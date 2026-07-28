@@ -4,8 +4,8 @@
 // same evaluator that runs `comptime`, so there is no second semantics to keep
 // in agreement.
 
-import { apply, run } from "./comptime/eval.ts";
-import { shapeOf, UNIT, type Value } from "./comptime/value.ts";
+import { apply, type Host, type Perform, run } from "./comptime/eval.ts";
+import { shapeOf, show, UNIT, type Value } from "./comptime/value.ts";
 import { load } from "./load.ts";
 
 export interface Grants {
@@ -33,6 +33,23 @@ export function grantsFor(grants: Grants): Value {
   return shapeOf([["print", print]]);
 }
 
+/**
+ * The host's answers, matching what `blot build` grants the compiled module.
+ * Both sides implement the same declared effects, or the two runs disagree
+ * about what the program does — which is the one thing they must not.
+ */
+function hostFor(grants: Grants): Host {
+  return (perform: Perform): Value | null => {
+    if (!perform.host) return null;
+    if (perform.effectName === "Console" && perform.operation === "write") {
+      const message = perform.argument;
+      grants.write(message.tag === "text" ? message.value : show(message));
+      return UNIT;
+    }
+    return null;
+  };
+}
+
 export async function evaluateFile(
   path: string,
   grants: Grants,
@@ -42,5 +59,6 @@ export async function evaluateFile(
     apply(loaded.closure, grantsFor(grants), loaded.module.span, {
       imports: new Map(),
     }),
+    hostFor(grants),
   );
 }

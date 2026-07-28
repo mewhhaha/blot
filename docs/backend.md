@@ -93,19 +93,50 @@ missing feature: a type has no runtime representation, so a module that returns
 one has nothing to compile. The diagnostic says so rather than promising it
 later.
 
-**Effects and handlers.** `@handle` is not lowered. gpufuck deleted its Effect
-Core precisely because effects belong to the frontend, so this is handler
-specialization on blot's side: a handler known at compile time inlines into
-direct-style calls, and one-shot `resume` means no continuation object is
-needed. The type checker already refuses an effect nothing handles.
+**Blot handlers.** `@handle` is not lowered. A handler written in blot has to be
+specialized away — inlined into direct-style calls, which one-shot `resume`
+makes possible without a continuation object — and that is blot's job, not
+gpufuck's. The type checker already refuses an effect nothing handles. gpufuck
+deleted its Effect Core precisely because effects belong to the frontend, so
+this is handler specialization on blot's side: a handler known at compile time
+inlines into direct-style calls, and one-shot `resume` means no continuation
+object is needed. The type checker already refuses an effect nothing handles.
 
-**Module parameters**, and therefore host capabilities. They cross the boundary
-as handlers, so they arrive with handler lowering.
+**Module parameters.** The entry module's record of blot handlers has no Wasm
+representation yet; it arrives with handler lowering.
 
 **Arrays.** They map to Core's `Store`, and the ownership facts from
 `blot
 ownership` are what would choose write-in-place over rebuild. Nothing
 consumes them yet.
+
+## Host effects are capabilities
+
+An effect the _host_ implements is declared with `@effect.host`, and it becomes
+a gpufuck capability — a named record of operations, each carrying the effect it
+performs, its parameter type, and its result type. gpufuck turns that into typed
+WebAssembly imports.
+
+```blot
+const Console = @effect.host { .write = Str -> Unit; };
+
+let report = () => Console.write "compiled";   // () -> () ~ { Console }
+```
+
+This is why blot needs no raw import form: you declare an effect, and the
+boundary follows from its operation types. It is also why a host effect's row is
+allowed to reach the module boundary, where an ordinary one nothing handles is
+an error — the row _is_ the program's declared interface, and `blot build`
+prints it as the module's imports.
+
+Both executions answer the same declared effects: `blot eval` bridges them to
+the same grants `blot build` hands the compiled module. `just wasm` compares the
+printed transcripts as well as the results, because an effectful program's
+output is as much of its meaning as its return value.
+
+Only integers, text, and `()` cross the boundary today. A shape would need a
+nominal on both sides, and inventing one silently would make the import's
+contract a guess.
 
 ## When gpufuck disagrees
 

@@ -134,7 +134,10 @@ export function infer(
       if (primitive === undefined) {
         // `@effect` and `@handle` are handled at their application sites,
         // because their types depend on the argument's shape.
-        if (expr.name === "@effect" || expr.name === "@handle") {
+        if (
+          expr.name === "@effect" || expr.name === "@effect.host" ||
+          expr.name === "@handle"
+        ) {
           return freshVar(level);
         }
         fail(
@@ -290,7 +293,10 @@ function inferSpecial(
   const head = spine(expr);
   if (head === null || head.callee.tag !== "intrinsic") return null;
 
-  if (head.callee.name === "@effect" && head.args.length === 1) {
+  if (
+    (head.callee.name === "@effect" || head.callee.name === "@effect.host") &&
+    head.args.length === 1
+  ) {
     // An effect's identity comes from evaluating it: two effects that both
     // declare `.write` are still different effects.
     const value = comptime(expr, context);

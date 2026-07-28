@@ -1,0 +1,24 @@
+// Host effects.
+//
+// `@effect.host` declares an effect the *host* implements. Its operations
+// become typed WebAssembly imports, which is why blot needs no raw import form:
+// you declare an effect, and the boundary follows from its operation types.
+//
+// The difference from an ordinary `@effect` is who discharges it. A blot effect
+// is handled by a blot handler and specialized away; a host effect's row is the
+// program's declared interface, so it is allowed to reach the module boundary
+// where an unhandled ordinary effect is an error.
+
+const Console = @effect.host {
+  .write = Str -> Unit;
+};
+
+// Nothing here says "effectful". The row is inferred, and `report` comes out as
+// `() -> () ~ { Console }` — an interface, not a leak.
+let report = () => do
+  const _ = Console.write "compiled";
+  const _2 = Console.write "linked";
+  return Console.write "done";
+end;
+
+return report ();

@@ -35,8 +35,9 @@ The gpufuck backend (M4) has landed for a real subset: `blot build` emits
 WebAssembly, and `just wasm` checks that the interpreter, gpufuck's GPU
 evaluator, and the emitted Wasm all agree. Literals, prelude operators and
 comparisons, records and spreads, tuples, unions, `case`, destructuring, arrays,
-`if`, and recursion compile; effects, handlers, and module parameters do not
-yet. See [docs/backend.md](docs/backend.md) for both lists.
+`if`, and recursion compile, and `@effect.host` effects become typed WebAssembly
+imports. Blot-written handlers and module parameters do not compile yet. See
+[docs/backend.md](docs/backend.md) for both lists.
 
 ```bash
 just run examples/tour.blot   # evaluate a program
@@ -108,6 +109,15 @@ handle (report, joining)   // "onedone"
 There is no `try`, no `with`, no `handler` keyword, and no `<-`. `resume` is a
 real one-shot continuation: resuming collects the rest of the computation, not
 resuming aborts it, and calling it twice is an error rather than a convention.
+
+An effect the _host_ implements is declared `@effect.host`, and its operations
+become typed WebAssembly imports — so blot needs no raw import form, and its row
+is the program's declared interface rather than something left unhandled:
+
+```blot
+const Console = @effect.host { .write = Str -> Unit; };
+let report = () => Console.write "compiled";   // () -> () ~ { Console }
+```
 
 A handler the program did not write is a host capability. The entry module's
 parameter is the entire authority it has — no ambient filesystem, no ambient

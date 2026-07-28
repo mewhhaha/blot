@@ -84,20 +84,22 @@ async function ownership(path: string): Promise<void> {
 /** Lowers to gpufuck's Core, compiles on the GPU, and writes the Wasm binary. */
 async function buildFile(path: string): Promise<void> {
   const { build } = await import("./backend/compile.ts");
-  const built = await build(path);
+  const { hostInit } = await import("./backend/host.ts");
+  const built = await build(path, hostInit((line) => console.log(line)));
   const output = path.replace(/\.blot$/, ".wasm");
   await Deno.writeFile(output, built.wasm);
-  const { runWasm } = await import("./backend/run.ts");
-  const ran = await runWasm(built.wasm);
   const render = (value: unknown): string =>
     JSON.stringify(
       value,
       (_key, member) => typeof member === "bigint" ? `${member}n` : member,
     );
+  const imports = built.capabilities.length === 0
+    ? ""
+    : `, imports { ${built.capabilities.join(", ")} }`;
   console.log(
-    `${output}: ${built.wasm.byteLength} bytes, wasm returns ${
-      render(ran.value)
-    }, gpu evaluator ${render(built.value)}`,
+    `${output}: ${built.wasm.byteLength} bytes${imports}, returns ${
+      render(built.ran)
+    }`,
   );
 }
 

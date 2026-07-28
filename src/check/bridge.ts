@@ -33,6 +33,20 @@ export function effectLabel(value: Value & { tag: "effect" }): string {
   return `${value.name}#${value.id}`;
 }
 
+/**
+ * Labels of effects the host implements.
+ *
+ * A host effect's row is the program's declared interface — its operations
+ * become WebAssembly imports — so it is allowed to reach the module boundary
+ * where an ordinary effect nothing handles is an error. Effect ids are globally
+ * unique, so one registry is enough.
+ */
+const hostLabels = new Set<string>();
+
+export function isHostEffect(label: string): boolean {
+  return hostLabels.has(label);
+}
+
 export function bridge(value: Value): SimpleType | null {
   switch (value.tag) {
     case "int":
@@ -111,6 +125,7 @@ export function bridge(value: Value): SimpleType | null {
     // carry that effect. This is the whole mechanism behind effect inference.
     case "effect": {
       const label = effectLabel(value);
+      if (value.host) hostLabels.add(label);
       const operations: [string, SimpleType][] = [];
       for (const [name, signature] of value.operations) {
         const bridged = bridge(signature);

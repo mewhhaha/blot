@@ -11,6 +11,8 @@ import {
   GpuCompiler,
   GpuEvaluator,
   requestWebGpuDevice,
+  runWasmModule,
+  type WasmInit,
 } from "gpufuck";
 import { BlotError } from "../diagnostic.ts";
 import { load } from "../load.ts";
@@ -21,9 +23,13 @@ export interface Built {
   readonly wasm: Uint8Array;
   /** What gpufuck's own evaluator produced, as a cross-check on the lowering. */
   readonly value: unknown;
+  /** What the compiled module returned when run against the host boundary. */
+  readonly ran: unknown;
+  /** Host capabilities the module imports, one per host effect. */
+  readonly capabilities: readonly string[];
 }
 
-export async function build(path: string): Promise<Built> {
+export async function build(path: string, init: WasmInit = {}): Promise<Built> {
   const loaded = await load(path);
   // Checking first is not politeness: lowering consumes the field and
   // constructor sets inference recorded, and cannot proceed without them.
@@ -38,7 +44,11 @@ export async function build(path: string): Promise<Built> {
     lowered.types,
     lowered.entry,
     loaded.source.length,
-    { evaluationProfile: EvaluationProfile.StrictEager },
+    {
+      evaluationProfile: EvaluationProfile.StrictEager,
+      hostCapabilities: lowered.capabilities,
+      hostDefinitions: lowered.hostDefinitions,
+    },
   );
 
   const device = await requestWebGpuDevice();
@@ -74,8 +84,26 @@ export async function build(path: string): Promise<Built> {
           unavailable: error instanceof Error ? error.message : String(error),
         };
       }
+      // Running goes through gpufuck's host boundary rather than a bare
+      // `WebAssembly.instantiate`: a host effect is a real import, and the
+      // boundary is what encodes values across it.
+      let ran: unknown = null;
+      try {
+        const execution = await runWasmModule(compilation.module, { init });
+        ran = execution.value;
+      } catch (error) {
+        ran = {
+          unavailable: error instanceof Error ? error.message : String(error),
+        };
+      }
+
       const wasm = await compileModuleToWasm(compilation.module);
-      return { wasm, value };
+      return {
+        wasm,
+        value,
+        ran,
+        capabilities: lowered.capabilities.map((capability) => capability.name),
+      };
     } finally {
       compilation.module.destroy();
     }

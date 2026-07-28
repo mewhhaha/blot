@@ -19,6 +19,7 @@ import { type Checked, checkModule, type VariantCase } from "./infer.ts";
 import type { Expr } from "../syntax/ast.ts";
 import { freshVar, type SimpleType } from "./type.ts";
 import { show, showModuleRow as showRow } from "./print.ts";
+import { isHostEffect } from "./bridge.ts";
 import { TypeError_ } from "./constrain.ts";
 import { checkLinearity, type Ownership } from "../linear/check.ts";
 
@@ -136,7 +137,8 @@ export async function checkFile(path: string): Promise<CheckResult> {
     // the top level means the program would reach a `perform` with no handler
     // installed, which is exactly the runtime failure — caught statically here.
     const row = showRow(checked.effects);
-    if (row !== "") {
+    const escaping = unhandledRow(checked.effects);
+    if (escaping !== "") {
       throw new BlotError(
         {
           code: "BLOT_UNHANDLED_EFFECT",
@@ -171,6 +173,30 @@ export async function checkFile(path: string): Promise<CheckResult> {
     }
     throw error;
   }
+}
+
+/**
+ * The part of a module's row nothing accounts for.
+ *
+ * A host effect's operations become WebAssembly imports, so its row *is* the
+ * program's declared interface and reaching the boundary is what it is for. An
+ * ordinary effect there is a program that would perform with no handler
+ * installed.
+ */
+function unhandledRow(effects: SimpleType): string {
+  const labels = rowLabels(effects, new Set()).filter((label) =>
+    !isHostEffect(label)
+  );
+  if (labels.length === 0) return "";
+  const shown = labels.map((label) => label.replace(/#\d+$/, "")).sort();
+  return `{ ${shown.join(", ")} }`;
+}
+
+function rowLabels(type: SimpleType, seen: Set<number>): string[] {
+  if (type.tag === "effects") return [...type.labels];
+  if (type.tag !== "var" || seen.has(type.id)) return [];
+  seen.add(type.id);
+  return type.lower.flatMap((bound) => rowLabels(bound, seen));
 }
 
 /** Facts from a dependency plus this module's own; keys are node identities. */

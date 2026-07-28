@@ -74,6 +74,16 @@ export type Value =
     readonly id: number;
     readonly name: string;
     readonly operations: ReadonlyMap<string, Value>;
+    /**
+     * Whether the host implements it.
+     *
+     * A blot effect is discharged by a blot handler and specialized away. A
+     * host effect's operations become typed WebAssembly imports, so its row is
+     * the program's declared interface rather than something left unhandled —
+     * which is why it may reach the module boundary and an ordinary one may
+     * not.
+     */
+    readonly host: boolean;
   }
   /** A performable operation: an effect plus one of its operation names. */
   | { readonly tag: "operation"; readonly effect: Value; readonly name: string }
@@ -148,7 +158,9 @@ export function show(value: Value): string {
   if (value.tag === "primitive") return `<${value.name}>`;
   if (value.tag === "native") return `<host ${value.name}>`;
   if (value.tag === "continuation") return "<resume>";
-  if (value.tag === "effect") return `<effect ${value.name}>`;
+  if (value.tag === "effect") {
+    return `<${value.host ? "host effect" : "effect"} ${value.name}>`;
+  }
   if (value.tag === "operation") return `<operation ${value.name}>`;
   if (value.tag === "sealed") return `${value.name} ${show(value.inner)}`;
   if (value.tag === "range") return `${show(value.low)}..${show(value.high)}`;

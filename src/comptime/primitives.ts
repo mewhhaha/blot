@@ -453,8 +453,9 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
 export function makeEffect(
   name: string,
   operations: ReadonlyMap<string, Value>,
+  host: boolean,
 ): Value {
-  return { tag: "effect", id: brands += 1, name, operations };
+  return { tag: "effect", id: brands += 1, name, operations, host };
 }
 
 export { asTuple };

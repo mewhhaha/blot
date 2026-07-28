@@ -30,6 +30,8 @@ export interface Perform {
   readonly operation: string;
   readonly argument: Value;
   readonly span: Span;
+  /** Whether the host implements this effect rather than a blot handler. */
+  readonly host: boolean;
 }
 
 export type Eval = Generator<Perform, Value, Value>;
@@ -349,6 +351,7 @@ export function* apply(
       operation: fn.name,
       argument,
       span,
+      host: fn.effect.host,
     };
   }
 
@@ -384,6 +387,7 @@ export function* apply(
 /** Primitives that need the evaluator itself rather than a pure value function. */
 const SPECIAL: ReadonlyMap<string, number> = new Map([
   ["@effect", 1],
+  ["@effect.host", 1],
   ["@handle", 2],
   ["@import", 1],
 ]);
@@ -394,12 +398,12 @@ function* runPrimitive(
   span: Span,
   runtime: Runtime,
 ): Eval {
-  if (name === "@effect") {
+  if (name === "@effect" || name === "@effect.host") {
     const shape = args[0];
     if (shape.tag !== "shape") {
-      fail("BLOT_TYPE", "`@effect` takes a shape of operation types.", span);
+      fail("BLOT_TYPE", `\`${name}\` takes a shape of operation types.`, span);
     }
-    return makeEffect("Effect", shape.fields);
+    return makeEffect("Effect", shape.fields, name === "@effect.host");
   }
 
   if (name === "@import") {
@@ -572,16 +576,32 @@ export function moduleClosure(
   return { tag: "closure", parameter, body, env, self: null, imports };
 }
 
-/** Runs a computation with no ambient handler; an unhandled effect is an error. */
-export function run(computation: Eval): Value {
-  const step = computation.next(UNIT);
-  if (!step.done) {
+/**
+ * Answers a host effect's operation. `null` means the host does not implement
+ * it, which is the same as there being no handler at all.
+ */
+export type Host = (perform: Perform) => Value | null;
+
+/**
+ * Runs a computation to completion.
+ *
+ * A blot effect must be discharged by a blot handler. A *host* effect is
+ * answered here instead, because the host is its implementation — the same
+ * split the backend makes when it turns one into a WebAssembly import.
+ */
+export function run(computation: Eval, host: Host = () => null): Value {
+  let step = computation.next(UNIT);
+  while (!step.done) {
     const perform = step.value;
-    fail(
-      "BLOT_UNHANDLED_EFFECT",
-      `No handler for \`${perform.effectName}.${perform.operation}\`.`,
-      perform.span,
-    );
+    const answer = host(perform);
+    if (answer === null) {
+      fail(
+        "BLOT_UNHANDLED_EFFECT",
+        `No handler for \`${perform.effectName}.${perform.operation}\`.`,
+        perform.span,
+      );
+    }
+    step = computation.next(answer);
   }
   return step.value;
 }

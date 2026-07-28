@@ -10,7 +10,7 @@
 // the corpus tests stay runnable without a device.
 
 import { build } from "../src/backend/compile.ts";
-import { runWasm } from "../src/backend/run.ts";
+import { hostInit } from "../src/backend/host.ts";
 import { evaluateFile } from "../src/run.ts";
 import { show } from "../src/comptime/value.ts";
 
@@ -18,22 +18,44 @@ import { show } from "../src/comptime/value.ts";
 const COMPILES = [
   "examples/minimal.blot",
   "examples/compiled.blot",
+  "examples/host.blot",
 ];
+
+/** `()` crosses the host boundary as a constructor, and reads as one. */
+function sameValue(wasm: unknown, interpreted: string): boolean {
+  const encoded = wasm as { kind?: string; value?: unknown };
+  if (encoded?.kind === "unit") return interpreted === "()";
+  if (encoded?.kind === "integer") return String(encoded.value) === interpreted;
+  return String(wasm) === interpreted;
+}
 
 let failures = 0;
 
 for (const path of COMPILES) {
-  const interpreted = await evaluateFile(path, { write: () => {} });
-  const built = await build(path);
-  const ran = await runWasm(built.wasm);
+  // Both runs print into their own transcript. An effectful program's output is
+  // as much of its meaning as its result, so the two have to match as well.
+  const interpretedLines: string[] = [];
+  const compiledLines: string[] = [];
+  const interpreted = await evaluateFile(path, {
+    write: (line) => interpretedLines.push(line),
+  });
+  const built = await build(path, hostInit((line) => compiledLines.push(line)));
 
   const expected = show(interpreted);
-  const actual = String(ran.value);
   const gpu = built.value as { kind?: string; value?: unknown };
 
-  if (actual !== expected) {
+  if (!sameValue(built.ran, expected)) {
     console.error(
-      `${path}: wasm returned ${actual}, interpreter said ${expected}`,
+      `${path}: wasm returned ${
+        JSON.stringify(built.ran)
+      }, interpreter said ${expected}`,
+    );
+    failures += 1;
+    continue;
+  }
+  if (interpretedLines.join("|") !== compiledLines.join("|")) {
+    console.error(
+      `${path}: wasm printed [${compiledLines}], interpreter printed [${interpretedLines}]`,
     );
     failures += 1;
     continue;
@@ -45,8 +67,11 @@ for (const path of COMPILES) {
     failures += 1;
     continue;
   }
+  const imports = built.capabilities.length === 0
+    ? ""
+    : ` importing { ${built.capabilities.join(", ")} }`;
   console.log(
-    `${path}: ${built.wasm.byteLength} bytes, all three agree on ${expected}`,
+    `${path}: ${built.wasm.byteLength} bytes${imports}, all three agree on ${expected}`,
   );
 }
 
