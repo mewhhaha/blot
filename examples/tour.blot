@@ -120,8 +120,8 @@ return {
   .tail = tail;
   .staged = staged;
 
-  .joined = handle (report, joining);
-  .printed = handle (report, printing);
+  .joined = @handle (Console, report, joining);
+  .printed = @handle (Console, report, printing);
 
   // A prefixed operand needs parentheses: a trailing operator in a flat chain
   // reads as infix, which is what keeps expressions recursion-free.

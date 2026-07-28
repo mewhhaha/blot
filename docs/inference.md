@@ -75,8 +75,23 @@ effect becomes a record of functions whose rows carry it. That is the whole
 mechanism, and it is why blot needs no `perform`, no `<-`, and no effect
 declaration form.
 
-A module whose row is non-empty at the top level is rejected: nothing would
-handle it.
+`@handle` names the effect it discharges, so the row arithmetic is real:
+
+```blot
+@handle (Console, computation, logging)
+```
+
+Everything the computation performs _except_ `Console` is still owed and flows
+on into the ambient row, and the handler is checked against the effect's
+operations — a typo in a clause name is a type error rather than a silent no-op
+at run time. Earlier `@handle` took only the computation and the handler, which
+made both of those unknowable: two effects may each declare `.write`, and a
+shape of clauses does not say which one is meant.
+
+A module whose row is non-empty at the top level is rejected, because nothing
+would handle it. A _host_ effect is the exception: its operations become
+WebAssembly imports, so its row is the program's declared interface rather than
+something left unhandled.
 
 ## Types are values, so checking runs the evaluator
 
@@ -102,14 +117,6 @@ implementation shortcut; it is what "types are values" means.
 
 Stated plainly, because a checker that quietly admits these is worse than one
 that says so.
-
-**Handler discharge.** `@handle` type-checks that its first argument is callable
-and does not join the thunk's row into the ambient one. Which effect a handler
-discharges is not recoverable from a shape's field names alone — the runtime
-dispatches by operation name — so a handler that discharges the wrong effect is
-not caught. The module-boundary check above still catches an effect that nothing
-handles at all. Making this precise needs handlers to carry their effect's
-identity, which is a language change, not a checker change.
 
 **Range arithmetic.** `@int.add` returns the unbounded integer domain, because
 it does not prove its result fits a width. So `sig f = I32 -> I32` over

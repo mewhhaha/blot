@@ -171,16 +171,6 @@ const upto = (low, high) => do
   return build (low, @array.empty);
 end;
 
-// --- effects ----------------------------------------------------------------
-//
-// `@handle` is curried like every primitive; this is the readable spelling.
-// A host capability is simply a handler blot did not write, so granting IO is
-// passing a shape into the entry module and nothing more.
-
-const handle = (computation, handler) => @handle computation handler;
-
-const Effect = { .handle = handle; };
-
 // --- option and result ------------------------------------------------------
 
 const Option = value => #None | #Some value;
@@ -291,9 +281,6 @@ return {
   .filter = filter;
   .sum = sum;
   .upto = upto;
-
-  .handle = handle;
-  .Effect = Effect;
 
   .Option = Option;
   .None = None;

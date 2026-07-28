@@ -1,0 +1,14 @@
+// `@handle` names the effect it discharges, so the row arithmetic is real: what
+// the computation performs *beyond* that effect is still owed, and reaching the
+// module boundary with it is an error.
+const Console = @effect { .write = Str -> Unit; };
+const Clock = @effect { .now = Unit -> Int; };
+
+let logging = { .write = (m, ?resume) => resume (); .return = v => v; };
+
+let stamped = () => do
+  const _ = Console.write "start";
+  return Clock.now ();
+end;
+
+return @handle (Console, stamped, logging);

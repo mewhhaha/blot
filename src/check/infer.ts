@@ -19,7 +19,7 @@ import { fail } from "../diagnostic.ts";
 import type { Env as ValueEnv } from "../comptime/value.ts";
 import { childEnv } from "../comptime/value.ts";
 import { bind, evaluate, type Imports, run } from "../comptime/eval.ts";
-import { bridge } from "./bridge.ts";
+import { bridge, effectLabel } from "./bridge.ts";
 import { constrain, instantiate, scheme, TypeError_ } from "./constrain.ts";
 import { PRIMITIVE_TYPES } from "./primitives.ts";
 import {
@@ -290,11 +290,13 @@ function inferSpecial(
   level: Level,
   row: SimpleType,
 ): SimpleType | null {
-  const head = spine(expr);
-  if (head === null || head.callee.tag !== "intrinsic") return null;
+  let head = spine(expr);
+  if (head === null) return null;
+  const callee = head.callee;
+  if (callee.tag !== "intrinsic") return null;
 
   if (
-    (head.callee.name === "@effect" || head.callee.name === "@effect.host") &&
+    (callee.name === "@effect" || callee.name === "@effect.host") &&
     head.args.length === 1
   ) {
     // An effect's identity comes from evaluating it: two effects that both
@@ -310,7 +312,7 @@ function inferSpecial(
   // A module is a function from its input record to its export record, and it
   // is checked once and shared. Typing the import is what lets a caller see
   // the module's exports instead of an opaque value.
-  if (head.callee.name === "@import" && head.args.length >= 1) {
+  if (callee.name === "@import" && head.args.length >= 1) {
     const specifier = head.args[0];
     if (specifier.tag !== "text") return null;
     const moduleType = context.modules.get(specifier.value);
@@ -333,21 +335,69 @@ function inferSpecial(
     return result;
   }
 
-  if (head.callee.name === "@handle" && head.args.length === 2) {
-    const thunk = infer(head.args[0], context, level, row);
-    infer(head.args[1], context, level, row);
+  if (callee.name === "@handle" && head.args.length === 1) {
+    const parts = head.args[0];
+    if (parts.tag !== "tuple" || parts.elements.length !== 3) {
+      fail(
+        "BLOT_TYPE_ERROR",
+        "`@handle` takes `(effect, computation, handler)`.",
+        expr.span,
+      );
+    }
+    head = { callee: head.callee, args: [...parts.elements] };
+  }
+
+  if (callee.name === "@handle" && head.args.length === 3) {
+    // `@handle` names the effect it discharges, so the row arithmetic is real:
+    // everything the computation performs *except* that effect still has to be
+    // handled somewhere, and flows on into the ambient row.
+    const effect = comptime(head.args[0], context);
+    if (effect === null || effect.tag !== "effect") {
+      fail(
+        "BLOT_TYPE_ERROR",
+        "`@handle` takes the effect it discharges as its first argument.",
+        head.args[0].span,
+      );
+    }
+    const discharged = effectLabel(effect);
+
+    const thunkRow = freshVar(level);
+    const thunk = infer(head.args[1], context, level, row);
+    const handler = infer(head.args[2], context, level, row);
     const result = freshVar(level);
-    // The thunk's row is deliberately *not* joined into the ambient row: the
-    // handler discharges it. Which effect it discharges is not recoverable from
-    // a handler shape's field names alone, so what is checked here is that the
-    // thunk is callable — see docs/inference.md.
+
     located(expr.span, () => {
       constrain(thunk, {
         tag: "fun",
         param: UNIT,
-        effects: freshVar(level),
+        effects: thunkRow,
         result,
       });
+      // A clause per operation, each taking `(argument, resume)`. Checking the
+      // handler against the effect is what makes a typo in an operation name a
+      // type error rather than a silent no-op at run time.
+      for (const [name, signature] of effect.operations) {
+        const bridged = bridge(signature);
+        if (bridged === null || bridged.tag !== "fun") continue;
+        const clause = freshVar(level);
+        constrain(handler, record([[name, clause]]));
+        constrain(clause, {
+          tag: "fun",
+          param: tupleType([bridged.param, freshVar(level)]),
+          effects: freshVar(level),
+          result: freshVar(level),
+        });
+      }
+    });
+
+    // Whatever the computation performs beyond this effect is still owed.
+    context.pending.push(() => {
+      const remaining = rowLabels(thunkRow, new Set()).filter((label) =>
+        label !== discharged
+      );
+      if (remaining.length > 0) {
+        located(expr.span, () => constrain(effects(remaining), row));
+      }
     });
     return result;
   }
@@ -355,7 +405,12 @@ function inferSpecial(
   return null;
 }
 
-function spine(expr: Expr): { callee: Expr; args: Expr[] } | null {
+interface Spine {
+  readonly callee: Expr;
+  readonly args: readonly Expr[];
+}
+
+function spine(expr: Expr): Spine | null {
   const args: Expr[] = [];
   let current = expr;
   while (current.tag === "apply") {
@@ -461,6 +516,14 @@ function casesOf(type: SimpleType): readonly VariantCase[] | null {
   walk(type, new Set());
   if (!sawVariant) return null;
   return [...found].map(([name, payload]) => ({ name, payload }));
+}
+
+/** The concrete effect labels a row carries. */
+function rowLabels(type: SimpleType, seen: Set<number>): string[] {
+  if (type.tag === "effects") return [...type.labels];
+  if (type.tag !== "var" || seen.has(type.id)) return [];
+  seen.add(type.id);
+  return type.lower.flatMap((bound) => rowLabels(bound, seen));
 }
 
 /** Arms of one `case` accept the union of their patterns. */

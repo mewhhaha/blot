@@ -70,6 +70,8 @@ const REJECTIONS: Record<string, { code: string; stage: "check" | "run" }> = {
     code: "BLOT_LINEAR_CONSUMED_TWICE",
     stage: "check",
   },
+  "effect_not_discharged": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },
+  "handler_wrong_operation": { code: "BLOT_TYPE_ERROR", stage: "check" },
 };
 
 async function blotFiles(directory: string): Promise<string[]> {

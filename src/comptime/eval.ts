@@ -13,6 +13,7 @@
 import type { Decl, Expr, Module, Pattern, Span } from "../syntax/ast.ts";
 import { expect, fail } from "../diagnostic.ts";
 import {
+  asTuple,
   childEnv,
   type Env,
   equal,
@@ -388,7 +389,7 @@ export function* apply(
 const SPECIAL: ReadonlyMap<string, number> = new Map([
   ["@effect", 1],
   ["@effect.host", 1],
-  ["@handle", 2],
+  ["@handle", 1],
   ["@import", 1],
 ]);
 
@@ -423,7 +424,19 @@ function* runPrimitive(
   }
 
   if (name === "@handle") {
-    return yield* handle(args[0], args[1], span, runtime);
+    // The one primitive that takes a tuple rather than being curried. The
+    // checker has to see this call site — the effect being discharged is part
+    // of the typing rule — and a prelude wrapper would hide it behind a
+    // closure whose parameter is not a compile-time value.
+    const parts = asTuple(args[0], 3);
+    if (parts === null) {
+      fail(
+        "BLOT_TYPE",
+        "`@handle` takes `(effect, computation, handler)`.",
+        span,
+      );
+    }
+    return yield* handle(parts[0], parts[1], parts[2], span, runtime);
   }
 
   const primitive = PRIMITIVES.get(name);
@@ -434,27 +447,50 @@ function* runPrimitive(
 /**
  * A deep, one-shot handler.
  *
+ * Takes the effect it discharges, not only the handler. Dispatching on
+ * operation names alone was ambiguous — two effects may both declare `.write` —
+ * and it left the checker unable to say *which* effect a `@handle` removed from
+ * a row. Naming the effect makes discharge checkable and makes the lowering
+ * possible; guessing it made neither.
+ *
  * `handler` is an ordinary shape: one field per operation, taking
- * `(argument, resume)`, plus an optional `.return` clause applied to the
- * computation's result. A host capability is simply a handler blot did not
- * write, which is the whole of the capability story — no `try`, no `with`, no
- * handler keyword.
+ * `(argument, ?resume)`, plus an optional `.return` clause applied to the
+ * computation's result. There is no `try`, no `with`, and no handler keyword.
  */
 function* handle(
+  effect: Value,
   thunk: Value,
   handler: Value,
   span: Span,
   runtime: Runtime,
 ): Eval {
+  if (effect.tag !== "effect") {
+    fail(
+      "BLOT_TYPE",
+      `\`@handle\` takes the effect it discharges, found ${show(effect)}.`,
+      span,
+    );
+  }
   if (handler.tag !== "shape") {
     fail("BLOT_TYPE", `A handler is a shape, found ${show(handler)}.`, span);
   }
+  for (const name of handler.fields.keys()) {
+    if (name === "return") continue;
+    if (!effect.operations.has(name)) {
+      fail(
+        "BLOT_NO_OPERATION",
+        `Effect \`${effect.name}\` has no operation \`${name}\`, so this handler cannot discharge it.`,
+        span,
+      );
+    }
+  }
   const computation = apply(thunk, UNIT, span, runtime);
-  return yield* drive(computation, handler, span, runtime);
+  return yield* drive(computation, effect.id, handler, span, runtime);
 }
 
 function* drive(
   computation: Eval,
+  effectId: number,
   handler: Extract<Value, { tag: "shape" }>,
   span: Span,
   runtime: Runtime,
@@ -463,7 +499,11 @@ function* drive(
 
   while (!step.done) {
     const perform = step.value;
-    const operation = handler.fields.get(perform.operation);
+    // Only this effect's operations. A different effect that happens to have an
+    // operation of the same name passes straight through to its own handler.
+    const operation = perform.effectId === effectId
+      ? handler.fields.get(perform.operation)
+      : undefined;
 
     if (operation === undefined) {
       // Not ours. Forward it outward and continue with whatever comes back.
@@ -477,7 +517,7 @@ function* drive(
       tag: "continuation",
       state,
       resume: (value: Value) =>
-        drive(feed(computation, value), handler, span, runtime),
+        drive(feed(computation, value), effectId, handler, span, runtime),
     };
     const clause = yield* apply(
       operation,

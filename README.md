@@ -99,16 +99,19 @@ let report = () => do
 end;
 
 let joining = {
-  .write = (message, resume) => message ++ resume ();
+  .write = (message, ?resume) => message ++ resume ();
   .return = value => value;
 };
 
-handle (report, joining)   // "onedone"
+@handle (Console, report, joining)   // "onedone"
 ```
 
-There is no `try`, no `with`, no `handler` keyword, and no `<-`. `resume` is a
-real one-shot continuation: resuming collects the rest of the computation, not
-resuming aborts it, and calling it twice is an error rather than a convention.
+`@handle` names the effect it discharges, which is what lets the checker
+subtract it from the row: whatever `report` performs beyond `Console` is still
+owed. There is no `try`, no `with`, no `handler` keyword, and no `<-`. `resume`
+is a real one-shot continuation: resuming collects the rest of the computation,
+not resuming aborts it, and calling it twice is an error rather than a
+convention.
 
 An effect the _host_ implements is declared `@effect.host`, and its operations
 become typed WebAssembly imports — so blot needs no raw import form, and its row

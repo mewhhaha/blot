@@ -3,4 +3,4 @@
 // `affine_resumed_twice.blot`. Both reject; only one does so before running.
 const Choice = @effect { .pick = Unit -> I32; };
 const twice = { .pick = (_, resume) => @int.add (resume 1) (resume 2); .return = v => v; };
-return handle ((() => Choice.pick ()), twice);
+return @handle (Choice, (() => Choice.pick ()), twice);

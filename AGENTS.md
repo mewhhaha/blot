@@ -34,6 +34,12 @@ If a feature seems to need one, it belongs in the comptime evaluator instead.
 This is what keeps the grammar small; do not reintroduce `type`, `interface`,
 `effect`, or `duck` as declaration forms.
 
+**`@handle` names its effect.** The checker must see that call site — the
+effect being discharged is part of the typing rule — so `@handle` is the one
+primitive that takes a tuple rather than being curried, and it has no prelude
+wrapper. A wrapper would hide it behind a closure whose parameter is not a
+compile-time value.
+
 **Few primitives.** New capability goes in `src/prelude/*.blot` first. It earns
 an `@`-primitive only when it cannot be written in blot at all. `struct`,
 `packed`, `Bool`, `Option`, `fold`, and every operator are prelude source.

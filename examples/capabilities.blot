@@ -36,6 +36,6 @@ const to_memory = {
 };
 
 return {
-  .printed = handle (report, to_host);
-  .captured = handle (report, to_memory);
+  .printed = @handle (Console, report, to_host);
+  .captured = @handle (Console, report, to_memory);
 };
