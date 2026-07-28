@@ -18,11 +18,19 @@ end;
 const sum_to = rec (n => if n < 1 then 0 else n + sum_to (n - 1) end);
 
 let point = { .x = 20; .y = 22; };
+let moved = { ...point; .x = 18; };
+let { .x; .y = height; } = moved;
 let add = (a, b) => a + b;
 
-let total = add (point.x, point.y);
+// A spread destructures its source once and rebuilds, and a destructuring
+// binding is the `case` it always meant.
+let total = add (x, height) + 4;
+
+// Arrays are Core's `Store`: allocated at the first element, then written.
+let values = [1, 2, 3];
+let picked = @array.get values 2 + @array.len values;
 let counted = sum_to 8;
 let described = describe (#Done 3);
 let compared = if 20 < 22 then 1 else 0 end;
 
-return total + counted + described + compared - 43;
+return total + counted + described + compared + picked - 51;

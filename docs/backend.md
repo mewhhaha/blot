@@ -64,9 +64,16 @@ and `20 + 22` compiles to a call to one hoisted definition.
 
 ## What compiles today
 
-Literals, prelude operators and comparisons, records, tuples, unions and `case`,
-lambdas and application, `let`, `if`, and recursion through `rec`.
-`examples/compiled.blot` exercises all of it.
+Literals, prelude operators and comparisons, records and their spreads, tuples,
+unions and `case`, destructuring bindings, arrays, lambdas and application,
+`let`, `if`, and recursion through `rec`. `examples/compiled.blot` exercises all
+of it, and `just wasm` checks the answer against the interpreter.
+
+Arrays are Core's `Store`. A write returns a _new_ store, so an array literal
+threads each element through its own binding — the first version rewrote the
+binder in the finished body instead, which quietly dropped every write but the
+last. Both backends agreed on the wrong answer; only the interpreter disagreed,
+which is the entire argument for checking three executions rather than two.
 
 ## What does not
 
@@ -80,6 +87,11 @@ do not pin the constructor set, and a generic parameter has no bounds to read it
 from, so lowering cannot build the Core union. The prelude therefore matches
 exhaustively — which is better style anyway — and closing this properly means
 monomorphizing per call site.
+
+**A `const` holding a type or an effect cannot cross into Wasm.** That is not a
+missing feature: a type has no runtime representation, so a module that returns
+one has nothing to compile. The diagnostic says so rather than promising it
+later.
 
 **Effects and handlers.** `@handle` is not lowered. gpufuck deleted its Effect
 Core precisely because effects belong to the frontend, so this is handler

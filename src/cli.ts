@@ -89,10 +89,15 @@ async function buildFile(path: string): Promise<void> {
   await Deno.writeFile(output, built.wasm);
   const { runWasm } = await import("./backend/run.ts");
   const ran = await runWasm(built.wasm);
+  const render = (value: unknown): string =>
+    JSON.stringify(
+      value,
+      (_key, member) => typeof member === "bigint" ? `${member}n` : member,
+    );
   console.log(
     `${output}: ${built.wasm.byteLength} bytes, wasm returns ${
-      JSON.stringify(ran.value)
-    }, gpu evaluator ${JSON.stringify(built.value)}`,
+      render(ran.value)
+    }, gpu evaluator ${render(built.value)}`,
   );
 }
 

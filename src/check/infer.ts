@@ -58,6 +58,8 @@ function lookupType(env: TypeEnv, name: string): Typing | undefined {
 interface Context {
   /** Field sets and constructor sets, recorded for the backend. */
   readonly shapes: Map<Expr, readonly string[]>;
+  /** Facts read after checking, once every constraint has been seen. */
+  readonly pending: (() => void)[];
   readonly variants: Map<Expr, readonly VariantCase[]>;
   readonly types: TypeEnv;
   /** Comptime bindings, for bridging `sig` expressions and `const` values. */
@@ -174,9 +176,13 @@ export function infer(
         constrain(target, record([[expr.name, result]]));
       });
       // Record what the target's whole field set is, if it is known. Lowering
-      // cannot see it and cannot build the nominal without it.
-      const fields = fieldsOf(target);
-      if (fields !== null) context.shapes.set(expr, fields);
+      // cannot see it and cannot build the nominal without it. Deferred to the
+      // end of checking, because a later use may add a field this one does not
+      // mention.
+      context.pending.push(() => {
+        const fields = fieldsOf(target);
+        if (fields !== null) context.shapes.set(expr, fields);
+      });
       return result;
     }
 
@@ -224,6 +230,12 @@ export function infer(
           fields.set(member.name, memberType);
           continue;
         }
+        // A spread contributes whatever the spread value holds, and the
+        // backend has to copy those fields one by one — so record the set.
+        context.pending.push(() => {
+          const spread = fieldsOf(memberType);
+          if (spread !== null) context.shapes.set(member.value, spread);
+        });
         // A spread of a shape whose fields are not statically known cannot
         // contribute names. Saying so is better than inventing them.
         if (memberType.tag === "record") {
@@ -407,7 +419,9 @@ function fieldsOf(type: SimpleType): readonly string[] | null {
     }
     if (current.tag !== "var" || seen.has(current.id)) return;
     seen.add(current.id);
-    for (const bound of current.lower) walk(bound, seen);
+    // Both directions: a value's fields are what flowed in, and a parameter's
+    // are what the body demanded. `(&p) => p.x + p.y` pins `p` from above.
+    for (const bound of [...current.lower, ...current.upper]) walk(bound, seen);
   };
 
   walk(type, new Set());
@@ -715,9 +729,11 @@ export function checkModule(
   }
   const shapes = new Map<Expr, readonly string[]>();
   const variants = new Map<Expr, readonly VariantCase[]>();
+  const pending: (() => void)[] = [];
   const context: Context = {
     shapes,
     variants,
+    pending,
     types,
     values,
     imports,
@@ -735,6 +751,9 @@ export function checkModule(
 
   inferDeclarations(module.declarations, context, level, row);
   const result = infer(module.result, context, level, row);
+  // Every constraint has been seen by now, so a field set read here is the
+  // whole one rather than whatever the first projection happened to mention.
+  for (const read of pending) read();
   return { type: result, effects: row, shapes, variants };
 }
 

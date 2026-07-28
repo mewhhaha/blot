@@ -34,9 +34,9 @@ the backend will consume. See [docs/ownership.md](docs/ownership.md).
 The gpufuck backend (M4) has landed for a real subset: `blot build` emits
 WebAssembly, and `just wasm` checks that the interpreter, gpufuck's GPU
 evaluator, and the emitted Wasm all agree. Literals, prelude operators and
-comparisons, records, tuples, unions, `case`, `if`, and recursion compile;
-effects, handlers, module parameters, and arrays do not yet. See
-[docs/backend.md](docs/backend.md) for both lists.
+comparisons, records and spreads, tuples, unions, `case`, destructuring, arrays,
+`if`, and recursion compile; effects, handlers, and module parameters do not
+yet. See [docs/backend.md](docs/backend.md) for both lists.
 
 ```bash
 just run examples/tour.blot   # evaluate a program
