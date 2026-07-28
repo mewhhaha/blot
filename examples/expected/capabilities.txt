@@ -1,0 +1,3 @@
+compiled
+linked
+{ .printed = "ok"; .captured = "compiledlinked"; }

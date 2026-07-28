@@ -1,0 +1,359 @@
+grammar Blot
+
+// Every token has one fixed terminal identity: no layout sensitivity, no
+// template islands, no contextual promotion. That is requirement 2 of baba's
+// version-3 GPU frontend profile, and it is the constraint the whole language
+// is designed around.
+
+token IDENT = /[a-z_][A-Za-z0-9_]*/ ;
+token TYPE_IDENT = /[A-Z][A-Za-z0-9_]*/ ;
+token INTEGER = /[0-9]+/ ;
+token TEXT = /"([^"\\]|\\[ntr"\\])*"/ ;
+token ELSE_IF priority 3 = /else[ \t\r\n]+if/ ;
+token INTRINSIC priority 3 = /@[a-z_][A-Za-z0-9_]*(\.[a-z_][A-Za-z0-9_]*)*/ ;
+
+// One operator class rather than an enumerated set. Custom operators are
+// therefore lexically ordinary; precedence and meaning come from the
+// `operators` header and are resolved semantically by fold-fixity, never by
+// grammar recursion.
+//
+// An operator may contain `/` anywhere except as a doubled prefix, which is
+// what keeps `/` available for division while `//` stays unambiguously a
+// comment. Spelled out rather than as `[...]+` because the lexer requires
+// disjoint terminal identities, not a longest-match tiebreak.
+token OPERATOR =
+  /[+\-*<>=|&^%!?~$:][+\-*\/<>=|&^%!?~$:]*|\/[+\-*<>=|&^%!?~$:][+\-*\/<>=|&^%!?~$:]*|\// ;
+
+skip WHITESPACE = /[ \t\r\n]+/ ;
+skip COMMENT = /\/\/[^\r\n]*/ ;
+
+// A module is a block: bounded headers, then one repeated `;`-terminated
+// island. `return` is a declaration form rather than a trailing bare
+// expression so that the strict root loop stays provable.
+program = (
+  header:module_header?
+  operators:operator_section?
+  declarations:declaration+
+) ;
+
+module_header = (
+  "module"
+  parameter:binding_pattern
+  ";"
+) ;
+
+operator_section = (
+  "operators"
+  "{"
+  declarations:fixity_declaration*
+  "}"
+  ";"
+) ;
+
+fixity_declaration = (
+  associativity:("infixl" | "infixr" | "infix" | "prefix")
+  precedence:INTEGER
+  "("
+  operator:OPERATOR
+  ")"
+  "="
+  target:qualified_name
+  ";"
+) ;
+
+// Three declaration forms. `type`, `interface`, `effect`, `duck`, and every
+// other binder in the reference language collapse into `const`, because types
+// are ordinary compile-time values.
+declaration = binding | shadowing | result ;
+
+// `statement` is `declaration` under a second name. The duplication is
+// mechanical and exists only so that `declaration` is not self-nesting, which
+// is what "throughput": "strict" requires of the repeated root island.
+statement = binding | shadowing | result ;
+
+binding = (
+  kind:("let" | "const" | "sig")
+  pattern:binding_pattern
+  "="
+  value:value
+  ";"
+) ;
+
+shadowing = (
+  name:(IDENT | TYPE_IDENT)
+  ":="
+  value:value
+  ";"
+) ;
+
+result = (
+  "return"
+  value:value
+  ";"
+) ;
+
+// Patterns. The qualifier carries `!` (linear, consumed exactly once) and `&`
+// (bounded borrow), and absorbs `-` so that negative literal patterns need no
+// separate rule. It is OPERATOR rather than a set of literals because spelling
+// those as literals would shadow them out of the operator class entirely,
+// costing every custom operator that uses those characters.
+binding_pattern = (
+  qualifier:OPERATOR?
+  value:pattern_core
+) ;
+
+// TYPE_IDENT binds like any other name: types are values, so `const I32 = ...`
+// is an ordinary binding and the capitalization is convention, not syntax.
+// Constructors always carry `#`, so a bare TYPE_IDENT is never a match.
+// `_` is deliberately absent as a literal: it also matches IDENT, so a parser
+// would have to choose between the two by context, and requirement 2 of the GPU
+// profile forbids contextual terminal identity. `_` is an ordinary name that
+// lowering treats as a wildcard, which costs nothing — a binding nobody reads
+// is exactly what a wildcard is.
+pattern_core = (
+  IDENT
+  | TYPE_IDENT
+  | INTEGER
+  | TEXT
+  | unit_pattern
+  | tuple_pattern
+  | array_pattern
+  | constructor_pattern
+  | shape_pattern
+) ;
+
+unit_pattern = ("(" ")") ;
+
+tuple_pattern = (
+  "("
+  first:binding_pattern
+  ","
+  rest:(binding_pattern % ",")
+  ")"
+) ;
+
+array_pattern = (
+  "["
+  elements:(binding_pattern % ",")?
+  "]"
+) ;
+
+constructor_pattern = (
+  "#"
+  constructor:TYPE_IDENT
+  payload:binding_pattern?
+) ;
+
+// Shape patterns terminate members with `;`, matching shape construction.
+shape_pattern = (
+  "{"
+  fields:shape_pattern_field*
+  "}"
+) ;
+
+shape_pattern_field = (
+  "."
+  name:field_name
+  value:("=" binding_pattern)?
+  ";"
+) ;
+
+// Expressions are flat operand/operator chains. Precedence is a semantic
+// recipe, so the contracted grammar has no residual recursion here.
+expression = (
+  first:operand
+  rest:infix_operation*
+) ;
+
+infix_operation = (
+  operator:OPERATOR
+  right:operand
+) ;
+
+// Spelled as two alternatives rather than `prefix_operator* postfix_expression`
+// so that no empty-repetition reduction has to be decided before the parser
+// knows whether it is inside a lambda parameter or an expression.
+operand = (
+  postfix_expression
+  | prefixes:prefix_operator+ value:postfix_expression
+) ;
+
+// `...` is deliberately absent: spreading is only meaningful in array and
+// shape positions, and having it in both places made the two readings of
+// `[...x]` ambiguous.
+prefix_operator = (OPERATOR | "comptime" | "rec") ;
+
+// Unary application by juxtaposition: `f x y` is `(f x) y`. This matches
+// gpufuck's unary Core exactly, so lowering needs no currying pass.
+postfix_expression = (
+  value:primary_expression
+  suffixes:field_suffix*
+  arguments:application_argument*
+) ;
+
+application_argument = (
+  value:application_primary
+  suffixes:field_suffix*
+) ;
+
+field_suffix = ("." field:field_name) ;
+
+// Field names accept every keyword and TYPE_IDENT. blot has few keywords, but
+// `.const`, `.type`, `.of`, and `.end` are all natural member names, and types
+// are values so `.I32` and `.Num` are ordinary members too. Enumerating the
+// keyword set here is static — it needs no contextual token, which the GPU
+// profile forbids outright.
+field_name = (IDENT | TYPE_IDENT | INTEGER | keyword) ;
+
+keyword = (
+  "module" | "operators" | "infixl" | "infixr" | "infix" | "prefix"
+  | "let" | "const" | "sig" | "return" | "do" | "end"
+  | "if" | "then" | "else" | "case" | "of" | "rec" | "comptime"
+) ;
+
+primary_expression = (
+  IDENT
+  | TYPE_IDENT
+  | INTEGER
+  | TEXT
+  | INTRINSIC
+  | constructor_expression
+  | unit
+  | conditional
+  | case_expression
+  | block
+  | array
+  | shape
+  | parenthesized_or_tuple
+) ;
+
+application_primary = (
+  IDENT
+  | TYPE_IDENT
+  | INTEGER
+  | TEXT
+  | INTRINSIC
+  | constructor_expression
+  | unit
+  | array
+  | shape
+  | parenthesized_or_tuple
+) ;
+
+constructor_expression = (
+  "#"
+  constructor:TYPE_IDENT
+) ;
+
+unit = ("(" ")") ;
+
+parenthesized_or_tuple = (
+  "("
+  first:value
+  tail:("," rest:(value % ","))?
+  ")"
+) ;
+
+array = (
+  "["
+  elements:(array_element % ",")?
+  "]"
+) ;
+
+array_element = (
+  spread:"..."?
+  value:value
+) ;
+
+// A lambda is admissible wherever a value is. Without this, `=>` still lexes
+// as an ordinary OPERATOR — every character in it is in the operator class —
+// so `(x => x)` would quietly parse as an infix chain instead of failing.
+value = lambda | expression ;
+
+// One structural aggregate. Tuples are shapes with integer labels; the
+// reference language's stored-tuple versus transient-pack distinction is gone.
+shape = (
+  "{"
+  members:shape_member*
+  "}"
+) ;
+
+shape_member = shape_spread | shape_field ;
+
+shape_spread = (
+  "..."
+  value:expression
+  ";"
+) ;
+
+shape_field = (
+  "."
+  name:field_name
+  "="
+  value:value
+  ";"
+) ;
+
+// One parameter, sharing the `postfix_expression` prefix with an ordinary
+// operand so that the parser never has to choose between "pattern" and
+// "expression" before it sees `=>`. Semantic analysis reclassifies the head as
+// a pattern and rejects heads that are not valid ones.
+//
+// Currying therefore needs parentheses: `f => (x => f (f x))`. That is the
+// honest cost of a locatable island boundary, and it is a small one in a
+// language where the idiomatic multi-argument function takes one shape.
+lambda = (
+  parameter:postfix_expression
+  "=>"
+  body:expression
+) ;
+
+conditional = (
+  "if"
+  condition:expression
+  "then"
+  consequence:value
+  alternatives:else_if_clause*
+  fallback:else_clause?
+  "end"
+) ;
+
+else_if_clause = (
+  ELSE_IF
+  condition:expression
+  "then"
+  consequence:value
+) ;
+
+else_clause = (
+  "else"
+  alternative:value
+) ;
+
+case_expression = (
+  "case"
+  target:expression
+  "of"
+  first:case_arm
+  rest:("," case_arm)*
+  "end"
+) ;
+
+case_arm = (
+  pattern:binding_pattern
+  "=>"
+  body:value
+) ;
+
+block = (
+  "do"
+  statements:statement+
+  "end"
+) ;
+
+qualified_name = (
+  root:(IDENT | TYPE_IDENT | INTRINSIC)
+  rest:qualified_name_part*
+) ;
+
+qualified_name_part = ("." name:field_name) ;

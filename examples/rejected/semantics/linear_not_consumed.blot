@@ -1,0 +1,3 @@
+// Exactly once, not at-most-once: a resource nothing consumes is a leak.
+let !handle = 41;
+return 0;

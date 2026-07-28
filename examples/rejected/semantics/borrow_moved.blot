@@ -1,0 +1,4 @@
+// `&` means the caller keeps what it passed. Returning the borrow would hand
+// ownership away.
+let steal = (&p) => p;
+return steal { .x = 1; };

@@ -1,0 +1,1 @@
+{ .owned = 42; .borrowed = 42; .settled = 8; .chosen = 10; .flipped = 2; }

@@ -1,0 +1,5 @@
+// Literals are singleton types, so a union of them is a real constraint rather
+// than documentation.
+sig level = 1 | 2 | 3;
+let level = 7;
+return level;

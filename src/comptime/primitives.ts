@@ -1,0 +1,460 @@
+// The `@` namespace: the entire compiler surface.
+//
+// Everything else — `struct`, `packed`, `Bool`, `Option`, `fold`, `+`, `==` —
+// is prelude source in `src/prelude`. A capability earns a primitive only when
+// it cannot be written in blot at all.
+//
+// Primitives are curried, like every other blot function. The readable
+// tuple-taking spellings (`range (low, high)`) are prelude wrappers, which is
+// where the ergonomics belong.
+
+import type { Span } from "../syntax/ast.ts";
+import { fail } from "../diagnostic.ts";
+import { asTuple, bool, equal, show, UNIT, type Value } from "./value.ts";
+
+export interface Primitive {
+  readonly arity: number;
+  readonly run: (args: readonly Value[], span: Span) => Value;
+}
+
+let brands = 0;
+
+function intOf(value: Value, span: Span, what: string): bigint {
+  if (value.tag !== "int") {
+    fail(
+      "BLOT_TYPE",
+      `${what} expects an integer, found ${show(value)}.`,
+      span,
+    );
+  }
+  return value.value;
+}
+
+function textOf(value: Value, span: Span, what: string): string {
+  if (value.tag !== "text") {
+    fail("BLOT_TYPE", `${what} expects text, found ${show(value)}.`, span);
+  }
+  return value.value;
+}
+
+function shapeFields(
+  value: Value,
+  span: Span,
+  what: string,
+): ReadonlyMap<string, Value> {
+  if (value.tag !== "shape") {
+    fail("BLOT_TYPE", `${what} expects a shape, found ${show(value)}.`, span);
+  }
+  return value.fields;
+}
+
+function arrayElements(
+  value: Value,
+  span: Span,
+  what: string,
+): readonly Value[] {
+  if (value.tag !== "array") {
+    fail("BLOT_TYPE", `${what} expects an array, found ${show(value)}.`, span);
+  }
+  return value.elements;
+}
+
+/** Unions are flat and duplicate-free, so `1 | 1 | 2` and `1 | 2` are one value. */
+function union(left: Value, right: Value): Value {
+  const members: Value[] = [];
+  const add = (value: Value): void => {
+    if (value.tag === "union") {
+      for (const member of value.members) add(member);
+      return;
+    }
+    if (!members.some((existing) => equal(existing, value))) {
+      members.push(value);
+    }
+  };
+  add(left);
+  add(right);
+  if (members.length === 1) return members[0];
+  return { tag: "union", members };
+}
+
+function members(value: Value): readonly Value[] {
+  return value.tag === "union" ? value.members : [value];
+}
+
+function intersect(left: Value, right: Value): Value {
+  const kept = members(left).filter((member) =>
+    members(right).some((other) => equal(member, other))
+  );
+  if (kept.length === 0) {
+    fail("BLOT_EMPTY_TYPE", "The intersection is empty.", { start: 0, end: 0 });
+  }
+  return kept.reduce(union);
+}
+
+function difference(left: Value, right: Value, span: Span): Value {
+  const kept = members(left).filter((member) =>
+    !members(right).some((other) => equal(member, other))
+  );
+  if (kept.length === 0) {
+    fail("BLOT_EMPTY_TYPE", "The difference is empty.", span);
+  }
+  return kept.reduce(union);
+}
+
+/** A literal's type is the literal: `@type.of 1` is `1`, never `I32`. */
+function typeOf(value: Value): Value {
+  if (value.tag === "shape") {
+    return {
+      tag: "shape",
+      fields: new Map(
+        [...value.fields].map(([name, member]) => [name, typeOf(member)]),
+      ),
+    };
+  }
+  if (value.tag === "array") {
+    return { tag: "array", elements: value.elements.map(typeOf) };
+  }
+  if (value.tag === "tag" && value.payload !== null) {
+    return { tag: "tag", name: value.name, payload: typeOf(value.payload) };
+  }
+  return value;
+}
+
+function compare(left: Value, right: Value, span: Span, what: string): number {
+  if (left.tag === "int" && right.tag === "int") {
+    if (left.value < right.value) return -1;
+    return left.value > right.value ? 1 : 0;
+  }
+  if (left.tag === "text" && right.tag === "text") {
+    if (left.value < right.value) return -1;
+    return left.value > right.value ? 1 : 0;
+  }
+  fail(
+    "BLOT_TYPE",
+    `${what} compares two integers or two texts, found ${show(left)} and ${
+      show(right)
+    }.`,
+    span,
+  );
+}
+
+function ordering(sign: number): Value {
+  if (sign < 0) return { tag: "tag", name: "Less", payload: null };
+  if (sign > 0) return { tag: "tag", name: "Greater", payload: null };
+  return { tag: "tag", name: "Equal", payload: null };
+}
+
+/** Does `value` inhabit `type`? Structural, and total over the value domain. */
+export function inhabits(value: Value, type: Value): boolean {
+  if (type.tag === "unbounded") return true;
+  if (type.tag === "union") {
+    return type.members.some((member) => inhabits(value, member));
+  }
+  if (type.tag === "range") {
+    const aboveLow = type.low.tag === "unbounded" ||
+      compare(value, type.low, { start: 0, end: 0 }, "@type.range") >= 0;
+    const belowHigh = type.high.tag === "unbounded" ||
+      compare(value, type.high, { start: 0, end: 0 }, "@type.range") <= 0;
+    return aboveLow && belowHigh;
+  }
+  if (type.tag === "shape" && value.tag === "shape") {
+    // Width subtyping: a wider value inhabits a narrower shape type.
+    for (const [name, member] of type.fields) {
+      const found = value.fields.get(name);
+      if (found === undefined || !inhabits(found, member)) return false;
+    }
+    return true;
+  }
+  if (type.tag === "array" && value.tag === "array") {
+    return value.elements.every((element) =>
+      type.elements.some((m) => inhabits(element, m))
+    );
+  }
+  if (type.tag === "tag" && value.tag === "tag") {
+    if (type.name !== value.name) return false;
+    if (type.payload === null) return value.payload === null;
+    return value.payload !== null && inhabits(value.payload, type.payload);
+  }
+  return equal(value, type);
+}
+
+export const PRIMITIVE_VALUES: ReadonlyMap<string, Value> = new Map<
+  string,
+  Value
+>([
+  ["@type.unbounded", { tag: "unbounded" }],
+  // The unit type is the unit value. A singleton type is its inhabitant.
+  ["@type.unit", UNIT],
+  // The unbounded domains. A range with two open ends cannot say which domain
+  // it means, so these name it.
+  ["@type.int", {
+    tag: "range",
+    low: { tag: "unbounded" },
+    high: { tag: "unbounded" },
+    domain: "int",
+  }],
+  ["@type.text", {
+    tag: "range",
+    low: { tag: "unbounded" },
+    high: { tag: "unbounded" },
+    domain: "text",
+  }],
+  ["@shape.empty", { tag: "shape", fields: new Map() }],
+  ["@array.empty", { tag: "array", elements: [] }],
+]);
+
+export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
+  string,
+  Primitive
+>([
+  // --- type algebra ---
+  ["@type.range", {
+    arity: 2,
+    run: ([low, high]) => ({ tag: "range", low, high }),
+  }],
+  ["@type.union", { arity: 2, run: ([left, right]) => union(left, right) }],
+  ["@type.intersect", {
+    arity: 2,
+    run: ([left, right]) => intersect(left, right),
+  }],
+  ["@type.diff", {
+    arity: 2,
+    run: ([left, right], span) => difference(left, right, span),
+  }],
+  ["@type.arrow", {
+    arity: 2,
+    run: ([domain, codomain]) => ({ tag: "arrow", domain, codomain }),
+  }],
+  ["@type.of", { arity: 1, run: ([value]) => typeOf(value) }],
+  ["@type.seal", {
+    arity: 2,
+    run: ([name, inner], span) => ({
+      tag: "sealed",
+      brand: brands += 1,
+      name: textOf(name, span, "@type.seal"),
+      inner,
+    }),
+  }],
+  ["@type.open", {
+    arity: 1,
+    run: ([value], span) => {
+      if (value.tag !== "sealed") {
+        fail(
+          "BLOT_TYPE",
+          `@type.open expects a sealed value, found ${show(value)}.`,
+          span,
+        );
+      }
+      return value.inner;
+    },
+  }],
+  // Rank-N is annotation-only: `@forall` takes a function from a type variable
+  // to a type, and inference never produces one on its own.
+  ["@forall", { arity: 1, run: ([body]) => body }],
+  ["@satisfies", {
+    arity: 2,
+    run: ([value, type], span) => {
+      if (!inhabits(value, type)) {
+        fail(
+          "BLOT_DOES_NOT_SATISFY",
+          `${show(value)} does not inhabit ${show(type)}.`,
+          span,
+        );
+      }
+      return value;
+    },
+  }],
+
+  // --- shapes ---
+  ["@shape.get", {
+    arity: 2,
+    run: ([shape, name], span) => {
+      const key = textOf(name, span, "@shape.get");
+      const found = shapeFields(shape, span, "@shape.get").get(key);
+      if (found === undefined) {
+        fail("BLOT_NO_FIELD", `No field \`${key}\` on ${show(shape)}.`, span);
+      }
+      return found;
+    },
+  }],
+  ["@shape.set", {
+    arity: 3,
+    run: ([shape, name, value], span) => {
+      const fields = new Map(shapeFields(shape, span, "@shape.set"));
+      fields.set(textOf(name, span, "@shape.set"), value);
+      return { tag: "shape", fields };
+    },
+  }],
+  ["@shape.remove", {
+    arity: 2,
+    run: ([shape, name], span) => {
+      const fields = new Map(shapeFields(shape, span, "@shape.remove"));
+      fields.delete(textOf(name, span, "@shape.remove"));
+      return { tag: "shape", fields };
+    },
+  }],
+  ["@shape.names", {
+    arity: 1,
+    run: ([shape], span) => ({
+      tag: "array",
+      elements: [...shapeFields(shape, span, "@shape.names").keys()].map((
+        name,
+      ) => ({
+        tag: "text" as const,
+        value: name,
+      })),
+    }),
+  }],
+  ["@shape.has", {
+    arity: 2,
+    run: ([shape, name], span) =>
+      bool(
+        shapeFields(shape, span, "@shape.has").has(
+          textOf(name, span, "@shape.has"),
+        ),
+      ),
+  }],
+
+  // --- arrays ---
+  ["@array.len", {
+    arity: 1,
+    run: ([array], span) => ({
+      tag: "int",
+      value: BigInt(arrayElements(array, span, "@array.len").length),
+    }),
+  }],
+  ["@array.get", {
+    arity: 2,
+    run: ([array, index], span) => {
+      const elements = arrayElements(array, span, "@array.get");
+      const position = Number(intOf(index, span, "@array.get"));
+      if (position < 0 || position >= elements.length) {
+        fail(
+          "BLOT_OUT_OF_BOUNDS",
+          `Index ${position} is outside an array of ${elements.length}.`,
+          span,
+        );
+      }
+      return elements[position];
+    },
+  }],
+  ["@array.set", {
+    arity: 3,
+    run: ([array, index, value], span) => {
+      const elements = [...arrayElements(array, span, "@array.set")];
+      const position = Number(intOf(index, span, "@array.set"));
+      if (position < 0 || position >= elements.length) {
+        fail(
+          "BLOT_OUT_OF_BOUNDS",
+          `Index ${position} is outside an array of ${elements.length}.`,
+          span,
+        );
+      }
+      elements[position] = value;
+      return { tag: "array", elements };
+    },
+  }],
+  ["@array.push", {
+    arity: 2,
+    run: ([array, value], span) => ({
+      tag: "array",
+      elements: [...arrayElements(array, span, "@array.push"), value],
+    }),
+  }],
+
+  // --- integers ---
+  ["@int.add", {
+    arity: 2,
+    run: ([l, r], s) => ({
+      tag: "int",
+      value: intOf(l, s, "@int.add") + intOf(r, s, "@int.add"),
+    }),
+  }],
+  ["@int.sub", {
+    arity: 2,
+    run: ([l, r], s) => ({
+      tag: "int",
+      value: intOf(l, s, "@int.sub") - intOf(r, s, "@int.sub"),
+    }),
+  }],
+  ["@int.mul", {
+    arity: 2,
+    run: ([l, r], s) => ({
+      tag: "int",
+      value: intOf(l, s, "@int.mul") * intOf(r, s, "@int.mul"),
+    }),
+  }],
+  ["@int.div", {
+    arity: 2,
+    run: ([l, r], s) => {
+      const divisor = intOf(r, s, "@int.div");
+      if (divisor === 0n) fail("BLOT_DIVIDE_BY_ZERO", "Division by zero.", s);
+      return { tag: "int", value: intOf(l, s, "@int.div") / divisor };
+    },
+  }],
+  ["@int.rem", {
+    arity: 2,
+    run: ([l, r], s) => {
+      const divisor = intOf(r, s, "@int.rem");
+      if (divisor === 0n) fail("BLOT_DIVIDE_BY_ZERO", "Remainder by zero.", s);
+      return { tag: "int", value: intOf(l, s, "@int.rem") % divisor };
+    },
+  }],
+  ["@int.neg", {
+    arity: 1,
+    run: ([v], s) => ({ tag: "int", value: -intOf(v, s, "@int.neg") }),
+  }],
+  // One comparison primitive. `Eq` and `Ord` are prelude source over it.
+  ["@int.cmp", {
+    arity: 2,
+    run: ([l, r], s) => ordering(compare(l, r, s, "@int.cmp")),
+  }],
+
+  // --- text ---
+  ["@text.concat", {
+    arity: 2,
+    run: ([l, r], s) => ({
+      tag: "text",
+      value: textOf(l, s, "@text.concat") + textOf(r, s, "@text.concat"),
+    }),
+  }],
+  ["@text.len", {
+    arity: 1,
+    run: ([v], s) => ({
+      tag: "int",
+      value: BigInt([...textOf(v, s, "@text.len")].length),
+    }),
+  }],
+  ["@text.cmp", {
+    arity: 2,
+    run: ([l, r], s) => ordering(compare(l, r, s, "@text.cmp")),
+  }],
+  ["@text.of_int", {
+    arity: 1,
+    run: ([v], s) => ({
+      tag: "text",
+      value: intOf(v, s, "@text.of_int").toString(),
+    }),
+  }],
+
+  // --- ownership (given meaning by the linearity pass; identity when running) ---
+  ["@linear.own", { arity: 1, run: ([value]) => value }],
+  ["@linear.maybe", { arity: 1, run: ([value]) => value }],
+  ["@linear.borrow", { arity: 1, run: ([value]) => value }],
+
+  ["@panic", {
+    arity: 1,
+    run: ([message], span) =>
+      fail("BLOT_PANIC", textOf(message, span, "@panic"), span),
+  }],
+]);
+
+/** `@effect` needs a fresh identity per call, so it is built rather than tabled. */
+export function makeEffect(
+  name: string,
+  operations: ReadonlyMap<string, Value>,
+): Value {
+  return { tag: "effect", id: brands += 1, name, operations };
+}
+
+export { asTuple };

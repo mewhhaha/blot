@@ -1,0 +1,7 @@
+// The captured value is spent into the closure, so a closure nobody calls leaks
+// what it captured. Nothing here is marked `!` — `go` is linear because of what
+// it holds.
+let consume = (!value) => @int.add value 1;
+let !token = 41;
+let go = () => consume (!token);
+return 0;

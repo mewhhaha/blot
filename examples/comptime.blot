@@ -1,0 +1,56 @@
+// Compile-time programming.
+//
+// Compile time is the same language, so `derive` is a function. Nothing here is
+// a macro, an attribute, or a plugin — it is code you can read, step through,
+// and call from anywhere.
+
+let folded = comptime (20 * 2 + 1);
+
+const Header = struct {
+  .kind = U8;
+  .urgent = U8;
+  .length = I32;
+};
+
+// Structuring and padding are ordinary code over `@shape.*`. `packed` is not a
+// language feature; it is a width function handed to `layout`.
+const byte_width = _ => 1;
+const word_width = _ => 4;
+
+const packed_layout = layout (Header.types, byte_width);
+const aligned_layout = layout (Header.types, word_width);
+
+// Reflection is a normal call, so structural derivation is ordinary recursion
+// over a shape's fields.
+const derive_show = target => (value =>
+  fold (target.fields, "", ((state, name) => do
+    const rendered = @text.of_int (@shape.get value name);
+    return @text.concat state (@text.concat name (@text.concat "=" (@text.concat rendered " ")));
+  end)));
+
+const show_header = comptime (derive_show Header);
+
+const derive_sum = target => (value =>
+  fold (target.fields, 0, ((state, name) => @int.add state (@shape.get value name))));
+
+const sum_header = comptime (derive_sum Header);
+
+let sample = { .kind = 5; .urgent = 1; .length = 120; };
+
+// Ordinary collection work, all of it prelude source over `fold`.
+let numbers = upto (0, 10);
+let evens = filter (numbers, (n => case @int.rem n 2 of 0 => #True, _ => #False end));
+let squares = map (evens, (n => @int.mul n n));
+
+return {
+  .folded = folded;
+  .packed_size = packed_layout.size;
+  .packed_fields = packed_layout.fields;
+  .aligned_size = aligned_layout.size;
+  .shown = show_header sample;
+  .summed = sum_header sample;
+  .numbers = numbers;
+  .evens = evens;
+  .squares = squares;
+  .total = sum squares;
+};

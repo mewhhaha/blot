@@ -1,0 +1,3 @@
+// `rec` makes a binding's own name visible inside its lambda, so it needs a
+// binding with a single name to refer to.
+return rec (n => n);

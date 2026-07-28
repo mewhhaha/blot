@@ -1,0 +1,4 @@
+// Every body ends with `return`. It is a declaration form rather than a
+// trailing bare expression so the strict root loop stays one repeated island.
+let x = 1;
+let y = 2;

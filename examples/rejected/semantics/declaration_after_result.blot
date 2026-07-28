@@ -1,0 +1,3 @@
+// `return` is last. A declaration after it would be unreachable.
+return 1;
+let stranded = 2;

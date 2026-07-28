@@ -1,0 +1,8 @@
+// A module with a parameter. It has no authority beyond the record it is given.
+
+module capabilities;
+
+return {
+  .run = capabilities.base + capabilities.bonus;
+  .scaled = capabilities.base * 2;
+};

@@ -1,0 +1,1 @@
+{ .sum = 42; .nested = 3; .negated = 3; .compared = #True; .equal = #True; .piped = 44; .branch = "less"; }

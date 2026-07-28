@@ -1,0 +1,1 @@
+{ .value = -2147483648..2147483647 | @type.unbounded..@type.unbounded; .verb = "GET" | "POST"; .ratio = 3; .chained = 5; .compared = #True; .joined = "abc"; .piped = 44; .applied = 42; .bounded = #True; .negated = 3; }

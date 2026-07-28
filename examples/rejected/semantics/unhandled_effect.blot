@@ -1,0 +1,4 @@
+// An effect with no handler is an error, not a silent no-op. There is no
+// ambient handler and no default to fall through to.
+const Console = @effect { .write = Str -> Unit; };
+return Console.write "nobody is listening";

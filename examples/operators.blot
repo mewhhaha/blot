@@ -1,0 +1,45 @@
+// Custom operators.
+//
+// Any spelling from the operator character class is available. The header
+// supplies precedence, associativity, and the function to dispatch to; the
+// parser knows none of it, because expressions parse as flat chains and
+// precedence is resolved semantically.
+
+operators {
+  infixl 45 (:|) = @type.union;
+  infixl 45 (:-) = @type.diff;
+  infixr 30 (<>) = Text.append;
+  infixl 15 (<%>) = Fn.pipe;
+  infix 35 (=~) = Ord.le;
+  prefix 90 (~) = Num.negate;
+};
+
+const Value = I32 :| Str;
+const Method = "GET" :| "POST" :| "PUT";
+const Verb = Method :- "PUT";
+
+// Division and the comment marker coexist: an operator may contain `/`
+// anywhere except as a doubled prefix, which is what keeps `//` a comment.
+let ratio = 22 / 7;
+let chained = 1 + 2 * 3 - 4 / 2;
+let compared = 1 + 2 == 3;
+
+// Associativity and precedence are the header's business, not the grammar's.
+let joined = "a" <> "b" <> "c";
+let piped = 20 <%> Num.add 2 <%> Num.mul 2;
+let applied = Num.add 20 $ 22;
+let bounded = 3 =~ 4;
+let negated = ~7 + 10;
+
+return {
+  .value = Value;
+  .verb = Verb;
+  .ratio = ratio;
+  .chained = chained;
+  .compared = compared;
+  .joined = joined;
+  .piped = piped;
+  .applied = applied;
+  .bounded = bounded;
+  .negated = negated;
+};

@@ -1,0 +1,9 @@
+// The arms of a `case` must cover the scrutinee. A constructor no arm mentions
+// is caught here rather than at runtime.
+const Message = #Ready | #Progress Int | #Failed Str;
+sig describe = Message -> Str;
+let describe = m => case m of
+  #Ready => "ready",
+  #Progress n => "working"
+end;
+return describe;

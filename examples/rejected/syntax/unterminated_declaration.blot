@@ -1,0 +1,4 @@
+// Every declaration terminates with `;`. The boundary is not cosmetic: it is
+// the structural terminal that bounds the repeated root island.
+let x = 1
+return x;

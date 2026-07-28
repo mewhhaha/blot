@@ -1,0 +1,2 @@
+// The smallest legal module: no header, no operators, one result.
+return 42;

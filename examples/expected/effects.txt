@@ -1,0 +1,1 @@
+{ .transcript = "hello|world|done"; .writes = 2; .silenced = "silenced"; .nested = 2; }

@@ -1,0 +1,3 @@
+// An operator with no fixity is an error. Precedence is never guessed.
+let x = 1 <?> 2;
+return x;

@@ -1,0 +1,11 @@
+// Fixities live in one bounded header before any executable declaration. A
+// parallel parser loads that table once and then segments statements
+// independently; a fixity discovered mid-file would invalidate every chain
+// already parsed.
+let x = 1;
+
+operators {
+  infixl 60 (+) = Num.add;
+};
+
+return x;

@@ -1,0 +1,5 @@
+// Width subtyping is the whole of what a `duck` contract needed to be, so a
+// missing member is an ordinary record constraint failure.
+let origin = { .x = 1; };
+let distance = p => @int.add p.x p.y;
+return distance origin;

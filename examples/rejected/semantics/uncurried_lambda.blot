@@ -1,0 +1,4 @@
+// A lambda body is an expression, not another lambda. Explicit currying needs
+// parentheses so that the nested lambda has a locatable boundary.
+let apply_twice = f => x => f (f x);
+return apply_twice;
