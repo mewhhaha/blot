@@ -47,6 +47,17 @@ reaches gpufuck must be specialized enough for HM to re-check. A gpufuck
 inference failure on a well-typed blot program is a lowering bug, never a
 type-system disagreement to paper over.
 
+**The three executions agree.** The comptime evaluator, gpufuck's GPU
+evaluator, and the emitted Wasm run the same language. `just wasm` requires all
+three to produce the same value; a lowering that satisfies one and not another
+is wrong.
+
+**Inference feeds the backend.** Field sets and constructor sets are recorded
+during checking, keyed by AST node identity, because a nominal declaration
+needs the whole set and the syntax does not carry it. Do not re-derive them in
+the backend — that is a second type checker. This is why `load` keeps one cache
+per process.
+
 **`blot check` must not touch WebGPU.** Parsing has baba's `CpuFrontend`
 oracle and inference is plain TypeScript. Keep the split structural so the
 formatter and language server never initialize a device.

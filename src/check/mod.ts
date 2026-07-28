@@ -14,8 +14,9 @@ import {
   PRELUDE,
   resolvePath,
 } from "../load.ts";
-import { childEnv } from "../comptime/value.ts";
-import { checkModule } from "./infer.ts";
+import { childEnv, type Env as ValueEnv } from "../comptime/value.ts";
+import { type Checked, checkModule, type VariantCase } from "./infer.ts";
+import type { Expr } from "../syntax/ast.ts";
 import { freshVar, type SimpleType } from "./type.ts";
 import { show, showModuleRow as showRow } from "./print.ts";
 import { TypeError_ } from "./constrain.ts";
@@ -25,6 +26,16 @@ export interface CheckResult {
   readonly type: string;
   readonly effects: string;
   readonly ownership: Ownership;
+  /** Field and constructor sets the backend needs; see `Checked`. */
+  readonly shapes: ReadonlyMap<Expr, readonly string[]>;
+  readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
+  /**
+   * The module's compile-time bindings, including its own `const`s.
+   *
+   * Checking has to evaluate them anyway — a `const` may *be* a type — so the
+   * backend reuses the results instead of running the evaluator twice.
+   */
+  readonly values: ValueEnv;
 }
 
 /**
@@ -35,22 +46,29 @@ export interface CheckResult {
  * record becomes the seed for every other module's scope. It is ordinary blot
  * source and gets no exemption from its own type system.
  */
-let preludeTypes: ReadonlyMap<string, SimpleType> | null = null;
+let preludeChecked: Checked | null = null;
 
-async function preludeScope(): Promise<ReadonlyMap<string, SimpleType>> {
-  if (preludeTypes !== null) return preludeTypes;
+async function preludeCheck(): Promise<Checked> {
+  if (preludeChecked !== null) return preludeChecked;
   const prelude = await load(PRELUDE);
-  const result = checkModule(
+  preludeChecked = checkModule(
     prelude.module,
     seedValues(prelude),
     imports(prelude),
     null,
   );
-  if (result.type.tag !== "record") {
+  if (preludeChecked.type.tag !== "record") {
     throw new Error("the prelude must return a shape");
   }
-  preludeTypes = result.type.fields;
-  return preludeTypes;
+  return preludeChecked;
+}
+
+async function preludeScope(): Promise<ReadonlyMap<string, SimpleType>> {
+  const checked = await preludeCheck();
+  if (checked.type.tag !== "record") {
+    throw new Error("the prelude must return a shape");
+  }
+  return checked.type.fields;
 }
 
 function seedValues(loaded: Loaded) {
@@ -74,6 +92,11 @@ export async function checkFile(path: string): Promise<CheckResult> {
   // Seeded with the prelude exactly as evaluation is, so that `+` resolves to
   // the same `Num.add` in both.
   const scope = path === PRELUDE ? null : await preludeScope();
+  // The prelude's own facts travel with it. Lowering specializes prelude
+  // closures, so it needs the field and constructor sets inference found
+  // *inside* them — `Ord.lt` matches on `#Less`, and that `case` is prelude
+  // source, not the user's.
+  const inherited = path === PRELUDE ? null : await preludeCheck();
   const values = childEnv(loaded.closure.env);
 
   // Each dependency is checked before its importer, so a module's exports are
@@ -132,6 +155,9 @@ export async function checkFile(path: string): Promise<CheckResult> {
       type: show(checked.type),
       effects: row,
       ownership: linear.ownership,
+      shapes: merge(checked.shapes, inherited?.shapes),
+      variants: merge(checked.variants, inherited?.variants),
+      values,
     };
   } catch (error) {
     if (error instanceof TypeError_) {
@@ -145,6 +171,15 @@ export async function checkFile(path: string): Promise<CheckResult> {
     }
     throw error;
   }
+}
+
+/** Facts from a dependency plus this module's own; keys are node identities. */
+function merge<Value>(
+  own: ReadonlyMap<Expr, Value>,
+  inherited: ReadonlyMap<Expr, Value> | undefined,
+): ReadonlyMap<Expr, Value> {
+  if (inherited === undefined) return own;
+  return new Map([...inherited, ...own]);
 }
 
 export { show };

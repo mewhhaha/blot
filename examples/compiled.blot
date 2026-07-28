@@ -1,0 +1,28 @@
+// What reaches WebAssembly today.
+//
+// Everything here compiles through gpufuck's Functional Core: prelude
+// operators, comparisons, records, tuples, unions, and recursion. `blot build`
+// emits a `.wasm` whose `main` export returns the module's result.
+//
+// The prelude is compiled, not inlined at every use — `+` is `Num.add`, an
+// ordinary closure that becomes one Core definition.
+
+const Message = #Ready | #Busy Int | #Done Int;
+
+const describe = m => case m of
+  #Ready => 0,
+  #Busy n => n,
+  #Done n => n * 2
+end;
+
+const sum_to = rec (n => if n < 1 then 0 else n + sum_to (n - 1) end);
+
+let point = { .x = 20; .y = 22; };
+let add = (a, b) => a + b;
+
+let total = add (point.x, point.y);
+let counted = sum_to 8;
+let described = describe (#Done 3);
+let compared = if 20 < 22 then 1 else 0 end;
+
+return total + counted + described + compared - 43;

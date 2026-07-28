@@ -36,6 +36,14 @@ check-file file:
 ownership file:
   deno run --allow-read src/cli.ts ownership {{file}}
 
+# Compile one program to WebAssembly through gpufuck. Needs an adapter.
+build file:
+  WGPU_BACKENDS=vulkan deno run --unstable-webgpu --allow-read --allow-write --allow-env src/cli.ts build {{file}}
+
+# Do the interpreter, the GPU evaluator, and the emitted Wasm agree?
+wasm:
+  WGPU_BACKENDS=vulkan deno run --unstable-webgpu --allow-read --allow-write --allow-env scripts/wasm.ts
+
 # Install the Tree-sitter grammar, queries, and `.blot` association into Helix.
 # Re-running replaces the managed block rather than appending a second copy.
 install:

@@ -65,9 +65,27 @@ const Logic = { .not = not; .and = and; .or = or; };
 
 const Ordering = #Less | #Equal | #Greater;
 
-const is_equal = o => case o of #Equal => True, _ => False end;
-const is_less = o => case o of #Less => True, _ => False end;
-const is_greater = o => case o of #Greater => True, _ => False end;
+// Matched exhaustively rather than with `_`. A wildcard arm leaves the
+// constructor set unpinned in a polymorphic function, and the set is what the
+// backend needs to build a Core union — so being explicit here is what lets
+// every comparison in the language reach Wasm.
+const is_equal = o => case o of
+  #Equal => True,
+  #Less => False,
+  #Greater => False
+end;
+
+const is_less = o => case o of
+  #Less => True,
+  #Equal => False,
+  #Greater => False
+end;
+
+const is_greater = o => case o of
+  #Greater => True,
+  #Less => False,
+  #Equal => False
+end;
 
 const Ord = {
   .cmp = left => (right => @int.cmp left right);

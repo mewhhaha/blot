@@ -18,7 +18,7 @@ import type { Decl, Expr, Module, Pattern, Span } from "../syntax/ast.ts";
 import { fail } from "../diagnostic.ts";
 import type { Env as ValueEnv } from "../comptime/value.ts";
 import { childEnv } from "../comptime/value.ts";
-import { evaluate, type Imports, run } from "../comptime/eval.ts";
+import { bind, evaluate, type Imports, run } from "../comptime/eval.ts";
 import { bridge } from "./bridge.ts";
 import { constrain, instantiate, scheme, TypeError_ } from "./constrain.ts";
 import { PRIMITIVE_TYPES } from "./primitives.ts";
@@ -56,6 +56,9 @@ function lookupType(env: TypeEnv, name: string): Typing | undefined {
 }
 
 interface Context {
+  /** Field sets and constructor sets, recorded for the backend. */
+  readonly shapes: Map<Expr, readonly string[]>;
+  readonly variants: Map<Expr, readonly VariantCase[]>;
   readonly types: TypeEnv;
   /** Comptime bindings, for bridging `sig` expressions and `const` values. */
   readonly values: ValueEnv;
@@ -83,6 +86,20 @@ function located<T>(span: Span, work: () => T): T {
 function comptime(expr: Expr, context: Context): ReturnType<typeof run> | null {
   try {
     return run(evaluate(expr, context.values, { imports: context.imports }));
+  } catch {
+    return null;
+  }
+}
+
+function comptimeBinding(
+  pattern: Pattern,
+  expr: Expr,
+  context: Context,
+): ReturnType<typeof run> | null {
+  try {
+    return run(
+      bind(pattern, expr, context.values, { imports: context.imports }),
+    );
   } catch {
     return null;
   }
@@ -156,6 +173,10 @@ export function infer(
       located(expr.span, () => {
         constrain(target, record([[expr.name, result]]));
       });
+      // Record what the target's whole field set is, if it is known. Lowering
+      // cannot see it and cannot build the nominal without it.
+      const fields = fieldsOf(target);
+      if (fields !== null) context.shapes.set(expr, fields);
       return result;
     }
 
@@ -360,7 +381,66 @@ function inferCase(
   if (covered !== null) {
     located(expr.target.span, () => constrain(target, covered));
   }
+  // Recorded after the arms, not before: the scrutinee's constructor set is
+  // what the arms proved it must be, and before them there is nothing to read.
+  const cases = casesOf(target);
+  if (cases !== null) context.variants.set(expr, cases);
   return result;
+}
+
+/**
+ * The field set of a record type, digging through a variable's bounds.
+ *
+ * A variable's lower bounds are what flowed into it, and a record among them is
+ * the shape the value actually has. Several disagreeing records mean the field
+ * set is not known here, and saying so beats picking one.
+ */
+function fieldsOf(type: SimpleType): readonly string[] | null {
+  const found = new Set<string>();
+  let sawRecord = false;
+
+  const walk = (current: SimpleType, seen: Set<number>): void => {
+    if (current.tag === "record") {
+      sawRecord = true;
+      for (const name of current.fields.keys()) found.add(name);
+      return;
+    }
+    if (current.tag !== "var" || seen.has(current.id)) return;
+    seen.add(current.id);
+    for (const bound of current.lower) walk(bound, seen);
+  };
+
+  walk(type, new Set());
+  return sawRecord ? [...found] : null;
+}
+
+/**
+ * The constructor set of a variant type, with each tag's arity.
+ *
+ * Arity matters to the backend and to nothing else: Core constructors declare
+ * their fields, and `#Ready` with no payload cannot share a field list with
+ * `#Busy n`.
+ */
+function casesOf(type: SimpleType): readonly VariantCase[] | null {
+  const found = new Map<string, boolean>();
+  let sawVariant = false;
+
+  const walk = (current: SimpleType, seen: Set<number>): void => {
+    if (current.tag === "variant") {
+      sawVariant = true;
+      for (const [name, payload] of current.cases) {
+        found.set(name, found.get(name) === true || payload.tag !== "unit");
+      }
+      return;
+    }
+    if (current.tag !== "var" || seen.has(current.id)) return;
+    seen.add(current.id);
+    for (const bound of [...current.lower, ...current.upper]) walk(bound, seen);
+  };
+
+  walk(type, new Set());
+  if (!sawVariant) return null;
+  return [...found].map(([name, payload]) => ({ name, payload }));
 }
 
 /** Arms of one `case` accept the union of their patterns. */
@@ -471,7 +551,13 @@ function inferDeclarations(
     // value knows exactly which operations exist and which row they carry.
     let type: Typing | null = null;
     if (declaration.kind === "const") {
-      const raw = comptime(declaration.value, context);
+      // Through `bind`, not `evaluate`: a `const` may be `rec`, and `rec` only
+      // means anything when it knows the name it is being bound to.
+      const raw = comptimeBinding(
+        declaration.pattern,
+        declaration.value,
+        context,
+      );
       // `@effect` cannot know what it will be called, so the binding names it.
       // The identity is preserved: this is a rename, not a second effect.
       const value =
@@ -594,6 +680,22 @@ function recordComptime(
 export interface Checked {
   readonly type: SimpleType;
   readonly effects: SimpleType;
+  /**
+   * What inference learned that lowering needs.
+   *
+   * gpufuck has no records: they become nominal declarations, and a nominal
+   * needs the *whole* field set. `p.x` alone does not say what else `p` has —
+   * inference does, so it writes it down here rather than making the backend
+   * re-derive it. Same for the constructor set behind a `case`.
+   */
+  readonly shapes: ReadonlyMap<Expr, readonly string[]>;
+  readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
+}
+
+/** One constructor of a union, and whether it carries a payload. */
+export interface VariantCase {
+  readonly name: string;
+  readonly payload: boolean;
 }
 
 export function checkModule(
@@ -611,7 +713,16 @@ export function checkModule(
     // them, so `fold` used once on text could never be used on integers.
     for (const [name, type] of prelude) types.names.set(name, scheme(type, -1));
   }
-  const context: Context = { types, values, imports, modules };
+  const shapes = new Map<Expr, readonly string[]>();
+  const variants = new Map<Expr, readonly VariantCase[]>();
+  const context: Context = {
+    shapes,
+    variants,
+    types,
+    values,
+    imports,
+    modules,
+  };
   const level = 0;
   const row = freshVar(level);
 
@@ -624,7 +735,7 @@ export function checkModule(
 
   inferDeclarations(module.declarations, context, level, row);
   const result = infer(module.result, context, level, row);
-  return { type: result, effects: row };
+  return { type: result, effects: row, shapes, variants };
 }
 
 export { effects, PRIMITIVE_TYPES };

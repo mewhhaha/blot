@@ -13,7 +13,7 @@ import { checkFile } from "./check/mod.ts";
 const [command, ...rest] = Deno.args;
 
 if (command === undefined || rest.length === 0) {
-  console.error("usage: blot <check|eval|ast|ownership> <file.blot>...");
+  console.error("usage: blot <check|eval|build|ast|ownership> <file.blot>...");
   Deno.exit(2);
 }
 
@@ -23,6 +23,7 @@ for (const path of rest) {
   try {
     if (command === "check") await check(path);
     else if (command === "ownership") await ownership(path);
+    else if (command === "build") await buildFile(path);
     else if (command === "eval") await evaluateFile(path);
     else if (command === "ast") await dumpAst(path);
     else {
@@ -78,6 +79,21 @@ async function ownership(path: string): Promise<void> {
     const { line, column } = locate(source, span.start);
     console.log(`  last use of \`${name}\` at ${line}:${column}`);
   }
+}
+
+/** Lowers to gpufuck's Core, compiles on the GPU, and writes the Wasm binary. */
+async function buildFile(path: string): Promise<void> {
+  const { build } = await import("./backend/compile.ts");
+  const built = await build(path);
+  const output = path.replace(/\.blot$/, ".wasm");
+  await Deno.writeFile(output, built.wasm);
+  const { runWasm } = await import("./backend/run.ts");
+  const ran = await runWasm(built.wasm);
+  console.log(
+    `${output}: ${built.wasm.byteLength} bytes, wasm returns ${
+      JSON.stringify(ran.value)
+    }, gpu evaluator ${JSON.stringify(built.value)}`,
+  );
 }
 
 async function dumpAst(path: string): Promise<void> {

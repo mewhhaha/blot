@@ -31,14 +31,19 @@ than by runtime check — `&` may be read but never moved, and a closure inherit
 the strongest obligation it captured. `blot ownership` prints the last-use facts
 the backend will consume. See [docs/ownership.md](docs/ownership.md).
 
-Not done: the gpufuck backend (M4), so reuse is analysed but not yet applied.
-The evaluator is the runtime for now, which is no accident — blot needs one
-anyway, because types are values.
+The gpufuck backend (M4) has landed for a real subset: `blot build` emits
+WebAssembly, and `just wasm` checks that the interpreter, gpufuck's GPU
+evaluator, and the emitted Wasm all agree. Literals, prelude operators and
+comparisons, records, tuples, unions, `case`, `if`, and recursion compile;
+effects, handlers, module parameters, and arrays do not yet. See
+[docs/backend.md](docs/backend.md) for both lists.
 
 ```bash
 just run examples/tour.blot   # evaluate a program
 just check-file examples/tour.blot  # infer its type and check ownership
 just ownership examples/tour.blot   # last-use and linearity facts
+just build examples/compiled.blot   # compile to WebAssembly
+just wasm                           # interpreter vs GPU evaluator vs Wasm
 just test                     # corpus goldens, rejections, profile gate
 just parity                   # CPU oracle vs WebGPU frontend, needs an adapter
 just generate                 # regenerate the parser; fails if the profile regresses

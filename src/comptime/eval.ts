@@ -247,7 +247,7 @@ function* runDeclarations(
  * Evaluates a binding's value, giving `rec` its meaning: the binding's own name
  * becomes visible inside the lambda.
  */
-function* bind(
+export function* bind(
   pattern: Pattern,
   value: Expr,
   scope: Env,

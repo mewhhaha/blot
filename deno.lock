@@ -2,6 +2,7 @@
   "version": "5",
   "specifiers": {
     "jsr:@mewhhaha/baba@^7.3.0": "7.3.0",
+    "jsr:@mewhhaha/gpufuck@0.4": "0.4.0",
     "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/internal@^1.0.12": "1.0.14",
     "jsr:@std/internal@^1.0.14": "1.0.14",
@@ -10,6 +11,9 @@
   "jsr": {
     "@mewhhaha/baba@7.3.0": {
       "integrity": "c9c618272845bee1c15f6b540b6a603d87c1ef00e6fcf2baaf61730e4ecd2c23"
+    },
+    "@mewhhaha/gpufuck@0.4.0": {
+      "integrity": "c63f2652b8a7ac71a49d00912079985e5f622382e588ed1243936af97e52e248"
     },
     "@std/assert@1.0.19": {
       "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",

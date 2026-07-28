@@ -109,9 +109,18 @@ export function moduleImports(module: Module): readonly string[] {
   return [...found];
 }
 
+/**
+ * One cache per process, not per call.
+ *
+ * Inference records facts for the backend keyed by AST node identity, so two
+ * `load` calls returning two structurally equal trees would silently lose every
+ * one of them. Sharing the cache is what keeps "the module" a single thing.
+ */
+const modules = new Map<string, Loaded>();
+
 export async function load(
   path: string,
-  cache: Map<string, Loaded> = new Map(),
+  cache: Map<string, Loaded> = modules,
   active: Set<string> = new Set(),
 ): Promise<Loaded> {
   const absolute = resolve(path);
