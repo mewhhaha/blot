@@ -49,6 +49,16 @@ const arrow_grouped = (Int | Str) -> Int;
 const algebra_bare = 0 | 1 & 1;
 const algebra_grouped = 0 | (1 & 1);
 
+// `&&` and `||` are boolean logic, distinct from `&` and `|`, which are set
+// algebra. Comparisons bind tighter than both, and `&&` tighter than `||`.
+//
+// Both arguments are evaluated. An operator here is an ordinary curried
+// function and blot has no laziness for one to exploit, so `if` is the
+// short-circuiting form.
+let ranged = 1 < 2 && 3 < 4;
+let either = False && True || True;
+let precedence = True || False && False;
+
 // Append binds tighter than comparison and looser than arithmetic. `==` is
 // `Ord.eq` over `@int.cmp`, so it compares integers; `Text.cmp` compares text.
 let appended = is_equal (Text.cmp ("a" <> "b") "ab");
@@ -59,6 +69,9 @@ return {
   .arrow_grouped = arrow_grouped;
   .algebra_bare = algebra_bare;
   .algebra_grouped = algebra_grouped;
+  .ranged = ranged;
+  .either = either;
+  .precedence = precedence;
   .appended = appended;
   .counted = counted;
   .value = Value;

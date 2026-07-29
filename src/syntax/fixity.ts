@@ -36,6 +36,12 @@ export const DEFAULT_FIXITIES: readonly Fixity[] = [
   entry("$", "right", 10, "Fn.apply"),
   entry("|>", "left", 20, "Fn.pipe"),
 
+  // Distinct spellings from `|` and `&`, which are set algebra. Both are
+  // ordinary curried functions, so both arguments are evaluated — `if` is the
+  // short-circuiting form.
+  entry("||", "right", 22, "Logic.or"),
+  entry("&&", "right", 24, "Logic.and"),
+
   // An arrow is looser than everything that builds the types on either side of
   // it, so `A | B -> C` is `(A | B) -> C` — the reading the notation has
   // everywhere else.

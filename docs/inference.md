@@ -147,6 +147,8 @@ meaningless anyway.
 |---|---|---|---|
 | 10 | `$` | right | `Fn.apply` |
 | 20 | `\|>` | left | `Fn.pipe` |
+| 22 | `\|\|` | right | `Logic.or` |
+| 24 | `&&` | right | `Logic.and` |
 | 25 | `->` | right | `@type.arrow` |
 | 30 | `==` `/=` `<` `<=` `>` `>=` | none | `Eq.*`, `Ord.*` |
 | 40 | `\|` `\\` | left | `Set.union`, `Set.diff` |
@@ -169,6 +171,11 @@ Three relationships are load-bearing and were each wrong once, so
 - **Append binds tighter than comparison and looser than arithmetic**, so
   `a <> b == c` compares the joined value and `t <> x + y` appends the sum.
   It used to sit below comparison, which made `a <> b == c` a type error.
+
+`&&` and `||` are boolean logic and are distinct from `&` and `|`, which are
+set algebra. Both are ordinary curried functions, so **both arguments are
+evaluated** — there is no laziness for an operator to exploit, and `if` is the
+short-circuiting form. `a && perform ()` performs whatever `a` is.
 
 `==` is `Ord.eq` over `@int.cmp` and compares integers. `Text.cmp` compares
 text — the evaluator used to accept text through `@int.cmp` while the checker

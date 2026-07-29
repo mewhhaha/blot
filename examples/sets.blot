@@ -30,7 +30,7 @@ const readonly = without "PUT";
 // rebinds `|`, `&`, and `\` for the rest of the module.
 
 const member = (values, needle) =>
-  fold (values, False, ((seen, value) => Logic.or (seen, Ord.eq value needle)));
+  fold (values, False, ((seen, value) => seen || Ord.eq value needle));
 
 const Set = {
   .union = left => (right => fold (right, left, ((all, value) =>

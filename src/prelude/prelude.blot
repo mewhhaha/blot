@@ -60,15 +60,21 @@ const not = value => case value of
   #False => True
 end;
 
-const and = (left, right) => case left of
+// Curried, because they are the targets of `&&` and `||`.
+//
+// Both arguments are evaluated: an operator is an ordinary function here, and
+// blot has no laziness for one to exploit. That is the honest cost of "nothing
+// is built in" — `if` is the short-circuiting form, and `a && perform ()` will
+// perform whatever `a` is.
+const and = left => (right => case left of
   #False => False,
   #True => right
-end;
+end);
 
-const or = (left, right) => case left of
+const or = left => (right => case left of
   #True => True,
   #False => right
-end;
+end);
 
 const Logic = { .not = not; .and = and; .or = or; };
 
@@ -179,10 +185,10 @@ const filter = (values, keep) =>
 const sum = values => fold (values, 0, ((state, value) => @int.add state value));
 
 const any = (values, holds) =>
-  fold (values, False, ((seen, value) => Logic.or (seen, holds value)));
+  fold (values, False, ((seen, value) => seen || holds value));
 
 const every = (values, holds) =>
-  fold (values, True, ((seen, value) => Logic.and (seen, holds value)));
+  fold (values, True, ((seen, value) => seen && holds value));
 
 const upto = (low, high) => do
   const build = rec ((index, state) =>
@@ -288,12 +294,12 @@ const sort_by = (values, before) => do
     let out = @array.empty;
     let placed = False;
     for existing in Iter.items sorted do
-      const goes_first = Logic.and (not placed, before (value, existing));
+      const goes_first = not placed && before (value, existing);
       out := if goes_first
         then @array.push (@array.push out value) existing
         else @array.push out existing
         end;
-      placed := Logic.or (placed, goes_first);
+      placed := placed || goes_first;
     end;
     sorted := if placed then out else @array.push out value end;
   end;
@@ -419,8 +425,8 @@ const refines = rec ((narrow, wide) => case reflect wide of
   #Unbounded => True,
   #Union options => any (options, (option => refines (narrow, option))),
   #Range r => case reflect narrow of
-    #Range s => Logic.and (above_low (s.low, r.low), below_high (s.high, r.high)),
-    _ => Logic.and (above_low (narrow, r.low), below_high (narrow, r.high))
+    #Range s => above_low (s.low, r.low) && below_high (s.high, r.high),
+    _ => above_low (narrow, r.low) && below_high (narrow, r.high)
   end,
   #Shape wide_fields => case reflect narrow of
     // Width and depth: a wider record refines a narrower one.
@@ -442,11 +448,11 @@ const refines = rec ((narrow, wide) => case reflect wide of
   end,
   #Arrow w => case reflect narrow of
     // Contravariant in the domain, covariant in the codomain.
-    #Arrow n => Logic.and (refines (w.domain, n.domain), refines (n.codomain, w.codomain)),
+    #Arrow n => refines (w.domain, n.domain) && refines (n.codomain, w.codomain),
     _ => False
   end,
   #Tag w => case reflect narrow of
-    #Tag n => Logic.and (text_eq (n.name, w.name), case w.payload of
+    #Tag n => text_eq (n.name, w.name) && (case w.payload of
       #None => case n.payload of #None => True, #Some _ => False end,
       #Some carried => case n.payload of
         #Some mine => refines (mine, carried),
@@ -457,8 +463,8 @@ const refines = rec ((narrow, wide) => case reflect wide of
   end,
   // A seal is invariant: same name, and carriers that refine each other.
   #Sealed w => case reflect narrow of
-    #Sealed n => Logic.and (text_eq (n.name, w.name),
-      Logic.and (refines (n.inner, w.inner), refines (w.inner, n.inner))),
+    #Sealed n => text_eq (n.name, w.name)
+      && refines (n.inner, w.inner) && refines (w.inner, n.inner),
     _ => False
   end,
   #Int v => refines_literal (narrow, v),
