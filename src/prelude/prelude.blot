@@ -184,6 +184,19 @@ const any = (values, holds) =>
 const every = (values, holds) =>
   fold (values, True, ((seen, value) => Logic.and (seen, holds value)));
 
+// Stable insertion sort. `before (a, b)` is `#True` when `a` must come first;
+// stability is what lets `packed` reorder by width without scrambling the
+// declaration order of fields that tie.
+const sort_by = (values, before) => fold (values, @array.empty, ((sorted, value) => do
+  const woven = fold (sorted, { .out = @array.empty; .placed = False; },
+    ((state, existing) =>
+      if Logic.and (not state.placed, before (value, existing))
+      then { .out = @array.push (@array.push state.out value) existing; .placed = True; }
+      else { .out = @array.push state.out existing; .placed = state.placed; }
+      end));
+  return if woven.placed then woven.out else @array.push woven.out value end;
+end));
+
 const upto = (low, high) => do
   const build = rec ((index, state) =>
     if is_less (@int.cmp index high)
@@ -236,8 +249,9 @@ const U8 = range (0, 255);
 const Nat = range (0, @type.unbounded);
 const Unit = @type.unit;
 
-// Field offsets and widths. This is the structuring and padding hook: `packed`
-// and any other layout strategy are written over it rather than built in.
+// Byte offsets and widths in declaration order, with no padding at all. This
+// is the raw hook; `aligned` and `packed` below are written over the same
+// idea rather than built in.
 const layout = (shape, width_of) => do
   const names = @shape.names shape;
   const placed = fold (names, { .offset = 0; .fields = @array.empty; },
@@ -408,24 +422,91 @@ const Reflect = {
   .opened = opened;
 };
 
-// `struct` is the headline claim of "few primitives": naming a product type's
-// fields and generating its constructor and accessors is ordinary code over
-// `@shape.*`, not a compiler feature.
-const struct = shape => do
-  // One slot per field is the canonical layout. `layout` below is the hook for
-  // any other strategy — `packed` is that call with a byte width instead of 1 —
-  // so a struct always reports where its fields live, and never invents a
-  // packing rule the program did not ask for.
-  const placed = layout (shape, (_ => 1));
+// --- structs ----------------------------------------------------------------
+//
+// A struct is a *placement*: an order over the declared fields, and the
+// positional product that order describes. The product is written out — a
+// three-field struct stores a three-slot tuple — so where a value lives is
+// something the program decided rather than something the compiler chose
+// later. That is the whole point of doing this in source.
+//
+// The product is a tuple rather than an array because a tuple keeps one type
+// per slot. `[I32, Str]` collapses to "an array of int-or-text" the moment
+// inference looks at it; `(I32, Str)` does not, and a struct whose storage is
+// imprecise is not predictable storage.
+//
+// `order` is a parameter, which is the entire packing and padding story:
+// `struct` is declaration order, `packed` is widest-first, and anything else
+// is a function you write.
+
+const slot_key = index => Text.of_int index;
+
+// name -> slot index, in the order the placement chose.
+const slots_of = order => (fold (order, { .next = 0; .at = @shape.empty; },
+  ((state, name) => {
+    .next = @int.add state.next 1;
+    .at = @shape.set state.at name state.next;
+  }))).at;
+
+const structure = (shape, order) => do
+  const at = slots_of order;
+  // The storage type, positionally. This is what a value of this struct *is*.
+  const storage = fold (order, @shape.empty,
+    ((product, name) => @shape.set product (slot_key (@shape.get at name)) (@shape.get shape name)));
   return {
-    .fields = @shape.names shape;
-    .types = shape;
-    .size = placed.size;
-    .slots = placed.fields;
-    .offset = name => fold (placed.fields, None,
-      ((found, slot) => if text_eq (slot.name, name) then Some slot.offset else found end));
-    .new = value => @satisfies value shape;
+    .shape = shape;
+    .storage = storage;
+    .fields = order;
+    .size = @array.len order;
+
+    // Which slot a field lives in. Every accessor below is this index and a
+    // projection; there is no other way to reach a field.
+    .slot = name => @shape.get at name;
+    .get = (value, name) => @shape.get value (slot_key (@shape.get at name));
+
+    // Named record in, positional storage out. The call site writes fields in
+    // whatever order reads well; the placement decides where they land. A
+    // field the shape does not declare is rejected here rather than silently
+    // stored, and a missing one fails on the read.
+    .new = record => do
+      const _ = @satisfies (@shape.names record) order;
+      return fold (order, @shape.empty, ((product, name) =>
+        @shape.set product (slot_key (@shape.get at name))
+          (@satisfies (@shape.get record name) (@shape.get shape name))));
+    end;
+
+    // ...and back, so storage can be read by name without knowing the order.
+    .named = value => fold (order, @shape.empty, ((record, name) =>
+      @shape.set record name (@shape.get value (slot_key (@shape.get at name)))));
   };
+end;
+
+const struct = shape => structure (shape, @shape.names shape);
+
+// Widest field first. With every field aligned to its own width, that is the
+// order in which `aligned` needs no padding at all, which is what packing a
+// struct means when you are not bit-packing it.
+const packed = (shape, width_of) => structure (shape,
+  sort_by (@shape.names shape, ((left, right) =>
+    is_greater (@int.cmp (width_of (@shape.get shape left)) (width_of (@shape.get shape right))))));
+
+// Byte offsets in a given order, with each field aligned to its own width.
+// `.padding` is reported rather than hidden: a placement that wastes space
+// should say so, because choosing a better order is the reason to look.
+const aligned = (shape, order, width_of) => do
+  const placed = fold (order, { .offset = 0; .fields = @array.empty; .padding = 0; },
+    ((state, name) => do
+      const width = width_of (@shape.get shape name);
+      const slack = @int.rem state.offset width;
+      const pad = if Ord.eq slack 0 then 0 else @int.sub width slack end;
+      const start = @int.add state.offset pad;
+      return {
+        .offset = @int.add start width;
+        .padding = @int.add state.padding pad;
+        .fields = @array.push state.fields { .name = name; .offset = start; .width = width; };
+      };
+    end));
+  return { .size = placed.offset; .padding = placed.padding; .fields = placed.fields; };
 end;
 
 const Type = {
@@ -438,7 +519,10 @@ const Type = {
   .seal = seal;
   .unseal = unseal;
   .struct = struct;
+  .structure = structure;
+  .packed = packed;
   .layout = layout;
+  .aligned = aligned;
 };
 
 return {
@@ -455,6 +539,9 @@ return {
   .not = not;
 
   .Ordering = Ordering;
+  .is_equal = is_equal;
+  .is_less = is_less;
+  .is_greater = is_greater;
   .Ord = Ord;
   .Eq = Eq;
   .Num = Num;
@@ -496,7 +583,11 @@ return {
   .text_eq = text_eq;
   .range = range;
   .struct = struct;
+  .structure = structure;
+  .packed = packed;
   .layout = layout;
+  .aligned = aligned;
+  .sort_by = sort_by;
   .I32 = I32;
   .I64 = I64;
   .U8 = U8;

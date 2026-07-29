@@ -81,6 +81,24 @@ const Message = #Ready | #Progress I32 | #Failed Str;
 const Point = struct { .x = I32; .y = I32; };
 ```
 
+A struct is a *placement*: an order over the declared fields, and the
+positional product that order describes. The product is written out, so where a
+value lives is decided by the program rather than by the compiler later, and the
+order is a parameter — `struct` is declaration order, `packed` is widest-first,
+anything else is a function you write:
+
+```blot
+const Record = { .flag = U8; .id = I32; .code = U8; .name = Str; };
+struct Record                     // (U8, I32, U8, Str)   24 bytes, 10 padding
+packed (Record, byte_width)       // (Str, I32, U8, U8)   14 bytes,  0 padding
+```
+
+The product is a tuple rather than an array because a tuple keeps one type per
+slot; `[I32, Str]` collapses to "an array of int-or-text" the moment inference
+looks at it, and storage that is imprecise is not predictable storage. The
+name-to-slot mapping is compile-time knowledge, so `new` runs at compile time
+and what reaches WebAssembly is the tuple and a projection at a fixed index.
+
 `struct` is prelude source — about fifteen lines over `@shape.*` — not a
 compiler builtin. Types are sets, so `|`, `&`, and `\` are bound to `Set.union`,
 `Set.intersect`, and `Set.diff` the same way `+` is bound to `Num.add` — at a

@@ -27,6 +27,14 @@ let add = (a, b) => a + b;
 let total = add (x, height) + 4;
 
 // Arrays are Core's `Store`: allocated at the first element, then written.
+// A struct is compile-time machinery over an ordinary tuple: the name-to-slot
+// mapping is resolved before lowering, so what reaches Wasm is the storage
+// product and a projection at a fixed index. `new` must therefore be `const`
+// — a runtime call would be a computed field name, which does not lower.
+const Point = struct { .x = I32; .y = I32; };
+const placed = Point.new { .y = 3; .x = 5; };
+let stored = placed.0 * placed.1;
+
 let values = [1, 2, 3];
 let [one, _two, three] = values;
 let picked = one + three + @array.len values - 1;
@@ -34,4 +42,4 @@ let counted = sum_to 8;
 let described = describe (#Done 3);
 let compared = if 20 < 22 then 1 else 0 end;
 
-return total + counted + described + compared + picked - 51;
+return total + counted + described + compared + picked + stored - 66;

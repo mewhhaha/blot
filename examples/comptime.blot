@@ -12,13 +12,14 @@ const Header = struct {
   .length = I32;
 };
 
-// Structuring and padding are ordinary code over `@shape.*`. `packed` is not a
-// language feature; it is a width function handed to `layout`.
+// Structuring and padding are ordinary code over `@shape.*`, so a width
+// function is all a layout strategy is. `examples/storage.blot` takes this
+// further; here it is only evidence that it is a call.
 const byte_width = _ => 1;
 const word_width = _ => 4;
 
-const packed_layout = layout (Header.types, byte_width);
-const aligned_layout = layout (Header.types, word_width);
+const packed_layout = layout (Header.shape, byte_width);
+const aligned_layout = layout (Header.shape, word_width);
 
 // Reflection is a normal call, so structural derivation is ordinary recursion
 // over a shape's fields.

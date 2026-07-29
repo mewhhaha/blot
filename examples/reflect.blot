@@ -53,9 +53,9 @@ const element_of = t => unwrap_or (opened ("List", t), Unit);
 
 // --- struct -----------------------------------------------------------------
 //
-// `struct` is fifteen lines of prelude over `@shape.*`. It reports the field
-// names, their types, the canonical one-slot-per-field layout, and a `new` that
-// refuses a value the shape does not admit.
+// `struct` is prelude source over `@shape.*`. It reports the declared shape,
+// the positional product that is the storage, which slot each field lives in,
+// and a `new` that refuses a value the shape does not admit.
 
 const Header = struct { .code = U8; .label = Str; };
 
@@ -82,8 +82,8 @@ return {
 
   .header_fields = Header.fields;
   .header_size = Header.size;
-  .header_slots = Header.slots;
-  .label_at = Header.offset "label";
+  .header_storage = Header.storage;
+  .label_at = Header.slot "label";
   .built = Header.new { .code = 7; .label = "ok"; };
   .picked = Pick (Ok, ["body"]);
   .omitted = Omit (Ok, ["body"]);
