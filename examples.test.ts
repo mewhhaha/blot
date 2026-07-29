@@ -27,7 +27,10 @@ import { checkFile } from "./src/check/mod.ts";
  * the type system getting stronger, and one that migrates the other way is a
  * regression.
  */
-const REJECTIONS: Record<string, { code: string; stage: "check" | "run" }> = {
+const REJECTIONS: Record<
+  string,
+  { code: string; stage: "check" | "run" | "build" }
+> = {
   "declaration_after_result": {
     code: "BLOT_DECLARATION_AFTER_RESULT",
     stage: "check",
@@ -71,6 +74,7 @@ const REJECTIONS: Record<string, { code: string; stage: "check" | "run" }> = {
     stage: "check",
   },
   "effect_not_discharged": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },
+  "handler_aborts": { code: "BLOT_UNSUPPORTED_LOWERING", stage: "build" },
   "handler_wrong_operation": { code: "BLOT_TYPE_ERROR", stage: "check" },
 };
 
@@ -120,27 +124,41 @@ for (const name of await blotFiles("examples/rejected/semantics")) {
     ? "an unrecorded diagnostic"
     : expected.code;
 
-  Deno.test(`examples/rejected/semantics/${name} fails with ${label}`, async () => {
-    if (expected === undefined) {
-      throw new Error(`add \`${stem}\` to REJECTIONS with its code and stage`);
-    }
-    const path = join("examples/rejected/semantics", name);
-    const run = expected.stage === "check"
-      ? () => checkFile(path)
-      : () => evaluateFile(path, { write: () => {} });
-
-    let message: string | null = null;
-    try {
-      await run();
-    } catch (error) {
-      if (!(error instanceof BlotError) && !(error instanceof LoadError)) {
-        throw error;
+  const suffix = expected?.stage === "build" ? " at build" : "";
+  Deno.test(
+    `examples/rejected/semantics/${name} fails with ${label}${suffix}`,
+    async () => {
+      if (expected === undefined) {
+        throw new Error(
+          `add \`${stem}\` to REJECTIONS with its code and stage`,
+        );
       }
-      message = error.message;
-    }
-    if (message === null) {
-      throw new Error(`expected \`${expected.stage}\` to reject this program`);
-    }
-    assertStringIncludes(message, expected.code);
-  });
+      const path = join("examples/rejected/semantics", name);
+      // A `build` rejection needs a WebGPU adapter, so it is asserted by
+      // `just wasm` rather than here; checking it must still pass.
+      if (expected.stage === "build") {
+        await checkFile(path);
+        return;
+      }
+      const run = expected.stage === "check"
+        ? () => checkFile(path)
+        : () => evaluateFile(path, { write: () => {} });
+
+      let message: string | null = null;
+      try {
+        await run();
+      } catch (error) {
+        if (!(error instanceof BlotError) && !(error instanceof LoadError)) {
+          throw error;
+        }
+        message = error.message;
+      }
+      if (message === null) {
+        throw new Error(
+          `expected \`${expected.stage}\` to reject this program`,
+        );
+      }
+      assertStringIncludes(message, expected.code);
+    },
+  );
 }

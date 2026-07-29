@@ -19,6 +19,7 @@ const COMPILES = [
   "examples/minimal.blot",
   "examples/compiled.blot",
   "examples/host.blot",
+  "examples/handlers.blot",
 ];
 
 /** `()` crosses the host boundary as a constructor, and reads as one. */
@@ -73,6 +74,31 @@ for (const path of COMPILES) {
   console.log(
     `${path}: ${built.wasm.byteLength} bytes${imports}, all three agree on ${expected}`,
   );
+}
+
+// Programs the backend must refuse, and why. A refusal that quietly became a
+// miscompile would look like progress.
+const REFUSES: readonly [string, string][] = [
+  [
+    "examples/rejected/semantics/handler_aborts.blot",
+    "does not resume in tail position",
+  ],
+];
+
+for (const [path, reason] of REFUSES) {
+  try {
+    await build(path, hostInit(() => {}));
+    console.error(`${path}: expected the backend to refuse this`);
+    failures += 1;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes(reason)) {
+      console.error(`${path}: refused for the wrong reason: ${message}`);
+      failures += 1;
+      continue;
+    }
+    console.log(`${path}: refused, ${reason}`);
+  }
 }
 
 if (failures > 0) {

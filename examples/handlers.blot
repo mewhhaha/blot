@@ -1,0 +1,33 @@
+// Handlers that compile.
+//
+// gpufuck's Core carries effect labels on definitions and lets a handler
+// *replace* an operation lexically; a pure replacement discharges the label.
+// That covers exactly the tail-resumptive handlers — the ones whose clause ends
+// in `resume e`, which is an operation replacement and nothing more.
+//
+// Handling means inlining the computation, because the evidence is lexical. A
+// closure has already resolved its operations against the global definitions,
+// so specializing the handler is not an optimization here: it is what makes it
+// mean anything.
+
+const Counter = @effect { .bump = Int -> Int; };
+const Scale = @effect { .by = Int -> Int; };
+
+// A clause is `(argument, ?resume) => …`. `?` is affine, so resuming twice is a
+// static error and never resuming is an abort — which is a different feature.
+let doubling = { .bump = (n, ?resume) => resume (n * 2); };
+
+// Tail position survives a block, an `if`, and a `case`, because each of those
+// has a tail to rewrite.
+let stepping = {
+  .by = (n, ?resume) => do
+    const scaled = n * 10;
+    return resume (if n < 0 then 0 else scaled end);
+  end;
+};
+
+let counted = () => Counter.bump 20 + Counter.bump 1;
+let scaled = () => Scale.by 4;
+
+// Nested handlers discharge only what they replace.
+return @handle (Counter, counted, doubling) - @handle (Scale, scaled, stepping);

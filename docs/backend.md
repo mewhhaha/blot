@@ -138,6 +138,39 @@ Only integers, text, and `()` cross the boundary today. A shape would need a
 nominal on both sides, and inventing one silently would make the import's
 contract a guess.
 
+## Handlers are evidence
+
+Core carries an effect label on a definition and lets a handler _replace_ that
+operation lexically; a pure replacement discharges the label. So a blot effect's
+operation is an ordinary definition whose body traps — unhandled is exactly what
+a trap means — and handling it substitutes a real implementation.
+
+That covers the **tail-resumptive** handlers precisely: the ones whose clause
+ends in `resume e`.
+
+```blot
+const Counter = @effect { .bump = Int -> Int; };
+let doubling = { .bump = (n, ?resume) => resume (n * 2); };
+let counted = () => Counter.bump 20 + Counter.bump 1;
+
+@handle (Counter, counted, doubling)   // 42
+```
+
+`(n, ?resume) => resume e` is the pure operation `n => e` and nothing more. Tail
+position survives a block, an `if`, and a `case`, because each of those has a
+tail to rewrite. Resuming anywhere else needs the rest of the computation as a
+value, and that is a continuation.
+
+**Handling inlines the computation**, because the evidence is lexical. A closure
+has already resolved its operations against the global definitions, so a handler
+wrapped around a call to it would replace nothing. Specializing the handler is
+not an optimization here — it is what makes it mean anything. The computation
+and the handler both have to be written in the module, which is what "a handler
+known at compile time" always required.
+
+The handled example compiles to 3,847 bytes with no evidence left at run time:
+the operations were replaced and their labels discharged.
+
 ## When gpufuck disagrees
 
 gpufuck re-runs Hindley-Milner on what blot emits. blot's algebraic-subtyping

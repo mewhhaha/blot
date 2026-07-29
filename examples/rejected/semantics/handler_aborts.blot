@@ -1,0 +1,8 @@
+// An aborting handler — one that never resumes — is a different feature from a
+// tail-resumptive one. It discards the rest of the computation, which needs a
+// delimited continuation, and Core has none. blot says so rather than
+// pretending a closed function is equivalent.
+const Ask = @effect { .ask = Int -> Int; };
+let quiet = { .ask = (n, ?resume) => 0; };
+let work = () => Ask.ask 1;
+return @handle (Ask, work, quiet);
