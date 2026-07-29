@@ -22,7 +22,7 @@ token INTRINSIC priority 3 = /@[a-z_][A-Za-z0-9_]*(\.[a-z_][A-Za-z0-9_]*)*/ ;
 // comment. Spelled out rather than as `[...]+` because the lexer requires
 // disjoint terminal identities, not a longest-match tiebreak.
 token OPERATOR =
-  /[+\-*<>=|&^%!?~$:][+\-*\/<>=|&^%!?~$:]*|\/[+\-*<>=|&^%!?~$:][+\-*\/<>=|&^%!?~$:]*|\// ;
+  /[+\-*<>=|&^%!?~$:\\][+\-*\/<>=|&^%!?~$:\\]*|\/[+\-*<>=|&^%!?~$:\\][+\-*\/<>=|&^%!?~$:\\]*|\// ;
 
 skip WHITESPACE = /[ \t\r\n]+/ ;
 skip COMMENT = /\/\/[^\r\n]*/ ;

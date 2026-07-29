@@ -10,9 +10,10 @@ const Method = "GET" | "POST" | "PUT";
 const Bit = 0 | 1;
 const Small = 1 | 2 | 3 | #Woop | "hello";
 
-// Set algebra over unions.
+// Set algebra over unions. `|` and `\` are `Set.union` and `Set.diff` — no
+// more built in than `+` is.
 const Value = I32 | Str;
-const Verb = Method :- "PUT";
+const Verb = Method \ "PUT";
 const Digit = range (0, 9);
 
 // Arrows are values too, so a signature is an expression.

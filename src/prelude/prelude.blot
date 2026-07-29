@@ -11,6 +11,20 @@
 //   * every other multi-argument function takes one shape, because naming beats
 //     position and a tuple is still one parameter.
 
+// --- sets -------------------------------------------------------------------
+//
+// Types are sets, so the three set operations are one namespace rather than
+// three loose primitives. `|` names `Set.union` exactly the way `+` names
+// `Num.add`: the operator points at prelude source, and the prelude decides
+// which primitive answers. Nothing about `|` is privileged, and this has to
+// come first because the declarations below already use it.
+
+const Set = {
+  .union = left => (right => @type.union left right);
+  .intersect = left => (right => @type.intersect left right);
+  .diff = left => (right => @type.diff left right);
+};
+
 // --- functions --------------------------------------------------------------
 
 const identity = value => value;
@@ -192,7 +206,6 @@ const Error = value => #Error value;
 // no type-level sublanguage for them to live in.
 
 const range = (low, high) => @type.range low high;
-const union = (left, right) => @type.union left right;
 const arrow = (domain, codomain) => @type.arrow domain codomain;
 const type_of = value => @type.of value;
 const seal = (name, value) => @type.seal name value;
@@ -245,7 +258,9 @@ end;
 
 const Type = {
   .range = range;
-  .union = union;
+  .union = Set.union;
+  .intersect = Set.intersect;
+  .diff = Set.diff;
   .arrow = arrow;
   .of = type_of;
   .seal = seal;
@@ -291,6 +306,7 @@ return {
   .Error = Error;
 
   .Type = Type;
+  .Set = Set;
   .range = range;
   .struct = struct;
   .layout = layout;

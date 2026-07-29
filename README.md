@@ -82,10 +82,15 @@ const Point = struct { .x = I32; .y = I32; };
 ```
 
 `struct` is prelude source — about fifteen lines over `@shape.*` — not a
-compiler builtin. `|` is an operator bound to `@type.union`. So is `+`, which
-resolves to `Num.add`. Set algebra, ranges, arrows, and seals are all ordinary
-calls, and reflection over a shape's fields is a `fold`, which is why `derive`
-is a function rather than a macro.
+compiler builtin. Types are sets, so `|`, `&`, and `\` are bound to `Set.union`,
+`Set.intersect`, and `Set.diff` the same way `+` is bound to `Num.add` — at a
+prelude record, never at a primitive. Because the binding resolves by name at
+the use site, a module that defines its own `Set` with those three fields
+rebinds all three operators for itself; structural width subtyping is the whole
+of the dispatch, and there is no coherence rule because there is no instance
+table. `examples/sets.blot` does exactly that over arrays. Ranges, arrows, and
+seals are ordinary calls too, and reflection over a shape's fields is a `fold`,
+which is why `derive` is a function rather than a macro.
 
 Effects are a shape of operation types handed to one primitive, and performing
 one is an ordinary call — the row is never written:
