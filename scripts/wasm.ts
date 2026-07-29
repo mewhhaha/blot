@@ -21,14 +21,50 @@ const COMPILES = [
   "examples/host.blot",
   "examples/handlers.blot",
   "examples/shadowed_effects.blot",
+  "examples/modules.blot",
+  "examples/arithmetic.blot",
+  "examples/linear.blot",
 ];
 
-/** `()` crosses the host boundary as a constructor, and reads as one. */
-function sameValue(wasm: unknown, interpreted: string): boolean {
-  const encoded = wasm as { kind?: string; value?: unknown };
-  if (encoded?.kind === "unit") return interpreted === "()";
-  if (encoded?.kind === "integer") return String(encoded.value) === interpreted;
-  return String(wasm) === interpreted;
+/**
+ * A boundary value, rendered the way the interpreter renders its own.
+ *
+ * A record crosses as a constructor, and its field *names* are a lowering
+ * detail — so the shapes the backend synthesized are what turn it back into
+ * something comparable. Comparing only scalars would have quietly stopped
+ * checking every program that returns a record.
+ */
+function render(
+  value: unknown,
+  shapes: ReadonlyMap<string, readonly string[]>,
+): string {
+  const node = value as {
+    kind?: string;
+    value?: unknown;
+    name?: string;
+    fields?: readonly unknown[];
+  };
+  if (node?.kind === "unit") return "()";
+  if (node?.kind === "integer") return String(node.value);
+  if (node?.kind === "text") return JSON.stringify(node.value);
+  // `#True` and `#False` became Core booleans on the way in; reading one back
+  // means undoing exactly that mapping.
+  if (node?.kind === "boolean") return node.value === true ? "#True" : "#False";
+  if (node?.kind === "constructor" && node.name !== undefined) {
+    const fields = shapes.get(node.name);
+    const parts = node.fields ?? [];
+    if (fields === undefined) {
+      return `#${node.name}${parts.length === 0 ? "" : " …"}`;
+    }
+    if (fields.every((name) => /^\d+$/.test(name)) && fields.length > 0) {
+      return `(${parts.map((part) => render(part, shapes)).join(", ")})`;
+    }
+    const members = fields.map((name, index) =>
+      `.${name} = ${render(parts[index], shapes)}`
+    );
+    return members.length === 0 ? "{}" : `{ ${members.join("; ")}; }`;
+  }
+  return String(value);
 }
 
 let failures = 0;
@@ -46,10 +82,10 @@ for (const path of COMPILES) {
   const expected = show(interpreted);
   const gpu = built.value as { kind?: string; value?: unknown };
 
-  if (!sameValue(built.ran, expected)) {
+  if (render(built.ran, built.shapes) !== expected) {
     console.error(
       `${path}: wasm returned ${
-        JSON.stringify(built.ran)
+        render(built.ran, built.shapes)
       }, interpreter said ${expected}`,
     );
     failures += 1;

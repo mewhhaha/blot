@@ -30,6 +30,8 @@ export interface CheckResult {
   /** Field and constructor sets the backend needs; see `Checked`. */
   readonly shapes: ReadonlyMap<Expr, readonly string[]>;
   readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
+  /** Checked dependencies, so the backend can inline what it imports. */
+  readonly modules: ReadonlyMap<string, Loaded>;
   /**
    * The module's compile-time bindings, including its own `const`s.
    *
@@ -103,8 +105,17 @@ export async function checkFile(path: string): Promise<CheckResult> {
   // Each dependency is checked before its importer, so a module's exports are
   // visible as types rather than as an opaque value.
   const modules = new Map<string, SimpleType>();
+  const loadedModules = new Map<string, Loaded>();
+  // A dependency's facts travel with it for the same reason the prelude's do:
+  // the backend inlines an imported module, so it needs the field and
+  // constructor sets inference found *inside* that module.
+  const dependencyFacts: {
+    shapes: ReadonlyMap<Expr, readonly string[]>;
+    variants: ReadonlyMap<Expr, readonly VariantCase[]>;
+  }[] = [];
   for (const specifier of moduleImports(loaded.module)) {
     const dependency = await load(resolvePath(specifier, loaded.path));
+    loadedModules.set(specifier, dependency);
     const dependencyScope = dependency.path === PRELUDE
       ? null
       : await preludeScope();
@@ -114,6 +125,7 @@ export async function checkFile(path: string): Promise<CheckResult> {
       imports(dependency),
       dependencyScope,
     );
+    dependencyFacts.push(checked);
     const parameter = dependency.module.parameter === null
       ? { tag: "unit" as const }
       : freshVar(0);
@@ -157,8 +169,17 @@ export async function checkFile(path: string): Promise<CheckResult> {
       type: show(checked.type),
       effects: row,
       ownership: linear.ownership,
-      shapes: merge(checked.shapes, inherited?.shapes),
-      variants: merge(checked.variants, inherited?.variants),
+      shapes: mergeAll([
+        ...dependencyFacts.map((facts) => facts.shapes),
+        inherited?.shapes,
+        checked.shapes,
+      ]),
+      variants: mergeAll([
+        ...dependencyFacts.map((facts) => facts.variants),
+        inherited?.variants,
+        checked.variants,
+      ]),
+      modules: loadedModules,
       values,
     };
   } catch (error) {
@@ -199,13 +220,16 @@ function rowLabels(type: SimpleType, seen: Set<number>): string[] {
   return type.lower.flatMap((bound) => rowLabels(bound, seen));
 }
 
-/** Facts from a dependency plus this module's own; keys are node identities. */
-function merge<Value>(
-  own: ReadonlyMap<Expr, Value>,
-  inherited: ReadonlyMap<Expr, Value> | undefined,
+/** Facts from every module that contributed code; keys are node identities. */
+function mergeAll<Value>(
+  sources: readonly (ReadonlyMap<Expr, Value> | undefined)[],
 ): ReadonlyMap<Expr, Value> {
-  if (inherited === undefined) return own;
-  return new Map([...inherited, ...own]);
+  const merged = new Map<Expr, Value>();
+  for (const source of sources) {
+    if (source === undefined) continue;
+    for (const [node, value] of source) merged.set(node, value);
+  }
+  return merged;
 }
 
 export { show };

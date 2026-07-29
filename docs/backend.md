@@ -65,9 +65,19 @@ and `20 + 22` compiles to a call to one hoisted definition.
 ## What compiles today
 
 Literals, prelude operators and comparisons, records and their spreads, tuples,
-unions and `case`, destructuring bindings, arrays, lambdas and application,
-`let`, `if`, and recursion through `rec`. `examples/compiled.blot` exercises all
-of it, and `just wasm` checks the answer against the interpreter.
+unions and `case`, destructuring bindings including array patterns, arrays,
+lambdas and application, `let`, `if`, recursion through `rec`, host effects,
+tail-resumptive handlers, and imported modules.
+
+An import is _inlined_: a module is a function from a record to a record, both
+known at compile time, so importing one is lowering its body as a block. The
+import boundary exists for authority, not for code generation.
+
+`just wasm` compares eight programs across all three executions, on their whole
+result rather than a scalar — a record crosses the boundary as a constructor,
+and the field names the backend synthesized are what turn it back into something
+comparable. Comparing only scalars would have quietly stopped checking every
+program that returns a record.
 
 Arrays are Core's `Store`. A write returns a _new_ store, so an array literal
 threads each element through its own binding — the first version rewrote the
@@ -102,8 +112,10 @@ this is handler specialization on blot's side: a handler known at compile time
 inlines into direct-style calls, and one-shot `resume` means no continuation
 object is needed. The type checker already refuses an effect nothing handles.
 
-**Module parameters.** The entry module's record of blot handlers has no Wasm
-representation yet; it arrives with handler lowering.
+**Module parameters.** An entry module that demands one cannot be compiled:
+`blot build` has no argument to hand it. For the Wasm target host authority
+arrives as `@effect.host` instead, which is typed, declared, and imported —
+`init` remains compile-time configuration.
 
 **Arrays.** They map to Core's `Store`, and the ownership facts from
 `blot

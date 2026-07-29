@@ -27,6 +27,8 @@ export interface Built {
   readonly ran: unknown;
   /** Host capabilities the module imports, one per host effect. */
   readonly capabilities: readonly string[];
+  /** Field names per synthesized nominal, for reading a record back. */
+  readonly shapes: ReadonlyMap<string, readonly string[]>;
 }
 
 export async function build(path: string, init: WasmInit = {}): Promise<Built> {
@@ -103,6 +105,7 @@ export async function build(path: string, init: WasmInit = {}): Promise<Built> {
         value,
         ran,
         capabilities: lowered.capabilities.map((capability) => capability.name),
+        shapes: lowered.shapes,
       };
     } finally {
       compilation.module.destroy();
