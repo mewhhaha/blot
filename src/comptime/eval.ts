@@ -225,7 +225,14 @@ function* runDeclarations(
   for (const declaration of declarations) {
     if (declaration.tag === "shadow") {
       const value = yield* evaluate(declaration.value, scope, runtime);
-      scope.names.set(declaration.name, value);
+      // A shadow names its effect for the same reason a binding does: without
+      // it every row reads `{ Effect }` and says nothing.
+      scope.names.set(
+        declaration.name,
+        value.tag === "effect" && value.name === "Effect"
+          ? { ...value, name: declaration.name }
+          : value,
+      );
       continue;
     }
     // `sig` constrains inference; it binds nothing and computes nothing here.

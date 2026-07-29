@@ -171,6 +171,19 @@ known at compile time" always required.
 The handled example compiles to 3,847 bytes with no evidence left at run time:
 the operations were replaced and their labels discharged.
 
+## Names, and what may not be mangled
+
+An effect's identity is its own, not its spelling: `@effect` mints a fresh one
+every time, so two effects may share a name. Core definitions are therefore
+named by identity — a name less unique than the memo that guards it is a
+duplicate definition waiting for two effects to collide.
+
+A **capability** name is the exception. It is the host-facing contract — the
+host supplies `init.Console` by that name — so it cannot be made unique behind
+the programmer's back. Two distinct host effects claiming it are ambiguous at
+the boundary, and `BLOT_AMBIGUOUS_CAPABILITY` says so rather than merging their
+operations.
+
 ## When gpufuck disagrees
 
 gpufuck re-runs Hindley-Milner on what blot emits. blot's algebraic-subtyping

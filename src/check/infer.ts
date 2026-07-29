@@ -599,9 +599,17 @@ function inferDeclarations(
 
   for (const declaration of declarations) {
     if (declaration.tag === "shadow") {
-      const type = generalize(declaration.value, context, level, row);
-      context.types.names.set(declaration.name, type);
-      recordValue(declaration.name, declaration.value, context);
+      // Same as a binding: evaluate first, name what it produced, and let the
+      // *named* value be what gets bridged. Bridging first would mint the
+      // effect's label from the placeholder name, and the rename afterwards
+      // would come too late to matter.
+      const named = namedComptime(declaration.name, declaration.value, context);
+      if (named !== null) context.values.names.set(declaration.name, named);
+      const bridged = named === null ? null : bridge(named);
+      context.types.names.set(
+        declaration.name,
+        bridged ?? generalize(declaration.value, context, level, row),
+      );
       continue;
     }
 
@@ -738,9 +746,26 @@ function generalizeRec(
   return scheme(inner, level);
 }
 
-function recordValue(name: string, expr: Expr, context: Context): void {
-  const value = comptime(expr, context);
-  if (value !== null) context.values.names.set(name, value);
+/** Evaluates a shadow's value and names the effect it may have produced. */
+function namedComptime(
+  name: string,
+  expr: Expr,
+  context: Context,
+): ReturnType<typeof run> | null {
+  return nameEffect(name, comptime(expr, context));
+}
+
+/**
+ * `@effect` cannot know what it will be called, so the binding names it. The
+ * identity is preserved: this is a rename, not a second effect.
+ */
+function nameEffect(
+  name: string,
+  value: ReturnType<typeof run> | null,
+): ReturnType<typeof run> | null {
+  if (value === null) return null;
+  if (value.tag !== "effect" || value.name !== "Effect") return value;
+  return { ...value, name };
 }
 
 function recordComptime(

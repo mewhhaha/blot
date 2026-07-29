@@ -20,6 +20,7 @@ const COMPILES = [
   "examples/compiled.blot",
   "examples/host.blot",
   "examples/handlers.blot",
+  "examples/shadowed_effects.blot",
 ];
 
 /** `()` crosses the host boundary as a constructor, and reads as one. */
