@@ -155,6 +155,21 @@ Only integers, text, and `()` cross the boundary today. A shape would need a
 nominal on both sides, and inventing one silently would make the import's
 contract a guess.
 
+## Recovering a constructor set without monomorphizing
+
+A wildcard arm leaves the scrutinee's constructor set open, which is common
+inside a polymorphic function: `case o of #Less => …, _ => …` says nothing about
+`#Equal`. Core needs the whole set to name the nominal, so the obvious fix is to
+duplicate the definition per instantiation — and that is the fix gpufuck's own
+measurements argue against.
+
+The set is already written down elsewhere.
+`const Message = #Ready | #Progress Int` _is_ a constructor set, so lowering
+harvests every compile-time union in scope and looks the arms up in them, the
+same membership lookup that already resolves which union a bare `#Ready` belongs
+to. An ambiguous tag — one two unions both declare — is refused rather than
+guessed.
+
 ## What a pattern becomes
 
 Core dispatches on a constructor and nothing else, so the rest of blot's
