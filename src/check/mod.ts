@@ -15,7 +15,12 @@ import {
   resolvePath,
 } from "../load.ts";
 import { childEnv, type Env as ValueEnv } from "../comptime/value.ts";
-import { type Checked, checkModule, type VariantCase } from "./infer.ts";
+import {
+  type Checked,
+  checkModule,
+  type GrantSignature,
+  type VariantCase,
+} from "./infer.ts";
 import type { Expr, Pattern } from "../syntax/ast.ts";
 import { freshVar, type SimpleType } from "./type.ts";
 import { show, showModuleRow as showRow } from "./print.ts";
@@ -31,6 +36,7 @@ export interface CheckResult {
   readonly shapes: ReadonlyMap<Expr, readonly string[]>;
   readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
   readonly patternShapes: ReadonlyMap<Pattern, readonly string[]>;
+  readonly grants: ReadonlyMap<Expr, GrantSignature>;
   /** Checked dependencies, so the backend can inline what it imports. */
   readonly modules: ReadonlyMap<string, Loaded>;
   /**
@@ -186,6 +192,7 @@ export async function checkFile(path: string): Promise<CheckResult> {
         inherited?.patternShapes,
         checked.patternShapes,
       ]),
+      grants: checked.grants,
       modules: loadedModules,
       values,
     };

@@ -62,6 +62,9 @@ interface Context {
   readonly pending: (() => void)[];
   readonly variants: Map<Expr, readonly VariantCase[]>;
   readonly patternShapes: Map<Pattern, readonly string[]>;
+  readonly grants: Map<Expr, GrantSignature>;
+  /** The entry module's parameter name, when it has one. */
+  parameterName: string | null;
   readonly types: TypeEnv;
   /** Comptime bindings, for bridging `sig` expressions and `const` values. */
   readonly values: ValueEnv;
@@ -187,6 +190,18 @@ export function infer(
         const fields = fieldsOf(target);
         if (fields !== null) context.shapes.set(expr, fields);
       });
+      // A projection off the module parameter is a granted capability. Read
+      // after checking, because the signature comes from how the program
+      // *uses* it and at the projection nothing has used it yet.
+      if (
+        expr.target.tag === "var" &&
+        expr.target.name === context.parameterName
+      ) {
+        context.pending.push(() => {
+          const signature = arrowOf(result);
+          if (signature !== null) context.grants.set(expr, signature);
+        });
+      }
       return result;
     }
 
@@ -712,6 +727,23 @@ function bindDeclaration(
   recordPatternShapes(pattern, whole, context);
 }
 
+/** A function type, dug out of whatever bounds carry it. */
+function arrowOf(
+  type: SimpleType,
+  seen = new Set<number>(),
+): GrantSignature | null {
+  if (type.tag === "fun") {
+    return { parameter: type.param, result: type.result };
+  }
+  if (type.tag !== "var" || seen.has(type.id)) return null;
+  seen.add(type.id);
+  for (const bound of [...type.upper, ...type.lower]) {
+    const found = arrowOf(bound, seen);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
 /** What the value actually carries, wherever a shape pattern reads part of it. */
 function recordPatternShapes(
   pattern: Pattern,
@@ -823,6 +855,21 @@ export interface Checked {
    * arrives.
    */
   readonly patternShapes: ReadonlyMap<Pattern, readonly string[]>;
+  /**
+   * The type of each projection off the entry module's parameter.
+   *
+   * The parameter is the program's whole authority, and at the WebAssembly
+   * boundary that authority *is* the module's imports — so each field the
+   * program reaches for becomes a declared host operation, and inference is
+   * what knows its signature.
+   */
+  readonly grants: ReadonlyMap<Expr, GrantSignature>;
+}
+
+/** A granted capability's shape, as the boundary needs it. */
+export interface GrantSignature {
+  readonly parameter: SimpleType;
+  readonly result: SimpleType;
 }
 
 /** One constructor of a union, and whether it carries a payload. */
@@ -849,11 +896,16 @@ export function checkModule(
   const shapes = new Map<Expr, readonly string[]>();
   const variants = new Map<Expr, readonly VariantCase[]>();
   const patternShapes = new Map<Pattern, readonly string[]>();
+  const grants = new Map<Expr, GrantSignature>();
   const pending: (() => void)[] = [];
   const context: Context = {
     shapes,
     variants,
     patternShapes,
+    grants,
+    parameterName: module.parameter !== null && module.parameter.tag === "name"
+      ? module.parameter.name
+      : null,
     pending,
     types,
     values,
@@ -881,6 +933,7 @@ export function checkModule(
     shapes,
     variants,
     patternShapes,
+    grants,
   };
 }
 

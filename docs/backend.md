@@ -67,9 +67,10 @@ and `20 + 22` compiles to a call to one hoisted definition.
 Literals, prelude operators and comparisons, records and their spreads, tuples,
 unions and `case` including literal guards and nested payloads, destructuring
 bindings including array patterns, arrays and their spreads, `map` and `filter`
-and the rest of the collection prelude, lambdas and application, `let`, `if`,
-recursion through `rec`, `fold` and the collections built on it, host effects,
-tail-resumptive handlers, and imported modules.
+and the rest of the collection prelude, text operations, granted capabilities,
+lambdas and application, `let`, `if`, recursion through `rec`, `fold` and the
+collections built on it, host effects, tail-resumptive handlers, and imported
+modules.
 
 `rec` becomes a Core `let-rec`, not a lifted top-level definition. Lifting it
 stranded whatever the lambda captured — `fold`'s inner `go` closes over
@@ -125,15 +126,40 @@ this is handler specialization on blot's side: a handler known at compile time
 inlines into direct-style calls, and one-shot `resume` means no continuation
 object is needed. The type checker already refuses an effect nothing handles.
 
-**Module parameters.** An entry module that demands one cannot be compiled:
-`blot build` has no argument to hand it. For the Wasm target host authority
-arrives as `@effect.host` instead, which is typed, declared, and imported —
-`init` remains compile-time configuration.
-
 **Arrays.** They map to Core's `Store`, and the ownership facts from
 `blot
 ownership` are what would choose write-in-place over rebuild. Nothing
 consumes them yet.
+
+## The module parameter is the module's imports
+
+The entry module's parameter is the program's whole authority — no ambient
+filesystem, no ambient clock, nothing to import for more. At this boundary that
+authority _is_ the module's imports:
+
+```blot
+module init;
+…
+const _ = init.print message;     // imports { Init }
+```
+
+`init` has no runtime representation of its own. Each field the program reaches
+for becomes a declared host operation, with the signature inference found for
+it, and nothing is passed in. A program that never asked for `print` cannot
+reach it.
+
+An operation's result may be unconstrained — nothing observes what `print`
+returns — and `()` is what that means at the boundary. An unconstrained
+_parameter_ is still refused: the host cannot be handed something no type
+determines.
+
+Text is the same story from the other end. Core carries text without measuring
+or rendering it, so `@text.len`, `@text.of_int`, and `@text.cmp` are host
+operations under a `Text` capability that blot declares itself — the import is
+typed and visible, and no program has to declare an effect for something the
+language already has. `@text.cmp` crosses as a comparison returning a sign; the
+three-constructor ordering is rebuilt on this side, because a variant has no
+boundary representation and inventing one for it would be the worse trade.
 
 ## Host effects are capabilities
 

@@ -1,0 +1,30 @@
+// Capabilities, at the WebAssembly boundary.
+//
+// The entry module's parameter is the program's whole authority: no ambient
+// filesystem, no ambient clock, nothing to import for more. At this boundary
+// that authority *is* the module's imports — each field the program reaches for
+// becomes a declared host operation, with the signature inference found for it.
+//
+// `init` has no runtime representation of its own. Nothing is passed in, and a
+// program that never asked for `print` cannot reach it.
+
+module init;
+
+const Console = @effect { .write = Str -> Unit; };
+
+// A tail-resumptive handler, so the operation is replaced and the effect
+// discharged. The granted capability is what it replaces the operation with.
+const to_host = {
+  .write = (message, ?resume) => do
+    const _ = init.print message;
+    return resume ();
+  end;
+};
+
+const report = () => do
+  const _ = Console.write "compiled";
+  const _2 = Console.write "linked";
+  return 42;
+end;
+
+return @handle (Console, report, to_host);
