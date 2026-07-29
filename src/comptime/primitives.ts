@@ -532,9 +532,25 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     run: ([v], s) => ({ tag: "int", value: -intOf(v, s, "@int.neg") }),
   }],
   // One comparison primitive. `Eq` and `Ord` are prelude source over it.
+  //
+  // Integers only, which is what its name and its declared type both say.
+  // `compare` is more general because a range bound may be text, but reaching
+  // that generality through here let `"a" == "b"` run while failing to check —
+  // the two executions have to agree, and `Text.cmp` is the one for text.
   ["@int.cmp", {
     arity: 2,
-    run: ([l, r], s) => ordering(compare(l, r, s, "@int.cmp")),
+    run: ([l, r], s) => {
+      if (l.tag !== "int" || r.tag !== "int") {
+        fail(
+          "BLOT_TYPE",
+          `@int.cmp compares two integers, found ${show(l)} and ${
+            show(r)
+          }. \`Text.cmp\` compares text.`,
+          s,
+        );
+      }
+      return ordering(compare(l, r, s, "@int.cmp"));
+    },
   }],
 
   // --- text ---

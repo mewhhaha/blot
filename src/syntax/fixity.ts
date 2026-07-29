@@ -30,25 +30,43 @@ function entry(
  * is built into the compiler; only the precedence is.
  */
 export const DEFAULT_FIXITIES: readonly Fixity[] = [
-  entry("|>", "left", 20, "Fn.pipe"),
+  // Loosest first. The levels are grouped by what an operator *does*, and two
+  // groups only share a level when mixing them without parentheses is
+  // meaningless anyway.
   entry("$", "right", 10, "Fn.apply"),
-  entry("<>", "right", 30, "Semigroup.append"),
-  entry("==", "none", 40, "Eq.eq"),
-  entry("/=", "none", 40, "Eq.ne"),
-  entry("<", "none", 40, "Ord.lt"),
-  entry("<=", "none", 40, "Ord.le"),
-  entry(">", "none", 40, "Ord.gt"),
-  entry(">=", "none", 40, "Ord.ge"),
-  entry("|", "left", 45, "Set.union"),
+  entry("|>", "left", 20, "Fn.pipe"),
+
+  // An arrow is looser than everything that builds the types on either side of
+  // it, so `A | B -> C` is `(A | B) -> C` — the reading the notation has
+  // everywhere else.
+  entry("->", "right", 25, "@type.arrow"),
+
+  entry("==", "none", 30, "Eq.eq"),
+  entry("/=", "none", 30, "Eq.ne"),
+  entry("<", "none", 30, "Ord.lt"),
+  entry("<=", "none", 30, "Ord.le"),
+  entry(">", "none", 30, "Ord.gt"),
+  entry(">=", "none", 30, "Ord.ge"),
+
+  // Set algebra mirrors arithmetic: intersection is the product, union and
+  // difference are the sum and the remainder, and the product binds tighter.
+  // `A | B & C` is `A | (B & C)`.
+  entry("|", "left", 40, "Set.union"),
+  entry("\\", "left", 40, "Set.diff"),
   entry("&", "left", 45, "Set.intersect"),
-  entry("\\", "left", 45, "Set.diff"),
+
   entry("<+", "left", 50, "attach"),
-  entry("->", "right", 55, "@type.arrow"),
+
+  // Above comparison, so `a <> b == c` compares the joined value; below
+  // arithmetic, so `text <> x + y` appends the sum.
+  entry("<>", "right", 55, "Semigroup.append"),
+
   entry("+", "left", 60, "Num.add"),
   entry("-", "left", 60, "Num.sub"),
   entry("*", "left", 70, "Num.mul"),
   entry("/", "left", 70, "Num.div"),
   entry("%", "left", 70, "Num.rem"),
+
   entry("-", "prefix", 90, "Num.negate"),
   entry("!", "prefix", 90, "@linear.own"),
   entry("?", "prefix", 90, "@linear.maybe"),

@@ -136,3 +136,41 @@ fields, and removing the construct beat weakening the checker to admit it.
 **Rank-N and higher-kinded types** are not inference's problem by design.
 `@forall` is annotation-only, and type constructors are comptime functions that
 are specialized away, so the lattice never needs kinds.
+
+## Operator precedence
+
+The default levels, loosest first. They are grouped by what an operator *does*,
+and two groups share a level only where mixing them without parentheses is
+meaningless anyway.
+
+| level | operators | assoc | target |
+|---|---|---|---|
+| 10 | `$` | right | `Fn.apply` |
+| 20 | `\|>` | left | `Fn.pipe` |
+| 25 | `->` | right | `@type.arrow` |
+| 30 | `==` `/=` `<` `<=` `>` `>=` | none | `Eq.*`, `Ord.*` |
+| 40 | `\|` `\\` | left | `Set.union`, `Set.diff` |
+| 45 | `&` | left | `Set.intersect` |
+| 50 | `<+` | left | `Type.attach` |
+| 55 | `<>` | right | `Semigroup.append` |
+| 60 | `+` `-` | left | `Num.add`, `Num.sub` |
+| 70 | `*` `/` `%` | left | `Num.mul`, `Num.div`, `Num.rem` |
+| 90 | `-` `!` `?` `&` | prefix | `Num.negate`, `@linear.*` |
+
+Three relationships are load-bearing and were each wrong once, so
+`examples/operators.blot` pins them:
+
+- **An arrow is looser than the type algebra around it**, so `A | B -> C` is
+  `(A | B) -> C`. It used to bind tighter, which silently made the domain the
+  last member of the union.
+- **Intersection binds tighter than union**, mirroring product over sum, so
+  `A | B & C` is `A | (B & C)`. They shared a level, which made it
+  `(A | B) & C`.
+- **Append binds tighter than comparison and looser than arithmetic**, so
+  `a <> b == c` compares the joined value and `t <> x + y` appends the sum.
+  It used to sit below comparison, which made `a <> b == c` a type error.
+
+`==` is `Ord.eq` over `@int.cmp` and compares integers. `Text.cmp` compares
+text — the evaluator used to accept text through `@int.cmp` while the checker
+rejected it, which is exactly the kind of divergence between the two executions
+that has to be an error rather than a convenience.
