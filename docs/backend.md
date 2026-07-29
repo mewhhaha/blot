@@ -272,3 +272,35 @@ gpufuck re-runs Hindley-Milner on what blot emits. blot's algebraic-subtyping
 result is the authority, so a rejection there is a **lowering bug**, never a
 type-system disagreement to resolve in gpufuck's favour. The diagnostic says so,
 because the alternative is a bug report filed against the wrong project.
+
+## Width subtyping does not survive lowering
+
+This is the largest remaining gap and it explains several smaller ones.
+
+blot's records are structurally width-subtyped: `value => value.x` infers
+`{ .x : 'a } -> 'a` and accepts any record with an `.x`. gpufuck's records are
+*nominal* and invariant — one declared type per field-name set — so the two do
+not line up:
+
+```blot
+let f = value => value.x;
+return f { .x = 42; .y = 0; };
+```
+
+```
+F2102: type mismatch: expected Shape_x['a], received Shape_x_y[Int, Int]
+```
+
+The projection site records the field set `["x"]` and synthesizes `Shape_x`;
+the argument is `Shape_x_y`. Both are right about what they saw, and neither is
+the type the other needs.
+
+`p.x` on a record whose shape is known at the site compiles, because there is
+only one field set involved. What does not compile is a *function* that
+projects — precisely the case width subtyping exists for.
+
+Closing it means specializing such a function per call-site shape, which is what
+"monomorphize before gpufuck" in `AGENTS.md` asks for and what is not built.
+Until then, a generic over records is a compile-time construct: `projecting T`
+in `examples/generics.blot` checks and selects at compile time and runs, but its
+result cannot be lowered.

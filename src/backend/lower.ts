@@ -1985,6 +1985,16 @@ function lowerApply(
         ),
       );
     }
+    // A refusal that survived compiling is one the program reached at run time,
+    // so it becomes a fault with the same message. `expect` is a prelude
+    // function and gets lowered like any other, whether or not this arm of it
+    // can be taken.
+    if (spine.callee.name === "@fail" && spine.args.length === 1) {
+      const message = spine.args[0];
+      return surface.runtimeFault(
+        message.tag === "text" ? message.value : "refused",
+      );
+    }
     // Checked while compiling, so nothing survives into the runtime: the value
     // passes through, and a failure was already a diagnostic.
     if (spine.callee.name === "@satisfies" && spine.args.length === 2) {

@@ -1,0 +1,1 @@
+{ .sum = 42; .byte = 3; .x2 = 3; .x3 = 5; .int_is_int = #True; .text_is_not_int = #False; .wider_record_fits = #True; .narrower_does_not = #False; .described_int = "an integer range"; .described_text = "a text range"; .described_record = "a record of 2"; .described_arrow = "a function"; }

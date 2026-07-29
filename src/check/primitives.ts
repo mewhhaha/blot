@@ -61,7 +61,14 @@ function reflection(fresh: () => SimpleType): SimpleType {
         ["payload", variant([["None", UNIT], ["Some", fresh()]])],
       ]),
     ],
-    ["Range", record([["low", fresh()], ["high", fresh()]])],
+    [
+      "Range",
+      record([
+        ["low", fresh()],
+        ["high", fresh()],
+        ["domain", variant([["Int", UNIT], ["Text", UNIT]])],
+      ]),
+    ],
     ["Union", { tag: "array", element: fresh() }],
     ["Shape", fresh()],
     ["Array", { tag: "array", element: fresh() }],
@@ -176,6 +183,8 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ["@type.of", poly((fresh) => curried([fresh()], TYPE))],
   ["@type.seal", poly((fresh) => curried([TEXT, fresh()], TYPE))],
   ["@type.open", poly((fresh) => curried([fresh()], fresh()))],
+  // `@fail` never returns, so its result is whatever the context needs.
+  ["@fail", poly((fresh) => curried([TEXT], fresh()))],
   ["@type.reflect", poly((fresh) => curried([fresh()], reflection(fresh)))],
   // Attaching a member returns the same type value. Inference sees straight
   // through the namespace, so the result is the target unchanged.

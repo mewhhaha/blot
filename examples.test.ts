@@ -76,6 +76,7 @@ const REJECTIONS: Record<
   "effect_not_discharged": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },
   "handler_aborts": { code: "BLOT_UNSUPPORTED_LOWERING", stage: "build" },
   "loop_type_drift": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "generic_refused": { code: "BLOT_REFUSED", stage: "check" },
   "handler_wrong_operation": { code: "BLOT_TYPE_ERROR", stage: "check" },
 };
 

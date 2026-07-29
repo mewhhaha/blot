@@ -78,6 +78,13 @@ end);
 
 const Logic = { .not = not; .and = and; .or = or; };
 
+// Refusing, with a reason. This is how a compile-time check reports what it
+// found: `expect` in a `const` is a diagnostic before the program runs.
+const expect = (condition, message) => case condition of
+  #True => (),
+  #False => @fail message
+end;
+
 // --- ordering ---------------------------------------------------------------
 //
 // One comparison primitive yields the whole of `Eq` and `Ord`. Every member
@@ -414,6 +421,11 @@ const refines_literal = (narrow, value) => case reflect narrow of
   _ => False
 end;
 
+const same_domain = (left, right) => case left of
+  #Int => case right of #Int => True, #Text => False end,
+  #Text => case right of #Text => True, #Int => False end
+end;
+
 // Does every value of `narrow` inhabit `wide`?
 //
 // This is the comptime mirror of what biunification decides during checking.
@@ -425,7 +437,10 @@ const refines = rec ((narrow, wide) => case reflect wide of
   #Unbounded => True,
   #Union options => any (options, (option => refines (narrow, option))),
   #Range r => case reflect narrow of
-    #Range s => above_low (s.low, r.low) && below_high (s.high, r.high),
+    // Same ordered domain first: an unbounded text range and an unbounded
+    // integer range have identical bounds and are not each other.
+    #Range s => same_domain (s.domain, r.domain)
+      && above_low (s.low, r.low) && below_high (s.high, r.high),
     _ => above_low (narrow, r.low) && below_high (narrow, r.high)
   end,
   #Shape wide_fields => case reflect narrow of
@@ -665,6 +680,7 @@ return {
   .False = False;
   .Logic = Logic;
   .not = not;
+  .expect = expect;
 
   .Ordering = Ordering;
   .is_equal = is_equal;

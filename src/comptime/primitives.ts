@@ -116,6 +116,13 @@ function difference(left: Value, right: Value, span: Span): Value {
  * blot-side comparison can tell an integer bound from a text bound without a
  * second primitive to ask.
  */
+/** Which ordered domain a range lives in: its own label, else its bounds. */
+function rangeDomain(value: Value & { tag: "range" }): "int" | "text" {
+  if (value.domain !== undefined) return value.domain;
+  if (value.low.tag === "text" || value.high.tag === "text") return "text";
+  return "int";
+}
+
 function reflect(value: Value): Value {
   // Transparent here too: reflecting a struct reports its storage, because
   // that is what the type is. `@type.members` asks the other question.
@@ -149,8 +156,20 @@ function reflect(value: Value): Value {
             : tagged("Some", value.payload),
         }),
       );
-    case "range":
-      return tagged("Range", record({ low: value.low, high: value.high }));
+    case "range": {
+      // The domain travels with the bounds. Without it `Int` and `Str` are both
+      // "a range from unbounded to unbounded" and blot code cannot tell them
+      // apart — which made `refines (Str, Int)` answer `#True`.
+      const domain = rangeDomain(value);
+      return tagged(
+        "Range",
+        record({
+          low: value.low,
+          high: value.high,
+          domain: bare(domain === "text" ? "Text" : "Int"),
+        }),
+      );
+    }
     case "union":
       return tagged("Union", { tag: "array", elements: [...value.members] });
     case "shape":
@@ -323,6 +342,19 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
         );
       }
       return value.inner;
+    },
+  }],
+  // Refusing. The one thing a program cannot express itself: every other
+  // primitive computes something, and a diagnostic is the absence of a value.
+  // `expect` in the prelude is this plus a condition.
+  ["@fail", {
+    arity: 1,
+    run: ([message], span) => {
+      fail(
+        "BLOT_REFUSED",
+        message.tag === "text" ? message.value : show(message),
+        span,
+      );
     },
   }],
   ["@type.reflect", { arity: 1, run: ([value]) => reflect(value) }],

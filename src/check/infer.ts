@@ -15,7 +15,7 @@
 // without a single annotation, and it is why blot needs no type sublanguage.
 
 import type { Decl, Expr, Module, Pattern, Span } from "../syntax/ast.ts";
-import { fail } from "../diagnostic.ts";
+import { BlotError, fail } from "../diagnostic.ts";
 import type { Env as ValueEnv } from "../comptime/value.ts";
 import {
   childEnv,
@@ -97,9 +97,17 @@ function located<T>(span: Span, work: () => T): T {
 function comptime(expr: Expr, context: Context): ReturnType<typeof run> | null {
   try {
     return run(evaluate(expr, context.values, { imports: context.imports }));
-  } catch {
+  } catch (error) {
+    // A refusal is the program asking to fail, not the evaluator failing to
+    // reach a value. Swallowing it would make `expect` silent at `blot check`
+    // and only speak at `blot run`, which is the wrong half of the compiler.
+    if (refusal(error)) throw error;
     return null;
   }
+}
+
+function refusal(error: unknown): boolean {
+  return error instanceof BlotError && error.diagnostic.code === "BLOT_REFUSED";
 }
 
 function comptimeBinding(
@@ -111,7 +119,8 @@ function comptimeBinding(
     return run(
       bind(pattern, expr, context.values, { imports: context.imports }),
     );
-  } catch {
+  } catch (error) {
+    if (refusal(error)) throw error;
     return null;
   }
 }
