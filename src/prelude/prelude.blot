@@ -540,21 +540,25 @@ const struct = shape => do
 
   const key = name => Text.of_int (@shape.get at name);
 
-  // The storage type, positionally. This is what a value of this struct *is*,
-  // and what `struct` hands back. The accessors go on in the same pass: one
-  // projection at a known slot, and nothing more. Their names are computed, so
-  // this is `@type.attach` rather than `:+`.
-  let storage = @shape.empty;
+  // One binding, rebound through both passes — the same shape binned's `struct`
+  // has, where `product_type` is built by one loop and extended by the next.
+  //
+  // Two passes rather than one because they build different things: the first
+  // fills a shape, and the second wraps that shape in a namespace. `@shape.set`
+  // takes a shape and `@type.attach` takes a type value, so the storage has to
+  // be finished before an accessor can go on it.
+  let product = @shape.empty;
   for name in Iter.items order do
-    storage := @shape.set storage (key name) (@shape.get shape name);
+    product := @shape.set product (key name) (@shape.get shape name);
   end;
 
-  let with_fields = storage;
+  // One accessor per field: a projection at a known slot, nothing more. The
+  // names are computed, so this is `@type.attach` rather than `:+`.
   for name in Iter.items order do
-    with_fields := @type.attach with_fields name (value => @shape.get value (key name));
+    product := @type.attach product name (value => @shape.get value (key name));
   end;
 
-  return with_fields :+ {
+  return product :+ {
     // Named record in, positional storage out. The call site writes the fields
     // in whatever order reads well; the order decides where they land. A field
     // the shape does not declare is refused here rather than stored, and a

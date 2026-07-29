@@ -82,7 +82,13 @@ function fieldList(rule: Rule, name: string): readonly Cursor[] {
   const value = rule.field(name);
   if (value === undefined || value === null) return [];
   expect(Array.isArray(value), `field ${name} of ${rule.name} is not an array`);
-  return value as readonly Cursor[];
+  // An optional separated list — `(array_element % ",")?` — yields one empty
+  // slot when it matched nothing, rather than no slots. The hole is the
+  // information "there were none", so dropping it is reading the field, not
+  // defaulting past a missing one. `[]` and `()` are the two forms that hit it.
+  return (value as readonly (Cursor | null)[]).filter((entry) =>
+    entry !== null && entry !== undefined
+  ) as readonly Cursor[];
 }
 
 /** Descends through wrapper rules — `value`, `pattern_core`, `field_name` — to a token. */

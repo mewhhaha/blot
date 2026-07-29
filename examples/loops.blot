@@ -45,6 +45,13 @@ for Iter.range (0, 0) do
   untouched := untouched + 100;
 end;
 
+// An accumulator does not have to be a scalar. `[]` is the empty array literal,
+// and a spread rebuilds it — which reads as the append it is.
+let doubled = [];
+for n in Iter.range (1, 4) do
+  doubled := [...doubled, n * 2];
+end;
+
 // --- a refutable binder filters ---------------------------------------------
 //
 // `x in source` binds every element. A binder that *can* fail — a constructor,
@@ -90,6 +97,7 @@ return {
   .squares = squares;
   .untouched = untouched;
   .halved = steps;
+  .doubled = doubled;
   .found = found;
   .labelled = labelled;
   .collected = collect (Iter.range (0, 4));
