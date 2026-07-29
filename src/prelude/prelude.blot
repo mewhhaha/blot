@@ -221,6 +221,68 @@ const Result = (ok, error) => #Ok ok | #Error error;
 const Ok = value => #Ok value;
 const Error = value => #Error value;
 
+// --- iterators --------------------------------------------------------------
+//
+// An iterator is a `.state` and a `.step`, where `step state` answers
+// `#Some (value, next_state)` or `#None`. Three things follow from that shape
+// and are the reason for it.
+//
+// It answers an `Option` rather than a pair of new constructors. The prelude is
+// in scope in every module that opens it, and lowering needs a constructor name
+// to belong to one union per module — so a tag the prelude introduces is
+// reserved everywhere. `#Some` and `#None` were already spent.
+//
+// It is a *state* and a step rather than a closure that returns the next
+// closure. Both express the same protocol, but the closure form allocates one
+// closure per element and leaves gpufuck resolving a lambda set that grows with
+// the loop; this form is one closure total and a plain value threaded through
+// it, which is a Core loop.
+//
+// And it is source. `range` and `items` are ordinary functions, so a new kind
+// of sequence is a function someone writes rather than a case the compiler has
+// to know about.
+
+const iter_range = (from, to) => {
+  .state = from;
+  .step = index =>
+    if is_less (@int.cmp index to)
+    then Some (index, @int.add index 1)
+    else None
+    end;
+};
+
+const iter_items = values => {
+  .state = 0;
+  .step = index =>
+    if is_less (@int.cmp index (@array.len values))
+    then Some (@array.get values index, @int.add index 1)
+    else None
+    end;
+};
+
+// Draining one. `for` is this loop with the accumulator inferred from the names
+// its body rebinds; written out, it is the same fold.
+const iterate = (iterator, initial, visit) => do
+  const go = rec ((state, carried) => case iterator.step state of
+    #None => carried,
+    #Some pair => go (pair.1, visit (carried, pair.0))
+  end);
+  return go (iterator.state, initial);
+end;
+
+const collect = iterator =>
+  iterate (iterator, @array.empty, ((values, value) => @array.push values value));
+
+// Namespaced because `range` is already the type constructor — `I32` is a
+// range — and two things called `range` in one scope would be worse than a
+// prefix. Every other group in this file is a record for the same reason.
+const Iter = {
+  .range = iter_range;
+  .items = iter_items;
+  .iterate = iterate;
+  .collect = collect;
+};
+
 // --- types ------------------------------------------------------------------
 //
 // Every one of these is an ordinary function over compile-time values. There is
@@ -586,6 +648,9 @@ return {
   .filter = filter;
   .sum = sum;
   .upto = upto;
+  .Iter = Iter;
+  .iterate = iterate;
+  .collect = collect;
 
   .Option = Option;
   .None = None;

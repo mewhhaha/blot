@@ -680,6 +680,16 @@ function lowerBlock(
   const wrappers: ((body: SurfaceExpression) => SurfaceExpression)[] = [];
 
   for (const declaration of declarations) {
+    // A loop lowers to a recursive Core function over a tuple of the names its
+    // body rebinds. That is not written yet, and emitting something that only
+    // happens to work would be worse than saying so: the interpreter, the GPU
+    // evaluator, and the Wasm are required to agree.
+    if (declaration.tag === "for") {
+      return unsupported(
+        "a `for` loop — it runs and type checks, but the recursive Core function it lowers to is not written",
+        declaration.span,
+      );
+    }
     // `open` emits nothing — a use of a name it brought in specializes to the
     // compile-time value, exactly as a `const` does — but the names still have
     // to be *in* this scope. An imported module is inlined into the importer's
@@ -2184,7 +2194,12 @@ function mentions(expr: Expr, name: string): boolean {
         expr.arms.some((arm) => mentions(arm.body, name));
     case "block":
       return expr.declarations.some((declaration) =>
-        mentions(declaration.value, name)
+        declaration.tag === "for"
+          ? mentions(declaration.source, name) ||
+            declaration.body.some((inner) =>
+              inner.tag !== "for" && mentions(inner.value, name)
+            )
+          : mentions(declaration.value, name)
       ) || mentions(expr.result, name);
     default:
       return false;

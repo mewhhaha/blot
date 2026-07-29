@@ -164,6 +164,23 @@ export type Decl =
     readonly tag: "open";
     readonly value: Expr;
     readonly span: Span;
+  }
+  /**
+   * `for source do … end;`
+   *
+   * A declaration rather than an expression, because what a loop produces is
+   * an effect on the enclosing scope: the names its body rebinds with `:=` are
+   * the accumulator, and the last iteration's values are what escape. That is
+   * a fold with the state inferred, which is how blot has `for` without having
+   * assignment.
+   */
+  | {
+    readonly tag: "for";
+    /** `for let x = …` binds each element; without it the loop runs for its rebindings. */
+    readonly binder: Pattern | null;
+    readonly source: Expr;
+    readonly body: readonly Decl[];
+    readonly span: Span;
   };
 
 export type Associativity = "left" | "right" | "none" | "prefix";

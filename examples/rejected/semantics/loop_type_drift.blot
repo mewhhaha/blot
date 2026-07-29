@@ -1,0 +1,12 @@
+// The accumulator's type is the join over iterations, so a rebinding that
+// changes it is not rejected at the rebinding — the error lands on the use
+// that cannot accept the widened type, which is where the mistake is.
+open (@import "blot:prelude") ();
+
+let total = 0;
+for Iter.range (0, 3) do
+  total := "not a number";
+  total := total + 1;
+end;
+
+return total;

@@ -64,12 +64,12 @@ fixity_declaration = (
 // Three declaration forms. `type`, `interface`, `effect`, `duck`, and every
 // other binder in the reference language collapse into `const`, because types
 // are ordinary compile-time values.
-declaration = binding | shadowing | opening | result ;
+declaration = binding | shadowing | opening | iteration | result ;
 
 // `statement` is `declaration` under a second name. The duplication is
 // mechanical and exists only so that `declaration` is not self-nesting, which
 // is what "throughput": "strict" requires of the repeated root island.
-statement = binding | shadowing | opening | result ;
+statement = binding | shadowing | opening | iteration | result ;
 
 binding = (
   kind:("let" | "const" | "sig")
@@ -85,6 +85,27 @@ shadowing = (
   value:value
   ";"
 ) ;
+
+// Looping. A declaration rather than an expression, because what a loop
+// produces is an effect on the enclosing scope: the names its body rebinds
+// with `:=` are the accumulator, and the last iteration's are what escape.
+// That is a fold with the state inferred, which is why blot can have `for`
+// without having assignment.
+//
+// `let` after `for` binds each element; without it the loop runs for its
+// rebindings alone. The two alternatives are told apart by a keyword, so the
+// FIRST sets stay disjoint.
+iteration = (
+  "for"
+  binder:iteration_binder?
+  source:value
+  "do"
+  body:statement*
+  "end"
+  ";"
+) ;
+
+iteration_binder = ( "let" pattern:binding_pattern "=" ) ;
 
 // Spreading a module's exports into scope. The prelude is an ordinary module
 // with no privilege, so this is how `+` finds `Num.add` — a default fixity
@@ -218,6 +239,7 @@ keyword = (
   "module" | "operators" | "infixl" | "infixr" | "infix" | "prefix"
   | "let" | "const" | "sig" | "return" | "do" | "end"
   | "if" | "then" | "else" | "case" | "of" | "rec" | "comptime" | "open"
+  | "for"
 ) ;
 
 primary_expression = (

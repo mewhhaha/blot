@@ -245,6 +245,31 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       span: rule.span,
     };
   }
+  if (rule.name === "iteration") {
+    const binder = field(rule, "binder");
+    return {
+      tag: "for",
+      binder: binder === null ? null : lowerPattern(
+        asRule(required(asRule(binder, "iteration_binder"), "pattern"), "pattern"),
+      ),
+      source: lowerValue(asRule(field(rule, "source"), "value"), context),
+      // A loop body is declarations and nothing else: there is no `return`,
+      // because a loop produces no value — what it produces is the rebindings
+      // that escape it.
+      body: fieldList(rule, "body").map((statement) => {
+        const inner = asRule(unwrap(statement), "statement");
+        if (inner.name === "result") {
+          fail(
+            "BLOT_RETURN_IN_LOOP",
+            "A loop body has no `return`: a loop produces its rebindings, not a value.",
+            inner.span,
+          );
+        }
+        return lowerDecl(inner, context);
+      }),
+      span: rule.span,
+    };
+  }
   if (rule.name === "opening") {
     return {
       tag: "open",

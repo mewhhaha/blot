@@ -217,12 +217,106 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
   expect(false, `unhandled expression ${(expr as Expr).tag}`);
 }
 
+/**
+ * The names a loop body rebinds with `:=`. They are its accumulator.
+ *
+ * Only a direct `:=` counts. A `let` inside the body is a local that the next
+ * iteration cannot see, which is what makes the escaping set syntactic and
+ * therefore something the checker can pin a type to.
+ */
+export function carried(body: readonly Decl[]): readonly string[] {
+  const names: string[] = [];
+  for (const declaration of body) {
+    if (declaration.tag === "shadow" && !names.includes(declaration.name)) {
+      names.push(declaration.name);
+    }
+  }
+  return names;
+}
+
+function* runLoop(
+  declaration: Decl & { tag: "for" },
+  scope: Env,
+  runtime: Runtime,
+): Generator<Perform, void, Value> {
+  const iterator = yield* evaluate(declaration.source, scope, runtime);
+  const step = iterator.tag === "shape" ? iterator.fields.get("step") : undefined;
+  const start = iterator.tag === "shape" ? iterator.fields.get("state") : undefined;
+  if (step === undefined || start === undefined) {
+    fail(
+      "BLOT_NOT_ITERABLE",
+      `\`for\` needs an iterator — a \`.state\` and a \`.step\` — found ${
+        show(iterator)
+      }.`,
+      declaration.span,
+    );
+  }
+  const escaping = carried(declaration.body);
+
+  let state = start;
+  for (;;) {
+    const stepped = yield* apply(step, state, declaration.span, runtime);
+    if (stepped.tag !== "tag") {
+      fail(
+        "BLOT_NOT_ITERABLE",
+        `A \`step\` answers \`#Some (value, state)\` or \`#None\`, found ${
+          show(stepped)
+        }.`,
+        declaration.span,
+      );
+    }
+    if (stepped.name === "None") return;
+    if (stepped.name !== "Some" || stepped.payload === null) {
+      fail(
+        "BLOT_NOT_ITERABLE",
+        `A \`step\` answers \`#Some (value, state)\` or \`#None\`, found ${
+          show(stepped)
+        }.`,
+        declaration.span,
+      );
+    }
+    const pair = asTuple(stepped.payload, 2);
+    if (pair === null) {
+      fail(
+        "BLOT_NOT_ITERABLE",
+        "`#Some` carries `(value, state)`.",
+        declaration.span,
+      );
+    }
+
+    // Each iteration is its own scope, so a `let` in the body is a local. Only
+    // the names the body rebound are written back, which is what makes the
+    // loop a fold rather than a mutation.
+    const inner = childEnv(scope);
+    if (
+      declaration.binder !== null &&
+      !match(declaration.binder, pair[0], inner)
+    ) {
+      fail(
+        "BLOT_ARGUMENT_MISMATCH",
+        `${show(pair[0])} does not match this binder.`,
+        declaration.span,
+      );
+    }
+    yield* runDeclarations(declaration.body, inner, runtime);
+    for (const name of escaping) {
+      const updated = inner.names.get(name);
+      if (updated !== undefined) scope.names.set(name, updated);
+    }
+    state = pair[1];
+  }
+}
+
 function* runDeclarations(
   declarations: readonly Decl[],
   scope: Env,
   runtime: Runtime,
 ): Generator<Perform, void, Value> {
   for (const declaration of declarations) {
+    if (declaration.tag === "for") {
+      yield* runLoop(declaration, scope, runtime);
+      continue;
+    }
     if (declaration.tag === "open") {
       const value = yield* evaluate(declaration.value, scope, runtime);
       if (value.tag !== "shape") {

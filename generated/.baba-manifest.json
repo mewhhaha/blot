@@ -33,7 +33,7 @@
       "kind": "source"
     },
     "wasm/parser.plan": {
-      "hash": "b126ca23030c4298d2b300939ec85c760599deec420fce6544f11648776eba93",
+      "hash": "335ed1fee71dbc5cf97c536a9c41eb0fcbe43e054c13fa22c3731f722738cbd9",
       "ownership": "generated",
       "encoding": "binary",
       "kind": "binary"
@@ -45,7 +45,7 @@
       "kind": "binary"
     },
     "wasm/syntax.ts": {
-      "hash": "68fda4dbc3252498cf6e68e402d679f6d173ba0345f6dcdcf407d68a92e98f4f",
+      "hash": "09fc7a6e2b572247ca36022b2b7bfac5876055c4be74dfb94ddf464a3ca6f970",
       "ownership": "generated",
       "encoding": "utf-8",
       "kind": "source"

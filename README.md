@@ -36,7 +36,8 @@ WebAssembly, and `just wasm` checks that the interpreter, gpufuck's GPU
 evaluator, and the emitted Wasm all agree. Literals, prelude operators and
 comparisons, records and spreads, tuples, unions, `case`, destructuring, arrays,
 `if`, and recursion compile, and `@effect.host` effects become typed WebAssembly
-imports. Blot-written handlers and module parameters do not compile yet. See
+imports. Blot-written handlers, module parameters, and `for` loops do not
+compile yet. See
 [docs/backend.md](docs/backend.md) for both lists.
 
 ```bash
@@ -62,16 +63,38 @@ for why that check exists.
 
 ## The language
 
-Four declaration forms, all `;`-terminated:
+Five declaration forms, all `;`-terminated:
 
 ```blot
 let name = expr;      // runtime binding
 const name = expr;    // must evaluate at compile time
 sig name = expr;      // optional constraint on the following binding
 open expr;            // spread a record's fields into scope
+for src do … end;     // loop; see below
 name := expr;         // shadow: new binding, type may change
 return expr;          // module or block result, last
 ```
+
+`for` is a declaration rather than an expression because what a loop produces
+is an effect on the enclosing scope: the names its body rebinds with `:=` are
+the accumulator, and the last iteration's values escape. That is a fold with
+the state inferred, which is how blot has a loop while having no assignment —
+`:=` was already "a new binding", not "a new value in the old one".
+
+```blot
+let x = 1;
+for Iter.range (0, 5) do
+  x := x + 1;
+end;
+return x;               // 6
+```
+
+An iterator is a `.state` and a `.step`, where `step state` answers
+`#Some (value, next_state)` or `#None`. `Iter.range` and `Iter.items` are
+ordinary prelude functions over that shape, so a new kind of sequence is a
+function someone writes. A state and a step rather than a closure returning the
+next closure: both express the protocol, but the closure form allocates one per
+element and leaves gpufuck resolving a lambda set that grows with the loop.
 
 Nothing is in scope that the module did not ask for. The prelude is an ordinary
 module with no privilege, so every file begins by opening it:

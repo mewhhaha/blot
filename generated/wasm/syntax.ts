@@ -133,6 +133,9 @@ export type LiteralKind =
   | "const"
   | "sig"
   | ":="
+  | "for"
+  | "do"
+  | "end"
   | "open"
   | "return"
   | ","
@@ -142,8 +145,6 @@ export type LiteralKind =
   | "."
   | "comptime"
   | "rec"
-  | "do"
-  | "end"
   | "if"
   | "then"
   | "else"
@@ -217,6 +218,8 @@ export type RuleName =
   | "statement"
   | "binding"
   | "shadowing"
+  | "iteration"
+  | "iteration_binder"
   | "opening"
   | "result"
   | "binding_pattern"
@@ -335,6 +338,20 @@ export interface BindingCursor extends RuleCursorBase<"binding"> {
 export interface ShadowingCursor extends RuleCursorBase<"shadowing"> {
   field(name: "name"): TokenCursor<"named", "IDENT"> | TokenCursor<"named", "TYPE_IDENT">;
   field(name: "value"): ValueCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface IterationCursor extends RuleCursorBase<"iteration"> {
+  field(name: "binder"): IterationBinderCursor | null;
+  field(name: "body"): ReadonlyArray<StatementCursor>;
+  field(name: "source"): ValueCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface IterationBinderCursor extends RuleCursorBase<"iteration_binder"> {
+  field(name: "pattern"): BindingPatternCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -581,6 +598,8 @@ export type AnyRuleCursor =
   | StatementCursor
   | BindingCursor
   | ShadowingCursor
+  | IterationCursor
+  | IterationBinderCursor
   | OpeningCursor
   | ResultCursor
   | BindingPatternCursor

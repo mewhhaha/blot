@@ -35,6 +35,12 @@ scope, and no exemption from its own type system. A default fixity names a
 binding by string, so `+` works only because something opened `Num` — do not
 reintroduce an implicit scope to make that line disappear.
 
+**A loop is a fold, not an assignment.** `for` rebinds with `:=` and the
+names its body rebinds are the accumulator; the checker gives each one a
+fixpoint variable so the type is the join over iterations. Do not add
+assignment to make a loop read more directly — that would put mutation in a
+language whose ownership analysis assumes there is none.
+
 **Types are values.** There is no type-level sublanguage and no type namespace.
 If a feature seems to need one, it belongs in the comptime evaluator instead.
 This is what keeps the grammar small; do not reintroduce `type`, `interface`,
