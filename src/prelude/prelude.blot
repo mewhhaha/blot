@@ -312,7 +312,7 @@ const seal = (name, value) => @type.seal name value;
 const unseal = value => @type.open value;
 
 // Attaching a namespace to a type value, which is what lets `struct` hand back
-// the storage type itself rather than a record beside it. `:+` is this, and it
+// the storage type itself rather than a record beside it. `<+` is this, and it
 // is curried and left-associative, so a namespace is written as a sequence of
 // attachments rather than as nested calls — which is as close to a sequence of
 // statements as a language without assignment gets.
@@ -507,7 +507,7 @@ const Reflect = {
 // --- structs ----------------------------------------------------------------
 //
 // `struct` hands back the storage type *itself*, with its constructor and
-// accessors attached to it by `:+`. One binding is both the type and its
+// accessors attached to it by `<+`. One binding is both the type and its
 // namespace, so `Point` can be written in a `sig` and still answer
 // `Point.new`. The members are invisible to typing: `sig p = Point;`
 // constrains `p` to the tuple, and nothing about the namespace reaches the
@@ -553,12 +553,12 @@ const struct = shape => do
   end;
 
   // One accessor per field: a projection at a known slot, nothing more. The
-  // names are computed, so this is `@type.attach` rather than `:+`.
+  // names are computed, so this is `@type.attach` rather than `<+`.
   for name in Iter.items order do
     product := @type.attach product name (value => @shape.get value (key name));
   end;
 
-  return product :+ {
+  return product <+ {
     // Named record in, positional storage out. The call site writes the fields
     // in whatever order reads well; the order decides where they land. A field
     // the shape does not declare is refused here rather than stored, and a

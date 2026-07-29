@@ -63,15 +63,15 @@ const raw = layout (Record, byte_width);
 
 // --- attaching your own ------------------------------------------------------
 //
-// `:+` is not a struct feature. It attaches a namespace to any type value, and
+// `<+` is not a struct feature. It attaches a namespace to any type value, and
 // it chains left, so a namespace reads as a sequence of attachments rather than
 // as nested calls.
 
 const Meters = seal ("Meters", I32)
-  :+ { .of = n => seal ("Meters", n); }
-  :+ { .unit = "m"; };
+  <+ { .of = n => seal ("Meters", n); }
+  <+ { .unit = "m"; };
 
-const Located = Point :+ { .origin = { .x = 0; .y = 0; }; };
+const Located = Point <+ { .origin = { .x = 0; .y = 0; }; };
 
 return {
   .meters_unit = Meters.unit;

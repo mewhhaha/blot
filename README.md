@@ -151,12 +151,12 @@ than an array because a tuple keeps one type per slot; `[I32, Str]` collapses
 to "an array of int-or-text" the moment inference looks at it, and storage that
 is imprecise is not predictable storage.
 
-`:+` is what attaches the namespace, and it works on any type value:
+`<+` is what attaches the namespace, and it works on any type value:
 
 ```blot
 const Meters = seal ("Meters", I32)
-  :+ { .of = n => seal ("Meters", n); }
-  :+ { .unit = "m"; };
+  <+ { .of = n => seal ("Meters", n); }
+  <+ { .unit = "m"; };
 ```
 
 A shape's fields are in declaration order and `reorder` rebuilds one in any
