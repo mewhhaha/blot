@@ -37,6 +37,39 @@ const ORDERING: SimpleType = variant([
 /** A type value — what `@type.*` produces. Opaque to inference by design. */
 const TYPE: SimpleType = { tag: "opaque", name: "Type" };
 
+/**
+ * What `@type.reflect` answers with.
+ *
+ * Every type-valued payload is a *fresh variable*, not the opaque `Type`, and
+ * that is deliberate in the same way `@shape.get`'s result is. Types are
+ * values, so a record of types is a type and so is `42`; there is no type
+ * smaller than "any value" that reflection could honestly promise about a
+ * payload. Inference therefore learns which case it has — enough to check the
+ * `case` arms — and learns nothing about what is inside, which is the truth.
+ */
+function reflection(fresh: () => SimpleType): SimpleType {
+  return variant([
+    ["Int", INT],
+    ["Text", TEXT],
+    ["Unit", UNIT],
+    ["Unbounded", UNIT],
+    ["Opaque", UNIT],
+    [
+      "Tag",
+      record([
+        ["name", TEXT],
+        ["payload", variant([["None", UNIT], ["Some", fresh()]])],
+      ]),
+    ],
+    ["Range", record([["low", fresh()], ["high", fresh()]])],
+    ["Union", { tag: "array", element: fresh() }],
+    ["Shape", fresh()],
+    ["Array", { tag: "array", element: fresh() }],
+    ["Arrow", record([["domain", fresh()], ["codomain", fresh()]])],
+    ["Sealed", record([["name", TEXT], ["inner", fresh()]])],
+  ]);
+}
+
 const PURE = effects([]);
 
 /** Curried, like every blot function. `a -> b -> c`, not `(a, b) -> c`. */
@@ -143,6 +176,11 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ["@type.of", poly((fresh) => curried([fresh()], TYPE))],
   ["@type.seal", poly((fresh) => curried([TEXT, fresh()], TYPE))],
   ["@type.open", poly((fresh) => curried([fresh()], fresh()))],
+  ["@type.reflect", poly((fresh) => curried([fresh()], reflection(fresh)))],
+  [
+    "@type.union_of",
+    poly((fresh) => curried([{ tag: "array", element: fresh() }], TYPE)),
+  ],
   [
     "@forall",
     poly((fresh) => {

@@ -140,6 +140,8 @@ const Text = {
 
 const Semigroup = { .append = Text.append; };
 
+const text_eq = (left, right) => is_equal (@text.cmp left right);
+
 // --- arrays -----------------------------------------------------------------
 
 const Array = {
@@ -175,6 +177,12 @@ const filter = (values, keep) =>
     end));
 
 const sum = values => fold (values, 0, ((state, value) => @int.add state value));
+
+const any = (values, holds) =>
+  fold (values, False, ((seen, value) => Logic.or (seen, holds value)));
+
+const every = (values, holds) =>
+  fold (values, True, ((seen, value) => Logic.and (seen, holds value)));
 
 const upto = (low, high) => do
   const build = rec ((index, state) =>
@@ -228,15 +236,6 @@ const U8 = range (0, 255);
 const Nat = range (0, @type.unbounded);
 const Unit = @type.unit;
 
-// `struct` is the headline claim of "few primitives": naming a product type's
-// fields and generating its constructor and accessors is ordinary code over
-// `@shape.*`, not a compiler feature.
-const struct = shape => {
-  .fields = @shape.names shape;
-  .types = shape;
-  .new = value => @satisfies value shape;
-};
-
 // Field offsets and widths. This is the structuring and padding hook: `packed`
 // and any other layout strategy are written over it rather than built in.
 const layout = (shape, width_of) => do
@@ -254,6 +253,179 @@ const layout = (shape, width_of) => do
       };
     end));
   return { .size = placed.offset; .fields = placed.fields; };
+end;
+
+// --- reflection -------------------------------------------------------------
+//
+// `@type.reflect` is the whole of the introspection machinery: it names which
+// case of the value domain a type is and hands back the parts, as an ordinary
+// tagged value. Everything below is blot over that result, using the `case`
+// the language already has. There is no type-level `case`, because a type is
+// not a different kind of thing to case on.
+
+const reflect = t => @type.reflect t;
+
+// A union's members, and any other type as the one-member array. `Extract`,
+// `Exclude`, and exhaustiveness checks are all folds over this.
+const members = t => case reflect t of
+  #Union options => options,
+  _ => [t]
+end;
+
+// Union has no identity element, so rebuilding one is a primitive rather than a
+// `fold`: an empty array is not the empty type, it is a mistake.
+const union_of = values => @type.union_of values;
+
+// `value` sits at or above a range's low end. `#Unbounded` is below everything,
+// and a bound in the wrong domain is not comparable rather than false-by-luck.
+// One helper serves both a literal and another range's bound.
+const above_low = (value, low) => case reflect low of
+  #Unbounded => True,
+  #Int l => case reflect value of
+    #Int v => not (is_less (@int.cmp v l)),
+    _ => False
+  end,
+  #Text l => case reflect value of
+    #Text v => not (is_less (@text.cmp v l)),
+    _ => False
+  end,
+  _ => False
+end;
+
+const below_high = (value, high) => case reflect high of
+  #Unbounded => True,
+  #Int h => case reflect value of
+    #Int v => not (is_greater (@int.cmp v h)),
+    _ => False
+  end,
+  #Text h => case reflect value of
+    #Text v => not (is_greater (@text.cmp v h)),
+    _ => False
+  end,
+  _ => False
+end;
+
+// A literal type is a singleton, so only the same literal refines it.
+const refines_literal = (narrow, value) => case reflect narrow of
+  #Int v => case reflect value of #Int w => Ord.eq v w, _ => False end,
+  #Text v => case reflect value of #Text w => text_eq (v, w), _ => False end,
+  _ => False
+end;
+
+// Does every value of `narrow` inhabit `wide`?
+//
+// This is the comptime mirror of what biunification decides during checking.
+// It is written here rather than exposed from the checker on purpose: the
+// checker's answer is about inferred types with variables in them, and this one
+// is about ground compile-time values, which is the only thing a program can
+// hold and ask about.
+const refines = rec ((narrow, wide) => case reflect wide of
+  #Unbounded => True,
+  #Union options => any (options, (option => refines (narrow, option))),
+  #Range r => case reflect narrow of
+    #Range s => Logic.and (above_low (s.low, r.low), below_high (s.high, r.high)),
+    _ => Logic.and (above_low (narrow, r.low), below_high (narrow, r.high))
+  end,
+  #Shape wide_fields => case reflect narrow of
+    // Width and depth: a wider record refines a narrower one.
+    #Shape narrow_fields => every (@shape.names wide_fields, (name =>
+      if @shape.has narrow_fields name
+      then refines (@shape.get narrow_fields name, @shape.get wide_fields name)
+      else False
+      end)),
+    _ => False
+  end,
+  #Array wide_elements => case reflect narrow of
+    #Array narrow_elements =>
+      if Ord.eq (@array.len narrow_elements) (@array.len wide_elements)
+      then every (upto (0, @int.sub (@array.len wide_elements) 1), (index =>
+        refines (@array.get narrow_elements index, @array.get wide_elements index)))
+      else False
+      end,
+    _ => False
+  end,
+  #Arrow w => case reflect narrow of
+    // Contravariant in the domain, covariant in the codomain.
+    #Arrow n => Logic.and (refines (w.domain, n.domain), refines (n.codomain, w.codomain)),
+    _ => False
+  end,
+  #Tag w => case reflect narrow of
+    #Tag n => Logic.and (text_eq (n.name, w.name), case w.payload of
+      #None => case n.payload of #None => True, #Some _ => False end,
+      #Some carried => case n.payload of
+        #Some mine => refines (mine, carried),
+        #None => False
+      end
+    end),
+    _ => False
+  end,
+  // A seal is invariant: same name, and carriers that refine each other.
+  #Sealed w => case reflect narrow of
+    #Sealed n => Logic.and (text_eq (n.name, w.name),
+      Logic.and (refines (n.inner, w.inner), refines (w.inner, n.inner))),
+    _ => False
+  end,
+  #Int v => refines_literal (narrow, v),
+  #Text v => refines_literal (narrow, v),
+  #Unit => case reflect narrow of #Unit => True, _ => False end,
+  #Opaque => False
+end);
+
+// The union members that fit the bound, and the ones that do not. `Extract` and
+// `Exclude` read as they do in TypeScript, except that neither can quietly
+// produce a bottom type, because blot does not have one — an empty result is
+// reported where it happens.
+const Extract = (whole, bound) =>
+  union_of (filter (members whole, (option => refines (option, bound))));
+
+const Exclude = (whole, bound) =>
+  union_of (filter (members whole, (option => not (refines (option, bound)))));
+
+// The field-level pair. `@shape.*` already does the work; these only name it.
+const Pick = (shape, names) => fold (names, @shape.empty,
+  ((kept, name) => @shape.set kept name (@shape.get shape name)));
+
+const Omit = (shape, names) => fold (names, shape,
+  ((kept, name) => @shape.remove kept name));
+
+// Matching a parameterized nominal. `opened ("List", t)` is `#Some element`
+// when `t` is a `List` of something, which is the blot reading of writing
+// `case t of List a => ...` in a language that had a type-level `case`.
+const opened = (name, t) => case reflect t of
+  #Sealed s => if text_eq (s.name, name) then Some s.inner else None end,
+  _ => None
+end;
+
+const Reflect = {
+  .of = reflect;
+  .members = members;
+  .union_of = union_of;
+  .refines = refines;
+  .extract = Extract;
+  .exclude = Exclude;
+  .pick = Pick;
+  .omit = Omit;
+  .opened = opened;
+};
+
+// `struct` is the headline claim of "few primitives": naming a product type's
+// fields and generating its constructor and accessors is ordinary code over
+// `@shape.*`, not a compiler feature.
+const struct = shape => do
+  // One slot per field is the canonical layout. `layout` below is the hook for
+  // any other strategy — `packed` is that call with a byte width instead of 1 —
+  // so a struct always reports where its fields live, and never invents a
+  // packing rule the program did not ask for.
+  const placed = layout (shape, (_ => 1));
+  return {
+    .fields = @shape.names shape;
+    .types = shape;
+    .size = placed.size;
+    .slots = placed.fields;
+    .offset = name => fold (placed.fields, None,
+      ((found, slot) => if text_eq (slot.name, name) then Some slot.offset else found end));
+    .new = value => @satisfies value shape;
+  };
 end;
 
 const Type = {
@@ -307,6 +479,21 @@ return {
 
   .Type = Type;
   .Set = Set;
+  .seal = seal;
+  .unseal = unseal;
+  .Reflect = Reflect;
+  .reflect = reflect;
+  .refines = refines;
+  .members = members;
+  .union_of = union_of;
+  .Extract = Extract;
+  .Exclude = Exclude;
+  .Pick = Pick;
+  .Omit = Omit;
+  .opened = opened;
+  .any = any;
+  .every = every;
+  .text_eq = text_eq;
   .range = range;
   .struct = struct;
   .layout = layout;

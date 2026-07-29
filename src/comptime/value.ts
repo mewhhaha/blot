@@ -87,10 +87,17 @@ export type Value =
   }
   /** A performable operation: an effect plus one of its operation names. */
   | { readonly tag: "operation"; readonly effect: Value; readonly name: string }
-  /** A nominal wrapper. Invariant, and never confused with its carrier. */
+  /**
+   * A nominal wrapper. Invariant, and never confused with its carrier.
+   *
+   * Identity is the name together with the carrier, not the `seal` call site.
+   * A fresh brand per call would make `List I32` a different type every time
+   * the constructor ran, which is exactly what a parameterized nominal must
+   * not be. Distinctness therefore comes from choosing a distinct name, which
+   * is what "nominal" means everywhere else.
+   */
   | {
     readonly tag: "sealed";
-    readonly brand: number;
     readonly name: string;
     readonly inner: Value;
   }
@@ -232,7 +239,7 @@ export function equal(left: Value, right: Value): boolean {
       );
   }
   if (left.tag === "sealed" && right.tag === "sealed") {
-    return left.brand === right.brand && equal(left.inner, right.inner);
+    return left.name === right.name && equal(left.inner, right.inner);
   }
   if (left.tag === "effect" && right.tag === "effect") {
     return left.id === right.id;

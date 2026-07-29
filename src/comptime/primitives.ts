@@ -101,6 +101,77 @@ function difference(left: Value, right: Value, span: Span): Value {
   return kept.reduce(union);
 }
 
+/**
+ * The one primitive behind type introspection.
+ *
+ * Types are values, so "inspect a type" has to mean "inspect a value", and the
+ * only thing the evaluator knows that a program cannot already ask is which
+ * *shape of representation* it is holding. `reflect` answers exactly that and
+ * nothing more: it names the case and hands back the parts. Everything built on
+ * top — refinement, `Extract`, `Omit`, matching a parameterized nominal — is
+ * ordinary blot over the result, because the result is an ordinary tagged value
+ * that `case` already destructures.
+ *
+ * The cases are split by *domain* rather than lumped into one `#Literal`, so a
+ * blot-side comparison can tell an integer bound from a text bound without a
+ * second primitive to ask.
+ */
+function reflect(value: Value): Value {
+  const tagged = (name: string, payload: Value): Value => ({
+    tag: "tag",
+    name,
+    payload,
+  });
+  const bare = (name: string): Value => ({ tag: "tag", name, payload: null });
+  const record = (fields: Record<string, Value>): Value => ({
+    tag: "shape",
+    fields: new Map(Object.entries(fields)),
+  });
+  switch (value.tag) {
+    case "int":
+      return tagged("Int", value);
+    case "text":
+      return tagged("Text", value);
+    case "unit":
+      return bare("Unit");
+    case "unbounded":
+      return bare("Unbounded");
+    case "tag":
+      return tagged(
+        "Tag",
+        record({
+          name: { tag: "text", value: value.name },
+          payload: value.payload === null
+            ? bare("None")
+            : tagged("Some", value.payload),
+        }),
+      );
+    case "range":
+      return tagged("Range", record({ low: value.low, high: value.high }));
+    case "union":
+      return tagged("Union", { tag: "array", elements: [...value.members] });
+    case "shape":
+      return tagged("Shape", value);
+    case "array":
+      return tagged("Array", value);
+    case "arrow":
+      return tagged(
+        "Arrow",
+        record({ domain: value.domain, codomain: value.codomain }),
+      );
+    case "sealed":
+      return tagged(
+        "Sealed",
+        record({ name: { tag: "text", value: value.name }, inner: value.inner }),
+      );
+    default:
+      // Closures, primitives, host functions, effects. A program can call these
+      // but has no business taking them apart, and saying so is more honest
+      // than inventing a case per callable kind.
+      return bare("Opaque");
+  }
+}
+
 /** A literal's type is the literal: `@type.of 1` is `1`, never `I32`. */
 function typeOf(value: Value): Value {
   if (value.tag === "shape") {
@@ -230,7 +301,6 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     arity: 2,
     run: ([name, inner], span) => ({
       tag: "sealed",
-      brand: brands += 1,
       name: textOf(name, span, "@type.seal"),
       inner,
     }),
@@ -248,6 +318,23 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
       return value.inner;
     },
   }],
+  ["@type.reflect", { arity: 1, run: ([value]) => reflect(value) }],
+  ["@type.union_of", {
+    arity: 1,
+    run: ([values], span) => {
+      const elements = arrayElements(values, span, "@type.union_of");
+      if (elements.length === 0) {
+        fail(
+          "BLOT_EMPTY_TYPE",
+          "@type.union_of has nothing to union: union has no identity element, " +
+            "so an empty array is not the empty type.",
+          span,
+        );
+      }
+      return elements.reduce(union);
+    },
+  }],
+
   // Rank-N is annotation-only: `@forall` takes a function from a type variable
   // to a type, and inference never produces one on its own.
   ["@forall", { arity: 1, run: ([body]) => body }],

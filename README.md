@@ -143,6 +143,23 @@ let printing = {
 };
 ```
 
+Because a type is a value, inspecting one means inspecting a value, and there
+is no type-level `case` — there is `@type.reflect`, which names which case of
+the value domain a type is and hands back the parts as an ordinary tagged
+value:
+
+```blot
+const element_of = t => case reflect t of
+  #Sealed s => if text_eq (s.name, "List") then Some s.inner else None end,
+  _ => None
+end;
+```
+
+`refines`, `Extract`, `Exclude`, `Pick`, and `Omit` are all prelude source over
+that one primitive, and `Extract` filters a union by which members refine a
+bound the way its TypeScript namesake does. `examples/reflect.blot` is the
+catalog entry.
+
 `examples/tour.blot` exercises every form the grammar accepts, and
 `examples/rejected/` holds the programs that must be refused, split by whether
 they fail at parse or during evaluation.

@@ -12,7 +12,7 @@
 // silently widening to "anything" would turn a missing case into a passing
 // check.
 
-import type { Value } from "../comptime/value.ts";
+import { show, type Value } from "../comptime/value.ts";
 import {
   effects as effectRow,
   fun,
@@ -139,7 +139,10 @@ export function bridge(value: Value): SimpleType | null {
     }
 
     case "sealed":
-      return { tag: "opaque", name: `${value.name}#${value.brand}` };
+      // A sealed type is identified by its name and its carrier, so the
+      // opaque name has to carry both — otherwise `List I32` and `List Str`
+      // would bridge to the same invariant type.
+      return { tag: "opaque", name: `${value.name}#${show(value.inner)}` };
 
     // A closure's type comes from its body, not from the value.
     default:
