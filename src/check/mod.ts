@@ -15,13 +15,8 @@ import {
   resolvePath,
 } from "../load.ts";
 import { childEnv, type Env as ValueEnv } from "../comptime/value.ts";
-import {
-  type Checked,
-  checkModule,
-  type ElementKind,
-  type VariantCase,
-} from "./infer.ts";
-import type { Expr } from "../syntax/ast.ts";
+import { type Checked, checkModule, type VariantCase } from "./infer.ts";
+import type { Expr, Pattern } from "../syntax/ast.ts";
 import { freshVar, type SimpleType } from "./type.ts";
 import { show, showModuleRow as showRow } from "./print.ts";
 import { isHostEffect } from "./bridge.ts";
@@ -35,7 +30,7 @@ export interface CheckResult {
   /** Field and constructor sets the backend needs; see `Checked`. */
   readonly shapes: ReadonlyMap<Expr, readonly string[]>;
   readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
-  readonly elements: ReadonlyMap<Expr, ElementKind>;
+  readonly patternShapes: ReadonlyMap<Pattern, readonly string[]>;
   /** Checked dependencies, so the backend can inline what it imports. */
   readonly modules: ReadonlyMap<string, Loaded>;
   /**
@@ -118,7 +113,7 @@ export async function checkFile(path: string): Promise<CheckResult> {
   const dependencyFacts: {
     shapes: ReadonlyMap<Expr, readonly string[]>;
     variants: ReadonlyMap<Expr, readonly VariantCase[]>;
-    elements: ReadonlyMap<Expr, ElementKind>;
+    patternShapes: ReadonlyMap<Pattern, readonly string[]>;
   }[] = [];
   for (const specifier of moduleImports(loaded.module)) {
     const dependency = await load(resolvePath(specifier, loaded.path));
@@ -186,10 +181,10 @@ export async function checkFile(path: string): Promise<CheckResult> {
         inherited?.variants,
         checked.variants,
       ]),
-      elements: mergeAll([
-        ...dependencyFacts.map((facts) => facts.elements),
-        inherited?.elements,
-        checked.elements,
+      patternShapes: mergeAll([
+        ...dependencyFacts.map((facts) => facts.patternShapes),
+        inherited?.patternShapes,
+        checked.patternShapes,
       ]),
       modules: loadedModules,
       values,
@@ -233,10 +228,10 @@ function rowLabels(type: SimpleType, seen: Set<number>): string[] {
 }
 
 /** Facts from every module that contributed code; keys are node identities. */
-function mergeAll<Value>(
-  sources: readonly (ReadonlyMap<Expr, Value> | undefined)[],
-): ReadonlyMap<Expr, Value> {
-  const merged = new Map<Expr, Value>();
+function mergeAll<Key, Value>(
+  sources: readonly (ReadonlyMap<Key, Value> | undefined)[],
+): ReadonlyMap<Key, Value> {
+  const merged = new Map<Key, Value>();
   for (const source of sources) {
     if (source === undefined) continue;
     for (const [node, value] of source) merged.set(node, value);

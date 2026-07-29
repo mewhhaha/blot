@@ -66,13 +66,21 @@ and `20 + 22` compiles to a call to one hoisted definition.
 
 Literals, prelude operators and comparisons, records and their spreads, tuples,
 unions and `case` including literal guards and nested payloads, destructuring
-bindings including array patterns, arrays and their spreads, lambdas and
-application, `let`, `if`, recursion through `rec`, `fold` and the collections
-built on it, host effects, tail-resumptive handlers, and imported modules.
+bindings including array patterns, arrays and their spreads, `map` and `filter`
+and the rest of the collection prelude, lambdas and application, `let`, `if`,
+recursion through `rec`, `fold` and the collections built on it, host effects,
+tail-resumptive handlers, and imported modules.
 
 `rec` becomes a Core `let-rec`, not a lifted top-level definition. Lifting it
 stranded whatever the lambda captured — `fold`'s inner `go` closes over
 `values`, and a definition has no enclosing scope for that to come from.
+
+An empty array is `storeEmpty`, which allocates a zero-length `Store a` and lets
+the surrounding constraints infer `a`. blot briefly recorded the element type
+during checking and wrote a typed placeholder instead; that worked only where
+the element was already pinned, so `map` and `filter` did not compile. Asking
+for the constructor was the right move over building monomorphization to route
+around its absence — gpufuck keeps Core polymorphic on measured grounds.
 
 An import is _inlined_: a module is a function from a record to a record, both
 known at compile time, so importing one is lowering its body as a block. The

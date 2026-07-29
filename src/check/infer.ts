@@ -61,7 +61,7 @@ interface Context {
   /** Facts read after checking, once every constraint has been seen. */
   readonly pending: (() => void)[];
   readonly variants: Map<Expr, readonly VariantCase[]>;
-  readonly elements: Map<Expr, ElementKind>;
+  readonly patternShapes: Map<Pattern, readonly string[]>;
   readonly types: TypeEnv;
   /** Comptime bindings, for bridging `sig` expressions and `const` values. */
   readonly values: ValueEnv;
@@ -131,17 +131,6 @@ export function infer(
     }
 
     case "intrinsic": {
-      if (expr.name === "@array.empty") {
-        const type = instantiate(PRIMITIVE_TYPES.get(expr.name)!, level);
-        // Read after checking, once the pushes that determine the element have
-        // all been seen.
-        context.pending.push(() => {
-          if (type.tag !== "array") return;
-          const kind = elementKind(type.element);
-          if (kind !== null) context.elements.set(expr, kind);
-        });
-        return type;
-      }
       const primitive = PRIMITIVE_TYPES.get(expr.name);
       if (primitive === undefined) {
         // `@effect` and `@handle` are handled at their application sites,
@@ -232,14 +221,6 @@ export function infer(
         located(expr.span, () => {
           if (item.spread) constrain(itemType, { tag: "array", element });
           else constrain(itemType, element);
-        });
-      }
-      // A literal with a spread is built by pushing onto an empty store, so it
-      // needs the same element the empty store does.
-      if (expr.elements.some((item) => item.spread)) {
-        context.pending.push(() => {
-          const kind = elementKind(element);
-          if (kind !== null) context.elements.set(expr, kind);
         });
       }
       return { tag: "array", element };
@@ -538,28 +519,6 @@ function casesOf(type: SimpleType): readonly VariantCase[] | null {
   return [...found].map(([name, payload]) => ({ name, payload }));
 }
 
-/** Which domain a type belongs to, when that is decidable. */
-function elementKind(
-  type: SimpleType,
-  seen = new Set<number>(),
-): ElementKind | null {
-  if (type.tag === "range") return type.domain;
-  if (type.tag === "unit") return "unit";
-  if (type.tag === "variant") {
-    const names = [...type.cases.keys()].sort();
-    const boolean = names.length > 0 &&
-      names.every((name) => name === "True" || name === "False");
-    return boolean ? "boolean" : null;
-  }
-  if (type.tag !== "var" || seen.has(type.id)) return null;
-  seen.add(type.id);
-  for (const bound of [...type.lower, ...type.upper]) {
-    const found = elementKind(bound, seen);
-    if (found !== null) return found;
-  }
-  return null;
-}
-
 /** The concrete effect labels a row carries. */
 function rowLabels(type: SimpleType, seen: Set<number>): string[] {
   if (type.tag === "effects") return [...type.labels];
@@ -748,7 +707,22 @@ function bindDeclaration(
   // the shape the pattern requires.
   const scope = context.types;
   const required = bindPattern(pattern, scope, level);
-  located(pattern.span, () => constrain(instantiate(type, level), required));
+  const whole = instantiate(type, level);
+  located(pattern.span, () => constrain(whole, required));
+  recordPatternShapes(pattern, whole, context);
+}
+
+/** What the value actually carries, wherever a shape pattern reads part of it. */
+function recordPatternShapes(
+  pattern: Pattern,
+  type: SimpleType,
+  context: Context,
+): void {
+  if (pattern.tag !== "shape") return;
+  context.pending.push(() => {
+    const fields = fieldsOf(type);
+    if (fields !== null) context.patternShapes.set(pattern, fields);
+  });
 }
 
 /** `let`-polymorphism: infer one level deeper, then quantify what stayed there. */
@@ -841,17 +815,15 @@ export interface Checked {
   readonly shapes: ReadonlyMap<Expr, readonly string[]>;
   readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
   /**
-   * What an empty array holds.
+   * The field set of the *value* a shape pattern destructures.
    *
-   * Core allocates a store *with* an element, and an empty array has none to
-   * offer — but the slot is never read, so it only has to typecheck. Inference
-   * is the only thing that knows which type that is.
+   * blot has width subtyping, so `let { .x; } = point;` names fewer fields than
+   * the value has. Core records are nominal, so the backend needs the value's
+   * set rather than the pattern's — the pattern says what is wanted, not what
+   * arrives.
    */
-  readonly elements: ReadonlyMap<Expr, ElementKind>;
+  readonly patternShapes: ReadonlyMap<Pattern, readonly string[]>;
 }
-
-/** The element domains a zero-length store can be allocated at. */
-export type ElementKind = "int" | "text" | "boolean" | "unit";
 
 /** One constructor of a union, and whether it carries a payload. */
 export interface VariantCase {
@@ -876,12 +848,12 @@ export function checkModule(
   }
   const shapes = new Map<Expr, readonly string[]>();
   const variants = new Map<Expr, readonly VariantCase[]>();
-  const elements = new Map<Expr, ElementKind>();
+  const patternShapes = new Map<Pattern, readonly string[]>();
   const pending: (() => void)[] = [];
   const context: Context = {
     shapes,
     variants,
-    elements,
+    patternShapes,
     pending,
     types,
     values,
@@ -903,7 +875,13 @@ export function checkModule(
   // Every constraint has been seen by now, so a field set read here is the
   // whole one rather than whatever the first projection happened to mention.
   for (const read of pending) read();
-  return { type: result, effects: row, shapes, variants, elements };
+  return {
+    type: result,
+    effects: row,
+    shapes,
+    variants,
+    patternShapes,
+  };
 }
 
 export { effects, PRIMITIVE_TYPES };
