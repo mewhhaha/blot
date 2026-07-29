@@ -81,23 +81,40 @@ const Message = #Ready | #Progress I32 | #Failed Str;
 const Point = struct { .x = I32; .y = I32; };
 ```
 
-A struct is a *placement*: an order over the declared fields, and the
-positional product that order describes. The product is written out, so where a
-value lives is decided by the program rather than by the compiler later, and the
-order is a parameter — `struct` is declaration order, `packed` is widest-first,
-anything else is a function you write:
+`struct` hands back the storage type *itself*, with its constructor and
+accessors attached to it, so one binding is both the type and its namespace:
+
+```blot
+const Point = struct { .x = I32; .y = I32; };   // Point is (I32, I32)
+
+sig p = Point;
+let p = Point.new { .y = 20; .x = 10; };        // (10, 20)
+let x = Point.x p;                              // and so is p.0
+```
+
+The members are invisible to typing — the bridge, equality, and inhabitation
+see straight through — so `sig p = Point;` constrains `p` to the tuple and
+nothing about the namespace reaches the lattice. The storage is a tuple rather
+than an array because a tuple keeps one type per slot; `[I32, Str]` collapses
+to "an array of int-or-text" the moment inference looks at it, and storage that
+is imprecise is not predictable storage.
+
+The slot order is a parameter, so a placement is an ordinary function.
+*Packing* is a separate question — which bytes a field occupies rather than
+which slot — and stays a separate call:
 
 ```blot
 const Record = { .flag = U8; .id = I32; .code = U8; .name = Str; };
-struct Record                     // (U8, I32, U8, Str)   24 bytes, 10 padding
-packed (Record, byte_width)       // (Str, I32, U8, U8)   14 bytes,  0 padding
+struct Record                    // (U8, I32, U8, Str)  →  24 bytes, 10 padding
+packed (Record, byte_width)      // reports the order and offsets: 14 bytes, 0
+structure (Record, tight.order)  // storage arranged that way, if you want it
 ```
 
-The product is a tuple rather than an array because a tuple keeps one type per
-slot; `[I32, Str]` collapses to "an array of int-or-text" the moment inference
-looks at it, and storage that is imprecise is not predictable storage. The
-name-to-slot mapping is compile-time knowledge, so `new` runs at compile time
-and what reaches WebAssembly is the tuple and a projection at a fixed index.
+The name-to-slot mapping is compile-time knowledge, so `new` runs at compile
+time and what reaches WebAssembly is the tuple and a projection at a fixed
+index. A struct's namespace does not appear in its type, so a function that
+takes a struct cannot read `.fields` off its parameter — hand it `Point.fields`
+instead, which is what derivation wants anyway.
 
 `struct` is prelude source — about fifteen lines over `@shape.*` — not a
 compiler builtin. Types are sets, so `|`, `&`, and `\` are bound to `Set.union`,

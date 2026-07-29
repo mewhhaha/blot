@@ -88,6 +88,22 @@ export type Value =
   /** A performable operation: an effect plus one of its operation names. */
   | { readonly tag: "operation"; readonly effect: Value; readonly name: string }
   /**
+   * A type value carrying a namespace.
+   *
+   * This is what makes `struct` return the storage type itself rather than a
+   * record beside it. `extended` is *transparent* everywhere that matters —
+   * equality, inhabitation, and the bridge into inference all see straight
+   * through to `inner`, so `sig p = Point;` means `p` is the tuple `Point`
+   * describes. The members are reachable by field access and invisible to
+   * typing, which is the only way one binding can be both the type and the
+   * namespace of its accessors.
+   */
+  | {
+    readonly tag: "extended";
+    readonly inner: Value;
+    readonly members: ReadonlyMap<string, Value>;
+  }
+  /**
    * A nominal wrapper. Invariant, and never confused with its carrier.
    *
    * Identity is the name together with the carrier, not the `seal` call site.
@@ -169,6 +185,7 @@ export function show(value: Value): string {
     return `<${value.host ? "host effect" : "effect"} ${value.name}>`;
   }
   if (value.tag === "operation") return `<operation ${value.name}>`;
+  if (value.tag === "extended") return show(value.inner);
   if (value.tag === "sealed") return `${value.name} ${show(value.inner)}`;
   if (value.tag === "range") return `${show(value.low)}..${show(value.high)}`;
   if (value.tag === "arrow") {
@@ -196,6 +213,8 @@ export function show(value: Value): string {
 /** Structural equality. Closures and primitives are compared by identity. */
 export function equal(left: Value, right: Value): boolean {
   if (left === right) return true;
+  if (left.tag === "extended") return equal(left.inner, right);
+  if (right.tag === "extended") return equal(left, right.inner);
   if (left.tag !== right.tag) return false;
   if (left.tag === "int" && right.tag === "int") {
     return left.value === right.value;

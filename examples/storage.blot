@@ -1,26 +1,33 @@
 // Predictable storage.
 //
-// A struct is a *placement*: an order over the declared fields, and the
-// positional product that order describes. The product is written out, so
-// where a value lives is something the program decided rather than something
-// the compiler chose later.
+// `structure` hands back the storage type *itself*, with the constructor and
+// accessors attached to it. One binding is both the type and its namespace, so
+// `Point` can be written in a `sig` and still answer `Point.new`. The members
+// are invisible to typing: `sig p = Point;` constrains `p` to the tuple, and
+// nothing about the namespace reaches the lattice.
 //
-// The product is a tuple rather than an array on purpose. `[I32, Str]`
-// collapses to "an array of int-or-text" the moment inference looks at it;
-// `(I32, Str)` keeps one type per slot, and storage that is imprecise is not
-// predictable storage.
+// The storage is a tuple rather than an array because a tuple keeps one type
+// per slot. `[I32, Str]` collapses to "an array of int-or-text" the moment
+// inference looks at it, and storage that is imprecise is not predictable
+// storage.
 
 const Point = struct { .x = I32; .y = I32; };
 
+// `Point` is the type.
+sig somewhere = Point;
 // Named record in, positional storage out. The call site writes the fields in
 // whatever order reads well; the placement decides where they land.
-const origin = Point.new { .y = 0; .x = 0; };
-const somewhere = Point.new { .y = 20; .x = 10; };
+let somewhere = Point.new { .y = 20; .x = 10; };
+
+// Three ways to the same slot: the accessor, the tuple field, and a pattern.
+let by_accessor = Point.x somewhere;
+let by_position = somewhere.0;
+let (across, up) = somewhere;
 
 // --- placement is a parameter -----------------------------------------------
 //
-// `struct` is declaration order. `packed` is widest-first. Anything else is a
-// function you write, because the order is just an array of names.
+// `struct` is declaration order. An order is only ever an array of names, so
+// any other placement is an ordinary function handed to `structure`.
 
 const Record = { .flag = U8; .id = I32; .code = U8; .name = Str; };
 
@@ -31,44 +38,47 @@ const byte_width = t =>
   end;
 
 const Declared = struct Record;
-const Packed = packed (Record, byte_width);
 
-// Alphabetical is a placement too — nothing about `structure` is privileged
-// toward the two above, and an order is only ever an array of names.
 const alphabetical = names => sort_by (names, ((left, right) => is_less (@text.cmp left right)));
 const Sorted = structure (Record, alphabetical (@shape.names Record));
 
-// --- what the order costs ---------------------------------------------------
+// --- packing is a different question ----------------------------------------
 //
-// `aligned` places each field at a multiple of its own width and reports the
-// padding rather than hiding it, because choosing a better order is the whole
-// reason to look at it.
+// `packed` is not `structure` with a sorted order. A placement decides which
+// *slot* a field occupies; packing decides which *bytes* it occupies, and a
+// packed record still has to say where each field starts, how wide it is, and
+// how much the order wasted. It reports a layout; feeding its `.order` back to
+// `structure` is how you get storage arranged that way, and keeping that a
+// separate call is what keeps the two independent.
 
 const declared_bytes = aligned (Record, Declared.fields, byte_width);
-const packed_bytes = aligned (Record, Packed.fields, byte_width);
+const tight = packed (Record, byte_width);
+const Tight = structure (Record, tight.order);
 
 // `layout` is the unpadded case: offsets in a given order, nothing inserted.
-const raw_bytes = layout (Record, byte_width);
+const raw = layout (Record, byte_width);
 
 return {
-  .storage = Point.storage;
-  .origin = origin;
+  .type = Point;
   .somewhere = somewhere;
-  .x = Point.get (somewhere, "x");
+  .by_accessor = by_accessor;
+  .by_position = by_position;
+  .destructured = (across, up);
   .y_slot = Point.slot "y";
   .back_to_named = Point.named somewhere;
 
   .declared_order = Declared.fields;
-  .declared_storage = Declared.storage;
+  .declared_type = Declared;
   .declared_size = declared_bytes.size;
   .declared_padding = declared_bytes.padding;
 
-  .packed_order = Packed.fields;
-  .packed_storage = Packed.storage;
-  .packed_size = packed_bytes.size;
-  .packed_padding = packed_bytes.padding;
-  .packed_offsets = packed_bytes.fields;
+  .packed_order = tight.order;
+  .packed_type = Tight;
+  .packed_size = tight.size;
+  .packed_padding = tight.padding;
+  .packed_offsets = tight.fields;
+  .id_at = tight.offset "id";
 
   .sorted_order = Sorted.fields;
-  .unpadded_size = raw_bytes.size;
+  .unpadded_size = raw.size;
 };

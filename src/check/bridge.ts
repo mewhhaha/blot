@@ -138,6 +138,11 @@ export function bridge(value: Value): SimpleType | null {
       return record(operations);
     }
 
+    // Transparent: a struct's type is its storage. The members it carries are
+    // a compile-time namespace and have no business in the lattice.
+    case "extended":
+      return bridge(value.inner);
+
     case "sealed":
       // A sealed type is identified by its name and its carrier, so the
       // opaque name has to carry both — otherwise `List I32` and `List Str`

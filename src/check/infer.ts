@@ -17,7 +17,7 @@
 import type { Decl, Expr, Module, Pattern, Span } from "../syntax/ast.ts";
 import { fail } from "../diagnostic.ts";
 import type { Env as ValueEnv } from "../comptime/value.ts";
-import { childEnv } from "../comptime/value.ts";
+import { childEnv, lookup as lookupValue } from "../comptime/value.ts";
 import { bind, evaluate, type Imports, run } from "../comptime/eval.ts";
 import { bridge, effectLabel } from "./bridge.ts";
 import { constrain, instantiate, scheme, TypeError_ } from "./constrain.ts";
@@ -177,6 +177,23 @@ export function infer(
     }
 
     case "field": {
+      // A type value's namespace is compile-time, and the ordinary field rule
+      // does not describe it: `Point` bridges to its storage, so `.new` is not
+      // a field of the type and asking for one would be a false error. When
+      // the target is a name bound to such a value and the name is a member,
+      // the member decides. A member that is a closure has no type to read off
+      // the value, so this stays silent rather than guessing.
+      if (expr.target.tag === "var") {
+        const bound = lookupValue(context.values, expr.target.name);
+        if (bound !== undefined && bound.tag === "extended") {
+          const member = bound.members.get(expr.name);
+          if (member !== undefined) {
+            const bridged = bridge(member);
+            if (bridged === null) return freshVar(level);
+            return bridged;
+          }
+        }
+      }
       const target = infer(expr.target, context, level, row);
       const result = freshVar(level);
       located(expr.span, () => {

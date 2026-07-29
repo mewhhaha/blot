@@ -302,6 +302,13 @@ function truth(value: Value, span: Span): boolean {
 }
 
 function project(target: Value, name: string, span: Span): Value {
+  // A type value's namespace. Looked up before the carrier, so `Point.new`
+  // reaches the constructor rather than slot `"new"`.
+  if (target.tag === "extended") {
+    const member = target.members.get(name);
+    if (member !== undefined) return member;
+    return project(target.inner, name, span);
+  }
   if (target.tag === "shape") {
     const found = target.fields.get(name);
     if (found === undefined) {

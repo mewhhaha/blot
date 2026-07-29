@@ -37,9 +37,14 @@ const Record = struct {
   .label = Str;
 };
 
-const derive_names = target => map (target.fields, (name => @text.concat "." name));
+// Derivation takes the field names, not the struct. A struct's namespace is
+// compile-time and does not appear in its type — `Record` *is* the storage
+// tuple — so a function that wanted `.fields` off its parameter would have no
+// type to ask for. Handing it `Record.fields` is both what type checks and
+// what the derivation actually needs.
+const derive_names = names => map (names, (name => @text.concat "." name));
 
-const describe = target => fold (target.fields, "", ((state, name) =>
+const describe = names => fold (names, "", ((state, name) =>
   @text.concat state (@text.concat name " ")));
 
 return {
@@ -58,8 +63,8 @@ return {
   .boxed_pair = BoxedPair U8;
 
   .record_fields = Record.fields;
-  .derived_names = derive_names Record;
-  .described = describe Record;
+  .derived_names = derive_names Record.fields;
+  .described = describe Record.fields;
 
   // A range accepts what it contains and rejects what it does not; the check
   // runs at compile time because everything here does.

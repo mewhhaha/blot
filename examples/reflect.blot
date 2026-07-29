@@ -53,9 +53,9 @@ const element_of = t => unwrap_or (opened ("List", t), Unit);
 
 // --- struct -----------------------------------------------------------------
 //
-// `struct` is prelude source over `@shape.*`. It reports the declared shape,
-// the positional product that is the storage, which slot each field lives in,
-// and a `new` that refuses a value the shape does not admit.
+// `struct` is prelude source over `@shape.*`, and it returns the storage type
+// with its namespace attached — so `Header` is both the tuple a value of it is
+// and the place `new`, `slot`, and the field accessors live.
 
 const Header = struct { .code = U8; .label = Str; };
 
@@ -82,7 +82,7 @@ return {
 
   .header_fields = Header.fields;
   .header_size = Header.size;
-  .header_storage = Header.storage;
+  .header_storage = Header;
   .label_at = Header.slot "label";
   .built = Header.new { .code = 7; .label = "ok"; };
   .picked = Pick (Ok, ["body"]);

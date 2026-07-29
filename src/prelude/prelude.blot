@@ -424,20 +424,20 @@ const Reflect = {
 
 // --- structs ----------------------------------------------------------------
 //
-// A struct is a *placement*: an order over the declared fields, and the
-// positional product that order describes. The product is written out — a
-// three-field struct stores a three-slot tuple — so where a value lives is
-// something the program decided rather than something the compiler chose
-// later. That is the whole point of doing this in source.
+// `structure` returns the storage type *itself*, with its constructor and
+// accessors attached to it. That is the point of `@type.extend`: one binding
+// is both the type and its namespace, so `sig p = Point;` constrains `p` to
+// the tuple `Point` describes while `Point.new` and `Point.x` still resolve.
+// Members are invisible to typing — the bridge, equality, and inhabitation all
+// see straight through to the storage.
 //
-// The product is a tuple rather than an array because a tuple keeps one type
+// The storage is a tuple rather than an array because a tuple keeps one type
 // per slot. `[I32, Str]` collapses to "an array of int-or-text" the moment
-// inference looks at it; `(I32, Str)` does not, and a struct whose storage is
-// imprecise is not predictable storage.
+// inference looks at it, and storage that is imprecise is not predictable
+// storage.
 //
-// `order` is a parameter, which is the entire packing and padding story:
-// `struct` is declaration order, `packed` is widest-first, and anything else
-// is a function you write.
+// `order` is a parameter: an order is only ever an array of names, so a
+// placement strategy is an ordinary function.
 
 const slot_key = index => Text.of_int index;
 
@@ -450,49 +450,50 @@ const slots_of = order => (fold (order, { .next = 0; .at = @shape.empty; },
 
 const structure = (shape, order) => do
   const at = slots_of order;
-  // The storage type, positionally. This is what a value of this struct *is*.
-  const storage = fold (order, @shape.empty,
-    ((product, name) => @shape.set product (slot_key (@shape.get at name)) (@shape.get shape name)));
-  return {
-    .shape = shape;
-    .storage = storage;
-    .fields = order;
-    .size = @array.len order;
 
-    // Which slot a field lives in. Every accessor below is this index and a
-    // projection; there is no other way to reach a field.
-    .slot = name => @shape.get at name;
-    .get = (value, name) => @shape.get value (slot_key (@shape.get at name));
+  // The storage type, positionally. This is what a value of this struct *is*,
+  // and what `structure` hands back.
+  const storage = fold (order, @shape.empty, ((product, name) =>
+    @shape.set product (slot_key (@shape.get at name)) (@shape.get shape name)));
 
-    // Named record in, positional storage out. The call site writes fields in
-    // whatever order reads well; the placement decides where they land. A
-    // field the shape does not declare is rejected here rather than silently
-    // stored, and a missing one fails on the read.
-    .new = record => do
-      const _ = @satisfies (@shape.names record) order;
-      return fold (order, @shape.empty, ((product, name) =>
-        @shape.set product (slot_key (@shape.get at name))
-          (@satisfies (@shape.get record name) (@shape.get shape name))));
-    end;
+  // One accessor per field: a projection at a known slot, nothing more.
+  const with_fields = fold (order, storage, ((t, name) =>
+    @type.extend t name (value => @shape.get value (slot_key (@shape.get at name)))));
 
-    // ...and back, so storage can be read by name without knowing the order.
-    .named = value => fold (order, @shape.empty, ((record, name) =>
-      @shape.set record name (@shape.get value (slot_key (@shape.get at name)))));
-  };
+  // Named record in, positional storage out. The call site writes the fields
+  // in whatever order reads well; the placement decides where they land. A
+  // field the shape does not declare is refused here rather than stored, and a
+  // missing one fails on the read.
+  const new = record => do
+    const _ = @satisfies (@shape.names record) order;
+    return fold (order, @shape.empty, ((product, name) =>
+      @shape.set product (slot_key (@shape.get at name))
+        (@satisfies (@shape.get record name) (@shape.get shape name))));
+  end;
+
+  // ...and back, so storage can be read by name without knowing the order.
+  const named = value => fold (order, @shape.empty, ((record, name) =>
+    @shape.set record name (@shape.get value (slot_key (@shape.get at name)))));
+
+  return @type.extend (@type.extend (@type.extend (@type.extend (@type.extend
+    (@type.extend with_fields "new" new) "named" named) "shape" shape)
+    "fields" order) "size" (@array.len order))
+    "slot" (name => @shape.get at name);
 end;
 
 const struct = shape => structure (shape, @shape.names shape);
 
-// Widest field first. With every field aligned to its own width, that is the
-// order in which `aligned` needs no padding at all, which is what packing a
-// struct means when you are not bit-packing it.
-const packed = (shape, width_of) => structure (shape,
-  sort_by (@shape.names shape, ((left, right) =>
-    is_greater (@int.cmp (width_of (@shape.get shape left)) (width_of (@shape.get shape right))))));
+// --- packing ----------------------------------------------------------------
+//
+// Deliberately not `structure` with a different order. A placement decides
+// which *slot* a field occupies; packing decides which *bytes* it occupies,
+// and the two answer different questions — a packed record still has to say
+// where each field starts, how wide it is, and how much space the order wasted.
+// Sharing an implementation would force one of them to pretend to be the other.
 
-// Byte offsets in a given order, with each field aligned to its own width.
-// `.padding` is reported rather than hidden: a placement that wastes space
-// should say so, because choosing a better order is the reason to look.
+// Offsets in a given order, each field aligned to its own width. `.padding` is
+// reported rather than hidden: a placement that wastes space should say so,
+// because choosing a better order is the reason to look.
 const aligned = (shape, order, width_of) => do
   const placed = fold (order, { .offset = 0; .fields = @array.empty; .padding = 0; },
     ((state, name) => do
@@ -507,6 +508,24 @@ const aligned = (shape, order, width_of) => do
       };
     end));
   return { .size = placed.offset; .padding = placed.padding; .fields = placed.fields; };
+end;
+
+// Widest field first, which with per-field alignment is the order that needs no
+// padding at all. `packed` reports the byte layout it chose; feeding its
+// `.order` to `structure` is how you get storage in that order, and keeping
+// that a separate call is what keeps the two decoupled.
+const packed = (shape, width_of) => do
+  const order = sort_by (@shape.names shape, ((left, right) =>
+    is_greater (@int.cmp (width_of (@shape.get shape left)) (width_of (@shape.get shape right)))));
+  const bytes = aligned (shape, order, width_of);
+  return {
+    .order = order;
+    .size = bytes.size;
+    .padding = bytes.padding;
+    .fields = bytes.fields;
+    .offset = name => fold (bytes.fields, None,
+      ((found, field) => if text_eq (field.name, name) then Some field.offset else found end));
+  };
 end;
 
 const Type = {

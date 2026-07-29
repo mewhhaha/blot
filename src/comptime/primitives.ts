@@ -117,6 +117,9 @@ function difference(left: Value, right: Value, span: Span): Value {
  * second primitive to ask.
  */
 function reflect(value: Value): Value {
+  // Transparent here too: reflecting a struct reports its storage, because
+  // that is what the type is. `@type.members` asks the other question.
+  if (value.tag === "extended") return reflect(value.inner);
   const tagged = (name: string, payload: Value): Value => ({
     tag: "tag",
     name,
@@ -174,6 +177,7 @@ function reflect(value: Value): Value {
 
 /** A literal's type is the literal: `@type.of 1` is `1`, never `I32`. */
 function typeOf(value: Value): Value {
+  if (value.tag === "extended") return typeOf(value.inner);
   if (value.tag === "shape") {
     return {
       tag: "shape",
@@ -217,6 +221,9 @@ function ordering(sign: number): Value {
 
 /** Does `value` inhabit `type`? Structural, and total over the value domain. */
 export function inhabits(value: Value, type: Value): boolean {
+  // Members are invisible to typing: a struct's type is its storage.
+  if (type.tag === "extended") return inhabits(value, type.inner);
+  if (value.tag === "extended") return inhabits(value.inner, type);
   if (type.tag === "unbounded") return true;
   if (type.tag === "union") {
     return type.members.some((member) => inhabits(value, member));
@@ -319,6 +326,39 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     },
   }],
   ["@type.reflect", { arity: 1, run: ([value]) => reflect(value) }],
+  // Attaching a member to a type value. This is what lets `struct` hand back
+  // the storage type itself with its constructor and accessors reachable on
+  // it, rather than a record beside the type. A duplicate is refused, so a
+  // field named `new` collides loudly instead of shadowing the constructor.
+  ["@type.extend", {
+    arity: 3,
+    run: ([target, name, member], span) => {
+      const key = textOf(name, span, "@type.extend");
+      const members = new Map(
+        target.tag === "extended" ? target.members : [],
+      );
+      if (members.has(key)) {
+        fail(
+          "BLOT_DUPLICATE_MEMBER",
+          `\`${key}\` is already a member of ${show(target)}.`,
+          span,
+        );
+      }
+      members.set(key, member);
+      return {
+        tag: "extended",
+        inner: target.tag === "extended" ? target.inner : target,
+        members,
+      };
+    },
+  }],
+  ["@type.members", {
+    arity: 1,
+    run: ([target]) => ({
+      tag: "shape",
+      fields: new Map(target.tag === "extended" ? target.members : []),
+    }),
+  }],
   ["@type.union_of", {
     arity: 1,
     run: ([values], span) => {

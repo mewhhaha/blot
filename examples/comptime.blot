@@ -22,19 +22,21 @@ const packed_layout = layout (Header.shape, byte_width);
 const aligned_layout = layout (Header.shape, word_width);
 
 // Reflection is a normal call, so structural derivation is ordinary recursion
-// over a shape's fields.
-const derive_show = target => (value =>
-  fold (target.fields, "", ((state, name) => do
+// over a shape's fields. It takes the names rather than the struct: a struct's
+// namespace is compile-time and does not appear in its type, so a parameter
+// that wanted `.fields` would have no type to ask for.
+const derive_show = names => (value =>
+  fold (names, "", ((state, name) => do
     const rendered = @text.of_int (@shape.get value name);
     return @text.concat state (@text.concat name (@text.concat "=" (@text.concat rendered " ")));
   end)));
 
-const show_header = comptime (derive_show Header);
+const show_header = comptime (derive_show Header.fields);
 
-const derive_sum = target => (value =>
-  fold (target.fields, 0, ((state, name) => @int.add state (@shape.get value name))));
+const derive_sum = names => (value =>
+  fold (names, 0, ((state, name) => @int.add state (@shape.get value name))));
 
-const sum_header = comptime (derive_sum Header);
+const sum_header = comptime (derive_sum Header.fields);
 
 let sample = { .kind = 5; .urgent = 1; .length = 120; };
 
