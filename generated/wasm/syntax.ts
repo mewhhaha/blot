@@ -136,6 +136,7 @@ export type LiteralKind =
   | "for"
   | "do"
   | "end"
+  | "<-"
   | "open"
   | "return"
   | ","
@@ -219,7 +220,7 @@ export type RuleName =
   | "binding"
   | "shadowing"
   | "iteration"
-  | "iteration_binder"
+  | "iteration_source"
   | "opening"
   | "result"
   | "binding_pattern"
@@ -343,15 +344,15 @@ export interface ShadowingCursor extends RuleCursorBase<"shadowing"> {
 }
 
 export interface IterationCursor extends RuleCursorBase<"iteration"> {
-  field(name: "binder"): IterationBinderCursor | null;
   field(name: "body"): ReadonlyArray<StatementCursor>;
-  field(name: "source"): ValueCursor;
+  field(name: "drawn"): IterationSourceCursor | null;
+  field(name: "head"): ValueCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
-export interface IterationBinderCursor extends RuleCursorBase<"iteration_binder"> {
-  field(name: "pattern"): BindingPatternCursor;
+export interface IterationSourceCursor extends RuleCursorBase<"iteration_source"> {
+  field(name: "source"): ValueCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -599,7 +600,7 @@ export type AnyRuleCursor =
   | BindingCursor
   | ShadowingCursor
   | IterationCursor
-  | IterationBinderCursor
+  | IterationSourceCursor
   | OpeningCursor
   | ResultCursor
   | BindingPatternCursor

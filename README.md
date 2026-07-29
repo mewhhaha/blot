@@ -82,11 +82,18 @@ the state inferred, which is how blot has a loop while having no assignment —
 
 ```blot
 let x = 1;
-for Iter.range (0, 5) do
+for Iter.range (0, 5) do        // run the body once per element
   x := x + 1;
 end;
-return x;               // 6
+return x;                       // 6
+
+for n <- source do … end;       // bind each element
+for #Some n <- source do … end; // bind, and skip what does not match
 ```
+
+A binder that cannot fail is a `let`. One that can becomes the `case` it looks
+like, with the other arm handing the accumulator back untouched — so filtering
+is one arm rather than a second construct.
 
 `for` is surface syntax over `iterate`, which is prelude source over `rec` and
 `case` — so there is no loop in the AST, none in the evaluator, and none in the

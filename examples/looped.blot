@@ -7,7 +7,7 @@
 open (@import "blot:prelude") ();
 
 let total = 0;
-for let n = Iter.range (1, 10) do
+for n <- Iter.range (1, 10) do
   total := total + n;
 end;
 
@@ -28,8 +28,15 @@ const halving = start => {
 };
 
 let shrunk = 0;
-for let value = halving 8 do
+for value <- halving 8 do
   shrunk := shrunk + value;
 end;
 
-return total + ticks + shrunk - 22;
+// A refutable binder is the `case` it looks like, with the other arm handing
+// the accumulator back — so filtering compiles too.
+let kept = 0;
+for #Some n <- Iter.items [Some 3, None, Some 4] do
+  kept := kept + n;
+end;
+
+return total + ticks + shrunk + kept - 29;

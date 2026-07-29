@@ -92,20 +92,28 @@ shadowing = (
 // That is a fold with the state inferred, which is why blot can have `for`
 // without having assignment.
 //
-// `let` after `for` binds each element; without it the loop runs for its
-// rebindings alone. The two alternatives are told apart by a keyword, so the
-// FIRST sets stay disjoint.
+//   for source do … end;              runs the body once per element
+//   for x <- source do … end;         binds each element
+//   for #Some x <- source do … end;   binds, and skips what does not match
 iteration = (
   "for"
-  binder:iteration_binder?
-  source:value
+  head:value
+  drawn:iteration_source?
   "do"
   body:statement*
   "end"
   ";"
 ) ;
 
-iteration_binder = ( "let" pattern:binding_pattern "=" ) ;
+// `head` is parsed as a value and reclassified into a pattern when `<-` follows
+// — the same trick `lambda` uses for its parameter. Making the binder a
+// separate alternative would need the parser to decide between a pattern and an
+// expression from the first token, which they share; deciding after `<-` costs
+// nothing and keeps the FIRST sets disjoint.
+//
+// `<-` is a literal rather than an OPERATOR, so it cannot also be a custom
+// operator. `=>` pays the same price for the same reason.
+iteration_source = ( "<-" source:value ) ;
 
 // Spreading a module's exports into scope. The prelude is an ordinary module
 // with no privilege, so this is how `+` finds `Num.add` — a default fixity

@@ -254,6 +254,28 @@ function lowerQualifiedName(rule: Rule, _source: string): readonly string[] {
  *        return { .total = total; };
  *      end));
  */
+/**
+ * Can this pattern fail to match?
+ *
+ * A binder that cannot fail is a `let`; one that can becomes the `case` that
+ * makes `for #Some x <- src` a filter. Aggregates are refutable exactly when a
+ * part of them is — an array pattern also constrains the length, so it always
+ * can fail.
+ */
+function refutable(pattern: Pattern): boolean {
+  switch (pattern.tag) {
+    case "name":
+    case "wildcard":
+      return false;
+    case "tuple":
+      return pattern.elements.some(refutable);
+    case "shape":
+      return pattern.fields.some((field) => refutable(field.pattern));
+    default:
+      return true;
+  }
+}
+
 function desugarLoop(
   binder: Pattern | null,
   source: Expr,
@@ -305,7 +327,12 @@ function desugarLoop(
       span,
     });
   }
-  if (binder !== null) {
+  // An irrefutable binder is a `let`. A refutable one — `#Some x <- src` — is
+  // a `case` whose other arm hands the accumulator back untouched, so an
+  // element that does not match skips the iteration instead of failing it.
+  // That is the filter, and it costs one arm.
+  const filtering = binder !== null && refutable(binder);
+  if (binder !== null && !filtering) {
     declarations.push({
       tag: "binding",
       kind: "let",
@@ -315,6 +342,19 @@ function desugarLoop(
     });
   }
   declarations.push(...body);
+
+  const step: Expr = { tag: "block", declarations, result: state, span };
+  const visited: Expr = filtering && binder !== null
+    ? {
+      tag: "case",
+      target: name(itemIn),
+      arms: [
+        { pattern: binder, body: step },
+        { pattern: { tag: "wildcard", span }, body: name(carriedIn) },
+      ],
+      span,
+    }
+    : step;
 
   const visit: Expr = {
     tag: "lambda",
@@ -326,7 +366,7 @@ function desugarLoop(
       ],
       span,
     },
-    body: { tag: "block", declarations, result: state, span },
+    body: visited,
     span,
   };
 
@@ -360,7 +400,8 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     };
   }
   if (rule.name === "iteration") {
-    const binder = field(rule, "binder");
+    const head = lowerValue(asRule(field(rule, "head"), "value"), context);
+    const drawn = field(rule, "drawn");
     // A loop body is declarations and nothing else: there is no `return`,
     // because a loop produces no value — what it produces is the rebindings
     // that escape it.
@@ -375,11 +416,13 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       }
       return lowerDecl(inner, context);
     });
+    if (drawn === null) return desugarLoop(null, head, body, rule.span);
     return desugarLoop(
-      binder === null ? null : lowerPattern(
-        asRule(required(asRule(binder, "iteration_binder"), "pattern"), "pattern"),
+      patternFromExpr(head),
+      lowerValue(
+        asRule(required(asRule(drawn, "iteration_source"), "source"), "value"),
+        context,
       ),
-      lowerValue(asRule(field(rule, "source"), "value"), context),
       body,
       rule.span,
     );

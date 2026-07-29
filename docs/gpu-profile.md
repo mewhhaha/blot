@@ -19,22 +19,26 @@ in a benchmark months later.
 
 | counter                    |              blot | gpu-duck | note                                               |
 | -------------------------- | ----------------: | -------: | -------------------------------------------------- |
-| `lexerStates`              |               105 |      175 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`              |               107 |      175 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity` |                 6 |        9 | worst-case island candidates allocated per token   |
 | `islandCount`              |                19 |       24 |                                                    |
 | `islandStates`             |               658 |        — |                                                    |
 | `contractionRounds`        |                33 |        — | fixed dispatch bound                               |
-| `denseTransitionBytes`     |           489,552 |        — | immutable device table                             |
-| `packedBytes`              |           792,023 |        — | version-3 runtime section                          |
+| `denseTransitionBytes`     |           497,448 |        — | immutable device table                             |
+| `packedBytes`              |           797,450 |        — | version-3 runtime section                          |
 | `rootLoopIsland`           | 3 (`declaration`) |        — | strict root loop proven                            |
 
 blot beats the gpu-duck reference on both counters that matter most for
 occupancy, because it has three declaration forms where gpu-duck has six and no
 type sublanguage at all.
 
-`for` cost three lexer states and thirty-three island states on top of that,
+`for` cost five lexer states and thirty-three island states on top of that,
 again with the multiplicity and contraction bounds unmoved: an `end`-terminated
-region is a shape the profile already had four of.
+region is a shape the profile already had four of. Two of those states are
+`<-`, and the binder cost no island states at all — it is parsed as a value and
+reclassified into a pattern when `<-` follows, the same trick `lambda` uses,
+rather than as an alternative the parser would have to choose from the first
+token.
 
 `open` cost one lexer state and twenty-one island states — one keyword and one
 declaration alternative, with `maxCandidateMultiplicity` and `contractionRounds`
