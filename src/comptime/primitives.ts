@@ -330,10 +330,10 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
   // the storage type itself with its constructor and accessors reachable on
   // it, rather than a record beside the type. A duplicate is refused, so a
   // field named `new` collides loudly instead of shadowing the constructor.
-  ["@type.extend", {
+  ["@type.attach", {
     arity: 3,
     run: ([target, name, member], span) => {
-      const key = textOf(name, span, "@type.extend");
+      const key = textOf(name, span, "@type.attach");
       const members = new Map(
         target.tag === "extended" ? target.members : [],
       );

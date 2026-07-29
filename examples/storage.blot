@@ -26,8 +26,9 @@ let (across, up) = somewhere;
 
 // --- placement is a parameter -----------------------------------------------
 //
-// `struct` is declaration order. An order is only ever an array of names, so
-// any other placement is an ordinary function handed to `structure`.
+// A shape's fields are in declaration order, and `reorder` rebuilds one in any
+// other — so choosing a placement is an operation on the shape, and `struct`
+// needs no second entry point for it.
 
 const Record = { .flag = U8; .id = I32; .code = U8; .name = Str; };
 
@@ -40,25 +41,39 @@ const byte_width = t =>
 const Declared = struct Record;
 
 const alphabetical = names => sort_by (names, ((left, right) => is_less (@text.cmp left right)));
-const Sorted = structure (Record, alphabetical (@shape.names Record));
+const Sorted = struct (reorder (Record, alphabetical (@shape.names Record)));
 
 // --- packing is a different question ----------------------------------------
 //
-// `packed` is not `structure` with a sorted order. A placement decides which
+// `packed` is not `struct` with a sorted order. A placement decides which
 // *slot* a field occupies; packing decides which *bytes* it occupies, and a
 // packed record still has to say where each field starts, how wide it is, and
-// how much the order wasted. It reports a layout; feeding its `.order` back to
-// `structure` is how you get storage arranged that way, and keeping that a
-// separate call is what keeps the two independent.
+// how much the order wasted. It reports a layout; `struct (reorder (...))` is
+// how you get storage arranged that way, and keeping that a separate call is
+// what keeps the two independent.
 
 const declared_bytes = aligned (Record, Declared.fields, byte_width);
 const tight = packed (Record, byte_width);
-const Tight = structure (Record, tight.order);
+const Tight = struct (reorder (Record, tight.order));
 
 // `layout` is the unpadded case: offsets in a given order, nothing inserted.
 const raw = layout (Record, byte_width);
 
+// --- attaching your own ------------------------------------------------------
+//
+// `:+` is not a struct feature. It attaches a namespace to any type value, and
+// it chains left, so a namespace reads as a sequence of attachments rather than
+// as nested calls.
+
+const Meters = seal ("Meters", I32)
+  :+ { .of = n => seal ("Meters", n); }
+  :+ { .unit = "m"; };
+
+const Located = Point :+ { .origin = { .x = 0; .y = 0; }; };
+
 return {
+  .meters_unit = Meters.unit;
+  .origin = Located.new Located.origin;
   .type = Point;
   .somewhere = somewhere;
   .by_accessor = by_accessor;

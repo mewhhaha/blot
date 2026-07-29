@@ -42,6 +42,7 @@ export const DEFAULT_FIXITIES: readonly Fixity[] = [
   entry("|", "left", 45, "Set.union"),
   entry("&", "left", 45, "Set.intersect"),
   entry("\\", "left", 45, "Set.diff"),
+  entry(":+", "left", 50, "attach"),
   entry("->", "right", 55, "@type.arrow"),
   entry("+", "left", 60, "Num.add"),
   entry("-", "left", 60, "Num.sub"),

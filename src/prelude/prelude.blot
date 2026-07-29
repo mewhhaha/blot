@@ -232,6 +232,15 @@ const type_of = value => @type.of value;
 const seal = (name, value) => @type.seal name value;
 const unseal = value => @type.open value;
 
+// Attaching a namespace to a type value, which is what lets `struct` hand back
+// the storage type itself rather than a record beside it. `:+` is this, and it
+// is curried and left-associative, so a namespace is written as a sequence of
+// attachments rather than as nested calls — which is as close to a sequence of
+// statements as a language without assignment gets.
+const attach = target => (members => fold (@shape.names members, target,
+  ((extended, name) => @type.attach extended name (@shape.get members name))));
+
+
 // The GPU frontend requires every integer literal to fit the signed 32-bit
 // domain, so wider bounds are computed rather than spelled. Compile time is the
 // same language, so this costs nothing at runtime.
@@ -424,72 +433,78 @@ const Reflect = {
 
 // --- structs ----------------------------------------------------------------
 //
-// `structure` returns the storage type *itself*, with its constructor and
-// accessors attached to it. That is the point of `@type.extend`: one binding
-// is both the type and its namespace, so `sig p = Point;` constrains `p` to
-// the tuple `Point` describes while `Point.new` and `Point.x` still resolve.
-// Members are invisible to typing — the bridge, equality, and inhabitation all
-// see straight through to the storage.
+// `struct` hands back the storage type *itself*, with its constructor and
+// accessors attached to it by `:+`. One binding is both the type and its
+// namespace, so `Point` can be written in a `sig` and still answer
+// `Point.new`. The members are invisible to typing: `sig p = Point;`
+// constrains `p` to the tuple, and nothing about the namespace reaches the
+// lattice.
 //
 // The storage is a tuple rather than an array because a tuple keeps one type
 // per slot. `[I32, Str]` collapses to "an array of int-or-text" the moment
 // inference looks at it, and storage that is imprecise is not predictable
 // storage.
 //
-// `order` is a parameter: an order is only ever an array of names, so a
-// placement strategy is an ordinary function.
+// There is no separate `structure (shape, order)`. A shape's fields are in
+// declaration order and `reorder` rebuilds one in any other, so choosing a
+// placement is an operation on the shape rather than a second entry point
+// into the struct.
 
-const slot_key = index => Text.of_int index;
+const reorder = (shape, order) => fold (order, @shape.empty,
+  ((moved, name) => @shape.set moved name (@shape.get shape name)));
 
-// name -> slot index, in the order the placement chose.
-const slots_of = order => (fold (order, { .next = 0; .at = @shape.empty; },
-  ((state, name) => {
-    .next = @int.add state.next 1;
-    .at = @shape.set state.at name state.next;
-  }))).at;
+const struct = shape => do
+  const order = @shape.names shape;
 
-const structure = (shape, order) => do
-  const at = slots_of order;
+  // Where each field lives.
+  const at = (fold (order, { .next = 0; .slots = @shape.empty; },
+    ((state, name) => {
+      .next = @int.add state.next 1;
+      .slots = @shape.set state.slots name state.next;
+    }))).slots;
+
+  const key = name => Text.of_int (@shape.get at name);
 
   // The storage type, positionally. This is what a value of this struct *is*,
-  // and what `structure` hands back.
-  const storage = fold (order, @shape.empty, ((product, name) =>
-    @shape.set product (slot_key (@shape.get at name)) (@shape.get shape name)));
+  // and what `struct` hands back.
+  const storage = fold (order, @shape.empty,
+    ((product, name) => @shape.set product (key name) (@shape.get shape name)));
 
-  // One accessor per field: a projection at a known slot, nothing more.
-  const with_fields = fold (order, storage, ((t, name) =>
-    @type.extend t name (value => @shape.get value (slot_key (@shape.get at name)))));
+  // One accessor per field: a projection at a known slot, nothing more. The
+  // names are computed, so this is `@type.attach` rather than `:+`.
+  const with_fields = fold (order, storage,
+    ((typed, name) => @type.attach typed name (value => @shape.get value (key name))));
 
-  // Named record in, positional storage out. The call site writes the fields
-  // in whatever order reads well; the placement decides where they land. A
-  // field the shape does not declare is refused here rather than stored, and a
-  // missing one fails on the read.
-  const new = record => do
-    const _ = @satisfies (@shape.names record) order;
-    return fold (order, @shape.empty, ((product, name) =>
-      @shape.set product (slot_key (@shape.get at name))
-        (@satisfies (@shape.get record name) (@shape.get shape name))));
-  end;
+  return with_fields :+ {
+    // Named record in, positional storage out. The call site writes the fields
+    // in whatever order reads well; the order decides where they land. A field
+    // the shape does not declare is refused here rather than stored, and a
+    // missing one fails on the read.
+    .new = record => do
+      const _ = @satisfies (@shape.names record) order;
+      return fold (order, @shape.empty, ((product, name) =>
+        @shape.set product (key name)
+          (@satisfies (@shape.get record name) (@shape.get shape name))));
+    end;
 
-  // ...and back, so storage can be read by name without knowing the order.
-  const named = value => fold (order, @shape.empty, ((record, name) =>
-    @shape.set record name (@shape.get value (slot_key (@shape.get at name)))));
+    // ...and back, so storage can be read by name without knowing the order.
+    .named = value => fold (order, @shape.empty,
+      ((record, name) => @shape.set record name (@shape.get value (key name))));
 
-  return @type.extend (@type.extend (@type.extend (@type.extend (@type.extend
-    (@type.extend with_fields "new" new) "named" named) "shape" shape)
-    "fields" order) "size" (@array.len order))
-    "slot" (name => @shape.get at name);
+    .shape = shape;
+    .fields = order;
+    .size = @array.len order;
+    .slot = name => @shape.get at name;
+  };
 end;
-
-const struct = shape => structure (shape, @shape.names shape);
 
 // --- packing ----------------------------------------------------------------
 //
-// Deliberately not `structure` with a different order. A placement decides
-// which *slot* a field occupies; packing decides which *bytes* it occupies,
-// and the two answer different questions — a packed record still has to say
-// where each field starts, how wide it is, and how much space the order wasted.
-// Sharing an implementation would force one of them to pretend to be the other.
+// Deliberately not `struct` with a different order. A placement decides which
+// *slot* a field occupies; packing decides which *bytes* it occupies, and the
+// two answer different questions — a packed record still has to say where each
+// field starts, how wide it is, and how much space the order wasted. Sharing
+// an implementation would force one of them to pretend to be the other.
 
 // Offsets in a given order, each field aligned to its own width. `.padding` is
 // reported rather than hidden: a placement that wastes space should say so,
@@ -511,9 +526,9 @@ const aligned = (shape, order, width_of) => do
 end;
 
 // Widest field first, which with per-field alignment is the order that needs no
-// padding at all. `packed` reports the byte layout it chose; feeding its
-// `.order` to `structure` is how you get storage in that order, and keeping
-// that a separate call is what keeps the two decoupled.
+// padding at all. `packed` reports the byte layout it chose; `struct (reorder
+// (shape, packed (shape, w).order))` is how you get storage arranged that way,
+// and keeping that a separate call is what keeps the two decoupled.
 const packed = (shape, width_of) => do
   const order = sort_by (@shape.names shape, ((left, right) =>
     is_greater (@int.cmp (width_of (@shape.get shape left)) (width_of (@shape.get shape right)))));
@@ -528,6 +543,7 @@ const packed = (shape, width_of) => do
   };
 end;
 
+
 const Type = {
   .range = range;
   .union = Set.union;
@@ -537,11 +553,7 @@ const Type = {
   .of = type_of;
   .seal = seal;
   .unseal = unseal;
-  .struct = struct;
-  .structure = structure;
-  .packed = packed;
-  .layout = layout;
-  .aligned = aligned;
+  .attach = attach;
 };
 
 return {
@@ -585,6 +597,7 @@ return {
 
   .Type = Type;
   .Set = Set;
+  .attach = attach;
   .seal = seal;
   .unseal = unseal;
   .Reflect = Reflect;
@@ -602,7 +615,7 @@ return {
   .text_eq = text_eq;
   .range = range;
   .struct = struct;
-  .structure = structure;
+  .reorder = reorder;
   .packed = packed;
   .layout = layout;
   .aligned = aligned;

@@ -99,15 +99,25 @@ than an array because a tuple keeps one type per slot; `[I32, Str]` collapses
 to "an array of int-or-text" the moment inference looks at it, and storage that
 is imprecise is not predictable storage.
 
-The slot order is a parameter, so a placement is an ordinary function.
+`:+` is what attaches the namespace, and it works on any type value:
+
+```blot
+const Meters = seal ("Meters", I32)
+  :+ { .of = n => seal ("Meters", n); }
+  :+ { .unit = "m"; };
+```
+
+A shape's fields are in declaration order and `reorder` rebuilds one in any
+other, so choosing a placement is an operation on the shape rather than a
+second entry point into `struct`.
 *Packing* is a separate question — which bytes a field occupies rather than
 which slot — and stays a separate call:
 
 ```blot
 const Record = { .flag = U8; .id = I32; .code = U8; .name = Str; };
-struct Record                    // (U8, I32, U8, Str)  →  24 bytes, 10 padding
-packed (Record, byte_width)      // reports the order and offsets: 14 bytes, 0
-structure (Record, tight.order)  // storage arranged that way, if you want it
+struct Record                          // (U8, I32, U8, Str) → 24 bytes, 10 padding
+packed (Record, byte_width)            // the order and offsets: 14 bytes, 0
+struct (reorder (Record, tight.order)) // storage arranged that way, if you want it
 ```
 
 The name-to-slot mapping is compile-time knowledge, so `new` runs at compile

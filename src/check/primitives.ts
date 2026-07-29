@@ -179,7 +179,7 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ["@type.reflect", poly((fresh) => curried([fresh()], reflection(fresh)))],
   // Attaching a member returns the same type value. Inference sees straight
   // through the namespace, so the result is the target unchanged.
-  ["@type.extend", poly((fresh) => curried([fresh(), TEXT, fresh()], TYPE))],
+  ["@type.attach", poly((fresh) => curried([fresh(), TEXT, fresh()], TYPE))],
   ["@type.members", poly((fresh) => curried([fresh()], fresh()))],
   [
     "@type.union_of",
