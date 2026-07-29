@@ -234,6 +234,14 @@ export function infer(
           else constrain(itemType, element);
         });
       }
+      // A literal with a spread is built by pushing onto an empty store, so it
+      // needs the same element the empty store does.
+      if (expr.elements.some((item) => item.spread)) {
+        context.pending.push(() => {
+          const kind = elementKind(element);
+          if (kind !== null) context.elements.set(expr, kind);
+        });
+      }
       return { tag: "array", element };
     }
 

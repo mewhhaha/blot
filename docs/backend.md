@@ -65,10 +65,10 @@ and `20 + 22` compiles to a call to one hoisted definition.
 ## What compiles today
 
 Literals, prelude operators and comparisons, records and their spreads, tuples,
-unions and `case`, destructuring bindings including array patterns, arrays,
-lambdas and application, `let`, `if`, recursion through `rec`, `fold` and the
-collections built on it, host effects, tail-resumptive handlers, and imported
-modules.
+unions and `case` including literal guards and nested payloads, destructuring
+bindings including array patterns, arrays and their spreads, lambdas and
+application, `let`, `if`, recursion through `rec`, `fold` and the collections
+built on it, host effects, tail-resumptive handlers, and imported modules.
 
 `rec` becomes a Core `let-rec`, not a lifted top-level definition. Lifting it
 stranded whatever the lambda captured — `fold`'s inner `go` closes over
@@ -154,6 +154,22 @@ output is as much of its meaning as its return value.
 Only integers, text, and `()` cross the boundary today. A shape would need a
 nominal on both sides, and inventing one silently would make the import's
 contract a guess.
+
+## What a pattern becomes
+
+Core dispatches on a constructor and nothing else, so the rest of blot's
+patterns become what they always described:
+
+| pattern                             | Core                                                           |
+| ----------------------------------- | -------------------------------------------------------------- |
+| `#Progress 0` next to `#Progress n` | one arm, with the literal as a guard inside it                 |
+| `case value of -1 => …, 1 => …`     | a chain of equality tests; there is no union to dispatch on    |
+| `#Pair (left, right)`               | one binder, then the `case` a compound binding already becomes |
+| `let [a, b] = xs`                   | reads by index, since a `Store` has no constructor             |
+
+An array literal with a spread is _built_ rather than allocated: start empty,
+push each written element, and copy each spread with a local recursive loop.
+`let-rec` is what makes the loop expressible.
 
 ## Handlers are evidence
 
