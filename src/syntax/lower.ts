@@ -230,6 +230,120 @@ function lowerQualifiedName(rule: Rule, _source: string): readonly string[] {
   return [root, ...rest];
 }
 
+/**
+ * `for source do … end;` becomes a call to `iterate`.
+ *
+ * There is no loop in the AST, no loop in the evaluator, and no loop in the
+ * backend, because a loop is a fold and `iterate` is the fold — prelude source
+ * over `rec` and `case`, which already compile. The whole construct is surface
+ * syntax over a function, exactly as `a + b` is surface syntax over `Num.add`,
+ * and it depends on `iterate` being in scope for the same reason `+` depends
+ * on `Num`.
+ *
+ * The names the body rebinds with `:=` are the accumulator. Only a direct `:=`
+ * counts: a `let` inside the body is a local the next iteration cannot see,
+ * which is what makes the escaping set syntactic.
+ *
+ *   for let n = src do total := total + n; end;
+ *
+ *   let { .total; } = iterate (src, { .total = total; },
+ *     ((loop$, item$) => do
+ *        let { .total; } = loop$;
+ *        let n = item$;
+ *        total := total + n;
+ *        return { .total = total; };
+ *      end));
+ */
+function desugarLoop(
+  binder: Pattern | null,
+  source: Expr,
+  body: readonly Decl[],
+  span: Span,
+): Decl {
+  const carried: string[] = [];
+  for (const declaration of body) {
+    if (declaration.tag === "shadow" && !carried.includes(declaration.name)) {
+      carried.push(declaration.name);
+    }
+  }
+
+  const name = (text: string): Expr => ({ tag: "var", name: text, span });
+  const state: Expr = carried.length === 0
+    ? { tag: "unit", span }
+    : {
+      tag: "shape",
+      members: carried.map((field) => ({
+        tag: "field" as const,
+        name: field,
+        value: name(field),
+      })),
+      span,
+    };
+  const statePattern: Pattern = carried.length === 0
+    ? { tag: "wildcard", span }
+    : {
+      tag: "shape",
+      fields: carried.map((field) => ({
+        name: field,
+        pattern: { tag: "name" as const, name: field, qualifier: "none" as const, span },
+      })),
+      span,
+    };
+
+  // Named so they cannot collide with anything a program can write: `$` is in
+  // the operator class, so no identifier contains one.
+  const carriedIn = "loop$";
+  const itemIn = "item$";
+
+  const declarations: Decl[] = [];
+  if (carried.length > 0) {
+    declarations.push({
+      tag: "binding",
+      kind: "let",
+      pattern: statePattern,
+      value: name(carriedIn),
+      span,
+    });
+  }
+  if (binder !== null) {
+    declarations.push({
+      tag: "binding",
+      kind: "let",
+      pattern: binder,
+      value: name(itemIn),
+      span,
+    });
+  }
+  declarations.push(...body);
+
+  const visit: Expr = {
+    tag: "lambda",
+    parameter: {
+      tag: "tuple",
+      elements: [
+        { tag: "name", name: carriedIn, qualifier: "none", span },
+        { tag: "name", name: itemIn, qualifier: "none", span },
+      ],
+      span,
+    },
+    body: { tag: "block", declarations, result: state, span },
+    span,
+  };
+
+  return {
+    tag: "binding",
+    kind: "let",
+    pattern: statePattern,
+    value: {
+      tag: "apply",
+      fn: name("iterate"),
+      arg: { tag: "tuple", elements: [source, state, visit], span },
+      span,
+    },
+    span,
+  };
+}
+
 function lowerDecl(rule: Rule, context: Context): Decl {
   if (rule.name === "binding") {
     const kind = tokenOf(required(rule, "kind")).text;
@@ -247,28 +361,28 @@ function lowerDecl(rule: Rule, context: Context): Decl {
   }
   if (rule.name === "iteration") {
     const binder = field(rule, "binder");
-    return {
-      tag: "for",
-      binder: binder === null ? null : lowerPattern(
+    // A loop body is declarations and nothing else: there is no `return`,
+    // because a loop produces no value — what it produces is the rebindings
+    // that escape it.
+    const body = fieldList(rule, "body").map((statement) => {
+      const inner = asRule(unwrap(statement), "statement");
+      if (inner.name === "result") {
+        fail(
+          "BLOT_RETURN_IN_LOOP",
+          "A loop body has no `return`: a loop produces its rebindings, not a value.",
+          inner.span,
+        );
+      }
+      return lowerDecl(inner, context);
+    });
+    return desugarLoop(
+      binder === null ? null : lowerPattern(
         asRule(required(asRule(binder, "iteration_binder"), "pattern"), "pattern"),
       ),
-      source: lowerValue(asRule(field(rule, "source"), "value"), context),
-      // A loop body is declarations and nothing else: there is no `return`,
-      // because a loop produces no value — what it produces is the rebindings
-      // that escape it.
-      body: fieldList(rule, "body").map((statement) => {
-        const inner = asRule(unwrap(statement), "statement");
-        if (inner.name === "result") {
-          fail(
-            "BLOT_RETURN_IN_LOOP",
-            "A loop body has no `return`: a loop produces its rebindings, not a value.",
-            inner.span,
-          );
-        }
-        return lowerDecl(inner, context);
-      }),
-      span: rule.span,
-    };
+      lowerValue(asRule(field(rule, "source"), "value"), context),
+      body,
+      rule.span,
+    );
   }
   if (rule.name === "opening") {
     return {

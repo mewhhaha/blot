@@ -205,14 +205,29 @@ class Lowering {
    * survive a nominal Core.
    */
   nominal(fields: readonly string[]): Nominal {
-    const key = [...fields].join(" ");
+    // Keyed by the canonical order, because two records with the same *labels*
+    // are the same type however they were written. A field set is recorded in
+    // the order the program first projected it, so `pair.1` before `pair.0`
+    // yields `["1", "0"]` where a tuple literal yields `["0", "1"]` — the same
+    // type, and keying on the written order declared both as `Tuple2`.
+    const ordered = [...fields].sort((left, right) => {
+      const both = /^\d+$/.test(left) && /^\d+$/.test(right);
+      if (both) return Number(left) - Number(right);
+      if (left < right) return -1;
+      return left > right ? 1 : 0;
+    });
+    const key = ordered.join("\u0000");
     const existing = this.nominals.get(key);
     if (existing !== undefined) return existing;
-    const label = fields.length === 0
+    const label = ordered.length === 0
       ? "Empty"
-      : fields.every((name) => /^\d+$/.test(name))
-      ? `Tuple${fields.length}`
-      : `Shape_${fields.join("_")}`;
+      : ordered.every((name) => /^\d+$/.test(name))
+      ? `Tuple${ordered.length}`
+      : `Shape_${ordered.join("_")}`;
+    // The *key* is canonical so both orderings find one nominal; the fields
+    // stay in the order that reached here first, because construction and
+    // projection both go through this object and only have to agree with each
+    // other.
     const nominal: Nominal = { name: label, fields };
     this.nominals.set(key, nominal);
     return nominal;
@@ -680,16 +695,6 @@ function lowerBlock(
   const wrappers: ((body: SurfaceExpression) => SurfaceExpression)[] = [];
 
   for (const declaration of declarations) {
-    // A loop lowers to a recursive Core function over a tuple of the names its
-    // body rebinds. That is not written yet, and emitting something that only
-    // happens to work would be worse than saying so: the interpreter, the GPU
-    // evaluator, and the Wasm are required to agree.
-    if (declaration.tag === "for") {
-      return unsupported(
-        "a `for` loop — it runs and type checks, but the recursive Core function it lowers to is not written",
-        declaration.span,
-      );
-    }
     // `open` emits nothing — a use of a name it brought in specializes to the
     // compile-time value, exactly as a `const` does — but the names still have
     // to be *in* this scope. An imported module is inlined into the importer's
@@ -1093,8 +1098,12 @@ function lower(
         );
       }
       const nominal = lowering.nominal(names);
-      const binders = names.map((name) => lowering.fresh(name));
-      const index = names.indexOf(expr.name);
+      // The nominal's own order, not this site's. Inference records a field set
+      // in the order the program first projected it, so two sites can disagree
+      // about the order of the same type — the nominal is the one that
+      // decides, and construction already goes through it.
+      const binders = nominal.fields.map((name) => lowering.fresh(name));
+      const index = nominal.fields.indexOf(expr.name);
       if (index < 0) {
         fail("BLOT_NO_FIELD", `No field \`.${expr.name}\`.`, expr.span);
       }
@@ -2194,12 +2203,7 @@ function mentions(expr: Expr, name: string): boolean {
         expr.arms.some((arm) => mentions(arm.body, name));
     case "block":
       return expr.declarations.some((declaration) =>
-        declaration.tag === "for"
-          ? mentions(declaration.source, name) ||
-            declaration.body.some((inner) =>
-              inner.tag !== "for" && mentions(inner.value, name)
-            )
-          : mentions(declaration.value, name)
+        mentions(declaration.value, name)
       ) || mentions(expr.result, name);
     default:
       return false;

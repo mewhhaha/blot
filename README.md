@@ -36,8 +36,7 @@ WebAssembly, and `just wasm` checks that the interpreter, gpufuck's GPU
 evaluator, and the emitted Wasm all agree. Literals, prelude operators and
 comparisons, records and spreads, tuples, unions, `case`, destructuring, arrays,
 `if`, and recursion compile, and `@effect.host` effects become typed WebAssembly
-imports. Blot-written handlers, module parameters, and `for` loops do not
-compile yet. See
+imports. Blot-written handlers and module parameters do not compile yet. See
 [docs/backend.md](docs/backend.md) for both lists.
 
 ```bash
@@ -88,6 +87,12 @@ for Iter.range (0, 5) do
 end;
 return x;               // 6
 ```
+
+`for` is surface syntax over `iterate`, which is prelude source over `rec` and
+`case` — so there is no loop in the AST, none in the evaluator, and none in the
+backend. It depends on `iterate` being in scope for the same reason `+` depends
+on `Num`, and it reaches WebAssembly because the fold it desugars to already
+did.
 
 An iterator is a `.state` and a `.step`, where `step state` answers
 `#Some (value, next_state)` or `#None`. `Iter.range` and `Iter.items` are

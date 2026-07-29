@@ -22,13 +22,7 @@ import {
   lookup as lookupValue,
   type Value,
 } from "../comptime/value.ts";
-import {
-  bind,
-  carried,
-  evaluate,
-  type Imports,
-  run,
-} from "../comptime/eval.ts";
+import { bind, evaluate, type Imports, run } from "../comptime/eval.ts";
 import { bridge, effectLabel } from "./bridge.ts";
 import { constrain, instantiate, scheme, TypeError_ } from "./constrain.ts";
 import { PRIMITIVE_TYPES } from "./primitives.ts";
@@ -633,90 +627,6 @@ function bindPattern(
   }
 }
 
-/**
- * `for source do … end;`
- *
- * The source is an iterator: a `.state` and a `.step` answering `#Some (element, state)`
- * or `#None`. Requiring the step's result state to be the same
- * variable it takes is what ties the loop together — one constraint, and the
- * element type falls out of it.
- *
- * The names the body rebinds are the accumulator, and each one's type after an
- * iteration has to fit its type before. That is stricter than `:=` outside a
- * loop, where a rebinding may change type freely, and it has to be: iteration
- * two sees what iteration one produced, so a type that drifted would make the
- * loop mean something different on every pass.
- */
-function inferLoop(
-  declaration: Decl & { tag: "for" },
-  context: Context,
-  level: Level,
-  row: SimpleType,
-): void {
-  const source = infer(declaration.source, context, level, row);
-  const state = freshVar(level);
-  const element = freshVar(level);
-  const stepped = variant([
-    ["None", UNIT],
-    ["Some", record([["0", element], ["1", state]])],
-  ]);
-  located(declaration.span, () => {
-    constrain(
-      source,
-      record([
-        ["state", state],
-        ["step", { tag: "fun", param: state, effects: row, result: stepped }],
-      ]),
-    );
-  });
-
-  // Each rebound name gets one variable that both its starting value and every
-  // iteration's result flow into. Constraining the body's result against the
-  // *starting* type instead would reject `let x = 1; for … do x := x + 1; end`,
-  // because `1` is a singleton and `x + 1` is not — the accumulator's type is
-  // the join over iterations, which is exactly what a fixpoint variable is.
-  const escaping = carried(declaration.body);
-  const accumulator = new Map<string, SimpleType>();
-  for (const name of escaping) {
-    const found = lookupType(context.types, name);
-    if (found === undefined) {
-      fail(
-        "BLOT_UNBOUND",
-        `\`${name}\` is not in scope, so the loop has nothing to rebind.`,
-        declaration.span,
-      );
-    }
-    const carriedType = freshVar(level);
-    located(declaration.span, () => {
-      constrain(instantiate(found, level), carriedType);
-    });
-    accumulator.set(name, carriedType);
-  }
-
-  const scope = childTypeEnv(context.types);
-  const inner: Context = { ...context, types: scope };
-  for (const [name, carriedType] of accumulator) {
-    scope.names.set(name, carriedType);
-  }
-  if (declaration.binder !== null) {
-    const bound = bindPattern(declaration.binder, scope, level);
-    located(declaration.span, () => {
-      constrain(element, bound);
-    });
-  }
-  inferDeclarations(declaration.body, inner, level, row);
-
-  for (const [name, carriedType] of accumulator) {
-    const after = lookupType(scope, name);
-    if (after === undefined) continue;
-    located(declaration.span, () => {
-      constrain(instantiate(after, level), carriedType);
-    });
-    // What the last iteration produced is what escapes.
-    context.types.names.set(name, carriedType);
-  }
-}
-
 function inferDeclarations(
   declarations: readonly Decl[],
   context: Context,
@@ -726,10 +636,6 @@ function inferDeclarations(
   let pendingSig: { name: string; type: SimpleType } | null = null;
 
   for (const declaration of declarations) {
-    if (declaration.tag === "for") {
-      inferLoop(declaration, context, level, row);
-      continue;
-    }
     if (declaration.tag === "open") {
       // `open m;` is `let name = m.name;` for every field, so it is the field
       // rule applied once per field rather than a new typing rule. The names

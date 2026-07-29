@@ -8,7 +8,7 @@
 // while a program is running and the evaluator can stay synchronous.
 
 import { fromFileUrl, isAbsolute, resolve } from "@std/path";
-import type { Decl, Expr, Module } from "./syntax/ast.ts";
+import type { Expr, Module } from "./syntax/ast.ts";
 import type { Diagnostic } from "./diagnostic.ts";
 import { BlotError, render } from "./diagnostic.ts";
 import { parse } from "./syntax/parse.ts";
@@ -91,7 +91,7 @@ function collectImports(expr: Expr, found: Set<string>): void {
       return;
     case "block":
       for (const declaration of expr.declarations) {
-        collectDecl(declaration, found);
+        collectImports(declaration.value, found);
       }
       collectImports(expr.result, found);
       return;
@@ -100,18 +100,11 @@ function collectImports(expr: Expr, found: Set<string>): void {
   }
 }
 
-function collectDecl(declaration: Decl, found: Set<string>): void {
-  if (declaration.tag === "for") {
-    collectImports(declaration.source, found);
-    for (const inner of declaration.body) collectDecl(inner, found);
-    return;
-  }
-  collectImports(declaration.value, found);
-}
-
 export function moduleImports(module: Module): readonly string[] {
   const found = new Set<string>();
-  for (const declaration of module.declarations) collectDecl(declaration, found);
+  for (const declaration of module.declarations) {
+    collectImports(declaration.value, found);
+  }
   collectImports(module.result, found);
   return [...found];
 }

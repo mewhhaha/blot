@@ -25,6 +25,7 @@ const COMPILES = [
   "examples/arithmetic.blot",
   "examples/linear.blot",
   "examples/collections.blot",
+  "examples/looped.blot",
   "examples/matching.blot",
   "examples/granted.blot",
 ];
