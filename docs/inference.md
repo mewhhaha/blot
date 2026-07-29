@@ -129,13 +129,21 @@ is what would close it, and it is the same machinery that would turn
 project a field named by a _value_. Their result is genuinely undetermined until
 the name is known, which happens during specialization. Their result type is an
 unconstrained variable: inference learns nothing and rejects nothing. This is
-why the prelude's `struct` returns `.fields`, `.types`, and `.new` rather than
-generated accessors — a record built from computed names has no statically known
-fields, and removing the construct beat weakening the checker to admit it.
+what a struct's accessors cost: `Point.x` is `@shape.get value "0"` with the
+slot resolved at compile time, so inference cannot say what it returns even
+though the evaluator can. The value is exact; the inferred type is a variable.
 
-**Rank-N and higher-kinded types** are not inference's problem by design.
-`@forall` is annotation-only, and type constructors are comptime functions that
-are specialized away, so the lattice never needs kinds.
+**Higher-kinded types** are not inference's problem by design: type
+constructors are comptime functions that are specialized away, so the lattice
+never needs kinds.
+
+**Rank-N is not implemented.** `@forall` exists as a primitive and is the
+identity function in both the evaluator and the checker — it carries no
+quantifier, performs no skolemization, and checks nothing. A `sig` written with
+it is rejected as not a type. Building it means: a value form for the
+quantifier, `bridge` turning it into a scheme, and subsumption at the
+application site (skolemize the argument's quantifier, instantiate the
+parameter's). None of that exists, and nothing in the corpus depends on it.
 
 ## Operator precedence
 

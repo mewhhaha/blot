@@ -36,8 +36,11 @@ WebAssembly, and `just wasm` checks that the interpreter, gpufuck's GPU
 evaluator, and the emitted Wasm all agree. Literals, prelude operators and
 comparisons, records and spreads, tuples, unions, `case`, destructuring, arrays,
 `if`, and recursion compile, and `@effect.host` effects become typed WebAssembly
-imports. Blot-written handlers and module parameters do not compile yet. See
-[docs/backend.md](docs/backend.md) for both lists.
+imports. Twelve of the twenty-three corpus programs reach WebAssembly; the rest
+either return a compile-time value from `main`, which has no runtime
+representation and is a correct refusal, or hit one of three gaps — an aborting
+handler, `@shape.get` with a computed name, and a module result whose type is
+still polymorphic at the entry. See [docs/backend.md](docs/backend.md).
 
 ```bash
 just run examples/tour.blot   # evaluate a program
@@ -288,7 +291,8 @@ they fail at parse or during evaluation.
 - **One parameter per function.** Juxtaposition is the only application form,
   which matches gpufuck's unary Core exactly.
 - **Higher-kinded abstraction is comptime.** Type constructors are comptime
-  functions, so the inference lattice never needs kinds.
+  functions, so the inference lattice never needs kinds. Rank-N is *not* built:
+  `@forall` is a placeholder that returns its argument.
 - **Immutability with ownership.** No assignment anywhere. `!` is linear and `&`
   borrows, checked by a flow analysis kept deliberately _outside_ the type
   lattice — that separation is what keeps biunification polynomial.
