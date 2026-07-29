@@ -434,11 +434,31 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       span: rule.span,
     };
   }
-  if (rule.name === "shadowing") {
+  if (rule.name === "rebinding") {
+    const name = tokenOf(required(rule, "name")).text;
+    const value = lowerValue(asRule(field(rule, "value"), "value"), context);
+    if (tokenOf(required(rule, "arrow")).text === ":=") {
+      return { tag: "shadow", name, value, span: rule.span };
+    }
+    // `x <- computation;` is `let x = computation ();`.
+    //
+    // Performing is an ordinary call in blot — the row is inferred, so there is
+    // nothing for a `perform` form to declare — which leaves `<-` one honest
+    // job: naming the result of a computation without spelling the `()`. That
+    // is what "get input from an effect" needs and all it needs, so it is
+    // surface syntax over application rather than a construct of its own.
+    // Requiring the value to be nullary is the type system's business, and it
+    // is what stops `<-` from being a second spelling for `let`.
     return {
-      tag: "shadow",
-      name: tokenOf(required(rule, "name")).text,
-      value: lowerValue(asRule(field(rule, "value"), "value"), context),
+      tag: "binding",
+      kind: "let",
+      pattern: { tag: "name", name, qualifier: "none", span: rule.span },
+      value: {
+        tag: "apply",
+        fn: value,
+        arg: { tag: "unit", span: rule.span },
+        span: rule.span,
+      },
       span: rule.span,
     };
   }

@@ -154,7 +154,7 @@
             "value": "value"
           }
         },
-        "shadowing": {
+        "rebinding": {
           "opcode": "shadow",
           "fields": {
             "name": "binder",
@@ -197,7 +197,7 @@
       ],
       "binders": [
         "binding",
-        "shadowing",
+        "rebinding",
         "module_header"
       ],
       "patterns": [

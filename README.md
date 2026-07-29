@@ -71,6 +71,7 @@ sig name = expr;      // optional constraint on the following binding
 open expr;            // spread a record's fields into scope
 for src do … end;     // loop; see below
 name := expr;         // shadow: new binding, type may change
+name <- expr;         // bind what a computation returns: `let name = expr ();`
 return expr;          // module or block result, last
 ```
 
@@ -186,6 +187,20 @@ which is why `derive` is a function rather than a macro.
 
 Effects are a shape of operation types handed to one primitive, and performing
 one is an ordinary call — the row is never written:
+
+`x <- computation;` reads from one. It is `let x = computation ();` and nothing
+more — performing is already a call and the row is already inferred, so there is
+nothing left for a perform form to declare, which leaves `<-` the one honest job
+of naming what a computation returns without spelling the `()`:
+
+```blot
+const Terminal = @effect { .read = Unit -> Str; };
+
+let ask = () => do
+  answer <- Terminal.read;
+  return answer <> "!";
+end;
+```
 
 ```blot
 const Console = @effect { .write = Str -> Unit; };

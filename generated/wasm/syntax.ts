@@ -133,6 +133,7 @@ export type LiteralKind =
   | "const"
   | "sig"
   | ":="
+  | "<-"
   | "for"
   | "do"
   | "end"
@@ -218,7 +219,7 @@ export type RuleName =
   | "declaration"
   | "statement"
   | "binding"
-  | "shadowing"
+  | "rebinding"
   | "iteration"
   | "iteration_source"
   | "opening"
@@ -336,7 +337,8 @@ export interface BindingCursor extends RuleCursorBase<"binding"> {
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
-export interface ShadowingCursor extends RuleCursorBase<"shadowing"> {
+export interface RebindingCursor extends RuleCursorBase<"rebinding"> {
+  field(name: "arrow"): TokenCursor<"literal", ":="> | TokenCursor<"literal", "<-">;
   field(name: "name"): TokenCursor<"named", "IDENT"> | TokenCursor<"named", "TYPE_IDENT">;
   field(name: "value"): ValueCursor;
   field(name: string): CursorFieldValue | undefined;
@@ -598,7 +600,7 @@ export type AnyRuleCursor =
   | DeclarationCursor
   | StatementCursor
   | BindingCursor
-  | ShadowingCursor
+  | RebindingCursor
   | IterationCursor
   | IterationSourceCursor
   | OpeningCursor

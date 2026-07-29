@@ -4,6 +4,12 @@
 // no handler keyword. An effect is a shape of operation types handed to one
 // primitive; performing an operation is an ordinary call; a handler is a shape;
 // and `@handle` is a function.
+//
+// `x <- computation;` is `let x = computation ();` and nothing more. Performing
+// is already a call and the row is already inferred, so there is nothing left
+// for a perform form to declare — which leaves `<-` one honest job: naming what
+// a computation *returns* without spelling the `()`. Requiring a nullary value
+// is what stops it from being a second spelling for `let`.
 
 open (@import "blot:prelude") ();
 
@@ -13,6 +19,21 @@ const Console = @effect {
 
 const Counter = @effect {
   .next = Unit -> Str;
+};
+
+// Reading from an effect, which is what `<-` is for.
+const Terminal = @effect {
+  .read = Unit -> Str;
+};
+
+let ask = () => do
+  answer <- Terminal.read;
+  return answer <> "!";
+end;
+
+let answering = {
+  .read = ((), ?resume) => resume "42";
+  .return = value => value;
 };
 
 // Nothing here says "effectful". The row is inferred; performing is a call.
@@ -56,9 +77,12 @@ let silenced = @handle (Console, greet, silencing);
 // left to handle.
 let nested = @handle (Console, (() => @handle (Console, greet, counting)), collecting);
 
+let asked = @handle (Terminal, ask, answering);
+
 return {
   .transcript = transcript;
   .writes = writes;
   .silenced = silenced;
   .nested = nested;
+  .asked = asked;
 };

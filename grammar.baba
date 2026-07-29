@@ -64,12 +64,12 @@ fixity_declaration = (
 // Three declaration forms. `type`, `interface`, `effect`, `duck`, and every
 // other binder in the reference language collapse into `const`, because types
 // are ordinary compile-time values.
-declaration = binding | shadowing | opening | iteration | result ;
+declaration = binding | rebinding | opening | iteration | result ;
 
 // `statement` is `declaration` under a second name. The duplication is
 // mechanical and exists only so that `declaration` is not self-nesting, which
 // is what "throughput": "strict" requires of the repeated root island.
-statement = binding | shadowing | opening | iteration | result ;
+statement = binding | rebinding | opening | iteration | result ;
 
 binding = (
   kind:("let" | "const" | "sig")
@@ -79,9 +79,20 @@ binding = (
   ";"
 ) ;
 
-shadowing = (
+// Rebinding a name. Two arrows, one rule: `:=` shadows with a new value, `<-`
+// binds the result of a computation that performs.
+//
+// One rule rather than two alternatives because they share their FIRST set — a
+// name — and splitting them is a shift/reduce conflict on IDENT. Factoring the
+// arrow out is the design fix, and it says something true: both are a name, an
+// arrow, and a value, and neither takes a pattern.
+//
+// `<-` is not a second spelling for `let`. It is admitted only where the
+// value's row is non-empty, and it applies a nullary operation, so
+// `input <- Terminal.read` needs no `()`.
+rebinding = (
   name:(IDENT | TYPE_IDENT)
-  ":="
+  arrow:(":=" | "<-")
   value:value
   ";"
 ) ;
