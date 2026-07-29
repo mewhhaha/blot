@@ -15,7 +15,12 @@ import {
   resolvePath,
 } from "../load.ts";
 import { childEnv, type Env as ValueEnv } from "../comptime/value.ts";
-import { type Checked, checkModule, type VariantCase } from "./infer.ts";
+import {
+  type Checked,
+  checkModule,
+  type ElementKind,
+  type VariantCase,
+} from "./infer.ts";
 import type { Expr } from "../syntax/ast.ts";
 import { freshVar, type SimpleType } from "./type.ts";
 import { show, showModuleRow as showRow } from "./print.ts";
@@ -30,6 +35,7 @@ export interface CheckResult {
   /** Field and constructor sets the backend needs; see `Checked`. */
   readonly shapes: ReadonlyMap<Expr, readonly string[]>;
   readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
+  readonly elements: ReadonlyMap<Expr, ElementKind>;
   /** Checked dependencies, so the backend can inline what it imports. */
   readonly modules: ReadonlyMap<string, Loaded>;
   /**
@@ -112,6 +118,7 @@ export async function checkFile(path: string): Promise<CheckResult> {
   const dependencyFacts: {
     shapes: ReadonlyMap<Expr, readonly string[]>;
     variants: ReadonlyMap<Expr, readonly VariantCase[]>;
+    elements: ReadonlyMap<Expr, ElementKind>;
   }[] = [];
   for (const specifier of moduleImports(loaded.module)) {
     const dependency = await load(resolvePath(specifier, loaded.path));
@@ -178,6 +185,11 @@ export async function checkFile(path: string): Promise<CheckResult> {
         ...dependencyFacts.map((facts) => facts.variants),
         inherited?.variants,
         checked.variants,
+      ]),
+      elements: mergeAll([
+        ...dependencyFacts.map((facts) => facts.elements),
+        inherited?.elements,
+        checked.elements,
       ]),
       modules: loadedModules,
       values,

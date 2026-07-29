@@ -66,8 +66,13 @@ and `20 + 22` compiles to a call to one hoisted definition.
 
 Literals, prelude operators and comparisons, records and their spreads, tuples,
 unions and `case`, destructuring bindings including array patterns, arrays,
-lambdas and application, `let`, `if`, recursion through `rec`, host effects,
-tail-resumptive handlers, and imported modules.
+lambdas and application, `let`, `if`, recursion through `rec`, `fold` and the
+collections built on it, host effects, tail-resumptive handlers, and imported
+modules.
+
+`rec` becomes a Core `let-rec`, not a lifted top-level definition. Lifting it
+stranded whatever the lambda captured — `fold`'s inner `go` closes over
+`values`, and a definition has no enclosing scope for that to come from.
 
 An import is _inlined_: a module is a function from a record to a record, both
 known at compile time, so importing one is lowering its body as a block. The

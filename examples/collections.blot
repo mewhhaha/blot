@@ -1,0 +1,18 @@
+// Collections.
+//
+// `fold` is prelude source over `@array.*`, and `for` does not exist — there is
+// no assignment for it to drive. Recursion is what a loop always was, and it
+// compiles: `rec` becomes a Core `let-rec` rather than a lifted definition,
+// because the lambda captures the block it is written in.
+
+let numbers = upto (0, 6);
+let total = sum numbers;
+
+// An explicit fold, to show what `sum` is.
+let doubled = fold (numbers, 0, ((state, value) => state + value * 2));
+
+// Arrays are Core's `Store`. An empty one is allocated at the element type
+// inference found, because Core has no way to allocate without an element.
+let counted = fold ([4, 8, 15], 0, ((state, _) => state + 1));
+
+return total + doubled + counted * 8 - 27;

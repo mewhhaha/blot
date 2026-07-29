@@ -24,6 +24,7 @@ const COMPILES = [
   "examples/modules.blot",
   "examples/arithmetic.blot",
   "examples/linear.blot",
+  "examples/collections.blot",
 ];
 
 /**
