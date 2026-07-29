@@ -10,6 +10,8 @@
 // so specializing the handler is not an optimization here: it is what makes it
 // mean anything.
 
+open (@import "blot:prelude") ();
+
 const Counter = @effect { .bump = Int -> Int; };
 const Scale = @effect { .by = Int -> Int; };
 

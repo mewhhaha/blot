@@ -223,6 +223,20 @@ function* runDeclarations(
   runtime: Runtime,
 ): Generator<Perform, void, Value> {
   for (const declaration of declarations) {
+    if (declaration.tag === "open") {
+      const value = yield* evaluate(declaration.value, scope, runtime);
+      if (value.tag !== "shape") {
+        fail(
+          "BLOT_CANNOT_OPEN",
+          `\`open\` spreads a record's fields into scope, found ${
+            show(value)
+          }.`,
+          declaration.span,
+        );
+      }
+      for (const [name, member] of value.fields) scope.names.set(name, member);
+      continue;
+    }
     if (declaration.tag === "shadow") {
       const value = yield* evaluate(declaration.value, scope, runtime);
       // A shadow names its effect for the same reason a binding does: without

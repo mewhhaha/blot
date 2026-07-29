@@ -10,6 +10,8 @@
 
 module init;
 
+open (@import "blot:prelude") ();
+
 const Console = @effect { .write = Str -> Unit; };
 
 // A tail-resumptive handler, so the operation is replaced and the effect

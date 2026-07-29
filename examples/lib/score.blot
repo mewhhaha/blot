@@ -2,6 +2,8 @@
 
 module capabilities;
 
+open (@import "blot:prelude") ();
+
 return {
   .run = capabilities.base + capabilities.bonus;
   .scaled = capabilities.base * 2;

@@ -7,6 +7,8 @@
 // The prelude is compiled, not inlined at every use — `+` is `Num.add`, an
 // ordinary closure that becomes one Core definition.
 
+open (@import "blot:prelude") ();
+
 const Message = #Ready | #Busy Int | #Done Int;
 
 const describe = m => case m of

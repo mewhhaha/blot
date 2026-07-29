@@ -4,6 +4,8 @@
 // a macro, an attribute, or a plugin — it is code you can read, step through,
 // and call from anywhere.
 
+open (@import "blot:prelude") ();
+
 let folded = comptime (20 * 2 + 1);
 
 const Header = struct {

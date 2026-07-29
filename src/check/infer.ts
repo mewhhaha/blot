@@ -17,7 +17,11 @@
 import type { Decl, Expr, Module, Pattern, Span } from "../syntax/ast.ts";
 import { fail } from "../diagnostic.ts";
 import type { Env as ValueEnv } from "../comptime/value.ts";
-import { childEnv, lookup as lookupValue } from "../comptime/value.ts";
+import {
+  childEnv,
+  lookup as lookupValue,
+  type Value,
+} from "../comptime/value.ts";
 import { bind, evaluate, type Imports, run } from "../comptime/eval.ts";
 import { bridge, effectLabel } from "./bridge.ts";
 import { constrain, instantiate, scheme, TypeError_ } from "./constrain.ts";
@@ -71,6 +75,7 @@ interface Context {
   readonly imports: Imports;
   /** Checked types of imported modules, keyed by the specifier as written. */
   readonly modules: ReadonlyMap<string, SimpleType>;
+  readonly opens: Map<Expr, ReadonlyMap<string, Value>>;
 }
 
 function located<T>(span: Span, work: () => T): T {
@@ -631,6 +636,36 @@ function inferDeclarations(
   let pendingSig: { name: string; type: SimpleType } | null = null;
 
   for (const declaration of declarations) {
+    if (declaration.tag === "open") {
+      // `open m;` is `let name = m.name;` for every field, so it is the field
+      // rule applied once per field rather than a new typing rule. The names
+      // come from the compile-time value because that is the only place the
+      // *set* of them is known; the types come from constraining the inferred
+      // record, because a closure has no type to read off its value.
+      const value = comptime(declaration.value, context);
+      if (value === null || value.tag !== "shape") {
+        fail(
+          "BLOT_CANNOT_OPEN",
+          "`open` spreads the fields of a compile-time record into scope.",
+          declaration.span,
+        );
+      }
+      context.opens.set(declaration.value, value.fields);
+      const target = infer(declaration.value, context, level, row);
+      for (const [name, member] of value.fields) {
+        context.values.names.set(name, member);
+        const field = freshVar(level);
+        located(declaration.span, () => {
+          constrain(target, record([[name, field]]));
+        });
+        // Quantified below ground level, for the reason the module scope is:
+        // these variables are already at level 0, and generalizing at 0 would
+        // make every use share them — `fold` used once on text could then
+        // never be used on integers.
+        context.types.names.set(name, scheme(field, -1));
+      }
+      continue;
+    }
     if (declaration.tag === "shadow") {
       // Same as a binding: evaluate first, name what it produced, and let the
       // *named* value be what gets bridged. Bridging first would mint the
@@ -854,6 +889,15 @@ export interface Checked {
   readonly type: SimpleType;
   readonly effects: SimpleType;
   /**
+   * What each `open` brought into scope.
+   *
+   * The backend inlines an imported module into the *importer's* scope, so a
+   * dependency's own `open` would otherwise install nothing there. The names
+   * are compile-time, and inference already had to compute them, so they
+   * travel with the rest of the facts rather than being recomputed.
+   */
+  readonly opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
+  /**
    * What inference learned that lowering needs.
    *
    * gpufuck has no records: they become nominal declarations, and a nominal
@@ -914,8 +958,10 @@ export function checkModule(
   const variants = new Map<Expr, readonly VariantCase[]>();
   const patternShapes = new Map<Pattern, readonly string[]>();
   const grants = new Map<Expr, GrantSignature>();
+  const opens = new Map<Expr, ReadonlyMap<string, Value>>();
   const pending: (() => void)[] = [];
   const context: Context = {
+    opens,
     shapes,
     variants,
     patternShapes,
@@ -947,6 +993,7 @@ export function checkModule(
   return {
     type: result,
     effects: row,
+    opens,
     shapes,
     variants,
     patternShapes,

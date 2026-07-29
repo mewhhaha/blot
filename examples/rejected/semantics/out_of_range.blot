@@ -1,3 +1,6 @@
 // A range accepts what it contains and rejects what it does not.
+
+open (@import "blot:prelude") ();
+
 const Digit = range (0, 9);
 return @satisfies 42 Digit;

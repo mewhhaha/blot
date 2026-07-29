@@ -1,5 +1,8 @@
 // `!` marks a value that must be consumed exactly once. Spending it twice is
 // the failure the marker exists to catch.
+
+open (@import "blot:prelude") ();
+
 let !token = 41;
 let consume = (!value) => @int.add value 1;
 return @int.add (consume (!token)) (consume (!token));

@@ -8,6 +8,8 @@
 
 module init;
 
+open (@import "blot:prelude") ();
+
 const Console = @effect {
   .write = Str -> Unit;
 };

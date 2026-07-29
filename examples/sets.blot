@@ -13,6 +13,8 @@
 // fixity declaration, and nothing added to the compiler. Structural width
 // subtyping is the entire dispatch mechanism.
 
+open (@import "blot:prelude") ();
+
 const Method = "GET" | "POST" | "PUT" | "DELETE";
 const Safe = Method \ "PUT" \ "DELETE";
 const Tag = (#X | #Y | #Z) & (#Y | #Z | #W);

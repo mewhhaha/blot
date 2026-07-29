@@ -62,15 +62,27 @@ for why that check exists.
 
 ## The language
 
-Three declaration forms, all `;`-terminated:
+Four declaration forms, all `;`-terminated:
 
 ```blot
 let name = expr;      // runtime binding
 const name = expr;    // must evaluate at compile time
 sig name = expr;      // optional constraint on the following binding
+open expr;            // spread a record's fields into scope
 name := expr;         // shadow: new binding, type may change
 return expr;          // module or block result, last
 ```
+
+Nothing is in scope that the module did not ask for. The prelude is an ordinary
+module with no privilege, so every file begins by opening it:
+
+```blot
+open (@import "blot:prelude") ();
+```
+
+That line is what makes `+` work: the default fixity for `+` names `Num.add`,
+and a fixity whose target is not in scope is useless. A module that skips it
+does not have `+`.
 
 That is the whole of it. `type`, `interface`, `effect`, and `duck` do not exist
 as declaration forms, because types are ordinary compile-time values:

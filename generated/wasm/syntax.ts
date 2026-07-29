@@ -133,6 +133,7 @@ export type LiteralKind =
   | "const"
   | "sig"
   | ":="
+  | "open"
   | "return"
   | ","
   | "["
@@ -216,6 +217,7 @@ export type RuleName =
   | "statement"
   | "binding"
   | "shadowing"
+  | "opening"
   | "result"
   | "binding_pattern"
   | "pattern_core"
@@ -332,6 +334,12 @@ export interface BindingCursor extends RuleCursorBase<"binding"> {
 
 export interface ShadowingCursor extends RuleCursorBase<"shadowing"> {
   field(name: "name"): TokenCursor<"named", "IDENT"> | TokenCursor<"named", "TYPE_IDENT">;
+  field(name: "value"): ValueCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface OpeningCursor extends RuleCursorBase<"opening"> {
   field(name: "value"): ValueCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
@@ -573,6 +581,7 @@ export type AnyRuleCursor =
   | StatementCursor
   | BindingCursor
   | ShadowingCursor
+  | OpeningCursor
   | ResultCursor
   | BindingPatternCursor
   | PatternCoreCursor

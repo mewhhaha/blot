@@ -64,12 +64,12 @@ fixity_declaration = (
 // Three declaration forms. `type`, `interface`, `effect`, `duck`, and every
 // other binder in the reference language collapse into `const`, because types
 // are ordinary compile-time values.
-declaration = binding | shadowing | result ;
+declaration = binding | shadowing | opening | result ;
 
 // `statement` is `declaration` under a second name. The duplication is
 // mechanical and exists only so that `declaration` is not self-nesting, which
 // is what "throughput": "strict" requires of the repeated root island.
-statement = binding | shadowing | result ;
+statement = binding | shadowing | opening | result ;
 
 binding = (
   kind:("let" | "const" | "sig")
@@ -82,6 +82,15 @@ binding = (
 shadowing = (
   name:(IDENT | TYPE_IDENT)
   ":="
+  value:value
+  ";"
+) ;
+
+// Spreading a module's exports into scope. The prelude is an ordinary module
+// with no privilege, so this is how `+` finds `Num.add` — a default fixity
+// whose target is not in scope is useless, and `open` is what puts it there.
+opening = (
+  "open"
   value:value
   ";"
 ) ;
@@ -208,7 +217,7 @@ field_name = (IDENT | TYPE_IDENT | INTEGER | keyword) ;
 keyword = (
   "module" | "operators" | "infixl" | "infixr" | "infix" | "prefix"
   | "let" | "const" | "sig" | "return" | "do" | "end"
-  | "if" | "then" | "else" | "case" | "of" | "rec" | "comptime"
+  | "if" | "then" | "else" | "case" | "of" | "rec" | "comptime" | "open"
 ) ;
 
 primary_expression = (

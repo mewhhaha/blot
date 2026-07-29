@@ -1,4 +1,7 @@
 // Ordinary application. Nothing here is annotated; the constraint comes from
 // `@int.add`'s own type flowing backwards into the parameter.
+
+open (@import "blot:prelude") ();
+
 let increment = x => @int.add x 1;
 return increment "text";

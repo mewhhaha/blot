@@ -29,6 +29,12 @@ not a metadata override. Record counter changes in `docs/gpu-profile.md`.
 partial program on failure. `just parity` must hold across the whole corpus
 before a grammar change lands.
 
+**Nothing is implicitly in scope.** The prelude is an ordinary module reached
+through `@import` and spread with `open`; it gets no seeding, no privileged
+scope, and no exemption from its own type system. A default fixity names a
+binding by string, so `+` works only because something opened `Num` — do not
+reintroduce an implicit scope to make that line disappear.
+
 **Types are values.** There is no type-level sublanguage and no type namespace.
 If a feature seems to need one, it belongs in the comptime evaluator instead.
 This is what keeps the grammar small; do not reintroduce `type`, `interface`,

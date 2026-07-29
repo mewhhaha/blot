@@ -245,6 +245,13 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       span: rule.span,
     };
   }
+  if (rule.name === "opening") {
+    return {
+      tag: "open",
+      value: lowerValue(asRule(field(rule, "value"), "value"), context),
+      span: rule.span,
+    };
+  }
   if (rule.name === "shadowing") {
     return {
       tag: "shadow",

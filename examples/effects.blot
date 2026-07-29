@@ -5,6 +5,8 @@
 // primitive; performing an operation is an ordinary call; a handler is a shape;
 // and `@handle` is a function.
 
+open (@import "blot:prelude") ();
+
 const Console = @effect {
   .write = Str -> Unit;
 };

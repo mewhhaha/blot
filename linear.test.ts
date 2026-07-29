@@ -10,9 +10,14 @@ import { BlotError } from "./src/diagnostic.ts";
 
 const scratch = await Deno.makeTempDir();
 
+// Every snippet opens the prelude, because every module does: it has no
+// privilege, and a fixture that skipped it would be testing a language where
+// `+` is unbound.
+const PRELUDE = 'open (@import "blot:prelude") ();\n';
+
 async function analyze(source: string) {
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
-  await Deno.writeTextFile(path, source);
+  await Deno.writeTextFile(path, PRELUDE + source);
   return await checkFile(path);
 }
 

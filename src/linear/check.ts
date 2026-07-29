@@ -261,6 +261,15 @@ function walkDeclarations(
   analysis: Analysis,
 ): void {
   for (const declaration of declarations) {
+    // `open` spreads a compile-time record, and a compile-time record cannot
+    // hold a linear value — there is no run time for it to be consumed in. So
+    // the expression is walked for what *it* consumes and nothing is declared.
+    if (declaration.tag === "open") {
+      if (walk(declaration.value, scope, analysis, "move") !== "none") {
+        escapes(declaration.span, analysis);
+      }
+      continue;
+    }
     if (declaration.tag === "shadow") {
       if (walk(declaration.value, scope, analysis, "move") !== "none") {
         escapes(declaration.span, analysis);

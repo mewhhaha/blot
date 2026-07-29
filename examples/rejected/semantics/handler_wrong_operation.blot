@@ -1,6 +1,9 @@
 // A handler is checked against the effect it claims to discharge. A typo in an
 // operation name used to be a silent no-op at run time; naming the effect makes
 // it a type error.
+
+open (@import "blot:prelude") ();
+
 const Console = @effect { .write = Str -> Unit; };
 let handler = { .wrote = (m, ?resume) => resume (); .return = v => v; };
 return @handle (Console, (() => Console.write "x"), handler);

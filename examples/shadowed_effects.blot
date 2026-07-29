@@ -7,6 +7,8 @@
 // A capability name is the exception: it *is* the host-facing contract, so two
 // host effects claiming one is refused rather than mangled behind your back.
 
+open (@import "blot:prelude") ();
+
 const Log = @effect { .write = Int -> Int; };
 let doubling = { .write = (n, ?resume) => resume (n * 2); };
 let work = () => Log.write 20;

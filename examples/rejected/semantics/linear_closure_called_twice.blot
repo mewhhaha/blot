@@ -1,5 +1,8 @@
 // A closure that captures a linear value is linear itself: the obligation moved
 // into it, and whoever holds it owes exactly one call.
+
+open (@import "blot:prelude") ();
+
 let consume = (!value) => @int.add value 1;
 let !token = 41;
 let go = () => consume (!token);

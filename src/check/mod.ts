@@ -11,12 +11,14 @@ import {
   load,
   type Loaded,
   moduleImports,
-  PRELUDE,
   resolvePath,
 } from "../load.ts";
-import { childEnv, type Env as ValueEnv } from "../comptime/value.ts";
 import {
-  type Checked,
+  childEnv,
+  type Env as ValueEnv,
+  type Value,
+} from "../comptime/value.ts";
+import {
   checkModule,
   type GrantSignature,
   type VariantCase,
@@ -32,6 +34,8 @@ export interface CheckResult {
   readonly type: string;
   readonly effects: string;
   readonly ownership: Ownership;
+  /** What each `open` brought into scope; see `Checked`. */
+  readonly opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
   /** Field and constructor sets the backend needs; see `Checked`. */
   readonly shapes: ReadonlyMap<Expr, readonly string[]>;
   readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
@@ -46,39 +50,6 @@ export interface CheckResult {
    * backend reuses the results instead of running the evaluator twice.
    */
   readonly values: ValueEnv;
-}
-
-/**
- * The prelude's exports, as types.
- *
- * They cannot be bridged from values — most are closures, whose types come from
- * their bodies — so the prelude is checked like any other module and its result
- * record becomes the seed for every other module's scope. It is ordinary blot
- * source and gets no exemption from its own type system.
- */
-let preludeChecked: Checked | null = null;
-
-async function preludeCheck(): Promise<Checked> {
-  if (preludeChecked !== null) return preludeChecked;
-  const prelude = await load(PRELUDE);
-  preludeChecked = checkModule(
-    prelude.module,
-    seedValues(prelude),
-    imports(prelude),
-    null,
-  );
-  if (preludeChecked.type.tag !== "record") {
-    throw new Error("the prelude must return a shape");
-  }
-  return preludeChecked;
-}
-
-async function preludeScope(): Promise<ReadonlyMap<string, SimpleType>> {
-  const checked = await preludeCheck();
-  if (checked.type.tag !== "record") {
-    throw new Error("the prelude must return a shape");
-  }
-  return checked.type.fields;
 }
 
 function seedValues(loaded: Loaded) {
@@ -99,14 +70,10 @@ export async function checkFile(path: string): Promise<CheckResult> {
     throw new Error("a module must load as a closure");
   }
 
-  // Seeded with the prelude exactly as evaluation is, so that `+` resolves to
-  // the same `Num.add` in both.
-  const scope = path === PRELUDE ? null : await preludeScope();
-  // The prelude's own facts travel with it. Lowering specializes prelude
-  // closures, so it needs the field and constructor sets inference found
-  // *inside* them — `Ord.lt` matches on `#Less`, and that `case` is prelude
-  // source, not the user's.
-  const inherited = path === PRELUDE ? null : await preludeCheck();
+  // Nothing is seeded. The prelude is reached through `@import` like any other
+  // module, so its exports arrive as a dependency's type and its facts travel
+  // in `dependencyFacts` — there is no branch here that knows what a prelude
+  // is.
   const values = childEnv(loaded.closure.env);
 
   // Each dependency is checked before its importer, so a module's exports are
@@ -117,6 +84,7 @@ export async function checkFile(path: string): Promise<CheckResult> {
   // the backend inlines an imported module, so it needs the field and
   // constructor sets inference found *inside* that module.
   const dependencyFacts: {
+    opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
     shapes: ReadonlyMap<Expr, readonly string[]>;
     variants: ReadonlyMap<Expr, readonly VariantCase[]>;
     patternShapes: ReadonlyMap<Pattern, readonly string[]>;
@@ -124,14 +92,11 @@ export async function checkFile(path: string): Promise<CheckResult> {
   for (const specifier of moduleImports(loaded.module)) {
     const dependency = await load(resolvePath(specifier, loaded.path));
     loadedModules.set(specifier, dependency);
-    const dependencyScope = dependency.path === PRELUDE
-      ? null
-      : await preludeScope();
     const checked = checkModule(
       dependency.module,
       seedValues(dependency),
       imports(dependency),
-      dependencyScope,
+      null,
     );
     dependencyFacts.push(checked);
     const parameter = dependency.module.parameter === null
@@ -150,7 +115,7 @@ export async function checkFile(path: string): Promise<CheckResult> {
       loaded.module,
       values,
       imports(loaded),
-      scope,
+      null,
       modules,
     );
     // A module's own row is what it performs that nothing handled. Non-empty at
@@ -177,19 +142,20 @@ export async function checkFile(path: string): Promise<CheckResult> {
       type: show(checked.type),
       effects: row,
       ownership: linear.ownership,
+      opens: mergeAll([
+        ...dependencyFacts.map((facts) => facts.opens),
+        checked.opens,
+      ]),
       shapes: mergeAll([
         ...dependencyFacts.map((facts) => facts.shapes),
-        inherited?.shapes,
         checked.shapes,
       ]),
       variants: mergeAll([
         ...dependencyFacts.map((facts) => facts.variants),
-        inherited?.variants,
         checked.variants,
       ]),
       patternShapes: mergeAll([
         ...dependencyFacts.map((facts) => facts.patternShapes),
-        inherited?.patternShapes,
         checked.patternShapes,
       ]),
       grants: checked.grants,

@@ -14,6 +14,8 @@ operators {
   prefix 90 (~) = Num.negate;
 };
 
+open (@import "blot:prelude") ();
+
 const Value = I32 :| Str;
 const Method = "GET" :| "POST" :| "PUT";
 const Verb = Method :- "PUT";

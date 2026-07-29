@@ -5,6 +5,8 @@
 // compiles: `rec` becomes a Core `let-rec` rather than a lifted definition,
 // because the lambda captures the block it is written in.
 
+open (@import "blot:prelude") ();
+
 let numbers = upto (0, 6);
 let total = sum numbers;
 

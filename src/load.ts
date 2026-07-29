@@ -12,8 +12,8 @@ import type { Expr, Module } from "./syntax/ast.ts";
 import type { Diagnostic } from "./diagnostic.ts";
 import { BlotError, render } from "./diagnostic.ts";
 import { parse } from "./syntax/parse.ts";
-import { childEnv, type Env, shapeOf, type Value } from "./comptime/value.ts";
-import { apply, moduleClosure, run } from "./comptime/eval.ts";
+import { childEnv, type Env, type Value } from "./comptime/value.ts";
+import { moduleClosure } from "./comptime/eval.ts";
 
 const PRELUDE_ROOT = fromFileUrl(new URL("./prelude/", import.meta.url));
 export const PRELUDE = resolve(PRELUDE_ROOT, "prelude.blot");
@@ -148,15 +148,11 @@ export async function load(
     imports.set(specifier, dependency.closure);
   }
 
-  // The prelude's exports are in scope in every module. Precedence for `+` is
-  // already built in (fixity.ts), and a default fixity whose target is not in
-  // scope would be useless; both are ordinary bindings a module can shadow.
+  // Nothing is in scope that the module did not ask for. The prelude is an
+  // ordinary module with no privilege: `open (@import "blot:prelude") ();` is
+  // what puts `Num.add` where the default fixity for `+` can find it, and a
+  // module that does not open it does not have `+`.
   const env: Env = childEnv(null);
-  if (absolute !== PRELUDE) {
-    for (const [name, value] of await preludeExports(cache)) {
-      env.names.set(name, value);
-    }
-  }
 
   const loaded: Loaded = {
     module: parsed.module,
@@ -168,25 +164,6 @@ export async function load(
   active.delete(absolute);
   cache.set(absolute, loaded);
   return loaded;
-}
-
-let preludeCache: ReadonlyMap<string, Value> | null = null;
-
-async function preludeExports(
-  cache: Map<string, Loaded>,
-): Promise<ReadonlyMap<string, Value>> {
-  if (preludeCache !== null) return preludeCache;
-  const prelude = await load(PRELUDE, cache);
-  const exports = run(
-    apply(prelude.closure, shapeOf([]), prelude.module.span, {
-      imports: new Map(),
-    }),
-  );
-  if (exports.tag !== "shape") {
-    throw new Error("the prelude must return a shape");
-  }
-  preludeCache = exports.fields;
-  return preludeCache;
 }
 
 export { BlotError };

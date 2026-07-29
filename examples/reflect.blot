@@ -9,6 +9,8 @@
 // and matching a parameterized nominal — is prelude source over that one
 // primitive.
 
+open (@import "blot:prelude") ();
+
 const Status = range (100, 599);
 
 const describe = t => case reflect t of

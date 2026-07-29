@@ -19,18 +19,23 @@ in a benchmark months later.
 
 | counter                    |              blot | gpu-duck | note                                               |
 | -------------------------- | ----------------: | -------: | -------------------------------------------------- |
-| `lexerStates`              |               101 |      175 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`              |               102 |      175 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity` |                 6 |        9 | worst-case island candidates allocated per token   |
 | `islandCount`              |                19 |       24 |                                                    |
-| `islandStates`             |               604 |        — |                                                    |
+| `islandStates`             |               625 |        — |                                                    |
 | `contractionRounds`        |                33 |        — | fixed dispatch bound                               |
-| `denseTransitionBytes`     |           434,880 |        — | immutable device table                             |
-| `packedBytes`              |           726,550 |        — | version-3 runtime section                          |
+| `denseTransitionBytes`     |           457,500 |        — | immutable device table                             |
+| `packedBytes`              |           755,030 |        — | version-3 runtime section                          |
 | `rootLoopIsland`           | 3 (`declaration`) |        — | strict root loop proven                            |
 
 blot beats the gpu-duck reference on both counters that matter most for
 occupancy, because it has three declaration forms where gpu-duck has six and no
 type sublanguage at all.
+
+`open` cost one lexer state and twenty-one island states — one keyword and one
+declaration alternative, with `maxCandidateMultiplicity` and `contractionRounds`
+unmoved. A declaration form whose FIRST set is a keyword nothing else starts
+with is the cheapest thing the profile can be asked for.
 
 `islandStates` and `packedBytes` rose by roughly 60% when field names were
 allowed to be keywords (`field_name = IDENT | INTEGER | keyword`). That was

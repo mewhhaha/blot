@@ -6,12 +6,14 @@
 
 module init;
 
-// The prelude's names are in scope already; this header only adds precedence.
-// `+` is `Num.add` either way — nothing about it is built in.
+// The header only adds precedence; `open` is what brings the names in. `+` is
+// `Num.add` either way — nothing about it is built in.
 operators {
   infixl 65 (++) = Text.append;
   infix 40 (===) = Eq.eq;
 };
+
+open (@import "blot:prelude") ();
 
 // --- types are values -------------------------------------------------------
 
