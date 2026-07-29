@@ -136,7 +136,7 @@ export type LiteralKind =
   | "for"
   | "do"
   | "end"
-  | "<-"
+  | "in"
   | "open"
   | "return"
   | ","

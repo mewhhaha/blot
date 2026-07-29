@@ -12,7 +12,6 @@
 "..." @operator
 ":=" @operator
 ";" @punctuation.delimiter
-"<-" @operator
 "=" @operator
 "=>" @operator
 "[" @punctuation.bracket

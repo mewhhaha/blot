@@ -19,14 +19,14 @@ for Iter.range (0, 5) do
   counted := counted + 1;
 end;
 
-// `for x <- …` binds each element.
+// `for x in …` binds each element.
 let total = 0;
-for n <- Iter.range (1, 5) do
+for n in Iter.range (1, 5) do
   total := total + n;
 end;
 
 let joined = "";
-for word <- Iter.items ["a", "b", "c"] do
+for word in Iter.items ["a", "b", "c"] do
   joined := joined <> word;
 end;
 
@@ -34,7 +34,7 @@ end;
 // is what keeps the escaping set syntactic — and therefore something the
 // checker can pin a type to.
 let squares = 0;
-for n <- Iter.range (1, 4) do
+for n in Iter.range (1, 4) do
   let square = n * n;
   squares := squares + square;
 end;
@@ -47,20 +47,20 @@ end;
 
 // --- a refutable binder filters ---------------------------------------------
 //
-// `x <- source` binds every element. A binder that *can* fail — a constructor,
+// `x in source` binds every element. A binder that *can* fail — a constructor,
 // a literal — becomes the `case` it looks like, with the other arm handing the
 // accumulator back untouched. An element that does not match skips the
 // iteration rather than failing it, which is what makes this a filter and
 // costs exactly one arm.
 
 let found = 0;
-for #Some n <- Iter.items [Some 1, None, Some 20, None, Some 300] do
+for #Some n in Iter.items [Some 1, None, Some 20, None, Some 300] do
   found := found + n;
 end;
 
 // A tuple binder cannot fail, so it stays a `let`.
 let labelled = "";
-for (rank, label) <- Iter.items [(1, "one"), (2, "two")] do
+for (rank, label) in Iter.items [(1, "one"), (2, "two")] do
   labelled := labelled <> label <> Text.of_int rank;
 end;
 
@@ -79,7 +79,7 @@ const halving = start => {
 };
 
 let steps = 0;
-for value <- halving 40 do
+for value in halving 40 do
   steps := steps + value;
 end;
 

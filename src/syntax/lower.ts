@@ -258,7 +258,7 @@ function lowerQualifiedName(rule: Rule, _source: string): readonly string[] {
  * Can this pattern fail to match?
  *
  * A binder that cannot fail is a `let`; one that can becomes the `case` that
- * makes `for #Some x <- src` a filter. Aggregates are refutable exactly when a
+ * makes `for #Some x in src` a filter. Aggregates are refutable exactly when a
  * part of them is — an array pattern also constrains the length, so it always
  * can fail.
  */
@@ -327,7 +327,7 @@ function desugarLoop(
       span,
     });
   }
-  // An irrefutable binder is a `let`. A refutable one — `#Some x <- src` — is
+  // An irrefutable binder is a `let`. A refutable one — `#Some x in src` — is
   // a `case` whose other arm hands the accumulator back untouched, so an
   // element that does not match skips the iteration instead of failing it.
   // That is the filter, and it costs one arm.

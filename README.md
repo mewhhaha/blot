@@ -87,8 +87,8 @@ for Iter.range (0, 5) do        // run the body once per element
 end;
 return x;                       // 6
 
-for n <- source do … end;       // bind each element
-for #Some n <- source do … end; // bind, and skip what does not match
+for n in source do … end;       // bind each element
+for #Some n in source do … end; // bind, and skip what does not match
 ```
 
 A binder that cannot fail is a `let`. One that can becomes the `case` it looks
@@ -205,7 +205,7 @@ let joining = {
 
 `@handle` names the effect it discharges, which is what lets the checker
 subtract it from the row: whatever `report` performs beyond `Console` is still
-owed. There is no `try`, no `with`, no `handler` keyword, and no `<-`. `resume`
+owed. There is no `try`, no `with`, and no `handler` keyword. `resume`
 is a real one-shot continuation: resuming collects the rest of the computation,
 not resuming aborts it, and calling it twice is an error rather than a
 convention.
