@@ -184,19 +184,6 @@ const any = (values, holds) =>
 const every = (values, holds) =>
   fold (values, True, ((seen, value) => Logic.and (seen, holds value)));
 
-// Stable insertion sort. `before (a, b)` is `#True` when `a` must come first;
-// stability is what lets `packed` reorder by width without scrambling the
-// declaration order of fields that tie.
-const sort_by = (values, before) => fold (values, @array.empty, ((sorted, value) => do
-  const woven = fold (sorted, { .out = @array.empty; .placed = False; },
-    ((state, existing) =>
-      if Logic.and (not state.placed, before (value, existing))
-      then { .out = @array.push (@array.push state.out value) existing; .placed = True; }
-      else { .out = @array.push state.out existing; .placed = state.placed; }
-      end));
-  return if woven.placed then woven.out else @array.push woven.out value end;
-end));
-
 const upto = (low, high) => do
   const build = rec ((index, state) =>
     if is_less (@int.cmp index high)
@@ -270,8 +257,13 @@ const iterate = (iterator, initial, visit) => do
   return go (iterator.state, initial);
 end;
 
-const collect = iterator =>
-  iterate (iterator, @array.empty, ((values, value) => @array.push values value));
+const collect = iterator => do
+  let values = @array.empty;
+  for value in iterator do
+    values := @array.push values value;
+  end;
+  return values;
+end;
 
 // Namespaced because `range` is already the type constructor — `I32` is a
 // range — and two things called `range` in one scope would be worse than a
@@ -282,6 +274,31 @@ const Iter = {
   .iterate = iterate;
   .collect = collect;
 };
+
+// Stable insertion sort. `before (a, b)` is `#True` when `a` must come first;
+// stability is what lets `packed` reorder by width without scrambling the
+// declaration order of fields that tie.
+//
+// Written with `for` rather than a fold inside a fold: the inner pass carries
+// two things at once, and naming them beats threading a record through a
+// closure that has to rebuild it on every element.
+const sort_by = (values, before) => do
+  let sorted = @array.empty;
+  for value in Iter.items values do
+    let out = @array.empty;
+    let placed = False;
+    for existing in Iter.items sorted do
+      const goes_first = Logic.and (not placed, before (value, existing));
+      out := if goes_first
+        then @array.push (@array.push out value) existing
+        else @array.push out existing
+        end;
+      placed := Logic.or (placed, goes_first);
+    end;
+    sorted := if placed then out else @array.push out value end;
+  end;
+  return sorted;
+end;
 
 // --- types ------------------------------------------------------------------
 //
@@ -324,20 +341,14 @@ const Unit = @type.unit;
 // is the raw hook; `aligned` and `packed` below are written over the same
 // idea rather than built in.
 const layout = (shape, width_of) => do
-  const names = @shape.names shape;
-  const placed = fold (names, { .offset = 0; .fields = @array.empty; },
-    ((state, name) => do
-      const width = width_of (@shape.get shape name);
-      return {
-        .offset = @int.add state.offset width;
-        .fields = @array.push state.fields {
-          .name = name;
-          .offset = state.offset;
-          .width = width;
-        };
-      };
-    end));
-  return { .size = placed.offset; .fields = placed.fields; };
+  let offset = 0;
+  let fields = @array.empty;
+  for name in Iter.items (@shape.names shape) do
+    const width = width_of (@shape.get shape name);
+    fields := @array.push fields { .name = name; .offset = offset; .width = width; };
+    offset := @int.add offset width;
+  end;
+  return { .size = offset; .fields = fields; };
 end;
 
 // --- reflection -------------------------------------------------------------
@@ -519,23 +530,29 @@ const struct = shape => do
   const order = @shape.names shape;
 
   // Where each field lives.
-  const at = (fold (order, { .next = 0; .slots = @shape.empty; },
-    ((state, name) => {
-      .next = @int.add state.next 1;
-      .slots = @shape.set state.slots name state.next;
-    }))).slots;
+  let next = 0;
+  let slots = @shape.empty;
+  for name in Iter.items order do
+    slots := @shape.set slots name next;
+    next := @int.add next 1;
+  end;
+  const at = slots;
 
   const key = name => Text.of_int (@shape.get at name);
 
   // The storage type, positionally. This is what a value of this struct *is*,
-  // and what `struct` hands back.
-  const storage = fold (order, @shape.empty,
-    ((product, name) => @shape.set product (key name) (@shape.get shape name)));
+  // and what `struct` hands back. The accessors go on in the same pass: one
+  // projection at a known slot, and nothing more. Their names are computed, so
+  // this is `@type.attach` rather than `:+`.
+  let storage = @shape.empty;
+  for name in Iter.items order do
+    storage := @shape.set storage (key name) (@shape.get shape name);
+  end;
 
-  // One accessor per field: a projection at a known slot, nothing more. The
-  // names are computed, so this is `@type.attach` rather than `:+`.
-  const with_fields = fold (order, storage,
-    ((typed, name) => @type.attach typed name (value => @shape.get value (key name))));
+  let with_fields = storage;
+  for name in Iter.items order do
+    with_fields := @type.attach with_fields name (value => @shape.get value (key name));
+  end;
 
   return with_fields :+ {
     // Named record in, positional storage out. The call site writes the fields
@@ -544,14 +561,22 @@ const struct = shape => do
     // missing one fails on the read.
     .new = record => do
       const _ = @satisfies (@shape.names record) order;
-      return fold (order, @shape.empty, ((product, name) =>
-        @shape.set product (key name)
-          (@satisfies (@shape.get record name) (@shape.get shape name))));
+      let product = @shape.empty;
+      for name in Iter.items order do
+        product := @shape.set product (key name)
+          (@satisfies (@shape.get record name) (@shape.get shape name));
+      end;
+      return product;
     end;
 
     // ...and back, so storage can be read by name without knowing the order.
-    .named = value => fold (order, @shape.empty,
-      ((record, name) => @shape.set record name (@shape.get value (key name))));
+    .named = value => do
+      let record = @shape.empty;
+      for name in Iter.items order do
+        record := @shape.set record name (@shape.get value (key name));
+      end;
+      return record;
+    end;
 
     .shape = shape;
     .fields = order;
@@ -572,19 +597,19 @@ end;
 // reported rather than hidden: a placement that wastes space should say so,
 // because choosing a better order is the reason to look.
 const aligned = (shape, order, width_of) => do
-  const placed = fold (order, { .offset = 0; .fields = @array.empty; .padding = 0; },
-    ((state, name) => do
-      const width = width_of (@shape.get shape name);
-      const slack = @int.rem state.offset width;
-      const pad = if Ord.eq slack 0 then 0 else @int.sub width slack end;
-      const start = @int.add state.offset pad;
-      return {
-        .offset = @int.add start width;
-        .padding = @int.add state.padding pad;
-        .fields = @array.push state.fields { .name = name; .offset = start; .width = width; };
-      };
-    end));
-  return { .size = placed.offset; .padding = placed.padding; .fields = placed.fields; };
+  let offset = 0;
+  let padding = 0;
+  let fields = @array.empty;
+  for name in Iter.items order do
+    const width = width_of (@shape.get shape name);
+    const slack = @int.rem offset width;
+    const pad = if Ord.eq slack 0 then 0 else @int.sub width slack end;
+    const start = @int.add offset pad;
+    fields := @array.push fields { .name = name; .offset = start; .width = width; };
+    padding := @int.add padding pad;
+    offset := @int.add start width;
+  end;
+  return { .size = offset; .padding = padding; .fields = fields; };
 end;
 
 // Widest field first, which with per-field alignment is the order that needs no

@@ -315,7 +315,16 @@ function desugarLoop(
   // Named so they cannot collide with anything a program can write: `$` is in
   // the operator class, so no identifier contains one.
   const carriedIn = "loop$";
-  const itemIn = "item$";
+  const pairIn = "pair$";
+
+  // The element is `pair$.0`, projected where it is used rather than bound to a
+  // name of its own — one fewer synthetic binding for the backend to see.
+  const element: Expr = {
+    tag: "field",
+    target: { tag: "var", name: pairIn, span },
+    name: "0",
+    span,
+  };
 
   const declarations: Decl[] = [];
   if (carried.length > 0) {
@@ -337,7 +346,7 @@ function desugarLoop(
       tag: "binding",
       kind: "let",
       pattern: binder,
-      value: name(itemIn),
+      value: element,
       span,
     });
   }
@@ -347,7 +356,7 @@ function desugarLoop(
   const visited: Expr = filtering && binder !== null
     ? {
       tag: "case",
-      target: name(itemIn),
+      target: element,
       arms: [
         { pattern: binder, body: step },
         { pattern: { tag: "wildcard", span }, body: name(carriedIn) },
@@ -356,17 +365,68 @@ function desugarLoop(
     }
     : step;
 
-  const visit: Expr = {
-    tag: "lambda",
-    parameter: {
-      tag: "tuple",
-      elements: [
-        { tag: "name", name: carriedIn, qualifier: "none", span },
-        { tag: "name", name: itemIn, qualifier: "none", span },
-      ],
+  // The recursion, inline. `for` names nothing: it emits the same `rec`/`case`
+  // that `iterate` contains rather than calling it, so a module that loops over
+  // an iterator it wrote itself needs nothing in scope. Looping over an *array*
+  // still needs `Iter.items`, but that is a call the program writes and can see.
+  const iterIn = "iter$";
+  const stateIn = "state$";
+  const goIn = "go$";
+  const at = (target: Expr, field: string): Expr => ({
+    tag: "field",
+    target,
+    name: field,
+    span,
+  });
+
+  const go: Expr = {
+    tag: "rec",
+    lambda: {
+      tag: "lambda",
+      parameter: {
+        tag: "tuple",
+        elements: [
+          { tag: "name", name: stateIn, qualifier: "none", span },
+          { tag: "name", name: carriedIn, qualifier: "none", span },
+        ],
+        span,
+      },
+      body: {
+        tag: "case",
+        target: {
+          tag: "apply",
+          fn: at(name(iterIn), "step"),
+          arg: name(stateIn),
+          span,
+        },
+        arms: [
+          {
+            pattern: { tag: "constructor", name: "None", payload: null, span },
+            body: name(carriedIn),
+          },
+          {
+            pattern: {
+              tag: "constructor",
+              name: "Some",
+              payload: { tag: "name", name: pairIn, qualifier: "none", span },
+              span,
+            },
+            body: {
+              tag: "apply",
+              fn: name(goIn),
+              arg: {
+                tag: "tuple",
+                elements: [at(name(pairIn), "1"), visited],
+                span,
+              },
+              span,
+            },
+          },
+        ],
+        span,
+      },
       span,
     },
-    body: visited,
     span,
   };
 
@@ -375,9 +435,17 @@ function desugarLoop(
     kind: "let",
     pattern: statePattern,
     value: {
-      tag: "apply",
-      fn: name("iterate"),
-      arg: { tag: "tuple", elements: [source, state, visit], span },
+      tag: "block",
+      declarations: [
+        { tag: "binding", kind: "let", pattern: { tag: "name", name: iterIn, qualifier: "none", span }, value: source, span },
+        { tag: "binding", kind: "let", pattern: { tag: "name", name: goIn, qualifier: "none", span }, value: go, span },
+      ],
+      result: {
+        tag: "apply",
+        fn: name(goIn),
+        arg: { tag: "tuple", elements: [at(name(iterIn), "state"), state], span },
+        span,
+      },
       span,
     },
     span,

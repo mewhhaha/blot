@@ -96,14 +96,18 @@ A binder that cannot fail is a `let`. One that can becomes the `case` it looks
 like, with the other arm handing the accumulator back untouched — so filtering
 is one arm rather than a second construct.
 
-`for` is surface syntax over `iterate`, which is prelude source over `rec` and
-`case` — so there is no loop in the AST, none in the evaluator, and none in the
-backend. It depends on `iterate` being in scope for the same reason `+` depends
-on `Num`, and it reaches WebAssembly because the fold it desugars to already
-did.
+`for` desugars to the `rec`/`case` recursion during CST lowering, so there is no
+loop in the AST, none in the evaluator, and none in the backend — and it names
+nothing, so a module that loops over an iterator it wrote itself needs nothing
+in scope. Looping over an *array* needs `Iter.items`, but that is a call the
+program writes and can see.
 
 An iterator is a `.state` and a `.step`, where `step state` answers
-`#Some (value, next_state)` or `#None`. `Iter.range` and `Iter.items` are
+`#Some (value, next_state)` or `#None`. The `Option` is not decoration: a step
+returning `(value, state, Bool)` would have to produce a value in the case
+where there is none, and for a polymorphic element no such value can be
+constructed — the same hole that makes an empty `Store` need its own
+constructor. `Iter.range` and `Iter.items` are
 ordinary prelude functions over that shape, so a new kind of sequence is a
 function someone writes. A state and a step rather than a closure returning the
 next closure: both express the protocol, but the closure form allocates one per

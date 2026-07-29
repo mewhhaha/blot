@@ -43,9 +43,12 @@ to say what a fold already says. And do not add assignment to make a loop read
 more directly; that would put mutation in a language whose ownership analysis
 assumes there is none.
 
-**Surface forms desugar; they do not get machinery.** `for` becomes a call to
-`iterate` and `x <- e` becomes `let x = e ()`, both during CST lowering, so
-nothing downstream of the parser knows either exists. A new form earns an AST
+**Surface forms desugar; they do not get machinery.** `for` becomes the
+`rec`/`case` recursion and `x <- e` becomes `let x = e ()`, both during CST
+lowering, so nothing downstream of the parser knows either exists. A desugaring
+emits the recursion rather than calling a prelude function that contains it: a
+keyword whose meaning depends on a name being in scope is a dependency the
+program cannot see. A new form earns an AST
 node only when no existing one can say what it means — otherwise it is a second
 way to say something the language already says, and every pass has to learn it.
 
