@@ -819,6 +819,7 @@ type LoopBody =
   | {
     readonly tag: "plain";
     readonly declarations: readonly Decl[];
+    readonly carried: readonly string[];
   }
   | {
     readonly tag: "control";
@@ -877,16 +878,11 @@ function desugarLoop(
     | { readonly tag: "control" },
   span: Span,
 ): LoweredLoop {
-  const carried: string[] = [];
-  if (body.tag === "control") {
-    carried.push(...body.carried);
-  } else {
-    for (const declaration of body.declarations) {
-      if (declaration.tag === "shadow" && !carried.includes(declaration.name)) {
-        carried.push(declaration.name);
-      }
-    }
-  }
+  // Both shapes name their accumulator the same way: from the `:=` the CST
+  // holds. Recovering it from the lowered body instead would miss a rebinding
+  // inside a statement conditional, which lowers to a `binding` rather than a
+  // `shadow` — by then lowering has erased the distinction.
+  const carried = body.carried;
 
   const name = (text: string): Expr => ({ tag: "var", name: text, span });
   const state = loopState(carried, span);
@@ -1298,6 +1294,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
         span: rule.span,
       };
     }
+    const carried = carriedNames(statements);
     const head = lowerValue(asRule(field(rule, "head"), "value"), context);
     const drawn = field(rule, "drawn");
     const body = statements.map((statement) => {
@@ -1309,7 +1306,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       loop = desugarLoop(
         null,
         head,
-        { tag: "plain", declarations: body },
+        { tag: "plain", declarations: body, carried },
         { tag: "iterate" },
         rule.span,
       );
@@ -1323,7 +1320,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
           ),
           context,
         ),
-        { tag: "plain", declarations: body },
+        { tag: "plain", declarations: body, carried },
         { tag: "iterate" },
         rule.span,
       );

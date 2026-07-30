@@ -1,0 +1,1 @@
+{ .counted = 2; .scored = 32; .mixed = 6; .evens = 3; .seen = 6; .scaled = 18; .flagged = 1; }

@@ -207,8 +207,10 @@ retained.
 
 Use another `let` or `const` to shadow a name with a different type.
 
-Only a single name may appear to the left of `:=`. A direct `:=` in a `for` body
-also defines one of that loop's accumulator fields.
+Only a single name may appear to the left of `:=`. A `:=` in a `for` body also
+defines one of that loop's accumulator fields, including one written inside a
+statement conditional in that body. A `:=` inside a nested `for` defines a field
+of the inner loop instead.
 
 ### 4.4 Nullary computation binding
 
@@ -509,9 +511,14 @@ else do
 end;
 ```
 
-A statement conditional produces `()` on its normal path. Its `else` is
-optional. Branches are statement scopes, so `return` and `break` retain their
-surrounding targets.
+A statement conditional's `else` is optional. Branches are statement scopes, so
+`return` and `break` retain their surrounding targets.
+
+A branch is a scope for `let` but not for `:=`. A name a branch rebinds with
+`:=` is rebound for the statements that follow the conditional: the name was
+already in scope and keeps its type, so every path agrees on what it holds —
+including a missing `else`, which passes the name through unchanged. A `let`
+inside a branch stays local to that branch.
 
 `then do` begins the branch body; the final `end;` closes the whole conditional.
 
@@ -579,7 +586,8 @@ The first form ignores each element. The second matches it against `pattern`. An
 irrefutable pattern binds normally. A refutable pattern that does not match
 skips that element rather than failing the loop.
 
-The names directly rebound with `:=` in the loop body form an implicit
+The names rebound with `:=` in the loop body — including inside a statement
+conditional in that body, but not inside a nested `for` — form an implicit
 accumulator record:
 
 - their incoming values initialize the accumulator;
