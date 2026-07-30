@@ -135,6 +135,13 @@
         }
       },
       {
+        "rule": "handler_composition",
+        "boundary": {
+          "kind": "terminated",
+          "terminal": "end"
+        }
+      },
+      {
         "rule": "block",
         "boundary": {
           "kind": "terminated",

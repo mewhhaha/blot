@@ -88,10 +88,7 @@ async function buildFile(path: string): Promise<void> {
   const output = path.replace(/\.blot$/, ".wasm");
   const manifest = `${output}.json`;
   await Deno.writeFile(output, built.wasm);
-  await Deno.writeTextFile(
-    manifest,
-    `${JSON.stringify(built.manifest, null, 2)}\n`,
-  );
+  await Deno.writeFile(manifest, built.manifestBytes);
   const imports = built.capabilities.length === 0
     ? ""
     : `, imports { ${built.capabilities.join(", ")} }`;

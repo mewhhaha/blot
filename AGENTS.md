@@ -25,6 +25,13 @@ change needs a `metadata.parser.resolutions` entry to generate, the grammar is
 wrong — every conflict so far had a design fix that made the language better,
 not a metadata override. Record counter changes in `docs/gpu-profile.md`.
 
+**The language specification changes with the language.** `LANGUAGE.md` is the
+normative description of accepted source and its meaning. Any change to syntax,
+lowering semantics, inference, ownership, effects, modules, primitives, runtime
+boundaries, or the prelude's public API must update `LANGUAGE.md` in the same
+diff. Examples and implementation comments support the specification; they do
+not replace it.
+
 **Byte parity is the safety net.** The GPU frontend has no CPU fallback and no
 partial program on failure. `just parity` must hold across the whole corpus
 before a grammar change lands.
@@ -56,12 +63,15 @@ while changing its type.
 becomes an unspellable compiler-local tagged result eliminated by a `case` at
 the source function boundary. A standalone `if` becomes an ordinary
 conditional over those results, and `x <- e` becomes `let x = e ()`, all during
-CST lowering. Nothing downstream of the parser knows these forms exist. A
-desugaring emits the recursion rather than calling a prelude function that
-contains it: a keyword whose meaning depends on a name being in scope is a
-dependency the program cannot see. A new form earns an AST node only when no
-existing one can say what it means — otherwise it is a second way to say
-something the language already says, and every pass has to learn it.
+CST lowering. `try program then do ... end` likewise becomes named nullary
+computations containing ordinary three-argument `@handle` calls; its bounded
+left-hand `<-` binds that computation rather than using the general declaration
+form. Nothing downstream of the parser knows these forms exist. A desugaring
+emits the recursion rather than calling a prelude function that contains it: a
+keyword whose meaning depends on a name being in scope is a dependency the
+program cannot see. A new form earns an AST node only when no existing one can
+say what it means — otherwise it is a second way to say something the language
+already says, and every pass has to learn it.
 
 **Value conditionals do not transfer control.** An expression `if` or `case`
 produces one of its branch values and cannot `return` from an enclosing
@@ -103,6 +113,13 @@ type-system disagreement to paper over.
 evaluator, and the emitted Wasm run the same language. `just wasm` requires all
 three to produce the same value; a lowering that satisfies one and not another
 is wrong.
+
+**The caller never sees gpufuck values.** Blot Core Wasm ABI 1 is the stable
+memory32, UTF-8 caller contract in `docs/abi.md`. Exports and host effects use
+its canonical adapters; gpufuck's tagged words, constructor numbers, and heap
+headers remain private. An incompatible layout, signature, ownership, import,
+or semantic change requires another ABI major and a matching `LANGUAGE.md`
+change. The sidecar and `blot:abi` custom-section bytes must stay identical.
 
 **Inference feeds the backend.** Field sets, constructor sets, and compile-time
 declaration values are recorded during checking, keyed by AST node identity,

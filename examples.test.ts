@@ -82,6 +82,10 @@ const REJECTIONS: Record<
     stage: "check",
   },
   "handler_wrong_operation": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "handler_composition_action": {
+    code: "BLOT_BAD_HANDLER_COMPOSITION",
+    stage: "check",
+  },
   "open_collision": { code: "BLOT_OPEN_COLLISION", stage: "check" },
   "open_duplicate_field": {
     code: "BLOT_DUPLICATE_OPEN_FIELD",

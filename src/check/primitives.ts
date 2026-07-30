@@ -119,6 +119,7 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ["@text.concat", mono(curried([TEXT, TEXT], TEXT))],
   ["@text.len", mono(curried([TEXT], INT))],
   ["@text.cmp", mono(curried([TEXT, TEXT], ORDERING))],
+  ["@text.contains", mono(curried([TEXT, TEXT], BOOL))],
   ["@text.of_int", mono(curried([INT], TEXT))],
 
   // --- arrays ---

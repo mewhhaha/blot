@@ -9,6 +9,7 @@
   (conditional)
   (conditional_statement)
   (case_expression)
+  (handler_composition)
   (iteration)
   (shape)
   (shape_pattern)

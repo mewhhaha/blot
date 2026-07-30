@@ -82,9 +82,11 @@ Staging runs after blot has checked the source and before lowering. It evaluates
 closed runtime fragments, removes compile-time-only result fields, and leaves
 effectful or otherwise residual expressions for gpufuck. Runtime result fields
 become named Wasm exports; compile-time fields remain in the manifest with no
-Wasm name. The manifest also records the compiled ABI, arity, effects,
-ownership, imports, capabilities, nominal layouts, and the source spelling
-behind every lowered variant or sealed constructor.
+Wasm name. Runtime fields use Blot Core Wasm ABI 1 rather than gpufuck's private
+tagged-value boundary. The structural manifest records canonical function types,
+post-return ownership, imports, record fields, variant cases, and seals. Its
+exact bytes occur both beside the module and in the `blot:abi` custom section;
+[abi.md](abi.md) specifies the byte contract.
 
 `rec` becomes a Core `let-rec`, not a lifted top-level definition. Lifting it
 stranded whatever the lambda captured — `fold`'s inner `go` closes over
@@ -153,13 +155,10 @@ returns — and `()` is what that means at the boundary. An unconstrained
 _parameter_ is still refused: the host cannot be handed something no type
 determines.
 
-Text is the same story from the other end. Core carries text without measuring
-or rendering it, so `@text.len`, `@text.of_int`, and `@text.cmp` are host
-operations under a `Text` capability that blot declares itself — the import is
-typed and visible, and no program has to declare an effect for something the
-language already has. `@text.cmp` crosses as a comparison returning a sign; the
-three-constructor ordering is rebuilt on this side, because a variant has no
-boundary representation and inventing one for it would be the worse trade.
+Core carries text without measuring or rendering it, so gpufuck emits
+module-local Wasm implementations of `@text.len`, `@text.of_int`, and
+`@text.cmp`. They create no ambient `Text` capability. `@text.cmp` computes a
+sign and blot rebuilds the three-constructor ordering on this side.
 
 ## Host effects are capabilities
 
@@ -185,9 +184,10 @@ the same grants `blot build` hands the compiled module. `just wasm` compares the
 printed transcripts as well as the results, because an effectful program's
 output is as much of its meaning as its return value.
 
-Only integers, text, and `()` cross the boundary today. A shape would need a
-nominal on both sides, and inventing one silently would make the import's
-contract a guess.
+Host effects use the same full first-order boundary as exports: integers, text,
+unit, booleans, concrete records, arrays, variants, and seals. The manifest
+names every structural component, so the host never has to guess a nominal
+layout.
 
 ## Recovering a constructor set without monomorphizing
 
@@ -247,6 +247,11 @@ wrapped around a call to it would replace nothing. Specializing the handler is
 not an optimization here — it is what makes it mean anything. The computation
 and the handler both have to be written in the module, which is what "a handler
 known at compile time" always required.
+
+`try program then do ... end` adds no backend path. CST lowering turns each
+bound two-argument `@handle (effect, handler)` step into a named nullary
+computation containing the ordinary three-argument call, then emits one final
+three-argument call that executes the composition.
 
 ## Names, and what may not be mangled
 

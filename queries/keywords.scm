@@ -83,6 +83,12 @@
   "of" @keyword.control.exception
   "end" @keyword.control.exception)
 
+(handler_composition
+  "try" @keyword.control.exception
+  "then" @keyword.control.exception
+  "do" @keyword.control
+  "end" @keyword.control)
+
 (prefix_operator
   [
     "rec"

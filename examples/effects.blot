@@ -1,9 +1,9 @@
 // Effects.
 //
-// There is no `effect` declaration form, no `perform`, no `try`, no `with`, and
-// no handler keyword. An effect is a shape of operation types handed to one
-// primitive; performing an operation is an ordinary call; a handler is a shape;
-// and `@handle` is a function.
+// There is no `effect` declaration form, no `perform`, no `with`, and no
+// handler declaration keyword. An effect is a shape of operation types handed
+// to one primitive; performing an operation is an ordinary call; a handler is
+// a shape; and `@handle` is a function.
 //
 // `x <- computation;` is `let x = computation ();` and nothing more. Performing
 // is already a call and the row is already inferred, so there is nothing left

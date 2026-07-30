@@ -8,7 +8,14 @@ import {
   run,
 } from "./comptime/eval.ts";
 import { childEnv, type Env, type Value } from "./comptime/value.ts";
-import type { Decl, Expr, Module, ShapeMember, Span } from "./syntax/ast.ts";
+import type {
+  Decl,
+  Expr,
+  Module,
+  Pattern,
+  ShapeMember,
+  Span,
+} from "./syntax/ast.ts";
 
 export interface StagedExport {
   readonly sourceName: string;
@@ -32,6 +39,7 @@ export function stageModule(
 ): StagedModule {
   const stagingValues = childEnv(values);
   const stagedDeclarations = new Set<Decl>();
+  let allDeclarationsStaged = true;
   for (const declaration of module.declarations) {
     if (declaration.tag !== "binding" || declaration.kind !== "let") continue;
     try {
@@ -47,6 +55,27 @@ export function stageModule(
       stagedDeclarations.add(declaration);
     } catch (error) {
       if (!(error instanceof BlotError)) throw error;
+      allDeclarationsStaged = false;
+      const pending: Pattern[] = [declaration.pattern];
+      while (pending.length > 0) {
+        const pattern = pending.pop();
+        if (pattern === undefined) continue;
+        if (pattern.tag === "name") {
+          stagingValues.names.delete(pattern.name);
+          continue;
+        }
+        if (pattern.tag === "tuple" || pattern.tag === "array") {
+          pending.push(...pattern.elements);
+          continue;
+        }
+        if (pattern.tag === "shape") {
+          pending.push(...pattern.fields.map((field) => field.pattern));
+          continue;
+        }
+        if (pattern.tag === "constructor" && pattern.payload !== null) {
+          pending.push(pattern.payload);
+        }
+      }
     }
   }
 
@@ -60,7 +89,7 @@ export function stageModule(
       };
     }
     let declarations = module.declarations;
-    if (staged.folded) {
+    if (staged.folded && allDeclarationsStaged) {
       declarations = module.declarations.filter((declaration) =>
         !stagedDeclarations.has(declaration)
       );
@@ -81,7 +110,7 @@ export function stageModule(
   const generatedDeclarations: Decl[] = [];
   const generatedShapes = new Map<Expr, readonly string[]>();
   let nextBinding = 0;
-  let fullyStaged = true;
+  let fullyStaged = allDeclarationsStaged;
   for (const member of module.result.members) {
     const staged = stageExpression(member.value, stagingValues, imports);
     if (member.tag === "field") {

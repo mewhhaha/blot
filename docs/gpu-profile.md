@@ -13,24 +13,27 @@ deno task generate && deno task inspect
 
 ## Recorded counters
 
-Measured against baba 7.3.0. These are checked into the repository so that a
+Measured against baba 7.9.0. These are checked into the repository so that a
 grammar change which quietly degrades parallelism shows up in a diff instead of
 in a benchmark months later.
 
 | counter                    |              blot | gpu-duck | note                                               |
 | -------------------------- | ----------------: | -------: | -------------------------------------------------- |
-| `lexerStates`              |               112 |      175 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`              |               114 |      175 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity` |                 6 |        9 | worst-case island candidates allocated per token   |
-| `islandCount`              |                19 |       24 |                                                    |
-| `islandStates`             |               807 |        — |                                                    |
+| `islandCount`              |                20 |       24 |                                                    |
+| `islandStates`             |               854 |        — |                                                    |
 | `contractionRounds`        |                33 |        — | fixed dispatch bound                               |
-| `denseTransitionBytes`     |           639,144 |        — | immutable device table                             |
-| `packedBytes`              |           940,227 |        — | version-3 runtime section                          |
+| `denseTransitionBytes`     |           696,864 |        — | immutable device table                             |
+| `packedBytes`              |         1,002,782 |        — | version-3 runtime section                          |
 | `rootLoopIsland`           | 3 (`declaration`) |        — | strict root loop proven                            |
 
 blot beats the gpu-duck reference on both counters that matter most for
 occupancy, because it has three declaration forms where gpu-duck has six and no
 type sublanguage at all.
+
+Updating baba from 7.3.0 to 7.9.0 increased `packedBytes` by 448 bytes for the
+new runtime metadata. The grammar-dependent counters did not change.
 
 `<-` cost two more lexer states and two island states. Splitting it into its own
 declaration alternative was a shift/reduce conflict on IDENT against `:=`, and
@@ -66,6 +69,13 @@ rename/ignore mask added sixty-six island states without changing `lexerStates`,
 `maxCandidateMultiplicity`, or `contractionRounds`. The mask is bounded by
 braces and commas, so the additional structure increases the static table
 without increasing per-token ambiguity.
+
+`try program then do ... end` adds two lexer states, one bounded island,
+forty-seven island states, 57,720 dense-transition bytes, and 62,107 packed
+bytes. Its body is a repeated semicolon-terminated handler step followed by one
+final step, so candidate multiplicity and contraction rounds remain fixed. The
+two-argument `@handle` spelling is parsed only inside this region and becomes
+the existing three-argument primitive during CST lowering.
 
 `islandStates` and `packedBytes` rose by roughly 60% when field names were
 allowed to be keywords (`field_name = IDENT | INTEGER | keyword`). That was

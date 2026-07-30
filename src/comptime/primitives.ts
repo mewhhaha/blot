@@ -246,8 +246,18 @@ function compare(left: Value, right: Value, span: Span, what: string): number {
     return left.value > right.value ? 1 : 0;
   }
   if (left.tag === "text" && right.tag === "text") {
-    if (left.value < right.value) return -1;
-    return left.value > right.value ? 1 : 0;
+    const leftScalars = [...left.value];
+    const rightScalars = [...right.value];
+    const length = Math.min(leftScalars.length, rightScalars.length);
+    for (let index = 0; index < length; index += 1) {
+      const leftScalar = leftScalars[index]!.codePointAt(0)!;
+      const rightScalar = rightScalars[index]!.codePointAt(0)!;
+      if (leftScalar < rightScalar) return -1;
+      if (leftScalar > rightScalar) return 1;
+    }
+    if (leftScalars.length < rightScalars.length) return -1;
+    if (leftScalars.length > rightScalars.length) return 1;
+    return 0;
   }
   fail(
     "BLOT_TYPE",
@@ -648,6 +658,15 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
   ["@text.cmp", {
     arity: 2,
     run: ([l, r], s) => ordering(compare(l, r, s, "@text.cmp")),
+  }],
+  ["@text.contains", {
+    arity: 2,
+    run: ([text, query], span) =>
+      bool(
+        textOf(text, span, "@text.contains").includes(
+          textOf(query, span, "@text.contains"),
+        ),
+      ),
   }],
   ["@text.of_int", {
     arity: 1,

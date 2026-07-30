@@ -1903,6 +1903,75 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     };
   }
 
+  if (rule.name === "handler_composition") {
+    let current = lowerValue(
+      asRule(field(rule, "program"), "program"),
+      context,
+    );
+    const declarations: Decl[] = [];
+
+    for (const cursor of fieldList(rule, "steps")) {
+      const step = asRule(cursor, "handler_composition_step");
+      const action = lowerHandlerCompositionAction(
+        asRule(field(step, "action"), "action"),
+        context,
+      );
+      const handled: Expr = {
+        tag: "lambda",
+        parameter: { tag: "unit", span: step.span },
+        body: {
+          tag: "apply",
+          fn: { tag: "intrinsic", name: "@handle", span: step.span },
+          arg: {
+            tag: "tuple",
+            elements: [action.effect, current, action.handler],
+            span: step.span,
+          },
+          span: step.span,
+        },
+        span: step.span,
+      };
+      const name = tokenOf(required(step, "name")).text;
+      if (name === "_") {
+        current = handled;
+        continue;
+      }
+      declarations.push({
+        tag: "binding",
+        kind: "let",
+        pattern: {
+          tag: "name",
+          name,
+          qualifier: "none",
+          span: step.span,
+        },
+        value: handled,
+        span: step.span,
+      });
+      current = { tag: "var", name, span: step.span };
+    }
+
+    const action = lowerHandlerCompositionAction(
+      asRule(field(rule, "result"), "result"),
+      context,
+    );
+    return {
+      tag: "block",
+      declarations,
+      result: {
+        tag: "apply",
+        fn: { tag: "intrinsic", name: "@handle", span: action.span },
+        arg: {
+          tag: "tuple",
+          elements: [action.effect, current, action.handler],
+          span: action.span,
+        },
+        span: action.span,
+      },
+      span: rule.span,
+    };
+  }
+
   if (rule.name === "block") {
     const statements = fieldList(rule, "statements");
     let result: Expr = { tag: "unit", span: rule.span };
@@ -1926,6 +1995,31 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     `\`${rule.name}\` is not an expression.`,
     rule.span,
   );
+}
+
+interface HandlerCompositionAction {
+  readonly effect: Expr;
+  readonly handler: Expr;
+  readonly span: Span;
+}
+
+function lowerHandlerCompositionAction(
+  rule: Rule,
+  context: Context,
+): HandlerCompositionAction {
+  const intrinsic = tokenOf(required(rule, "intrinsic"));
+  if (intrinsic.text !== "@handle") {
+    fail(
+      "BLOT_BAD_HANDLER_COMPOSITION",
+      `A \`try\` step uses \`@handle (effect, handler)\`, found \`${intrinsic.text}\`.`,
+      intrinsic.span,
+    );
+  }
+  return {
+    effect: lowerValue(asRule(field(rule, "effect"), "effect"), context),
+    handler: lowerValue(asRule(field(rule, "handler"), "handler"), context),
+    span: rule.span,
+  };
 }
 
 function lowerArm(rule: Rule, context: Context): Arm {

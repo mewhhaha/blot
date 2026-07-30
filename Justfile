@@ -16,13 +16,13 @@ parse file:
 # Byte parity between baba's CPU oracle and the WebGPU frontend. Needs an
 # adapter; nothing else in the repository does.
 parity:
-  WGPU_BACKENDS=vulkan WGPU_POWER_PREF=high \
-    deno run --unstable-webgpu --allow-read --allow-env scripts/parity.ts \
-      examples/*.blot examples/lib/*.blot src/prelude/*.blot
+    WGPU_BACKENDS=vulkan WGPU_POWER_PREF=high \
+      deno run --unstable-webgpu --allow-read --allow-env scripts/parity.ts \
+      examples/*.blot examples/lib/*.blot case-studies/*/*.blot src/prelude/*.blot
 
 # The same corpus through the CPU oracle only.
 parity-cpu:
-  deno run --allow-read scripts/parity.ts --cpu examples/*.blot examples/lib/*.blot src/prelude/*.blot
+  deno run --allow-read scripts/parity.ts --cpu examples/*.blot examples/lib/*.blot case-studies/*/*.blot src/prelude/*.blot
 
 # Parse and evaluate one program.
 run file:
@@ -58,7 +58,7 @@ grammar-check:
   deno run --allow-read --allow-run=tree-sitter scripts/check_grammar.ts
 
 check:
-  deno check scripts/*.ts src/cli.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts
+  deno check scripts/*.ts case-studies/*.ts src/cli.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts
   deno fmt --check
   deno lint
 

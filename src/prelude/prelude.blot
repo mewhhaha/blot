@@ -148,6 +148,7 @@ const Text = {
   .append = left => (right => @text.concat left right);
   .length = value => @text.len value;
   .cmp = left => (right => @text.cmp left right);
+  .contains = text => (query => @text.contains text query);
   .of_int = value => @text.of_int value;
 };
 

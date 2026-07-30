@@ -34,9 +34,40 @@ export function hostInit(write: (line: string) => void): WasmInit {
           "Text.compare right argument",
         );
         let ordering = 0n;
-        if (left < right) ordering = -1n;
-        if (left > right) ordering = 1n;
+        const leftScalars = [...left];
+        const rightScalars = [...right];
+        const length = Math.min(leftScalars.length, rightScalars.length);
+        for (let index = 0; index < length; index += 1) {
+          const leftScalar = leftScalars[index]!.codePointAt(0)!;
+          const rightScalar = rightScalars[index]!.codePointAt(0)!;
+          if (leftScalar < rightScalar) {
+            ordering = -1n;
+            break;
+          }
+          if (leftScalar > rightScalar) {
+            ordering = 1n;
+            break;
+          }
+        }
+        if (ordering === 0n && leftScalars.length < rightScalars.length) {
+          ordering = -1n;
+        }
+        if (ordering === 0n && leftScalars.length > rightScalars.length) {
+          ordering = 1n;
+        }
         return { kind: "signed-integer-64", value: ordering };
+      },
+      contains: (value) => {
+        if (value.kind !== "constructor" || value.fields.length !== 2) {
+          throw new TypeError(
+            `Text.contains argument must be a two-field constructor; received ${
+              describe(value)
+            }`,
+          );
+        }
+        const text = requireText(value.fields[0], "Text.contains text");
+        const query = requireText(value.fields[1], "Text.contains query");
+        return { kind: "boolean", value: text.includes(query) };
       },
     },
     Init: {

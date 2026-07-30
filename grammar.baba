@@ -290,7 +290,7 @@ keyword = (
   "module" | "operators" | "infixl" | "infixr" | "infix" | "prefix"
   | "let" | "const" | "sig" | "return" | "do" | "end"
   | "if" | "then" | "else" | "case" | "of" | "rec" | "comptime" | "open"
-  | "for" | "in" | "break"
+  | "for" | "in" | "break" | "try"
 ) ;
 
 primary_expression = (
@@ -303,6 +303,7 @@ primary_expression = (
   | unit
   | conditional
   | case_expression
+  | handler_composition
   | block
   | array
   | shape
@@ -483,6 +484,40 @@ case_arm = (
   pattern:binding_pattern
   "=>"
   body:value
+) ;
+
+// Compose statically known handlers around one nullary computation. Each
+// bound step receives the computation produced by handling the previous
+// effect; the final step executes the fully composed computation.
+//
+// `@handle` remains the only handling primitive. Its two-argument appearance
+// is confined to this bounded surface form, where the current computation is
+// the omitted middle argument. Lowering restores the ordinary
+// `@handle (effect, computation, handler)` call before inference.
+handler_composition = (
+  "try"
+  program:value
+  "then"
+  "do"
+  steps:handler_composition_step*
+  result:handler_composition_action
+  "end"
+) ;
+
+handler_composition_step = (
+  name:(IDENT | TYPE_IDENT)
+  "<-"
+  action:handler_composition_action
+  ";"
+) ;
+
+handler_composition_action = (
+  intrinsic:INTRINSIC
+  "("
+  effect:value
+  ","
+  handler:value
+  ")"
 ) ;
 
 // `in` separates a block's value from its semicolon-terminated statements.

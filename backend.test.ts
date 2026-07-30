@@ -93,33 +93,27 @@ Deno.test("the manifest separates runtime and compile-time exports", async () =>
 
   assertEquals(one, {
     sourceName: "one",
-    wasmName: "blot:one",
+    name: "blot:one",
     phase: "runtime",
-    abi: { kind: "signed-integer-64" },
-    arity: 0,
+    function: {
+      parameters: [],
+      result: { kind: "signed-integer-64" },
+    },
+    postReturn: null,
     effects: [],
     ownership: "owned",
   });
   assertEquals(method, {
     sourceName: "method",
-    wasmName: null,
+    name: null,
     phase: "comptime",
-    abi: null,
-    arity: 0,
+    function: null,
+    postReturn: null,
     effects: [],
     ownership: null,
   });
-  assertEquals(
-    manifest.constructors.find((constructor) =>
-      constructor.sourceName === "Centimeter"
-    ),
-    {
-      runtimeName: "Sealed0",
-      kind: "sealed",
-      sourceName: "Centimeter",
-      payload: true,
-    },
-  );
+  assertEquals(JSON.stringify(manifest).includes("coreIndex"), false);
+  assertEquals(JSON.stringify(manifest).includes("constructor"), false);
 });
 
 Deno.test("runtime fields are callable by their blot export names", async () => {
@@ -165,7 +159,7 @@ Deno.test("a concrete record signature specializes an exported projection", asyn
   const project = manifest.exports.find((exported) =>
     exported.sourceName === "project"
   );
-  assertEquals(project?.arity, 1);
+  assertEquals(project?.function?.parameters.length, 1);
   assertEquals(project?.phase, "runtime");
 });
 
@@ -180,6 +174,71 @@ Deno.test("Store values cross named exports as arrays", async () => {
       ],
     },
   );
+});
+
+Deno.test("text primitives are self-contained in emitted WebAssembly", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "text-intrinsics.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "return {",
+      '  .length = @text.len "a😀";',
+      "  .rendered = @text.of_int (-9223372036854775808);",
+      '  .ordering = @text.cmp "a" "b";',
+      '  .contains = @text.contains "GPU frontend" "front";',
+      '  .missing = @text.contains "GPU frontend" "back";',
+      "};",
+    ].join("\n"),
+  );
+
+  assertEquals(await runLoweringExport(path, "length"), {
+    kind: "signed-integer-64",
+    value: 2n,
+  });
+  assertEquals(await runLoweringExport(path, "rendered"), {
+    kind: "text",
+    value: "-9223372036854775808",
+  });
+  const ordering = await runLoweringExport(path, "ordering");
+  assertEquals(
+    ordering,
+    {
+      kind: "constructor",
+      name: "Sum0_Less",
+      fields: [],
+    },
+  );
+  assertEquals(await runLoweringExport(path, "contains"), {
+    kind: "boolean",
+    value: true,
+  });
+  assertEquals(await runLoweringExport(path, "missing"), {
+    kind: "boolean",
+    value: false,
+  });
+});
+
+Deno.test("host effects publish structural first-order imports", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "structural-host.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "const Pair = { .left = Int; .right = Int; };",
+      "const Exchange = @effect.host { .swap = Pair -> Pair; };",
+      "return Exchange.swap { .left = 20; .right = 22; };",
+    ].join("\n"),
+  );
+
+  const manifest = await validateLowering(path);
+  const imported = manifest.imports[0];
+  assertEquals(imported?.module, "blot:host/Exchange");
+  assertEquals(imported?.name, "swap");
+  assertEquals(imported?.function.parameters[0]?.kind, "record");
+  assertEquals(imported?.function.result.kind, "record");
 });
 
 Deno.test("module-result spreads preserve last-wins export staging", async () => {
@@ -234,5 +293,8 @@ Deno.test("residual module-result spreads still declare every export", async () 
     manifest.exports.map((exported) => exported.sourceName),
     ["a", "b"],
   );
-  assertEquals(manifest.capabilities, ["Source"]);
+  assertEquals(
+    manifest.imports.map((imported) => imported.capability),
+    ["Source"],
+  );
 });

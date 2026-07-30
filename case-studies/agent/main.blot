@@ -1,0 +1,35 @@
+operators {
+  infixl 65 (++) = Text.append;
+};
+
+open {} = (@import "blot:prelude") ();
+
+const Terminal = @effect.host {
+  .read_line = Unit -> Str;
+  .write = Str -> Unit;
+};
+
+const Model = @effect.host {
+  .complete = Str -> Str;
+};
+
+let transcript = "";
+let turns = 0;
+
+for ever do
+  let _ = Terminal.write "You:";
+  prompt <- Terminal.read_line;
+
+  if text_eq (prompt, "") then do
+    break;
+  end;
+
+  let request = transcript ++ "\nUser: " ++ prompt ++ "\nAssistant:";
+  let reply = Model.complete request;
+  let _2 = Terminal.write (Text.append "Agent: " reply);
+
+  transcript := request ++ " " ++ reply;
+  turns := turns + 1;
+end;
+
+return turns;

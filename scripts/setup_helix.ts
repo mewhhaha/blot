@@ -119,6 +119,7 @@ const KEYWORDS = [
   "for",
   "in",
   "break",
+  "try",
 ];
 
 const grammarJsPath = join(grammarDirectory, "grammar.js");

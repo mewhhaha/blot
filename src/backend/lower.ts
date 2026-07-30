@@ -32,6 +32,7 @@ import {
   type SurfaceTypeDeclaration,
   type TypeSchema,
   UNIT_CONSTRUCTOR_NAME,
+  WasmIntrinsic,
 } from "gpufuck";
 import type {
   ArrayElement,
@@ -137,8 +138,29 @@ export interface Lowered {
   readonly shapes: ReadonlyMap<string, readonly string[]>;
   /** Source spellings for variant and sealed constructors at the ABI. */
   readonly constructors: ReadonlyMap<string, RuntimeConstructor>;
+  /** Structural declarations needed to publish the stable caller ABI. */
+  readonly runtimeTypes: ReadonlyMap<string, RuntimeTypeDeclaration>;
   readonly exports: readonly LoweredExport[];
 }
+
+export type RuntimeTypeDeclaration =
+  | {
+    readonly kind: "record";
+    readonly fields: readonly string[];
+  }
+  | {
+    readonly kind: "variant";
+    readonly cases: readonly {
+      readonly sourceName: string;
+      readonly runtimeName: string;
+      readonly payload: boolean;
+    }[];
+  }
+  | {
+    readonly kind: "sealed";
+    readonly sourceName: string;
+    readonly runtimeName: string;
+  };
 
 export interface RuntimeConstructor {
   readonly kind: "variant" | "sealed";
@@ -288,10 +310,8 @@ class Lowering {
     } else if (ordered.every((name) => /^\d+$/.test(name))) {
       label = `Tuple${ordered.length}`;
     }
-    // The *key* is canonical so both orderings find one nominal; the fields
-    // stay in the order that reached here first, because construction and
-    // projection both go through this object and only have to agree with each
-    // other.
+    // The key is canonical so both orderings find one nominal; construction
+    // and projection preserve the source order that established the shape.
     const nominal: Nominal = { name: label, fields };
     this.nominals.set(key, nominal);
     return nominal;
@@ -520,6 +540,37 @@ export function lowerModule(
             kind: "sealed",
             sourceName: sealed.sourceName,
             payload: true,
+          },
+        ] as const
+      ),
+    ]),
+    runtimeTypes: new Map<string, RuntimeTypeDeclaration>([
+      ...[...lowering.nominals.values()].map((nominal) =>
+        [
+          nominal.name,
+          { kind: "record", fields: nominal.fields },
+        ] as const
+      ),
+      ...[...lowering.sums.values()].map((sum) =>
+        [
+          sum.name,
+          {
+            kind: "variant",
+            cases: sum.cases.map((case_) => ({
+              sourceName: case_.name,
+              runtimeName: constructorName(sum, case_.name),
+              payload: case_.payload,
+            })),
+          },
+        ] as const
+      ),
+      ...[...lowering.seals.values()].map((sealed) =>
+        [
+          sealed.name,
+          {
+            kind: "sealed",
+            sourceName: sealed.sourceName,
+            runtimeName: sealed.constructor,
           },
         ] as const
       ),
@@ -843,8 +894,8 @@ function hostOperation(
       span,
     );
   }
-  const parameter = boundaryType(signature.domain, span);
-  const result = boundaryType(signature.codomain, span);
+  const parameter = boundaryType(signature.domain, span, lowering);
+  const result = boundaryType(signature.codomain, span, lowering);
   // Named by identity, not by spelling. The memo that stops this being minted
   // twice is keyed on the effect's id, and a name that is less unique than its
   // memo is a duplicate definition waiting for two effects to share a name.
@@ -933,8 +984,11 @@ function effectOperation(
   lowering.effectOperations.set(key, name);
   lowering.definitions.push(defineEffectOperation({
     name,
-    parameter: { name: "argument", type: boundaryType(signature.domain, span) },
-    result: boundaryType(signature.codomain, span),
+    parameter: {
+      name: "argument",
+      type: boundaryType(signature.domain, span, lowering),
+    },
+    result: boundaryType(signature.codomain, span, lowering),
     effects: effectSet(`${effect.name}.${operation}`),
     // Performing with nothing to handle it is a trap, which is what the
     // checker already refuses statically. This is the residue of that rule.
@@ -963,6 +1017,7 @@ function schemaOf(
   type: SimpleType,
   operation: string,
   span: Span,
+  lowering: Lowering,
   unconstrained: TypeSchema | null = null,
   seen = new Set<number>(),
 ): TypeSchema {
@@ -976,12 +1031,23 @@ function schemaOf(
     if (names.length > 0 && names.every((n) => n === "True" || n === "False")) {
       return { kind: "boolean" };
     }
+    return exportSchema(type, operation, span, lowering);
+  }
+  if (type.tag === "record" || type.tag === "array") {
+    return exportSchema(type, operation, span, lowering);
   }
   if (type.tag === "var" && !seen.has(type.id)) {
     seen.add(type.id);
     for (const bound of [...type.lower, ...type.upper]) {
       try {
-        return schemaOf(bound, operation, span, unconstrained, seen);
+        return schemaOf(
+          bound,
+          operation,
+          span,
+          lowering,
+          unconstrained,
+          seen,
+        );
       } catch {
         continue;
       }
@@ -1012,8 +1078,14 @@ function grantOperation(
   const existing = lowering.hostOperations.get(key);
   if (existing !== undefined) return existing;
 
-  const parameter = schemaOf(signature.parameter, operation, span);
-  const result = schemaOf(signature.result, operation, span, { kind: "unit" });
+  const parameter = schemaOf(signature.parameter, operation, span, lowering);
+  const result = schemaOf(
+    signature.result,
+    operation,
+    span,
+    lowering,
+    { kind: "unit" },
+  );
   const name = `${GRANT_CAPABILITY}$${operation}`;
   lowering.hostOperations.set(key, name);
   lowering.definitions.push({
@@ -1070,9 +1142,10 @@ function textOperation(
   const field = {
     kind: "operation" as const,
     name: operation,
-    effects: effectSet(TEXT_CAPABILITY),
+    effects: effectSet(),
     parameter,
     result,
+    wasmIntrinsic: textIntrinsic(operation),
   };
   lowering.capabilities.set(TEXT_CAPABILITY, {
     name: TEXT_CAPABILITY,
@@ -1087,6 +1160,16 @@ function textOperation(
   return name;
 }
 
+function textIntrinsic(operation: string): WasmIntrinsic {
+  if (operation === "length") return WasmIntrinsic.TextCodePointLength;
+  if (operation === "of_int") {
+    return WasmIntrinsic.TextFromSignedInteger64;
+  }
+  if (operation === "compare") return WasmIntrinsic.TextCompare;
+  if (operation === "contains") return WasmIntrinsic.TextContains;
+  throw new Error(`Blot text operation ${operation} has no Wasm intrinsic`);
+}
+
 /**
  * A blot type value, as a boundary type.
  *
@@ -1094,7 +1177,14 @@ function textOperation(
  * sides of the boundary, and inventing one silently would make the import's
  * contract a guess.
  */
-function boundaryType(value: Value, span: Span): TypeSchema {
+function boundaryType(
+  value: Value,
+  span: Span,
+  lowering: Lowering,
+): TypeSchema {
+  if (value.tag === "extended") {
+    return boundaryType(value.inner, span, lowering);
+  }
   if (value.tag === "unit") return { kind: "unit" };
   if (value.tag === "range") {
     const domain = value.domain ??
@@ -1102,11 +1192,75 @@ function boundaryType(value: Value, span: Span): TypeSchema {
     if (domain === "int") return { kind: "signed-integer-64" };
     return HostTypes.text;
   }
-  fail(
-    "BLOT_UNSUPPORTED_LOWERING",
-    "Only integers, text, and `()` cross the host boundary today.",
-    span,
-  );
+  if (value.tag === "shape") {
+    const nominal = lowering.nominal([...value.fields.keys()]);
+    return {
+      kind: "named",
+      name: nominal.name,
+      arguments: nominal.fields.map((field) => {
+        const member = value.fields.get(field);
+        if (member === undefined) {
+          throw new Error(`host boundary record omitted field ${field}`);
+        }
+        return boundaryType(member, span, lowering);
+      }),
+    };
+  }
+  if (value.tag === "sealed") {
+    const sealed = lowering.seal(value.name);
+    return {
+      kind: "named",
+      name: sealed.name,
+      arguments: [boundaryType(value.inner, span, lowering)],
+    };
+  }
+  if (value.tag === "tag") {
+    let payload = false;
+    if (value.payload !== null) payload = true;
+    const sum = lowering.sum([{ name: value.name, payload }]);
+    const arguments_: TypeSchema[] = [];
+    if (value.payload !== null) {
+      arguments_.push(boundaryType(value.payload, span, lowering));
+    }
+    return { kind: "named", name: sum.name, arguments: arguments_ };
+  }
+  if (value.tag === "union") {
+    const cases: { readonly name: string; readonly payload: Value | null }[] =
+      [];
+    for (const member of value.members) {
+      if (member.tag !== "tag") {
+        return valueExportSchema(value, "host operation", span, lowering);
+      }
+      cases.push({
+        name: member.name,
+        payload: member.payload,
+      });
+    }
+    const names = cases.map((case_) => case_.name);
+    if (
+      names.length > 0 &&
+      names.every((name) => name === "True" || name === "False")
+    ) return { kind: "boolean" };
+    const sum = lowering.sum(cases.map((case_) => ({
+      name: case_.name,
+      payload: case_.payload !== null,
+    })));
+    return {
+      kind: "named",
+      name: sum.name,
+      arguments: sum.cases.flatMap((case_) => {
+        const matching = cases.find((candidate) =>
+          candidate.name === case_.name
+        );
+        if (matching === undefined) {
+          throw new Error(`host boundary variant omitted case ${case_.name}`);
+        }
+        if (matching.payload === null) return [];
+        return [boundaryType(matching.payload, span, lowering)];
+      }),
+    };
+  }
+  return valueExportSchema(value, "host operation", span, lowering);
 }
 
 /**
@@ -2628,6 +2782,29 @@ function lowerApply(
             tag("Equal"),
             tag("Greater"),
           ),
+        ),
+      );
+    }
+    if (
+      spine.callee.name === "@text.contains" && spine.args.length === 2
+    ) {
+      const pair = lowering.nominal(["0", "1"]);
+      const contains = textOperation(
+        "contains",
+        {
+          kind: "named",
+          name: pair.name,
+          arguments: [HostTypes.text, HostTypes.text],
+        },
+        { kind: "boolean" },
+        lowering,
+      );
+      return at.apply(
+        at.name(contains),
+        at.apply(
+          at.name(pair.name),
+          lower(spine.args[0], scope, lowering),
+          lower(spine.args[1], scope, lowering),
         ),
       );
     }

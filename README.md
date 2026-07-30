@@ -3,6 +3,11 @@
 A functional language whose syntax is designed against a parallel GPU parser
 from the start, rather than retrofitted to one.
 
+See [LANGUAGE.md](LANGUAGE.md) for the complete language specification.
+Executable application studies live in [case-studies/](case-studies/): a
+grep-like file search, an interactive terminal program, and an agent-style
+conversation loop.
+
 `../binned` is the maximal version of this idea — 124k lines of TypeScript and a
 language reference of 80k characters. `../baba/examples/gpu-duck` is the
 opposite pressure: a grammar cut down until baba's WebGPU frontend can prove it
@@ -32,14 +37,16 @@ the strongest obligation it captured. `blot ownership` prints the last-use facts
 the backend will consume. See [docs/ownership.md](docs/ownership.md).
 
 The gpufuck backend (M4) now lowers every accepted catalog program. `blot build`
-emits WebAssembly plus a JSON ABI manifest without executing the program;
-`just wasm` checks the interpreter, gpufuck's GPU evaluator, and emitted Wasm
-against the same staged runtime result. The CPU test suite sends the entire
-catalog through gpufuck as well, so backend coverage does not require a WebGPU
-adapter. Compile-time-only result fields are erased, runtime fields become named
-Wasm exports, host effects become typed imports, and one-shot handlers are
-specialized through non-tail resume and abort. See
-[docs/backend.md](docs/backend.md).
+emits stable Core WebAssembly plus a JSON ABI manifest without executing the
+program. The identical manifest is embedded in the `blot:abi` custom section,
+and generated adapters keep gpufuck's private heap representation out of the
+caller contract. See [docs/abi.md](docs/abi.md). `just wasm` checks the
+interpreter, gpufuck's GPU evaluator, and emitted Wasm against the same staged
+runtime result. The CPU test suite sends the entire catalog through gpufuck as
+well, so backend coverage does not require a WebGPU adapter. Compile-time-only
+result fields are erased, runtime fields become named Wasm exports, host effects
+become typed imports, and one-shot handlers are specialized through non-tail
+resume and abort. See [docs/backend.md](docs/backend.md).
 
 ```bash
 just run examples/tour.blot   # evaluate a program
@@ -296,9 +303,23 @@ let joining = {
 
 `@handle` names the effect it discharges, which is what lets the checker
 subtract it from the row: whatever `report` performs beyond `Console` is still
-owed. There is no `try`, no `with`, and no `handler` keyword. `resume` is a real
-one-shot continuation: resuming collects the rest of the computation, not
-resuming aborts it, and calling it twice is an error rather than a convention.
+owed. `resume` is a real one-shot continuation: resuming collects the rest of
+the computation, not resuming aborts it, and calling it twice is an error rather
+than a convention.
+
+Several handlers compose without manual nesting:
+
+```blot
+let result = try program then do
+  program_without_terminal <- @handle (Terminal, fake_terminal);
+  program_without_clock <- @handle (Clock, fake_clock);
+  @handle (Random, fake_random)
+end;
+```
+
+Each bound step names the nullary program with that source effect discharged;
+the final step executes the composition. This is static sugar for nested
+three-argument `@handle` calls, not a runtime handler registry.
 
 An effect the _host_ implements is declared `@effect.host`, and its operations
 become typed WebAssembly imports — so blot needs no raw import form, and its row
