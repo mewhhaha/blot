@@ -113,6 +113,13 @@ const REJECTIONS: Record<
     code: "BLOT_RETURN_IN_VALUE_CONDITION",
     stage: "check",
   },
+  // A phase error, not a type error: the program checks and the interpreter
+  // runs it, and only lowering has to place the capture in a frame that does
+  // not exist. `backend.test.ts` asserts the code.
+  "const_captures_let": {
+    code: "BLOT_CONST_CAPTURES_RUNTIME",
+    stage: "build",
+  },
 };
 
 async function blotFiles(directory: string): Promise<string[]> {

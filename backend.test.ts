@@ -1,5 +1,5 @@
 import { buildSurfaceModule, CpuCompiler, EvaluationProfile } from "gpufuck";
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { join } from "@std/path";
 import {
   runLowering,
@@ -8,6 +8,7 @@ import {
 } from "./src/backend/compile.ts";
 import { lowerModule } from "./src/backend/lower.ts";
 import { checkFile } from "./src/check/mod.ts";
+import { BlotError } from "./src/diagnostic.ts";
 import { load } from "./src/load.ts";
 
 async function blotFiles(directory: string): Promise<string[]> {
@@ -51,6 +52,25 @@ for (const name of ["handler_aborts.blot", "handlers.blot"]) {
     compilation.module.destroy();
   });
 }
+
+// A `const` is compile time and a `let` is not, so a hoisted compile-time
+// closure has no frame to find a `let` in. The refusal has to say that: the
+// captured name is in scope at the source level, and reporting it as unbound
+// sends the reader looking for a declaration that is right there.
+Deno.test("a `const` refuses to capture a `let`", async () => {
+  const path = join("examples/rejected/semantics", "const_captures_let.blot");
+  const loaded = await load(path);
+  const checked = await checkFile(path);
+  const error = assertThrows(
+    () => lowerModule(loaded.module, checked, checked.values),
+    BlotError,
+  );
+  assertEquals(error.diagnostic.code, "BLOT_CONST_CAPTURES_RUNTIME");
+  assertEquals(
+    loaded.source.slice(error.diagnostic.span.start, error.diagnostic.span.end),
+    "helper",
+  );
+});
 
 Deno.test("runtime integers cross WebAssembly as signed i64", async () => {
   const directory = await Deno.makeTempDir();

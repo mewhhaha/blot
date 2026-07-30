@@ -397,6 +397,15 @@ interface Scope {
   readonly values: ValueEnv;
   /** The module parameter's name, whose fields are granted capabilities. */
   granted?: string;
+  /**
+   * The compile-time value being hoisted into a top-level definition, when
+   * this scope is inside one.
+   *
+   * A hoisted definition has no enclosing frame, so a name it fails to resolve
+   * is not an unbound name — the checker already proved every name is bound.
+   * It is a `const` reaching for a binding that only exists at run time.
+   */
+  hoisting?: string;
 }
 
 function childScope(parent: Scope | null, values?: ValueEnv): Scope {
@@ -409,6 +418,7 @@ function childScope(parent: Scope | null, values?: ValueEnv): Scope {
     parent,
     values: visibleValues,
     granted: parent?.granted,
+    hoisting: parent?.hoisting,
   };
 }
 
@@ -1600,6 +1610,17 @@ function lower(
       // Not a local, so it is a compile-time binding: specialize it.
       const value = lookupValue(scope.values, expr.name);
       if (value === undefined) {
+        // Inside a hoisted compile-time closure there is no enclosing frame,
+        // and the checker has already proved this name is bound. So it is a
+        // `let` — a binding with no value until the program runs — and the
+        // `const` that reached for it was never computable at compile time.
+        if (scope.hoisting !== undefined) {
+          fail(
+            "BLOT_CONST_CAPTURES_RUNTIME",
+            `\`${expr.name}\` is bound by \`let\`, so it has no value at compile time and the compile-time closure \`${scope.hoisting}\` cannot capture it. Write \`let ${scope.hoisting} = …\`, or bind \`${expr.name}\` with \`const\`.`,
+            expr.span,
+          );
+        }
         fail("BLOT_UNBOUND", `\`${expr.name}\` is not in scope.`, expr.span);
       }
       return lowerValue(value, expr.name, expr.span, lowering);
@@ -2391,6 +2412,7 @@ function lowerValue(
       lowering.hoisted.set(value, name);
 
       const scope = childScope(null, value.env);
+      scope.hoisting = hint;
       // `rec` names the closure itself, so the definition has to be in scope
       // inside its own body.
       if (value.self !== null) scope.names.set(value.self, name);

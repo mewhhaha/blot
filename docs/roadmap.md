@@ -114,9 +114,12 @@ reads. The whole corpus is written around this — `case-studies/grep/main.blot`
 pointedly writes `count := if matching then count + 1 else count end;` — and
 nothing in the compiler says so.
 
-**Runs but cannot compile.** A `const` that closes over a `let` checks (`Int`),
-evaluates (`2`), and then refuses to lower with a message that is false at the
-source level: ``BLOT_UNBOUND: `helper` is not in scope.``
+**Runs but cannot compile.** A `const` that closes over a `let` checks (`Int`)
+and evaluates (`2`), and only `build` refuses it. The refusal now names the
+phase error — `BLOT_CONST_CAPTURES_RUNTIME` at the capture, naming both
+bindings — rather than claiming the captured name is unbound. Refusing in the
+checker instead, so `check` and `eval` agree with `build`, is still open
+(item 1d).
 
 **Diagnostics.** `blot check` prints type errors with no location at all —
 `d1.blot: BLOT_TYPE_ERROR: 1 is not text.` — while parse errors on the same path
@@ -209,13 +212,21 @@ continuation *is* the bound name. Root-cause in the desugaring
 (`src/syntax/lower.ts`) or in the source-function boundary join
 (`src/check/infer.ts`); add an inference test pinning `(Int | 999)`.
 
-**1d. A `const` that captures a `let` must refuse at the source, not at
-lowering.** `BLOT_UNBOUND` from `src/backend/lower.ts` for a name the source
-plainly binds is a compiler disagreement, not a user error. Decide the language
-question — I recommend (a), refuse in the checker with
-`BLOT_CONST_CAPTURES_RUNTIME` naming both bindings, because (b) means the
-backend must lower a definition staging already decided was runtime-phase — and
-say it in `LANGUAGE.md` §6.
+**1d. A `const` that captures a `let` must refuse in the checker, not at
+lowering.** Half done. The language question is decided and said in
+`LANGUAGE.md` §4.1: the program is illegal, because a closure whose environment
+names a runtime binding is not computable without runtime input. Lowering now
+refuses it as `BLOT_CONST_CAPTURES_RUNTIME` at the capture, naming both
+bindings, instead of claiming the name is unbound.
+
+What remains is moving the refusal to `check`, so `check` and `eval` stop
+accepting a program `build` rejects. That needs a free-variable walk over each
+`const` lambda body compared against the comptime environment — machinery the
+compiler does not have, and which has to agree with patterns, shadowing, the
+`for`/guard desugarings, `open`, handler shapes and `@`-primitives, or it will
+over-fire on the corpus. When it lands the code stays the same, and the only
+edits are moving this program's `REJECTIONS` stage from `build` to `check` and
+deleting the `backend.test.ts` test.
 
 **Corpus.** Adds `examples/rejected/semantics/rebinding_not_carried.blot`,
 `.../const_captures_runtime.blot`, and one `examples/` guard program with a

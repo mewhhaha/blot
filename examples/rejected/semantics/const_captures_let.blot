@@ -1,0 +1,18 @@
+// A `const` is compile time; a `let` is not.
+//
+// `use` is evaluated while the program is compiled, so its body may only reach
+// names that already have compile-time values. `helper` is bound by `let`, so
+// it has no value until the program runs — there is nothing for the
+// specialized definition to close over, and a definition hoisted to the top
+// level has no enclosing frame to find it in.
+//
+// The refusal points at the capture rather than at `helper`'s declaration:
+// `helper` is perfectly in scope here, it is in the wrong phase. Writing
+// `let use = y => helper y;` compiles.
+
+open {} = (@import "blot:prelude") ();
+
+let helper = x => x + 1;
+const use = y => helper y;
+
+return use 1;

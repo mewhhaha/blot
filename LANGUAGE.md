@@ -169,6 +169,14 @@ the pattern's names.
 running. A `const` must be computable without runtime input. Compile-time
 closures may later be specialized into runtime code when called.
 
+A `const` may not capture a `let`. Specializing a compile-time closure emits it
+as a definition of its own, and a definition has no enclosing frame to read a
+runtime binding out of, so a `const` whose body names a `let` is refused at the
+capture. Bind the captured name with `const`, or bind the closure with `let`. A
+`const` written inside a function body whose value depends on that function's
+parameters is not a compile-time value at all — it is an ordinary runtime
+binding, and captures like one.
+
 A mismatch in a binding pattern is an error. Repeating `let` or `const`
 explicitly shadows the earlier binding and may change its type:
 
