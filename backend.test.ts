@@ -69,7 +69,7 @@ Deno.test("runtime integer overflow traps in emitted WebAssembly", async () => {
   await Deno.writeTextFile(
     path,
     [
-      'open { } = (@import "blot:prelude") ();',
+      'open {} = (@import "blot:prelude") ();',
       "let maximum = 9223372036854775807;",
       "return maximum + 1;",
     ].join("\n"),
@@ -128,7 +128,7 @@ Deno.test("runtime fields are callable by their blot export names", async () => 
   await Deno.writeTextFile(
     path,
     [
-      'open { } = (@import "blot:prelude") ();',
+      'open {} = (@import "blot:prelude") ();',
       "sig increment = Int -> Int;",
       "let increment = value => value + 1;",
       "return { .increment = increment; };",
@@ -153,7 +153,7 @@ Deno.test("a concrete record signature specializes an exported projection", asyn
   await Deno.writeTextFile(
     path,
     [
-      'open { } = (@import "blot:prelude") ();',
+      'open {} = (@import "blot:prelude") ();',
       "const Point = { .x = Int; .y = Int; };",
       "sig project = Point -> Int;",
       "let project = point => point.x;",
@@ -188,7 +188,7 @@ Deno.test("module-result spreads preserve last-wins export staging", async () =>
   await Deno.writeTextFile(
     path,
     [
-      'open { } = (@import "blot:prelude") ();',
+      'open {} = (@import "blot:prelude") ();',
       "const base = { .a = 1; .kind = Int; };",
       "return { ...base; .a = 2; .b = 3; };",
     ].join("\n"),
@@ -222,7 +222,7 @@ Deno.test("residual module-result spreads still declare every export", async () 
   await Deno.writeTextFile(
     path,
     [
-      'open { } = (@import "blot:prelude") ();',
+      'open {} = (@import "blot:prelude") ();',
       "const Source = @effect.host { .read = Unit -> Int; };",
       "let base = { .a = Source.read (); .b = 2; };",
       "return { ...base; .a = 3; };",

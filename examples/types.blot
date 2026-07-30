@@ -4,7 +4,7 @@
 // so type algebra is function application and `const` is the only declaration
 // form involved. This is what removes twelve rules from the grammar.
 
-open { } = (@import "blot:prelude") ();
+open {} = (@import "blot:prelude") ();
 
 // Literals are singleton types: the type of `1` is `1`, never `Int`.
 

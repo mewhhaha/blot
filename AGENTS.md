@@ -35,29 +35,45 @@ scope, and no exemption from its own type system. A default fixity names a
 binding by string, so `+` works only because something opened `Num` — do not
 reintroduce an implicit scope to make that line disappear.
 
-**A loop is a fold, not an assignment.** `for` and `loop` desugar during CST
-lowering: the names their bodies rebind with `:=` become the accumulator
-record, and nothing downstream of the parser knows a loop exists. `break`
-becomes a locally handled abort carrying that record. Do not give these forms
-AST nodes, typing rules, or backend paths — each would be a second way to say
-what recursion and handlers already say. And do not add assignment to make a
-loop read more directly; that would put mutation in a language whose ownership
-analysis assumes there is none.
+**A loop is a fold, not an assignment.** `for` desugars during CST lowering:
+the names its body rebinds with `:=` become the accumulator record, and nothing
+downstream of the parser knows a loop exists. `break` carries that record out of
+the nearest `for`; an early `return` carries its value through the `for` to the
+enclosing source function. `ever` is an ordinary prelude iterator, not a keyword
+or compiler special case. Do not give these forms AST nodes, typing rules, or
+backend paths — each would be a second way to say what recursion and cases
+already say. And do not add assignment to make a loop read more directly; that
+would put mutation in a language whose ownership analysis assumes there is
+none.
 
 **`:=` preserves type.** It shadows an existing binding with another value of
 the same stable type; singleton literals widen to their integer or text domain
 when rebound. A repeated `let` or `const` is the explicit way to shadow a name
 while changing its type.
 
-**Surface forms desugar; they do not get machinery.** `for` and `loop` become
-`rec`/`case` recursion, `break` becomes a locally handled abort, and `x <- e`
-becomes `let x = e ()`, all during CST lowering, so nothing downstream of the
-parser knows these forms exist. A desugaring emits the recursion rather than
-calling a prelude function that contains it: a keyword whose meaning depends
-on a name being in scope is a dependency the program cannot see. A new form
-earns an AST node only when no existing one can say what it means — otherwise
-it is a second way to say something the language already says, and every pass
-has to learn it.
+**Surface forms desugar; they do not get machinery.** `for` becomes
+`rec`/`case` recursion, `break` becomes loop-local control, and early `return`
+becomes an unspellable compiler-local tagged result eliminated by a `case` at
+the source function boundary. A standalone `if` becomes an ordinary
+conditional over those results, and `x <- e` becomes `let x = e ()`, all during
+CST lowering. Nothing downstream of the parser knows these forms exist. A
+desugaring emits the recursion rather than calling a prelude function that
+contains it: a keyword whose meaning depends on a name being in scope is a
+dependency the program cannot see. A new form earns an AST node only when no
+existing one can say what it means — otherwise it is a second way to say
+something the language already says, and every pass has to learn it.
+
+**Value conditionals do not transfer control.** An expression `if` or `case`
+produces one of its branch values and cannot `return` from an enclosing
+function or `break` an enclosing loop. A standalone `if ... then do ... end;`
+inherits those surrounding control targets. Expression `if` requires `else`;
+statement `if` does not.
+
+**A deconstructing guard must leave on failure.**
+`if let pattern = value else do ... end;` binds the pattern in the statements
+that follow it. Its `else` path must `return` or `break`; allowing that path to
+continue would put names in scope that were never bound. There is no `then`
+because success continues after the guard rather than entering another block.
 
 **Types are values.** There is no type-level sublanguage and no type namespace.
 If a feature seems to need one, it belongs in the comptime evaluator instead.

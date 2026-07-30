@@ -11,7 +11,7 @@
 // a computation *returns* without spelling the `()`. Requiring a nullary value
 // is what stops it from being a second spelling for `let`.
 
-open { } = (@import "blot:prelude") ();
+open {} = (@import "blot:prelude") ();
 
 const Console = @effect {
   .write = Str -> Unit;
@@ -28,7 +28,7 @@ const Terminal = @effect {
 
 let ask = () => do
   answer <- Terminal.read;
-  return answer <> "!";
+  in answer <> "!"
 end;
 
 let answering = {
@@ -40,7 +40,7 @@ let answering = {
 let greet = () => do
   let _ = Console.write "hello";
   let _2 = Console.write "world";
-  return "done";
+  in "done"
 end;
 
 // A handler is a shape: one field per operation taking `(argument, ?resume)`,
@@ -52,7 +52,7 @@ end;
 let collecting = {
   .write = (message, ?resume) => do
     let rest = resume ();
-    return @text.concat (@text.concat message "|") rest;
+    in @text.concat (@text.concat message "|") rest
   end;
   .return = value => value;
 };

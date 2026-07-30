@@ -533,25 +533,23 @@ function lowerExports(
   lowering: Lowering,
 ): LoweredExport[] {
   if (exports.length === 0) return [];
+  const [first] = exports;
+  if (exports.length === 1 && first.sourceName === "default") {
+    return [lowerExport(
+      first,
+      surface.name(MODULE_RESULT),
+      0,
+      result.span,
+      lowering,
+    )];
+  }
   let shape: (Expr & { readonly tag: "shape" }) | null = null;
   if (result.tag === "shape") shape = result;
   if (result.tag === "block" && result.result.tag === "shape") {
     shape = result.result;
   }
   if (shape === null) {
-    const [exported] = exports;
-    if (exports.length !== 1 || exported.sourceName !== "default") {
-      throw new Error(
-        "a non-record module result must have one default export",
-      );
-    }
-    return [lowerExport(
-      exported,
-      surface.name(MODULE_RESULT),
-      0,
-      result.span,
-      lowering,
-    )];
+    throw new Error("named exports require a record module result");
   }
 
   const nominal = lowering.nominal(

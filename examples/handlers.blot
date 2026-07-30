@@ -9,7 +9,7 @@
 // so specializing the handler is not an optimization here: it is what makes it
 // mean anything.
 
-open { } = (@import "blot:prelude") ();
+open {} = (@import "blot:prelude") ();
 
 const Counter = @effect { .bump = Int -> Int; };
 const Scale = @effect { .by = Int -> Int; };
@@ -22,7 +22,7 @@ let doubling = { .bump = (n, ?resume) => resume (n * 2); };
 let stepping = {
   .by = (n, ?resume) => do
     let scaled = n * 10;
-    return resume (if n < 0 then 0 else scaled end);
+    in resume (if n < 0 then 0 else scaled end)
   end;
 };
 

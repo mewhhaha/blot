@@ -70,21 +70,61 @@ Declarations are all `;`-terminated:
 let name = expr;      // runtime binding
 const name = expr;    // must evaluate at compile time
 sig name = expr;      // optional constraint on the following binding
-open { } = expr;      // spread every field into scope
+open {} = expr;      // spread every field into scope
 open { .a: b, .c: _ } = expr; // rename .a to b and suppress .c
 for src do … end;     // loop; see below
-loop do … end;        // repeat until `break`
-break;                // exit the nearest `loop`
+for ever do … end;    // iterate the prelude's infinite iterator
+break;                // exit the nearest `for`
+if c then do … end;   // conditional control flow
+if let p = x else do … end; // bind p or leave through the else branch
 name := expr;         // shadow an existing binding, preserving its type
 name <- expr;         // bind what a computation returns: `let name = expr ();`
-return expr;          // module or block result, last
+return expr;          // exit the nearest function or module
 ```
 
-`for` and `loop` are declarations rather than expressions because what a loop
-produces is an effect on the enclosing scope: the names its body rebinds with
-`:=` are the accumulator, and the last iteration's values escape. That is a fold
-with the state inferred, which is how blot has loops while having no assignment
-— `:=` was already "a new binding", not "a new value in the old one".
+An expression `if` always has an `else` and produces one of its branch values:
+
+```blot
+let label = if ready then "ready" else "waiting" end;
+```
+
+There is no `yield`: the selected branch expression is the conditional's value.
+It is a closed value computation: `return` and `break` cannot escape through one
+of its branches. A standalone conditional is surrounding control flow, has an
+optional `else`, and may transfer control:
+
+```blot
+let describe = value => do
+  if value < 0 then do
+    return "negative";
+  end;
+  in "non-negative"
+end;
+```
+
+A deconstructing guard binds its pattern on the path that follows:
+
+```blot
+if let #Some value = candidate else do
+  return fallback;
+end;
+// value is in scope here
+```
+
+This form has no `then`: its success path is the following statements, not a
+second block. The `else` body must leave that path with `return` or `break`, so
+every name in the pattern is known to exist afterward.
+
+`do` is an expression block. Its semicolon-terminated statements are separated
+from its value by `in`; without `in`, its value is `()`. The marker is required
+by the strict GPU grammar because a bare trailing name and the start of
+`name := ...;` have the same one-token prefix.
+
+`for` is a declaration rather than an expression because what it produces is an
+effect on the enclosing scope: the names its body rebinds with `:=` are the
+accumulator, and the last iteration's values escape. That is a fold with the
+state inferred, which is how blot has loops while having no assignment — `:=`
+was already "a new binding", not "a new value in the old one".
 
 `:=` preserves the binding's stable type: rebinding one integer literal to
 another widens the name to `Int`, while rebinding it to text is rejected. A
@@ -105,9 +145,11 @@ return x;                       // 6
 for n in source do … end;       // bind each element
 for #Some n in source do … end; // bind, and skip what does not match
 
-loop do
+for ever do
   x := x + 1;
-  let _ = if done x then do break; return (); end else () end;
+  if done x then do
+    break;
+  end;
 end;
 ```
 
@@ -115,31 +157,33 @@ A binder that cannot fail is a `let`. One that can becomes the `case` it looks
 like, with the other arm handing the accumulator back untouched — so filtering
 is one arm rather than a second construct.
 
-Both loops desugar to `rec`/`case` recursion during CST lowering, so there is no
-loop in the AST, none in the evaluator, and none in the backend. `break`
-desugars to a locally handled abort carrying the accumulator as it exists at
-that point; it can appear inside an `if`, `case`, or `do` block, targets the
-nearest `loop`, and cannot cross a function or `for` boundary. A `for` names
-nothing, so a module that loops over an iterator it wrote itself needs nothing
-in scope. Looping over an _array_ needs `Iter.items`, but that is a call the
-program writes and can see.
+`for` desugars to `rec`/`case` recursion during CST lowering, so there is no
+loop in the AST, none in the evaluator, and none in the backend. `break` carries
+the accumulator as it exists at that point; it can appear inside a standalone
+`if`, targets the nearest `for`, and cannot cross a function or
+value-conditional boundary. `return` instead crosses a `for` and exits the
+nearest function. A `for` names nothing, so a module that loops over an iterator
+it wrote itself needs nothing in scope. Looping over an _array_ needs
+`Iter.items`, but that is a call the program writes and can see.
 
 An iterator is a `.state` and a `.step`, where `step state` answers
 `#Some (value, next_state)` or `#None`. The `Option` is not decoration: a step
 returning `(value, state, Bool)` would have to produce a value in the case where
 there is none, and for a polymorphic element no such value can be constructed —
 the same hole that makes an empty `Store` need its own constructor. `Iter.range`
-and `Iter.items` are ordinary prelude functions over that shape, so a new kind
-of sequence is a function someone writes. A state and a step rather than a
-closure returning the next closure: both express the protocol, but the closure
-form allocates one per element and leaves gpufuck resolving a lambda set that
-grows with the loop.
+and `Iter.items` are ordinary prelude functions over that shape, and `ever` is
+an ordinary iterator whose step always produces another unit. That is why
+`for ever do` needs the prelude opened and no special grammar. A new kind of
+sequence is a value someone writes. A state and a step rather than a closure
+returning the next closure: both express the protocol, but the closure form
+allocates one per element and leaves gpufuck resolving a lambda set that grows
+with the loop.
 
 Nothing is in scope that the module did not ask for. The prelude is an ordinary
 module with no privilege, so every file begins by opening it:
 
 ```blot
-open { } = @import "blot:prelude" ();
+open {} = @import "blot:prelude" ();
 ```
 
 The empty mask keeps every field's name. A mask only describes exceptions:
@@ -230,7 +274,7 @@ const Terminal = @effect { .read = Unit -> Str; };
 
 let ask = () => do
   answer <- Terminal.read;
-  return answer <> "!";
+  in answer <> "!"
 end;
 ```
 
@@ -239,7 +283,7 @@ const Console = @effect { .write = Str -> Unit; };
 
 let report = () => do
   let _ = Console.write "one";
-  return "done";
+  in "done"
 end;
 
 let joining = {
@@ -275,7 +319,7 @@ module init;
 let printing = {
   .write = (message, resume) => do
     let _ = init.print message;     // opaque; the program can only call it
-    return resume ();
+    in resume ()
   end;
   .return = value => value;
 };

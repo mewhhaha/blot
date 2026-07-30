@@ -8,7 +8,7 @@
 
 module init;
 
-open { } = (@import "blot:prelude") ();
+open {} = (@import "blot:prelude") ();
 
 const Console = @effect {
   .write = Str -> Unit;
@@ -19,7 +19,7 @@ const Console = @effect {
 const to_host = {
   .write = (message, ?resume) => do
     let _ = init.print message;
-    return resume ();
+    in resume ()
   end;
   .return = value => value;
 };
@@ -29,7 +29,7 @@ const to_host = {
 const report = () => do
   let _ = Console.write "compiled";
   let _2 = Console.write "linked";
-  return "ok";
+  in "ok"
 end;
 
 const to_memory = {

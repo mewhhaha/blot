@@ -7,7 +7,9 @@
 [
   (block)
   (conditional)
+  (conditional_statement)
   (case_expression)
+  (iteration)
   (shape)
   (shape_pattern)
   (array)

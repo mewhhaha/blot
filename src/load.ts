@@ -163,7 +163,7 @@ export async function load(
   }
 
   // Nothing is in scope that the module did not ask for. The prelude is an
-  // ordinary module with no privilege: `open { } = (@import "blot:prelude") ();` is
+  // ordinary module with no privilege: `open {} = (@import "blot:prelude") ();` is
   // what puts `Num.add` where the default fixity for `+` can find it, and a
   // module that does not open it does not have `+`.
   const env: Env = childEnv(null);

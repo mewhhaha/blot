@@ -13,7 +13,7 @@ operators {
   infix 40 (===) = Eq.eq;
 };
 
-open { } = @import "blot:prelude" ();
+open {} = @import "blot:prelude" ();
 
 // --- types are values -------------------------------------------------------
 
@@ -64,7 +64,7 @@ let staged = do
   let scaled = base + right;
   // `:=` rebinds at the same stable type; there is no assignment anywhere.
   scaled := scaled + 1;
-  return scaled;
+  in scaled
 end;
 
 // A repeated `let` is explicit shadowing and may change the type.
@@ -79,15 +79,11 @@ for n in Iter.range (1, 4) do
 end;
 
 let repeated = 0;
-loop do
+for ever do
   repeated := repeated + 1;
-  let _ = if repeated < 3
-    then ()
-    else do
-      break;
-      return ();
-    end
-    end;
+  if repeated >= 3 then do
+    break;
+  end;
 end;
 
 // --- effects ----------------------------------------------------------------
@@ -97,7 +93,7 @@ const Console = @effect { .write = Str -> Unit; };
 let report = () => do
   let _ = Console.write "one";
   let _2 = Console.write "two";
-  return "done";
+  in "done"
 end;
 
 let joining = {
@@ -110,7 +106,7 @@ let joining = {
 let printing = {
   .write = (message, ?resume) => do
     let _ = init.print message;
-    return resume ();
+    in resume ()
   end;
   .return = value => value;
 };

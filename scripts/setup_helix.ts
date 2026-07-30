@@ -115,6 +115,10 @@ const KEYWORDS = [
   "of",
   "rec",
   "comptime",
+  "open",
+  "for",
+  "in",
+  "break",
 ];
 
 const grammarJsPath = join(grammarDirectory, "grammar.js");

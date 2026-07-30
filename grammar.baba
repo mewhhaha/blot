@@ -65,13 +65,15 @@ fixity_declaration = (
 // reference language collapse into `const`, because types are ordinary
 // compile-time values.
 declaration =
-  binding | rebinding | opening | iteration | repetition | breaking | result ;
+  binding | rebinding | opening | iteration | breaking
+  | conditional_statement | result ;
 
 // `statement` is `declaration` under a second name. The duplication is
 // mechanical and exists only so that `declaration` is not self-nesting, which
 // is what "throughput": "strict" requires of the repeated root island.
 statement =
-  binding | rebinding | opening | iteration | repetition | breaking | result ;
+  binding | rebinding | opening | iteration | breaking
+  | conditional_statement | result ;
 
 binding = (
   kind:("let" | "const" | "sig")
@@ -110,6 +112,10 @@ rebinding = (
 //   for source do … end;              runs the body once per element
 //   for x in source do … end;         binds each element
 //   for #Some x in source do … end;   binds, and skips what does not match
+//
+// `break` stops the nearest `for` with its accumulator as it exists at that
+// point. An unbounded loop is an ordinary iteration over an infinite iterator:
+// `for ever do … end;`.
 iteration = (
   "for"
   head:value
@@ -129,25 +135,6 @@ iteration = (
 // A keyword rather than an arrow, so `<-` stays in the operator class and is
 // free for perform-binding an effect.
 iteration_source = ( "in" source:value ) ;
-
-// Repeating without an iterator. Like `for`, `loop` is a declaration whose
-// direct `:=` rebindings are its accumulator. `break` aborts with the
-// accumulator as it exists at that point, so those values escape the loop.
-//
-//   loop do
-//     attempts := attempts + 1;
-//     let _ = if ready then do break; return (); end else () end;
-//   end;
-//
-// Both forms lower to the existing recursion and handler machinery. Neither
-// survives into the AST, inference, ownership, or the backend.
-repetition = (
-  "loop"
-  "do"
-  body:statement*
-  "end"
-  ";"
-) ;
 
 breaking = (
   "break"
@@ -303,7 +290,7 @@ keyword = (
   "module" | "operators" | "infixl" | "infixr" | "infix" | "prefix"
   | "let" | "const" | "sig" | "return" | "do" | "end"
   | "if" | "then" | "else" | "case" | "of" | "rec" | "comptime" | "open"
-  | "for" | "in" | "loop" | "break"
+  | "for" | "in" | "break"
 ) ;
 
 primary_expression = (
@@ -409,7 +396,7 @@ conditional = (
   "then"
   consequence:value
   alternatives:else_if_clause*
-  fallback:else_clause?
+  fallback:else_clause
   "end"
 ) ;
 
@@ -423,6 +410,64 @@ else_if_clause = (
 else_clause = (
   "else"
   alternative:value
+) ;
+
+// A standalone conditional is control flow in the surrounding body rather
+// than a value. Its branches contain statements, so `return` and `break` may
+// target the surrounding function or loop. `else` is optional because the
+// normal result is always `()`.
+//
+// `then do` introduces the branch body rather than nesting an expression block,
+// so one `end;` closes the whole statement:
+//
+//   if ready then do
+//     return ();
+//   end;
+conditional_statement = (
+  "if"
+  body:(conditional_statement_guard | conditional_statement_branches)
+  "end"
+  ";"
+) ;
+
+// A deconstructing guard has no success block: matching binds the pattern for
+// the statements that follow it, while the `else` body must transfer control.
+//
+//   if let #Some value = option else do
+//     return fallback;
+//   end;
+//   // value is in scope here
+conditional_statement_guard = (
+  "let"
+  pattern:binding_pattern
+  "="
+  value:value
+  "else"
+  "do"
+  alternative:statement*
+) ;
+
+conditional_statement_branches = (
+  condition:expression
+  "then"
+  "do"
+  consequence:statement*
+  alternatives:conditional_statement_else_if_clause*
+  fallback:conditional_statement_else_clause?
+) ;
+
+conditional_statement_else_if_clause = (
+  ELSE_IF
+  condition:expression
+  "then"
+  "do"
+  consequence:statement*
+) ;
+
+conditional_statement_else_clause = (
+  "else"
+  "do"
+  alternative:statement*
 ) ;
 
 case_expression = (
@@ -440,9 +485,14 @@ case_arm = (
   body:value
 ) ;
 
+// `in` separates a block's value from its semicolon-terminated statements.
+// Without it, an IDENT after a statement could be either the tail value or the
+// beginning of `name := value;`, which is an LR conflict and therefore not a
+// strict GPU island. A block without `in` produces `()`.
 block = (
   "do"
-  statements:statement+
+  statements:statement*
+  result:("in" value)?
   "end"
 ) ;
 

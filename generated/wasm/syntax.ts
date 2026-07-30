@@ -138,7 +138,6 @@ export type LiteralKind =
   | "do"
   | "end"
   | "in"
-  | "loop"
   | "break"
   | "open"
   | ","
@@ -225,7 +224,6 @@ export type RuleName =
   | "rebinding"
   | "iteration"
   | "iteration_source"
-  | "repetition"
   | "breaking"
   | "opening"
   | "open_mask"
@@ -264,6 +262,11 @@ export type RuleName =
   | "conditional"
   | "else_if_clause"
   | "else_clause"
+  | "conditional_statement"
+  | "conditional_statement_guard"
+  | "conditional_statement_branches"
+  | "conditional_statement_else_if_clause"
+  | "conditional_statement_else_clause"
   | "case_expression"
   | "case_arm"
   | "block"
@@ -362,12 +365,6 @@ export interface IterationCursor extends RuleCursorBase<"iteration"> {
 
 export interface IterationSourceCursor extends RuleCursorBase<"iteration_source"> {
   field(name: "source"): ValueCursor;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
-export interface RepetitionCursor extends RuleCursorBase<"repetition"> {
-  field(name: "body"): ReadonlyArray<StatementCursor>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -570,7 +567,7 @@ export interface ConditionalCursor extends RuleCursorBase<"conditional"> {
   field(name: "alternatives"): ReadonlyArray<ElseIfClauseCursor>;
   field(name: "condition"): ExpressionCursor;
   field(name: "consequence"): ValueCursor;
-  field(name: "fallback"): ElseClauseCursor | null;
+  field(name: "fallback"): ElseClauseCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -584,6 +581,42 @@ export interface ElseIfClauseCursor extends RuleCursorBase<"else_if_clause"> {
 
 export interface ElseClauseCursor extends RuleCursorBase<"else_clause"> {
   field(name: "alternative"): ValueCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConditionalStatementCursor extends RuleCursorBase<"conditional_statement"> {
+  field(name: "body"): ConditionalStatementBranchesCursor | ConditionalStatementGuardCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConditionalStatementGuardCursor extends RuleCursorBase<"conditional_statement_guard"> {
+  field(name: "alternative"): ReadonlyArray<StatementCursor>;
+  field(name: "pattern"): BindingPatternCursor;
+  field(name: "value"): ValueCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConditionalStatementBranchesCursor extends RuleCursorBase<"conditional_statement_branches"> {
+  field(name: "alternatives"): ReadonlyArray<ConditionalStatementElseIfClauseCursor>;
+  field(name: "condition"): ExpressionCursor;
+  field(name: "consequence"): ReadonlyArray<StatementCursor>;
+  field(name: "fallback"): ConditionalStatementElseClauseCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConditionalStatementElseIfClauseCursor extends RuleCursorBase<"conditional_statement_else_if_clause"> {
+  field(name: "condition"): ExpressionCursor;
+  field(name: "consequence"): ReadonlyArray<StatementCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ConditionalStatementElseClauseCursor extends RuleCursorBase<"conditional_statement_else_clause"> {
+  field(name: "alternative"): ReadonlyArray<StatementCursor>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -604,6 +637,7 @@ export interface CaseArmCursor extends RuleCursorBase<"case_arm"> {
 }
 
 export interface BlockCursor extends RuleCursorBase<"block"> {
+  field(name: "result"): readonly [TokenCursor<"literal", "in">, ValueCursor] | null;
   field(name: "statements"): ReadonlyArray<StatementCursor>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
@@ -633,7 +667,6 @@ export type AnyRuleCursor =
   | RebindingCursor
   | IterationCursor
   | IterationSourceCursor
-  | RepetitionCursor
   | BreakingCursor
   | OpeningCursor
   | OpenMaskCursor
@@ -672,6 +705,11 @@ export type AnyRuleCursor =
   | ConditionalCursor
   | ElseIfClauseCursor
   | ElseClauseCursor
+  | ConditionalStatementCursor
+  | ConditionalStatementGuardCursor
+  | ConditionalStatementBranchesCursor
+  | ConditionalStatementElseIfClauseCursor
+  | ConditionalStatementElseClauseCursor
   | CaseExpressionCursor
   | CaseArmCursor
   | BlockCursor

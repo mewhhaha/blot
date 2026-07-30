@@ -25,8 +25,23 @@
 (result
   "return" @keyword.control.return)
 
+(opening
+  "open" @keyword.control.import)
+
+(iteration
+  "for" @keyword.control.repeat
+  "do" @keyword.control
+  "end" @keyword.control)
+
+(iteration_source
+  "in" @keyword.control)
+
+(breaking
+  "break" @keyword.control.return)
+
 (block
   "do" @keyword.control
+  "in" @keyword.control
   "end" @keyword.control)
 
 (conditional
@@ -40,6 +55,28 @@
 
 (else_clause
   "else" @keyword.control.conditional)
+
+(conditional_statement
+  "if" @keyword.control.conditional
+  "end" @keyword.control.conditional)
+
+(conditional_statement_guard
+  "let" @keyword.storage.type
+  "else" @keyword.control.conditional
+  "do" @keyword.control)
+
+(conditional_statement_branches
+  "then" @keyword.control.conditional
+  "do" @keyword.control)
+
+(conditional_statement_else_if_clause
+  (ELSE_IF) @keyword.control.conditional
+  "then" @keyword.control.conditional
+  "do" @keyword.control)
+
+(conditional_statement_else_clause
+  "else" @keyword.control.conditional
+  "do" @keyword.control)
 
 (case_expression
   "case" @keyword.control.exception

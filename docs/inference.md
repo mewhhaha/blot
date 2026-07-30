@@ -66,7 +66,7 @@ pairs, and the two should not look alike. `e` is the rest of the row — a row
 variable — and it is what makes a wrapper effect-polymorphic without saying so:
 
 ```blot
-let logged = f => (x => do let _ = Console.write "call"; return f x; end);
+let logged = f => (x => do let _ = Console.write "call"; in f x end);
 // ('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }
 ```
 

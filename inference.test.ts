@@ -14,7 +14,7 @@ const scratch = await Deno.makeTempDir();
 // Every snippet opens the prelude, because every module does: it has no
 // privilege, and a fixture that skipped it would be testing a language where
 // `+` is unbound.
-const PRELUDE = 'open { } = (@import "blot:prelude") ();\n';
+const PRELUDE = 'open {} = (@import "blot:prelude") ();\n';
 
 async function typeOf(source: string): Promise<string> {
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
@@ -103,6 +103,30 @@ check(
   "rebinding preserves polymorphism",
   'let identity = x => x;\nidentity := x => x;\nreturn { .number = identity 1; .text = identity "two"; };',
   '{ .number = 1; .text = "two"; }',
+);
+
+check(
+  "an unconditional early return determines the function result",
+  "let answer = () => do\n  return 42;\nend;\nreturn answer;",
+  "() -> 42",
+);
+
+check(
+  "a statement conditional returns from its function",
+  'let describe = value => do\n  if value < 0 then do\n    return "negative";\n  end;\n  in "positive"\nend;\nreturn describe;',
+  'Int -> ("negative" | "positive")',
+);
+
+check(
+  "a return crosses a for loop",
+  "let find = wanted => do\n  for value in Iter.range (0, 5) do\n    if value == wanted then do\n      return value;\n    end;\n  end;\n  in -1\nend;\nreturn find;",
+  "Int -> (Int | 0 | -1)",
+);
+
+check(
+  "a return crosses an unbounded loop",
+  "let count_to = limit => do\n  let count = 0;\n  for ever do\n    count := count + 1;\n    if count >= limit then do\n      return count;\n    end;\n  end;\n  in 0\nend;\nreturn count_to;",
+  "Int -> (Int | 0)",
 );
 
 rejects(
@@ -195,7 +219,7 @@ const Clock = @effect { .now = Unit -> Int; };
 let stamped = name => do
   let t = Clock.now ();
   let _ = Console.write name;
-  return t;
+  in t
 end;
 return { .stamped = stamped; };`,
   "{ .stamped = Text -> Int ~ { Clock, Console }; }",
@@ -206,7 +230,7 @@ return { .stamped = stamped; };`,
 check(
   "a row variable makes an effect-polymorphic wrapper",
   `const Console = @effect { .write = Str -> Unit; };
-let logged = f => (x => do let _ = Console.write "call"; return f x; end);
+let logged = f => (x => do let _ = Console.write "call"; in f x end);
 return { .logged = logged; };`,
   "{ .logged = ('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }; }",
 );

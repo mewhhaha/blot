@@ -19,13 +19,13 @@ in a benchmark months later.
 
 | counter                    |              blot | gpu-duck | note                                               |
 | -------------------------- | ----------------: | -------: | -------------------------------------------------- |
-| `lexerStates`              |               115 |      175 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`              |               112 |      175 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity` |                 6 |        9 | worst-case island candidates allocated per token   |
 | `islandCount`              |                19 |       24 |                                                    |
-| `islandStates`             |               783 |        — |                                                    |
+| `islandStates`             |               807 |        — |                                                    |
 | `contractionRounds`        |                33 |        — | fixed dispatch bound                               |
-| `denseTransitionBytes`     |           629,532 |        — | immutable device table                             |
-| `packedBytes`              |           938,994 |        — | version-3 runtime section                          |
+| `denseTransitionBytes`     |           639,144 |        — | immutable device table                             |
+| `packedBytes`              |           940,227 |        — | version-3 runtime section                          |
 | `rootLoopIsland`           | 3 (`declaration`) |        — | strict root loop proven                            |
 
 blot beats the gpu-duck reference on both counters that matter most for
@@ -44,10 +44,21 @@ and costs no _alternative_ — `for x in src` is parsed as a value and
 reclassified into a pattern once `in` follows, the same trick `lambda` uses,
 rather than as a branch the parser would have to choose from the first token.
 
-`loop` and `break` add eight lexer states and forty-four island states. Both
-open with their own keyword, so the candidate multiplicity and contraction bound
-remain unchanged. Their semantics cost no grammar structure beyond the bounded
-`do`/`end` region already used by `for`.
+Removing the separate `loop` form reduced the profile by three lexer states,
+twenty-five island states, 29,784 dense-transition bytes, and 34,237 packed
+bytes. `for ever do` needs no replacement grammar: `ever` is an ordinary prelude
+iterator in the existing `for source do` form. `break` remains its own
+declaration and targets the nearest `for` during CST lowering.
+
+Standalone `if` adds thirty-three island states without changing lexer states,
+candidate multiplicity, or contraction rounds. Its `then do` branch is
+semicolon-bounded control flow; expression `if` keeps value branches and now
+requires `else`. Factoring the standalone form's shared `if` opener to admit
+`if let pattern = value else do` adds another sixteen island states, again
+without moving those three bounds. A bare trailing value after block statements
+conflicted with the shared `IDENT` prefix of `name := ...;`, so
+`do statements in value end` uses the existing `in` token as the structural
+boundary instead of adding a parser resolution.
 
 The original `open value;` cost one lexer state and twenty-one island states —
 one keyword and one declaration alternative. Adding its `{ .source: target }`
@@ -87,11 +98,15 @@ The ten proofs are listed in `../baba/docs/webgpu-frontend.md`.
 
 ## What the profile cost the language
 
-Three concessions, each recorded here so they are not rediscovered as bugs:
+The concessions are recorded here so they are not rediscovered as bugs:
 
 - **`return expr;` is a declaration form**, not a trailing bare expression. A
   bare final expression would break the strict root loop, which requires the
   root to be one repeated island with an explicit structural boundary.
+- **An expression block separates its value with `in`.** In
+  `do statements in value end`, the marker distinguishes the value from another
+  semicolon-terminated statement. Without it, an `IDENT` could begin either the
+  value or `name := ...;`, which is an LR conflict and an unbounded GPU island.
 - **`statement` duplicates `declaration`.** The two rules are identical. Strict
   throughput requires the repeated root island not be self-nesting, and blocks
   nest declarations; routing block bodies through a second rule name keeps

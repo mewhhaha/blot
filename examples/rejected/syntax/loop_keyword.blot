@@ -1,0 +1,6 @@
+// Unbounded iteration uses the ordinary `ever` iterator; `loop` is not syntax.
+loop do
+  break;
+end;
+
+return ();

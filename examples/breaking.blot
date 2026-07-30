@@ -1,51 +1,61 @@
 // An unbounded loop is still a fold. Its direct `:=` rebindings are the
 // accumulator, and `break` returns the accumulator as it exists at that point.
 
-open { } = @import "blot:prelude" ();
+open {} = @import "blot:prelude" ();
 
 let iterations = 0;
 let completed = 0;
-loop do
+for ever do
   iterations := iterations + 1;
-  let _ = if iterations < 5
-    then ()
-    else do
-      break;
-      return ();
-    end
-    end;
+  if iterations >= 5 then do
+    break;
+  end;
   completed := completed + 1;
 end;
 
-// Each loop handles its own `break`, so nesting targets the nearest loop.
+// Each `for` handles its own `break`, so nesting targets the nearest one.
 let outer = 0;
 let inner_total = 0;
-loop do
+for ever do
   outer := outer + 1;
   let inner = 0;
-  loop do
+  for ever do
     inner := inner + 1;
-    let _ = if inner < 2
-      then ()
-      else do
-        break;
-        return ();
-      end
-      end;
+    if inner >= 2 then do
+      break;
+    end;
   end;
   inner_total := inner_total + inner;
-  let _ = if outer < 3
-    then ()
-    else do
-      break;
-      return ();
-    end
-    end;
+  if outer >= 3 then do
+    break;
+  end;
 end;
 
-// A loop with no accumulator exits with `()`.
-loop do
+// A finite iterator can stop before it is exhausted.
+let finite = 0;
+for value in Iter.range (0, 10) do
+  finite := finite + value;
+  if value >= 3 then do
+    break;
+  end;
+end;
+
+// A `for` with no accumulator exits with `()`.
+for ever do
   break;
+end;
+
+// A deconstructing guard keeps its bindings on the success path. Its `else`
+// must leave the path, so `value` is known to exist after the guard.
+let guard_steps = 0;
+let guard_total = 0;
+for ever do
+  guard_steps := guard_steps + 1;
+  let candidate = if guard_steps < 3 then Some guard_steps else None end;
+  if let #Some value = candidate else do
+    break;
+  end;
+  guard_total := guard_total + value;
 end;
 
 return {
@@ -53,4 +63,6 @@ return {
   .completed = completed;
   .outer = outer;
   .inner_total = inner_total;
+  .finite = finite;
+  .guard_total = guard_total;
 };

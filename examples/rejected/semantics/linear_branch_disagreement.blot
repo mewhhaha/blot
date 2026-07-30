@@ -1,7 +1,7 @@
 // Consumed on one path and not the other is consumed neither exactly once nor
 // never, so the branches have to agree.
 
-open { } = (@import "blot:prelude") ();
+open {} = (@import "blot:prelude") ();
 
 let !token = 41;
 let consume = (!value) => value;

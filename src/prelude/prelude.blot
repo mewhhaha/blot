@@ -165,16 +165,15 @@ const Array = {
   .push = (values, value) => @array.push values value;
 };
 
-// Structural recursion, which is all either surface loop becomes before
-// inference. Rebindings form the accumulator; neither loop introduces
-// assignment.
+// Structural recursion, which is all a surface loop becomes before inference.
+// Rebindings form the accumulator; `for` does not introduce assignment.
 const fold = (values, state, step) => do
   let go = rec ((index, current) =>
     if is_less (@int.cmp index (@array.len values))
     then go (@int.add index 1, step (current, @array.get values index))
     else current
     end);
-  return go (0, state);
+  in go (0, state)
 end;
 
 const each = (values, visit) =>
@@ -204,7 +203,7 @@ const upto = (low, high) => do
     then build (@int.add index 1, @array.push state index)
     else state
     end);
-  return build (low, @array.empty);
+  in build (low, @array.empty)
 end;
 
 // --- option and result ------------------------------------------------------
@@ -243,6 +242,11 @@ const Error = value => #Error value;
 // of sequence is a function someone writes rather than a case the compiler has
 // to know about.
 
+const ever = {
+  .state = ();
+  .step = _ => Some ((), ());
+};
+
 const iter_range = (from, to) => {
   .state = from;
   .step = index =>
@@ -268,7 +272,7 @@ const iterate = (iterator, initial, visit) => do
     #None => carried,
     #Some pair => go (pair.1, visit (carried, pair.0))
   end);
-  return go (iterator.state, initial);
+  in go (iterator.state, initial)
 end;
 
 const collect = iterator => do
@@ -276,7 +280,7 @@ const collect = iterator => do
   for value in iterator do
     values := @array.push values value;
   end;
-  return values;
+  in values
 end;
 
 // Namespaced because `range` is already the type constructor — `I32` is a
@@ -311,7 +315,7 @@ const sort_by = (values, before) => do
     end;
     sorted := if placed then out else @array.push out value end;
   end;
-  return sorted;
+  in sorted
 end;
 
 // --- types ------------------------------------------------------------------
@@ -362,7 +366,7 @@ const layout = (shape, width_of) => do
     fields := @array.push fields { .name = name; .offset = offset; .width = width; };
     offset := @int.add offset width;
   end;
-  return { .size = offset; .fields = fields; };
+  in { .size = offset; .fields = fields; }
 end;
 
 // --- reflection -------------------------------------------------------------
@@ -580,7 +584,7 @@ const struct = shape => do
     product := @type.attach product name (value => @shape.get value (key name));
   end;
 
-  return product <+ {
+  in product <+ {
     // Named record in, positional storage out. The call site writes the fields
     // in whatever order reads well; the order decides where they land. A field
     // the shape does not declare is refused here rather than stored, and a
@@ -592,7 +596,7 @@ const struct = shape => do
         product := @shape.set product (key name)
           (@satisfies (@shape.get record name) (@shape.get shape name));
       end;
-      return product;
+      in product
     end;
 
     // ...and back, so storage can be read by name without knowing the order.
@@ -601,14 +605,14 @@ const struct = shape => do
       for name in Iter.items order do
         record := @shape.set record name (@shape.get value (key name));
       end;
-      return record;
+      in record
     end;
 
     .shape = shape;
     .fields = order;
     .size = @array.len order;
     .slot = name => @shape.get at name;
-  };
+  }
 end;
 
 // --- packing ----------------------------------------------------------------
@@ -635,7 +639,7 @@ const aligned = (shape, order, width_of) => do
     padding := @int.add padding pad;
     offset := @int.add start width;
   end;
-  return { .size = offset; .padding = padding; .fields = fields; };
+  in { .size = offset; .padding = padding; .fields = fields; }
 end;
 
 // Widest field first, which with per-field alignment is the order that needs no
@@ -646,14 +650,14 @@ const packed = (shape, width_of) => do
   let order = sort_by (@shape.names shape, ((left, right) =>
     is_greater (@int.cmp (width_of (@shape.get shape left)) (width_of (@shape.get shape right)))));
   let bytes = aligned (shape, order, width_of);
-  return {
+  in {
     .order = order;
     .size = bytes.size;
     .padding = bytes.padding;
     .fields = bytes.fields;
     .offset = name => fold (bytes.fields, None,
       ((found, field) => if text_eq (field.name, name) then Some field.offset else found end));
-  };
+  }
 end;
 
 
@@ -700,6 +704,7 @@ return {
   .filter = filter;
   .sum = sum;
   .upto = upto;
+  .ever = ever;
   .Iter = Iter;
   .iterate = iterate;
   .collect = collect;

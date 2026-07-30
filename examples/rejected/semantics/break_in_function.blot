@@ -1,6 +1,6 @@
 let stop = () => do
   break;
-  return ();
+  in ()
 end;
 
 return stop ();

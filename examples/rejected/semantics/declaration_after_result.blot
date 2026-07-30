@@ -1,6 +1,0 @@
-// `return` is last. A declaration after it would be unreachable.
-
-open { } = (@import "blot:prelude") ();
-
-return 1;
-let stranded = 2;

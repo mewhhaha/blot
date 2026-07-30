@@ -2,7 +2,7 @@
 // operation name used to be a silent no-op at run time; naming the effect makes
 // it a type error.
 
-open { } = (@import "blot:prelude") ();
+open {} = (@import "blot:prelude") ();
 
 const Console = @effect { .write = Str -> Unit; };
 let handler = { .wrote = (m, ?resume) => resume (); .return = v => v; };

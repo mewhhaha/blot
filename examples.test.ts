@@ -31,10 +31,6 @@ const REJECTIONS: Record<
   string,
   { code: string; stage: "check" | "run" | "build" }
 > = {
-  "declaration_after_result": {
-    code: "BLOT_DECLARATION_AFTER_RESULT",
-    stage: "check",
-  },
   "misplaced_rec": { code: "BLOT_MISPLACED_REC", stage: "run" },
   "missing_result": { code: "BLOT_MISSING_RESULT", stage: "check" },
   "out_of_range": { code: "BLOT_TYPE_ERROR", stage: "check" },
@@ -77,10 +73,14 @@ const REJECTIONS: Record<
     stage: "check",
   },
   "effect_not_discharged": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },
-  "loop_type_drift": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "for_type_drift": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "rebinding_type_change": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "rebinding_unbound": { code: "BLOT_UNBOUND", stage: "check" },
   "generic_refused": { code: "BLOT_REFUSED", stage: "check" },
+  "guard_may_continue": {
+    code: "BLOT_GUARD_MAY_CONTINUE",
+    stage: "check",
+  },
   "handler_wrong_operation": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "open_collision": { code: "BLOT_OPEN_COLLISION", stage: "check" },
   "open_duplicate_field": {
@@ -92,12 +92,20 @@ const REJECTIONS: Record<
     code: "BLOT_BREAK_OUTSIDE_LOOP",
     stage: "check",
   },
-  "break_in_for": {
+  "break_in_function": {
     code: "BLOT_BREAK_OUTSIDE_LOOP",
     stage: "check",
   },
-  "break_in_function": {
-    code: "BLOT_BREAK_OUTSIDE_LOOP",
+  "break_in_value_if": {
+    code: "BLOT_BREAK_IN_VALUE_CONDITION",
+    stage: "check",
+  },
+  "return_in_value_if": {
+    code: "BLOT_RETURN_IN_VALUE_CONDITION",
+    stage: "check",
+  },
+  "return_in_value_case": {
+    code: "BLOT_RETURN_IN_VALUE_CONDITION",
     stage: "check",
   },
 };

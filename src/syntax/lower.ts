@@ -154,60 +154,579 @@ export function lowerModule(root: Rule, source: string): Module {
       );
 
   const table = buildFixityTable(fixities);
-  const context: Context = { source, table, loop: null };
+  const context: Context = {
+    source,
+    table,
+    loop: null,
+    escapeBoundary: "none",
+  };
 
   const declarations = fieldList(root, "declarations")
     .map((cursor) => unwrap(cursor));
-
-  const { body, result } = splitResult(declarations, context, root.span);
-  return { parameter, fixities, declarations: body, result, span: root.span };
+  const last = declarations.at(-1);
+  if (last === undefined || asRule(last, "declaration").name !== "result") {
+    fail(
+      "BLOT_MISSING_RESULT",
+      "A module ends with `return expr;`.",
+      root.span,
+    );
+  }
+  const statements = declarations.slice(0, -1);
+  const resultRule = asRule(last, "result");
+  let result = lowerValue(
+    asRule(field(resultRule, "value"), "value"),
+    context,
+  );
+  let loweredDeclarations: readonly Decl[];
+  if (statementsNeedControlLowering(statements)) {
+    result = resolveControlSequence(statements, result, context, root.span);
+    loweredDeclarations = [];
+  } else {
+    loweredDeclarations = statements.map((cursor) =>
+      lowerDecl(asRule(cursor, "declaration"), context)
+    );
+  }
+  return {
+    parameter,
+    fixities,
+    declarations: loweredDeclarations,
+    result,
+    span: root.span,
+  };
 }
 
 interface Context {
   readonly source: string;
   readonly table: ReturnType<typeof buildFixityTable>;
   readonly loop: {
-    readonly effect: string;
+    readonly tag: "control";
     readonly carried: readonly string[];
+    readonly breakConstructor: string;
   } | null;
+  readonly escapeBoundary: "none" | "value-condition";
 }
 
-/**
- * `return expr;` is a declaration form rather than a trailing bare expression,
- * because the strict root loop needs one repeated `;`-bounded island. Here it
- * becomes what it always meant: the body's result.
- */
-function splitResult(
+function statementRule(cursor: Cursor): Rule {
+  const rule = asRule(cursor, "statement");
+  if (rule.name === "statement" || rule.name === "declaration") {
+    return asRule(unwrap(rule), "statement");
+  }
+  return rule;
+}
+
+function conditionalStatementBody(rule: Rule): Rule {
+  return asRule(field(rule, "body"), "conditional statement");
+}
+
+function nestedStatementLists(rule: Rule): readonly (readonly Cursor[])[] {
+  if (rule.name === "iteration") {
+    return [fieldList(rule, "body")];
+  }
+  if (rule.name !== "conditional_statement") return [];
+
+  const body = conditionalStatementBody(rule);
+  if (body.name === "conditional_statement_guard") {
+    return [fieldList(body, "alternative")];
+  }
+  expect(
+    body.name === "conditional_statement_branches",
+    `unknown conditional statement ${body.name}`,
+  );
+  const nested: (readonly Cursor[])[] = [
+    fieldList(body, "consequence"),
+  ];
+  for (const alternative of fieldList(body, "alternatives")) {
+    nested.push(
+      fieldList(
+        asRule(
+          alternative,
+          "conditional_statement_else_if_clause",
+        ),
+        "consequence",
+      ),
+    );
+  }
+  const fallback = field(body, "fallback");
+  if (fallback !== null) {
+    nested.push(
+      fieldList(
+        asRule(fallback, "conditional_statement_else_clause"),
+        "alternative",
+      ),
+    );
+  }
+  return nested;
+}
+
+function statementsNeedControlLowering(cursors: readonly Cursor[]): boolean {
+  for (const cursor of cursors) {
+    const rule = statementRule(cursor);
+    if (rule.name === "result" || rule.name === "breaking") return true;
+    if (
+      rule.name === "conditional_statement" &&
+      conditionalStatementBody(rule).name === "conditional_statement_guard"
+    ) {
+      return true;
+    }
+    if (rule.name === "iteration") {
+      if (statementsContainReturn(fieldList(rule, "body"))) return true;
+      continue;
+    }
+    for (const nested of nestedStatementLists(rule)) {
+      if (statementsNeedControlLowering(nested)) return true;
+    }
+  }
+  return false;
+}
+
+function statementsContainReturn(cursors: readonly Cursor[]): boolean {
+  for (const cursor of cursors) {
+    const rule = statementRule(cursor);
+    if (rule.name === "result") return true;
+    for (const nested of nestedStatementLists(rule)) {
+      if (statementsContainReturn(nested)) return true;
+    }
+  }
+  return false;
+}
+
+function statementsContainBreak(cursors: readonly Cursor[]): boolean {
+  for (const cursor of cursors) {
+    const rule = statementRule(cursor);
+    if (rule.name === "breaking") return true;
+    if (rule.name === "iteration") continue;
+    for (const nested of nestedStatementLists(rule)) {
+      if (statementsContainBreak(nested)) return true;
+    }
+  }
+  return false;
+}
+
+function statementsCanContinue(cursors: readonly Cursor[]): boolean {
+  for (const cursor of cursors) {
+    const rule = statementRule(cursor);
+    if (rule.name === "result" || rule.name === "breaking") return false;
+    if (rule.name !== "conditional_statement") continue;
+
+    const body = conditionalStatementBody(rule);
+    if (body.name === "conditional_statement_guard") continue;
+    expect(
+      body.name === "conditional_statement_branches",
+      `unknown conditional statement ${body.name}`,
+    );
+    const fallback = field(body, "fallback");
+    if (fallback === null) continue;
+    const everyBranchLeaves = nestedStatementLists(rule).every((nested) =>
+      !statementsCanContinue(nested)
+    );
+    if (everyBranchLeaves) return false;
+  }
+  return true;
+}
+
+interface ControlConstructors {
+  readonly return: string;
+  readonly continue: string;
+}
+
+// gpufuck gives each constructor one monomorphic payload type. A boundary-
+// specific, source-unspellable name keeps unrelated continuation payloads from
+// being unified, and the wrapper keeps `()` distinct from a payloadless tag.
+function syntheticConstructor(label: string, span: Span): string {
+  return `${label}$${span.start}$${span.end}`;
+}
+
+function controlPayload(value: Expr, span: Span): Expr {
+  return {
+    tag: "shape",
+    members: [{ tag: "field", name: "value", value }],
+    span,
+  };
+}
+
+function controlPayloadPattern(name: string | null, span: Span): Pattern {
+  let pattern: Pattern = { tag: "wildcard", span };
+  if (name !== null) {
+    pattern = {
+      tag: "name",
+      name,
+      qualifier: "none",
+      span,
+    };
+  }
+  return {
+    tag: "shape",
+    fields: [{ name: "value", pattern }],
+    span,
+  };
+}
+
+function controlOutcome(
+  constructor: string,
+  value: Expr,
+  span: Span,
+): Expr {
+  return {
+    tag: "apply",
+    fn: { tag: "tag", name: constructor, span },
+    arg: controlPayload(value, span),
+    span,
+  };
+}
+
+function resolveControlSequence(
+  cursors: readonly Cursor[],
+  normalResult: Expr,
+  context: Context,
+  span: Span,
+): Expr {
+  const constructors: ControlConstructors = {
+    return: syntheticConstructor("FunctionReturn", span),
+    continue: syntheticConstructor("FunctionContinue", span),
+  };
+  const outcome = lowerControlOutcome(
+    cursors,
+    context,
+    span,
+    normalResult,
+    constructors,
+  );
+  const arms: Arm[] = [];
+  if (statementsContainReturn(cursors)) {
+    arms.push({
+      pattern: {
+        tag: "constructor",
+        name: constructors.return,
+        payload: controlPayloadPattern("returned$", span),
+        span,
+      },
+      body: { tag: "var", name: "returned$", span },
+    });
+  }
+  if (statementsCanContinue(cursors)) {
+    arms.push({
+      pattern: {
+        tag: "constructor",
+        name: constructors.continue,
+        payload: controlPayloadPattern("continued$", span),
+        span,
+      },
+      body: { tag: "var", name: "continued$", span },
+    });
+  }
+  return {
+    tag: "case",
+    target: outcome,
+    arms,
+    span,
+  };
+}
+
+function lowerControlOutcome(
   cursors: readonly Cursor[],
   context: Context,
   span: Span,
-): { body: readonly Decl[]; result: Expr } {
-  const body: Decl[] = [];
-  let result: Expr | null = null;
-
-  for (const cursor of cursors) {
-    const rule = asRule(cursor, "declaration");
-    if (rule.name === "result") {
-      if (result !== null) {
-        fail("BLOT_MULTIPLE_RESULTS", "A body has one `return`.", rule.span);
-      }
-      result = lowerValue(asRule(field(rule, "value"), "value"), context);
-      continue;
-    }
-    if (result !== null) {
+  continueValue: Expr,
+  constructors: ControlConstructors,
+): Expr {
+  const first = cursors[0];
+  if (first === undefined) {
+    return controlOutcome(constructors.continue, continueValue, span);
+  }
+  const rule = statementRule(first);
+  if (rule.name === "result") {
+    if (context.escapeBoundary === "value-condition") {
       fail(
-        "BLOT_DECLARATION_AFTER_RESULT",
-        "`return` is the last declaration in a body.",
+        "BLOT_RETURN_IN_VALUE_CONDITION",
+        "`return` cannot escape a value-producing `if` or `case`.",
         rule.span,
       );
     }
-    body.push(lowerDecl(rule, context));
+    return controlOutcome(
+      constructors.return,
+      lowerValue(asRule(field(rule, "value"), "value"), context),
+      rule.span,
+    );
+  }
+  if (
+    rule.name === "breaking" &&
+    context.loop !== null &&
+    context.loop.tag === "control"
+  ) {
+    return controlOutcome(
+      context.loop.breakConstructor,
+      loopState(context.loop.carried, rule.span),
+      rule.span,
+    );
   }
 
-  if (result === null) {
-    fail("BLOT_MISSING_RESULT", "A body ends with `return expr;`.", span);
+  const remaining = cursors.slice(1);
+  if (rule.name === "conditional_statement") {
+    const body = conditionalStatementBody(rule);
+    if (body.name === "conditional_statement_guard") {
+      const alternative = fieldList(body, "alternative");
+      if (statementsCanContinue(alternative)) {
+        fail(
+          "BLOT_GUARD_MAY_CONTINUE",
+          "The `else` branch of `if let` must `return` or `break`.",
+          body.span,
+        );
+      }
+      return {
+        tag: "case",
+        target: lowerValue(asRule(field(body, "value"), "value"), context),
+        arms: [
+          {
+            pattern: lowerPattern(
+              asRule(field(body, "pattern"), "pattern"),
+            ),
+            body: lowerControlOutcome(
+              remaining,
+              context,
+              span,
+              continueValue,
+              constructors,
+            ),
+          },
+          {
+            pattern: { tag: "wildcard", span: body.span },
+            body: lowerControlOutcome(
+              alternative,
+              context,
+              body.span,
+              { tag: "unit", span: body.span },
+              constructors,
+            ),
+          },
+        ],
+        span: rule.span,
+      };
+    }
+    expect(
+      body.name === "conditional_statement_branches",
+      `unknown conditional statement ${body.name}`,
+    );
+    let branchContinue: Expr = { tag: "unit", span: rule.span };
+    let branchConstructors = constructors;
+    let branchContext = context;
+    if (remaining.length === 0) branchContinue = continueValue;
+    if (remaining.length > 0) {
+      branchConstructors = {
+        return: syntheticConstructor("ConditionalReturn", rule.span),
+        continue: syntheticConstructor("ConditionalContinue", rule.span),
+      };
+      if (context.loop !== null && context.loop.tag === "control") {
+        branchContext = {
+          ...context,
+          loop: {
+            ...context.loop,
+            breakConstructor: syntheticConstructor(
+              "ConditionalBreak",
+              rule.span,
+            ),
+          },
+        };
+      }
+    }
+    const conditional = lowerControlConditional(
+      body,
+      branchContext,
+      branchContinue,
+      branchConstructors,
+    );
+    if (remaining.length === 0) return conditional;
+    const arms: Arm[] = [];
+    if (statementsContainReturn([rule])) {
+      arms.push({
+        pattern: {
+          tag: "constructor",
+          name: branchConstructors.return,
+          payload: controlPayloadPattern("returned$", rule.span),
+          span: rule.span,
+        },
+        body: controlOutcome(
+          constructors.return,
+          { tag: "var", name: "returned$", span: rule.span },
+          rule.span,
+        ),
+      });
+    }
+    if (statementsCanContinue([rule])) {
+      arms.push({
+        pattern: {
+          tag: "constructor",
+          name: branchConstructors.continue,
+          payload: controlPayloadPattern(null, rule.span),
+          span: rule.span,
+        },
+        body: lowerControlOutcome(
+          remaining,
+          context,
+          span,
+          continueValue,
+          constructors,
+        ),
+      });
+    }
+    if (
+      context.loop !== null &&
+      context.loop.tag === "control" &&
+      branchContext.loop !== null &&
+      branchContext.loop.tag === "control" &&
+      statementsContainBreak([rule])
+    ) {
+      arms.push({
+        pattern: {
+          tag: "constructor",
+          name: branchContext.loop.breakConstructor,
+          payload: controlPayloadPattern("stopped$", rule.span),
+          span: rule.span,
+        },
+        body: controlOutcome(
+          context.loop.breakConstructor,
+          { tag: "var", name: "stopped$", span: rule.span },
+          rule.span,
+        ),
+      });
+    }
+    return {
+      tag: "case",
+      target: conditional,
+      arms,
+      span: rule.span,
+    };
   }
-  return { body, result };
+  if (rule.name === "iteration") {
+    const loop = lowerControlLoop(rule, context);
+    const arms: Arm[] = [];
+    if (loop.returns) {
+      arms.push({
+        pattern: {
+          tag: "constructor",
+          name: loop.constructors.return,
+          payload: controlPayloadPattern("returned$", rule.span),
+          span: rule.span,
+        },
+        body: controlOutcome(
+          constructors.return,
+          { tag: "var", name: "returned$", span: rule.span },
+          rule.span,
+        ),
+      });
+    }
+    arms.push({
+      pattern: {
+        tag: "constructor",
+        name: loop.constructors.continue,
+        payload: controlPayloadPattern("loopState$", rule.span),
+        span: rule.span,
+      },
+      body: {
+        tag: "block",
+        declarations: [{
+          tag: "binding",
+          kind: "let",
+          pattern: loop.pattern,
+          value: {
+            tag: "var",
+            name: "loopState$",
+            span: rule.span,
+          },
+          span: rule.span,
+        }],
+        result: lowerControlOutcome(
+          remaining,
+          context,
+          span,
+          continueValue,
+          constructors,
+        ),
+        span: rule.span,
+      },
+    });
+    return {
+      tag: "case",
+      target: loop.value,
+      arms,
+      span: rule.span,
+    };
+  }
+
+  return {
+    tag: "block",
+    declarations: [lowerDecl(rule, context)],
+    result: lowerControlOutcome(
+      remaining,
+      context,
+      span,
+      continueValue,
+      constructors,
+    ),
+    span: {
+      start: rule.span.start,
+      end: span.end,
+    },
+  };
+}
+
+function lowerControlConditional(
+  body: Rule,
+  context: Context,
+  continueValue: Expr,
+  constructors: ControlConstructors,
+): Expr {
+  const branches: Branch[] = [{
+    condition: lowerExpression(
+      asRule(field(body, "condition"), "condition"),
+      context,
+    ),
+    consequence: lowerControlOutcome(
+      fieldList(body, "consequence"),
+      context,
+      body.span,
+      continueValue,
+      constructors,
+    ),
+  }];
+  for (const cursor of fieldList(body, "alternatives")) {
+    const clause = asRule(
+      cursor,
+      "conditional_statement_else_if_clause",
+    );
+    branches.push({
+      condition: lowerExpression(
+        asRule(field(clause, "condition"), "condition"),
+        context,
+      ),
+      consequence: lowerControlOutcome(
+        fieldList(clause, "consequence"),
+        context,
+        clause.span,
+        continueValue,
+        constructors,
+      ),
+    });
+  }
+  let fallback = controlOutcome(
+    constructors.continue,
+    continueValue,
+    body.span,
+  );
+  const fallbackCursor = field(body, "fallback");
+  if (fallbackCursor !== null) {
+    const clause = asRule(
+      fallbackCursor,
+      "conditional_statement_else_clause",
+    );
+    fallback = lowerControlOutcome(
+      fieldList(clause, "alternative"),
+      context,
+      clause.span,
+      continueValue,
+      constructors,
+    );
+  }
+  return { tag: "if", branches, fallback, span: body.span };
 }
 
 function lowerFixity(rule: Rule, source: string): Fixity {
@@ -279,32 +798,68 @@ function refutable(pattern: Pattern): boolean {
   }
 }
 
+type LoopBody =
+  | {
+    readonly tag: "plain";
+    readonly declarations: readonly Decl[];
+  }
+  | {
+    readonly tag: "control";
+    readonly outcome: Expr;
+    readonly carried: readonly string[];
+    readonly constructors: ControlConstructors;
+    readonly resultConstructors: ControlConstructors;
+    readonly breakConstructor: string;
+    readonly returns: boolean;
+    readonly continues: boolean;
+    readonly breaks: boolean;
+  };
+
+interface LoweredLoop {
+  readonly pattern: Pattern;
+  readonly value: Expr;
+}
+
+interface LoweredControlLoop extends LoweredLoop {
+  readonly constructors: ControlConstructors;
+  readonly returns: boolean;
+}
+
+function loopState(carried: readonly string[], span: Span): Expr {
+  if (carried.length === 0) return { tag: "unit", span };
+  return {
+    tag: "shape",
+    members: carried.map((field) => ({
+      tag: "field",
+      name: field,
+      value: { tag: "var", name: field, span },
+    })),
+    span,
+  };
+}
+
 function desugarLoop(
   binder: Pattern | null,
   source: Expr,
-  body: readonly Decl[],
+  body: LoopBody,
   completion:
     | { readonly tag: "iterate" }
-    | { readonly tag: "breakable"; readonly effect: string },
+    | { readonly tag: "control" },
   span: Span,
-): Decl {
+): LoweredLoop {
   const carried: string[] = [];
-  for (const declaration of body) {
-    if (declaration.tag === "shadow" && !carried.includes(declaration.name)) {
-      carried.push(declaration.name);
+  if (body.tag === "control") {
+    carried.push(...body.carried);
+  } else {
+    for (const declaration of body.declarations) {
+      if (declaration.tag === "shadow" && !carried.includes(declaration.name)) {
+        carried.push(declaration.name);
+      }
     }
   }
 
   const name = (text: string): Expr => ({ tag: "var", name: text, span });
-  const state: Expr = carried.length === 0 ? { tag: "unit", span } : {
-    tag: "shape",
-    members: carried.map((field) => ({
-      tag: "field" as const,
-      name: field,
-      value: name(field),
-    })),
-    span,
-  };
+  const state = loopState(carried, span);
   const statePattern: Pattern = carried.length === 0
     ? { tag: "wildcard", span }
     : {
@@ -359,16 +914,35 @@ function desugarLoop(
       span,
     });
   }
-  declarations.push(...body);
+  if (body.tag === "plain") declarations.push(...body.declarations);
 
-  const step: Expr = { tag: "block", declarations, result: state, span };
+  let stepResult = state;
+  if (body.tag === "control") stepResult = body.outcome;
+  const step: Expr = {
+    tag: "block",
+    declarations,
+    result: stepResult,
+    span,
+  };
+  let skipped: Expr = { tag: "unit", span };
+  if (body.tag === "control") {
+    skipped = controlOutcome(
+      body.constructors.continue,
+      name(carriedIn),
+      span,
+    );
+  }
+  if (body.tag === "plain") skipped = name(carriedIn);
   const visited: Expr = filtering && binder !== null
     ? {
       tag: "case",
       target: element,
       arms: [
         { pattern: binder, body: step },
-        { pattern: { tag: "wildcard", span }, body: name(carriedIn) },
+        {
+          pattern: { tag: "wildcard", span },
+          body: skipped,
+        },
       ],
       span,
     }
@@ -398,118 +972,65 @@ function desugarLoop(
     span,
   });
   const nextIterator = at(name(pairIn), "1");
+  const resolveVisitOutcome = (outcome: Expr): Expr => {
+    expect(body.tag === "control", "plain loop used control outcome");
+    const arms: Arm[] = [];
+    if (body.returns) {
+      arms.push({
+        pattern: {
+          tag: "constructor",
+          name: body.constructors.return,
+          payload: controlPayloadPattern("returned$", span),
+          span,
+        },
+        body: controlOutcome(
+          body.resultConstructors.return,
+          name("returned$"),
+          span,
+        ),
+      });
+    }
+    if (body.continues) {
+      arms.push({
+        pattern: {
+          tag: "constructor",
+          name: body.constructors.continue,
+          payload: controlPayloadPattern("continued$", span),
+          span,
+        },
+        body: continueWith(nextIterator, name("continued$")),
+      });
+    }
+    if (completion.tag === "control" && body.breaks) {
+      arms.push({
+        pattern: {
+          tag: "constructor",
+          name: body.breakConstructor,
+          payload: controlPayloadPattern("stopped$", span),
+          span,
+        },
+        body: controlOutcome(
+          body.resultConstructors.continue,
+          name("stopped$"),
+          span,
+        ),
+      });
+    }
+    return { tag: "case", target: outcome, arms, span };
+  };
   let completedVisit = continueWith(nextIterator, visited);
-
-  if (completion.tag === "breakable") {
-    const resultName = "loopResult$";
-    const handledVisit: Expr = {
-      tag: "apply",
-      fn: { tag: "intrinsic", name: "@handle", span },
-      arg: {
-        tag: "tuple",
-        elements: [
-          name(completion.effect),
-          {
-            tag: "lambda",
-            parameter: { tag: "unit", span },
-            body: visited,
-            span,
-          },
-          {
-            tag: "shape",
-            members: [
-              {
-                tag: "field",
-                name: "exit",
-                value: {
-                  tag: "lambda",
-                  parameter: {
-                    tag: "tuple",
-                    elements: [
-                      statePattern,
-                      {
-                        tag: "name",
-                        name: "resume$",
-                        qualifier: "affine",
-                        span,
-                      },
-                    ],
-                    span,
-                  },
-                  body: {
-                    tag: "apply",
-                    fn: { tag: "tag", name: "LoopBreak", span },
-                    arg: state,
-                    span,
-                  },
-                  span,
-                },
-              },
-              {
-                tag: "field",
-                name: "return",
-                value: {
-                  tag: "lambda",
-                  parameter: {
-                    tag: "name",
-                    name: resultName,
-                    qualifier: "none",
-                    span,
-                  },
-                  body: {
-                    tag: "apply",
-                    fn: { tag: "tag", name: "LoopContinue", span },
-                    arg: name(resultName),
-                    span,
-                  },
-                  span,
-                },
-              },
-            ],
-            span,
-          },
-        ],
-        span,
-      },
-      span,
-    };
-    completedVisit = {
-      tag: "case",
-      target: handledVisit,
-      arms: [
-        {
-          pattern: {
-            tag: "constructor",
-            name: "LoopBreak",
-            payload: {
-              tag: "name",
-              name: "stopped$",
-              qualifier: "none",
-              span,
-            },
-            span,
-          },
-          body: name("stopped$"),
-        },
-        {
-          pattern: {
-            tag: "constructor",
-            name: "LoopContinue",
-            payload: {
-              tag: "name",
-              name: "continued$",
-              qualifier: "none",
-              span,
-            },
-            span,
-          },
-          body: continueWith(nextIterator, name("continued$")),
-        },
-      ],
-      span,
-    };
+  if (body.tag === "control") {
+    completedVisit = resolveVisitOutcome(visited);
   }
 
+  let exhausted: Expr = name(carriedIn);
+  if (body.tag === "control") {
+    exhausted = controlOutcome(
+      body.resultConstructors.continue,
+      name(carriedIn),
+      span,
+    );
+  }
   const go: Expr = {
     tag: "rec",
     lambda: {
@@ -533,7 +1054,7 @@ function desugarLoop(
         arms: [
           {
             pattern: { tag: "constructor", name: "None", payload: null, span },
-            body: name(carriedIn),
+            body: exhausted,
           },
           {
             pattern: {
@@ -553,8 +1074,6 @@ function desugarLoop(
   };
 
   return {
-    tag: "binding",
-    kind: "let",
     pattern: statePattern,
     value: {
       tag: "block",
@@ -586,105 +1105,6 @@ function desugarLoop(
       },
       span,
     },
-    span,
-  };
-}
-
-/**
- * `loop do … end;` is a fold over an iterator that never ends. `break` performs
- * a compiler-local abort carrying the fold state. Each iteration handles that
- * abort before deciding whether to recur, so no handler encloses the recursion
- * itself.
- */
-function desugarRepetition(
-  body: readonly Decl[],
-  span: Span,
-): Decl {
-  const name = (text: string): Expr => ({ tag: "var", name: text, span });
-  const apply = (fn: Expr, arg: Expr): Expr => ({
-    tag: "apply",
-    fn,
-    arg,
-    span,
-  });
-  const effectName = "break$";
-  const typeName = "breakType$";
-  const signature = apply(
-    { tag: "intrinsic", name: "@forall", span },
-    {
-      tag: "lambda",
-      parameter: { tag: "name", name: typeName, qualifier: "none", span },
-      body: apply(
-        apply(
-          { tag: "intrinsic", name: "@type.arrow", span },
-          name(typeName),
-        ),
-        name(typeName),
-      ),
-      span,
-    },
-  );
-  const effect = apply(
-    { tag: "intrinsic", name: "@effect", span },
-    {
-      tag: "shape",
-      members: [{ tag: "field", name: "exit", value: signature }],
-      span,
-    },
-  );
-
-  const iterator: Expr = {
-    tag: "shape",
-    members: [
-      { tag: "field", name: "state", value: { tag: "unit", span } },
-      {
-        tag: "field",
-        name: "step",
-        value: {
-          tag: "lambda",
-          parameter: { tag: "wildcard", span },
-          body: apply(
-            { tag: "tag", name: "Some", span },
-            {
-              tag: "tuple",
-              elements: [{ tag: "unit", span }, { tag: "unit", span }],
-              span,
-            },
-          ),
-          span,
-        },
-      },
-    ],
-    span,
-  };
-  const repeated = desugarLoop(
-    null,
-    iterator,
-    body,
-    { tag: "breakable", effect: effectName },
-    span,
-  );
-  expect(repeated.tag === "binding", "loop did not lower to a binding");
-
-  return {
-    ...repeated,
-    value: {
-      tag: "block",
-      declarations: [{
-        tag: "binding",
-        kind: "const",
-        pattern: {
-          tag: "name",
-          name: effectName,
-          qualifier: "none",
-          span,
-        },
-        value: effect,
-        span,
-      }],
-      result: repeated.value,
-      span,
-    },
   };
 }
 
@@ -698,6 +1118,85 @@ function carriedNames(statements: readonly Cursor[]): readonly string[] {
     if (!carried.includes(name)) carried.push(name);
   }
   return carried;
+}
+
+function lowerControlLoop(
+  rule: Rule,
+  context: Context,
+): LoweredControlLoop {
+  const statements = fieldList(rule, "body");
+  const carried = carriedNames(statements);
+  const constructors: ControlConstructors = {
+    return: syntheticConstructor("LoopReturn", rule.span),
+    continue: syntheticConstructor("LoopContinue", rule.span),
+  };
+  const bodyConstructors: ControlConstructors = {
+    return: syntheticConstructor("LoopBodyReturn", rule.span),
+    continue: syntheticConstructor("LoopBodyContinue", rule.span),
+  };
+  const breakConstructor = syntheticConstructor("LoopBreak", rule.span);
+  const returns = statementsContainReturn(statements);
+  const continues = statementsCanContinue(statements);
+  const breaks = statementsContainBreak(statements);
+  const bodyContext: Context = {
+    ...context,
+    loop: { tag: "control", carried, breakConstructor },
+  };
+  const outcome = lowerControlOutcome(
+    statements,
+    bodyContext,
+    rule.span,
+    loopState(carried, rule.span),
+    bodyConstructors,
+  );
+
+  expect(rule.name === "iteration", `expected a loop, got ${rule.name}`);
+  const head = lowerValue(asRule(field(rule, "head"), "value"), context);
+  const drawn = field(rule, "drawn");
+  if (drawn === null) {
+    const loop = desugarLoop(
+      null,
+      head,
+      {
+        tag: "control",
+        outcome,
+        carried,
+        constructors: bodyConstructors,
+        resultConstructors: constructors,
+        breakConstructor,
+        returns,
+        continues,
+        breaks,
+      },
+      { tag: "control" },
+      rule.span,
+    );
+    return { ...loop, constructors, returns };
+  }
+  const loop = desugarLoop(
+    patternFromExpr(head),
+    lowerValue(
+      asRule(
+        required(asRule(drawn, "iteration_source"), "source"),
+        "value",
+      ),
+      context,
+    ),
+    {
+      tag: "control",
+      outcome,
+      carried,
+      constructors: bodyConstructors,
+      resultConstructors: constructors,
+      breakConstructor,
+      returns,
+      continues,
+      breaks,
+    },
+    { tag: "control" },
+    rule.span,
+  );
+  return { ...loop, constructors, returns };
 }
 
 function lowerDecl(rule: Rule, context: Context): Decl {
@@ -716,99 +1215,168 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     };
   }
   if (rule.name === "iteration") {
+    const statements = fieldList(rule, "body");
+    if (statementsNeedControlLowering(statements)) {
+      const loop = lowerControlLoop(rule, context);
+      expect(!loop.returns, "a local control loop contains a return");
+      return {
+        tag: "binding",
+        kind: "let",
+        pattern: loop.pattern,
+        value: {
+          tag: "case",
+          target: loop.value,
+          arms: [{
+            pattern: {
+              tag: "constructor",
+              name: loop.constructors.continue,
+              payload: controlPayloadPattern("loopState$", rule.span),
+              span: rule.span,
+            },
+            body: { tag: "var", name: "loopState$", span: rule.span },
+          }],
+          span: rule.span,
+        },
+        span: rule.span,
+      };
+    }
     const head = lowerValue(asRule(field(rule, "head"), "value"), context);
     const drawn = field(rule, "drawn");
-    // A loop body is declarations and nothing else: there is no `return`,
-    // because a loop produces no value — what it produces is the rebindings
-    // that escape it.
-    const body = fieldList(rule, "body").map((statement) => {
+    const body = statements.map((statement) => {
       const inner = asRule(unwrap(statement), "statement");
-      if (inner.name === "result") {
-        fail(
-          "BLOT_RETURN_IN_LOOP",
-          "A loop body has no `return`: a loop produces its rebindings, not a value.",
-          inner.span,
-        );
-      }
       return lowerDecl(inner, { ...context, loop: null });
     });
+    let loop: LoweredLoop;
     if (drawn === null) {
-      return desugarLoop(
+      loop = desugarLoop(
         null,
         head,
-        body,
+        { tag: "plain", declarations: body },
+        { tag: "iterate" },
+        rule.span,
+      );
+    } else {
+      loop = desugarLoop(
+        patternFromExpr(head),
+        lowerValue(
+          asRule(
+            required(asRule(drawn, "iteration_source"), "source"),
+            "value",
+          ),
+          context,
+        ),
+        { tag: "plain", declarations: body },
         { tag: "iterate" },
         rule.span,
       );
     }
-    return desugarLoop(
-      patternFromExpr(head),
-      lowerValue(
-        asRule(required(asRule(drawn, "iteration_source"), "source"), "value"),
-        context,
-      ),
-      body,
-      { tag: "iterate" },
-      rule.span,
-    );
-  }
-  if (rule.name === "repetition") {
-    const statements = fieldList(rule, "body");
-    const carried = carriedNames(statements);
-    const loop = { effect: "break$", carried };
-    const body = statements.map((statement) => {
-      const inner = asRule(unwrap(statement), "statement");
-      if (inner.name === "result") {
-        fail(
-          "BLOT_RETURN_IN_LOOP",
-          "A loop body has no `return`: a loop produces its rebindings, not a value.",
-          inner.span,
-        );
-      }
-      return lowerDecl(inner, { ...context, loop });
-    });
-    return desugarRepetition(body, rule.span);
+    return {
+      tag: "binding",
+      kind: "let",
+      pattern: loop.pattern,
+      value: loop.value,
+      span: rule.span,
+    };
   }
   if (rule.name === "breaking") {
     if (context.loop === null) {
+      if (context.escapeBoundary === "value-condition") {
+        fail(
+          "BLOT_BREAK_IN_VALUE_CONDITION",
+          "`break` cannot escape a value-producing `if` or `case`.",
+          rule.span,
+        );
+      }
       fail(
         "BLOT_BREAK_OUTSIDE_LOOP",
-        "`break` is inside a `loop`, and cannot cross a function or `for` boundary.",
+        "`break` has no enclosing `for`.",
         rule.span,
       );
     }
-    const state: Expr = context.loop.carried.length === 0
-      ? { tag: "unit", span: rule.span }
-      : {
-        tag: "shape",
-        members: context.loop.carried.map((name) => ({
-          tag: "field" as const,
-          name,
-          value: { tag: "var" as const, name, span: rule.span },
-        })),
+    throw new Error("control break reached declaration lowering");
+  }
+  if (rule.name === "conditional_statement") {
+    const body = conditionalStatementBody(rule);
+    expect(
+      body.name === "conditional_statement_branches",
+      "`if let` reached declaration lowering",
+    );
+    const branches: Branch[] = [{
+      condition: lowerExpression(
+        asRule(field(body, "condition"), "condition"),
+        context,
+      ),
+      consequence: {
+        tag: "block",
+        declarations: fieldList(body, "consequence").map((statement) =>
+          lowerDecl(asRule(unwrap(statement), "statement"), context)
+        ),
+        result: { tag: "unit", span: rule.span },
         span: rule.span,
+      },
+    }];
+    for (const cursor of fieldList(body, "alternatives")) {
+      const clause = asRule(
+        cursor,
+        "conditional_statement_else_if_clause",
+      );
+      branches.push({
+        condition: lowerExpression(
+          asRule(field(clause, "condition"), "condition"),
+          context,
+        ),
+        consequence: {
+          tag: "block",
+          declarations: fieldList(clause, "consequence").map((statement) =>
+            lowerDecl(asRule(unwrap(statement), "statement"), context)
+          ),
+          result: { tag: "unit", span: clause.span },
+          span: clause.span,
+        },
+      });
+    }
+    let fallback: Expr = { tag: "unit", span: rule.span };
+    const fallbackCursor = field(body, "fallback");
+    if (fallbackCursor !== null) {
+      const clause = asRule(
+        fallbackCursor,
+        "conditional_statement_else_clause",
+      );
+      fallback = {
+        tag: "block",
+        declarations: fieldList(clause, "alternative").map((statement) =>
+          lowerDecl(asRule(unwrap(statement), "statement"), context)
+        ),
+        result: { tag: "unit", span: clause.span },
+        span: clause.span,
       };
+    }
     return {
       tag: "binding",
       kind: "let",
       pattern: { tag: "wildcard", span: rule.span },
       value: {
-        tag: "apply",
-        fn: {
-          tag: "field",
-          target: {
-            tag: "var",
-            name: context.loop.effect,
-            span: rule.span,
-          },
-          name: "exit",
-          span: rule.span,
-        },
-        arg: state,
+        tag: "if",
+        branches,
+        fallback,
         span: rule.span,
       },
       span: rule.span,
     };
+  }
+  if (rule.name === "result") {
+    if (context.escapeBoundary === "value-condition") {
+      fail(
+        "BLOT_RETURN_IN_VALUE_CONDITION",
+        "`return` cannot escape a value-producing `if` or `case`.",
+        rule.span,
+      );
+    }
+    fail(
+      "BLOT_RETURN_OUTSIDE_BODY",
+      "`return` has no enclosing body.",
+      rule.span,
+    );
   }
   if (rule.name === "opening") {
     const mask = asRule(required(rule, "mask"), "open_mask");
@@ -1089,7 +1657,11 @@ function lowerLambda(rule: Rule, context: Context): Expr {
     parameter: patternFromExpr(head),
     body: lowerExpression(
       asRule(field(rule, "body"), "body"),
-      { ...context, loop: null },
+      {
+        ...context,
+        loop: null,
+        escapeBoundary: "none",
+      },
     ),
     span: rule.span,
   };
@@ -1267,14 +1839,19 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
   }
 
   if (rule.name === "conditional") {
+    const closed: Context = {
+      ...context,
+      loop: null,
+      escapeBoundary: "value-condition",
+    };
     const branches: Branch[] = [{
       condition: lowerExpression(
         asRule(field(rule, "condition"), "condition"),
-        context,
+        closed,
       ),
       consequence: lowerValue(
         asRule(field(rule, "consequence"), "consequence"),
-        context,
+        closed,
       ),
     }];
     for (const cursor of fieldList(rule, "alternatives")) {
@@ -1282,46 +1859,66 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
       branches.push({
         condition: lowerExpression(
           asRule(field(clause, "condition"), "condition"),
-          context,
+          closed,
         ),
         consequence: lowerValue(
           asRule(field(clause, "consequence"), "consequence"),
-          context,
+          closed,
         ),
       });
     }
-    const fallbackCursor = field(rule, "fallback");
-    const fallback = fallbackCursor === null ? null : lowerValue(
+    const fallbackCursor = asRule(
+      required(rule, "fallback"),
+      "else_clause",
+    );
+    const fallback = lowerValue(
       asRule(
-        field(asRule(fallbackCursor, "else_clause"), "alternative"),
+        field(fallbackCursor, "alternative"),
         "alternative",
       ),
-      context,
+      closed,
     );
     return { tag: "if", branches, fallback, span: rule.span };
   }
 
   if (rule.name === "case_expression") {
+    const closed: Context = {
+      ...context,
+      loop: null,
+      escapeBoundary: "value-condition",
+    };
     const arms: Arm[] = [
-      lowerArm(asRule(field(rule, "first"), "first"), context),
+      lowerArm(asRule(field(rule, "first"), "first"), closed),
     ];
     for (const cursor of fieldList(rule, "rest")) {
       // Each entry is the `,` token paired with the arm.
       const pair = cursor as unknown as readonly Cursor[];
-      arms.push(lowerArm(asRule(pair[1], "case_arm"), context));
+      arms.push(lowerArm(asRule(pair[1], "case_arm"), closed));
     }
     return {
       tag: "case",
-      target: lowerExpression(asRule(field(rule, "target"), "target"), context),
+      target: lowerExpression(asRule(field(rule, "target"), "target"), closed),
       arms,
       span: rule.span,
     };
   }
 
   if (rule.name === "block") {
-    const statements = fieldList(rule, "statements").map((c) => unwrap(c));
-    const { body, result } = splitResult(statements, context, rule.span);
-    return { tag: "block", declarations: body, result, span: rule.span };
+    const statements = fieldList(rule, "statements");
+    let result: Expr = { tag: "unit", span: rule.span };
+    const resultPair = rule.field("result");
+    if (resultPair !== null && resultPair !== undefined) {
+      expect(Array.isArray(resultPair), "block result is not an `in` pair");
+      const valueCursor = resultPair[1] as Cursor;
+      result = lowerValue(asRule(valueCursor, "block result"), context);
+    }
+    if (statementsNeedControlLowering(statements)) {
+      return resolveControlSequence(statements, result, context, rule.span);
+    }
+    const declarations = statements.map((statement) =>
+      lowerDecl(asRule(unwrap(statement), "statement"), context)
+    );
+    return { tag: "block", declarations, result, span: rule.span };
   }
 
   fail(

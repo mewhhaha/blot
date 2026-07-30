@@ -6,7 +6,7 @@
 // `if a is i32 and b is i32 then … else compiler error` shape, and it needs no
 // type-level sublanguage to write.
 
-open { } = (@import "blot:prelude") ();
+open {} = (@import "blot:prelude") ();
 
 // --- constrained on the type ------------------------------------------------
 //
@@ -15,7 +15,7 @@ open { } = (@import "blot:prelude") ();
 
 const adding = T => do
   let _ = expect (refines (T, Int), "adding is integers only, and this is not one");
-  return (a, b) => @int.add a b;
+  in (a, b) => @int.add a b
 end;
 
 const add_i32 = adding I32;
@@ -36,7 +36,7 @@ const HasX = { .x = Int; };
 
 const projecting = T => do
   let _ = expect (refines (T, HasX), "projecting needs a record with an .x");
-  return value => value.x;
+  in value => value.x
 end;
 
 const x_of_2 = projecting Point2;
