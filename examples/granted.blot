@@ -10,22 +10,22 @@
 
 module init;
 
-open (@import "blot:prelude") ();
+open { } = (@import "blot:prelude") ();
 
 const Console = @effect { .write = Str -> Unit; };
 
-// A tail-resumptive handler, so the operation is replaced and the effect
-// discharged. The granted capability is what it replaces the operation with.
+// The handler discharges the blot effect by forwarding it to the granted
+// capability, then resumes the rest of the computation.
 const to_host = {
   .write = (message, ?resume) => do
-    const _ = init.print message;
+    let _ = init.print message;
     return resume ();
   end;
 };
 
 const report = () => do
-  const _ = Console.write "compiled";
-  const _2 = Console.write "linked";
+  let _ = Console.write "compiled";
+  let _2 = Console.write "linked";
   return 42;
 end;
 

@@ -31,16 +31,15 @@ than by runtime check — `&` may be read but never moved, and a closure inherit
 the strongest obligation it captured. `blot ownership` prints the last-use facts
 the backend will consume. See [docs/ownership.md](docs/ownership.md).
 
-The gpufuck backend (M4) has landed for a real subset: `blot build` emits
-WebAssembly, and `just wasm` checks that the interpreter, gpufuck's GPU
-evaluator, and the emitted Wasm all agree. Literals, prelude operators and
-comparisons, records and spreads, tuples, unions, `case`, destructuring, arrays,
-`if`, and recursion compile, and `@effect.host` effects become typed WebAssembly
-imports. Twelve of the twenty-three corpus programs reach WebAssembly; the rest
-either return a compile-time value from `main`, which has no runtime
-representation and is a correct refusal, or hit one of three gaps — an aborting
-handler, `@shape.get` with a computed name, and a module result whose type is
-still polymorphic at the entry. See [docs/backend.md](docs/backend.md).
+The gpufuck backend (M4) now lowers every accepted catalog program. `blot build`
+emits WebAssembly plus a JSON ABI manifest without executing the program;
+`just wasm` checks the interpreter, gpufuck's GPU evaluator, and emitted Wasm
+against the same staged runtime result. The CPU test suite sends the entire
+catalog through gpufuck as well, so backend coverage does not require a WebGPU
+adapter. Compile-time-only result fields are erased, runtime fields become named
+Wasm exports, host effects become typed imports, and one-shot handlers are
+specialized through non-tail resume and abort. See
+[docs/backend.md](docs/backend.md).
 
 ```bash
 just run examples/tour.blot   # evaluate a program
@@ -65,24 +64,36 @@ for why that check exists.
 
 ## The language
 
-Five declaration forms, all `;`-terminated:
+Declarations are all `;`-terminated:
 
 ```blot
 let name = expr;      // runtime binding
 const name = expr;    // must evaluate at compile time
 sig name = expr;      // optional constraint on the following binding
-open expr;            // spread a record's fields into scope
+open { } = expr;      // spread every field into scope
+open { .a: b, .c: _ } = expr; // rename .a to b and suppress .c
 for src do … end;     // loop; see below
-name := expr;         // shadow: new binding, type may change
+loop do … end;        // repeat until `break`
+break;                // exit the nearest `loop`
+name := expr;         // shadow an existing binding, preserving its type
 name <- expr;         // bind what a computation returns: `let name = expr ();`
 return expr;          // module or block result, last
 ```
 
-`for` is a declaration rather than an expression because what a loop produces
-is an effect on the enclosing scope: the names its body rebinds with `:=` are
-the accumulator, and the last iteration's values escape. That is a fold with
-the state inferred, which is how blot has a loop while having no assignment —
-`:=` was already "a new binding", not "a new value in the old one".
+`for` and `loop` are declarations rather than expressions because what a loop
+produces is an effect on the enclosing scope: the names its body rebinds with
+`:=` are the accumulator, and the last iteration's values escape. That is a fold
+with the state inferred, which is how blot has loops while having no assignment
+— `:=` was already "a new binding", not "a new value in the old one".
+
+`:=` preserves the binding's stable type: rebinding one integer literal to
+another widens the name to `Int`, while rebinding it to text is rejected. A
+repeated binding is the explicit type-changing form:
+
+```blot
+let value = 1;
+let value = "now text";
+```
 
 ```blot
 let x = 1;
@@ -93,35 +104,50 @@ return x;                       // 6
 
 for n in source do … end;       // bind each element
 for #Some n in source do … end; // bind, and skip what does not match
+
+loop do
+  x := x + 1;
+  let _ = if done x then do break; return (); end else () end;
+end;
 ```
 
 A binder that cannot fail is a `let`. One that can becomes the `case` it looks
 like, with the other arm handing the accumulator back untouched — so filtering
 is one arm rather than a second construct.
 
-`for` desugars to the `rec`/`case` recursion during CST lowering, so there is no
-loop in the AST, none in the evaluator, and none in the backend — and it names
+Both loops desugar to `rec`/`case` recursion during CST lowering, so there is no
+loop in the AST, none in the evaluator, and none in the backend. `break`
+desugars to a locally handled abort carrying the accumulator as it exists at
+that point; it can appear inside an `if`, `case`, or `do` block, targets the
+nearest `loop`, and cannot cross a function or `for` boundary. A `for` names
 nothing, so a module that loops over an iterator it wrote itself needs nothing
-in scope. Looping over an *array* needs `Iter.items`, but that is a call the
+in scope. Looping over an _array_ needs `Iter.items`, but that is a call the
 program writes and can see.
 
 An iterator is a `.state` and a `.step`, where `step state` answers
 `#Some (value, next_state)` or `#None`. The `Option` is not decoration: a step
-returning `(value, state, Bool)` would have to produce a value in the case
-where there is none, and for a polymorphic element no such value can be
-constructed — the same hole that makes an empty `Store` need its own
-constructor. `Iter.range` and `Iter.items` are
-ordinary prelude functions over that shape, so a new kind of sequence is a
-function someone writes. A state and a step rather than a closure returning the
-next closure: both express the protocol, but the closure form allocates one per
-element and leaves gpufuck resolving a lambda set that grows with the loop.
+returning `(value, state, Bool)` would have to produce a value in the case where
+there is none, and for a polymorphic element no such value can be constructed —
+the same hole that makes an empty `Store` need its own constructor. `Iter.range`
+and `Iter.items` are ordinary prelude functions over that shape, so a new kind
+of sequence is a function someone writes. A state and a step rather than a
+closure returning the next closure: both express the protocol, but the closure
+form allocates one per element and leaves gpufuck resolving a lambda set that
+grows with the loop.
 
 Nothing is in scope that the module did not ask for. The prelude is an ordinary
 module with no privilege, so every file begins by opening it:
 
 ```blot
-open (@import "blot:prelude") ();
+open { } = @import "blot:prelude" ();
 ```
+
+The empty mask keeps every field's name. A mask only describes exceptions:
+`.source: target` renames one field and `.value: _` suppresses one, while every
+unlisted field still enters scope unchanged. Renames may not collide with an
+unlisted field; suppress or rename that field explicitly when both exist.
+`@import` returns the imported module function, and the final `()` supplies its
+empty module parameter.
 
 That line is what makes `+` work: the default fixity for `+` names `Num.add`,
 and a fixity whose target is not in scope is useless. A module that skips it
@@ -136,7 +162,7 @@ const Message = #Ready | #Progress I32 | #Failed Str;
 const Point = struct { .x = I32; .y = I32; };
 ```
 
-`struct` hands back the storage type *itself*, with its constructor and
+`struct` hands back the storage type _itself_, with its constructor and
 accessors attached to it, so one binding is both the type and its namespace:
 
 ```blot
@@ -147,12 +173,12 @@ let p = Point.new { .y = 20; .x = 10; };        // (10, 20)
 let x = Point.x p;                              // and so is p.0
 ```
 
-The members are invisible to typing — the bridge, equality, and inhabitation
-see straight through — so `sig p = Point;` constrains `p` to the tuple and
-nothing about the namespace reaches the lattice. The storage is a tuple rather
-than an array because a tuple keeps one type per slot; `[I32, Str]` collapses
-to "an array of int-or-text" the moment inference looks at it, and storage that
-is imprecise is not predictable storage.
+The members are invisible to typing — the bridge, equality, and inhabitation see
+straight through — so `sig p = Point;` constrains `p` to the tuple and nothing
+about the namespace reaches the lattice. The storage is a tuple rather than an
+array because a tuple keeps one type per slot; `[I32, Str]` collapses to "an
+array of int-or-text" the moment inference looks at it, and storage that is
+imprecise is not predictable storage.
 
 `<+` is what attaches the namespace, and it works on any type value:
 
@@ -163,10 +189,9 @@ const Meters = seal ("Meters", I32)
 ```
 
 A shape's fields are in declaration order and `reorder` rebuilds one in any
-other, so choosing a placement is an operation on the shape rather than a
-second entry point into `struct`.
-*Packing* is a separate question — which bytes a field occupies rather than
-which slot — and stays a separate call:
+other, so choosing a placement is an operation on the shape rather than a second
+entry point into `struct`. _Packing_ is a separate question — which bytes a
+field occupies rather than which slot — and stays a separate call:
 
 ```blot
 const Record = { .flag = U8; .id = I32; .code = U8; .name = Str; };
@@ -213,7 +238,7 @@ end;
 const Console = @effect { .write = Str -> Unit; };
 
 let report = () => do
-  const _ = Console.write "one";
+  let _ = Console.write "one";
   return "done";
 end;
 
@@ -227,10 +252,9 @@ let joining = {
 
 `@handle` names the effect it discharges, which is what lets the checker
 subtract it from the row: whatever `report` performs beyond `Console` is still
-owed. There is no `try`, no `with`, and no `handler` keyword. `resume`
-is a real one-shot continuation: resuming collects the rest of the computation,
-not resuming aborts it, and calling it twice is an error rather than a
-convention.
+owed. There is no `try`, no `with`, and no `handler` keyword. `resume` is a real
+one-shot continuation: resuming collects the rest of the computation, not
+resuming aborts it, and calling it twice is an error rather than a convention.
 
 An effect the _host_ implements is declared `@effect.host`, and its operations
 become typed WebAssembly imports — so blot needs no raw import form, and its row
@@ -250,17 +274,16 @@ module init;
 
 let printing = {
   .write = (message, resume) => do
-    const _ = init.print message;   // opaque; the program can only call it
+    let _ = init.print message;     // opaque; the program can only call it
     return resume ();
   end;
   .return = value => value;
 };
 ```
 
-Because a type is a value, inspecting one means inspecting a value, and there
-is no type-level `case` — there is `@type.reflect`, which names which case of
-the value domain a type is and hands back the parts as an ordinary tagged
-value:
+Because a type is a value, inspecting one means inspecting a value, and there is
+no type-level `case` — there is `@type.reflect`, which names which case of the
+value domain a type is and hands back the parts as an ordinary tagged value:
 
 ```blot
 const element_of = t => case reflect t of
@@ -291,8 +314,9 @@ they fail at parse or during evaluation.
 - **One parameter per function.** Juxtaposition is the only application form,
   which matches gpufuck's unary Core exactly.
 - **Higher-kinded abstraction is comptime.** Type constructors are comptime
-  functions, so the inference lattice never needs kinds. Rank-N is *not* built:
-  `@forall` is a placeholder that returns its argument.
+  functions, so the inference lattice never needs kinds. Explicit predicative
+  Rank-N types use `@forall`; quantified arguments are skolemized and quantified
+  values are instantiated only at monotypes.
 - **Immutability with ownership.** No assignment anywhere. `!` is linear and `&`
   borrows, checked by a flow analysis kept deliberately _outside_ the type
   lattice — that separation is what keeps biunification polynomial.

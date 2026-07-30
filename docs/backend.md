@@ -57,20 +57,34 @@ two structurally equal trees would silently lose every recorded fact.
 ## `const` compiles to nothing
 
 A `const` is a compile-time value and emits no code. A use specializes it: a
-`const` holding a type disappears entirely, and one holding a closure becomes a
-Core definition — once, by closure identity — only if something calls it. That
-is how `+` reaches Wasm at all. `Num.add` is a prelude closure, not a primitive,
-and `20 + 22` compiles to a call to one hoisted definition.
+`const` holding a type or effect disappears entirely, and one holding a closure
+becomes a Core definition — once, by closure identity — only if something calls
+it. That is how `+` reaches Wasm at all. `Num.add` is a prelude closure, not a
+primitive, and `20 + 22` compiles to a call to one hoisted definition.
+
+Inference records compile-time declaration values by AST expression identity.
+The module's final value environment cannot contain a `const` local to a
+residual block, but lowering still needs that value to specialize a local
+handler or closure. Carrying the value as a fact preserves its effect identity
+without evaluating compiler input for a second time.
 
 ## What compiles today
 
-Literals, prelude operators and comparisons, records and their spreads, tuples,
-unions and `case` including literal guards and nested payloads, destructuring
-bindings including array patterns, arrays and their spreads, `map` and `filter`
-and the rest of the collection prelude, text operations, granted capabilities,
-lambdas and application, `let`, `if`, recursion through `rec`, `fold` and the
-collections built on it, host effects, tail-resumptive handlers, and imported
-modules.
+Every accepted program in `examples/` reaches gpufuck's CPU compiler. That
+catalog covers literals, signed-i64 arithmetic, prelude operators and
+comparisons, records and their spreads, tuples, unions and `case` including
+literal guards and nested payloads, exact and nested destructuring, arrays and
+their spreads, the collection prelude, text operations, granted capabilities,
+lambdas and application, `let`, `if`, recursion, imported modules, host effects,
+and one-shot handlers including non-tail resume and abort.
+
+Staging runs after blot has checked the source and before lowering. It evaluates
+closed runtime fragments, removes compile-time-only result fields, and leaves
+effectful or otherwise residual expressions for gpufuck. Runtime result fields
+become named Wasm exports; compile-time fields remain in the manifest with no
+Wasm name. The manifest also records the compiled ABI, arity, effects,
+ownership, imports, capabilities, nominal layouts, and the source spelling
+behind every lowered variant or sealed constructor.
 
 `rec` becomes a Core `let-rec`, not a lifted top-level definition. Lifting it
 stranded whatever the lambda captured — `fold`'s inner `go` closes over
@@ -87,11 +101,11 @@ An import is _inlined_: a module is a function from a record to a record, both
 known at compile time, so importing one is lowering its body as a block. The
 import boundary exists for authority, not for code generation.
 
-`just wasm` compares eight programs across all three executions, on their whole
-result rather than a scalar — a record crosses the boundary as a constructor,
-and the field names the backend synthesized are what turn it back into something
-comparable. Comparing only scalars would have quietly stopped checking every
-program that returns a record.
+`just wasm` discovers every accepted catalog program and compares all three
+executions on the staged runtime result rather than on a selected scalar. A
+record crosses the boundary as a constructor, and the field names the backend
+synthesized are what turn it back into something comparable. Comparing only
+scalars would quietly stop checking every program that returns a record.
 
 Arrays are Core's `Store`. A write returns a _new_ store, so an array literal
 threads each element through its own binding — the first version rewrote the
@@ -99,37 +113,23 @@ binder in the finished body instead, which quietly dropped every write but the
 last. Both backends agreed on the wrong answer; only the interpreter disagreed,
 which is the entire argument for checking three executions rather than two.
 
-## What does not
+## Remaining backend boundaries
 
-**Polymorphic functions whose `case` has a wildcard arm.** The arms of
+The remaining restrictions are at boundaries where the compiler needs a concrete
+representation:
 
-```blot
-const is_less = o => case o of #Less => True, _ => False end;
-```
-
-do not pin the constructor set, and a generic parameter has no bounds to read it
-from, so lowering cannot build the Core union. The prelude therefore matches
-exhaustively — which is better style anyway — and closing this properly means
-monomorphizing per call site.
-
-**A `const` holding a type or an effect cannot cross into Wasm.** That is not a
-missing feature: a type has no runtime representation, so a module that returns
-one has nothing to compile. The diagnostic says so rather than promising it
-later.
-
-**Blot handlers.** `@handle` is not lowered. A handler written in blot has to be
-specialized away — inlined into direct-style calls, which one-shot `resume`
-makes possible without a continuation object — and that is blot's job, not
-gpufuck's. The type checker already refuses an effect nothing handles. gpufuck
-deleted its Effect Core precisely because effects belong to the frontend, so
-this is handler specialization on blot's side: a handler known at compile time
-inlines into direct-style calls, and one-shot `resume` means no continuation
-object is needed. The type checker already refuses an effect nothing handles.
-
-**Arrays.** They map to Core's `Store`, and the ownership facts from
-`blot
-ownership` are what would choose write-in-place over rebuild. Nothing
-consumes them yet.
+- A runtime export needs a concrete first-order ABI. Integers, text, unit,
+  booleans, records, arrays, variants, seals, and functions over those values
+  cross. Types and effects are compile-time values, so staging records and
+  erases them instead of inventing a runtime encoding.
+- A source handler is specialized only when its effect, nullary computation, and
+  clause shape are statically visible. Handling a host effect, dynamically
+  choosing a handler, or spreading clauses would require a runtime handler
+  representation that gpufuck intentionally does not have.
+- A residual structurally polymorphic function must have a concrete record shape
+  before it reaches gpufuck. Compile-time generic functions are specialized at
+  their blot call sites; an unconstrained runtime export is rejected instead of
+  being assigned an arbitrary nominal ABI.
 
 ## The module parameter is the module's imports
 
@@ -222,13 +222,11 @@ push each written element, and copy each spread with a local recursive loop.
 
 ## Handlers are evidence
 
-Core carries an effect label on a definition and lets a handler _replace_ that
-operation lexically; a pure replacement discharges the label. So a blot effect's
-operation is an ordinary definition whose body traps — unhandled is exactly what
-a trap means — and handling it substitutes a real implementation.
-
-That covers the **tail-resumptive** handlers precisely: the ones whose clause
-ends in `resume e`.
+gpufuck has no runtime effect or handler representation. blot therefore
+specializes `@handle` with a selective CPS transform before Core exists.
+Ordinary expressions stay in direct style. At a handled operation, lowering
+passes the operation argument and an affine continuation representing the rest
+of the computation to the matching clause.
 
 ```blot
 const Counter = @effect { .bump = Int -> Int; };
@@ -238,10 +236,10 @@ let counted = () => Counter.bump 20 + Counter.bump 1;
 @handle (Counter, counted, doubling)   // 42
 ```
 
-`(n, ?resume) => resume e` is the pure operation `n => e` and nothing more. Tail
-position survives a block, an `if`, and a `case`, because each of those has a
-tail to rewrite. Resuming anywhere else needs the rest of the computation as a
-value, and that is a continuation.
+Calling `resume` continues from the operation and can use its eventual result in
+any expression. Omitting it aborts the rest of the computation. The affine
+qualifier is the static proof that a clause cannot resume twice; no runtime
+one-shot check is needed.
 
 **Handling inlines the computation**, because the evidence is lexical. A closure
 has already resolved its operations against the global definitions, so a handler
@@ -249,9 +247,6 @@ wrapped around a call to it would replace nothing. Specializing the handler is
 not an optimization here — it is what makes it mean anything. The computation
 and the handler both have to be written in the module, which is what "a handler
 known at compile time" always required.
-
-The handled example compiles to 3,847 bytes with no evidence left at run time:
-the operations were replaced and their labels discharged.
 
 ## Names, and what may not be mangled
 
@@ -273,34 +268,26 @@ result is the authority, so a rejection there is a **lowering bug**, never a
 type-system disagreement to resolve in gpufuck's favour. The diagnostic says so,
 because the alternative is a bug report filed against the wrong project.
 
-## Width subtyping does not survive lowering
+## Width subtyping is specialized before Core
 
-This is the largest remaining gap and it explains several smaller ones.
+blot's records are structurally width-subtyped: `value => value.x` infers a
+function that accepts any record with `.x`. gpufuck's records are nominal and
+invariant, so an open structural type cannot be handed over unchanged.
 
-blot's records are structurally width-subtyped: `value => value.x` infers
-`{ .x : 'a } -> 'a` and accepts any record with an `.x`. gpufuck's records are
-*nominal* and invariant — one declared type per field-name set — so the two do
-not line up:
+Compile-time generics close that type at each blot call site.
+`examples/generics.blot` specializes the same projection for both a two-field
+and a three-field record, and the resulting functions lower against two concrete
+nominals. A runtime export instead needs to state the concrete boundary:
 
 ```blot
-let f = value => value.x;
-return f { .x = 42; .y = 0; };
+const Point = { .x = Int; .y = Int; };
+sig project = Point -> Int;
+let project = point => point.x;
+
+return { .project = project; };
 ```
 
-```
-F2102: type mismatch: expected Shape_x['a], received Shape_x_y[Int, Int]
-```
-
-The projection site records the field set `["x"]` and synthesizes `Shape_x`;
-the argument is `Shape_x_y`. Both are right about what they saw, and neither is
-the type the other needs.
-
-`p.x` on a record whose shape is known at the site compiles, because there is
-only one field set involved. What does not compile is a *function* that
-projects — precisely the case width subtyping exists for.
-
-Closing it means specializing such a function per call-site shape, which is what
-"monomorphize before gpufuck" in `AGENTS.md` asks for and what is not built.
-Until then, a generic over records is a compile-time construct: `projecting T`
-in `examples/generics.blot` checks and selects at compile time and runs, but its
-result cannot be lowered.
+That signature is not an annotation the function body needs; it is the
+first-order Wasm contract. Exporting the unconstrained structural function is
+refused with `BLOT_EXPORT_NOT_FIRST_ORDER`, because choosing one nominal shape
+would narrow the source type silently.

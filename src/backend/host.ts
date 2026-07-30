@@ -1,57 +1,74 @@
-// The host side of a host effect.
+// Host implementations used by the executable agreement catalog.
 //
-// A `@effect.host` declaration becomes a gpufuck capability, and a capability
-// becomes typed WebAssembly imports. This is what answers them. blot has no
-// raw import form on purpose: you declare an effect, and the boundary follows
-// from its operation types.
+// Production callers provide the imports named by the build manifest. These
+// implementations are deliberately strict so a compiler/host ABI disagreement
+// fails at the boundary instead of being converted into a plausible value.
 
-import type { WasmInit } from "gpufuck";
+import type { WasmHostValue, WasmInit } from "gpufuck";
 
-/**
- * The capabilities `blot build` grants when it runs what it compiled.
- *
- * Deliberately small and named after the effect, not after a filename or an
- * ambient global — a program that did not declare `Console` cannot reach this.
- */
 export function hostInit(write: (line: string) => void): WasmInit {
   return {
-    // Core carries text without measuring or rendering it, so blot declares
-    // this capability itself and the host answers it. Every program that
-    // inspects text imports it, and it is visible in the module's imports.
     Text: {
-      length: (value: unknown) => ({
-        kind: "integer" as const,
-        value: [...String((value as { value?: string }).value ?? "")].length,
-      }),
-      of_int: (value: unknown) => ({
-        kind: "text" as const,
-        value: String((value as { value?: number | bigint }).value ?? 0),
-      }),
-      compare: (value: unknown) => {
-        const pair = value as { fields?: readonly { value?: string }[] };
-        const left = String(pair.fields?.[0]?.value ?? "");
-        const right = String(pair.fields?.[1]?.value ?? "");
+      length: (value) => {
+        const text = requireText(value, "Text.length argument");
         return {
-          kind: "integer" as const,
-          value: left < right ? -1 : left > right ? 1 : 0,
+          kind: "signed-integer-64",
+          value: BigInt([...text].length),
         };
       },
+      of_int: (value) => {
+        const integer = requireInteger(value, "Text.of_int argument");
+        return { kind: "text", value: String(integer) };
+      },
+      compare: (value) => {
+        if (value.kind !== "constructor" || value.fields.length !== 2) {
+          throw new TypeError(
+            `Text.compare argument must be a two-field constructor; received ${
+              describe(value)
+            }`,
+          );
+        }
+        const left = requireText(value.fields[0], "Text.compare left argument");
+        const right = requireText(
+          value.fields[1],
+          "Text.compare right argument",
+        );
+        let ordering = 0n;
+        if (left < right) ordering = -1n;
+        if (left > right) ordering = 1n;
+        return { kind: "signed-integer-64", value: ordering };
+      },
     },
-    // Whatever the entry module reached for through its parameter. `blot build`
-    // grants exactly this; a program that asked for something else would not
-    // find it.
     Init: {
-      print: (value: unknown) => {
-        write(String((value as { value?: string }).value ?? ""));
-        return { kind: "unit" as const };
+      print: (value) => {
+        write(requireText(value, "Init.print argument"));
+        return { kind: "unit" };
       },
     },
     Console: {
-      write: (value: unknown) => {
-        const text = value as { kind?: string; value?: string };
-        write(text.kind === "text" ? String(text.value) : String(value));
-        return { kind: "unit" as const };
+      write: (value) => {
+        write(requireText(value, "Console.write argument"));
+        return { kind: "unit" };
       },
     },
   };
+}
+
+function requireText(value: WasmHostValue, location: string): string {
+  if (value.kind === "text") return value.value;
+  throw new TypeError(`${location} must be text; received ${describe(value)}`);
+}
+
+function requireInteger(value: WasmHostValue, location: string): bigint {
+  if (value.kind === "signed-integer-64") return value.value;
+  throw new TypeError(
+    `${location} must be a signed i64; received ${describe(value)}`,
+  );
+}
+
+function describe(value: WasmHostValue): string {
+  if ("value" in value) {
+    return `${value.kind} ${String(value.value)}`;
+  }
+  return value.kind;
 }

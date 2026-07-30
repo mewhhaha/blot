@@ -32,6 +32,7 @@ export class LoadError extends Error {
 export interface Loaded {
   readonly module: Module;
   readonly closure: Value;
+  readonly dependencies: ReadonlyMap<string, Loaded>;
   readonly source: string;
   readonly path: string;
 }
@@ -45,14 +46,14 @@ export function resolvePath(specifier: string, importer: string): string {
   return resolve(importer, "..", specifier);
 }
 
-function collectImports(expr: Expr, found: Set<string>): void {
+function collectImports(expr: Expr, found: Map<Expr, string>): void {
   switch (expr.tag) {
     case "apply":
       if (
         expr.fn.tag === "intrinsic" && expr.fn.name === "@import" &&
         expr.arg.tag === "text"
       ) {
-        found.add(expr.arg.value);
+        found.set(expr.arg, expr.arg.value);
       }
       collectImports(expr.fn, found);
       collectImports(expr.arg, found);
@@ -101,12 +102,17 @@ function collectImports(expr: Expr, found: Set<string>): void {
 }
 
 export function moduleImports(module: Module): readonly string[] {
-  const found = new Set<string>();
+  const found = importExpressions(module);
+  return [...new Set(found.values())];
+}
+
+export function importExpressions(module: Module): ReadonlyMap<Expr, string> {
+  const found = new Map<Expr, string>();
   for (const declaration of module.declarations) {
     collectImports(declaration.value, found);
   }
   collectImports(module.result, found);
-  return [...found];
+  return found;
 }
 
 /**
@@ -121,16 +127,22 @@ const modules = new Map<string, Loaded>();
 export async function load(
   path: string,
   cache: Map<string, Loaded> = modules,
-  active: Set<string> = new Set(),
+  active: readonly string[] = [],
 ): Promise<Loaded> {
   const absolute = resolve(path);
   const cached = cache.get(absolute);
   if (cached !== undefined) return cached;
 
-  if (active.has(absolute)) {
-    throw new Error(`blot import cycle through ${absolute}`);
+  const cycleStart = active.indexOf(absolute);
+  if (cycleStart >= 0) {
+    const cycle = [...active.slice(cycleStart), absolute];
+    throw new BlotError({
+      code: "BLOT_IMPORT_CYCLE",
+      message: `Import cycle: ${cycle.join(" -> ")}.`,
+      span: { start: 0, end: 0 },
+    });
   }
-  active.add(absolute);
+  const nextActive = [...active, absolute];
 
   const source = await Deno.readTextFile(absolute);
   const parsed = await parse(source);
@@ -139,17 +151,19 @@ export async function load(
   }
 
   const imports = new Map<string, Value>();
+  const dependencies = new Map<string, Loaded>();
   for (const specifier of moduleImports(parsed.module)) {
     const dependency = await load(
       resolvePath(specifier, absolute),
       cache,
-      active,
+      nextActive,
     );
     imports.set(specifier, dependency.closure);
+    dependencies.set(specifier, dependency);
   }
 
   // Nothing is in scope that the module did not ask for. The prelude is an
-  // ordinary module with no privilege: `open (@import "blot:prelude") ();` is
+  // ordinary module with no privilege: `open { } = (@import "blot:prelude") ();` is
   // what puts `Num.add` where the default fixity for `+` can find it, and a
   // module that does not open it does not have `+`.
   const env: Env = childEnv(null);
@@ -157,11 +171,11 @@ export async function load(
   const loaded: Loaded = {
     module: parsed.module,
     closure: moduleClosure(parsed.module, env, imports),
+    dependencies,
     source,
     path: absolute,
   };
 
-  active.delete(absolute);
   cache.set(absolute, loaded);
   return loaded;
 }

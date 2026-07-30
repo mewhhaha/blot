@@ -11,7 +11,7 @@
 // a computation *returns* without spelling the `()`. Requiring a nullary value
 // is what stops it from being a second spelling for `let`.
 
-open (@import "blot:prelude") ();
+open { } = (@import "blot:prelude") ();
 
 const Console = @effect {
   .write = Str -> Unit;
@@ -38,8 +38,8 @@ let answering = {
 
 // Nothing here says "effectful". The row is inferred; performing is a call.
 let greet = () => do
-  const _ = Console.write "hello";
-  const _2 = Console.write "world";
+  let _ = Console.write "hello";
+  let _2 = Console.write "world";
   return "done";
 end;
 
@@ -51,7 +51,7 @@ end;
 // catches the second call statically.
 let collecting = {
   .write = (message, ?resume) => do
-    const rest = resume ();
+    let rest = resume ();
     return @text.concat (@text.concat message "|") rest;
   end;
   .return = value => value;
@@ -60,6 +60,11 @@ let collecting = {
 let counting = {
   .write = (_, ?resume) => @int.add 1 (resume ());
   .return = _ => 0;
+};
+
+let passing = {
+  .write = (_, ?resume) => resume ();
+  .return = value => value;
 };
 
 // A handler that never resumes discards the rest of the computation, which is
@@ -75,7 +80,7 @@ let silenced = @handle (Console, greet, silencing);
 
 // Handlers nest. The inner one discharges `Console`; the outer sees nothing
 // left to handle.
-let nested = @handle (Console, (() => @handle (Console, greet, counting)), collecting);
+let nested = @handle (Console, (() => @handle (Console, greet, counting)), passing);
 
 let asked = @handle (Terminal, ask, answering);
 

@@ -4,7 +4,13 @@
 // same evaluator that runs `comptime`, so there is no second semantics to keep
 // in agreement.
 
-import { apply, type Host, type Perform, run } from "./comptime/eval.ts";
+import {
+  apply,
+  evaluationRuntime,
+  type Host,
+  type Perform,
+  run,
+} from "./comptime/eval.ts";
 import { shapeOf, show, UNIT, type Value } from "./comptime/value.ts";
 import { load } from "./load.ts";
 
@@ -56,9 +62,12 @@ export async function evaluateFile(
 ): Promise<Value> {
   const loaded = await load(path);
   return run(
-    apply(loaded.closure, grantsFor(grants), loaded.module.span, {
-      imports: new Map(),
-    }),
+    apply(
+      loaded.closure,
+      grantsFor(grants),
+      loaded.module.span,
+      evaluationRuntime(new Map(), "runtime"),
+    ),
     hostFor(grants),
   );
 }

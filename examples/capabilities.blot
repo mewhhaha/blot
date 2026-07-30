@@ -8,7 +8,7 @@
 
 module init;
 
-open (@import "blot:prelude") ();
+open { } = (@import "blot:prelude") ();
 
 const Console = @effect {
   .write = Str -> Unit;
@@ -18,7 +18,7 @@ const Console = @effect {
 // written in blot over the granted function, which is the ordinary case.
 const to_host = {
   .write = (message, ?resume) => do
-    const _ = init.print message;
+    let _ = init.print message;
     return resume ();
   end;
   .return = value => value;
@@ -27,8 +27,8 @@ const to_host = {
 // The same computation, discharged two different ways. Nothing in `report`
 // mentions which.
 const report = () => do
-  const _ = Console.write "compiled";
-  const _2 = Console.write "linked";
+  let _ = Console.write "compiled";
+  let _2 = Console.write "linked";
   return "ok";
 end;
 

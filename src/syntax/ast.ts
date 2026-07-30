@@ -139,6 +139,13 @@ export type Expr =
 
 export type DeclKind = "let" | "const" | "sig";
 
+export interface OpenMapping {
+  readonly source: string;
+  /** `null` suppresses the source field instead of binding it. */
+  readonly target: string | null;
+  readonly span: Span;
+}
+
 export type Decl =
   | {
     readonly tag: "binding";
@@ -154,7 +161,8 @@ export type Decl =
     readonly span: Span;
   }
   /**
-   * `open expr;` — every field of a record becomes a name in this scope.
+   * `open { .source: target, .hidden: _ } = expr;` spreads a record's fields
+   * into scope while renaming or suppressing the listed fields.
    *
    * The prelude is an ordinary module with no privilege, so this is how `+`
    * reaches `Num.add`: a default fixity whose target is not in scope is
@@ -162,6 +170,7 @@ export type Decl =
    */
   | {
     readonly tag: "open";
+    readonly mappings: readonly OpenMapping[];
     readonly value: Expr;
     readonly span: Span;
   };

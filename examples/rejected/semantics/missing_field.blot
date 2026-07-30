@@ -1,7 +1,7 @@
 // Width subtyping is the whole of what a `duck` contract needed to be, so a
 // missing member is an ordinary record constraint failure.
 
-open (@import "blot:prelude") ();
+open { } = (@import "blot:prelude") ();
 
 let origin = { .x = 1; };
 let distance = p => @int.add p.x p.y;

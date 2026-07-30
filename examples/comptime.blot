@@ -4,7 +4,7 @@
 // a macro, an attribute, or a plugin — it is code you can read, step through,
 // and call from anywhere.
 
-open (@import "blot:prelude") ();
+open { } = (@import "blot:prelude") ();
 
 let folded = comptime (20 * 2 + 1);
 
@@ -29,7 +29,7 @@ const aligned_layout = layout (Header.shape, word_width);
 // that wanted `.fields` would have no type to ask for.
 const derive_show = names => (value =>
   fold (names, "", ((state, name) => do
-    const rendered = @text.of_int (@shape.get value name);
+    let rendered = @text.of_int (@shape.get value name);
     return @text.concat state (@text.concat name (@text.concat "=" (@text.concat rendered " ")));
   end)));
 

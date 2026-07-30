@@ -1,0 +1,7 @@
+open { } = @import "blot:prelude" ();
+
+for Iter.range (0, 1) do
+  break;
+end;
+
+return ();

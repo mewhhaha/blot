@@ -29,6 +29,7 @@ export function show(type: SimpleType): string {
   const names = new Map<number, string>();
   const recursive = new Set<string>();
   const active = new Map<string, string>();
+  const quantifiedNames = new Map<number, string>();
   let nextBinder = 0;
 
   const nameFor = (variable: Variable): string => {
@@ -106,6 +107,21 @@ export function show(type: SimpleType): string {
           return `μ${binder}.${body}`;
         }
         return body;
+      }
+
+      case "rigid": {
+        const name = quantifiedNames.get(current.id);
+        if (name !== undefined) return name;
+        return `'s${current.id}`;
+      }
+
+      case "forall": {
+        const names = current.variables.map((variable) => {
+          const name = `'q${quantifiedNames.size}`;
+          quantifiedNames.set(variable, name);
+          return name;
+        });
+        return `forall ${names.join(" ")}. ${go(current.body, polarity)}`;
       }
 
       case "range":
@@ -195,6 +211,9 @@ function collect(type: SimpleType): Occurrences {
         walk(current.param, !polarity);
         walk(current.effects, polarity);
         walk(current.result, polarity);
+        return;
+      case "forall":
+        walk(current.body, polarity);
         return;
       case "record":
         for (const member of current.fields.values()) walk(member, polarity);

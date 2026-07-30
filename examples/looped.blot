@@ -4,7 +4,7 @@
 // and `case` — so there is no loop in the AST, none in the evaluator, and none
 // in the backend. What reaches WebAssembly is the fold that was always there.
 
-open (@import "blot:prelude") ();
+open { } = (@import "blot:prelude") ();
 
 let total = 0;
 for n in Iter.range (1, 10) do

@@ -2,7 +2,7 @@
 // compile time, bridged into the lattice, and constrained against what the
 // binding actually infers.
 
-open (@import "blot:prelude") ();
+open { } = (@import "blot:prelude") ();
 
 sig double = Int -> Int;
 let double = value => @text.concat value "!";

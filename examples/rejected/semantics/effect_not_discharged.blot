@@ -2,7 +2,7 @@
 // the computation performs *beyond* that effect is still owed, and reaching the
 // module boundary with it is an error.
 
-open (@import "blot:prelude") ();
+open { } = (@import "blot:prelude") ();
 
 const Console = @effect { .write = Str -> Unit; };
 const Clock = @effect { .now = Unit -> Int; };
@@ -10,7 +10,7 @@ const Clock = @effect { .now = Unit -> Int; };
 let logging = { .write = (m, ?resume) => resume (); .return = v => v; };
 
 let stamped = () => do
-  const _ = Console.write "start";
+  let _ = Console.write "start";
   return Clock.now ();
 end;
 

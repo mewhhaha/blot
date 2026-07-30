@@ -19,13 +19,13 @@ in a benchmark months later.
 
 | counter                    |              blot | gpu-duck | note                                               |
 | -------------------------- | ----------------: | -------: | -------------------------------------------------- |
-| `lexerStates`              |               107 |      175 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`              |               115 |      175 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity` |                 6 |        9 | worst-case island candidates allocated per token   |
 | `islandCount`              |                19 |       24 |                                                    |
-| `islandStates`             |               673 |        — |                                                    |
+| `islandStates`             |               783 |        — |                                                    |
 | `contractionRounds`        |                33 |        — | fixed dispatch bound                               |
-| `denseTransitionBytes`     |           516,864 |        — | immutable device table                             |
-| `packedBytes`              |           823,345 |        — | version-3 runtime section                          |
+| `denseTransitionBytes`     |           629,532 |        — | immutable device table                             |
+| `packedBytes`              |           938,994 |        — | version-3 runtime section                          |
 | `rootLoopIsland`           | 3 (`declaration`) |        — | strict root loop proven                            |
 
 blot beats the gpu-duck reference on both counters that matter most for
@@ -38,16 +38,23 @@ the design fix was to notice that both are a name, an arrow, and a value —
 `rebinding` is one rule with two arrows, and neither takes a pattern.
 
 `for` cost three lexer states and forty-six island states on top of that, again
-with the multiplicity and contraction bounds unmoved: an `end`-terminated
-region is a shape the profile already had four of. The binder is spelled with a
-keyword and costs no *alternative* — `for x in src` is parsed as a value and
+with the multiplicity and contraction bounds unmoved: an `end`-terminated region
+is a shape the profile already had four of. The binder is spelled with a keyword
+and costs no _alternative_ — `for x in src` is parsed as a value and
 reclassified into a pattern once `in` follows, the same trick `lambda` uses,
 rather than as a branch the parser would have to choose from the first token.
 
-`open` cost one lexer state and twenty-one island states — one keyword and one
-declaration alternative, with `maxCandidateMultiplicity` and `contractionRounds`
-unmoved. A declaration form whose FIRST set is a keyword nothing else starts
-with is the cheapest thing the profile can be asked for.
+`loop` and `break` add eight lexer states and forty-four island states. Both
+open with their own keyword, so the candidate multiplicity and contraction bound
+remain unchanged. Their semantics cost no grammar structure beyond the bounded
+`do`/`end` region already used by `for`.
+
+The original `open value;` cost one lexer state and twenty-one island states —
+one keyword and one declaration alternative. Adding its `{ .source: target }`
+rename/ignore mask added sixty-six island states without changing `lexerStates`,
+`maxCandidateMultiplicity`, or `contractionRounds`. The mask is bounded by
+braces and commas, so the additional structure increases the static table
+without increasing per-token ambiguity.
 
 `islandStates` and `packedBytes` rose by roughly 60% when field names were
 allowed to be keywords (`field_name = IDENT | INTEGER | keyword`). That was

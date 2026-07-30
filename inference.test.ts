@@ -14,7 +14,7 @@ const scratch = await Deno.makeTempDir();
 // Every snippet opens the prelude, because every module does: it has no
 // privilege, and a fixture that skipped it would be testing a language where
 // `+` is unbound.
-const PRELUDE = 'open (@import "blot:prelude") ();\n';
+const PRELUDE = 'open { } = (@import "blot:prelude") ();\n';
 
 async function typeOf(source: string): Promise<string> {
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
@@ -79,6 +79,36 @@ check(
   "one binding instantiates independently per use",
   'let identity = x => x;\nreturn { .a = identity 1; .b = identity "two"; };',
   '{ .a = 1; .b = "two"; }',
+);
+
+check(
+  "rebinding preserves the integer domain",
+  "let value = 1;\nvalue := 2;\nreturn value;",
+  "Int",
+);
+
+rejects(
+  "rebinding rejects a different type",
+  'let value = 1;\nvalue := "two";\nreturn value;',
+  "Use `let value = ...;`",
+);
+
+check(
+  "a repeated let may shadow with a different type",
+  'let value = 1;\nlet value = "two";\nreturn value;',
+  '"two"',
+);
+
+check(
+  "rebinding preserves polymorphism",
+  'let identity = x => x;\nidentity := x => x;\nreturn { .number = identity 1; .text = identity "two"; };',
+  '{ .number = 1; .text = "two"; }',
+);
+
+rejects(
+  "rebinding requires an existing name",
+  "missing := 1;\nreturn missing;",
+  "cannot shadow a name that is not in scope",
 );
 
 check(
@@ -163,8 +193,8 @@ check(
   `const Console = @effect { .write = Str -> Unit; };
 const Clock = @effect { .now = Unit -> Int; };
 let stamped = name => do
-  const t = Clock.now ();
-  const _ = Console.write name;
+  let t = Clock.now ();
+  let _ = Console.write name;
   return t;
 end;
 return { .stamped = stamped; };`,
@@ -176,7 +206,7 @@ return { .stamped = stamped; };`,
 check(
   "a row variable makes an effect-polymorphic wrapper",
   `const Console = @effect { .write = Str -> Unit; };
-let logged = f => (x => do const _ = Console.write "call"; return f x; end);
+let logged = f => (x => do let _ = Console.write "call"; return f x; end);
 return { .logged = logged; };`,
   "{ .logged = ('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }; }",
 );
@@ -228,4 +258,94 @@ rejects(
   "a range rejects what it does not contain",
   "sig small = range (0, 9);\nlet small = 42;\nreturn small;",
   "is outside",
+);
+
+// --- staging is a guarantee, not an optimization ---------------------------
+
+rejects(
+  "a const cannot silently become a runtime binding",
+  "let runtime = 41;\nconst copied = runtime + 1;\nreturn copied;",
+  "BLOT_NOT_COMPTIME",
+);
+
+rejects(
+  "a comptime expression cannot depend on a runtime binding",
+  "let runtime = 41;\nreturn comptime (runtime + 1);",
+  "BLOT_NOT_COMPTIME",
+);
+
+rejects(
+  "a signature cannot float past another declaration",
+  "sig answer = Int;\nlet unrelated = 0;\nlet answer = 42;\nreturn answer;",
+  "must be immediately followed",
+);
+
+rejects(
+  "a signature cannot be left without a binding",
+  "sig answer = Int;\nreturn 42;",
+  "has no adjacent binding",
+);
+
+rejects(
+  "satisfies is a static constraint when its type is known",
+  "const Digit = range (0, 9);\nreturn @satisfies 42 Digit;",
+  "is outside",
+);
+
+check(
+  "a handler result is the common clause result",
+  `const Ask = @effect { .ask = Int -> Str; };
+let work = () => Ask.ask 1;
+let text = {
+  .ask = (_, ?resume) => @text.concat (resume "ok") "!";
+  .return = value => @text.concat value ".";
+};
+return @handle (Ask, work, text);`,
+  "Text",
+);
+
+rejects(
+  "resume accepts the operation result type",
+  `const Ask = @effect { .ask = Int -> Str; };
+let work = () => Ask.ask 1;
+let wrong = {
+  .ask = (argument, ?resume) => resume argument;
+  .return = value => value;
+};
+return @handle (Ask, work, wrong);`,
+  "an integer is not text",
+);
+
+// --- explicit predicative Rank-N -------------------------------------------
+
+check(
+  "an explicit forall preserves a polymorphic binding",
+  `sig identity = @forall (T => T -> T);
+let identity = value => value;
+return identity;`,
+  "forall 'q0. 'q0 -> 'q0",
+);
+
+check(
+  "a Rank-N parameter may be instantiated at two monotypes",
+  `sig use = (@forall (T => T -> T)) -> { .number = Int; .text = Str; };
+let use = identity => {
+  .number = identity 42;
+  .text = identity "forty-two";
+};
+let identity = value => value;
+return use identity;`,
+  "{ .number = Int; .text = Text; }",
+);
+
+rejects(
+  "a monomorphic function does not satisfy a Rank-N parameter",
+  `sig use = (@forall (T => T -> T)) -> { .number = Int; .text = Str; };
+let use = identity => {
+  .number = identity 42;
+  .text = identity "forty-two";
+};
+let increment = value => @int.add value 1;
+return use increment;`,
+  "rigid type",
 );

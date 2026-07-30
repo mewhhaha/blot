@@ -5,7 +5,7 @@
 // inside its constructor's arm, and a `case` over literals is a chain of
 // equality tests.
 
-open (@import "blot:prelude") ();
+open { } = (@import "blot:prelude") ();
 
 const Message = #Ready | #Progress Int | #Failed Int;
 

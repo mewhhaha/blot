@@ -69,6 +69,12 @@ export type Value =
   | { readonly tag: "union"; readonly members: readonly Value[] }
   | { readonly tag: "unbounded" }
   | { readonly tag: "arrow"; readonly domain: Value; readonly codomain: Value }
+  | { readonly tag: "type-variable"; readonly id: number }
+  | {
+    readonly tag: "forall";
+    readonly variable: number;
+    readonly body: Value;
+  }
   | {
     readonly tag: "effect";
     readonly id: number;
@@ -177,6 +183,10 @@ export function show(value: Value): string {
   if (value.tag === "text") return JSON.stringify(value.value);
   if (value.tag === "unit") return "()";
   if (value.tag === "unbounded") return "@type.unbounded";
+  if (value.tag === "type-variable") return `'t${value.id}`;
+  if (value.tag === "forall") {
+    return `forall 't${value.variable}. ${show(value.body)}`;
+  }
   if (value.tag === "closure") return "<function>";
   if (value.tag === "primitive") return `<${value.name}>`;
   if (value.tag === "native") return `<host ${value.name}>`;
@@ -250,6 +260,12 @@ export function equal(left: Value, right: Value): boolean {
   if (left.tag === "arrow" && right.tag === "arrow") {
     return equal(left.domain, right.domain) &&
       equal(left.codomain, right.codomain);
+  }
+  if (left.tag === "type-variable" && right.tag === "type-variable") {
+    return left.id === right.id;
+  }
+  if (left.tag === "forall" && right.tag === "forall") {
+    return left.variable === right.variable && equal(left.body, right.body);
   }
   if (left.tag === "union" && right.tag === "union") {
     return left.members.length === right.members.length &&

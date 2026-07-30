@@ -27,6 +27,13 @@ Subtyping is not decoration. It is what makes three separate features into one:
 `identity 42` infers `42`, not `Int`. `#Ready` fits wherever `#Ready | #Failed`
 does. A function that performs nothing gets an empty row without being told.
 
+`:=` is deliberately stricter than `let`. It introduces a new binding for an
+existing name, but the old and new types must flow into one another. Singleton
+integer and text literals widen to their domains at that boundary, so
+`value := value + 1` preserves `Int`; changing an integer binding to text
+requires another `let value = ...`. The existing binding's scheme is retained,
+so rebinding a polymorphic function does not accidentally make it monomorphic.
+
 The one place subtyping is strictly _more_ general than Hindley-Milner is worth
 seeing:
 
@@ -59,7 +66,7 @@ pairs, and the two should not look alike. `e` is the rest of the row — a row
 variable — and it is what makes a wrapper effect-polymorphic without saying so:
 
 ```blot
-let logged = f => (x => do const _ = Console.write "call"; return f x; end);
+let logged = f => (x => do let _ = Console.write "call"; return f x; end);
 // ('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }
 ```
 
@@ -133,39 +140,39 @@ what a struct's accessors cost: `Point.x` is `@shape.get value "0"` with the
 slot resolved at compile time, so inference cannot say what it returns even
 though the evaluator can. The value is exact; the inferred type is a variable.
 
-**Higher-kinded types** are not inference's problem by design: type
-constructors are comptime functions that are specialized away, so the lattice
-never needs kinds.
+**Higher-kinded types** are not inference's problem by design: type constructors
+are comptime functions that are specialized away, so the lattice never needs
+kinds.
 
-**Rank-N is not implemented.** `@forall` exists as a primitive and is the
-identity function in both the evaluator and the checker — it carries no
-quantifier, performs no skolemization, and checks nothing. A `sig` written with
-it is rejected as not a type. Building it means: a value form for the
-quantifier, `bridge` turning it into a scheme, and subsumption at the
-application site (skolemize the argument's quantifier, instantiate the
-parameter's). None of that exists, and nothing in the corpus depends on it.
+**Rank-N is explicit and predicative.** `@forall` evaluates its body with a
+fresh type variable and produces a quantified type value. Bridging preserves
+that quantifier; subsumption instantiates a quantified value on the left and
+skolemizes one required on the right. A Rank-N parameter can therefore use its
+argument at two different monotypes, while a monomorphic function is rejected.
+The checker never binds an inference variable to a `forall`, so impredicative
+instantiation remains deliberately outside the language.
 
 ## Operator precedence
 
-The default levels, loosest first. They are grouped by what an operator *does*,
+The default levels, loosest first. They are grouped by what an operator _does_,
 and two groups share a level only where mixing them without parentheses is
 meaningless anyway.
 
-| level | operators | assoc | target |
-|---|---|---|---|
-| 10 | `$` | right | `Fn.apply` |
-| 20 | `\|>` | left | `Fn.pipe` |
-| 22 | `\|\|` | right | `Logic.or` |
-| 24 | `&&` | right | `Logic.and` |
-| 25 | `->` | right | `@type.arrow` |
-| 30 | `==` `/=` `<` `<=` `>` `>=` | none | `Eq.*`, `Ord.*` |
-| 40 | `\|` `\\` | left | `Set.union`, `Set.diff` |
-| 45 | `&` | left | `Set.intersect` |
-| 50 | `<+` | left | `Type.attach` |
-| 55 | `<>` | right | `Semigroup.append` |
-| 60 | `+` `-` | left | `Num.add`, `Num.sub` |
-| 70 | `*` `/` `%` | left | `Num.mul`, `Num.div`, `Num.rem` |
-| 90 | `-` `!` `?` `&` | prefix | `Num.negate`, `@linear.*` |
+| level | operators                   | assoc  | target                          |
+| ----- | --------------------------- | ------ | ------------------------------- |
+| 10    | `$`                         | right  | `Fn.apply`                      |
+| 20    | `\|>`                       | left   | `Fn.pipe`                       |
+| 22    | `\|\|`                      | right  | `Logic.or`                      |
+| 24    | `&&`                        | right  | `Logic.and`                     |
+| 25    | `->`                        | right  | `@type.arrow`                   |
+| 30    | `==` `/=` `<` `<=` `>` `>=` | none   | `Eq.*`, `Ord.*`                 |
+| 40    | `\|` `\\`                   | left   | `Set.union`, `Set.diff`         |
+| 45    | `&`                         | left   | `Set.intersect`                 |
+| 50    | `<+`                        | left   | `Type.attach`                   |
+| 55    | `<>`                        | right  | `Semigroup.append`              |
+| 60    | `+` `-`                     | left   | `Num.add`, `Num.sub`            |
+| 70    | `*` `/` `%`                 | left   | `Num.mul`, `Num.div`, `Num.rem` |
+| 90    | `-` `!` `?` `&`             | prefix | `Num.negate`, `@linear.*`       |
 
 Three relationships are load-bearing and were each wrong once, so
 `examples/operators.blot` pins them:
@@ -177,15 +184,15 @@ Three relationships are load-bearing and were each wrong once, so
   `A | B & C` is `A | (B & C)`. They shared a level, which made it
   `(A | B) & C`.
 - **Append binds tighter than comparison and looser than arithmetic**, so
-  `a <> b == c` compares the joined value and `t <> x + y` appends the sum.
-  It used to sit below comparison, which made `a <> b == c` a type error.
+  `a <> b == c` compares the joined value and `t <> x + y` appends the sum. It
+  used to sit below comparison, which made `a <> b == c` a type error.
 
-`&&` and `||` are boolean logic and are distinct from `&` and `|`, which are
-set algebra. Both are ordinary curried functions, so **both arguments are
+`&&` and `||` are boolean logic and are distinct from `&` and `|`, which are set
+algebra. Both are ordinary curried functions, so **both arguments are
 evaluated** — there is no laziness for an operator to exploit, and `if` is the
 short-circuiting form. `a && perform ()` performs whatever `a` is.
 
-`==` is `Ord.eq` over `@int.cmp` and compares integers. `Text.cmp` compares
-text — the evaluator used to accept text through `@int.cmp` while the checker
+`==` is `Ord.eq` over `@int.cmp` and compares integers. `Text.cmp` compares text
+— the evaluator used to accept text through `@int.cmp` while the checker
 rejected it, which is exactly the kind of divergence between the two executions
 that has to be an error rather than a convenience.

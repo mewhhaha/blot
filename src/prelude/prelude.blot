@@ -165,10 +165,11 @@ const Array = {
   .push = (values, value) => @array.push values value;
 };
 
-// Structural recursion, which is all a loop ever was. `for` does not exist in
-// blot: there is no assignment for it to drive.
+// Structural recursion, which is all either surface loop becomes before
+// inference. Rebindings form the accumulator; neither loop introduces
+// assignment.
 const fold = (values, state, step) => do
-  const go = rec ((index, current) =>
+  let go = rec ((index, current) =>
     if is_less (@int.cmp index (@array.len values))
     then go (@int.add index 1, step (current, @array.get values index))
     else current
@@ -198,7 +199,7 @@ const every = (values, holds) =>
   fold (values, True, ((seen, value) => seen && holds value));
 
 const upto = (low, high) => do
-  const build = rec ((index, state) =>
+  let build = rec ((index, state) =>
     if is_less (@int.cmp index high)
     then build (@int.add index 1, @array.push state index)
     else state
@@ -263,7 +264,7 @@ const iter_items = values => {
 // Draining one. `for` is this loop with the accumulator inferred from the names
 // its body rebinds; written out, it is the same fold.
 const iterate = (iterator, initial, visit) => do
-  const go = rec ((state, carried) => case iterator.step state of
+  let go = rec ((state, carried) => case iterator.step state of
     #None => carried,
     #Some pair => go (pair.1, visit (carried, pair.0))
   end);
@@ -301,7 +302,7 @@ const sort_by = (values, before) => do
     let out = @array.empty;
     let placed = False;
     for existing in Iter.items sorted do
-      const goes_first = not placed && before (value, existing);
+      let goes_first = not placed && before (value, existing);
       out := if goes_first
         then @array.push (@array.push out value) existing
         else @array.push out existing
@@ -357,7 +358,7 @@ const layout = (shape, width_of) => do
   let offset = 0;
   let fields = @array.empty;
   for name in Iter.items (@shape.names shape) do
-    const width = width_of (@shape.get shape name);
+    let width = width_of (@shape.get shape name);
     fields := @array.push fields { .name = name; .offset = offset; .width = width; };
     offset := @int.add offset width;
   end;
@@ -548,7 +549,7 @@ const reorder = (shape, order) => fold (order, @shape.empty,
   ((moved, name) => @shape.set moved name (@shape.get shape name)));
 
 const struct = shape => do
-  const order = @shape.names shape;
+  let order = @shape.names shape;
 
   // Where each field lives.
   let next = 0;
@@ -557,9 +558,9 @@ const struct = shape => do
     slots := @shape.set slots name next;
     next := @int.add next 1;
   end;
-  const at = slots;
+  let at = slots;
 
-  const key = name => Text.of_int (@shape.get at name);
+  let key = name => Text.of_int (@shape.get at name);
 
   // One binding, rebound through both passes — the same shape binned's `struct`
   // has, where `product_type` is built by one loop and extended by the next.
@@ -585,7 +586,7 @@ const struct = shape => do
     // the shape does not declare is refused here rather than stored, and a
     // missing one fails on the read.
     .new = record => do
-      const _ = @satisfies (@shape.names record) order;
+      let _ = @satisfies (@shape.names record) order;
       let product = @shape.empty;
       for name in Iter.items order do
         product := @shape.set product (key name)
@@ -626,10 +627,10 @@ const aligned = (shape, order, width_of) => do
   let padding = 0;
   let fields = @array.empty;
   for name in Iter.items order do
-    const width = width_of (@shape.get shape name);
-    const slack = @int.rem offset width;
-    const pad = if Ord.eq slack 0 then 0 else @int.sub width slack end;
-    const start = @int.add offset pad;
+    let width = width_of (@shape.get shape name);
+    let slack = @int.rem offset width;
+    let pad = if Ord.eq slack 0 then 0 else @int.sub width slack end;
+    let start = @int.add offset pad;
     fields := @array.push fields { .name = name; .offset = start; .width = width; };
     padding := @int.add padding pad;
     offset := @int.add start width;
@@ -642,9 +643,9 @@ end;
 // (shape, packed (shape, w).order))` is how you get storage arranged that way,
 // and keeping that a separate call is what keeps the two decoupled.
 const packed = (shape, width_of) => do
-  const order = sort_by (@shape.names shape, ((left, right) =>
+  let order = sort_by (@shape.names shape, ((left, right) =>
     is_greater (@int.cmp (width_of (@shape.get shape left)) (width_of (@shape.get shape right)))));
-  const bytes = aligned (shape, order, width_of);
+  let bytes = aligned (shape, order, width_of);
   return {
     .order = order;
     .size = bytes.size;

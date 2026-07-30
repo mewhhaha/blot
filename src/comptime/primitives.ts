@@ -14,7 +14,30 @@ import { asTuple, bool, equal, show, UNIT, type Value } from "./value.ts";
 
 export interface Primitive {
   readonly arity: number;
-  readonly run: (args: readonly Value[], span: Span) => Value;
+  readonly run: (
+    args: readonly Value[],
+    span: Span,
+    phase: "comptime" | "runtime",
+  ) => Value;
+}
+
+const I64_LOW = -0x8000000000000000n;
+const I64_HIGH = 0x7fffffffffffffffn;
+
+function integerResult(
+  value: bigint,
+  span: Span,
+  operation: string,
+  phase: "comptime" | "runtime",
+): Value {
+  if (phase === "runtime" && (value < I64_LOW || value > I64_HIGH)) {
+    fail(
+      "BLOT_INTEGER_OVERFLOW",
+      `${operation} produced ${value}, outside signed i64 ${I64_LOW}..${I64_HIGH}.`,
+      span,
+    );
+  }
+  return { tag: "int", value };
 }
 
 let brands = 0;
@@ -184,7 +207,10 @@ function reflect(value: Value): Value {
     case "sealed":
       return tagged(
         "Sealed",
-        record({ name: { tag: "text", value: value.name }, inner: value.inner }),
+        record({
+          name: { tag: "text", value: value.name },
+          inner: value.inner,
+        }),
       );
     default:
       // Closures, primitives, host functions, effects. A program can call these
@@ -407,9 +433,6 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     },
   }],
 
-  // Rank-N is annotation-only: `@forall` takes a function from a type variable
-  // to a type, and inference never produces one on its own.
-  ["@forall", { arity: 1, run: ([body]) => body }],
   ["@satisfies", {
     arity: 2,
     run: ([value, type], span) => {
@@ -524,31 +547,47 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
   // --- integers ---
   ["@int.add", {
     arity: 2,
-    run: ([l, r], s) => ({
-      tag: "int",
-      value: intOf(l, s, "@int.add") + intOf(r, s, "@int.add"),
-    }),
+    run: ([l, r], span, phase) =>
+      integerResult(
+        intOf(l, span, "@int.add") + intOf(r, span, "@int.add"),
+        span,
+        "@int.add",
+        phase,
+      ),
   }],
   ["@int.sub", {
     arity: 2,
-    run: ([l, r], s) => ({
-      tag: "int",
-      value: intOf(l, s, "@int.sub") - intOf(r, s, "@int.sub"),
-    }),
+    run: ([l, r], span, phase) =>
+      integerResult(
+        intOf(l, span, "@int.sub") - intOf(r, span, "@int.sub"),
+        span,
+        "@int.sub",
+        phase,
+      ),
   }],
   ["@int.mul", {
     arity: 2,
-    run: ([l, r], s) => ({
-      tag: "int",
-      value: intOf(l, s, "@int.mul") * intOf(r, s, "@int.mul"),
-    }),
+    run: ([l, r], span, phase) =>
+      integerResult(
+        intOf(l, span, "@int.mul") * intOf(r, span, "@int.mul"),
+        span,
+        "@int.mul",
+        phase,
+      ),
   }],
   ["@int.div", {
     arity: 2,
-    run: ([l, r], s) => {
-      const divisor = intOf(r, s, "@int.div");
-      if (divisor === 0n) fail("BLOT_DIVIDE_BY_ZERO", "Division by zero.", s);
-      return { tag: "int", value: intOf(l, s, "@int.div") / divisor };
+    run: ([l, r], span, phase) => {
+      const divisor = intOf(r, span, "@int.div");
+      if (divisor === 0n) {
+        fail("BLOT_DIVIDE_BY_ZERO", "Division by zero.", span);
+      }
+      return integerResult(
+        intOf(l, span, "@int.div") / divisor,
+        span,
+        "@int.div",
+        phase,
+      );
     },
   }],
   ["@int.rem", {
@@ -561,7 +600,13 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
   }],
   ["@int.neg", {
     arity: 1,
-    run: ([v], s) => ({ tag: "int", value: -intOf(v, s, "@int.neg") }),
+    run: ([value], span, phase) =>
+      integerResult(
+        -intOf(value, span, "@int.neg"),
+        span,
+        "@int.neg",
+        phase,
+      ),
   }],
   // One comparison primitive. `Eq` and `Ord` are prelude source over it.
   //

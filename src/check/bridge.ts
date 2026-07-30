@@ -15,6 +15,7 @@
 import { show, type Value } from "../comptime/value.ts";
 import {
   effects as effectRow,
+  freshRigid,
   fun,
   INT,
   intLiteral,
@@ -48,6 +49,13 @@ export function isHostEffect(label: string): boolean {
 }
 
 export function bridge(value: Value): SimpleType | null {
+  return bridgeValue(value, new Map());
+}
+
+function bridgeValue(
+  value: Value,
+  variables: ReadonlyMap<number, SimpleType>,
+): SimpleType | null {
   switch (value.tag) {
     case "int":
       return intLiteral(value.value);
@@ -68,8 +76,8 @@ export function bridge(value: Value): SimpleType | null {
     }
 
     case "arrow": {
-      const domain = bridge(value.domain);
-      const codomain = bridge(value.codomain);
+      const domain = bridgeValue(value.domain, variables);
+      const codomain = bridgeValue(value.codomain, variables);
       if (domain === null || codomain === null) return null;
       // A written arrow says nothing about effects, and inference is what
       // supplies the row. `⊤` here would be a lie in the other direction, so
@@ -85,12 +93,12 @@ export function bridge(value: Value): SimpleType | null {
         if (member.tag === "tag") {
           const payload = member.payload === null
             ? UNIT
-            : bridge(member.payload);
+            : bridgeValue(member.payload, variables);
           if (payload === null) return null;
           cases.set(member.name, payload);
           continue;
         }
-        const bridged = bridge(member);
+        const bridged = bridgeValue(member, variables);
         if (bridged === null) return null;
         members.push(bridged);
       }
@@ -99,7 +107,9 @@ export function bridge(value: Value): SimpleType | null {
     }
 
     case "tag": {
-      const payload = value.payload === null ? UNIT : bridge(value.payload);
+      const payload = value.payload === null
+        ? UNIT
+        : bridgeValue(value.payload, variables);
       if (payload === null) return null;
       return variant([[value.name, payload]]);
     }
@@ -107,7 +117,7 @@ export function bridge(value: Value): SimpleType | null {
     case "shape": {
       const fields: [string, SimpleType][] = [];
       for (const [name, member] of value.fields) {
-        const bridged = bridge(member);
+        const bridged = bridgeValue(member, variables);
         if (bridged === null) return null;
         fields.push([name, bridged]);
       }
@@ -115,7 +125,9 @@ export function bridge(value: Value): SimpleType | null {
     }
 
     case "array": {
-      const elements = value.elements.map(bridge);
+      const elements = value.elements.map((element) =>
+        bridgeValue(element, variables)
+      );
       if (elements.some((element) => element === null)) return null;
       return { tag: "array", element: union(elements as SimpleType[]) };
     }
@@ -128,8 +140,23 @@ export function bridge(value: Value): SimpleType | null {
       if (value.host) hostLabels.add(label);
       const operations: [string, SimpleType][] = [];
       for (const [name, signature] of value.operations) {
-        const bridged = bridge(signature);
-        if (bridged === null || bridged.tag !== "fun") return null;
+        const bridged = bridgeValue(signature, variables);
+        if (bridged === null) return null;
+        if (bridged.tag === "forall" && bridged.body.tag === "fun") {
+          operations.push([
+            name,
+            {
+              ...bridged,
+              body: fun(
+                bridged.body.param,
+                bridged.body.result,
+                effectRow([label]),
+              ),
+            },
+          ]);
+          continue;
+        }
+        if (bridged.tag !== "fun") return null;
         operations.push([
           name,
           fun(bridged.param, bridged.result, effectRow([label])),
@@ -141,7 +168,22 @@ export function bridge(value: Value): SimpleType | null {
     // Transparent: a struct's type is its storage. The members it carries are
     // a compile-time namespace and have no business in the lattice.
     case "extended":
-      return bridge(value.inner);
+      return bridgeValue(value.inner, variables);
+
+    case "type-variable": {
+      const variable = variables.get(value.id);
+      if (variable === undefined) return null;
+      return variable;
+    }
+
+    case "forall": {
+      const variable = freshRigid();
+      const innerVariables = new Map(variables);
+      innerVariables.set(value.variable, variable);
+      const body = bridgeValue(value.body, innerVariables);
+      if (body === null) return null;
+      return { tag: "forall", variables: [variable.id], body };
+    }
 
     case "sealed":
       // A sealed type is identified by its name and its carrier, so the

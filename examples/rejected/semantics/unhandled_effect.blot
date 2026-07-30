@@ -1,7 +1,7 @@
 // An effect with no handler is an error, not a silent no-op. There is no
 // ambient handler and no default to fall through to.
 
-open (@import "blot:prelude") ();
+open { } = (@import "blot:prelude") ();
 
 const Console = @effect { .write = Str -> Unit; };
 return Console.write "nobody is listening";

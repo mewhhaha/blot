@@ -22,17 +22,33 @@ import {
   lookup as lookupValue,
   type Value,
 } from "../comptime/value.ts";
-import { bind, evaluate, type Imports, run } from "../comptime/eval.ts";
+import {
+  bind,
+  evaluate,
+  evaluationRuntime,
+  type Imports,
+  resolveOpenBindings,
+  run,
+} from "../comptime/eval.ts";
 import { bridge, effectLabel } from "./bridge.ts";
-import { constrain, instantiate, scheme, TypeError_ } from "./constrain.ts";
+import {
+  constrain,
+  instantiate,
+  instantiateForall,
+  scheme,
+  TypeError_,
+} from "./constrain.ts";
 import { PRIMITIVE_TYPES } from "./primitives.ts";
+import { show as showType } from "./print.ts";
 import {
   effects,
   freshVar,
+  INT,
   intLiteral,
   type Level,
   record,
   type SimpleType,
+  TEXT,
   textLiteral,
   tupleType,
   type Typing,
@@ -42,11 +58,12 @@ import {
 
 interface TypeEnv {
   readonly names: Map<string, Typing>;
+  readonly literals: Map<string, Expr>;
   readonly parent: TypeEnv | null;
 }
 
 function childTypeEnv(parent: TypeEnv | null): TypeEnv {
-  return { names: new Map(), parent };
+  return { names: new Map(), literals: new Map(), parent };
 }
 
 function lookupType(env: TypeEnv, name: string): Typing | undefined {
@@ -59,9 +76,21 @@ function lookupType(env: TypeEnv, name: string): Typing | undefined {
   return undefined;
 }
 
+function lookupLiteral(env: TypeEnv, name: string): Expr | undefined {
+  let scope: TypeEnv | null = env;
+  while (scope !== null) {
+    const found = scope.literals.get(name);
+    if (found !== undefined) return found;
+    scope = scope.parent;
+  }
+  return undefined;
+}
+
 interface Context {
   /** Field sets and constructor sets, recorded for the backend. */
   readonly shapes: Map<Expr, readonly string[]>;
+  /** Compile-time declaration values, keyed by their source expression. */
+  readonly comptimeValues: Map<Expr, Value>;
   /** Facts read after checking, once every constraint has been seen. */
   readonly pending: (() => void)[];
   readonly variants: Map<Expr, readonly VariantCase[]>;
@@ -96,7 +125,13 @@ function located<T>(span: Span, work: () => T): T {
  */
 function comptime(expr: Expr, context: Context): ReturnType<typeof run> | null {
   try {
-    return run(evaluate(expr, context.values, { imports: context.imports }));
+    return run(
+      evaluate(
+        expr,
+        context.values,
+        evaluationRuntime(context.imports, "comptime"),
+      ),
+    );
   } catch (error) {
     // A refusal is the program asking to fail, not the evaluator failing to
     // reach a value. Swallowing it would make `expect` silent at `blot check`
@@ -110,18 +145,64 @@ function refusal(error: unknown): boolean {
   return error instanceof BlotError && error.diagnostic.code === "BLOT_REFUSED";
 }
 
-function comptimeBinding(
-  pattern: Pattern,
+function requireComptime(
   expr: Expr,
   context: Context,
-): ReturnType<typeof run> | null {
+  what: string,
+): ReturnType<typeof run> {
   try {
     return run(
-      bind(pattern, expr, context.values, { imports: context.imports }),
+      evaluate(
+        expr,
+        context.values,
+        evaluationRuntime(context.imports, "comptime"),
+      ),
     );
   } catch (error) {
     if (refusal(error)) throw error;
-    return null;
+    if (
+      error instanceof BlotError &&
+      (error.diagnostic.code === "BLOT_UNBOUND" ||
+        error.diagnostic.code === "BLOT_UNHANDLED_EFFECT")
+    ) {
+      fail(
+        "BLOT_NOT_COMPTIME",
+        `${what} must be known at compile time: ${error.diagnostic.message}`,
+        expr.span,
+      );
+    }
+    throw error;
+  }
+}
+
+function requireComptimeBinding(
+  pattern: Pattern,
+  expr: Expr,
+  context: Context,
+): ReturnType<typeof run> {
+  try {
+    return run(
+      bind(
+        pattern,
+        expr,
+        context.values,
+        evaluationRuntime(context.imports, "comptime"),
+      ),
+    );
+  } catch (error) {
+    if (refusal(error)) throw error;
+    if (
+      error instanceof BlotError &&
+      (error.diagnostic.code === "BLOT_UNBOUND" ||
+        error.diagnostic.code === "BLOT_UNHANDLED_EFFECT")
+    ) {
+      fail(
+        "BLOT_NOT_COMPTIME",
+        `A \`const\` binding must be known at compile time: ${error.diagnostic.message}`,
+        expr.span,
+      );
+    }
+    throw error;
   }
 }
 
@@ -254,8 +335,16 @@ export function infer(
       return infer(expr.lambda, context, level, row);
     }
 
-    case "comptime":
+    case "comptime": {
+      const value = requireComptime(
+        expr.body,
+        context,
+        "A `comptime` expression",
+      );
+      const bridged = bridge(value);
+      if (bridged !== null) return bridged;
       return infer(expr.body, context, level, row);
+    }
 
     case "tuple":
       return tupleType(expr.elements.map((e) => infer(e, context, level, row)));
@@ -274,9 +363,18 @@ export function infer(
 
     case "shape": {
       const fields = new Map<string, SimpleType>();
+      const written = new Set<string>();
       for (const member of expr.members) {
         const memberType = infer(member.value, context, level, row);
         if (member.tag === "field") {
+          if (written.has(member.name)) {
+            fail(
+              "BLOT_DUPLICATE_FIELD",
+              `Field \`.${member.name}\` is written more than once in this shape.`,
+              member.value.span,
+            );
+          }
+          written.add(member.name);
           fields.set(member.name, memberType);
           continue;
         }
@@ -407,33 +505,85 @@ function inferSpecial(
       );
     }
     const discharged = effectLabel(effect);
+    let handlerExpression: Expr | undefined = head.args[2];
+    if (handlerExpression.tag === "var") {
+      handlerExpression = lookupLiteral(context.types, handlerExpression.name);
+    }
+    if (handlerExpression === undefined || handlerExpression.tag !== "shape") {
+      fail(
+        "BLOT_TYPE_ERROR",
+        "A handler must be a statically known shape of clauses.",
+        head.args[2].span,
+      );
+    }
+    for (const member of handlerExpression.members) {
+      if (member.tag !== "field" || member.name === "return") continue;
+      const clause = member.value;
+      let resume: Pattern | undefined;
+      if (clause.tag === "lambda" && clause.parameter.tag === "tuple") {
+        resume = clause.parameter.elements[1];
+      }
+      if (
+        resume === undefined || resume.tag !== "name" ||
+        resume.qualifier !== "affine"
+      ) {
+        fail(
+          "BLOT_HANDLER_RESUME_NOT_AFFINE",
+          `Handler clause \`.${member.name}\` must bind its continuation as \`?resume\`.`,
+          clause.span,
+        );
+      }
+    }
 
     const thunkRow = freshVar(level);
     const thunk = infer(head.args[1], context, level, row);
     const handler = infer(head.args[2], context, level, row);
-    const result = freshVar(level);
+    const computationResult = freshVar(level);
+    const handledResult = freshVar(level);
 
     located(expr.span, () => {
       constrain(thunk, {
         tag: "fun",
         param: UNIT,
         effects: thunkRow,
-        result,
+        result: computationResult,
       });
       // A clause per operation, each taking `(argument, resume)`. Checking the
       // handler against the effect is what makes a typo in an operation name a
       // type error rather than a silent no-op at run time.
       for (const [name, signature] of effect.operations) {
-        const bridged = bridge(signature);
+        let bridged = bridge(signature);
+        if (bridged !== null && bridged.tag === "forall") {
+          bridged = instantiateForall(bridged, level);
+        }
         if (bridged === null || bridged.tag !== "fun") continue;
         const clause = freshVar(level);
         constrain(handler, record([[name, clause]]));
+        const continuation = {
+          tag: "fun" as const,
+          param: bridged.result,
+          effects: row,
+          result: handledResult,
+        };
         constrain(clause, {
           tag: "fun",
-          param: tupleType([bridged.param, freshVar(level)]),
-          effects: freshVar(level),
-          result: freshVar(level),
+          param: tupleType([bridged.param, continuation]),
+          effects: row,
+          result: handledResult,
         });
+      }
+      const handlerFields = fieldsOf(handler);
+      if (handlerFields !== null && handlerFields.includes("return")) {
+        const returnClause = freshVar(level);
+        constrain(handler, record([["return", returnClause]]));
+        constrain(returnClause, {
+          tag: "fun",
+          param: computationResult,
+          effects: row,
+          result: handledResult,
+        });
+      } else {
+        constrain(computationResult, handledResult);
       }
     });
 
@@ -446,7 +596,23 @@ function inferSpecial(
         located(expr.span, () => constrain(effects(remaining), row));
       }
     });
-    return result;
+    return handledResult;
+  }
+
+  if (callee.name === "@satisfies" && head.args.length === 2) {
+    const valueType = infer(head.args[0], context, level, row);
+    const typeValue = comptime(head.args[1], context);
+    if (typeValue === null) return null;
+    const expected = bridge(typeValue);
+    if (expected === null) {
+      fail(
+        "BLOT_TYPE_ERROR",
+        "The second argument to `@satisfies` must evaluate to a type.",
+        head.args[1].span,
+      );
+    }
+    located(expr.span, () => constrain(valueType, expected));
+    return valueType;
   }
 
   return null;
@@ -642,15 +808,31 @@ function inferDeclarations(
   level: Level,
   row: SimpleType,
 ): void {
-  let pendingSig: { name: string; type: SimpleType } | null = null;
+  let pendingSig:
+    | { name: string; type: SimpleType; span: Span }
+    | null = null;
 
   for (const declaration of declarations) {
+    if (pendingSig !== null) {
+      const adjacent = declaration.tag === "binding" &&
+        declaration.kind !== "sig" &&
+        declaration.pattern.tag === "name" &&
+        declaration.pattern.name === pendingSig.name;
+      if (!adjacent) {
+        fail(
+          "BLOT_BAD_SIG",
+          `The signature for \`${pendingSig.name}\` must be immediately followed by that binding.`,
+          pendingSig.span,
+        );
+      }
+    }
+
     if (declaration.tag === "open") {
-      // `open m;` is `let name = m.name;` for every field, so it is the field
-      // rule applied once per field rather than a new typing rule. The names
-      // come from the compile-time value because that is the only place the
-      // *set* of them is known; the types come from constraining the inferred
-      // record, because a closure has no type to read off its value.
+      // Opening is the field rule applied once per resulting binding rather
+      // than a new typing rule. The names come from the compile-time value
+      // because that is the only place the set of them is known; the types
+      // come from constraining the inferred record, because a closure has no
+      // type to read off its value.
       const value = comptime(declaration.value, context);
       if (value === null || value.tag !== "shape") {
         fail(
@@ -659,34 +841,88 @@ function inferDeclarations(
           declaration.span,
         );
       }
-      context.opens.set(declaration.value, value.fields);
+      const bindings = resolveOpenBindings(
+        value.fields,
+        declaration.mappings,
+        declaration.span,
+      );
+      context.opens.set(
+        declaration.value,
+        new Map(bindings.map((binding) => [binding.target, binding.value])),
+      );
       const target = infer(declaration.value, context, level, row);
-      for (const [name, member] of value.fields) {
-        context.values.names.set(name, member);
+      for (const binding of bindings) {
+        context.values.names.set(binding.target, binding.value);
         const field = freshVar(level);
         located(declaration.span, () => {
-          constrain(target, record([[name, field]]));
+          constrain(target, record([[binding.source, field]]));
         });
         // Quantified below ground level, for the reason the module scope is:
         // these variables are already at level 0, and generalizing at 0 would
         // make every use share them — `fold` used once on text could then
         // never be used on integers.
-        context.types.names.set(name, scheme(field, -1));
+        context.types.names.set(binding.target, scheme(field, -1));
       }
       continue;
     }
     if (declaration.tag === "shadow") {
+      const previous = lookupType(context.types, declaration.name);
+      if (previous === undefined) {
+        fail(
+          "BLOT_UNBOUND",
+          `\`${declaration.name} := ...\` cannot shadow a name that is not in scope.`,
+          declaration.span,
+        );
+      }
       // Same as a binding: evaluate first, name what it produced, and let the
       // *named* value be what gets bridged. Bridging first would mint the
       // effect's label from the placeholder name, and the rename afterwards
       // would come too late to matter.
       const named = namedComptime(declaration.name, declaration.value, context);
-      if (named !== null) context.values.names.set(declaration.name, named);
-      const bridged = named === null ? null : bridge(named);
-      context.types.names.set(
-        declaration.name,
-        bridged ?? generalize(declaration.value, context, level, row),
+      let bridged: SimpleType | null = null;
+      if (named !== null) bridged = bridge(named);
+      let inferred: Typing;
+      if (bridged === null) {
+        inferred = generalize(declaration.value, context, level, row);
+      } else {
+        inferred = bridged;
+      }
+      const previousType = stableRebindingType(
+        instantiate(previous, level + 1),
       );
+      const inferredType = stableRebindingType(
+        instantiate(inferred, level + 1),
+      );
+      try {
+        constrain(previousType, inferredType);
+        constrain(inferredType, previousType);
+      } catch (error) {
+        if (!(error instanceof TypeError_)) throw error;
+        fail(
+          "BLOT_TYPE_ERROR",
+          `\`${declaration.name} := ...\` must preserve ${
+            showType(previousType)
+          }, found ${
+            showType(inferredType)
+          }. Use \`let ${declaration.name} = ...;\` to shadow it with a different type.`,
+          declaration.span,
+        );
+      }
+      if (named !== null) {
+        context.values.names.set(declaration.name, named);
+        context.comptimeValues.set(declaration.value, named);
+      }
+      if (previous.tag === "scheme") {
+        context.types.names.set(
+          declaration.name,
+          scheme(stableRebindingType(previous.body), previous.level),
+        );
+      } else {
+        context.types.names.set(
+          declaration.name,
+          stableRebindingType(previous),
+        );
+      }
       continue;
     }
 
@@ -710,7 +946,11 @@ function inferDeclarations(
           declaration.span,
         );
       }
-      pendingSig = { name: declaration.pattern.name, type: bridged };
+      pendingSig = {
+        name: declaration.pattern.name,
+        type: bridged,
+        span: declaration.span,
+      };
       continue;
     }
 
@@ -718,10 +958,17 @@ function inferDeclarations(
     // here: `const Console = @effect {...}` has no inferable structure, but its
     // value knows exactly which operations exist and which row they carry.
     let type: Typing | null = null;
+    let signature: SimpleType | null = null;
+    if (
+      pendingSig !== null && declaration.pattern.tag === "name" &&
+      pendingSig.name === declaration.pattern.name
+    ) {
+      signature = pendingSig.type;
+    }
     if (declaration.kind === "const") {
       // Through `bind`, not `evaluate`: a `const` may be `rec`, and `rec` only
       // means anything when it knows the name it is being bound to.
-      const raw = comptimeBinding(
+      const raw = requireComptimeBinding(
         declaration.pattern,
         declaration.value,
         context,
@@ -735,22 +982,33 @@ function inferDeclarations(
           : raw;
       if (value !== null) {
         recordComptime(declaration.pattern, value, context);
+        context.comptimeValues.set(declaration.value, value);
         const bridged = bridge(value);
         if (bridged !== null) type = bridged;
       }
     }
 
     if (type === null) {
-      type =
-        declaration.value.tag === "rec" && declaration.pattern.tag === "name"
-          ? generalizeRec(
-            declaration.pattern.name,
-            declaration.value,
-            context,
-            level,
-            row,
-          )
-          : generalize(declaration.value, context, level, row);
+      if (signature !== null && declaration.value.tag === "lambda") {
+        type = checkAgainst(
+          declaration.value,
+          signature,
+          context,
+          level,
+          row,
+        );
+      } else {
+        type =
+          declaration.value.tag === "rec" && declaration.pattern.tag === "name"
+            ? generalizeRec(
+              declaration.pattern.name,
+              declaration.value,
+              context,
+              level,
+              row,
+            )
+            : generalize(declaration.value, context, level, row);
+      }
     }
 
     if (
@@ -766,7 +1024,118 @@ function inferDeclarations(
     }
 
     bindDeclaration(declaration.pattern, type, context, level);
+    if (
+      declaration.pattern.tag === "name" &&
+      (declaration.value.tag === "shape" ||
+        declaration.value.tag === "lambda")
+    ) {
+      context.types.literals.set(
+        declaration.pattern.name,
+        declaration.value,
+      );
+    }
   }
+
+  if (pendingSig !== null) {
+    fail(
+      "BLOT_BAD_SIG",
+      `The signature for \`${pendingSig.name}\` has no adjacent binding.`,
+      pendingSig.span,
+    );
+  }
+}
+
+/** Widens singleton literals so rebinding preserves their domain. */
+function stableRebindingType(
+  type: SimpleType,
+): SimpleType {
+  if (type.tag === "range") {
+    if (type.domain === "int") return INT;
+    return TEXT;
+  }
+  if (type.tag === "array") {
+    return { tag: "array", element: stableRebindingType(type.element) };
+  }
+  if (type.tag === "record") {
+    return record(
+      [...type.fields].map(([name, member]) => [
+        name,
+        stableRebindingType(member),
+      ]),
+    );
+  }
+  if (type.tag === "variant") {
+    return variant(
+      [...type.cases].map(([name, payload]) => [
+        name,
+        stableRebindingType(payload),
+      ]),
+    );
+  }
+  if (type.tag === "fun") {
+    return {
+      tag: "fun",
+      param: stableRebindingType(type.param),
+      effects: stableRebindingType(type.effects),
+      result: stableRebindingType(type.result),
+    };
+  }
+  if (type.tag === "forall") {
+    return {
+      tag: "forall",
+      variables: type.variables,
+      body: stableRebindingType(type.body),
+    };
+  }
+  if (type.tag === "union") {
+    return {
+      tag: "union",
+      members: type.members.map(stableRebindingType),
+    };
+  }
+  return type;
+}
+
+function checkAgainst(
+  expr: Expr,
+  expected: SimpleType,
+  context: Context,
+  level: Level,
+  row: SimpleType,
+): SimpleType {
+  if (expr.tag !== "lambda" || expected.tag !== "fun") {
+    const inferred = infer(expr, context, level + 1, row);
+    located(expr.span, () => constrain(inferred, expected));
+    return expected;
+  }
+
+  const scope = childTypeEnv(context.types);
+  const inner: Context = { ...context, types: scope };
+  bindPatternAgainst(expr.parameter, expected.param, scope, level + 1);
+  const bodyRow = freshVar(level + 1);
+  checkAgainst(
+    expr.body,
+    expected.result,
+    inner,
+    level + 1,
+    bodyRow,
+  );
+  located(expr.span, () => constrain(bodyRow, expected.effects));
+  return expected;
+}
+
+function bindPatternAgainst(
+  pattern: Pattern,
+  expected: SimpleType,
+  scope: TypeEnv,
+  level: Level,
+): void {
+  if (pattern.tag === "name") {
+    scope.names.set(pattern.name, expected);
+    return;
+  }
+  const accepted = bindPattern(pattern, scope, level);
+  located(pattern.span, () => constrain(expected, accepted));
 }
 
 function bindDeclaration(
@@ -907,6 +1276,13 @@ export interface Checked {
    */
   readonly opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
   /**
+   * Compile-time declaration values keyed by the expression that produced
+   * them. Local bindings do not live in the module's final value environment,
+   * but lowering still needs their identities while traversing a residual
+   * block.
+   */
+  readonly comptimeValues: ReadonlyMap<Expr, Value>;
+  /**
    * What inference learned that lowering needs.
    *
    * gpufuck has no records: they become nominal declarations, and a nominal
@@ -968,9 +1344,11 @@ export function checkModule(
   const patternShapes = new Map<Pattern, readonly string[]>();
   const grants = new Map<Expr, GrantSignature>();
   const opens = new Map<Expr, ReadonlyMap<string, Value>>();
+  const comptimeValues = new Map<Expr, Value>();
   const pending: (() => void)[] = [];
   const context: Context = {
     opens,
+    comptimeValues,
     shapes,
     variants,
     patternShapes,
@@ -1003,6 +1381,7 @@ export function checkModule(
     type: result,
     effects: row,
     opens,
+    comptimeValues,
     shapes,
     variants,
     patternShapes,

@@ -14,6 +14,7 @@
 import {
   boundAbove,
   boundBelow,
+  freshRigid,
   freshVar,
   type Level,
   levelOf,
@@ -39,6 +40,10 @@ function describe(type: SimpleType): string {
   switch (type.tag) {
     case "var":
       return "an inferred type";
+    case "rigid":
+      return `the rigid type 's${type.id}`;
+    case "forall":
+      return "a polymorphic type";
     case "range":
       if (type.low !== null && type.low === type.high) {
         return type.domain === "text"
@@ -102,6 +107,20 @@ export function constrain(
   if (lhs.tag === "var" || rhs.tag === "var") cache.add(seen);
 
   if (rhs.tag === "top" || lhs.tag === "bottom") return;
+
+  if (lhs.tag === "forall") {
+    constrain(instantiateForall(lhs, levelOf(rhs)), rhs, cache);
+    return;
+  }
+
+  if (rhs.tag === "forall") {
+    constrain(lhs, skolemize(rhs), cache);
+    return;
+  }
+
+  if (lhs.tag === "rigid" && rhs.tag === "rigid" && lhs.id === rhs.id) {
+    return;
+  }
 
   if (lhs.tag === "fun" && rhs.tag === "fun") {
     constrain(rhs.param, lhs.param, cache);
@@ -250,6 +269,12 @@ function extrude(
         effects: extrude(type.effects, polarity, level, seen),
         result: extrude(type.result, polarity, level, seen),
       };
+    case "forall":
+      return {
+        tag: "forall",
+        variables: type.variables,
+        body: extrude(type.body, polarity, level, seen),
+      };
     case "record":
       return {
         tag: "record",
@@ -285,6 +310,8 @@ function levelBelow(type: SimpleType, level: Level): boolean {
     case "fun":
       return levelBelow(type.param, level) && levelBelow(type.effects, level) &&
         levelBelow(type.result, level);
+    case "forall":
+      return levelBelow(type.body, level);
     case "record":
       return [...type.fields.values()].every((t) => levelBelow(t, level));
     case "variant":
@@ -334,6 +361,12 @@ function freshenAbove(
         effects: freshenAbove(type.effects, limit, level, seen),
         result: freshenAbove(type.result, limit, level, seen),
       };
+    case "forall":
+      return {
+        tag: "forall",
+        variables: type.variables,
+        body: freshenAbove(type.body, limit, level, seen),
+      };
     case "record":
       return {
         tag: "record",
@@ -356,6 +389,90 @@ function freshenAbove(
       return {
         tag: "array",
         element: freshenAbove(type.element, limit, level, seen),
+      };
+    default:
+      return type;
+  }
+}
+
+export function instantiateForall(
+  type: SimpleType & { tag: "forall" },
+  level: Level,
+): SimpleType {
+  const replacements = new Map<number, SimpleType>();
+  for (const variable of type.variables) {
+    replacements.set(variable, freshVar(level));
+  }
+  return substituteRigid(type.body, replacements);
+}
+
+function skolemize(
+  type: SimpleType & { tag: "forall" },
+): SimpleType {
+  const replacements = new Map<number, SimpleType>();
+  for (const variable of type.variables) {
+    replacements.set(variable, freshRigid());
+  }
+  return substituteRigid(type.body, replacements);
+}
+
+function substituteRigid(
+  type: SimpleType,
+  replacements: ReadonlyMap<number, SimpleType>,
+): SimpleType {
+  switch (type.tag) {
+    case "rigid": {
+      const replacement = replacements.get(type.id);
+      if (replacement === undefined) return type;
+      return replacement;
+    }
+    case "forall": {
+      const innerReplacements = new Map(replacements);
+      for (const variable of type.variables) innerReplacements.delete(variable);
+      return {
+        tag: "forall",
+        variables: type.variables,
+        body: substituteRigid(type.body, innerReplacements),
+      };
+    }
+    case "fun":
+      return {
+        tag: "fun",
+        param: substituteRigid(type.param, replacements),
+        effects: substituteRigid(type.effects, replacements),
+        result: substituteRigid(type.result, replacements),
+      };
+    case "record":
+      return {
+        tag: "record",
+        fields: new Map(
+          [...type.fields].map(([name, member]) => [
+            name,
+            substituteRigid(member, replacements),
+          ]),
+        ),
+      };
+    case "array":
+      return {
+        tag: "array",
+        element: substituteRigid(type.element, replacements),
+      };
+    case "variant":
+      return {
+        tag: "variant",
+        cases: new Map(
+          [...type.cases].map(([name, payload]) => [
+            name,
+            substituteRigid(payload, replacements),
+          ]),
+        ),
+      };
+    case "union":
+      return {
+        tag: "union",
+        members: type.members.map((member) =>
+          substituteRigid(member, replacements)
+        ),
       };
     default:
       return type;

@@ -1,0 +1,5 @@
+const exports = { .source = 1; };
+
+open { .source: first, .source: second } = exports;
+
+return first;

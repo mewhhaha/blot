@@ -10,7 +10,14 @@
 // an approximation: `resume` is affine and calling it twice is an error, not a
 // convention.
 
-import type { Decl, Expr, Module, Pattern, Span } from "../syntax/ast.ts";
+import type {
+  Decl,
+  Expr,
+  Module,
+  OpenMapping,
+  Pattern,
+  Span,
+} from "../syntax/ast.ts";
 import { expect, fail } from "../diagnostic.ts";
 import {
   asTuple,
@@ -40,13 +47,105 @@ export type Eval = Generator<Perform, Value, Value>;
 /** Modules resolved before evaluation begins; `@import` never touches the disk. */
 export type Imports = ReadonlyMap<string, Value>;
 
-interface Runtime {
+export type EvaluationPhase = "comptime" | "runtime";
+
+interface EvaluationBudget {
+  remaining: number;
+  readonly limit: number;
+}
+
+export interface Runtime {
   readonly imports: Imports;
+  readonly phase: EvaluationPhase;
+  readonly budget: EvaluationBudget;
+}
+
+const DEFAULT_EVALUATION_FUEL = 1_000_000;
+
+export interface OpenBinding {
+  readonly source: string;
+  readonly target: string;
+  readonly value: Value;
+}
+
+export function resolveOpenBindings(
+  fields: ReadonlyMap<string, Value>,
+  mappings: readonly OpenMapping[],
+  span: Span,
+): readonly OpenBinding[] {
+  const mappingsBySource = new Map<string, OpenMapping>();
+  for (const mapping of mappings) {
+    const previous = mappingsBySource.get(mapping.source);
+    if (previous !== undefined) {
+      fail(
+        "BLOT_DUPLICATE_OPEN_FIELD",
+        `The open mask maps field \`.${mapping.source}\` more than once.`,
+        mapping.span,
+      );
+    }
+    if (!fields.has(mapping.source)) {
+      fail(
+        "BLOT_NO_FIELD",
+        `The open mask names field \`.${mapping.source}\`, but the opened record has no such field.`,
+        mapping.span,
+      );
+    }
+    mappingsBySource.set(mapping.source, mapping);
+  }
+
+  const bindingsByTarget = new Map<string, OpenBinding>();
+  for (const [source, value] of fields) {
+    const mapping = mappingsBySource.get(source);
+    let target: string | null = source;
+    if (mapping !== undefined) target = mapping.target;
+    if (target === null) continue;
+
+    const previous = bindingsByTarget.get(target);
+    if (previous !== undefined) {
+      let collisionSpan = span;
+      if (mapping !== undefined) collisionSpan = mapping.span;
+      fail(
+        "BLOT_OPEN_COLLISION",
+        `Fields \`.${previous.source}\` and \`.${source}\` would both enter scope as \`${target}\`. Rename or suppress one of them.`,
+        collisionSpan,
+      );
+    }
+    bindingsByTarget.set(target, { source, target, value });
+  }
+  return [...bindingsByTarget.values()];
+}
+
+export function evaluationRuntime(
+  imports: Imports,
+  phase: EvaluationPhase,
+  fuel = DEFAULT_EVALUATION_FUEL,
+): Runtime {
+  return { imports, phase, budget: { remaining: fuel, limit: fuel } };
 }
 
 export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
+  runtime.budget.remaining -= 1;
+  if (runtime.budget.remaining < 0) {
+    fail(
+      "BLOT_EVALUATION_LIMIT",
+      `Evaluation exceeded its deterministic limit of ${runtime.budget.limit} steps.`,
+      expr.span,
+    );
+  }
+
   switch (expr.tag) {
     case "int":
+      if (
+        runtime.phase === "runtime" &&
+        (expr.value < -0x8000000000000000n ||
+          expr.value > 0x7fffffffffffffffn)
+      ) {
+        fail(
+          "BLOT_INTEGER_OVERFLOW",
+          `The runtime integer ${expr.value} is outside signed i64 -9223372036854775808..9223372036854775807.`,
+          expr.span,
+        );
+      }
       return { tag: "int", value: expr.value };
     case "text":
       return { tag: "text", value: expr.value };
@@ -122,10 +221,14 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
       );
       break;
 
-    case "comptime":
-      // Everything already runs at compile time; the marker becomes meaningful
-      // once there is a runtime stage to distinguish it from.
-      return yield* evaluate(expr.body, env, runtime);
+    case "comptime": {
+      const comptimeRuntime: Runtime = {
+        imports: runtime.imports,
+        phase: "comptime",
+        budget: runtime.budget,
+      };
+      return yield* evaluate(expr.body, env, comptimeRuntime);
+    }
 
     case "tuple": {
       const elements: Value[] = [];
@@ -234,28 +337,49 @@ function* runDeclarations(
           declaration.span,
         );
       }
-      for (const [name, member] of value.fields) scope.names.set(name, member);
+      const bindings = resolveOpenBindings(
+        value.fields,
+        declaration.mappings,
+        declaration.span,
+      );
+      for (const binding of bindings) {
+        scope.names.set(binding.target, binding.value);
+      }
       continue;
     }
     if (declaration.tag === "shadow") {
+      if (lookup(scope, declaration.name) === undefined) {
+        fail(
+          "BLOT_UNBOUND",
+          `\`${declaration.name} := ...\` cannot shadow a name that is not in scope.`,
+          declaration.span,
+        );
+      }
       const value = yield* evaluate(declaration.value, scope, runtime);
       // A shadow names its effect for the same reason a binding does: without
       // it every row reads `{ Effect }` and says nothing.
-      scope.names.set(
-        declaration.name,
-        value.tag === "effect" && value.name === "Effect"
-          ? { ...value, name: declaration.name }
-          : value,
-      );
+      let namedValue = value;
+      if (value.tag === "effect" && value.name === "Effect") {
+        namedValue = { ...value, name: declaration.name };
+      }
+      scope.names.set(declaration.name, namedValue);
       continue;
     }
     // `sig` constrains inference; it binds nothing and computes nothing here.
     if (declaration.kind === "sig") continue;
+    let declarationRuntime = runtime;
+    if (declaration.kind === "const" && runtime.phase === "runtime") {
+      declarationRuntime = {
+        imports: runtime.imports,
+        phase: "comptime",
+        budget: runtime.budget,
+      };
+    }
     const value = yield* bind(
       declaration.pattern,
       declaration.value,
       scope,
-      runtime,
+      declarationRuntime,
     );
     if (!match(declaration.pattern, value, scope)) {
       fail(
@@ -361,7 +485,14 @@ export function* apply(
         span,
       );
     }
-    const inner = fn.imports === undefined ? runtime : { imports: fn.imports };
+    let inner = runtime;
+    if (fn.imports !== undefined) {
+      inner = {
+        imports: fn.imports,
+        phase: runtime.phase,
+        budget: runtime.budget,
+      };
+    }
     return yield* evaluate(fn.body, scope, inner);
   }
 
@@ -417,9 +548,12 @@ export function* apply(
 const SPECIAL: ReadonlyMap<string, number> = new Map([
   ["@effect", 1],
   ["@effect.host", 1],
+  ["@forall", 1],
   ["@handle", 1],
   ["@import", 1],
 ]);
+
+let nextTypeVariable = 0;
 
 function* runPrimitive(
   name: string,
@@ -451,6 +585,13 @@ function* runPrimitive(
     return module;
   }
 
+  if (name === "@forall") {
+    nextTypeVariable += 1;
+    const variable: Value = { tag: "type-variable", id: nextTypeVariable };
+    const body = yield* apply(args[0], variable, span, runtime);
+    return { tag: "forall", variable: nextTypeVariable, body };
+  }
+
   if (name === "@handle") {
     // The one primitive that takes a tuple rather than being curried. The
     // checker has to see this call site — the effect being discharged is part
@@ -469,7 +610,7 @@ function* runPrimitive(
 
   const primitive = PRIMITIVES.get(name);
   expect(primitive !== undefined, `missing primitive ${name}`);
-  return primitive.run(args, span);
+  return primitive.run(args, span, runtime.phase);
 }
 
 /**

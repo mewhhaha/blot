@@ -37,8 +37,11 @@ const REJECTIONS: Record<
   },
   "misplaced_rec": { code: "BLOT_MISPLACED_REC", stage: "run" },
   "missing_result": { code: "BLOT_MISSING_RESULT", stage: "check" },
-  "out_of_range": { code: "BLOT_DOES_NOT_SATISFY", stage: "run" },
-  "resume_twice": { code: "BLOT_RESUME_TWICE", stage: "run" },
+  "out_of_range": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "resume_twice": {
+    code: "BLOT_HANDLER_RESUME_NOT_AFFINE",
+    stage: "check",
+  },
   "uncurried_lambda": { code: "BLOT_UNPARENTHESIZED_LAMBDA", stage: "check" },
   "unknown_operator": { code: "BLOT_UNKNOWN_OPERATOR", stage: "check" },
   "unhandled_effect": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },
@@ -74,10 +77,29 @@ const REJECTIONS: Record<
     stage: "check",
   },
   "effect_not_discharged": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },
-  "handler_aborts": { code: "BLOT_UNSUPPORTED_LOWERING", stage: "build" },
   "loop_type_drift": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "rebinding_type_change": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "rebinding_unbound": { code: "BLOT_UNBOUND", stage: "check" },
   "generic_refused": { code: "BLOT_REFUSED", stage: "check" },
   "handler_wrong_operation": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "open_collision": { code: "BLOT_OPEN_COLLISION", stage: "check" },
+  "open_duplicate_field": {
+    code: "BLOT_DUPLICATE_OPEN_FIELD",
+    stage: "check",
+  },
+  "open_missing_field": { code: "BLOT_NO_FIELD", stage: "check" },
+  "break_outside_loop": {
+    code: "BLOT_BREAK_OUTSIDE_LOOP",
+    stage: "check",
+  },
+  "break_in_for": {
+    code: "BLOT_BREAK_OUTSIDE_LOOP",
+    stage: "check",
+  },
+  "break_in_function": {
+    code: "BLOT_BREAK_OUTSIDE_LOOP",
+    stage: "check",
+  },
 };
 
 async function blotFiles(directory: string): Promise<string[]> {

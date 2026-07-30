@@ -35,22 +35,29 @@ scope, and no exemption from its own type system. A default fixity names a
 binding by string, so `+` works only because something opened `Num` — do not
 reintroduce an implicit scope to make that line disappear.
 
-**A loop is a fold, not an assignment.** `for` desugars to `iterate` during
-CST lowering: the names its body rebinds with `:=` become the accumulator
-record, and nothing downstream of the parser knows a loop exists. Do not give
-it an AST node, a typing rule, or a backend path — each would be a second way
-to say what a fold already says. And do not add assignment to make a loop read
-more directly; that would put mutation in a language whose ownership analysis
-assumes there is none.
+**A loop is a fold, not an assignment.** `for` and `loop` desugar during CST
+lowering: the names their bodies rebind with `:=` become the accumulator
+record, and nothing downstream of the parser knows a loop exists. `break`
+becomes a locally handled abort carrying that record. Do not give these forms
+AST nodes, typing rules, or backend paths — each would be a second way to say
+what recursion and handlers already say. And do not add assignment to make a
+loop read more directly; that would put mutation in a language whose ownership
+analysis assumes there is none.
 
-**Surface forms desugar; they do not get machinery.** `for` becomes the
-`rec`/`case` recursion and `x <- e` becomes `let x = e ()`, both during CST
-lowering, so nothing downstream of the parser knows either exists. A desugaring
-emits the recursion rather than calling a prelude function that contains it: a
-keyword whose meaning depends on a name being in scope is a dependency the
-program cannot see. A new form earns an AST
-node only when no existing one can say what it means — otherwise it is a second
-way to say something the language already says, and every pass has to learn it.
+**`:=` preserves type.** It shadows an existing binding with another value of
+the same stable type; singleton literals widen to their integer or text domain
+when rebound. A repeated `let` or `const` is the explicit way to shadow a name
+while changing its type.
+
+**Surface forms desugar; they do not get machinery.** `for` and `loop` become
+`rec`/`case` recursion, `break` becomes a locally handled abort, and `x <- e`
+becomes `let x = e ()`, all during CST lowering, so nothing downstream of the
+parser knows these forms exist. A desugaring emits the recursion rather than
+calling a prelude function that contains it: a keyword whose meaning depends
+on a name being in scope is a dependency the program cannot see. A new form
+earns an AST node only when no existing one can say what it means — otherwise
+it is a second way to say something the language already says, and every pass
+has to learn it.
 
 **Types are values.** There is no type-level sublanguage and no type namespace.
 If a feature seems to need one, it belongs in the comptime evaluator instead.
@@ -81,11 +88,12 @@ evaluator, and the emitted Wasm run the same language. `just wasm` requires all
 three to produce the same value; a lowering that satisfies one and not another
 is wrong.
 
-**Inference feeds the backend.** Field sets and constructor sets are recorded
-during checking, keyed by AST node identity, because a nominal declaration
-needs the whole set and the syntax does not carry it. Do not re-derive them in
-the backend — that is a second type checker. This is why `load` keeps one cache
-per process.
+**Inference feeds the backend.** Field sets, constructor sets, and compile-time
+declaration values are recorded during checking, keyed by AST node identity,
+because a nominal declaration needs the whole set and a residual block may
+still contain a local compile-time binding. Do not re-derive them in the
+backend — that is a second type checker and, for effects, would mint a different
+identity. This is why `load` keeps one cache per process.
 
 **`blot check` must not touch WebGPU.** Parsing has baba's `CpuFrontend`
 oracle and inference is plain TypeScript. Keep the split structural so the

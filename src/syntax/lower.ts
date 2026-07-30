@@ -154,7 +154,7 @@ export function lowerModule(root: Rule, source: string): Module {
       );
 
   const table = buildFixityTable(fixities);
-  const context: Context = { source, table };
+  const context: Context = { source, table, loop: null };
 
   const declarations = fieldList(root, "declarations")
     .map((cursor) => unwrap(cursor));
@@ -166,6 +166,10 @@ export function lowerModule(root: Rule, source: string): Module {
 interface Context {
   readonly source: string;
   readonly table: ReturnType<typeof buildFixityTable>;
+  readonly loop: {
+    readonly effect: string;
+    readonly carried: readonly string[];
+  } | null;
 }
 
 /**
@@ -237,14 +241,12 @@ function lowerQualifiedName(rule: Rule, _source: string): readonly string[] {
 }
 
 /**
- * `for source do … end;` becomes a call to `iterate`.
+ * `for source do … end;` becomes the recursion behind `iterate`.
  *
  * There is no loop in the AST, no loop in the evaluator, and no loop in the
- * backend, because a loop is a fold and `iterate` is the fold — prelude source
- * over `rec` and `case`, which already compile. The whole construct is surface
- * syntax over a function, exactly as `a + b` is surface syntax over `Num.add`,
- * and it depends on `iterate` being in scope for the same reason `+` depends
- * on `Num`.
+ * backend, because a loop is a fold and `rec`/`case` already express the fold.
+ * The construct emits that recursion directly, so its meaning does not depend
+ * on a prelude name being in scope.
  *
  * The names the body rebinds with `:=` are the accumulator. Only a direct `:=`
  * counts: a `let` inside the body is a local the next iteration cannot see,
@@ -252,13 +254,8 @@ function lowerQualifiedName(rule: Rule, _source: string): readonly string[] {
  *
  *   for let n = src do total := total + n; end;
  *
- *   let { .total; } = iterate (src, { .total = total; },
- *     ((loop$, item$) => do
- *        let { .total; } = loop$;
- *        let n = item$;
- *        total := total + n;
- *        return { .total = total; };
- *      end));
+ * The resulting recursive step destructures `{ .total; }`, visits one item,
+ * rebuilds that state, and recurs with the iterator's next state.
  */
 /**
  * Can this pattern fail to match?
@@ -286,6 +283,9 @@ function desugarLoop(
   binder: Pattern | null,
   source: Expr,
   body: readonly Decl[],
+  completion:
+    | { readonly tag: "iterate" }
+    | { readonly tag: "breakable"; readonly effect: string },
   span: Span,
 ): Decl {
   const carried: string[] = [];
@@ -296,24 +296,27 @@ function desugarLoop(
   }
 
   const name = (text: string): Expr => ({ tag: "var", name: text, span });
-  const state: Expr = carried.length === 0
-    ? { tag: "unit", span }
-    : {
-      tag: "shape",
-      members: carried.map((field) => ({
-        tag: "field" as const,
-        name: field,
-        value: name(field),
-      })),
-      span,
-    };
+  const state: Expr = carried.length === 0 ? { tag: "unit", span } : {
+    tag: "shape",
+    members: carried.map((field) => ({
+      tag: "field" as const,
+      name: field,
+      value: name(field),
+    })),
+    span,
+  };
   const statePattern: Pattern = carried.length === 0
     ? { tag: "wildcard", span }
     : {
       tag: "shape",
       fields: carried.map((field) => ({
         name: field,
-        pattern: { tag: "name" as const, name: field, qualifier: "none" as const, span },
+        pattern: {
+          tag: "name" as const,
+          name: field,
+          qualifier: "none" as const,
+          span,
+        },
       })),
       span,
     };
@@ -384,6 +387,128 @@ function desugarLoop(
     name: field,
     span,
   });
+  const continueWith = (nextIterator: Expr, nextState: Expr): Expr => ({
+    tag: "apply",
+    fn: name(goIn),
+    arg: {
+      tag: "tuple",
+      elements: [nextIterator, nextState],
+      span,
+    },
+    span,
+  });
+  const nextIterator = at(name(pairIn), "1");
+  let completedVisit = continueWith(nextIterator, visited);
+
+  if (completion.tag === "breakable") {
+    const resultName = "loopResult$";
+    const handledVisit: Expr = {
+      tag: "apply",
+      fn: { tag: "intrinsic", name: "@handle", span },
+      arg: {
+        tag: "tuple",
+        elements: [
+          name(completion.effect),
+          {
+            tag: "lambda",
+            parameter: { tag: "unit", span },
+            body: visited,
+            span,
+          },
+          {
+            tag: "shape",
+            members: [
+              {
+                tag: "field",
+                name: "exit",
+                value: {
+                  tag: "lambda",
+                  parameter: {
+                    tag: "tuple",
+                    elements: [
+                      statePattern,
+                      {
+                        tag: "name",
+                        name: "resume$",
+                        qualifier: "affine",
+                        span,
+                      },
+                    ],
+                    span,
+                  },
+                  body: {
+                    tag: "apply",
+                    fn: { tag: "tag", name: "LoopBreak", span },
+                    arg: state,
+                    span,
+                  },
+                  span,
+                },
+              },
+              {
+                tag: "field",
+                name: "return",
+                value: {
+                  tag: "lambda",
+                  parameter: {
+                    tag: "name",
+                    name: resultName,
+                    qualifier: "none",
+                    span,
+                  },
+                  body: {
+                    tag: "apply",
+                    fn: { tag: "tag", name: "LoopContinue", span },
+                    arg: name(resultName),
+                    span,
+                  },
+                  span,
+                },
+              },
+            ],
+            span,
+          },
+        ],
+        span,
+      },
+      span,
+    };
+    completedVisit = {
+      tag: "case",
+      target: handledVisit,
+      arms: [
+        {
+          pattern: {
+            tag: "constructor",
+            name: "LoopBreak",
+            payload: {
+              tag: "name",
+              name: "stopped$",
+              qualifier: "none",
+              span,
+            },
+            span,
+          },
+          body: name("stopped$"),
+        },
+        {
+          pattern: {
+            tag: "constructor",
+            name: "LoopContinue",
+            payload: {
+              tag: "name",
+              name: "continued$",
+              qualifier: "none",
+              span,
+            },
+            span,
+          },
+          body: continueWith(nextIterator, name("continued$")),
+        },
+      ],
+      span,
+    };
+  }
 
   const go: Expr = {
     tag: "rec",
@@ -417,16 +542,7 @@ function desugarLoop(
               payload: { tag: "name", name: pairIn, qualifier: "none", span },
               span,
             },
-            body: {
-              tag: "apply",
-              fn: name(goIn),
-              arg: {
-                tag: "tuple",
-                elements: [at(name(pairIn), "1"), visited],
-                span,
-              },
-              span,
-            },
+            body: completedVisit,
           },
         ],
         span,
@@ -443,19 +559,145 @@ function desugarLoop(
     value: {
       tag: "block",
       declarations: [
-        { tag: "binding", kind: "let", pattern: { tag: "name", name: iterIn, qualifier: "none", span }, value: source, span },
-        { tag: "binding", kind: "let", pattern: { tag: "name", name: goIn, qualifier: "none", span }, value: go, span },
+        {
+          tag: "binding",
+          kind: "let",
+          pattern: { tag: "name", name: iterIn, qualifier: "none", span },
+          value: source,
+          span,
+        },
+        {
+          tag: "binding",
+          kind: "let",
+          pattern: { tag: "name", name: goIn, qualifier: "none", span },
+          value: go,
+          span,
+        },
       ],
       result: {
         tag: "apply",
         fn: name(goIn),
-        arg: { tag: "tuple", elements: [at(name(iterIn), "state"), state], span },
+        arg: {
+          tag: "tuple",
+          elements: [at(name(iterIn), "state"), state],
+          span,
+        },
         span,
       },
       span,
     },
     span,
   };
+}
+
+/**
+ * `loop do … end;` is a fold over an iterator that never ends. `break` performs
+ * a compiler-local abort carrying the fold state. Each iteration handles that
+ * abort before deciding whether to recur, so no handler encloses the recursion
+ * itself.
+ */
+function desugarRepetition(
+  body: readonly Decl[],
+  span: Span,
+): Decl {
+  const name = (text: string): Expr => ({ tag: "var", name: text, span });
+  const apply = (fn: Expr, arg: Expr): Expr => ({
+    tag: "apply",
+    fn,
+    arg,
+    span,
+  });
+  const effectName = "break$";
+  const typeName = "breakType$";
+  const signature = apply(
+    { tag: "intrinsic", name: "@forall", span },
+    {
+      tag: "lambda",
+      parameter: { tag: "name", name: typeName, qualifier: "none", span },
+      body: apply(
+        apply(
+          { tag: "intrinsic", name: "@type.arrow", span },
+          name(typeName),
+        ),
+        name(typeName),
+      ),
+      span,
+    },
+  );
+  const effect = apply(
+    { tag: "intrinsic", name: "@effect", span },
+    {
+      tag: "shape",
+      members: [{ tag: "field", name: "exit", value: signature }],
+      span,
+    },
+  );
+
+  const iterator: Expr = {
+    tag: "shape",
+    members: [
+      { tag: "field", name: "state", value: { tag: "unit", span } },
+      {
+        tag: "field",
+        name: "step",
+        value: {
+          tag: "lambda",
+          parameter: { tag: "wildcard", span },
+          body: apply(
+            { tag: "tag", name: "Some", span },
+            {
+              tag: "tuple",
+              elements: [{ tag: "unit", span }, { tag: "unit", span }],
+              span,
+            },
+          ),
+          span,
+        },
+      },
+    ],
+    span,
+  };
+  const repeated = desugarLoop(
+    null,
+    iterator,
+    body,
+    { tag: "breakable", effect: effectName },
+    span,
+  );
+  expect(repeated.tag === "binding", "loop did not lower to a binding");
+
+  return {
+    ...repeated,
+    value: {
+      tag: "block",
+      declarations: [{
+        tag: "binding",
+        kind: "const",
+        pattern: {
+          tag: "name",
+          name: effectName,
+          qualifier: "none",
+          span,
+        },
+        value: effect,
+        span,
+      }],
+      result: repeated.value,
+      span,
+    },
+  };
+}
+
+function carriedNames(statements: readonly Cursor[]): readonly string[] {
+  const carried: string[] = [];
+  for (const statement of statements) {
+    const declaration = asRule(unwrap(statement), "statement");
+    if (declaration.name !== "rebinding") continue;
+    if (tokenOf(required(declaration, "arrow")).text !== ":=") continue;
+    const name = tokenOf(required(declaration, "name")).text;
+    if (!carried.includes(name)) carried.push(name);
+  }
+  return carried;
 }
 
 function lowerDecl(rule: Rule, context: Context): Decl {
@@ -488,9 +730,17 @@ function lowerDecl(rule: Rule, context: Context): Decl {
           inner.span,
         );
       }
-      return lowerDecl(inner, context);
+      return lowerDecl(inner, { ...context, loop: null });
     });
-    if (drawn === null) return desugarLoop(null, head, body, rule.span);
+    if (drawn === null) {
+      return desugarLoop(
+        null,
+        head,
+        body,
+        { tag: "iterate" },
+        rule.span,
+      );
+    }
     return desugarLoop(
       patternFromExpr(head),
       lowerValue(
@@ -498,12 +748,84 @@ function lowerDecl(rule: Rule, context: Context): Decl {
         context,
       ),
       body,
+      { tag: "iterate" },
       rule.span,
     );
   }
+  if (rule.name === "repetition") {
+    const statements = fieldList(rule, "body");
+    const carried = carriedNames(statements);
+    const loop = { effect: "break$", carried };
+    const body = statements.map((statement) => {
+      const inner = asRule(unwrap(statement), "statement");
+      if (inner.name === "result") {
+        fail(
+          "BLOT_RETURN_IN_LOOP",
+          "A loop body has no `return`: a loop produces its rebindings, not a value.",
+          inner.span,
+        );
+      }
+      return lowerDecl(inner, { ...context, loop });
+    });
+    return desugarRepetition(body, rule.span);
+  }
+  if (rule.name === "breaking") {
+    if (context.loop === null) {
+      fail(
+        "BLOT_BREAK_OUTSIDE_LOOP",
+        "`break` is inside a `loop`, and cannot cross a function or `for` boundary.",
+        rule.span,
+      );
+    }
+    const state: Expr = context.loop.carried.length === 0
+      ? { tag: "unit", span: rule.span }
+      : {
+        tag: "shape",
+        members: context.loop.carried.map((name) => ({
+          tag: "field" as const,
+          name,
+          value: { tag: "var" as const, name, span: rule.span },
+        })),
+        span: rule.span,
+      };
+    return {
+      tag: "binding",
+      kind: "let",
+      pattern: { tag: "wildcard", span: rule.span },
+      value: {
+        tag: "apply",
+        fn: {
+          tag: "field",
+          target: {
+            tag: "var",
+            name: context.loop.effect,
+            span: rule.span,
+          },
+          name: "exit",
+          span: rule.span,
+        },
+        arg: state,
+        span: rule.span,
+      },
+      span: rule.span,
+    };
+  }
   if (rule.name === "opening") {
+    const mask = asRule(required(rule, "mask"), "open_mask");
+    const mappings = fieldList(mask, "entries").map((cursor) => {
+      const mapping = asRule(cursor, "open_mapping");
+      const target = tokenOf(required(mapping, "target")).text;
+      let loweredTarget: string | null = target;
+      if (target === "_") loweredTarget = null;
+      return {
+        source: tokenOf(required(mapping, "source")).text,
+        target: loweredTarget,
+        span: mapping.span,
+      };
+    });
     return {
       tag: "open",
+      mappings,
       value: lowerValue(asRule(field(rule, "value"), "value"), context),
       span: rule.span,
     };
@@ -765,7 +1087,10 @@ function lowerLambda(rule: Rule, context: Context): Expr {
   return {
     tag: "lambda",
     parameter: patternFromExpr(head),
-    body: lowerExpression(asRule(field(rule, "body"), "body"), context),
+    body: lowerExpression(
+      asRule(field(rule, "body"), "body"),
+      { ...context, loop: null },
+    ),
     span: rule.span,
   };
 }

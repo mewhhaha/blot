@@ -10,6 +10,7 @@
 "," @punctuation.delimiter
 "." @punctuation.delimiter
 "..." @operator
+":" @punctuation.delimiter
 ":=" @operator
 ";" @punctuation.delimiter
 "<-" @operator
@@ -27,5 +28,7 @@
 (COMMENT) @comment
 (field_suffix field: (field_name) @variable.other.member)
 (fixity_declaration target: (qualified_name) @variable)
+(open_mapping target: (IDENT) @variable)
+(open_mapping target: (TYPE_IDENT) @variable)
 (shape_field name: (field_name) @variable.other.member)
 (shape_pattern_field name: (field_name) @variable.other.member)

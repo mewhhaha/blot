@@ -4,7 +4,7 @@
 // Neither is in the type lattice — they are a separate flow analysis, which is
 // what keeps biunification polynomial.
 
-open (@import "blot:prelude") ();
+open { } = (@import "blot:prelude") ();
 
 let consume = (!value) => value + 1;
 let peek = (&point) => point.x + point.y;

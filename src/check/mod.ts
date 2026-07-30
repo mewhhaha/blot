@@ -7,18 +7,14 @@
 
 import type { Diagnostic } from "../diagnostic.ts";
 import { BlotError } from "../diagnostic.ts";
-import {
-  load,
-  type Loaded,
-  moduleImports,
-  resolvePath,
-} from "../load.ts";
+import { importExpressions, load, type Loaded } from "../load.ts";
 import {
   childEnv,
   type Env as ValueEnv,
   type Value,
 } from "../comptime/value.ts";
 import {
+  type Checked,
   checkModule,
   type GrantSignature,
   type VariantCase,
@@ -33,16 +29,25 @@ import { checkLinearity, type Ownership } from "../linear/check.ts";
 export interface CheckResult {
   readonly type: string;
   readonly effects: string;
+  /** Inferred module result retained for specialization and boundary lowering. */
+  readonly moduleType: SimpleType;
+  /** Inferred module row retained for the emitted ABI manifest. */
+  readonly moduleEffects: SimpleType;
   readonly ownership: Ownership;
   /** What each `open` brought into scope; see `Checked`. */
   readonly opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
+  /** Compile-time declaration values; see `Checked`. */
+  readonly comptimeValues: ReadonlyMap<Expr, Value>;
   /** Field and constructor sets the backend needs; see `Checked`. */
   readonly shapes: ReadonlyMap<Expr, readonly string[]>;
   readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
   readonly patternShapes: ReadonlyMap<Pattern, readonly string[]>;
   readonly grants: ReadonlyMap<Expr, GrantSignature>;
-  /** Checked dependencies, so the backend can inline what it imports. */
-  readonly modules: ReadonlyMap<string, Loaded>;
+  /** Checked dependencies keyed by each literal import site. */
+  readonly modules: ReadonlyMap<
+    Expr,
+    { readonly module: Loaded["module"]; readonly values: ValueEnv }
+  >;
   /**
    * The module's compile-time bindings, including its own `const`s.
    *
@@ -52,13 +57,6 @@ export interface CheckResult {
   readonly values: ValueEnv;
 }
 
-function seedValues(loaded: Loaded) {
-  if (loaded.closure.tag !== "closure") {
-    throw new Error("a module must load as a closure");
-  }
-  return childEnv(loaded.closure.env);
-}
-
 function imports(loaded: Loaded) {
   if (loaded.closure.tag !== "closure") return new Map();
   return loaded.closure.imports ?? new Map();
@@ -66,6 +64,21 @@ function imports(loaded: Loaded) {
 
 export async function checkFile(path: string): Promise<CheckResult> {
   const loaded = await load(path);
+  return checkLoaded(loaded, new Map()).result;
+}
+
+interface CheckedFile {
+  readonly checked: Checked;
+  readonly result: CheckResult;
+}
+
+function checkLoaded(
+  loaded: Loaded,
+  cache: Map<string, CheckedFile>,
+): CheckedFile {
+  const cached = cache.get(loaded.path);
+  if (cached !== undefined) return cached;
+
   if (loaded.closure.tag !== "closure") {
     throw new Error("a module must load as a closure");
   }
@@ -79,34 +92,29 @@ export async function checkFile(path: string): Promise<CheckResult> {
   // Each dependency is checked before its importer, so a module's exports are
   // visible as types rather than as an opaque value.
   const modules = new Map<string, SimpleType>();
-  const loadedModules = new Map<string, Loaded>();
+  const dependencies = new Map<string, CheckedFile>();
   // A dependency's facts travel with it for the same reason the prelude's do:
   // the backend inlines an imported module, so it needs the field and
   // constructor sets inference found *inside* that module.
   const dependencyFacts: {
     opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
+    comptimeValues: ReadonlyMap<Expr, Value>;
     shapes: ReadonlyMap<Expr, readonly string[]>;
     variants: ReadonlyMap<Expr, readonly VariantCase[]>;
     patternShapes: ReadonlyMap<Pattern, readonly string[]>;
   }[] = [];
-  for (const specifier of moduleImports(loaded.module)) {
-    const dependency = await load(resolvePath(specifier, loaded.path));
-    loadedModules.set(specifier, dependency);
-    const checked = checkModule(
-      dependency.module,
-      seedValues(dependency),
-      imports(dependency),
-      null,
-    );
-    dependencyFacts.push(checked);
+  for (const [specifier, dependency] of loaded.dependencies) {
+    const dependencyChecked = checkLoaded(dependency, cache);
+    dependencies.set(specifier, dependencyChecked);
+    dependencyFacts.push(dependencyChecked.checked);
     const parameter = dependency.module.parameter === null
       ? { tag: "unit" as const }
       : freshVar(0);
     modules.set(specifier, {
       tag: "fun",
       param: parameter,
-      effects: { tag: "effects", labels: new Set() },
-      result: checked.type,
+      effects: dependencyChecked.checked.effects,
+      result: dependencyChecked.checked.type,
     });
   }
 
@@ -138,13 +146,47 @@ export async function checkFile(path: string): Promise<CheckResult> {
     if (linear.diagnostics.length > 0) {
       throw new BlotError(linear.diagnostics[0]);
     }
-    return {
+    const resolvedModules = mergeAll([
+      ...[...dependencies.values()].map((dependency) =>
+        dependency.result.modules
+      ),
+      new Map(
+        [...importExpressions(loaded.module)].map(([site, specifier]) => {
+          const dependency = dependencies.get(specifier);
+          if (dependency === undefined) {
+            throw new Error(
+              `loaded module ${loaded.path} omitted dependency ${specifier}`,
+            );
+          }
+          const loadedDependency = loaded.dependencies.get(specifier);
+          if (loadedDependency === undefined) {
+            throw new Error(
+              `loaded module ${loaded.path} omitted dependency ${specifier}`,
+            );
+          }
+          return [
+            site,
+            {
+              module: loadedDependency.module,
+              values: dependency.result.values,
+            },
+          ] as const;
+        }),
+      ),
+    ]);
+    const result: CheckResult = {
       type: show(checked.type),
       effects: row,
+      moduleType: checked.type,
+      moduleEffects: checked.effects,
       ownership: linear.ownership,
       opens: mergeAll([
         ...dependencyFacts.map((facts) => facts.opens),
         checked.opens,
+      ]),
+      comptimeValues: mergeAll([
+        ...dependencyFacts.map((facts) => facts.comptimeValues),
+        checked.comptimeValues,
       ]),
       shapes: mergeAll([
         ...dependencyFacts.map((facts) => facts.shapes),
@@ -159,9 +201,12 @@ export async function checkFile(path: string): Promise<CheckResult> {
         checked.patternShapes,
       ]),
       grants: checked.grants,
-      modules: loadedModules,
+      modules: resolvedModules,
       values,
     };
+    const complete = { checked, result };
+    cache.set(loaded.path, complete);
+    return complete;
   } catch (error) {
     if (error instanceof TypeError_) {
       throw new BlotError(

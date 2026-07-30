@@ -1,0 +1,56 @@
+// An unbounded loop is still a fold. Its direct `:=` rebindings are the
+// accumulator, and `break` returns the accumulator as it exists at that point.
+
+open { } = @import "blot:prelude" ();
+
+let iterations = 0;
+let completed = 0;
+loop do
+  iterations := iterations + 1;
+  let _ = if iterations < 5
+    then ()
+    else do
+      break;
+      return ();
+    end
+    end;
+  completed := completed + 1;
+end;
+
+// Each loop handles its own `break`, so nesting targets the nearest loop.
+let outer = 0;
+let inner_total = 0;
+loop do
+  outer := outer + 1;
+  let inner = 0;
+  loop do
+    inner := inner + 1;
+    let _ = if inner < 2
+      then ()
+      else do
+        break;
+        return ();
+      end
+      end;
+  end;
+  inner_total := inner_total + inner;
+  let _ = if outer < 3
+    then ()
+    else do
+      break;
+      return ();
+    end
+    end;
+end;
+
+// A loop with no accumulator exits with `()`.
+loop do
+  break;
+end;
+
+return {
+  .iterations = iterations;
+  .completed = completed;
+  .outer = outer;
+  .inner_total = inner_total;
+};

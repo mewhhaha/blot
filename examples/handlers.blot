@@ -1,16 +1,15 @@
 // Handlers that compile.
 //
-// gpufuck's Core carries effect labels on definitions and lets a handler
-// *replace* an operation lexically; a pure replacement discharges the label.
-// That covers exactly the tail-resumptive handlers — the ones whose clause ends
-// in `resume e`, which is an operation replacement and nothing more.
+// gpufuck has no runtime handler representation, so blot specializes a handler
+// with selective CPS before Core exists. Each operation receives an affine
+// continuation for the rest of the computation.
 //
 // Handling means inlining the computation, because the evidence is lexical. A
 // closure has already resolved its operations against the global definitions,
 // so specializing the handler is not an optimization here: it is what makes it
 // mean anything.
 
-open (@import "blot:prelude") ();
+open { } = (@import "blot:prelude") ();
 
 const Counter = @effect { .bump = Int -> Int; };
 const Scale = @effect { .by = Int -> Int; };
@@ -19,11 +18,10 @@ const Scale = @effect { .by = Int -> Int; };
 // static error and never resuming is an abort — which is a different feature.
 let doubling = { .bump = (n, ?resume) => resume (n * 2); };
 
-// Tail position survives a block, an `if`, and a `case`, because each of those
-// has a tail to rewrite.
+// Resume may appear beneath a block, conditional, or case.
 let stepping = {
   .by = (n, ?resume) => do
-    const scaled = n * 10;
+    let scaled = n * 10;
     return resume (if n < 0 then 0 else scaled end);
   end;
 };

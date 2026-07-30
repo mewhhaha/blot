@@ -1,8 +1,8 @@
 // The whole language in one file.
 //
-// Three declaration forms, one aggregate, one namespace. `type`, `interface`,
-// `effect`, `duck`, `try`, `with`, `handler`, `for`, and assignment do not
-// exist — each of them is either a `const`, a call, or nothing at all.
+// One aggregate and one namespace. `type`, `interface`, `effect`, `duck`,
+// `try`, `with`, `handler`, and assignment do not exist — each is either a
+// `const`, a call, or nothing at all.
 
 module init;
 
@@ -13,7 +13,7 @@ operators {
   infix 40 (===) = Eq.eq;
 };
 
-open (@import "blot:prelude") ();
+open { } = @import "blot:prelude" ();
 
 // --- types are values -------------------------------------------------------
 
@@ -60,11 +60,34 @@ let [head, waist, tail] = [1, 2, 3];
 // --- shadowing and blocks ---------------------------------------------------
 
 let staged = do
-  const base = left * 2;
+  let base = left * 2;
   let scaled = base + right;
-  // `:=` rebinds; there is no assignment anywhere in blot.
+  // `:=` rebinds at the same stable type; there is no assignment anywhere.
   scaled := scaled + 1;
   return scaled;
+end;
+
+// A repeated `let` is explicit shadowing and may change the type.
+let changing = 1;
+let changing = "now text";
+
+// --- loops ------------------------------------------------------------------
+
+let folded = 0;
+for n in Iter.range (1, 4) do
+  folded := folded + n;
+end;
+
+let repeated = 0;
+loop do
+  repeated := repeated + 1;
+  let _ = if repeated < 3
+    then ()
+    else do
+      break;
+      return ();
+    end
+    end;
 end;
 
 // --- effects ----------------------------------------------------------------
@@ -72,8 +95,8 @@ end;
 const Console = @effect { .write = Str -> Unit; };
 
 let report = () => do
-  const _ = Console.write "one";
-  const _2 = Console.write "two";
+  let _ = Console.write "one";
+  let _2 = Console.write "two";
   return "done";
 end;
 
@@ -86,7 +109,7 @@ let joining = {
 // function and the program's entire authority.
 let printing = {
   .write = (message, ?resume) => do
-    const _ = init.print message;
+    let _ = init.print message;
     return resume ();
   end;
   .return = value => value;
@@ -121,6 +144,9 @@ return {
   .head = head;
   .tail = tail;
   .staged = staged;
+  .changing = changing;
+  .folded = folded;
+  .repeated = repeated;
 
   .joined = @handle (Console, report, joining);
   .printed = @handle (Console, report, printing);

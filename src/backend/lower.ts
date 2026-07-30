@@ -24,17 +24,29 @@ import {
   type HostCapabilityDeclaration,
   type HostDefinitionBinding,
   HostTypes,
+  NumericConversion,
+  storeType,
   surface,
   type SurfaceDefinition,
   type SurfaceExpression,
   type SurfaceTypeDeclaration,
   type TypeSchema,
+  UNIT_CONSTRUCTOR_NAME,
 } from "gpufuck";
-import type { Expr, Module, Pattern, Span } from "../syntax/ast.ts";
+import type {
+  ArrayElement,
+  Decl,
+  Expr,
+  Module,
+  Pattern,
+  ShapeMember,
+  Span,
+} from "../syntax/ast.ts";
 import { fail } from "../diagnostic.ts";
 import type { GrantSignature, VariantCase } from "../check/infer.ts";
 import type { SimpleType } from "../check/type.ts";
 import {
+  childEnv,
   type Env as ValueEnv,
   lookup as lookupValue,
   type Value,
@@ -49,10 +61,15 @@ import {
 export interface Facts {
   /** What each `open` brought into scope, so an inlined module keeps its own. */
   readonly opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
+  /** Compile-time declaration values that remain inside residual blocks. */
+  readonly comptimeValues: ReadonlyMap<Expr, Value>;
   readonly shapes: ReadonlyMap<Expr, readonly string[]>;
   readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
-  /** Dependencies, so an import can be inlined rather than left opaque. */
-  readonly modules: ReadonlyMap<string, { readonly module: Module }>;
+  /** Dependencies keyed by literal import site, so relative paths never alias. */
+  readonly modules: ReadonlyMap<
+    Expr,
+    { readonly module: Module; readonly values: ValueEnv }
+  >;
   /** The field set of the value a shape pattern destructures. */
   readonly patternShapes: ReadonlyMap<Pattern, readonly string[]>;
   /** Signatures of the capabilities granted through the module parameter. */
@@ -94,6 +111,12 @@ interface Sum {
   readonly cases: readonly VariantCase[];
 }
 
+interface Sealed {
+  readonly name: string;
+  readonly constructor: string;
+  readonly sourceName: string;
+}
+
 /** Constructors share one namespace in Core, so they are qualified by their type. */
 function constructorName(sum: Sum, tag: string): string {
   return `${sum.name}_${tag}`;
@@ -112,13 +135,37 @@ export interface Lowered {
    * lowering detail nobody outside can recover.
    */
   readonly shapes: ReadonlyMap<string, readonly string[]>;
+  /** Source spellings for variant and sealed constructors at the ABI. */
+  readonly constructors: ReadonlyMap<string, RuntimeConstructor>;
+  readonly exports: readonly LoweredExport[];
+}
+
+export interface RuntimeConstructor {
+  readonly kind: "variant" | "sealed";
+  readonly sourceName: string;
+  readonly payload: boolean;
 }
 
 const ENTRY = "main";
+const MODULE_RESULT = "blot$module$result";
+
+export interface RuntimeExport {
+  readonly sourceName: string;
+  readonly type: SimpleType;
+  readonly value?: Value;
+}
+
+export interface LoweredExport {
+  readonly sourceName: string;
+  readonly wasmName: string;
+  readonly definition: string;
+  readonly type: TypeSchema;
+}
 
 class Lowering {
   readonly nominals = new Map<string, Nominal>();
   readonly sums = new Map<string, Sum>();
+  readonly seals = new Map<string, Sealed>();
   readonly definitions: SurfaceDefinition[] = [];
   /** Hoisted prelude closures, by identity: one definition per closure. */
   readonly hoisted = new Map<Value, string>();
@@ -157,15 +204,31 @@ class Lowering {
     const sorted = [...cases].sort((left, right) =>
       left.name < right.name ? -1 : left.name > right.name ? 1 : 0
     );
-    const key = sorted.map((entry) => entry.name).join(" ");
+    const key = sorted.map((entry) => {
+      let arity = "0";
+      if (entry.payload) arity = "1";
+      return `${entry.name}:${arity}`;
+    }).join(" ");
     const existing = this.sums.get(key);
     if (existing !== undefined) return existing;
     const sum: Sum = {
-      name: `Sum_${sorted.map((entry) => entry.name).join("_")}`,
+      name: `Sum${this.sums.size}`,
       cases: sorted,
     };
     this.sums.set(key, sum);
     return sum;
+  }
+
+  seal(sourceName: string): Sealed {
+    const existing = this.seals.get(sourceName);
+    if (existing !== undefined) return existing;
+    const sealed = {
+      name: `Sealed${this.seals.size}`,
+      constructor: `Sealed${this.seals.size}`,
+      sourceName,
+    };
+    this.seals.set(sourceName, sealed);
+    return sealed;
   }
 
   /**
@@ -219,11 +282,12 @@ class Lowering {
     const key = ordered.join("\u0000");
     const existing = this.nominals.get(key);
     if (existing !== undefined) return existing;
-    const label = ordered.length === 0
-      ? "Empty"
-      : ordered.every((name) => /^\d+$/.test(name))
-      ? `Tuple${ordered.length}`
-      : `Shape_${ordered.join("_")}`;
+    let label = `Shape${this.nominals.size}`;
+    if (ordered.length === 0) {
+      label = "Empty";
+    } else if (ordered.every((name) => /^\d+$/.test(name))) {
+      label = `Tuple${ordered.length}`;
+    }
     // The *key* is canonical so both orderings find one nominal; the fields
     // stay in the order that reached here first, because construction and
     // projection both go through this object and only have to agree with each
@@ -236,23 +300,45 @@ class Lowering {
   declarations(): SurfaceTypeDeclaration[] {
     const sums: SurfaceTypeDeclaration[] = [...this.sums.values()].map((
       sum,
-    ) => ({
-      name: sum.name,
-      // One parameter per constructor that carries a payload, so `#Ready` and
-      // `#Failed Text` can live in one union without agreeing on a type.
-      parameters: sum.cases.map((_, index) => `p${index}`),
-      constructors: sum.cases.map((entry, index) => ({
-        name: constructorName(sum, entry.name),
-        fields: entry.payload
-          ? [{
-            name: "payload",
-            type: { kind: "parameter", name: `p${index}` } satisfies TypeSchema,
-          }]
-          : [],
-      })),
-    }));
+    ) => {
+      const payloads = sum.cases.filter((entry) => entry.payload);
+      return {
+        name: sum.name,
+        parameters: payloads.map((_, index) => `p${index}`),
+        constructors: sum.cases.map((entry) => {
+          if (!entry.payload) {
+            return {
+              name: constructorName(sum, entry.name),
+              fields: [],
+            };
+          }
+          const index = payloads.indexOf(entry);
+          return {
+            name: constructorName(sum, entry.name),
+            fields: [{
+              name: "payload",
+              type: {
+                kind: "parameter",
+                name: `p${index}`,
+              } satisfies TypeSchema,
+            }],
+          };
+        }),
+      };
+    });
     return [
       ...sums,
+      ...[...this.seals.values()].map((sealed) => ({
+        name: sealed.name,
+        parameters: ["value"],
+        constructors: [{
+          name: sealed.constructor,
+          fields: [{
+            name: "value",
+            type: { kind: "parameter", name: "value" } satisfies TypeSchema,
+          }],
+        }],
+      })),
       ...[...this.nominals.values()].map((nominal) => ({
         name: nominal.name,
         // Polymorphic in every field: gpufuck's HM decides what each one holds,
@@ -294,11 +380,14 @@ interface Scope {
 }
 
 function childScope(parent: Scope | null, values?: ValueEnv): Scope {
+  const visibleValues = values === undefined
+    ? childEnv(parent!.values)
+    : childEnv(values);
   return {
     names: new Map(),
     literals: new Map(),
     parent,
-    values: values ?? parent!.values,
+    values: visibleValues,
     granted: parent?.granted,
   };
 }
@@ -336,17 +425,18 @@ function resolve(scope: Scope, name: string): string | null {
 
 /** Primitives with a direct Core operator. Everything else is unsupported. */
 const BINARY: ReadonlyMap<string, BinaryOperator> = new Map([
-  ["@int.add", BinaryOperator.Add],
-  ["@int.sub", BinaryOperator.Subtract],
-  ["@int.mul", BinaryOperator.Multiply],
-  ["@int.div", BinaryOperator.Divide],
-  ["@int.rem", BinaryOperator.Remainder],
+  ["@int.add", BinaryOperator.AddSignedInteger64],
+  ["@int.sub", BinaryOperator.SubtractSignedInteger64],
+  ["@int.mul", BinaryOperator.MultiplySignedInteger64],
+  ["@int.div", BinaryOperator.DivideSignedInteger64],
+  ["@int.rem", BinaryOperator.RemainderSignedInteger64],
 ]);
 
 export function lowerModule(
   module: Module,
   facts: Facts,
   values: ValueEnv,
+  runtimeExports: readonly RuntimeExport[] = [],
 ): Lowered {
   const lowering = new Lowering(facts, values);
   const scope = childScope(null, values);
@@ -367,11 +457,36 @@ export function lowerModule(
 
   const body = lowerBlock(module.declarations, module.result, scope, lowering);
   lowering.definitions.push({
-    name: ENTRY,
+    name: MODULE_RESULT,
     parameters: [],
     annotation: null,
     body,
   });
+  const exports = lowerExports(
+    module.result,
+    runtimeExports,
+    lowering,
+  );
+  if (exports.some((exported) => exported.type.kind === "function")) {
+    const initialized = lowering.fresh("module");
+    lowering.definitions.push({
+      name: ENTRY,
+      parameters: [],
+      annotation: { kind: "unit" },
+      body: surface.let(
+        initialized,
+        surface.name(MODULE_RESULT),
+        surface.name(UNIT_CONSTRUCTOR_NAME),
+      ),
+    });
+  } else {
+    lowering.definitions.push({
+      name: ENTRY,
+      parameters: [],
+      annotation: null,
+      body: surface.name(MODULE_RESULT),
+    });
+  }
 
   return {
     definitions: lowering.definitions,
@@ -379,12 +494,329 @@ export function lowerModule(
     entry: ENTRY,
     capabilities: [...lowering.capabilities.values()],
     hostDefinitions: lowering.hostDefinitions,
+    exports,
     shapes: new Map(
       [...lowering.nominals.values()].map((nominal) =>
         [nominal.name, nominal.fields] as const
       ),
     ),
+    constructors: new Map<string, RuntimeConstructor>([
+      ...[...lowering.sums.values()].flatMap((sum) =>
+        sum.cases.map((entry) =>
+          [
+            constructorName(sum, entry.name),
+            {
+              kind: "variant",
+              sourceName: entry.name,
+              payload: entry.payload,
+            },
+          ] as const
+        )
+      ),
+      ...[...lowering.seals.values()].map((sealed) =>
+        [
+          sealed.constructor,
+          {
+            kind: "sealed",
+            sourceName: sealed.sourceName,
+            payload: true,
+          },
+        ] as const
+      ),
+    ]),
   };
+}
+
+function lowerExports(
+  result: Expr,
+  exports: readonly RuntimeExport[],
+  lowering: Lowering,
+): LoweredExport[] {
+  if (exports.length === 0) return [];
+  let shape: (Expr & { readonly tag: "shape" }) | null = null;
+  if (result.tag === "shape") shape = result;
+  if (result.tag === "block" && result.result.tag === "shape") {
+    shape = result.result;
+  }
+  if (shape === null) {
+    const [exported] = exports;
+    if (exports.length !== 1 || exported.sourceName !== "default") {
+      throw new Error(
+        "a non-record module result must have one default export",
+      );
+    }
+    return [lowerExport(
+      exported,
+      surface.name(MODULE_RESULT),
+      0,
+      result.span,
+      lowering,
+    )];
+  }
+
+  const nominal = lowering.nominal(
+    exports.map((exported) => exported.sourceName),
+  );
+  const binders = nominal.fields.map((field) => lowering.fresh(field));
+  return exports.map((exported, index) => {
+    const field = nominal.fields.indexOf(exported.sourceName);
+    if (field < 0) {
+      throw new Error(
+        `module result omitted runtime export ${exported.sourceName}`,
+      );
+    }
+    const body = surface.case(surface.name(MODULE_RESULT), [{
+      constructor: nominal.name,
+      binders,
+      body: surface.name(binders[field]),
+    }]);
+    return lowerExport(exported, body, index, result.span, lowering);
+  });
+}
+
+function lowerExport(
+  exported: RuntimeExport,
+  body: SurfaceExpression,
+  index: number,
+  span: Span,
+  lowering: Lowering,
+): LoweredExport {
+  const definition = `blot$export$${index}`;
+  const wasmName = `blot:${exported.sourceName}`;
+  let type: TypeSchema;
+  if (exported.value !== undefined && exported.value.tag === "sealed") {
+    type = valueExportSchema(
+      exported.value,
+      exported.sourceName,
+      span,
+      lowering,
+    );
+  } else {
+    type = exportSchema(exported.type, exported.sourceName, span, lowering);
+  }
+  lowering.definitions.push({
+    name: definition,
+    parameters: [],
+    annotation: type,
+    body,
+  });
+  return {
+    sourceName: exported.sourceName,
+    wasmName,
+    definition,
+    type,
+  };
+}
+
+function exportSchema(
+  type: SimpleType,
+  name: string,
+  span: Span,
+  lowering: Lowering,
+  seen = new Set<number>(),
+): TypeSchema {
+  switch (type.tag) {
+    case "unit":
+      return { kind: "unit" };
+    case "range":
+      if (type.domain === "int") return { kind: "signed-integer-64" };
+      return HostTypes.text;
+    case "fun":
+      return {
+        kind: "function",
+        parameter: exportSchema(type.param, name, span, lowering, seen),
+        result: exportSchema(type.result, name, span, lowering, seen),
+      };
+    case "record": {
+      const nominal = lowering.nominal([...type.fields.keys()]);
+      return {
+        kind: "named",
+        name: nominal.name,
+        arguments: nominal.fields.map((field) => {
+          const fieldType = type.fields.get(field);
+          if (fieldType === undefined) {
+            throw new Error(
+              `inferred record for export ${name} omitted field ${field}`,
+            );
+          }
+          return exportSchema(fieldType, name, span, lowering, seen);
+        }),
+      };
+    }
+    case "array":
+      return storeType(exportSchema(type.element, name, span, lowering, seen));
+    case "variant": {
+      const names = [...type.cases.keys()];
+      if (
+        names.length > 0 &&
+        names.every((constructor) =>
+          constructor === "True" || constructor === "False"
+        )
+      ) {
+        return { kind: "boolean" };
+      }
+      const cases = names.map((constructor) => {
+        const payload = type.cases.get(constructor);
+        if (payload === undefined) {
+          throw new Error(
+            `inferred variant for export ${name} omitted ${constructor}`,
+          );
+        }
+        return { name: constructor, payload: payload.tag !== "unit" };
+      });
+      const sum = lowering.sum(cases);
+      return {
+        kind: "named",
+        name: sum.name,
+        arguments: sum.cases.flatMap((constructor) => {
+          if (!constructor.payload) return [];
+          const payload = type.cases.get(constructor.name);
+          if (payload === undefined) {
+            throw new Error(
+              `inferred variant for export ${name} omitted ${constructor.name}`,
+            );
+          }
+          return [exportSchema(payload, name, span, lowering, seen)];
+        }),
+      };
+    }
+    case "var": {
+      if (seen.has(type.id)) return unsupportedExport(name, span);
+      seen.add(type.id);
+      let bounds = type.lower;
+      if (bounds.length === 0) bounds = type.upper;
+      if (bounds.length === 0) return unsupportedExport(name, span);
+      if (bounds.every((bound) => bound.tag === "range")) {
+        const ranges = bounds as (SimpleType & { readonly tag: "range" })[];
+        const domain = ranges[0].domain;
+        if (ranges.every((range) => range.domain === domain)) {
+          if (domain === "int") return { kind: "signed-integer-64" };
+          return HostTypes.text;
+        }
+      }
+      if (bounds.every((bound) => bound.tag === "variant")) {
+        const cases = new Map<string, SimpleType>();
+        for (const bound of bounds) {
+          if (bound.tag !== "variant") {
+            throw new Error("variant bounds changed while lowering an export");
+          }
+          for (const [constructor, payload] of bound.cases) {
+            cases.set(constructor, payload);
+          }
+        }
+        return exportSchema(
+          { tag: "variant", cases },
+          name,
+          span,
+          lowering,
+          new Set(seen),
+        );
+      }
+      const schemas = bounds.map((bound) =>
+        exportSchema(bound, name, span, lowering, new Set(seen))
+      );
+      const [first] = schemas;
+      const key = JSON.stringify(first);
+      if (schemas.some((schema) => JSON.stringify(schema) !== key)) {
+        return unsupportedExport(name, span);
+      }
+      return first;
+    }
+    case "union": {
+      const schemas = type.members.map((member) =>
+        exportSchema(member, name, span, lowering, new Set(seen))
+      );
+      const [first] = schemas;
+      if (first === undefined) return unsupportedExport(name, span);
+      const key = JSON.stringify(first);
+      if (schemas.some((schema) => JSON.stringify(schema) !== key)) {
+        return unsupportedExport(name, span);
+      }
+      return first;
+    }
+    default:
+      return unsupportedExport(name, span);
+  }
+}
+
+function valueExportSchema(
+  value: Value,
+  name: string,
+  span: Span,
+  lowering: Lowering,
+): TypeSchema {
+  if (value.tag === "sealed") {
+    const sealed = lowering.seal(value.name);
+    return {
+      kind: "named",
+      name: sealed.name,
+      arguments: [valueExportSchema(value.inner, name, span, lowering)],
+    };
+  }
+  const bridged = bridgeRuntimeValue(value);
+  if (bridged === null) return unsupportedExport(name, span);
+  return exportSchema(bridged, name, span, lowering);
+}
+
+function bridgeRuntimeValue(value: Value): SimpleType | null {
+  switch (value.tag) {
+    case "int":
+      return {
+        tag: "range",
+        domain: "int",
+        low: value.value,
+        high: value.value,
+      };
+    case "text":
+      return {
+        tag: "range",
+        domain: "text",
+        low: value.value,
+        high: value.value,
+      };
+    case "unit":
+      return { tag: "unit" };
+    case "array": {
+      const elements: SimpleType[] = [];
+      for (const element of value.elements) {
+        const type = bridgeRuntimeValue(element);
+        if (type === null) return null;
+        elements.push(type);
+      }
+      return { tag: "array", element: { tag: "union", members: elements } };
+    }
+    case "shape": {
+      const fields = new Map<string, SimpleType>();
+      for (const [field, member] of value.fields) {
+        const type = bridgeRuntimeValue(member);
+        if (type === null) return null;
+        fields.set(field, type);
+      }
+      return { tag: "record", fields };
+    }
+    case "tag": {
+      let payload: SimpleType = { tag: "unit" };
+      if (value.payload !== null) {
+        const bridged = bridgeRuntimeValue(value.payload);
+        if (bridged === null) return null;
+        payload = bridged;
+      }
+      return {
+        tag: "variant",
+        cases: new Map([[value.name, payload]]),
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+function unsupportedExport(name: string, span: Span): never {
+  return fail(
+    "BLOT_EXPORT_NOT_FIRST_ORDER",
+    `Export \`${name}\` does not have a concrete first-order WebAssembly type.`,
+    span,
+  );
 }
 
 /**
@@ -538,7 +970,8 @@ function schemaOf(
 ): TypeSchema {
   if (type.tag === "unit") return { kind: "unit" };
   if (type.tag === "range") {
-    return type.domain === "int" ? { kind: "integer" } : HostTypes.text;
+    if (type.domain === "int") return { kind: "signed-integer-64" };
+    return HostTypes.text;
   }
   if (type.tag === "variant") {
     const names = [...type.cases.keys()].sort();
@@ -668,7 +1101,7 @@ function boundaryType(value: Value, span: Span): TypeSchema {
   if (value.tag === "range") {
     const domain = value.domain ??
       (value.low.tag === "int" || value.high.tag === "int" ? "int" : "text");
-    if (domain === "int") return { kind: "integer" };
+    if (domain === "int") return { kind: "signed-integer-64" };
     return HostTypes.text;
   }
   fail(
@@ -703,18 +1136,21 @@ function lowerBlock(
     if (declaration.tag === "open") {
       const opened = lowering.facts.opens.get(declaration.value);
       if (opened === undefined) {
-        return unsupported("an `open` the checker did not record", declaration.span);
+        return unsupported(
+          "an `open` the checker did not record",
+          declaration.span,
+        );
       }
       for (const [name, value] of opened) inner.values.names.set(name, value);
       continue;
     }
     if (declaration.tag === "shadow") {
+      const known = lowering.facts.comptimeValues.get(declaration.value);
+      if (known !== undefined) inner.values.names.set(declaration.name, known);
       // A binding whose value has no runtime representation emits nothing, the
       // same rule that makes `const Message = #Ready | …` disappear. Shadowing
       // an effect or a type is rebinding a compile-time name, not code.
-      if (compileTimeOnly(lookupValue(inner.values, declaration.name))) {
-        continue;
-      }
+      if (compileTimeOnly(known)) continue;
       const value = lower(declaration.value, inner, lowering);
       const name = lowering.fresh(declaration.name);
       inner.names.set(declaration.name, name);
@@ -739,11 +1175,12 @@ function lowerBlock(
     // A `const` inside a function body is a different animal. `const rest =
     // resume ();` depends on the parameter, so there is no compile-time value
     // to specialize and it has to become an ordinary binding.
-    if (
-      declaration.kind === "const" && declaration.pattern.tag === "name" &&
-      lookupValue(inner.values, declaration.pattern.name) !== undefined
-    ) {
-      continue;
+    if (declaration.kind === "const" && declaration.pattern.tag === "name") {
+      const known = lowering.facts.comptimeValues.get(declaration.value);
+      if (known !== undefined) {
+        inner.values.names.set(declaration.pattern.name, known);
+        continue;
+      }
     }
     if (declaration.kind === "sig") continue;
 
@@ -810,35 +1247,35 @@ function bind(
   }
 
   if (pattern.tag === "array") {
-    // An array is a `Store`, which has no constructor to match on, so the
-    // pattern reads each index instead. The length is what the pattern says;
-    // a shorter store traps on the read, which is the same failure the
-    // interpreter reports.
     const store = lowering.fresh("store");
-    const reads = pattern.elements.map((element, index) => {
-      if (element.tag === "wildcard") return null;
-      if (element.tag !== "name") {
-        return unsupported(
-          "a nested pattern in an array binding",
-          element.span,
-        ) as never;
-      }
-      const bound = lowering.fresh(element.name);
-      scope.names.set(element.name, bound);
-      return { bound, index };
-    });
+    const wrappers = pattern.elements.map((element, index) =>
+      bind(
+        element,
+        at.storeRead(at.name(store), at.integer(index)),
+        scope,
+        lowering,
+      )
+    );
     return (body) => {
       let inner = body;
-      for (let position = reads.length - 1; position >= 0; position -= 1) {
-        const read = reads[position];
-        if (read === null) continue;
-        inner = surface.let(
-          read.bound,
-          at.storeRead(at.name(store), at.integer(read.index)),
-          inner,
-        );
+      for (let index = wrappers.length - 1; index >= 0; index -= 1) {
+        inner = wrappers[index](inner);
       }
-      return surface.let(store, value, inner);
+      return surface.let(
+        store,
+        value,
+        at.if(
+          at.binary(
+            BinaryOperator.Equal,
+            at.storeLength(at.name(store)),
+            at.integer(pattern.elements.length),
+          ),
+          inner,
+          at.runtimeFault(
+            `array pattern expected ${pattern.elements.length} elements`,
+          ),
+        ),
+      );
     };
   }
 
@@ -861,26 +1298,83 @@ function bind(
         element: field.pattern,
       }));
 
+    const nested: ((body: SurfaceExpression) => SurfaceExpression)[] = [];
     const binders = nominal.fields.map((name) => {
       const part = parts.find((entry) => entry.name === name);
       if (part === undefined) return lowering.fresh("_");
       if (part.element.tag === "wildcard") return lowering.fresh("_");
-      if (part.element.tag !== "name") {
-        return unsupported(
-          "a nested pattern in a binding",
-          part.element.span,
-        ) as never;
+      const bound = lowering.fresh("part");
+      if (part.element.tag === "name") {
+        scope.names.set(part.element.name, bound);
+      } else {
+        nested.push(
+          bind(part.element, at.name(bound), scope, lowering),
+        );
       }
-      const bound = lowering.fresh(part.element.name);
-      scope.names.set(part.element.name, bound);
       return bound;
     });
 
-    return (body) =>
-      at.case(value, [{ constructor: nominal.name, binders, body }]);
+    return (body) => {
+      let inner = body;
+      for (let index = nested.length - 1; index >= 0; index -= 1) {
+        inner = nested[index](inner);
+      }
+      return at.case(value, [{
+        constructor: nominal.name,
+        binders,
+        body: inner,
+      }]);
+    };
   }
 
-  return unsupported(`a ${pattern.tag} pattern in a binding`, pattern.span);
+  if (pattern.tag === "constructor") {
+    const sum = lowering.sumFor(
+      pattern.name,
+      pattern.payload !== null,
+      pattern.span,
+    );
+    if (pattern.payload === null) {
+      return (body) =>
+        at.case(value, [{
+          constructor: constructorName(sum, pattern.name),
+          binders: [],
+          body,
+        }], { body: at.runtimeFault("constructor pattern did not match") });
+    }
+    const payload = lowering.fresh("payload");
+    const nested = bind(
+      pattern.payload,
+      at.name(payload),
+      scope,
+      lowering,
+    );
+    return (body) =>
+      at.case(value, [{
+        constructor: constructorName(sum, pattern.name),
+        binders: [payload],
+        body: nested(body),
+      }], { body: at.runtimeFault("constructor pattern did not match") });
+  }
+
+  if (pattern.tag === "int" || pattern.tag === "text") {
+    let literal: SurfaceExpression;
+    let operator: BinaryOperator = BinaryOperator.Equal;
+    if (pattern.tag === "int") {
+      literal = at.signedInteger64(pattern.value);
+      operator = BinaryOperator.EqualSignedInteger64;
+    } else {
+      literal = at.text(pattern.value);
+    }
+    return (body) =>
+      at.if(
+        at.binary(operator, value, literal),
+        body,
+        at.runtimeFault("literal pattern did not match"),
+      );
+  }
+
+  pattern satisfies never;
+  throw new Error("unhandled pattern in lowering");
 }
 
 /**
@@ -908,7 +1402,6 @@ function recursiveBinding(
     parameter,
     inner,
     lowering,
-    lambda.span,
   );
   const value = wrap(lambda.body);
   const span = { startByte: lambda.span.start, endByte: lambda.span.end };
@@ -928,22 +1421,14 @@ function lower(
   const at = surface.at({ startByte: expr.span.start, endByte: expr.span.end });
 
   switch (expr.tag) {
-    case "int": {
-      // gpufuck's `integer` is a signed 32-bit Core literal. blot's comptime
-      // integers are arbitrary precision, so the narrowing is checked rather
-      // than assumed — this is exactly the width obligation a `sig` of `I32`
-      // would have carried.
-      if (expr.value < -2147483648n || expr.value > 2147483647n) {
-        return at.signedInteger64(expr.value);
-      }
-      return at.integer(Number(expr.value));
-    }
+    case "int":
+      return at.signedInteger64(expr.value);
 
     case "text":
       return at.text(expr.value);
 
     case "unit":
-      return at.integer(0);
+      return at.name(UNIT_CONSTRUCTOR_NAME);
 
     // `#True` and `#False` are ordinary prelude constructors, and gpufuck's
     // conditions are booleans. Mapping the two is what lets `if` lower at all.
@@ -973,7 +1458,6 @@ function lower(
         parameter,
         inner,
         lowering,
-        expr.span,
       );
       return at.lambda([parameter], body(expr.body));
     }
@@ -992,64 +1476,98 @@ function lower(
     }
 
     case "shape": {
-      const written: { name: string; value: Expr }[] = [];
-      const spreads: Expr[] = [];
+      let fields: string[] = [];
+      let built: SurfaceExpression = at.name(lowering.nominal([]).name);
+
       for (const member of expr.members) {
         if (member.tag === "field") {
-          written.push({ name: member.name, value: member.value });
+          const previous = lowering.nominal(fields);
+          const previousName = lowering.fresh("shape");
+          const previousBinders = previous.fields.map((name) =>
+            lowering.fresh(name)
+          );
+          const memberName = lowering.fresh(member.name);
+          const nextFields = [...fields];
+          if (!nextFields.includes(member.name)) nextFields.push(member.name);
+          const next = lowering.nominal(nextFields);
+
+          built = surface.let(
+            previousName,
+            built,
+            surface.let(
+              memberName,
+              lower(member.value, scope, lowering),
+              at.case(at.name(previousName), [{
+                constructor: previous.name,
+                binders: previousBinders,
+                body: at.apply(
+                  at.name(next.name),
+                  ...next.fields.map((name) => {
+                    if (name === member.name) return at.name(memberName);
+                    const index = previous.fields.indexOf(name);
+                    return at.name(previousBinders[index]);
+                  }),
+                ),
+              }]),
+            ),
+          );
+          fields = nextFields;
           continue;
         }
-        spreads.push(member.value);
-      }
 
-      if (spreads.length === 0) {
-        const nominal = lowering.nominal(written.map((field) => field.name));
-        return at.apply(
-          at.name(nominal.name),
-          ...nominal.fields.map((name) => {
-            const found = written.find((field) => field.name === name);
-            if (found === undefined) {
-              fail("BLOT_NO_FIELD", `No field \`.${name}\`.`, expr.span);
-            }
-            return lower(found.value, scope, lowering);
-          }),
+        const carried = lowering.facts.shapes.get(member.value);
+        if (carried === undefined) {
+          return unsupported(
+            "spreading a shape inference could not pin down",
+            expr.span,
+          );
+        }
+
+        const previous = lowering.nominal(fields);
+        const previousName = lowering.fresh("shape");
+        const previousBinders = previous.fields.map((name) =>
+          lowering.fresh(name)
         );
-      }
+        const spread = lowering.nominal(carried);
+        const spreadName = lowering.fresh("spread");
+        const spreadBinders = spread.fields.map((name) => lowering.fresh(name));
+        const nextFields = [...fields];
+        for (const name of carried) {
+          if (!nextFields.includes(name)) nextFields.push(name);
+        }
+        const next = lowering.nominal(nextFields);
 
-      if (spreads.length > 1) {
-        return unsupported("more than one spread in one shape", expr.span);
-      }
-
-      // One destructure, not one projection per field: `{ ...origin; .x = 20; }`
-      // takes `origin` apart once and rebuilds, which is both the shorter Core
-      // and the shape a reuse pass could later write in place.
-      const source = spreads[0];
-      const carried = lowering.facts.shapes.get(source);
-      if (carried === undefined) {
-        return unsupported(
-          "spreading a shape inference could not pin down",
-          expr.span,
+        built = surface.let(
+          previousName,
+          built,
+          surface.let(
+            spreadName,
+            lower(member.value, scope, lowering),
+            at.case(at.name(previousName), [{
+              constructor: previous.name,
+              binders: previousBinders,
+              body: at.case(at.name(spreadName), [{
+                constructor: spread.name,
+                binders: spreadBinders,
+                body: at.apply(
+                  at.name(next.name),
+                  ...next.fields.map((name) => {
+                    const spreadIndex = spread.fields.indexOf(name);
+                    if (spreadIndex >= 0) {
+                      return at.name(spreadBinders[spreadIndex]);
+                    }
+                    const previousIndex = previous.fields.indexOf(name);
+                    return at.name(previousBinders[previousIndex]);
+                  }),
+                ),
+              }]),
+            }]),
+          ),
         );
+        fields = nextFields;
       }
-      const from = lowering.nominal(carried);
-      const binders = from.fields.map((name) => lowering.fresh(name));
-      const names = [...new Set([...carried, ...written.map((f) => f.name)])];
-      const target = lowering.nominal(names);
 
-      return at.case(lower(source, scope, lowering), [{
-        constructor: from.name,
-        binders,
-        body: at.apply(
-          at.name(target.name),
-          ...target.fields.map((name) => {
-            // A written member wins over the spread it overrides.
-            const found = written.find((field) => field.name === name);
-            if (found !== undefined) return lower(found.value, scope, lowering);
-            const index = from.fields.indexOf(name);
-            return at.name(binders[index]);
-          }),
-        ),
-      }]);
+      return built;
     }
 
     case "field": {
@@ -1413,13 +1931,19 @@ function lowerCase(
       for (let index = tests.length - 1; index >= 0; index -= 1) {
         const test = tests[index];
         const literal = test.literal;
+        let compared: SurfaceExpression = at.text("");
+        let operator: BinaryOperator = BinaryOperator.Equal;
+        if (literal.tag === "int") {
+          compared = at.signedInteger64(literal.value);
+          operator = BinaryOperator.EqualSignedInteger64;
+        } else if (literal.tag === "text") {
+          compared = at.text(literal.value);
+        }
         body = at.if(
           at.binary(
-            BinaryOperator.Equal,
+            operator,
             at.name(binders[0]),
-            literal.tag === "int"
-              ? at.integer(Number(literal.value))
-              : at.text(literal.tag === "text" ? literal.value : ""),
+            compared,
           ),
           lower(test.body, inner, lowering),
           body,
@@ -1529,11 +2053,16 @@ function lowerLiteralCase(
   for (let index = tests.length - 1; index >= 0; index -= 1) {
     const test = tests[index];
     const value = test.literal;
-    const literal = value.tag === "int"
-      ? at.integer(Number(value.value))
-      : at.text(value.tag === "text" ? value.value : "");
+    let literal = at.text("");
+    let operator: BinaryOperator = BinaryOperator.Equal;
+    if (value.tag === "int") {
+      literal = at.signedInteger64(value.value);
+      operator = BinaryOperator.EqualSignedInteger64;
+    } else if (value.tag === "text") {
+      literal = at.text(value.value);
+    }
     body = at.if(
-      at.binary(BinaryOperator.Equal, at.name(scrutinee), literal),
+      at.binary(operator, at.name(scrutinee), literal),
       test.body,
       body,
     );
@@ -1634,13 +2163,11 @@ function lowerValue(
 
   switch (value.tag) {
     case "int":
-      return value.value < -2147483648n || value.value > 2147483647n
-        ? at.signedInteger64(value.value)
-        : at.integer(Number(value.value));
+      return at.signedInteger64(value.value);
     case "text":
       return at.text(value.value);
     case "unit":
-      return at.integer(0);
+      return at.name(UNIT_CONSTRUCTOR_NAME);
     case "tag": {
       if (value.name === "True") return at.boolean(true);
       if (value.name === "False") return at.boolean(false);
@@ -1694,6 +2221,14 @@ function lowerValue(
       );
     }
 
+    case "sealed": {
+      const sealed = lowering.seal(value.name);
+      return at.apply(
+        at.name(sealed.constructor),
+        lowerValue(value.inner, hint, span, lowering),
+      );
+    }
+
     case "closure": {
       const existing = lowering.hoisted.get(value);
       if (existing !== undefined) return at.name(existing);
@@ -1710,7 +2245,6 @@ function lowerValue(
         parameter,
         scope,
         lowering,
-        span,
       );
       lowering.definitions.push({
         name,
@@ -1751,38 +2285,165 @@ function bindParameter(
   parameter: string,
   scope: Scope,
   lowering: Lowering,
-  span: Span,
 ): (body: Expr) => SurfaceExpression {
-  const at = surface.at({ startByte: span.start, endByte: span.end });
+  const at = surface.at({
+    startByte: pattern.span.start,
+    endByte: pattern.span.end,
+  });
+  const wrapper = bind(
+    pattern,
+    at.name(parameter),
+    scope,
+    lowering,
+  );
+  return (body) => wrapper(lower(body, scope, lowering));
+}
 
-  if (pattern.tag === "name") {
-    scope.names.set(pattern.name, parameter);
-    return (body) => lower(body, scope, lowering);
+function lowerIntegerBinary(
+  operator: BinaryOperator,
+  left: SurfaceExpression,
+  right: SurfaceExpression,
+  lowering: Lowering,
+  at: typeof surface,
+): SurfaceExpression {
+  if (
+    operator !== BinaryOperator.AddSignedInteger64 &&
+    operator !== BinaryOperator.SubtractSignedInteger64 &&
+    operator !== BinaryOperator.MultiplySignedInteger64
+  ) {
+    return at.binary(operator, left, right);
   }
-  if (pattern.tag === "wildcard" || pattern.tag === "unit") {
-    return (body) => lower(body, scope, lowering);
-  }
-  if (pattern.tag === "tuple") {
-    const nominal = lowering.nominal(
-      pattern.elements.map((_, index) => String(index)),
+
+  const leftName = lowering.fresh("left");
+  const rightName = lowering.fresh("right");
+  const resultName = lowering.fresh("result");
+  const leftValue = at.name(leftName);
+  const rightValue = at.name(rightName);
+  const resultValue = at.name(resultName);
+  const zero = at.signedInteger64(0n);
+  const overflow = at.runtimeFault("integer overflow");
+  let checked: SurfaceExpression;
+
+  if (operator === BinaryOperator.AddSignedInteger64) {
+    checked = at.if(
+      at.binary(BinaryOperator.GreaterSignedInteger64, rightValue, zero),
+      at.if(
+        at.binary(
+          BinaryOperator.LessSignedInteger64,
+          resultValue,
+          leftValue,
+        ),
+        overflow,
+        resultValue,
+      ),
+      at.if(
+        at.binary(BinaryOperator.LessSignedInteger64, rightValue, zero),
+        at.if(
+          at.binary(
+            BinaryOperator.GreaterSignedInteger64,
+            resultValue,
+            leftValue,
+          ),
+          overflow,
+          resultValue,
+        ),
+        resultValue,
+      ),
     );
-    const binders = pattern.elements.map((element) => {
-      if (element.tag === "wildcard") return lowering.fresh("_");
-      if (element.tag !== "name") {
-        return unsupported("a nested tuple parameter", element.span) as never;
-      }
-      const bound = lowering.fresh(element.name);
-      scope.names.set(element.name, bound);
-      return bound;
-    });
-    return (body) =>
-      at.case(at.name(parameter), [{
-        constructor: nominal.name,
-        binders,
-        body: lower(body, scope, lowering),
-      }]);
+  } else if (operator === BinaryOperator.SubtractSignedInteger64) {
+    checked = at.if(
+      at.binary(BinaryOperator.GreaterSignedInteger64, rightValue, zero),
+      at.if(
+        at.binary(
+          BinaryOperator.GreaterSignedInteger64,
+          resultValue,
+          leftValue,
+        ),
+        overflow,
+        resultValue,
+      ),
+      at.if(
+        at.binary(BinaryOperator.LessSignedInteger64, rightValue, zero),
+        at.if(
+          at.binary(
+            BinaryOperator.LessSignedInteger64,
+            resultValue,
+            leftValue,
+          ),
+          overflow,
+          resultValue,
+        ),
+        resultValue,
+      ),
+    );
+  } else {
+    const minimum = at.signedInteger64(-0x8000000000000000n);
+    const negativeOne = at.signedInteger64(-1n);
+    const minimumTimesNegativeOne = at.if(
+      at.binary(
+        BinaryOperator.EqualSignedInteger64,
+        leftValue,
+        negativeOne,
+      ),
+      at.if(
+        at.binary(
+          BinaryOperator.EqualSignedInteger64,
+          rightValue,
+          minimum,
+        ),
+        overflow,
+        resultValue,
+      ),
+      at.if(
+        at.binary(
+          BinaryOperator.EqualSignedInteger64,
+          rightValue,
+          negativeOne,
+        ),
+        at.if(
+          at.binary(
+            BinaryOperator.EqualSignedInteger64,
+            leftValue,
+            minimum,
+          ),
+          overflow,
+          resultValue,
+        ),
+        at.if(
+          at.binary(BinaryOperator.EqualSignedInteger64, leftValue, zero),
+          resultValue,
+          at.if(
+            at.binary(
+              BinaryOperator.NotEqualSignedInteger64,
+              at.binary(
+                BinaryOperator.DivideSignedInteger64,
+                resultValue,
+                leftValue,
+              ),
+              rightValue,
+            ),
+            overflow,
+            resultValue,
+          ),
+        ),
+      ),
+    );
+    checked = minimumTimesNegativeOne;
   }
-  return unsupported(`a ${pattern.tag} parameter`, pattern.span);
+
+  return surface.let(
+    leftName,
+    left,
+    surface.let(
+      rightName,
+      right,
+      surface.let(
+        resultName,
+        at.binary(operator, leftValue, rightValue),
+        checked,
+      ),
+    ),
+  );
 }
 
 function lowerApply(
@@ -1812,10 +2473,12 @@ function lowerApply(
   if (spine.callee.tag === "intrinsic") {
     const operator = BINARY.get(spine.callee.name);
     if (operator !== undefined && spine.args.length === 2) {
-      return at.binary(
+      return lowerIntegerBinary(
         operator,
         lower(spine.args[0], scope, lowering),
         lower(spine.args[1], scope, lowering),
+        lowering,
+        at,
       );
     }
     // Text concatenation is its own Core node rather than an operator; the
@@ -1848,10 +2511,18 @@ function lowerApply(
           right,
           lower(spine.args[1], scope, lowering),
           at.if(
-            at.binary(BinaryOperator.Less, at.name(left), at.name(right)),
+            at.binary(
+              BinaryOperator.LessSignedInteger64,
+              at.name(left),
+              at.name(right),
+            ),
             tag("Less"),
             at.if(
-              at.binary(BinaryOperator.Equal, at.name(left), at.name(right)),
+              at.binary(
+                BinaryOperator.EqualSignedInteger64,
+                at.name(left),
+                at.name(right),
+              ),
               tag("Equal"),
               tag("Greater"),
             ),
@@ -1860,10 +2531,12 @@ function lowerApply(
       );
     }
     if (spine.callee.name === "@int.neg" && spine.args.length === 1) {
-      return at.binary(
-        BinaryOperator.Subtract,
-        at.integer(0),
+      return lowerIntegerBinary(
+        BinaryOperator.SubtractSignedInteger64,
+        at.signedInteger64(0n),
         lower(spine.args[0], scope, lowering),
+        lowering,
+        at,
       );
     }
     // A module is a function from a record to a record, and both are known at
@@ -1885,7 +2558,7 @@ function lowerApply(
           textOperation(
             "length",
             HostTypes.text,
-            { kind: "integer" },
+            { kind: "signed-integer-64" },
             lowering,
           ),
         ),
@@ -1897,7 +2570,7 @@ function lowerApply(
         at.name(
           textOperation(
             "of_int",
-            { kind: "integer" },
+            { kind: "signed-integer-64" },
             HostTypes.text,
             lowering,
           ),
@@ -1920,7 +2593,7 @@ function lowerApply(
           name: pair.name,
           arguments: [HostTypes.text, HostTypes.text],
         },
-        { kind: "integer" },
+        { kind: "signed-integer-64" },
         lowering,
       );
       const sign = lowering.fresh("sign");
@@ -1942,10 +2615,18 @@ function lowerApply(
           ),
         ),
         at.if(
-          at.binary(BinaryOperator.Less, at.name(sign), at.integer(0)),
+          at.binary(
+            BinaryOperator.LessSignedInteger64,
+            at.name(sign),
+            at.signedInteger64(0n),
+          ),
           tag("Less"),
           at.if(
-            at.binary(BinaryOperator.Equal, at.name(sign), at.integer(0)),
+            at.binary(
+              BinaryOperator.EqualSignedInteger64,
+              at.name(sign),
+              at.signedInteger64(0n),
+            ),
             tag("Equal"),
             tag("Greater"),
           ),
@@ -1953,18 +2634,27 @@ function lowerApply(
       );
     }
     if (spine.callee.name === "@array.len" && spine.args.length === 1) {
-      return at.storeLength(lower(spine.args[0], scope, lowering));
+      return at.convert(
+        NumericConversion.SignedInteger32ToSignedInteger64,
+        at.storeLength(lower(spine.args[0], scope, lowering)),
+      );
     }
     if (spine.callee.name === "@array.get" && spine.args.length === 2) {
       return at.storeRead(
         lower(spine.args[0], scope, lowering),
-        lower(spine.args[1], scope, lowering),
+        at.convert(
+          NumericConversion.SignedInteger64ToSignedInteger32,
+          lower(spine.args[1], scope, lowering),
+        ),
       );
     }
     if (spine.callee.name === "@array.set" && spine.args.length === 3) {
       return at.storeWrite(
         lower(spine.args[0], scope, lowering),
-        lower(spine.args[1], scope, lowering),
+        at.convert(
+          NumericConversion.SignedInteger64ToSignedInteger32,
+          lower(spine.args[1], scope, lowering),
+        ),
         lower(spine.args[2], scope, lowering),
       );
     }
@@ -2015,25 +2705,13 @@ function lowerApply(
   );
 }
 
-/**
- * `@handle (Effect, computation, handler)`.
- *
- * gpufuck's handlers are lexical evidence: `withEffectHandler` replaces an
- * operation inside a body, and a *pure* replacement discharges the label. That
- * covers exactly the tail-resumptive handlers — the ones whose clause ends in
- * `resume e`, which are an operation replacement and nothing more.
- *
- * An aborting or multi-shot handler is a different thing. It needs a delimited
- * continuation, which Core does not have, and pretending a closed function is
- * equivalent would be wrong rather than merely incomplete.
- */
+/** `@handle` becomes selective CPS before anything reaches gpufuck. */
 function lowerHandle(
   argument: Expr,
   scope: Scope,
   lowering: Lowering,
   span: Span,
 ): SurfaceExpression {
-  const at = surface.at({ startByte: span.start, endByte: span.end });
   if (argument.tag !== "tuple" || argument.elements.length !== 3) {
     return unsupported(
       "`@handle` without `(effect, computation, handler)`",
@@ -2050,10 +2728,7 @@ function lowerHandle(
     return unsupported("a `@handle` whose effect is not compile-time", span);
   }
   if (effect.host) {
-    return unsupported(
-      "handling a host effect, whose operations are imports the host answers",
-      span,
-    );
+    return unsupported("handling a host effect inside blot", span);
   }
   const handler = handlerExpr.tag === "shape"
     ? handlerExpr
@@ -2068,7 +2743,7 @@ function lowerHandle(
   }
 
   let returnClause: Expr | null = null;
-  const clauses: { operation: string; value: Expr }[] = [];
+  const clauses = new Map<string, Expr>();
   for (const member of handler.members) {
     if (member.tag !== "field") {
       return unsupported("a spread in a handler", span);
@@ -2077,13 +2752,9 @@ function lowerHandle(
       returnClause = member.value;
       continue;
     }
-    clauses.push({ operation: member.name, value: member.value });
+    clauses.set(member.name, member.value);
   }
 
-  // Core's evidence is *lexical*: a replacement reaches the calls written
-  // inside its body. A computation passed as a closure has already resolved its
-  // operations against the global definitions, so handling it means inlining
-  // it — which is what handler specialization always was.
   const thunk = computation.tag === "lambda"
     ? computation
     : computation.tag === "var"
@@ -2098,126 +2769,190 @@ function lowerHandle(
   if (thunk.parameter.tag !== "unit" && thunk.parameter.tag !== "wildcard") {
     return unsupported("a handled computation that takes an argument", span);
   }
-  let body = lower(thunk.body, childScope(scope), lowering);
-  if (returnClause !== null) {
-    body = at.apply(lower(returnClause, scope, lowering), body);
-  }
 
-  for (const clause of clauses) {
-    const replacement = pureReplacement(clause.value, span);
-    body = at.withEffectHandler(
-      effectOperation(effect, clause.operation, lowering, span),
-      lower(replacement, scope, lowering),
-      body,
-    );
-  }
-  return body;
-}
+  const cps = (
+    expr: Expr,
+    continuation: (value: Expr) => Expr,
+  ): Expr => {
+    if (expr.tag === "apply") {
+      const performed = flatten(expr);
+      if (performed.callee.tag === "field" && performed.args.length === 1) {
+        const performedEffect = comptimeEffect(performed.callee, scope);
+        if (performedEffect !== null && performedEffect.id === effect.id) {
+          const clause = clauses.get(performed.callee.name);
+          if (clause === undefined) {
+            fail(
+              "BLOT_TYPE_ERROR",
+              `Handler for \`${effect.name}\` has no \`.${performed.callee.name}\` clause.`,
+              expr.span,
+            );
+          }
+          return cps(performed.args[0], (operationArgument) => {
+            const resumed = lowering.fresh("resumed");
+            const resume: Expr = {
+              tag: "lambda",
+              parameter: {
+                tag: "name",
+                name: resumed,
+                qualifier: "affine",
+                span: expr.span,
+              },
+              body: continuation({
+                tag: "var",
+                name: resumed,
+                span: expr.span,
+              }),
+              span: expr.span,
+            };
+            return {
+              tag: "apply",
+              fn: clause,
+              arg: {
+                tag: "tuple",
+                elements: [operationArgument, resume],
+                span: expr.span,
+              },
+              span: expr.span,
+            };
+          });
+        }
+      }
+      return cps(
+        expr.fn,
+        (fn) =>
+          cps(
+            expr.arg,
+            (arg) => continuation({ tag: "apply", fn, arg, span: expr.span }),
+          ),
+      );
+    }
 
-/**
- * A tail-resumptive clause, as the pure operation that replaces it.
- *
- * `(m, ?resume) => resume e` becomes `m => e`. Resuming in tail position is
- * exactly "this operation computes `e`", which is what an evidence replacement
- * can express; resuming anywhere else needs the rest of the computation as a
- * value, and that is a continuation.
- */
-function pureReplacement(clause: Expr, span: Span): Expr {
-  if (clause.tag !== "lambda" || clause.parameter.tag !== "tuple") {
-    return unsupported(
-      "a handler clause that is not `(argument, ?resume) => …`",
+    if (expr.tag === "field") {
+      return cps(expr.target, (target) => continuation({ ...expr, target }));
+    }
+
+    if (expr.tag === "tuple") {
+      const elements: Expr[] = [];
+      const sequence = (index: number): Expr => {
+        if (index === expr.elements.length) {
+          return continuation({ ...expr, elements });
+        }
+        return cps(expr.elements[index], (element) => {
+          elements.push(element);
+          return sequence(index + 1);
+        });
+      };
+      return sequence(0);
+    }
+
+    if (expr.tag === "array") {
+      const elements: ArrayElement[] = [];
+      const sequence = (index: number): Expr => {
+        if (index === expr.elements.length) {
+          return continuation({ ...expr, elements });
+        }
+        const element = expr.elements[index];
+        return cps(element.value, (value) => {
+          elements.push({ spread: element.spread, value });
+          return sequence(index + 1);
+        });
+      };
+      return sequence(0);
+    }
+
+    if (expr.tag === "shape") {
+      const members: ShapeMember[] = [];
+      const sequence = (index: number): Expr => {
+        if (index === expr.members.length) {
+          return continuation({ ...expr, members });
+        }
+        const member = expr.members[index];
+        return cps(member.value, (value) => {
+          if (member.tag === "field") {
+            members.push({ tag: "field", name: member.name, value });
+          } else {
+            members.push({ tag: "spread", value });
+          }
+          return sequence(index + 1);
+        });
+      };
+      return sequence(0);
+    }
+
+    if (expr.tag === "if") {
+      const branch = (index: number): Expr | null => {
+        if (index === expr.branches.length) {
+          if (expr.fallback === null) return null;
+          return cps(expr.fallback, continuation);
+        }
+        const current = expr.branches[index];
+        return cps(current.condition, (condition) => ({
+          tag: "if",
+          branches: [{
+            condition,
+            consequence: cps(current.consequence, continuation),
+          }],
+          fallback: branch(index + 1),
+          span: expr.span,
+        }));
+      };
+      const transformed = branch(0);
+      if (transformed === null) {
+        fail(
+          "BLOT_TYPE_ERROR",
+          "A handled conditional must have at least one branch.",
+          expr.span,
+        );
+      }
+      return transformed;
+    }
+
+    if (expr.tag === "case") {
+      return cps(expr.target, (target) => ({
+        ...expr,
+        target,
+        arms: expr.arms.map((arm) => ({
+          ...arm,
+          body: cps(arm.body, continuation),
+        })),
+      }));
+    }
+
+    if (expr.tag === "block") {
+      const sequence = (index: number): Expr => {
+        if (index === expr.declarations.length) {
+          return cps(expr.result, continuation);
+        }
+        const declaration = expr.declarations[index];
+        if (declaration.tag === "binding" && declaration.kind === "sig") {
+          return sequence(index + 1);
+        }
+        return cps(declaration.value, (value) => {
+          const rewritten = { ...declaration, value } as Decl;
+          return {
+            tag: "block",
+            declarations: [rewritten],
+            result: sequence(index + 1),
+            span: expr.span,
+          };
+        });
+      };
+      return sequence(0);
+    }
+
+    return continuation(expr);
+  };
+
+  const transformed = cps(thunk.body, (value) => {
+    if (returnClause === null) return value;
+    return {
+      tag: "apply",
+      fn: returnClause,
+      arg: value,
       span,
-    );
-  }
-  const [parameter, resume] = clause.parameter.elements;
-  if (resume === undefined || resume.tag !== "name") {
-    return unsupported("a handler clause without a named `resume`", span);
-  }
-  const rewritten = tailResume(clause.body, resume.name);
-  if (rewritten === null) {
-    return unsupported(
-      `a handler that does not resume in tail position — aborting and multi-shot handlers need a delimited continuation, which Core does not have`,
-      clause.body.span,
-    );
-  }
-  if (mentions(rewritten, resume.name)) {
-    return unsupported(
-      "a handler that uses `resume` outside tail position",
-      clause.body.span,
-    );
-  }
-  return { tag: "lambda", parameter, body: rewritten, span: clause.span };
-}
-
-/** Replaces `resume e` in tail position with `e`, or reports that there is none. */
-function tailResume(body: Expr, resume: string): Expr | null {
-  if (
-    body.tag === "apply" && body.fn.tag === "var" && body.fn.name === resume
-  ) {
-    return body.arg;
-  }
-  if (body.tag === "block") {
-    const result = tailResume(body.result, resume);
-    if (result === null) return null;
-    return { ...body, result };
-  }
-  if (body.tag === "if") {
-    const branches = body.branches.map((branch) => {
-      const consequence = tailResume(branch.consequence, resume);
-      return consequence === null ? null : { ...branch, consequence };
-    });
-    if (branches.some((branch) => branch === null)) return null;
-    const fallback = body.fallback === null
-      ? null
-      : tailResume(body.fallback, resume);
-    if (body.fallback !== null && fallback === null) return null;
-    return { ...body, branches: branches as typeof body.branches, fallback };
-  }
-  if (body.tag === "case") {
-    const arms = body.arms.map((arm) => {
-      const rewritten = tailResume(arm.body, resume);
-      return rewritten === null ? null : { ...arm, body: rewritten };
-    });
-    if (arms.some((arm) => arm === null)) return null;
-    return { ...body, arms: arms as typeof body.arms };
-  }
-  return null;
-}
-
-function mentions(expr: Expr, name: string): boolean {
-  switch (expr.tag) {
-    case "var":
-      return expr.name === name;
-    case "apply":
-      return mentions(expr.fn, name) || mentions(expr.arg, name);
-    case "field":
-      return mentions(expr.target, name);
-    case "lambda":
-      return mentions(expr.body, name);
-    case "rec":
-      return mentions(expr.lambda, name);
-    case "comptime":
-      return mentions(expr.body, name);
-    case "tuple":
-      return expr.elements.some((element) => mentions(element, name));
-    case "array":
-      return expr.elements.some((element) => mentions(element.value, name));
-    case "shape":
-      return expr.members.some((member) => mentions(member.value, name));
-    case "if":
-      return expr.branches.some((branch) =>
-        mentions(branch.condition, name) || mentions(branch.consequence, name)
-      ) || (expr.fallback !== null && mentions(expr.fallback, name));
-    case "case":
-      return mentions(expr.target, name) ||
-        expr.arms.some((arm) => mentions(arm.body, name));
-    case "block":
-      return expr.declarations.some((declaration) =>
-        mentions(declaration.value, name)
-      ) || mentions(expr.result, name);
-    default:
-      return false;
-  }
+    };
+  });
+  return lower(transformed, childScope(scope), lowering);
 }
 
 /**
@@ -2237,7 +2972,7 @@ function lowerImport(
   if (specifier.tag !== "text") {
     return unsupported("an `@import` whose path is not a literal", span);
   }
-  const dependency = lowering.facts.modules.get(specifier.value);
+  const dependency = lowering.facts.modules.get(specifier);
   if (dependency === undefined) {
     return unsupported(`the import \`${specifier.value}\``, span);
   }
@@ -2248,7 +2983,7 @@ function lowerImport(
     );
   }
 
-  const inner = childScope(scope);
+  const inner = childScope(scope, dependency.values);
   const parameter = dependency.module.parameter;
   const wrapper = parameter === null
     ? null

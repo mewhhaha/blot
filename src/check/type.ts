@@ -32,10 +32,21 @@ export interface Variable {
   readonly upper: SimpleType[];
 }
 
+export interface RigidVariable {
+  readonly tag: "rigid";
+  readonly id: number;
+}
+
 export type Domain = "int" | "text";
 
 export type SimpleType =
   | Variable
+  | RigidVariable
+  | {
+    readonly tag: "forall";
+    readonly variables: readonly number[];
+    readonly body: SimpleType;
+  }
   | {
     readonly tag: "range";
     readonly domain: Domain;
@@ -80,10 +91,16 @@ export interface Scheme {
 export type Typing = SimpleType | Scheme;
 
 let nextId = 0;
+let nextRigidId = 0;
 
 export function freshVar(level: Level): Variable {
   nextId += 1;
   return { tag: "var", id: nextId, level, lower: [], upper: [] };
+}
+
+export function freshRigid(): RigidVariable {
+  nextRigidId += 1;
+  return { tag: "rigid", id: nextRigidId };
 }
 
 export const UNIT: SimpleType = { tag: "unit" };
@@ -164,6 +181,8 @@ export function levelOf(type: SimpleType): Level {
   switch (type.tag) {
     case "var":
       return type.level;
+    case "forall":
+      return levelOf(type.body);
     case "fun":
       return Math.max(
         levelOf(type.param),
