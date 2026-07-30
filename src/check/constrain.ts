@@ -61,8 +61,11 @@ function describe(type: SimpleType): string {
       }`;
     case "array":
       return "an array";
-    case "variant":
-      return [...type.cases.keys()].map((n) => `#${n}`).join(" | ");
+    case "variant": {
+      const shown = [...type.cases.keys()].map((n) => `#${n}`).join(" | ");
+      if (type.open) return `${shown} | ..`;
+      return shown;
+    }
     case "effects":
       return `<${[...type.labels].join(", ")}>`;
     case "opaque":
@@ -154,11 +157,19 @@ export function constrain(
     for (const [name, payload] of lhs.cases) {
       const accepted = rhs.cases.get(name);
       if (accepted === undefined) {
+        // An open requirement names the constructors it reads and admits the
+        // rest, which is exactly what an arm matching everything leaves behind.
+        if (rhs.open) continue;
         throw new TypeError_(
           `\`#${name}\` is not one of ${describe(rhs)}`,
         );
       }
       constrain(payload, accepted, cache);
+    }
+    if (lhs.open && !rhs.open) {
+      throw new TypeError_(
+        `${describe(lhs)} may carry a constructor outside ${describe(rhs)}`,
+      );
     }
     return;
   }
@@ -287,6 +298,7 @@ function extrude(
     case "variant":
       return {
         tag: "variant",
+        open: type.open,
         cases: new Map(
           [...type.cases].map((
             [n, t],
@@ -379,6 +391,7 @@ function freshenAbove(
     case "variant":
       return {
         tag: "variant",
+        open: type.open,
         cases: new Map(
           [...type.cases].map((
             [n, t],
@@ -460,6 +473,7 @@ function substituteRigid(
     case "variant":
       return {
         tag: "variant",
+        open: type.open,
         cases: new Map(
           [...type.cases].map(([name, payload]) => [
             name,

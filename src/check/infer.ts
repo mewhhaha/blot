@@ -46,10 +46,12 @@ import {
   INT,
   intLiteral,
   type Level,
+  openVariant,
   record,
   type SimpleType,
   TEXT,
   textLiteral,
+  TOP,
   tupleType,
   type Typing,
   UNIT,
@@ -642,19 +644,27 @@ function inferCase(
 ): SimpleType {
   const target = infer(expr.target, context, level, row);
   const result = freshVar(level);
-  const accepted: SimpleType[] = [];
+  const accepted: AcceptedArm[] = [];
+
+  // An arm that matches every value leaves the constructor set unbounded, but
+  // not unknown: the refutable arms still say what their payloads carry.
+  const open = expr.arms.some((arm) => irrefutable(arm.pattern));
 
   for (const arm of expr.arms) {
     const scope = childTypeEnv(context.types);
     const inner: Context = { ...context, types: scope };
     const armType = bindPattern(arm.pattern, scope, level);
-    accepted.push(armType);
 
-    // Narrowing: inside the arm, a matched name is known to have the arm's
-    // shape. This is what "branches prove stuff" amounts to over a union
-    // lattice — refinement, not dependent types.
-    if (expr.target.tag === "var" && !irrefutable(arm.pattern)) {
-      scope.names.set(expr.target.name, armType);
+    if (arm.pattern.tag === "name") {
+      // An irrefutable name matches every value, so it *is* the scrutinee.
+      located(arm.pattern.span, () => constrain(target, armType));
+    }
+    if (!irrefutable(arm.pattern)) {
+      accepted.push({ pattern: arm.pattern, accepted: armType });
+      // Narrowing: inside the arm, a matched name is known to have the arm's
+      // shape. This is what "branches prove stuff" amounts to over a union
+      // lattice — refinement, not dependent types.
+      if (expr.target.tag === "var") scope.names.set(expr.target.name, armType);
     }
 
     const body = infer(arm.body, inner, level, row);
@@ -662,8 +672,10 @@ function inferCase(
   }
 
   // The scrutinee must be covered by the arms taken together. A variant with a
-  // case no arm mentions is caught here rather than at runtime.
-  const covered = mergeAccepted(accepted);
+  // case no arm mentions is caught here rather than at runtime. When an arm is
+  // irrefutable the requirement is open instead of absent — dropping it is what
+  // left `case c of #Some v => v, _ => 0 end` with `v` unrelated to `c`.
+  const covered = mergeAccepted(accepted, open);
   if (covered !== null) {
     located(expr.target.span, () => constrain(target, covered));
   }
@@ -715,6 +727,9 @@ function casesOf(type: SimpleType): readonly VariantCase[] | null {
 
   const walk = (current: SimpleType, seen: Set<number>): void => {
     if (current.tag === "variant") {
+      // An open variant names the constructors one `case` read, not the whole
+      // set. The backend needs the whole set, so this is not it.
+      if (current.open) return;
       sawVariant = true;
       for (const [name, payload] of current.cases) {
         found.set(name, found.get(name) === true || payload.tag !== "unit");
@@ -739,17 +754,65 @@ function rowLabels(type: SimpleType, seen: Set<number>): string[] {
   return type.lower.flatMap((bound) => rowLabels(bound, seen));
 }
 
-/** Arms of one `case` accept the union of their patterns. */
-function mergeAccepted(accepted: readonly SimpleType[]): SimpleType | null {
+/** A refutable arm's pattern together with what it accepts. */
+interface AcceptedArm {
+  readonly pattern: Pattern;
+  readonly accepted: SimpleType;
+}
+
+/**
+ * Arms of one `case` accept the union of their patterns.
+ *
+ * `open` is set when some arm matched everything: the constructors named here
+ * then constrain their payloads without closing the set. An arm that is not a
+ * constructor — a literal, a shape — is not a union at all, and saying nothing
+ * beats inventing a coverage it does not have.
+ *
+ * One constructor may have several arms, and only the first that can match it
+ * runs. A total payload pattern settles the constructor: it cannot fail, so
+ * every later arm for that constructor is unreachable, which is the same rule
+ * the backend lowers by. A literal payload is a guard rather than a
+ * requirement, so it constrains nothing on its own.
+ */
+function mergeAccepted(
+  accepted: readonly AcceptedArm[],
+  open: boolean,
+): SimpleType | null {
   const cases = new Map<string, SimpleType>();
-  for (const type of accepted) {
-    // An irrefutable arm accepts everything, so coverage says nothing.
-    if (type.tag === "var") return null;
-    if (type.tag !== "variant") return null;
-    for (const [name, payload] of type.cases) cases.set(name, payload);
+  const settled = new Set<string>();
+  for (const arm of accepted) {
+    if (arm.accepted.tag !== "variant") return null;
+    const total = arm.pattern.tag === "constructor" &&
+      (arm.pattern.payload === null || totalPattern(arm.pattern.payload));
+    for (const [name, payload] of arm.accepted.cases) {
+      if (settled.has(name)) continue;
+      if (total) {
+        cases.set(name, payload);
+        settled.add(name);
+        continue;
+      }
+      if (!cases.has(name)) cases.set(name, TOP);
+    }
   }
   if (cases.size === 0) return null;
+  if (open) return openVariant(cases);
   return variant(cases);
+}
+
+/** Does this pattern match every value of the type it is written against? */
+function totalPattern(pattern: Pattern): boolean {
+  switch (pattern.tag) {
+    case "wildcard":
+    case "name":
+    case "unit":
+      return true;
+    case "tuple":
+      return pattern.elements.every(totalPattern);
+    case "shape":
+      return pattern.fields.every((field) => totalPattern(field.pattern));
+    default:
+      return false;
+  }
 }
 
 function irrefutable(pattern: Pattern): boolean {
@@ -1065,12 +1128,11 @@ function stableRebindingType(
     );
   }
   if (type.tag === "variant") {
-    return variant(
-      [...type.cases].map(([name, payload]) => [
-        name,
-        stableRebindingType(payload),
-      ]),
-    );
+    const cases = [...type.cases].map((
+      [name, payload],
+    ) => [name, stableRebindingType(payload)] as const);
+    if (type.open) return openVariant(cases);
+    return variant(cases);
   }
   if (type.tag === "fun") {
     return {

@@ -743,7 +743,9 @@ function exportSchema(
           return HostTypes.text;
         }
       }
-      if (bounds.every((bound) => bound.tag === "variant")) {
+      // An open bound names the constructors one `case` read rather than the
+      // whole union, and an export needs the whole one.
+      if (bounds.every((bound) => bound.tag === "variant" && !bound.open)) {
         const cases = new Map<string, SimpleType>();
         for (const bound of bounds) {
           if (bound.tag !== "variant") {
@@ -754,7 +756,7 @@ function exportSchema(
           }
         }
         return exportSchema(
-          { tag: "variant", cases },
+          { tag: "variant", cases, open: false },
           name,
           span,
           lowering,
@@ -853,6 +855,7 @@ function bridgeRuntimeValue(value: Value): SimpleType | null {
       return {
         tag: "variant",
         cases: new Map([[value.name, payload]]),
+        open: false,
       };
     }
     default:

@@ -537,6 +537,10 @@ statements in the surrounding body. On failure, the `else` statements run. That
 path must leave through `return` or `break`; allowing it to continue would leave
 the pattern names unbound.
 
+The guard is a `case` with a wildcard alternative, so it types its names the
+same way one does: `value` above has the type the matched constructor carries,
+and the guard leaves the rest of the constructor set open.
+
 This form has no `then` because success continues after the guard.
 
 ### 8.4 `case`
@@ -555,6 +559,27 @@ value.
 When the target's type is known, the union of the arm patterns must cover it. A
 wildcard or name pattern is irrefutable. Reaching runtime without a matching arm
 is an error.
+
+An arm's pattern types the names the arm binds: what the target carries for a
+constructor flows into that arm's payload pattern. An irrefutable arm leaves the
+constructor set open rather than unknown — the named arms still say what their
+payloads carry, so
+
+```blot
+let unwrap_or = m => case m of
+  #Some inner => inner,
+  _ => "none"
+end;
+```
+
+has type `#Some 'a | .. -> ('a | "none")`, where `| ..` reads "and possibly
+other constructors". A name arm matches every value, so it binds the target
+itself.
+
+One constructor may have several arms, and only the first that can match it
+runs. A payload pattern that only binds cannot fail, so it settles what that
+constructor carries and every later arm for it is unreachable. A literal payload
+is a guard rather than a requirement and constrains nothing on its own.
 
 Like expression `if`, `case` is a value boundary: `return` and `break` cannot
 escape from an arm.
@@ -680,6 +705,7 @@ Compiler output uses notation that is not additional source syntax:
 | `{ .x = Int; }`           | structural record           |
 | `[Int]`                   | homogeneous array           |
 | `#None \| #Some Int`      | constructor variant         |
+| `#Some Int \| ..`         | variant with an open set    |
 | `A -> B`                  | pure function               |
 | `A -> B ~ { Console, e }` | function with an effect row |
 | `'a`, `'b`                | inferred type variables     |

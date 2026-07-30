@@ -81,6 +81,7 @@ const REJECTIONS: Record<
     code: "BLOT_GUARD_MAY_CONTINUE",
     stage: "check",
   },
+  "guard_payload_type": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "handler_wrong_operation": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "handler_composition_action": {
     code: "BLOT_BAD_HANDLER_COMPOSITION",

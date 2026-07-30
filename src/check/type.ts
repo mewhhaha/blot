@@ -62,8 +62,20 @@ export type SimpleType =
   }
   | { readonly tag: "record"; readonly fields: ReadonlyMap<string, SimpleType> }
   | { readonly tag: "array"; readonly element: SimpleType }
-  /** A union of constructors. Payload is `unit` when the tag carries none. */
-  | { readonly tag: "variant"; readonly cases: ReadonlyMap<string, SimpleType> }
+  /**
+   * A union of constructors. Payload is `unit` when the tag carries none.
+   *
+   * `open` means "these constructors, and possibly others". It is what a `case`
+   * with a wildcard or name arm proves about its scrutinee: the constructor
+   * arms still say what their payloads carry, but the arm that matches
+   * everything leaves the set of constructors unbounded. Inference only ever
+   * builds one as an upper bound.
+   */
+  | {
+    readonly tag: "variant";
+    readonly cases: ReadonlyMap<string, SimpleType>;
+    readonly open: boolean;
+  }
   /** An effect row: a set ordered by inclusion. */
   | { readonly tag: "effects"; readonly labels: ReadonlySet<string> }
   /**
@@ -146,7 +158,14 @@ export function record(
 export function variant(
   cases: Iterable<readonly [string, SimpleType]>,
 ): SimpleType {
-  return { tag: "variant", cases: new Map(cases) };
+  return { tag: "variant", cases: new Map(cases), open: false };
+}
+
+/** `#A | #B | ..` — those constructors, and possibly others. */
+export function openVariant(
+  cases: Iterable<readonly [string, SimpleType]>,
+): SimpleType {
+  return { tag: "variant", cases: new Map(cases), open: true };
 }
 
 export function union(members: readonly SimpleType[]): SimpleType {

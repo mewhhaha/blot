@@ -184,6 +184,36 @@ check(
   "(#No | #Yes, 'a) -> ('a | #Off)",
 );
 
+check(
+  "a default arm still types the constructor arms it accompanies",
+  "let f = m => case m of #Some inner => inner, _ => 0 end;\nreturn f;",
+  "#Some 'a | .. -> ('a | 0)",
+);
+
+check(
+  "an open union accepts a constructor no arm names",
+  'let f = m => case m of #Some inner => inner, _ => 0 end;\nreturn f (#Some "hi");',
+  '(0 | "hi")',
+);
+
+check(
+  "a name arm is the target",
+  "let f = m => case m of other => other end;\nreturn f;",
+  "'a -> 'a",
+);
+
+check(
+  "a guard types what it binds",
+  'let f = m => do\n  if let #Some inner = m else do\n    return "none";\n  end;\n  in inner\nend;\nreturn f (#Some 7);',
+  '("none" | 7)',
+);
+
+rejects(
+  "a guard rejects a payload used at the wrong type",
+  'let f = m => do\n  if let #Some inner = m else do\n    return "none";\n  end;\n  in Text.append inner "!"\nend;\nreturn f (#Some 3);',
+  "3 is not text",
+);
+
 rejects(
   "a constructor no arm covers is rejected",
   'let f = m => case m of #Ready => 1, #Busy n => n end;\nreturn f (#Failed "x");',

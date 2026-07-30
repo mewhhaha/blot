@@ -1,0 +1,16 @@
+// A guard's pattern types what it binds. `#Some 3` carries an integer, so
+// appending text to `inner` is a type error at `blot check` rather than a
+// surprise at run time.
+
+open {} = (@import "blot:prelude") ();
+
+const counted = #Some 3;
+
+let shout = () => do
+  if let #Some inner = counted else do
+    return "none";
+  end;
+  in Text.append inner "!"
+end;
+
+return shout ();

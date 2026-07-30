@@ -163,6 +163,7 @@ export function show(type: SimpleType): string {
             ? `#${name}`
             : `#${name} ${go(payload, polarity)}`
         );
+        if (current.open) return [...cases, ".."].join(" | ");
         if (cases.length === 0) return "⊥";
         return cases.join(" | ");
       }
