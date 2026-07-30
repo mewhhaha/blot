@@ -344,6 +344,18 @@ function controlPayload(value: Expr, span: Span): Expr {
   };
 }
 
+/** Like `controlPayloadPattern`, but binds a whole rebound-name record. */
+function controlStatePattern(
+  carried: readonly string[],
+  span: Span,
+): Pattern {
+  return {
+    tag: "shape",
+    fields: [{ name: "value", pattern: loopPattern(carried, span) }],
+    span,
+  };
+}
+
 function controlPayloadPattern(name: string | null, span: Span): Pattern {
   let pattern: Pattern = { tag: "wildcard", span };
   if (name !== null) {
@@ -506,7 +518,12 @@ function lowerControlOutcome(
       body.name === "conditional_statement_branches",
       `unknown conditional statement ${body.name}`,
     );
-    let branchContinue: Expr = { tag: "unit", span: rule.span };
+    // What a branch produces when it falls through. The names it rebound have
+    // to ride across the rejoin, or the statements after the conditional read
+    // the value from before it — which is how `if c then do n := n + 1; end;`
+    // inside a `for` silently counted nothing.
+    const rebound = reboundNames(nestedStatementLists(rule).flat());
+    let branchContinue: Expr = loopState(rebound, rule.span);
     let branchConstructors = constructors;
     let branchContext = context;
     if (remaining.length === 0) branchContinue = continueValue;
@@ -556,7 +573,7 @@ function lowerControlOutcome(
         pattern: {
           tag: "constructor",
           name: branchConstructors.continue,
-          payload: controlPayloadPattern(null, rule.span),
+          payload: controlStatePattern(rebound, rule.span),
           span: rule.span,
         },
         body: lowerControlOutcome(
@@ -823,6 +840,19 @@ interface LoweredLoop {
 interface LoweredControlLoop extends LoweredLoop {
   readonly constructors: ControlConstructors;
   readonly returns: boolean;
+}
+
+/** The destructuring counterpart of `loopState`. */
+function loopPattern(carried: readonly string[], span: Span): Pattern {
+  if (carried.length === 0) return { tag: "wildcard", span };
+  return {
+    tag: "shape",
+    fields: carried.map((field) => ({
+      name: field,
+      pattern: { tag: "name" as const, name: field, qualifier: "none" as const, span },
+    })),
+    span,
+  };
 }
 
 function loopState(carried: readonly string[], span: Span): Expr {
@@ -1108,17 +1138,45 @@ function desugarLoop(
   };
 }
 
-function carriedNames(statements: readonly Cursor[]): readonly string[] {
-  const carried: string[] = [];
-  for (const statement of statements) {
-    const declaration = asRule(unwrap(statement), "statement");
-    if (declaration.name !== "rebinding") continue;
-    if (tokenOf(required(declaration, "arrow")).text !== ":=") continue;
-    const name = tokenOf(required(declaration, "name")).text;
-    if (!carried.includes(name)) carried.push(name);
-  }
-  return carried;
+/**
+ * The names a statement stream rebinds with `:=`.
+ *
+ * Recursive through nested statement lists, because a statement conditional is
+ * part of the same stream: `if c then do n := n + 1; end;` rebinds `n` for
+ * everything after it, and a loop containing that rebinds `n` per iteration.
+ *
+ * `:=` is the only form collected, and that is what makes this well defined.
+ * A rebinding requires the name to be in scope already and to keep its type
+ * (LANGUAGE.md 4.3), so there is always an outer binding to hand the value back
+ * to and both paths agree on what it holds. A `let` introduces a new name with
+ * a possibly new type and must not escape its branch — a name bound only when a
+ * condition happened to hold is exactly what must not leak.
+ */
+function reboundNames(statements: readonly Cursor[]): readonly string[] {
+  const rebound: string[] = [];
+  const visit = (cursors: readonly Cursor[]): void => {
+    for (const cursor of cursors) {
+      const declaration = statementRule(cursor);
+      if (
+        declaration.name === "rebinding" &&
+        tokenOf(required(declaration, "arrow")).text === ":="
+      ) {
+        const name = tokenOf(required(declaration, "name")).text;
+        if (!rebound.includes(name)) rebound.push(name);
+        continue;
+      }
+      // Not into a nested `for`. Its own desugaring already threads what it
+      // rebinds into this stream as a `let`, and the names it introduces for
+      // itself are not this scope's to carry.
+      if (declaration.name === "iteration") continue;
+      for (const nested of nestedStatementLists(declaration)) visit(nested);
+    }
+  };
+  visit(statements);
+  return rebound;
 }
+
+const carriedNames = reboundNames;
 
 function lowerControlLoop(
   rule: Rule,
@@ -1301,6 +1359,11 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       body.name === "conditional_statement_branches",
       "`if let` reached declaration lowering",
     );
+    // Names the branches rebind escape the conditional. A branch is a scope for
+    // `let`, which introduces a name, but not for `:=`, which hands an existing
+    // one back — so a statement conditional can compute, and a `:=` inside one
+    // is not silently dropped.
+    const rebound = reboundNames(nestedStatementLists(rule).flat());
     const branches: Branch[] = [{
       condition: lowerExpression(
         asRule(field(body, "condition"), "condition"),
@@ -1311,7 +1374,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
         declarations: fieldList(body, "consequence").map((statement) =>
           lowerDecl(asRule(unwrap(statement), "statement"), context)
         ),
-        result: { tag: "unit", span: rule.span },
+        result: loopState(rebound, rule.span),
         span: rule.span,
       },
     }];
@@ -1330,12 +1393,15 @@ function lowerDecl(rule: Rule, context: Context): Decl {
           declarations: fieldList(clause, "consequence").map((statement) =>
             lowerDecl(asRule(unwrap(statement), "statement"), context)
           ),
-          result: { tag: "unit", span: clause.span },
+          result: loopState(rebound, clause.span),
           span: clause.span,
         },
       });
     }
-    let fallback: Expr = { tag: "unit", span: rule.span };
+    // A missing `else` is the pass-through arm: it hands back the names as
+    // they already are, which is what makes a one-branch rebinding mean what it
+    // reads as.
+    let fallback: Expr = loopState(rebound, rule.span);
     const fallbackCursor = field(body, "fallback");
     if (fallbackCursor !== null) {
       const clause = asRule(
@@ -1347,14 +1413,14 @@ function lowerDecl(rule: Rule, context: Context): Decl {
         declarations: fieldList(clause, "alternative").map((statement) =>
           lowerDecl(asRule(unwrap(statement), "statement"), context)
         ),
-        result: { tag: "unit", span: clause.span },
+        result: loopState(rebound, clause.span),
         span: clause.span,
       };
     }
     return {
       tag: "binding",
       kind: "let",
-      pattern: { tag: "wildcard", span: rule.span },
+      pattern: loopPattern(rebound, rule.span),
       value: {
         tag: "if",
         branches,
