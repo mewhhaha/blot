@@ -12,6 +12,10 @@ import {
   type CanonicalAbiType,
   type CompilationOptions,
   compileModuleToWasm,
+  CompilerPerformanceTrace,
+  WASM_PROVEN_STORE_READS_TRACE_ANNOTATION,
+  WASM_STATIC_ANALYSIS_TRACE_STAGE,
+  WASM_STORE_READS_TRACE_ANNOTATION,
   CpuCompiler,
   EvaluationProfile,
   GpuCompiler,
@@ -122,8 +126,23 @@ interface InternalWasmManifest {
   readonly imports: readonly CanonicalAbiImport[];
 }
 
+/**
+ * What gpufuck's range analysis made of the bounds blot proved.
+ *
+ * blot proves an index in bounds and then emits the read anyway — the check is
+ * gpufuck's to remove, and until this was read there was no way to tell whether
+ * it recognised the shape our guards take. `proven` short of `total` is not a
+ * defect; it is the number to look at before claiming a proof paid for itself.
+ */
+export interface StoreReadCounts {
+  readonly total: number;
+  readonly proven: number;
+}
+
 export interface Built {
   readonly wasm: Uint8Array;
+  /** Store reads seen, and those whose bounds check was eliminated. */
+  readonly storeReads: StoreReadCounts;
   readonly manifest: WasmManifest;
   /** Exact bytes stored in the `blot:abi` custom section and sidecar. */
   readonly manifestBytes: Uint8Array;
@@ -198,6 +217,21 @@ export class BlotCompilerSession {
   }
 }
 
+/** Reads the stable Store-analysis annotations off a finished trace. */
+function storeReadCounts(trace: CompilerPerformanceTrace): StoreReadCounts {
+  let total = 0;
+  let proven = 0;
+  for (const event of trace.snapshot()) {
+    if (event.stage !== WASM_STATIC_ANALYSIS_TRACE_STAGE) continue;
+    const seen = event.annotations[WASM_STORE_READS_TRACE_ANNOTATION];
+    const eliminated =
+      event.annotations[WASM_PROVEN_STORE_READS_TRACE_ANNOTATION];
+    if (typeof seen === "number") total += seen;
+    if (typeof eliminated === "number") proven += eliminated;
+  }
+  return { total, proven };
+}
+
 export async function build(path: string): Promise<Built> {
   const session = await BlotCompilerSession.create();
   try {
@@ -223,12 +257,15 @@ async function buildWithSession(
     );
     const builtManifest = publicManifest(internalManifest);
     const manifestBytes = serializeManifest(builtManifest);
+    const trace = new CompilerPerformanceTrace();
     const coreWasm = await compileModuleToWasm(compiled.module, {
       canonicalAbi: canonicalInterface(internalManifest),
+      trace,
     });
     const wasm = appendCustomSection(coreWasm, "blot:abi", manifestBytes);
     return {
       wasm,
+      storeReads: storeReadCounts(trace),
       manifest: builtManifest,
       manifestBytes,
       capabilities: compiled.lowered.capabilities.flatMap((capability) => {
@@ -404,12 +441,15 @@ async function verifyWithSession(
     );
     const builtManifest = publicManifest(internalManifest);
     const manifestBytes = serializeManifest(builtManifest);
+    const trace = new CompilerPerformanceTrace();
     const coreWasm = await compileModuleToWasm(compiled.module, {
       canonicalAbi: canonicalInterface(internalManifest),
+      trace,
     });
     const wasm = appendCustomSection(coreWasm, "blot:abi", manifestBytes);
     return {
       wasm,
+      storeReads: storeReadCounts(trace),
       value,
       ran,
       manifest: builtManifest,

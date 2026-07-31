@@ -348,6 +348,15 @@ Shape fields and spreads are applied from left to right. A later spread or field
 replaces an earlier field with the same name. Writing the same explicit field
 more than once is rejected.
 
+A spread contributes the fields its operand is *known* to have. Where the
+operand is a shape written nearby, that is all of them. Where it is a parameter,
+it is none of them: `r => { ...r; .tag = 1; }` returns a shape with `.tag` and
+nothing else, and reading any other field off the result is an error. Width
+subtyping says what a function may *read* from a record it is handed; it does
+not carry the unread fields through a spread, which would need a row variable
+this lattice does not have. Naming the fields at the spread avoids the limit
+entirely.
+
 Field projection is postfix and may be chained:
 
 ```blot
@@ -609,6 +618,11 @@ end;
 
 `@panic` takes a text and returns the empty type, so it may stand where any
 value is expected. It is not a caught failure: reaching it stops the program.
+It survives to WebAssembly as an explicit fault carrying that text, which is
+what distinguishes it from the arms the compiler proves unreachable: coverage
+is checked, so a `case` with no matching arm is a path the checker ruled out,
+and the emitted module marks it as unreachable rather than as a fault a program
+can hit.
 
 A target whose type inference has not pinned carries no coverage requirement,
 since there is nothing to enumerate. Literal arms therefore still constrain

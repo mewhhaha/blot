@@ -1891,7 +1891,7 @@ function lower(
 
     case "if": {
       let result = expr.fallback === null
-        ? at.runtimeFault("no branch matched")
+        ? at.unreachable("no branch matched")
         : lower(expr.fallback, scope, lowering);
       for (let index = expr.branches.length - 1; index >= 0; index -= 1) {
         const branch = expr.branches[index];
@@ -2337,8 +2337,12 @@ function lowerLiteralCase(
     return unsupported(`a ${pattern.tag} pattern over a literal`, pattern.span);
   }
 
+  // Exhaustiveness is a checked error, so an arm-less tail is a path the
+  // checker proved cannot be taken — not a fault the program can hit. `@panic`
+  // is how a program opts into a reachable one, and it stays an explicit
+  // fault so the two are distinguishable at the boundary.
   let body = fallback ??
-    at.runtimeFault("no arm matched");
+    at.unreachable("no arm matched");
   for (let index = tests.length - 1; index >= 0; index -= 1) {
     const test = tests[index];
     const value = test.literal;
@@ -2999,6 +3003,15 @@ function lowerApply(
     // so it becomes a fault with the same message. `expect` is a prelude
     // function and gets lowered like any other, whether or not this arm of it
     // can be taken.
+    // The escape from exhaustiveness. `@fail` refuses while compiling; this one
+    // is reachable by construction, so it lowers to an explicit fault carrying
+    // the reason the program gave for it.
+    if (spine.callee.name === "@panic" && spine.args.length === 1) {
+      const reason = spine.args[0];
+      return surface.runtimeFault(
+        reason.tag === "text" ? reason.value : "panicked",
+      );
+    }
     if (spine.callee.name === "@fail" && spine.args.length === 1) {
       const message = spine.args[0];
       return surface.runtimeFault(

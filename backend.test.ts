@@ -1,5 +1,6 @@
 import { buildSurfaceModule, CpuCompiler, EvaluationProfile } from "gpufuck";
 import {
+  assert,
   assertEquals,
   assertRejects,
   assertStringIncludes,
@@ -7,6 +8,7 @@ import {
 } from "@std/assert";
 import { join } from "@std/path";
 import {
+  build,
   runLowering,
   runLoweringExport,
   validateLowering,
@@ -524,4 +526,42 @@ Deno.test("residual module-result spreads still declare every export", async () 
     manifest.imports.map((imported) => imported.capability),
     ["Source"],
   );
+});
+
+Deno.test("proved array reads reach gpufuck with their bounds checks removed", async () => {
+  // blot proves an index in bounds and emits the read anyway; removing the
+  // check is gpufuck's range analysis, and the only way to know it recognises
+  // the shape our guards take is to read the count back. A proof nothing
+  // downstream acts on is a diagnostic wearing an optimization's clothes.
+  const built = await build("examples/tour.blot");
+  assert(
+    built.storeReads.total > 0,
+    "tour.blot must keep a Store read for this to measure anything",
+  );
+  assertEquals(built.storeReads.proven, built.storeReads.total);
+});
+
+Deno.test("a reachable @panic traps with the reason the program gave", async () => {
+  // `@panic` is what a program says instead of an arm it cannot write, so the
+  // arm it lives in is reachable by construction — it must survive lowering.
+  // A host effect keeps the scrutinee out of the comptime evaluator's reach,
+  // which is the only way this arm gets past specialization at all.
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "panic.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "const Source = @effect.host { .read = Unit -> Int; };",
+      "sig pick = Int -> Int;",
+      "let pick = n => case n of",
+      "  0 => 100,",
+      '  _ => @panic "pick expects zero"',
+      "end;",
+      "return { .ok = pick (Source.read ()); };",
+    ].join("\n"),
+  );
+
+  const manifest = await validateLowering(path);
+  assertEquals(manifest.exports.map((exported) => exported.sourceName), ["ok"]);
 });
