@@ -13,6 +13,13 @@ const Method = "GET" | "POST" | "PUT";
 const Bit = 0 | 1;
 const Small = 1 | 2 | 3 | #Woop | "hello";
 
+// Set algebra is by containment, not by equality: a type is a set, so the
+// question is what it *contains*. Removing a point from an integer range splits
+// it, which is exact because integers are discrete. Text is dense — there is no
+// least string above `"a"` — so `Str \\ "a"` is refused rather than approximated.
+const NonZero = Int \ 0;
+const JustOne = Int & 1;
+
 // Set algebra over unions. `|` and `\` are `Set.union` and `Set.diff` — no
 // more built in than `+` is.
 const Value = I32 | Str;
@@ -56,6 +63,8 @@ return {
   .verb = Verb;
   .bit = Bit;
   .small = Small;
+  .non_zero = NonZero;
+  .just_one = JustOne;
   .value = Value;
   .digit = Digit;
   .predicate = Predicate;

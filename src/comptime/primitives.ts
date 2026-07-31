@@ -104,24 +104,84 @@ function members(value: Value): readonly Value[] {
   return value.tag === "union" ? value.members : [value];
 }
 
+/**
+ * Set algebra on types, by *containment* rather than by equality.
+ *
+ * Comparing members with `equal` made `Int & 1` empty and `Int \\ 1` the whole
+ * of `Int` — both silently wrong, because `1` and `Int` are different values
+ * and one is inside the other. A type is a set, so the question is what it
+ * contains.
+ */
 function intersect(left: Value, right: Value): Value {
-  const kept = members(left).filter((member) =>
-    members(right).some((other) => equal(member, other))
-  );
+  const kept: Value[] = [];
+  for (const member of members(left)) {
+    for (const other of members(right)) {
+      const meet = meetOf(member, other);
+      if (meet !== null && !kept.some((seen) => equal(seen, meet))) {
+        kept.push(meet);
+      }
+    }
+  }
   if (kept.length === 0) {
     fail("BLOT_EMPTY_TYPE", "The intersection is empty.", { start: 0, end: 0 });
   }
   return kept.reduce(union);
 }
 
+/** The overlap of two ground members, or `null` when they are disjoint. */
+function meetOf(left: Value, right: Value): Value | null {
+  if (equal(left, right)) return left;
+  // A literal inside a range is the overlap; this is the case `equal` missed.
+  if (right.tag === "range" && inhabits(left, right)) return left;
+  if (left.tag === "range" && inhabits(right, left)) return right;
+  return null;
+}
+
 function difference(left: Value, right: Value, span: Span): Value {
-  const kept = members(left).filter((member) =>
-    !members(right).some((other) => equal(member, other))
-  );
+  let kept = members(left);
+  for (const other of members(right)) {
+    const next: Value[] = [];
+    for (const member of kept) next.push(...without(member, other, span));
+    kept = next;
+  }
   if (kept.length === 0) {
     fail("BLOT_EMPTY_TYPE", "The difference is empty.", span);
   }
   return kept.reduce(union);
+}
+
+/**
+ * One ground member minus another, as the pieces that remain.
+ *
+ * Removing a point from an integer range splits it, and that is exact because
+ * integers are discrete: `Int \\ 1` is `..0 | 2..`. Text is dense — there is no
+ * least string above `"a"` — so removing a point from a text range is refused
+ * rather than approximated, which is what returning the range unchanged was.
+ */
+function without(member: Value, other: Value, span: Span): Value[] {
+  if (equal(member, other)) return [];
+  if (member.tag !== "range") return [member];
+  if (!inhabits(other, member)) return [member];
+  if (other.tag === "int") {
+    const pieces: Value[] = [];
+    const below: Value = { tag: "int", value: other.value - 1n };
+    const above: Value = { tag: "int", value: other.value + 1n };
+    if (member.low.tag === "unbounded" || compare(member.low, below, span, "@type.diff") <= 0) {
+      pieces.push({ tag: "range", low: member.low, high: below, domain: "int" });
+    }
+    if (member.high.tag === "unbounded" || compare(above, member.high, span, "@type.diff") <= 0) {
+      pieces.push({ tag: "range", low: above, high: member.high, domain: "int" });
+    }
+    return pieces;
+  }
+  fail(
+    "BLOT_UNREPRESENTABLE_DIFFERENCE",
+    `Removing ${show(other)} from ${
+      show(member)
+    } cannot be written as a type: text has no least value above a given one, ` +
+      "so the result is not a union of ranges.",
+    span,
+  );
 }
 
 /**
