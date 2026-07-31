@@ -32,6 +32,7 @@ import {
   run,
 } from "../comptime/eval.ts";
 import { bridge, effectLabel } from "./bridge.ts";
+import { showLiterals, uncovered } from "./coverage.ts";
 import {
   constrain,
   instantiate,
@@ -679,6 +680,25 @@ function inferCase(
   const covered = mergeAccepted(accepted, open);
   if (covered !== null) {
     located(expr.target.span, () => constrain(target, covered));
+  }
+  // A literal set is covered by membership rather than by subtyping, so it is
+  // checked instead of constrained. `mergeAccepted` gives up the moment an arm
+  // is not a constructor, which left `case n of 1 => "one" end` over `1 | 2 | 3`
+  // with no requirement at all — accepted here and trapping at runtime.
+  //
+  // Constraining `target` against the union of the literal arms would pass this
+  // program's gate and be wrong: with no `sig` the target is a bare variable,
+  // and the constraint would pin it to whatever the arms happen to list rather
+  // than reporting what they miss. Literal arms stay non-constraining.
+  if (!open) {
+    const missing = uncovered(target, accepted.map((arm) => arm.accepted));
+    if (missing !== null && missing.length > 0) {
+      fail(
+        "BLOT_INCOMPLETE_CASE",
+        `No arm covers \`${showLiterals(missing)}\`.`,
+        expr.target.span,
+      );
+    }
   }
   // Recorded after the arms, not before: the scrutinee's constructor set is
   // what the arms proved it must be, and before them there is nothing to read.

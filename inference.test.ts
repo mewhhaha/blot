@@ -226,6 +226,56 @@ rejects(
   "`7` is not one of `1` | `2` | `3`",
 );
 
+// --- a literal union is a set the arms must exhaust -------------------------
+//
+// A constructor set is covered by subtyping, because a variant of the arms is a
+// type. A literal set is covered by membership instead: the arms are checked
+// against the declared members rather than constrained to them, so an
+// unannotated scrutinee stays unconstrained and only a declared one carries a
+// requirement.
+
+rejects(
+  "a literal no arm covers is rejected",
+  'sig f = 1 | 2 | 3 -> Str;\nlet f = n => case n of 1 => "one" end;\nreturn f;',
+  "No arm covers `2 | 3`",
+);
+
+rejects(
+  "a text literal no arm covers is rejected",
+  'sig f = "up" | "down" -> Int;\nlet f = d => case d of "up" => 1 end;\nreturn f;',
+  'No arm covers `"down"`',
+);
+
+check(
+  "arms that exhaust a literal union are accepted",
+  'sig f = 1 | 2 | 3 -> Str;\nlet f = n => case n of 1 => "one", 2 => "two", 3 => "three" end;\nreturn f;',
+  "1 | 2 | 3 -> Str",
+);
+
+check(
+  "an irrefutable arm covers the rest of a literal union",
+  'sig f = 1 | 2 | 3 -> Str;\nlet f = n => case n of 1 => "one", _ => "rest" end;\nreturn f;',
+  "1 | 2 | 3 -> Str",
+);
+
+check(
+  "literal arms still constrain nothing on their own",
+  'let f = n => case n of 1 => "one", 2 => "two" end;\nreturn f;',
+  '\'a -> ("one" | "two")',
+);
+
+check(
+  "an unbounded domain carries no coverage requirement",
+  'sig f = Int -> Str;\nlet f = n => case n of 1 => "one" end;\nreturn f;',
+  "Int -> Str",
+);
+
+check(
+  "a literal payload arm leaves its constructor set alone",
+  'let f = m => case m of #Some 1 => "one", #Some n => "many", #None => "none" end;\nreturn f (#Some 2);',
+  '("one" | "many" | "none")',
+);
+
 // --- effects are a lattice element, not a separate pass ---------------------
 
 check(

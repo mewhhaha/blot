@@ -23,6 +23,16 @@ let classify = value => case value of
   _ => 30
 end;
 
+// A declared literal union is a set, so its arms have to exhaust it the same
+// way a constructor set's do. Dropping the `3` arm is a type error here rather
+// than a trap at the call that passes `3`.
+sig rank = 1 | 2 | 3 -> Int;
+let rank = level => case level of
+  1 => 100,
+  2 => 200,
+  3 => 300
+end;
+
 // A compound payload binds one name and then destructures it.
 let unpack = m => case m of
   #Pair (left, right) => left + right,
@@ -31,4 +41,4 @@ end;
 
 return describe #Ready + describe (#Progress 0) + describe (#Progress 4)
   + describe (#Failed 3) + classify 1 + classify 7 + unpack (#Pair (5, 6))
-  - 130;
+  + rank 2 - 330;

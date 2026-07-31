@@ -1,0 +1,99 @@
+// Which values a ground type enumerates.
+//
+// Types in blot are sets, and a literal is a range whose bounds coincide — so
+// `1 | 2 | 3` is a three-element set and the question "do these arms cover it"
+// is ordinary set membership. This module answers only the half of that
+// question the lattice can answer exactly: it enumerates a type, or it says it
+// cannot.
+//
+// It says it cannot far more often than it says it can, and that is the point.
+// `Int` is a set too, but not one an arm list can exhaust, and a variable is
+// not a set yet at all. A `case` over either of those carries no coverage
+// requirement rather than a guessed one.
+//
+// Only two shapes enumerate: a singleton `range`, and a `union` whose members
+// are all singleton ranges. A `union` is the one constructor inference never
+// builds for itself — it arrives already computed from a type expression (see
+// type.ts) — so when one reaches here it *is* the set the program declared.
+//
+// This is deliberately not `@type.diff` or `Reflect.exclude`. Those compare
+// members with the comptime `equal`, which on a range compares exact bounds, so
+// `@type.diff Int 1` answers `Int` and silently readmits the value it was asked
+// to remove. A coverage check that silently readmits a value is worse than no
+// coverage check.
+
+import type { Domain, SimpleType } from "./type.ts";
+import { showRange } from "./print.ts";
+
+/** One inhabitant of a ground literal type. */
+export interface Literal {
+  readonly domain: Domain;
+  readonly value: bigint | string;
+}
+
+/**
+ * The inhabitants of `type`, or `null` when it does not enumerate.
+ *
+ * `null` is "cannot say", never "no inhabitants": an empty set is `[]`.
+ */
+function enumerate(type: SimpleType): readonly Literal[] | null {
+  if (type.tag === "range") {
+    // Bounds that coincide are a singleton. `null` is an open end, and an open
+    // end at either side is an interval nothing can list.
+    if (type.low === null || type.low !== type.high) return null;
+    return [{ domain: type.domain, value: type.low }];
+  }
+  if (type.tag !== "union") return null;
+
+  const members: Literal[] = [];
+  for (const member of type.members) {
+    const one = enumerate(member);
+    // One member that does not enumerate makes the whole union unenumerable.
+    // Widening to the members that do would claim a coverage the type does not
+    // have, and the missing member is exactly the value that would trap.
+    if (one === null) return null;
+    members.push(...one);
+  }
+  return members;
+}
+
+/** Two literals are the same value only within the same domain. */
+function sameLiteral(left: Literal, right: Literal): boolean {
+  return left.domain === right.domain && left.value === right.value;
+}
+
+/**
+ * The members of `target` that no arm accepts, or `null` when no requirement
+ * can be stated.
+ *
+ * `null` when the target does not enumerate, and `null` when any arm does not:
+ * an arm whose pattern is a constructor, a shape, or a tuple says nothing about
+ * a literal set, and a partial answer here would name members a later arm may
+ * well cover.
+ */
+export function uncovered(
+  target: SimpleType,
+  arms: readonly SimpleType[],
+): readonly Literal[] | null {
+  const members = enumerate(target);
+  if (members === null) return null;
+  if (arms.length === 0) return null;
+
+  const covered: Literal[] = [];
+  for (const arm of arms) {
+    const one = enumerate(arm);
+    if (one === null) return null;
+    covered.push(...one);
+  }
+
+  return members.filter(
+    (member) => !covered.some((literal) => sameLiteral(literal, member)),
+  );
+}
+
+/** `1 | 2`, spelled the way a `sig` would spell it. */
+export function showLiterals(literals: readonly Literal[]): string {
+  return literals
+    .map((literal) => showRange(literal.domain, literal.value, literal.value))
+    .join(" | ");
+}

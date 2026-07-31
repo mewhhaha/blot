@@ -140,6 +140,19 @@ what a struct's accessors cost: `Point.x` is `@shape.get value "0"` with the
 slot resolved at compile time, so inference cannot say what it returns even
 though the evaluator can. The value is exact; the inferred type is a variable.
 
+**Literal coverage stops where enumeration stops.** A `case` over a declared
+literal union is checked for coverage by listing the union's members and
+subtracting the arms, so `1 | 2 | 3` with only a `1` arm is refused. That works
+because a declared union is the one type constructor inference never builds for
+itself — when one reaches a `case`, it _is_ the set the program wrote down. It
+does not extend to a target whose type is `Int`, `Str`, a range with an open
+end, or a variable inference has not pinned: those enumerate no finite member
+list, so `sig f = Int -> Str` with `case n of 1 => "one" end` is still accepted
+and still traps. Closing that would need a difference operation on the lattice
+(`Int \ 1`), which is a real design question — an intersection lives in negative
+position and a complement in neither, so adding both is what would turn the
+lattice into a boolean algebra and cost the polynomial bound.
+
 **Higher-kinded types** are not inference's problem by design: type constructors
 are comptime functions that are specialized away, so the lattice never needs
 kinds.

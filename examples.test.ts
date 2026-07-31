@@ -44,6 +44,9 @@ const REJECTIONS: Record<
   "sig_mismatch": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "literal_outside_union": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "missing_case": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  // A constructor set is covered by subtyping and reports through `constrain`;
+  // a literal set is covered by membership and has its own code.
+  "missing_literal_case": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
   "wrong_argument": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "missing_field": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "linear_consumed_twice": {

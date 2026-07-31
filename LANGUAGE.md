@@ -568,6 +568,31 @@ When the target's type is known, the union of the arm patterns must cover it. A
 wildcard or name pattern is irrefutable. Reaching runtime without a matching arm
 is an error.
 
+Coverage over a constructor set and coverage over a literal set are the same
+requirement read on the two kinds of set a type can be. A constructor set is
+covered by subtyping: the arms name a variant, and the target must flow into it.
+A literal set is covered by membership instead, because the arms are literals
+rather than a type the target could be constrained to — so the members the arms
+do not name are reported, and the target's own type is left alone.
+
+```blot
+sig rank = 1 | 2 | 3 -> Int;
+let rank = level => case level of
+  1 => 100,
+  2 => 200
+end;
+```
+
+is refused: `3` is a member of the target's type that no arm covers. Adding a
+`3` arm, or any irrefutable arm, accepts it.
+
+The requirement applies only where the target's type enumerates its members: a
+declared union of literals, or a single literal. `Int`, `Str`, a range with an
+open end, and a target whose type inference has not pinned carry no coverage
+requirement, since no finite arm list could discharge one. Literal arms
+therefore still constrain nothing on their own: without the `sig` above, `rank`
+accepts any argument and owes no coverage at all.
+
 An arm's pattern types the names the arm binds: what the target carries for a
 constructor flows into that arm's payload pattern. An irrefutable arm leaves the
 constructor set open rather than unknown — the named arms still say what their
