@@ -9,7 +9,7 @@
 // Needs a WebGPU adapter, so it is not part of `deno test`: `blot check` and
 // the corpus tests stay runnable without a device.
 
-import { verify } from "../src/backend/compile.ts";
+import { BlotCompilerSession } from "../src/backend/compile.ts";
 import { hostInit } from "../src/backend/host.ts";
 import { evaluateFile } from "../src/run.ts";
 import { shapeOf, show, UNIT, type Value } from "../src/comptime/value.ts";
@@ -111,60 +111,71 @@ function render(
 
 let failures = 0;
 
-for (const path of examples) {
-  // Each execution prints into its own transcript. An effectful program's
-  // output is as much of its meaning as its result, so all three have to match.
-  const interpretedLines: string[] = [];
-  const evaluatorLines: string[] = [];
-  const wasmLines: string[] = [];
-  const interpreted = await evaluateFile(path, {
-    write: (line) => interpretedLines.push(line),
-  });
-  const built = await verify(path, {
-    evaluatorInit: hostInit((line) => evaluatorLines.push(line)),
-    wasmInit: hostInit((line) => wasmLines.push(line)),
-  });
+// One device for the whole corpus. `verify(path)` opens and destroys a session
+// per call, and a destroyed device does not return its memory to the driver
+// immediately — so the one-shot form asked for and released forty devices back
+// to back, and failed to get one whenever something else on the machine was
+// already holding a share of the card. Keeping the session is what it was
+// added for.
+const session = await BlotCompilerSession.create();
+try {
+  for (const path of examples) {
+    // Each execution prints into its own transcript. An effectful program's
+    // output is as much of its meaning as its result, so all three have to match.
+    const interpretedLines: string[] = [];
+    const evaluatorLines: string[] = [];
+    const wasmLines: string[] = [];
+    const interpreted = await evaluateFile(path, {
+      write: (line) => interpretedLines.push(line),
+    });
+    const built = await session.verify(path, {
+      evaluatorInit: hostInit((line) => evaluatorLines.push(line)),
+      wasmInit: hostInit((line) => wasmLines.push(line)),
+    });
 
-  const expected = show(runtimeResult(interpreted, built.manifest.exports));
+    const expected = show(runtimeResult(interpreted, built.manifest.exports));
 
-  if (render(built.ran, built.shapes, built.constructors) !== expected) {
-    console.error(
-      `${path}: wasm returned ${
-        render(built.ran, built.shapes, built.constructors)
-      }, interpreter said ${expected}`,
+    if (render(built.ran, built.shapes, built.constructors) !== expected) {
+      console.error(
+        `${path}: wasm returned ${
+          render(built.ran, built.shapes, built.constructors)
+        }, interpreter said ${expected}`,
+      );
+      failures += 1;
+      continue;
+    }
+    if (interpretedLines.join("|") !== wasmLines.join("|")) {
+      console.error(
+        `${path}: wasm printed [${wasmLines}], interpreter printed [${interpretedLines}]`,
+      );
+      failures += 1;
+      continue;
+    }
+    if (render(built.value, built.shapes, built.constructors) !== expected) {
+      console.error(
+        `${path}: gpu evaluator returned ${
+          render(built.value, built.shapes, built.constructors)
+        }, interpreter said ${expected}`,
+      );
+      failures += 1;
+      continue;
+    }
+    if (interpretedLines.join("|") !== evaluatorLines.join("|")) {
+      console.error(
+        `${path}: gpufuck evaluator printed [${evaluatorLines}], interpreter printed [${interpretedLines}]`,
+      );
+      failures += 1;
+      continue;
+    }
+    const imports = built.capabilities.length === 0
+      ? ""
+      : ` importing { ${built.capabilities.join(", ")} }`;
+    console.log(
+      `${path}: ${built.wasm.byteLength} bytes${imports}, all three agree on ${expected}`,
     );
-    failures += 1;
-    continue;
   }
-  if (interpretedLines.join("|") !== wasmLines.join("|")) {
-    console.error(
-      `${path}: wasm printed [${wasmLines}], interpreter printed [${interpretedLines}]`,
-    );
-    failures += 1;
-    continue;
-  }
-  if (render(built.value, built.shapes, built.constructors) !== expected) {
-    console.error(
-      `${path}: gpu evaluator returned ${
-        render(built.value, built.shapes, built.constructors)
-      }, interpreter said ${expected}`,
-    );
-    failures += 1;
-    continue;
-  }
-  if (interpretedLines.join("|") !== evaluatorLines.join("|")) {
-    console.error(
-      `${path}: gpufuck evaluator printed [${evaluatorLines}], interpreter printed [${interpretedLines}]`,
-    );
-    failures += 1;
-    continue;
-  }
-  const imports = built.capabilities.length === 0
-    ? ""
-    : ` importing { ${built.capabilities.join(", ")} }`;
-  console.log(
-    `${path}: ${built.wasm.byteLength} bytes${imports}, all three agree on ${expected}`,
-  );
+} finally {
+  session.destroy();
 }
 
 function runtimeResult(
