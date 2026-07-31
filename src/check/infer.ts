@@ -49,15 +49,18 @@ import {
   TypeError_,
 } from "./constrain.ts";
 import { PRIMITIVE_TYPES } from "./primitives.ts";
-import { show as showType } from "./print.ts";
+import { show as showType, showRange } from "./print.ts";
 import {
+  type ClosedBound,
   effects,
   freshVar,
   INT,
   intLiteral,
+  lengthBound,
   type Level,
   openVariant,
   record,
+  shiftBound,
   type SimpleType,
   TEXT,
   textLiteral,
@@ -99,6 +102,23 @@ interface TypeEnv {
    * an array the callee never receives.
    */
   readonly arrayLengths: Map<string, { length: bigint; typing: Typing }>;
+  /**
+   * The binding occurrence a name currently denotes, paired with the `Typing`
+   * that occurrence installed.
+   *
+   * An occurrence is what `len(b)` in a bound is keyed to (type.ts). blot has no
+   * assignment and arrays are immutable, so one occurrence denotes exactly one
+   * value for its whole lifetime — which is the fact that makes a length
+   * symbol mean one integer. A `:=` mints a new occurrence rather than
+   * modifying one.
+   *
+   * The `Typing` pairing makes the map fail closed. A scope that shadows a name
+   * without minting — a `case` arm narrowing its target, say — installs a
+   * different `Typing`, so this answers `null` and no length is symbolised
+   * rather than one being read off a binding that is no longer the one in
+   * scope.
+   */
+  readonly bindings: Map<string, { id: number; typing: Typing }>;
   readonly parent: TypeEnv | null;
 }
 
@@ -108,8 +128,34 @@ function childTypeEnv(parent: TypeEnv | null): TypeEnv {
     literals: new Map(),
     comptime: new Map(),
     arrayLengths: new Map(),
+    bindings: new Map(),
     parent,
   };
+}
+
+let nextBinding = 0;
+
+/** Mints an occurrence for the name `scope` has just bound. */
+function recordBinding(scope: TypeEnv, name: string): void {
+  const typing = scope.names.get(name);
+  if (typing === undefined) return;
+  nextBinding += 1;
+  scope.bindings.set(name, { id: nextBinding, typing });
+}
+
+function lookupBinding(env: TypeEnv, name: string): number | null {
+  const typing = lookupType(env, name);
+  if (typing === undefined) return null;
+  let scope: TypeEnv | null = env;
+  while (scope !== null) {
+    const found = scope.bindings.get(name);
+    if (found !== undefined) {
+      if (found.typing !== typing) return null;
+      return found.id;
+    }
+    scope = scope.parent;
+  }
+  return null;
 }
 
 function lookupType(env: TypeEnv, name: string): Typing | undefined {
@@ -612,29 +658,13 @@ function inferSpecial(
     return result;
   }
 
-  // A read whose index and whose array's length are both decided by the source
-  // cannot succeed, and saying so where it is written beats trapping.
-  //
-  // This is a diagnostic and nothing else. It contributes no type — the ordinary
-  // curried scheme still types the call — and pushes no bound anywhere, so no
-  // index is ever *proved* in bounds by it. The length is a fact about a value
-  // the source wrote out, not a fact in the type, which carries none. And an
-  // index that is merely *typed* as one integer is not enough: the witness rule
-  // is the one `narrowing` uses, so a `let`-bound index is refused here for the
-  // reason `if n == -9` narrows nothing.
+  // A read no execution of which could succeed is reported where it is written
+  // rather than trapping.
   if (
     (callee.name === "@array.get" || callee.name === "@array.set") &&
     head.args.length >= 2
   ) {
-    const length = comptimeArrayLength(head.args[0], context.types);
-    const index = comptimeInt(head.args[1], context.types);
-    if (length !== null && index !== null && (index < 0n || index >= length)) {
-      fail(
-        "BLOT_OUT_OF_BOUNDS",
-        `Index ${index} is outside an array of ${length}.`,
-        expr.span,
-      );
-    }
+    reportImpossibleRead(expr, head.args[0], head.args[1], context.types);
   }
 
   if (callee.name === "@handle" && head.args.length === 1) {
@@ -811,7 +841,7 @@ interface Narrowing {
 
 /**
  * What `condition` proves, when the function it calls is a recognised comparison
- * of an integer against a compile-time integer.
+ * of an integer against a witness.
  *
  * Nothing here knows what `==` is. `n == 1` has already become the ordinary
  * application `Eq.eq n 1`, and this reads the compile-time value bound to that
@@ -828,16 +858,18 @@ function narrowing(condition: Expr, scope: TypeEnv): Narrowing | null {
   const answers = recognise(callee);
   if (answers === null) return null;
 
-  // The witness decides which side is the subject. One side must be a single
-  // compile-time integer — not merely a ground type. `n == m` where `m`'s type
-  // is `1 | 2` would let the untaken branch conclude `n ∉ {1, 2}`, but all the
-  // condition said is that `n` differs from *this* `m`. A whole type is a sound
-  // witness for the intersection and an unsound one for the complement, so
-  // neither is taken unless the witness is one value.
+  // The witness decides which side is the subject. One side must name a single
+  // value — a compile-time integer, or one array's length — and not merely have
+  // a ground type. `n == m` where `m`'s type is `1 | 2` would let the untaken
+  // branch conclude `n ∉ {1, 2}`, but all the condition said is that `n` differs
+  // from *this* `m`. A whole type is a sound witness for the intersection and an
+  // unsound one for the complement, so neither is taken unless the witness is
+  // one value. A length is one value for the same reason a `const` is: the
+  // binding occurrence it names holds one array for its whole lifetime.
   const left = condition.fn.arg;
   const right = condition.arg;
-  const leftWitness = comptimeInt(left, scope);
-  const rightWitness = comptimeInt(right, scope);
+  const leftWitness = witness(left, scope);
+  const rightWitness = witness(right, scope);
   if (leftWitness !== null && rightWitness !== null) return null;
 
   if (rightWitness !== null) {
@@ -858,12 +890,12 @@ function narrowing(condition: Expr, scope: TypeEnv): Narrowing | null {
 function proves(
   subject: { readonly name: string; readonly type: SimpleType },
   answers: ReadonlySet<Ordering>,
-  witness: bigint,
+  against: ClosedBound,
 ): Narrowing | null {
-  const taken = intersect(subject.type, region(answers, witness));
+  const taken = intersect(subject.type, region(answers, against));
   const untaken = intersect(
     subject.type,
-    region(complement(answers), witness),
+    region(complement(answers), against),
   );
   if (taken.tag !== "type" || untaken.tag !== "type") return null;
   return {
@@ -989,6 +1021,118 @@ function comptimeArrayLength(expr: Expr, scope: TypeEnv): bigint | null {
   // is reached through its own record, and only for a plain name.
   if (path.length !== 1) return null;
   return lookupArrayLength(scope, path[0]);
+}
+
+/**
+ * How many elements an array expression holds, as a bound.
+ *
+ * A number when the source decided it, and otherwise the symbol `len b` for the
+ * binding occurrence the name denotes. The symbol names an integer the compiler
+ * cannot see, which is exactly enough: an index compared against it and an index
+ * used to read the array named the same occurrence, so the two bounds are the
+ * same integer whatever it is.
+ *
+ * The number comes first because it says strictly more. `let xs = [1, 2, 3]`
+ * gives every comparison against `@array.len xs` the witness `3`, so the
+ * ordinary literal machinery decides it and no symbol is minted at all.
+ *
+ * Only a plain name carries an occurrence. An alias, a field, a call result, and
+ * an array expression built in place are refused rather than given a symbol,
+ * because a symbol they were given would name a binding that is not the one
+ * holding the array.
+ */
+function arrayLength(expr: Expr, scope: TypeEnv): ClosedBound | null {
+  const decided = comptimeArrayLength(expr, scope);
+  if (decided !== null) return decided;
+  if (expr.tag !== "var") return null;
+  const occurrence = lookupBinding(scope, expr.name);
+  if (occurrence === null) return null;
+  return lengthBound(occurrence, 0n, expr.name);
+}
+
+/**
+ * The value a comparison narrows against.
+ *
+ * Two forms, and the second is what lets a bound name a run-time value: a
+ * compile-time integer, or the length of an array a name in scope holds. Both
+ * are reached without running any user code — `@array.len` is compiler-owned,
+ * total and pure, so reading it here calls nothing the program could have
+ * shadowed, which is the same property `comptimeInt` needs of a `const`.
+ *
+ * A comparison of one length against another has two witnesses and no subject,
+ * so `narrowing` refuses it before either is used.
+ */
+function witness(expr: Expr, scope: TypeEnv): ClosedBound | null {
+  const literal = comptimeInt(expr, scope);
+  if (literal !== null) return literal;
+  const head = spine(expr);
+  if (head === null) return null;
+  if (head.callee.tag !== "intrinsic") return null;
+  if (head.callee.name !== "@array.len") return null;
+  if (head.args.length !== 1) return null;
+  return arrayLength(head.args[0], scope);
+}
+
+/**
+ * Reports a read that cannot succeed, and says nothing about any other read.
+ *
+ * The index's ground type is *read*, never constrained. That is the whole reason
+ * this does not disturb inference: constraining the index against `0..len xs -
+ * 1` would push a bound into the index variable, publish it, and then reject the
+ * ordinary call that passes an unproved integer. Reading leaves
+ * `[a] -> Int -> a` exactly as it was.
+ *
+ * So nothing here proves a read is *in* bounds. It answers one question — is
+ * every value this index can take outside the array — and the answer is a
+ * diagnostic or silence. `@array.get` still emits a checked read either way.
+ *
+ * The comparison is `intersect`, which is where the partiality lives: two
+ * lengths that cannot be ordered give a range rather than `bottom`, so an
+ * undecidable read is silent. A false negative leaves a run-time trap where one
+ * already was; a false positive would refuse a program that works.
+ */
+function reportImpossibleRead(
+  expr: Expr,
+  array: Expr,
+  index: Expr,
+  scope: TypeEnv,
+): void {
+  const length = arrayLength(array, scope);
+  if (length === null) return;
+  const indices = indexSet(index, scope);
+  if (indices === null) return;
+  const inside: SimpleType = {
+    tag: "range",
+    domain: "int",
+    low: 0n,
+    high: shiftBound(length, -1n),
+  };
+  const both = intersect(indices, inside);
+  if (both.tag !== "type") return;
+  if (both.type.tag !== "bottom") return;
+  fail(
+    "BLOT_OUT_OF_BOUNDS",
+    `Index ${showType(indices)} is outside an array of ${
+      showRange("int", length, length)
+    }.`,
+    expr.span,
+  );
+}
+
+/**
+ * The integers an index expression can produce, when the source decides them.
+ *
+ * A compile-time integer, or a name whose type is already a ground set of
+ * integers — which is a name a `sig` gave one to, or one a branch narrowed. A
+ * `let` generalizes, so a `let`-bound integer has a scheme rather than a ground
+ * type and is refused; anything computed is refused too, because inferring it
+ * here would infer it twice.
+ */
+function indexSet(expr: Expr, scope: TypeEnv): SimpleType | null {
+  const literal = comptimeInt(expr, scope);
+  if (literal !== null) return intLiteral(literal);
+  if (expr.tag !== "var") return null;
+  return groundIntType(lookupType(scope, expr.name));
 }
 
 /**
@@ -1266,6 +1410,7 @@ function bindPattern(
     case "name": {
       const type = freshVar(level);
       scope.names.set(pattern.name, type);
+      recordBinding(scope, pattern.name);
       return type;
     }
     case "int":
@@ -1360,6 +1505,7 @@ function inferDeclarations(
         // make every use share them — `fold` used once on text could then
         // never be used on integers.
         context.types.names.set(binding.target, scheme(field, -1));
+        recordBinding(context.types, binding.target);
         recordComptimeBinding(context.types, binding.target, binding.value);
       }
       continue;
@@ -1422,10 +1568,15 @@ function inferDeclarations(
           stableRebindingType(previous),
         );
       }
+      // A rebinding is a new occurrence: the name holds another value, and a
+      // length proved about the old one says nothing about it. Minted
+      // explicitly, and for the reason the two deletes below exist —
+      // `stableRebindingType` can hand back the very type it was given, so the
+      // `Typing` pairing alone would not always notice a `:=` in the same scope
+      // as the binding it shadows.
+      recordBinding(context.types, declaration.name);
       // A rebinding whose value is not known at compile time erases the one the
-      // name had. `stableRebindingType` can hand back the very type it was
-      // given, so the `Typing` pairing alone would not always notice a `:=` in
-      // the same scope as the binding it shadows.
+      // name had.
       context.types.comptime.delete(declaration.name);
       // And the length, for the same reason: after `xs := f ();` the name holds
       // an array of unknown size, and the literal it was declared with says
@@ -1665,6 +1816,7 @@ function bindPatternAgainst(
 ): void {
   if (pattern.tag === "name") {
     scope.names.set(pattern.name, expected);
+    recordBinding(scope, pattern.name);
     return;
   }
   const accepted = bindPattern(pattern, scope, level);
@@ -1679,6 +1831,7 @@ function bindDeclaration(
 ): void {
   if (pattern.tag === "name") {
     context.types.names.set(pattern.name, type);
+    recordBinding(context.types, pattern.name);
     return;
   }
   // A destructuring binding types its parts by constraining the whole against

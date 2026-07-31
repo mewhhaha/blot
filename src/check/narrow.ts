@@ -57,7 +57,14 @@
 import type { Arm, Decl, Expr, Pattern } from "../syntax/ast.ts";
 import { apply, evaluationRuntime, run } from "../comptime/eval.ts";
 import type { Value } from "../comptime/value.ts";
-import { BOTTOM, type SimpleType, union } from "./type.ts";
+import {
+  BOTTOM,
+  type Bound,
+  type ClosedBound,
+  shiftBound,
+  type SimpleType,
+  union,
+} from "./type.ts";
 
 /** The three answers `@int.cmp` can give, as an ordering of its arguments. */
 export type Ordering = "less" | "equal" | "greater";
@@ -137,10 +144,16 @@ export function complement(
  * "less than `k`" is the range ending at `k - 1`. The same construction on text
  * would be wrong, and this module never builds one — `@int.cmp` fails on text, so
  * a recognised comparison never sees any.
+ *
+ * `k` is a bound rather than an integer, so the value compared against may be an
+ * array's length: `n < @array.len xs` gives `..len xs - 1` by the same
+ * construction that gives `n < 3` the range `..2`. Nothing here knows the
+ * difference, because the only operation it performs on `k` is stepping it by
+ * one, and `shiftBound` is total on both.
  */
 export function region(
   orderings: ReadonlySet<Ordering>,
-  k: bigint,
+  k: ClosedBound,
 ): SimpleType {
   const pieces: SimpleType[] = [];
   let stretch: Ordering[] = [];
@@ -169,14 +182,14 @@ export function region(
   return union(pieces);
 }
 
-function lowOf(first: Ordering, k: bigint): bigint | null {
+function lowOf(first: Ordering, k: ClosedBound): Bound {
   if (first === "less") return null;
   if (first === "equal") return k;
-  return k + 1n;
+  return shiftBound(k, 1n);
 }
 
-function highOf(last: Ordering, k: bigint): bigint | null {
-  if (last === "less") return k - 1n;
+function highOf(last: Ordering, k: ClosedBound): Bound {
+  if (last === "less") return shiftBound(k, -1n);
   if (last === "equal") return k;
   return null;
 }

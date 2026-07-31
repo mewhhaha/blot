@@ -20,6 +20,7 @@ import {
   region,
 } from "./narrow.ts";
 import { show } from "./print.ts";
+import { lengthBound } from "./type.ts";
 
 const scratch = await Deno.makeTempDir();
 
@@ -170,6 +171,25 @@ Deno.test("a gap gives exactly two pieces", () => {
 
 Deno.test("no ordering is the empty set", () => {
   assertEquals(show(region(orderings(), 10n)), "⊥");
+});
+
+// A length is compared against exactly as a literal is. The only operation
+// `region` performs on the value is stepping it by one, so the same three
+// shapes come out — which is what makes `n < @array.len xs` a proof rather than
+// a special case.
+Deno.test("a region around a length is the same construction", () => {
+  const length = lengthBound(301, 0n, "xs");
+  const around = (...names: Ordering[]): string =>
+    show(region(orderings(...names), length));
+
+  assertEquals(around("less"), "..len xs - 1");
+  assertEquals(around("equal"), "len xs");
+  assertEquals(around("greater"), "len xs + 1..");
+  assertEquals(around("less", "equal"), "..len xs");
+  assertEquals(around("equal", "greater"), "len xs..");
+  assertEquals(around("less", "greater"), "..len xs - 1 | len xs + 1..");
+  assertEquals(around("less", "equal", "greater"), "Int");
+  assertEquals(show(region(orderings(), length)), "⊥");
 });
 
 // The complement is taken here, on three elements, and never on a type. That is

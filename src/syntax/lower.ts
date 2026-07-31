@@ -850,7 +850,12 @@ function loopPattern(carried: readonly string[], span: Span): Pattern {
     tag: "shape",
     fields: carried.map((field) => ({
       name: field,
-      pattern: { tag: "name" as const, name: field, qualifier: "none" as const, span },
+      pattern: {
+        tag: "name" as const,
+        name: field,
+        qualifier: "none" as const,
+        span,
+      },
     })),
     span,
   };

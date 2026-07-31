@@ -234,8 +234,6 @@ export function tupleType(elements: readonly SimpleType[]): SimpleType {
 }
 
 const lengthBounds = new Map<string, LengthBound>();
-/** The first occurrence to claim each display name. See `lengthSubject`. */
-const lengthClaims = new Map<string, number>();
 
 /**
  * `len(binding) + offset`, interned so that `===` is denotational equality.
@@ -255,7 +253,6 @@ export function lengthBound(
   const key = `${binding}:${offset}`;
   const existing = lengthBounds.get(key);
   if (existing !== undefined) return existing;
-  if (!lengthClaims.has(name)) lengthClaims.set(name, binding);
   const minted: LengthBound = { tag: "len", binding, offset, name };
   lengthBounds.set(key, minted);
   return minted;
@@ -266,14 +263,44 @@ export function isLength(bound: Bound): bound is LengthBound {
 }
 
 /**
- * How a message names the array whose length this is.
+ * `bound + delta`, the one place an offset is ever built.
  *
- * Two occurrences may be written with the same name, and an error that said
- * `len xs` about either of them would read as a compiler bug. The occurrence
- * that claimed the name first keeps it; every other one is spelled `xs#7`.
+ * Two callers, and both build the same `1`: `region` in narrow.ts, because
+ * "below `k`" ends at `k - 1`, and the valid index set of an array, because the
+ * last index of `len xs` elements is `len xs - 1`. Keeping the arithmetic here
+ * is what keeps it from spreading — an offset that no function outside this one
+ * can construct cannot grow a second term.
+ *
+ * A text bound is never stepped. Text order is dense, so no bound names the
+ * value just below another one, and the two operations that would want to —
+ * `region` and set difference — are over `@int.cmp` and refuse text outright.
  */
-export function lengthSubject(bound: LengthBound): string {
-  if (lengthClaims.get(bound.name) === bound.binding) return bound.name;
+export function shiftBound(bound: ClosedBound, delta: bigint): ClosedBound {
+  if (typeof bound === "bigint") return bound + delta;
+  if (isLength(bound)) {
+    return lengthBound(bound.binding, bound.offset + delta, bound.name);
+  }
+  expect(false, "a text bound was stepped");
+}
+
+/**
+ * How a message names the array whose length this is, beside another bound.
+ *
+ * Two occurrences may be written with the same name, and a range whose two ends
+ * said `len xs` about two different arrays would read as a compiler bug. So the
+ * occurrence id is spelled — `xs#7` — exactly when the bound printed next to
+ * this one is a different occurrence with the same name, and never otherwise.
+ *
+ * Deciding it from the pair rather than from a claim made once per process is
+ * what keeps the id out of the message a reader actually gets. A diagnostic
+ * carries a span, so `len xs` at that span names the `xs` in scope there; a
+ * number attached to it because some unrelated function also had a parameter
+ * called `xs` would be noise the reader cannot act on.
+ */
+export function lengthSubject(bound: LengthBound, beside: Bound): string {
+  if (!isLength(beside)) return bound.name;
+  if (beside.name !== bound.name) return bound.name;
+  if (beside.binding === bound.binding) return bound.name;
   return `${bound.name}#${bound.binding}`;
 }
 

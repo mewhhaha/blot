@@ -1,0 +1,1 @@
+{ .inside = 20; .past_end = 0; .negative = 0; .cleared = [10, 20, 0]; .unchanged = [10, 20, 30]; }

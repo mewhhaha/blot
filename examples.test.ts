@@ -57,6 +57,11 @@ const REJECTIONS: Record<
   // the array's length are written out in the source. It is the same code the
   // evaluator raises, and it has migrated from `run` to `check`.
   "index_outside_array": { code: "BLOT_OUT_OF_BOUNDS", stage: "check" },
+  // The same code from a length nobody measured. `n >= @array.len xs` proves
+  // `n : len xs..`, every value of which is past the end of `xs` whatever `xs`
+  // turns out to hold — so the read is decided without the length ever being a
+  // number.
+  "index_at_or_past_length": { code: "BLOT_OUT_OF_BOUNDS", stage: "check" },
   "wrong_argument": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "missing_field": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "linear_consumed_twice": {

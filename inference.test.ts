@@ -568,14 +568,152 @@ check(
   "(0 | 1 | 2 | 3)",
 );
 
-// The index has to be one compile-time integer, not merely a name whose type is
-// one integer. This is the same line `narrowing` draws, and drawing it anywhere
-// else would mean two different answers to "what is a witness".
+// The index is decided by a compile-time integer or by a ground type — a `sig`
+// gave the name one, or a branch proved one. A `let` generalizes, so a
+// `let`-bound integer has a scheme rather than a ground type and decides
+// nothing, and anything computed is refused because inferring it here would
+// infer it twice.
 
 check(
-  "an index bound by `let` is not a compile-time integer",
+  "an index bound by `let` decides nothing",
   "let n = 99;\nlet xs = [1, 2, 3];\nreturn @array.get xs n;",
   "(1 | 2 | 3)",
+);
+
+// --- an index proved against the array's length -----------------------------
+//
+// `@array.len xs` is a run-time value, and a comparison against it narrows
+// anyway: the bound is the symbol `len xs`, keyed to the binding occurrence, so
+// the index and the read name the same integer without anyone knowing which one
+// it is. The proof is still only a diagnostic — an index is never constrained,
+// so no published type moves and `@array.get` still emits a checked read.
+
+const GUARDED = "sig at = [Int] -> Int -> Int;\n" +
+  "let at = xs => (n =>\n" +
+  "  if n >= 0\n" +
+  "  then (if n < @array.len xs then @array.get xs n else 0 end)\n" +
+  "  else 0\n" +
+  "  end);\n";
+
+check(
+  "a guarded read is an ordinary read, and its signature is untouched",
+  `${GUARDED}return { .fn = at; .call = at [1, 2, 3] 0; };`,
+  "{ .fn = [Int] -> Int -> Int; .call = Int; }",
+);
+
+// The proof itself, as a string. Two nested comparisons leave the index exactly
+// the set of indices the array has, and the second one is the half that needs
+// `0 <= len xs` to be admitted at all.
+rejects(
+  "two comparisons prove the index is an index of that array",
+  "sig small = 1 | 2 -> Str;\n" +
+    'let small = k => case k of 1 => "one", 2 => "two" end;\n' +
+    "sig at = [Int] -> Int -> Str;\n" +
+    "let at = xs => (n =>\n" +
+    '  if n >= 0 then (if n < @array.len xs then small n else "hi" end)\n' +
+    '  else "lo" end);\n' +
+    "return at;",
+  "`0..len xs - 1` is not one of `1` | `2`",
+);
+
+check(
+  "a proved index escaping into a published type is spelled, not hidden",
+  "sig n = Int;\nlet n = 5;\n" +
+    "let g = xs => if n < @array.len xs then n else 0 end;\nreturn g;",
+  "['a] -> (..len xs - 1 | 0)",
+);
+
+// `&&` proves nothing, so the guard has to nest. This is pinned as the type it
+// leaves rather than as a wish: `Logic.and` is an ordinary prelude function over
+// two booleans, and nothing recognises it as a conjunction of comparisons.
+rejects(
+  "`&&` leaves the index exactly as wide as it was",
+  "sig small = 1 | 2 -> Str;\n" +
+    'let small = k => case k of 1 => "one", 2 => "two" end;\n' +
+    "sig at = [Int] -> Int -> Str;\n" +
+    "let at = xs => (n =>\n" +
+    '  if n >= 0 && n < @array.len xs then small n else "lo" end);\n' +
+    "return at;",
+  "`Int` is not one of `1` | `2`",
+);
+
+// The rejections. Every value the index can take is past the end, whatever the
+// array holds — so the read cannot succeed on any input.
+
+rejects(
+  "an index at or past the length is refused",
+  "sig at = [Int] -> Int -> Int;\n" +
+    "let at = xs => (n => if n >= @array.len xs then @array.get xs n else 0 end);\n" +
+    "return at;",
+  "Index len xs.. is outside an array of len xs",
+);
+
+rejects(
+  "an index equal to the length is refused",
+  "sig at = [Int] -> Int -> Int;\n" +
+    "let at = xs => (n => if n == @array.len xs then @array.get xs n else 0 end);\n" +
+    "return at;",
+  "Index len xs is outside an array of len xs",
+);
+
+rejects(
+  "`@array.set` is decided against a length by the same rule",
+  "sig put = [Int] -> Int -> [Int];\n" +
+    "let put = xs => (n => if n >= @array.len xs then @array.set xs n 0 else xs end);\n" +
+    "return put;",
+  "Index len xs.. is outside an array of len xs",
+);
+
+// The refusals, asserted as types. Each one is a length the comparison and the
+// read do not agree about, and each is silent: a read nobody could decide is
+// left to trap exactly as it did.
+
+check(
+  "a length proved about one array says nothing about another",
+  "sig at = [Int] -> [Int] -> Int -> Int;\n" +
+    "let at = xs => (ys => (n =>\n" +
+    "  if n >= @array.len xs then @array.get ys n else 0 end));\n" +
+    "return at;",
+  "[Int] -> [Int] -> Int -> Int",
+);
+
+check(
+  "an alias is another occurrence, so a proof does not carry to it",
+  "sig at = [Int] -> Int -> Int;\n" +
+    "let at = xs => (n => do\n" +
+    "  let ys = xs;\n" +
+    "  in if n >= @array.len xs then @array.get ys n else 0 end\n" +
+    "end);\n" +
+    "return at;",
+  "[Int] -> Int -> Int",
+);
+
+check(
+  "a rebinding is a new occurrence, so an old proof decides nothing about it",
+  "sig at = [Int] -> [Int] -> Int -> Int;\n" +
+    "let at = xs => (ws => (n =>\n" +
+    "  if n >= @array.len xs then do\n" +
+    "    xs := ws;\n" +
+    "    in @array.get xs n\n" +
+    "  end else 0 end));\n" +
+    "return at;",
+  "[Int] -> [Int] -> Int -> Int",
+);
+
+check(
+  "an index with no ground type decides nothing",
+  "let at = xs => (n => if n >= @array.len xs then @array.get xs n else 0 end);\n" +
+    "return at;",
+  "(['a] & ['b]) -> Int -> ('b | 0)",
+);
+
+check(
+  "an array reached by anything but a name has no occurrence to name",
+  "sig at = { .values = [Int]; } -> Int -> Int;\n" +
+    "let at = box => (n =>\n" +
+    "  if n >= @array.len box.values then @array.get box.values n else 0 end);\n" +
+    "return at;",
+  "{ .values = [Int]; } -> Int -> Int",
 );
 
 // --- effects are a lattice element, not a separate pass ---------------------

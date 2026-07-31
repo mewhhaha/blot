@@ -22,6 +22,7 @@ import {
   lengthBound,
   lengthSubject,
   LONGEST_ARRAY,
+  shiftBound,
 } from "./type.ts";
 import { showRange } from "./print.ts";
 
@@ -128,13 +129,40 @@ Deno.test("a length is spelled as the arithmetic it is", () => {
   assertEquals(showRange("int", xs, ys), "len xs..len ys");
 });
 
+// The offset is built here and nowhere else, which is what keeps a bound to one
+// symbol and one literal: a caller that cannot construct a term cannot grow one.
+Deno.test("stepping a bound moves the offset and nothing else", () => {
+  assertEquals(shiftBound(3n, -1n), 2n);
+  assertEquals(shiftBound(3n, 1n), 4n);
+  assertEquals(shiftBound(xs, -1n) === xsLast, true);
+  assertEquals(shiftBound(xs, 1n) === xsPast, true);
+  assertEquals(shiftBound(xsLast, 1n) === xs, true);
+  // Stepping twice is stepping by two: the offsets add, so the interning holds.
+  assertEquals(shiftBound(shiftBound(xs, -1n), 1n) === xs, true);
+  assertThrows(() => shiftBound("a", 1n), Error, "blot invariant violated");
+});
+
+// The id is spelled where an unqualified name would lie and nowhere else. A
+// diagnostic carries a span, so `len xs` at that span names the `xs` in scope
+// there; a number attached because an unrelated function also had a parameter
+// called `xs` would be noise the reader cannot act on.
 Deno.test("two occurrences written with the same name are told apart", () => {
   const first = lengthBound(201, 0n, "vs");
   const second = lengthBound(202, 0n, "vs");
-  assertEquals(lengthSubject(first), "vs");
-  assertEquals(lengthSubject(second), "vs#202");
+  assertEquals(lengthSubject(first, second), "vs#201");
+  assertEquals(lengthSubject(second, first), "vs#202");
+  assertEquals(showRange("int", first, second), "len vs#201..len vs#202");
+
+  // Beside itself, beside another offset of itself, and beside anything that is
+  // not a length of an array with the same name: the plain name.
+  assertEquals(lengthSubject(first, first), "vs");
+  assertEquals(lengthSubject(first, lengthBound(201, -1n, "vs")), "vs");
+  assertEquals(lengthSubject(first, ys), "vs");
+  assertEquals(lengthSubject(first, null), "vs");
+  assertEquals(lengthSubject(first, 0n), "vs");
   assertEquals(
     showRange("int", 0n, lengthBound(202, -1n, "vs")),
-    "0..len vs#202 - 1",
+    "0..len vs - 1",
   );
+  assertEquals(showRange("int", first, first), "len vs");
 });

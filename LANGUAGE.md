@@ -586,7 +586,7 @@ end;
 is refused: `3` is a member of the target's type that no arm covers. Adding a
 `3` arm, or any irrefutable arm, accepts it.
 
-A target whose type has an *open end* — `Int`, `Str`, any unbounded range —
+A target whose type has an _open end_ — `Int`, `Str`, any unbounded range —
 holds infinitely many values, so no finite list of literal arms can exhaust it.
 Such a `case` is refused rather than accepted in silence:
 
@@ -678,8 +678,45 @@ then be evaluated only through that call, so the function is some decision on
 one pair of integers per answer. That is why narrowing reaches an unbounded
 domain: `if n < 10` proves `..9` and `10..` without enumerating anything.
 
-The other operand must be a single compile-time integer — an integer literal, or
-a name whose `const` value is one. `if 0 < n` reads the same as `if n > 0`.
+**What it is compared against.** The other operand must be a value the checker
+can name without running the program, and there are two of them.
+
+The first is a single compile-time integer — an integer literal, or a name whose
+`const` value is one. `if 0 < n` reads the same as `if n > 0`.
+
+The second is the length of an array a name in scope holds, written
+`@array.len xs`. That one is not a number and does not have to be:
+
+```blot
+sig at = [Int] -> Int -> Int;
+let at = xs => (n =>
+  if n >= 0
+  then (if n < @array.len xs then @array.get xs n else 0 end)
+  else 0
+  end);
+```
+
+`n` is `..len xs - 1` in the inner branch and `0..len xs - 1` inside both, where
+`len xs` names the number of elements in the array the binding `xs` holds. An
+array's type carries no length (§13.3) and this does not put one there: the
+symbol is a range bound, so it is compared and never solved for.
+
+A length is keyed to the _binding occurrence_, which is what makes it denote one
+integer: blot has no assignment and arrays are immutable, so a binding holds one
+value for its whole lifetime. Every consequence follows from that key.
+
+- `:=` binds a new occurrence, so a length proved before it says nothing after
+  it, in either direction.
+- An alias is another occurrence. After `let ys = xs;`, `len ys` and `len xs`
+  are two unrelated integers, and a comparison against one proves nothing about
+  a read of the other.
+- Two arrays are never related. `len xs` and `len ys` are not compared, ordered,
+  added, or subtracted, and neither is a length compared against another array's
+  index.
+- The one thing assumed about a length nobody measured is
+  `0 <= len xs <= 2147483647`, because an array's length is a 32-bit count. It
+  is what lets `n >= 0` and `n < @array.len xs` compose: without it, `0` and
+  `len xs` could not be ordered and the second comparison would prove nothing.
 
 Narrowing never changes a program's type. It only lets a branch use a name at a
 type the branch has proved, so a function's own signature is what it was.
@@ -695,6 +732,16 @@ the branch failing to cover a set the condition would have shrunk.
   through to an outer one. This is what makes shadowing safe: the checker never
   reasons about a function the program does not call, and an operator record
   supplied by the _caller_ could never be reasoned about at all.
+- **A condition built from two comparisons.** `if n >= 0 && n < 3` proves
+  nothing, and neither does `||`. `&&` is an ordinary fixity entry naming a
+  prelude function of two booleans (§7), and what is recognised is a comparison
+  of two integers — so a conjunction has to be written as nested `if`s.
+- **A length reached by anything but a name.** `@array.len box.values`,
+  `@array.len (f ())`, and the prelude's `Array.length xs` name no binding
+  occurrence, so there is no symbol to compare against. Only the primitive
+  applied to a name in scope is a witness.
+- **Two lengths.** `@array.len xs == @array.len ys` has a witness on both sides
+  and a subject on neither.
 - **A witness that is another runtime name.** `n == m` says `n` equals this `m`,
   not that `n` is somewhere in `m`'s type. Intersecting against a whole type
   would be sound and complementing against it would not, so neither is done.
@@ -837,19 +884,25 @@ inference lattice only when it denotes a type.
 
 Compiler output uses notation that is not additional source syntax:
 
-| display                   | meaning                         |
-| ------------------------- | ------------------------------- |
-| `Int`, `Str`, `1`, `"x"`  | ranges and singleton ranges     |
-| `0..9`, `0..`             | bounded and half-bounded ranges |
-| `{ .x = Int; }`           | structural record               |
-| `[Int]`                   | homogeneous array               |
-| `#None \| #Some Int`      | constructor variant             |
-| `#Some Int \| ..`         | variant with an open set        |
-| `A -> B`                  | pure function                   |
-| `A -> B ~ { Console, e }` | function with an effect row     |
-| `'a`, `'b`                | inferred type variables         |
-| `forall 'q0. ...`         | explicit quantified type        |
-| `⊤`, `⊥`                  | top and bottom                  |
+| display                   | meaning                              |
+| ------------------------- | ------------------------------------ |
+| `Int`, `Str`, `1`, `"x"`  | ranges and singleton ranges          |
+| `0..9`, `0..`             | bounded and half-bounded ranges      |
+| `len xs`, `0..len xs - 1` | a range bounded by an array's length |
+| `{ .x = Int; }`           | structural record                    |
+| `[Int]`                   | homogeneous array                    |
+| `#None \| #Some Int`      | constructor variant                  |
+| `#Some Int \| ..`         | variant with an open set             |
+| `A -> B`                  | pure function                        |
+| `A -> B ~ { Console, e }` | function with an effect row          |
+| `'a`, `'b`                | inferred type variables              |
+| `forall 'q0. ...`         | explicit quantified type             |
+| `⊤`, `⊥`                  | top and bottom                       |
+
+`len xs` is printed, never written: it names the length of the array a binding
+holds (§8.5), and a `sig` has no syntax for it. Where a range's two ends are the
+lengths of two different arrays that share a name, each is printed with the
+occurrence that distinguishes it — `len xs#7`.
 
 Effect-row notation is printed by the checker and is not written in a `sig`.
 Effectful function type values are produced from effect declarations and
@@ -884,7 +937,11 @@ its carrier.
 
 The implemented checker does not currently prove:
 
-- range-refining arithmetic or index bounds from comparisons;
+- range-refining arithmetic — `@int.add n 1` widens to `Int` whatever `n` was,
+  so an index carried across an addition loses what a comparison proved about
+  it;
+- an index bound that came from anywhere but a comparison against a literal or
+  against `@array.len` applied to a name (§8.5, §13.3);
 - precise results of value-named `@shape.get`, `@shape.set`, and
   `@shape.remove`; or
 - impredicative instantiation.
@@ -1084,43 +1141,77 @@ signed 64-bit range trap.
 
 Array indexing is zero-based and bounds-checked.
 
-#### An index the source already decides
+#### A read that cannot succeed
 
 `@array.get` and `@array.set` are rejected at check time with
-`BLOT_OUT_OF_BOUNDS` when the index and the array's length are both decided by
-the source, instead of trapping when the program runs:
+`BLOT_OUT_OF_BOUNDS` when every index the source allows is outside the array,
+instead of trapping when the program runs:
 
 ```blot
 let xs = [1, 2, 3];
 return @array.get xs 99;   // BLOT_OUT_OF_BOUNDS: Index 99 is outside an array of 3.
 ```
 
-An array's type carries no length and this does not put one there. The length is
-read from the array literal the binding was written with, it is read for this
-diagnostic and for nothing else, and no index is ever proved in bounds: the call
-is still typed by the primitive's ordinary scheme, and `@array.get` still emits
-a checked read.
+```blot
+sig at = [Int] -> Int -> Int;
+let at = xs => (n => if n >= @array.len xs then @array.get xs n else 0 end);
+// BLOT_OUT_OF_BOUNDS: Index len xs.. is outside an array of len xs.
+```
 
-The length is decided in exactly three cases — the array is written out at the
-call site, the name denotes a compile-time array value, or the name was bound to
-an array literal with no spread. The index must be one compile-time integer,
-which is the same witness a condition needs to narrow (§8.5): a name bound by
-`let` is not one, for the reason `if n == -9` narrows nothing.
+The second needs no number. `n >= @array.len xs` proves `n : len xs..` (§8.5),
+whose smallest value is the first index past the end of `xs`, and the read names
+the same binding — so the two bounds are the same integer whatever the caller
+passes.
+
+The index's type is _read_, never constrained. That is what keeps the rule from
+changing any program's type: a signature is what it was, and an ordinary call
+passing an unproved integer still checks. So nothing is ever proved to be _in_
+bounds either. The answer is a diagnostic or silence, and `@array.get` still
+emits a checked read in both cases — a proof here does not remove a run-time
+check, and none of these forms is faster than any other.
+
+The array's length is decided in one of two ways: as a number, when the array is
+written out at the call site, the name denotes a compile-time array value, or
+the name was bound to an array literal with no spread; and otherwise as the
+symbol `len b` for the binding occurrence a plain name denotes. The index is
+decided when it is a compile-time integer, or when it is a name whose type is
+already a ground set of integers — one a `sig` declared, or one a branch proved.
+A `let` generalizes, so a `let`-bound integer decides nothing, and neither does
+anything computed.
 
 Everything else is silent rather than approximated, and a read through it traps
 at run time exactly as before:
 
-- an aliased array — `let ys = xs;` says nothing about `ys`;
-- an array a function returned, or one a prelude combinator built;
-- an array written with a spread, whose length includes one this cannot see;
-- a name rebound by `:=` to anything but an array literal, which erases the
-  length the name had. A `:=` to an array literal records that literal's length.
+- an index proved against one array and used to read another, an alias
+  (`let ys = xs;`) included: two occurrences are two unrelated integers;
+- an array reached by anything but a plain name — a field, a call result, an
+  array written in place — which names no occurrence to compare against;
+- an array written with a spread, whose element count includes one this cannot
+  see. It still has an occurrence, so a comparison against its own `@array.len`
+  still proves;
+- a name rebound by `:=`, which binds a new occurrence and erases the number the
+  old one had. A `:=` to an array literal records that literal's length;
+- an index a comparison did not bound, and an index carried across arithmetic:
+  `@int.add n 1` is `Int` whatever `n` was;
+- an index bounded only by a literal, when the array's length is a symbol.
+  `n < 5` proves `..4`, and whether `..4` is inside `0..len xs - 1` depends on
+  an array nobody measured.
+
+A loop is not a proof either. `for n in Iter.range (0, @array.len xs)` passes
+the length to an ordinary prelude iterator, and what comes back out is `Int`; a
+read inside the body is unproved and still bounds-checked.
 
 A shadowed binding is measured by the binding that shadows it or not at all. A
 lambda parameter, a pattern binder, and a later `let` each install a type of
 their own, and a length is recorded against the one it was written beside — so
 `let xs = [1, 2, 3]; let read = xs => @array.get xs 99;` reports nothing,
 because the `xs` being read is the caller's.
+
+All of this is for unqualified arrays. Every argument position is a move (§11),
+and both of these forms name the array twice — once to measure and once to read
+— so a linear or borrowed array cannot be written this way at all:
+`let !xs = [1, 2, 3]; let n = @array.len xs; let v = @array.get xs 0;` is
+`BLOT_LINEAR_CONSUMED_TWICE`, and this rule does not change that.
 
 ### 13.4 Type values
 

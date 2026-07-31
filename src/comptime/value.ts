@@ -214,7 +214,10 @@ export function show(value: Value): string {
       if (domain === "text") return "Str";
       return "Int";
     }
-    if (domain === "text" && value.low.tag === "text" && value.low.value === "" && shut) {
+    if (
+      domain === "text" && value.low.tag === "text" && value.low.value === "" &&
+      shut
+    ) {
       return "Str";
     }
     const left = open ? "" : show(value.low);

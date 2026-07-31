@@ -1,0 +1,46 @@
+// An index proved against the length of the array it reads.
+//
+// `@array.len xs` is a run-time value, so a comparison against it cannot be
+// decided by a number. It is decided by a symbol: `len xs` names the length of
+// the array the binding `xs` holds, and every mention of that binding names the
+// same integer. So `n < @array.len xs` proves `n : ..len xs - 1` by the same
+// construction that makes `n < 3` prove `..2`, and the array's type still
+// carries no length.
+//
+// The guard is nested rather than written `n >= 0 && n < @array.len xs`. `&&`
+// is `Logic.and`, an ordinary prelude function over two booleans, and nothing
+// recognises it as a conjunction of two comparisons — so the `&&` spelling
+// proves nothing and reads exactly as it did before. Conjunction narrowing is
+// a separate change.
+//
+// What the proof buys is a diagnostic, not a faster read. `@array.get` still
+// emits a checked read, and the sibling under `examples/rejected/semantics/`
+// is the program this arrangement lets the checker reject.
+
+open {} = (@import "blot:prelude") ();
+
+sig at = [Int] -> Int -> Int;
+let at = xs => (n =>
+  if n >= 0
+  then (if n < @array.len xs then @array.get xs n else 0 end)
+  else 0
+  end);
+
+// The same proof serves a write: `@array.set` takes the index `@array.get`
+// takes, and asks the same question of it.
+sig clear = [Int] -> Int -> [Int];
+let clear = xs => (n =>
+  if n >= 0
+  then (if n < @array.len xs then @array.set xs n 0 else xs end)
+  else xs
+  end);
+
+let values = [10, 20, 30];
+
+return {
+  .inside = at values 1;
+  .past_end = at values 3;
+  .negative = at values (0 - 1);
+  .cleared = clear values 2;
+  .unchanged = clear values 9;
+};

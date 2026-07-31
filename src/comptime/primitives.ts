@@ -166,11 +166,27 @@ function without(member: Value, other: Value, span: Span): Value[] {
     const pieces: Value[] = [];
     const below: Value = { tag: "int", value: other.value - 1n };
     const above: Value = { tag: "int", value: other.value + 1n };
-    if (member.low.tag === "unbounded" || compare(member.low, below, span, "@type.diff") <= 0) {
-      pieces.push({ tag: "range", low: member.low, high: below, domain: "int" });
+    if (
+      member.low.tag === "unbounded" ||
+      compare(member.low, below, span, "@type.diff") <= 0
+    ) {
+      pieces.push({
+        tag: "range",
+        low: member.low,
+        high: below,
+        domain: "int",
+      });
     }
-    if (member.high.tag === "unbounded" || compare(above, member.high, span, "@type.diff") <= 0) {
-      pieces.push({ tag: "range", low: above, high: member.high, domain: "int" });
+    if (
+      member.high.tag === "unbounded" ||
+      compare(above, member.high, span, "@type.diff") <= 0
+    ) {
+      pieces.push({
+        tag: "range",
+        low: above,
+        high: member.high,
+        domain: "int",
+      });
     }
     return pieces;
   }
