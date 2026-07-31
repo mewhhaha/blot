@@ -59,13 +59,12 @@ The refutation case works, which is what proves it is not the `@type.unbounded`
 approximation. There is no `examples/rankn.blot`; `grep -rn "@forall" examples`
 is empty. The catalog rule says there should be one.
 
-**Width subtyping still does not lower. Staging is hiding it.** `stageModule`
-(`src/stage.ts:34`) constant-folds every `let` it can before lowering, and the
-corpus is almost entirely foldable, so the gap is invisible there. Insert one
-value that staging cannot compute and it returns immediately:
+**Width subtyping lowers as of M3a; two shape cases remain.** The program below
+was the reproduction, and staging was hiding it: `stageModule` (`src/stage.ts`)
+constant-folds every `let` it can before lowering, and the corpus was almost
+entirely foldable.
 
 ```blot
-// /tmp/blotscratch/w5.blot                     blot check: Int ~ { Source }
 open {} = (@import "blot:prelude") ();
 const Source = @effect.host { .value = Unit -> Int; };
 let get_x = v => v.x;
@@ -73,16 +72,18 @@ n <- Source.value;
 return get_x { .x = n; .y = 0; };
 ```
 
-```
-BLOT_LOWERING_BUG: gpufuck rejected the lowered module:
-F2102: type mismatch: expected Shape0['a], received Shape2[I64, I64].
-```
+It compiled to `F2102: expected Shape0['a], received Shape2[I64, I64]` and now
+builds: a projection reads the record that *flowed* to it, across the
+instantiation each caller made. `examples/projected.blot` is that program with a
+runtime source, and it is in `just wasm`, so the corpus is now evidence rather
+than an avoidance. Two records reaching one projection is
+`BLOT_SHAPE_DISAGREEMENT`, named at the span, with
+`examples/rejected/semantics/shape_disagreement.blot` as the catalog entry.
 
-The same thing happens with no effect at all, from inside an exported function
-(`/tmp/blotscratch/w7.blot`, `expected Shape0['a], received Shape2['a, I64]`).
-Closing the boundary with a `sig` still works (`/tmp/blotscratch/w6.blot`, OK),
-which is the escape `docs/backend.md:285-297` documents. So: **the corpus is not
-evidence that this is fixed; the corpus is evidence that the corpus avoids it.**
+What still reports `BLOT_LOWERING_BUG` is listed under "Remaining backend
+boundaries" in `docs/backend.md`: a spread whose member type is still a variable
+(M3a deliberately dropped that step), a parameter destructured in place, and a
+projector reached across `@import` (M3c).
 
 **Three places blot disagrees with itself.** Each verified by running `check` and
 `eval` on the same file.
@@ -356,22 +357,20 @@ by the clones — `checkLinearity` runs inside `checkFile`, before the
 
 **So: land both, in this order, with the guards the judges found.**
 
-- **M3a — design 3, STEPS 1 and 2 only.** Surface `freshenAbove`'s `seen` map
-  out of `instantiate` (`src/check/constrain.ts:299`) onto per-check `Context`
-  state, never a module global. Split `fieldsOf` (`src/check/infer.ts:518-537`)
-  by polarity — union the upper bounds, treat two disagreeing lower bounds as
-  unknown — and follow the instantiation copies from the site's own variable.
-  Resolve one nominal per site: one widest built set wins; no built sets falls
-  back to today's demand union; two disagreeing sets is a located blot refusal
-  naming both label sets. **Drop STEP 3** (the spread-source registration).
-  It is the verified crash, its termination argument does not cover the relation
-  it introduces, and two judges independently confirmed it is separable and
-  costs only the `{ ...r; .x = r.x + 1; }` shape.
+- **M3a — design 3, STEPS 1 and 2 only. Landed.** `freshenAbove` records each
+  definition-site variable's copies in a per-`checkModule` `Instances` map
+  (`src/check/constrain.ts`), never a module global and never a field on
+  `Variable`. `fieldsOf` became `shapeOf` (`src/check/infer.ts`), split by
+  polarity — what flowed in decides, demands speak and union only when nothing
+  flowed in — and it follows the copies. Two disagreeing flowed sets are carried
+  in the fact itself, so the backend refuses with `BLOT_SHAPE_DISAGREEMENT`
+  naming both. STEP 3 (the spread-source registration) was dropped as planned;
+  it is the verified crash and it costs only the `{ ...r; .x = r.x + 1; }` shape.
 
-  The polarity split is the strongest signal in the whole set: all three designs
-  reached it independently, and its regression guard is known —
+  The polarity split was the strongest signal in the whole set: all three
+  designs reached it independently, and its regression guard held —
   `examples/modules.blot`'s `.base`/`.bonus` contribute two one-field *upper*
-  bounds that must still union.
+  bounds and still union. The whole corpus emits byte-identical Wasm.
 
 - **M3b — design 1, seeded from M3a's refusals.** A `src/specialize/` pass in
   the empty slot at `src/backend/compile.ts` (between `checkFile` and
@@ -406,13 +405,15 @@ load-bearing and needs a test with a tuple projected `.1` before `.0`); and
 an explicit `@handle` carve-out and an example with a handler over a
 width-subtyped function.
 
-**Corpus.** None start compiling — all 31 already do. What lands instead is the
-first set of `examples/` programs that exercise the feature at all, each with a
-runtime source so staging cannot fold it: the bare case, one projector at two
-shapes, a chain through a non-projecting caller, higher-order through `map`, a
-spread of a width-subtyped parameter, a returned record asserting the dropped
-field survives, and one `examples/rejected/` entry for two genuinely disagreeing
-widths asserting the blot-side code and *not* `BLOT_LOWERING_BUG`.
+**Corpus.** None start compiling — all of them already did. What M3a landed
+instead is `examples/projected.blot`, which exercises the feature at all: a
+runtime source so staging cannot fold it, the bare case, a chain through a
+non-projecting caller, a destructuring rather than a projection, and a second
+agreeing call site. Its rejection is
+`examples/rejected/semantics/shape_disagreement.blot`, asserting the blot-side
+code and *not* `BLOT_LOWERING_BUG`. Higher-order through `map` and a returned
+record asserting the dropped field survives are still worth adding; a spread of
+a width-subtyped parameter waits on the dropped STEP 3.
 
 **Gate.** `deno test --filter "lowers to gpufuck Core"` covering the new
 programs; `just wasm` agreeing across all three executions on every one; and

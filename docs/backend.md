@@ -54,6 +54,31 @@ re-deriving them means a second type checker.
 That is also why `load` keeps one cache per process. Two `load` calls returning
 two structurally equal trees would silently lose every recorded fact.
 
+### What a shape fact reads
+
+A variable's lower bounds are the records that flowed into it and its upper
+bounds are the records the program demanded of it, and those answer different
+questions. What flowed in decides, because a value carries exactly the fields of
+the record that reached it. Demands speak only when nothing flowed in at all — a
+parameter whose caller is outside the module is pinned from above, which is what
+gives `(&p) => p.x + p.y` a shape — and then they are unioned, because each
+projection writes its own one-field record.
+
+A `let`-bound function is generalized, so the record its callers pass never
+reaches the definition-site variable through the bound graph at all. `extrude`
+links its copies into that graph; `freshenAbove` must not, because a scheme's
+instantiations are exactly what does not constrain each other. The edge from a
+definition-site variable to each of its copies is therefore recorded beside the
+lattice, in `Instances` — one map per `checkModule` call, never a field on
+`Variable`, because `PRIMITIVE_TYPES` holds process-global scheme variables that
+outlive every check. `constrain` never reads it, so biunification propagates the
+bounds it always did and stays polynomial; the shape walk follows it, and that
+is what lets `let get_x = v => v.x;` learn the record its call sites built.
+
+Two _different_ records flowing to one node is not a wider record, it is two
+shapes, and the fact says so rather than unioning them. The backend refuses with
+`BLOT_SHAPE_DISAGREEMENT`, naming both.
+
 ## `const` compiles to nothing
 
 A `const` is a compile-time value and emits no code. A use specializes it: a
@@ -129,9 +154,30 @@ representation:
   choosing a handler, or spreading clauses would require a runtime handler
   representation that gpufuck intentionally does not have.
 - A residual structurally polymorphic function must have a concrete record shape
-  before it reaches gpufuck. Compile-time generic functions are specialized at
-  their blot call sites; an unconstrained runtime export is rejected instead of
-  being assigned an arbitrary nominal ABI.
+  before it reaches gpufuck. It gets one from the call sites that instantiated
+  it, so a `let`-bound projection whose callers agree compiles; callers that
+  pass different records are refused by name. Compile-time generic functions are
+  specialized at their blot call sites; an unconstrained runtime export is
+  rejected instead of being assigned an arbitrary nominal ABI.
+
+Three shape cases still reach gpufuck's own type checker rather than a blot
+refusal, and each reports `BLOT_LOWERING_BUG` with an `F2102` from gpufuck:
+
+- **A spread of a value whose type is still a variable.**
+  `r => { ...r; .x = 1; }` infers the result `{ .x }` however wide `r` is,
+  because `case "shape"` in inference only widens the result when the spread
+  member is already a record. The construction the backend emits copies every
+  field, so the two disagree. Closing it needs row variables or a deferred
+  record type, not a shape fact.
+- **A parameter destructured in place**, as in `({ .x = a; }) => a` applied to a
+  wider record. A shape pattern's type _is_ a record rather than a variable
+  bounded by one, so there is nothing for the value's fields to flow into and
+  the pattern's own fields are all the fact can say.
+- **A projecting function reached across `@import`.** A dependency is checked
+  before its importers exist, so its shape facts are read while no caller has
+  instantiated it. The rule holds inside a module and not yet across the module
+  graph; closing it means computing the facts once for the whole graph rather
+  than once per `checkModule`.
 
 ## The module parameter is the module's imports
 

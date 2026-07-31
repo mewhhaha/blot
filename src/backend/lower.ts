@@ -44,7 +44,12 @@ import type {
   Span,
 } from "../syntax/ast.ts";
 import { fail } from "../diagnostic.ts";
-import type { GrantSignature, VariantCase } from "../check/infer.ts";
+import {
+  type GrantSignature,
+  refuseDisagreement,
+  type Shape,
+  type VariantCase,
+} from "../check/infer.ts";
 import type { SimpleType } from "../check/type.ts";
 import {
   childEnv,
@@ -64,7 +69,7 @@ export interface Facts {
   readonly opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
   /** Compile-time declaration values that remain inside residual blocks. */
   readonly comptimeValues: ReadonlyMap<Expr, Value>;
-  readonly shapes: ReadonlyMap<Expr, readonly string[]>;
+  readonly shapes: ReadonlyMap<Expr, Shape>;
   readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
   /** Dependencies keyed by literal import site, so relative paths never alias. */
   readonly modules: ReadonlyMap<
@@ -72,7 +77,7 @@ export interface Facts {
     { readonly module: Module; readonly values: ValueEnv }
   >;
   /** The field set of the value a shape pattern destructures. */
-  readonly patternShapes: ReadonlyMap<Pattern, readonly string[]>;
+  readonly patternShapes: ReadonlyMap<Pattern, Shape>;
   /** Signatures of the capabilities granted through the module parameter. */
   readonly grants: ReadonlyMap<Expr, GrantSignature>;
 }
@@ -1448,11 +1453,7 @@ function bind(
     // The *value's* field set, not the pattern's: width subtyping means
     // `let { .x; } = point;` names fewer than arrive, and Core records are
     // nominal.
-    const names = pattern.tag === "tuple"
-      ? pattern.elements.map((_, index) => String(index))
-      : lowering.facts.patternShapes.get(pattern) ??
-        pattern.fields.map((field) => field.name);
-    const nominal = lowering.nominal(names);
+    const nominal = lowering.nominal(destructuredFields(pattern, lowering));
     const parts = pattern.tag === "tuple"
       ? pattern.elements.map((element, index) => ({
         name: String(index),
@@ -1540,6 +1541,29 @@ function bind(
 
   pattern satisfies never;
   throw new Error("unhandled pattern in lowering");
+}
+
+/**
+ * The field set of the value a tuple or shape pattern takes apart.
+ *
+ * A tuple pattern is its own answer: it names every position, and a tuple of a
+ * different arity is a different type rather than a wider one. A shape pattern
+ * is not, because width subtyping means fewer fields are named than arrive, so
+ * inference records what the value carries. Where it recorded nothing — a
+ * pattern no declaration bound, whose value type it could not pin down — the
+ * pattern's own fields are all there is to go on.
+ */
+function destructuredFields(
+  pattern: Extract<Pattern, { tag: "tuple" | "shape" }>,
+  lowering: Lowering,
+): readonly string[] {
+  if (pattern.tag === "tuple") {
+    return pattern.elements.map((_, index) => String(index));
+  }
+  const shape = lowering.facts.patternShapes.get(pattern);
+  if (shape === undefined) return pattern.fields.map((field) => field.name);
+  if (shape.tag === "disagreement") refuseDisagreement(shape, pattern.span);
+  return shape.fields;
 }
 
 /**
@@ -1691,13 +1715,17 @@ function lower(
           continue;
         }
 
-        const carried = lowering.facts.shapes.get(member.value);
-        if (carried === undefined) {
+        const spreadShape = lowering.facts.shapes.get(member.value);
+        if (spreadShape === undefined) {
           return unsupported(
             "spreading a shape inference could not pin down",
             expr.span,
           );
         }
+        if (spreadShape.tag === "disagreement") {
+          refuseDisagreement(spreadShape, member.value.span);
+        }
+        const carried = spreadShape.fields;
 
         const previous = lowering.nominal(fields);
         const previousName = lowering.fresh("shape");
@@ -1784,14 +1812,15 @@ function lower(
       const target = lower(expr.target, scope, lowering);
       // The whole field set comes from inference. A projection alone does not
       // say what else the record holds, and the nominal needs all of it.
-      const names = lowering.facts.shapes.get(expr);
-      if (names === undefined) {
+      const shape = lowering.facts.shapes.get(expr);
+      if (shape === undefined) {
         return unsupported(
           `projecting \`.${expr.name}\` from a value whose shape inference could not pin down`,
           expr.span,
         );
       }
-      const nominal = lowering.nominal(names);
+      if (shape.tag === "disagreement") refuseDisagreement(shape, expr.span);
+      const nominal = lowering.nominal(shape.fields);
       // The nominal's own order, not this site's. Inference records a field set
       // in the order the program first projected it, so two sites can disagree
       // about the order of the same type — the nominal is the one that

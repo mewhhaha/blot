@@ -1,5 +1,10 @@
 import { buildSurfaceModule, CpuCompiler, EvaluationProfile } from "gpufuck";
-import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import {
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
 import { join } from "@std/path";
 import {
   runLowering,
@@ -181,6 +186,160 @@ Deno.test("a concrete record signature specializes an exported projection", asyn
   );
   assertEquals(project?.function?.parameters.length, 1);
   assertEquals(project?.phase, "runtime");
+});
+
+// The body reads one field; the caller passes two. A `let`-bound projection is
+// generalized, so the record never reaches the definition-site variable through
+// the bound graph — only through the instantiation each call site made. Reading
+// the copy is what gives the projection a nominal the construction site agrees
+// with, and without it gpufuck sees `Shape0['a]` against `Shape2[I64, I64]`.
+Deno.test("a generalized projection takes its shape from the call site", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "flowed-shape.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "let get_x = v => v.x;",
+      "sig at = Int -> Int;",
+      "let at = n => get_x { .x = n; .y = 0; };",
+      "return { .at = at; };",
+    ].join("\n"),
+  );
+
+  assertEquals(
+    await runLoweringExport(path, "at", [{
+      kind: "signed-integer-64",
+      value: 41n,
+    }]),
+    { kind: "signed-integer-64", value: 41n },
+  );
+});
+
+// The catalog's rejection: `blot check` accepts it, and lowering names both
+// shapes at the projection that sees them.
+Deno.test("examples/rejected/semantics/shape_disagreement.blot names both shapes", async () => {
+  const path = join(
+    "examples/rejected/semantics",
+    "shape_disagreement.blot",
+  );
+  await checkFile(path);
+  const error = await assertRejects(
+    () => validateLowering(path),
+    BlotError,
+  );
+  assertEquals(error.diagnostic.code, "BLOT_SHAPE_DISAGREEMENT");
+  assertStringIncludes(error.diagnostic.message, "{ .x; .y; }");
+  assertStringIncludes(error.diagnostic.message, "{ .x; .z; }");
+  const source = await Deno.readTextFile(path);
+  assertEquals(
+    source.slice(error.diagnostic.span.start, error.diagnostic.span.end),
+    "v.x",
+  );
+});
+
+// Width subtyping accepts this; Core records are invariant, so there is no one
+// nominal for both call sites. The union `.x .y .z` would be a record the
+// program never writes, so lowering names both shapes instead of picking one.
+Deno.test("two shapes at one generalized projection are refused, not merged", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "two-shapes.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "let get_x = v => v.x;",
+      "sig at = Int -> Int;",
+      "let at = n => get_x { .x = n; .y = 0; } + get_x { .x = 1; .z = n; };",
+      "return { .at = at; };",
+    ].join("\n"),
+  );
+
+  const error = await assertRejects(
+    () => validateLowering(path),
+    BlotError,
+  );
+  assertEquals(error.diagnostic.code, "BLOT_SHAPE_DISAGREEMENT");
+  assertStringIncludes(error.diagnostic.message, "{ .x; .y; }");
+  assertStringIncludes(error.diagnostic.message, "{ .x; .z; }");
+});
+
+// Narrower and wider are still two records: a `{ .x; }` is really built at one
+// call site and a `{ .x; .y; }` at the other, and taking the widest would read
+// a field the first value does not have.
+Deno.test("subset shapes at one generalized projection are refused too", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "subset-shapes.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "let get_x = v => v.x;",
+      "sig at = Int -> Int;",
+      "let at = n => get_x { .x = n; } + get_x { .x = 1; .y = n; };",
+      "return { .at = at; };",
+    ].join("\n"),
+  );
+
+  const error = await assertRejects(
+    () => validateLowering(path),
+    BlotError,
+  );
+  assertEquals(error.diagnostic.code, "BLOT_SHAPE_DISAGREEMENT");
+  assertStringIncludes(error.diagnostic.message, "{ .x; }");
+  assertStringIncludes(error.diagnostic.message, "{ .x; .y; }");
+});
+
+// The same generalized function, reached through a `let`-bound forwarder: the
+// chain of instantiations is what the copies record, and the shape has to
+// survive both of them.
+Deno.test("a generalized projection keeps its shape through a forwarder", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "forwarded-shape.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "let get_x = v => v.x;",
+      "let twice = v => get_x v + get_x v;",
+      "sig at = Int -> Int;",
+      "let at = n => twice { .x = n; .y = 0; };",
+      "return { .at = at; };",
+    ].join("\n"),
+  );
+
+  assertEquals(
+    await runLoweringExport(path, "at", [{
+      kind: "signed-integer-64",
+      value: 21n,
+    }]),
+    { kind: "signed-integer-64", value: 42n },
+  );
+});
+
+// A `let`-bound function that destructures rather than projects reads the same
+// fact through the pattern, so it has to follow the copies too.
+Deno.test("a generalized destructuring takes its shape from the call site", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "flowed-pattern.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "let get_x = v => do let { .x = a; } = v; in a end;",
+      "sig at = Int -> Int;",
+      "let at = n => get_x { .x = n; .y = 0; };",
+      "return { .at = at; };",
+    ].join("\n"),
+  );
+
+  assertEquals(
+    await runLoweringExport(path, "at", [{
+      kind: "signed-integer-64",
+      value: 41n,
+    }]),
+    { kind: "signed-integer-64", value: 41n },
+  );
 });
 
 Deno.test("Store values cross named exports as arrays", async () => {

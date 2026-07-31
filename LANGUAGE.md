@@ -1331,8 +1331,22 @@ seals, and functions over supported values. Types and effects remain
 compile-time manifest entries and have no invented runtime encoding.
 
 A residual structurally polymorphic function must be specialized to a concrete
-record shape before gpufuck. Exporting an unconstrained structural function is
-rejected rather than assigned an arbitrary nominal ABI.
+record shape before gpufuck. The shape is the one that *flows* to the
+projection, not the narrower one the body reads: inference follows what flowed
+into the projected variable, across the instantiation a `let`-bound scheme makes
+for each of its callers, so `let get_x = v => v.x;` takes its record from the
+call sites. When nothing flows in — a parameter whose caller is outside the
+module — the fields the body demands decide instead, and they are unioned.
+
+Two *different* records reaching one projection decide nothing, and that
+includes a narrower and a wider one: a value of each is really built, Core
+records are invariant, so the two are distinct nominal types and their union is
+a record neither call site writes. `BLOT_SHAPE_DISAGREEMENT` names both of them
+at that projection rather than inventing a third. This is a lowering refusal and
+not a type error: the program is well typed under width subtyping, and
+`blot check` still accepts it and reports its principal type. Exporting an
+unconstrained structural function is rejected rather than assigned an arbitrary
+nominal ABI.
 
 ### 15.1 Core WebAssembly ABI
 

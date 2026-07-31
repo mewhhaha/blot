@@ -139,6 +139,13 @@ const REJECTIONS: Record<
     code: "BLOT_CONST_CAPTURES_RUNTIME",
     stage: "build",
   },
+  // Also not a type error: width subtyping accepts two records at one
+  // projection, and it is Core's nominal records that have no type for both.
+  // `backend.test.ts` asserts the code and that the message names both shapes.
+  "shape_disagreement": {
+    code: "BLOT_SHAPE_DISAGREEMENT",
+    stage: "build",
+  },
 };
 
 async function blotFiles(directory: string): Promise<string[]> {

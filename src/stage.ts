@@ -1,4 +1,5 @@
 import { BlotError } from "./diagnostic.ts";
+import { refuseDisagreement, type Shape } from "./check/infer.ts";
 import {
   bind,
   evaluate,
@@ -28,14 +29,14 @@ export interface StagedModule {
   readonly module: Module;
   readonly exports: readonly StagedExport[];
   /** Shape facts introduced by staging-generated projections. */
-  readonly shapes: ReadonlyMap<Expr, readonly string[]>;
+  readonly shapes: ReadonlyMap<Expr, Shape>;
 }
 
 export function stageModule(
   module: Module,
   values: Env,
   imports: Imports,
-  inferredShapes: ReadonlyMap<Expr, readonly string[]> = new Map(),
+  inferredShapes: ReadonlyMap<Expr, Shape> = new Map(),
 ): StagedModule {
   const stagingValues = childEnv(values);
   const stagedDeclarations = new Set<Decl>();
@@ -108,7 +109,7 @@ export function stageModule(
   const finalFields = new Map<string, Expr | null>();
   const exportedFields = new Map<string, StagedExport>();
   const generatedDeclarations: Decl[] = [];
-  const generatedShapes = new Map<Expr, readonly string[]>();
+  const generatedShapes = new Map<Expr, Shape>();
   let nextBinding = 0;
   let fullyStaged = allDeclarationsStaged;
   for (const member of module.result.members) {
@@ -153,7 +154,10 @@ export function stageModule(
             name,
             span: member.value.span,
           };
-          generatedShapes.set(expression, [...staged.value.fields.keys()]);
+          generatedShapes.set(expression, {
+            tag: "fields",
+            fields: [...staged.value.fields.keys()],
+          });
         }
         finalFields.set(name, expression);
         let phase: StagedExport["phase"] = "runtime";
@@ -163,12 +167,16 @@ export function stageModule(
       continue;
     }
 
-    const fields = inferredShapes.get(member.value);
-    if (fields === undefined) {
+    const shape = inferredShapes.get(member.value);
+    if (shape === undefined) {
       throw new Error(
         "checking omitted the field set of a residual module-result spread",
       );
     }
+    if (shape.tag === "disagreement") {
+      refuseDisagreement(shape, member.value.span);
+    }
+    const fields = shape.fields;
     const binding = `stage$result$${nextBinding}`;
     nextBinding += 1;
     generatedDeclarations.push(runtimeBinding(binding, member.value));
@@ -180,7 +188,7 @@ export function stageModule(
         name,
         span: member.value.span,
       };
-      generatedShapes.set(expression, fields);
+      generatedShapes.set(expression, { tag: "fields", fields });
       finalFields.set(name, expression);
       exportedFields.set(name, { sourceName: name, phase: "runtime" });
     }

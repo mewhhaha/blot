@@ -334,9 +334,35 @@ function levelBelow(type: SimpleType, level: Level): boolean {
   }
 }
 
-export function instantiate(typing: Typing, level: Level): SimpleType {
+/**
+ * Where each definition-site variable's instantiation copies went.
+ *
+ * `extrude` links its copies into the bound graph — `type.upper.push(copy)` —
+ * so a constraint recorded on the copy is visible from the original. It is the
+ * only copier that can: a `let`-bound scheme's whole point is that its
+ * instantiations do not constrain each other, so `freshenAbove` must leave the
+ * definition-site variable alone. That leaves the backend with no way to learn
+ * what a generalized projection was actually applied to.
+ *
+ * The edge is recorded here instead, beside the lattice rather than in it.
+ * `constrain` never reads this map, so biunification propagates exactly the
+ * bounds it propagated before and stays polynomial; only fact collection walks
+ * it, and only to answer "what shapes reached this node".
+ *
+ * One map per `checkModule` call, which is what keeps it bounded. Hanging the
+ * edge off the `Variable` would attach unbounded growth to `PRIMITIVE_TYPES`,
+ * whose scheme variables are process-global and outlive every check — and would
+ * let one file's records be seen while checking another's.
+ */
+export type Instances = Map<Variable, Variable[]>;
+
+export function instantiate(
+  typing: Typing,
+  level: Level,
+  instances: Instances,
+): SimpleType {
   if (typing.tag !== "scheme") return typing;
-  return freshenAbove(typing.body, typing.level, level, new Map());
+  return freshenAbove(typing.body, typing.level, level, new Map(), instances);
 }
 
 export function scheme(body: SimpleType, level: Level): Scheme {
@@ -348,6 +374,7 @@ function freshenAbove(
   limit: Level,
   level: Level,
   seen: Map<Variable, Variable>,
+  instances: Instances,
 ): SimpleType {
   if (levelBelow(type, limit)) return type;
 
@@ -357,26 +384,35 @@ function freshenAbove(
       if (existing !== undefined) return existing;
       const copy = freshVar(level);
       seen.set(type, copy);
+      // Not a bound. The copy is where this use's constraints land, and the
+      // edge is what lets a fact read at the definition find them again.
+      const recorded = instances.get(type);
+      if (recorded === undefined) instances.set(type, [copy]);
+      else recorded.push(copy);
       copy.lower.push(
-        ...type.lower.map((b) => freshenAbove(b, limit, level, seen)),
+        ...type.lower.map((b) =>
+          freshenAbove(b, limit, level, seen, instances)
+        ),
       );
       copy.upper.push(
-        ...type.upper.map((b) => freshenAbove(b, limit, level, seen)),
+        ...type.upper.map((b) =>
+          freshenAbove(b, limit, level, seen, instances)
+        ),
       );
       return copy;
     }
     case "fun":
       return {
         tag: "fun",
-        param: freshenAbove(type.param, limit, level, seen),
-        effects: freshenAbove(type.effects, limit, level, seen),
-        result: freshenAbove(type.result, limit, level, seen),
+        param: freshenAbove(type.param, limit, level, seen, instances),
+        effects: freshenAbove(type.effects, limit, level, seen, instances),
+        result: freshenAbove(type.result, limit, level, seen, instances),
       };
     case "forall":
       return {
         tag: "forall",
         variables: type.variables,
-        body: freshenAbove(type.body, limit, level, seen),
+        body: freshenAbove(type.body, limit, level, seen, instances),
       };
     case "record":
       return {
@@ -384,7 +420,7 @@ function freshenAbove(
         fields: new Map(
           [...type.fields].map((
             [n, t],
-          ) => [n, freshenAbove(t, limit, level, seen)]),
+          ) => [n, freshenAbove(t, limit, level, seen, instances)]),
         ),
       };
     case "variant":
@@ -394,13 +430,13 @@ function freshenAbove(
         cases: new Map(
           [...type.cases].map((
             [n, t],
-          ) => [n, freshenAbove(t, limit, level, seen)]),
+          ) => [n, freshenAbove(t, limit, level, seen, instances)]),
         ),
       };
     case "array":
       return {
         tag: "array",
-        element: freshenAbove(type.element, limit, level, seen),
+        element: freshenAbove(type.element, limit, level, seen, instances),
       };
     default:
       return type;

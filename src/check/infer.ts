@@ -45,6 +45,7 @@ import {
 import { intersect } from "./setops.ts";
 import {
   constrain,
+  type Instances,
   instantiate,
   instantiateForall,
   scheme,
@@ -254,13 +255,15 @@ function lookupLiteral(env: TypeEnv, name: string): Expr | undefined {
 
 interface Context {
   /** Field sets and constructor sets, recorded for the backend. */
-  readonly shapes: Map<Expr, readonly string[]>;
+  readonly shapes: Map<Expr, Shape>;
   /** Compile-time declaration values, keyed by their source expression. */
   readonly comptimeValues: Map<Expr, Value>;
   /** Facts read after checking, once every constraint has been seen. */
   readonly pending: (() => void)[];
+  /** Instantiation copies, for the shape facts; see `Instances`. */
+  readonly instances: Instances;
   readonly variants: Map<Expr, readonly VariantCase[]>;
-  readonly patternShapes: Map<Pattern, readonly string[]>;
+  readonly patternShapes: Map<Pattern, Shape>;
   readonly grants: Map<Expr, GrantSignature>;
   /** The entry module's parameter name, when it has one. */
   parameterName: string | null;
@@ -391,7 +394,7 @@ export function infer(
       if (found === undefined) {
         fail("BLOT_UNBOUND", `\`${expr.name}\` is not in scope.`, expr.span);
       }
-      return instantiate(found, level);
+      return instantiate(found, level, context.instances);
     }
 
     case "intrinsic": {
@@ -411,7 +414,7 @@ export function infer(
           expr.span,
         );
       }
-      return instantiate(primitive, level);
+      return instantiate(primitive, level, context.instances);
     }
 
     case "tag":
@@ -463,10 +466,11 @@ export function infer(
       // Record what the target's whole field set is, if it is known. Lowering
       // cannot see it and cannot build the nominal without it. Deferred to the
       // end of checking, because a later use may add a field this one does not
-      // mention.
+      // mention — and because a generalized projection learns its shape from
+      // call sites that have not been inferred yet.
       context.pending.push(() => {
-        const fields = fieldsOf(target);
-        if (fields !== null) context.shapes.set(expr, fields);
+        const shape = shapeOf(target, context.instances);
+        if (shape !== null) context.shapes.set(expr, shape);
       });
       // A projection off the module parameter is a granted capability. Read
       // after checking, because the signature comes from how the program
@@ -547,7 +551,7 @@ export function infer(
         // A spread contributes whatever the spread value holds, and the
         // backend has to copy those fields one by one — so record the set.
         context.pending.push(() => {
-          const spread = fieldsOf(memberType);
+          const spread = shapeOf(memberType, context.instances);
           if (spread !== null) context.shapes.set(member.value, spread);
         });
         // A spread of a shape whose fields are not statically known cannot
@@ -642,7 +646,7 @@ function inferSpecial(
     if (specifier.tag !== "text") return null;
     const moduleType = context.modules.get(specifier.value);
     if (moduleType === undefined) return null;
-    let result = instantiate(scheme(moduleType, -1), level);
+    let result = instantiate(scheme(moduleType, -1), level, context.instances);
     for (const argument of head.args.slice(1)) {
       const argumentType = infer(argument, context, level, row);
       const applied = freshVar(level);
@@ -761,8 +765,11 @@ function inferSpecial(
           result: handledResult,
         });
       }
-      const handlerFields = fieldsOf(handler);
-      if (handlerFields !== null && handlerFields.includes("return")) {
+      const handlerShape = shapeOf(handler, context.instances);
+      if (
+        handlerShape !== null && handlerShape.tag === "fields" &&
+        handlerShape.fields.includes("return")
+      ) {
         const returnClause = freshVar(level);
         constrain(handler, record([["return", returnClause]]));
         constrain(returnClause, {
@@ -1301,31 +1308,122 @@ function inferCase(
 }
 
 /**
- * The field set of a record type, digging through a variable's bounds.
+ * What checking learned about the record at one node.
  *
- * A variable's lower bounds are what flowed into it, and a record among them is
- * the shape the value actually has. Several disagreeing records mean the field
- * set is not known here, and saying so beats picking one.
+ * A field set is what the backend needs: Core records are nominal, so a
+ * projection cannot be lowered without the whole set. A disagreement is the
+ * other answer inference can honestly give — two different records reached this
+ * node, which width subtyping accepts and Core has no single type for. Carrying
+ * the two sets is what lets lowering refuse by name instead of inventing a
+ * third.
  */
-function fieldsOf(type: SimpleType): readonly string[] | null {
-  const found = new Set<string>();
-  let sawRecord = false;
+export type Shape =
+  | { readonly tag: "fields"; readonly fields: readonly string[] }
+  | Disagreement;
 
-  const walk = (current: SimpleType, seen: Set<number>): void => {
+export interface Disagreement {
+  readonly tag: "disagreement";
+  readonly left: readonly string[];
+  readonly right: readonly string[];
+}
+
+/**
+ * Refuse a node that two different records reach, naming both.
+ *
+ * This is a lowering refusal and not a type error: the program is well typed
+ * under width subtyping, and `blot check` still accepts it and reports its
+ * principal type. What has no answer is the Core nominal, and the two shapes
+ * are the whole explanation, so they are what the message carries.
+ */
+export function refuseDisagreement(
+  disagreement: Disagreement,
+  span: Span,
+): never {
+  fail(
+    "BLOT_SHAPE_DISAGREEMENT",
+    `${shownShape(disagreement.left)} and ${
+      shownShape(disagreement.right)
+    } both reach this. Blot's shapes are width-subtyped and Core's are ` +
+      "nominal, so no one record type is both, and lowering will not pick " +
+      "one. Give the two values the same fields, or read the field at each " +
+      "of them rather than through one binding that sees both.",
+    span,
+  );
+}
+
+function shownShape(fields: readonly string[]): string {
+  return `{ ${[...fields].sort().map((name) => `.${name}`).join("; ")}; }`;
+}
+
+/**
+ * The record at a node: the one shape that flows to it.
+ *
+ * A variable's lower bounds are the records that flowed into it and its upper
+ * bounds are the records the program demanded of it, and those answer different
+ * questions. What flowed in decides, because a value carries exactly the fields
+ * of the record that reached it. A demand speaks only when nothing flowed in at
+ * all — a parameter whose caller is outside the module is pinned from above,
+ * which is what makes `(&p) => p.x + p.y` a shape with `.x` and `.y` — and
+ * demands are unioned, because each projection writes its own one-field record.
+ *
+ * Instantiation copies are followed as well. A `let`-bound projection is
+ * generalized, so the record its callers pass never reaches the definition-site
+ * variable through the bound graph at all; the copy is where it landed.
+ *
+ * Two *different* records flowing to one node is not a wider record, it is two
+ * shapes — including when one's fields contain the other's, because a value of
+ * each is really built and gpufuck's records are invariant. No nominal is both,
+ * and their union would name a record the program never writes, so the answer
+ * is which two disagreed rather than a guess between them.
+ */
+function shapeOf(
+  type: SimpleType,
+  instances: Instances,
+): Shape | null {
+  const flowed = reachedRecords(type, instances, "lower");
+  if (flowed.size > 1) {
+    const [left, right] = [...flowed.values()];
+    return { tag: "disagreement", left, right };
+  }
+  for (const fields of flowed.values()) return { tag: "fields", fields };
+
+  const demanded = reachedRecords(type, instances, "upper");
+  if (demanded.size === 0) return null;
+  const union = new Set<string>();
+  for (const fields of demanded.values()) {
+    for (const name of fields) union.add(name);
+  }
+  return { tag: "fields", fields: [...union] };
+}
+
+/**
+ * The distinct field sets on records reachable along one bound direction,
+ * keyed canonically so two spellings of the same shape count once.
+ */
+function reachedRecords(
+  type: SimpleType,
+  instances: Instances,
+  direction: "lower" | "upper",
+): Map<string, readonly string[]> {
+  const found = new Map<string, readonly string[]>();
+  const seen = new Set<number>();
+
+  const walk = (current: SimpleType): void => {
     if (current.tag === "record") {
-      sawRecord = true;
-      for (const name of current.fields.keys()) found.add(name);
+      const fields = [...current.fields.keys()];
+      found.set([...fields].sort().join(" "), fields);
       return;
     }
     if (current.tag !== "var" || seen.has(current.id)) return;
     seen.add(current.id);
-    // Both directions: a value's fields are what flowed in, and a parameter's
-    // are what the body demanded. `(&p) => p.x + p.y` pins `p` from above.
-    for (const bound of [...current.lower, ...current.upper]) walk(bound, seen);
+    for (const bound of current[direction]) walk(bound);
+    const copies = instances.get(current);
+    if (copies === undefined) return;
+    for (const copy of copies) walk(copy);
   };
 
-  walk(type, new Set());
-  return sawRecord ? [...found] : null;
+  walk(type);
+  return found;
 }
 
 /**
@@ -1334,6 +1432,12 @@ function fieldsOf(type: SimpleType): readonly string[] | null {
  * Arity matters to the backend and to nothing else: Core constructors declare
  * their fields, and `#Ready` with no payload cannot share a field list with
  * `#Busy n`.
+ *
+ * Unlike `shapeOf` this still walks both directions in one pass, unions what it
+ * finds, and does not follow instantiation copies. That is scope, not oversight:
+ * a generalized function that matches on a variant has the same hole a
+ * generalized projection had, and closing it wants the same treatment — the
+ * copies are recorded, so it is a rewrite of this walk and nothing else.
  */
 function casesOf(type: SimpleType): readonly VariantCase[] | null {
   const found = new Map<string, boolean>();
@@ -1589,10 +1693,10 @@ function inferDeclarations(
         inferred = bridged;
       }
       const previousType = stableRebindingType(
-        instantiate(previous, level + 1),
+        instantiate(previous, level + 1, context.instances),
       );
       const inferredType = stableRebindingType(
-        instantiate(inferred, level + 1),
+        instantiate(inferred, level + 1, context.instances),
       );
       try {
         constrain(previousType, inferredType);
@@ -1746,7 +1850,10 @@ function inferDeclarations(
     ) {
       const expected = pendingSig.type;
       located(declaration.span, () => {
-        constrain(instantiate(type as Typing, level), expected);
+        constrain(
+          instantiate(type as Typing, level, context.instances),
+          expected,
+        );
       });
       type = expected;
       pendingSig = null;
@@ -1894,7 +2001,7 @@ function bindDeclaration(
   // the shape the pattern requires.
   const scope = context.types;
   const required = bindPattern(pattern, scope, level);
-  const whole = instantiate(type, level);
+  const whole = instantiate(type, level, context.instances);
   located(pattern.span, () => constrain(whole, required));
   recordPatternShapes(pattern, whole, context);
 }
@@ -1924,8 +2031,8 @@ function recordPatternShapes(
 ): void {
   if (pattern.tag !== "shape") return;
   context.pending.push(() => {
-    const fields = fieldsOf(type);
-    if (fields !== null) context.patternShapes.set(pattern, fields);
+    const shape = shapeOf(type, context.instances);
+    if (shape !== null) context.patternShapes.set(pattern, shape);
   });
 }
 
@@ -2032,7 +2139,7 @@ export interface Checked {
    * inference does, so it writes it down here rather than making the backend
    * re-derive it. Same for the constructor set behind a `case`.
    */
-  readonly shapes: ReadonlyMap<Expr, readonly string[]>;
+  readonly shapes: ReadonlyMap<Expr, Shape>;
   readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
   /**
    * The field set of the *value* a shape pattern destructures.
@@ -2042,7 +2149,7 @@ export interface Checked {
    * set rather than the pattern's — the pattern says what is wanted, not what
    * arrives.
    */
-  readonly patternShapes: ReadonlyMap<Pattern, readonly string[]>;
+  readonly patternShapes: ReadonlyMap<Pattern, Shape>;
   /**
    * The type of each projection off the entry module's parameter.
    *
@@ -2081,16 +2188,20 @@ export function checkModule(
     // them, so `fold` used once on text could never be used on integers.
     for (const [name, type] of prelude) types.names.set(name, scheme(type, -1));
   }
-  const shapes = new Map<Expr, readonly string[]>();
+  const shapes = new Map<Expr, Shape>();
   const variants = new Map<Expr, readonly VariantCase[]>();
-  const patternShapes = new Map<Pattern, readonly string[]>();
+  const patternShapes = new Map<Pattern, Shape>();
   const grants = new Map<Expr, GrantSignature>();
   const opens = new Map<Expr, ReadonlyMap<string, Value>>();
   const comptimeValues = new Map<Expr, Value>();
   const pending: (() => void)[] = [];
+  // Bounded by this call: the map dies with the check that built it, so the
+  // process-global primitive schemes accumulate nothing across files.
+  const instances: Instances = new Map();
   const context: Context = {
     opens,
     comptimeValues,
+    instances,
     shapes,
     variants,
     patternShapes,

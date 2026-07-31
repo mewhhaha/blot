@@ -17,6 +17,7 @@ import {
   type Checked,
   checkModule,
   type GrantSignature,
+  type Shape,
   type VariantCase,
 } from "./infer.ts";
 import type { Expr, Pattern } from "../syntax/ast.ts";
@@ -39,9 +40,9 @@ export interface CheckResult {
   /** Compile-time declaration values; see `Checked`. */
   readonly comptimeValues: ReadonlyMap<Expr, Value>;
   /** Field and constructor sets the backend needs; see `Checked`. */
-  readonly shapes: ReadonlyMap<Expr, readonly string[]>;
+  readonly shapes: ReadonlyMap<Expr, Shape>;
   readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
-  readonly patternShapes: ReadonlyMap<Pattern, readonly string[]>;
+  readonly patternShapes: ReadonlyMap<Pattern, Shape>;
   readonly grants: ReadonlyMap<Expr, GrantSignature>;
   /** Checked dependencies keyed by each literal import site. */
   readonly modules: ReadonlyMap<
@@ -99,9 +100,9 @@ function checkLoaded(
   const dependencyFacts: {
     opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
     comptimeValues: ReadonlyMap<Expr, Value>;
-    shapes: ReadonlyMap<Expr, readonly string[]>;
+    shapes: ReadonlyMap<Expr, Shape>;
     variants: ReadonlyMap<Expr, readonly VariantCase[]>;
-    patternShapes: ReadonlyMap<Pattern, readonly string[]>;
+    patternShapes: ReadonlyMap<Pattern, Shape>;
   }[] = [];
   for (const [specifier, dependency] of loaded.dependencies) {
     const dependencyChecked = checkLoaded(dependency, cache);

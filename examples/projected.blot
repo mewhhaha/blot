@@ -1,0 +1,43 @@
+// Projecting a field, compiled.
+//
+// Blot's records are structural and width-subtyped: `v => v.x` says only that
+// `v` has an `.x`, and a caller may pass any record that does. Core's records
+// are nominal and invariant, so the same function needs one whole field set —
+// and `v => v.x` never names one. The record it is really applied to is the one
+// its callers pass, so inference follows the instantiation each call site made
+// and writes down what reached it there.
+//
+// Every caller below passes the same shape. Callers that pass different ones
+// are `examples/rejected/semantics/shape_disagreement.blot`: no Core record is
+// both, so that program is refused rather than compiled against a shape nobody
+// writes.
+
+open {} = (@import "blot:prelude") ();
+
+const Console = @effect.host {
+  .write = Str -> Unit;
+};
+
+// A `let` is generalized, so nothing here fixes the shape of `v`.
+let get_x = v => v.x;
+// Reached through a forwarder, so the shape survives two instantiations.
+let twice = p => get_x p + get_x p;
+// Destructured rather than projected, which reads the same fact.
+let first = p => do let { .x = a; } = p; in a end;
+
+// Writing is the host's, so the compiler cannot run this: `point` is built
+// while the program runs rather than folded away while it compiles, and the
+// projections above are what reaches WebAssembly.
+let point = do
+  let _ = Console.write "projected";
+  in { .x = 7; .y = 0; }
+end;
+
+return {
+  .direct = get_x point;
+  .forwarded = twice point;
+  .destructured = first point;
+  // A second call site is free as long as it agrees: one shape reaches the
+  // projection, so one Core record answers for both.
+  .agreeing = get_x { .x = 8; .y = 9; };
+};
