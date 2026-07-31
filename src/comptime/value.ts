@@ -244,6 +244,15 @@ export function show(value: Value): string {
 }
 
 /** Structural equality. Closures and primitives are compared by identity. */
+/** Which ordered domain a range lives in: its own label, else its bounds. */
+export function rangeDomainOf(
+  value: Value & { tag: "range" },
+): "int" | "text" {
+  if (value.domain !== undefined) return value.domain;
+  if (value.low.tag === "text" || value.high.tag === "text") return "text";
+  return "int";
+}
+
 export function equal(left: Value, right: Value): boolean {
   if (left === right) return true;
   if (left.tag === "extended") return equal(left.inner, right);
@@ -278,6 +287,10 @@ export function equal(left: Value, right: Value): boolean {
     return true;
   }
   if (left.tag === "range" && right.tag === "range") {
+    // The domain is part of the identity. `Int` and `Str` are both
+    // `unbounded..unbounded` and comparing only the bounds made them equal, so
+    // `@type.union` deduplicated them and `Int | Str` silently became `Int`.
+    if (rangeDomainOf(left) !== rangeDomainOf(right)) return false;
     return equal(left.low, right.low) && equal(left.high, right.high);
   }
   if (left.tag === "arrow" && right.tag === "arrow") {
