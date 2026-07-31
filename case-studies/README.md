@@ -129,8 +129,14 @@ nothing reloads.
 ### Hot reload, two kinds
 
 ```bash
-WGPU_BACKENDS=vulkan deno task engine        # http://localhost:8321
+WGPU_BACKENDS=vulkan deno task engine             # opens a browser
+WGPU_BACKENDS=vulkan deno task engine --no-open   # just serves
 ```
+
+The task compiles the module, serves it on port 8321, watches both trees, and
+opens the page. Deno is the whole toolchain here — there is no bundler and no
+build step, and the browser is the display rather than the environment: the
+compiler, the file watcher, and the reload channel all live in `serve.ts`.
 
 **Assets.** Edit `assets/scene.json` and the server re-reads it and bumps a
 generation. The guest compares that generation each frame and rebuilds its
