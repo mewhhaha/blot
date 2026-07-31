@@ -36,12 +36,32 @@ export interface Literal {
  *
  * `null` is "cannot say", never "no inhabitants": an empty set is `[]`.
  */
+/** How many integers are worth listing to decide coverage. */
+const LISTABLE = 256n;
+
 function enumerate(type: SimpleType): readonly Literal[] | null {
   if (type.tag === "range") {
-    // Bounds that coincide are a singleton. `null` is an open end, and an open
-    // end at either side is an interval nothing can list.
-    if (type.low === null || type.low !== type.high) return null;
-    return [{ domain: type.domain, value: type.low }];
+    if (type.low === null || type.high === null) return null;
+    if (type.low === type.high) {
+      return [{ domain: type.domain, value: type.low }];
+    }
+    // A bounded *integer* range is a finite set, so arms can cover it: two
+    // comparisons narrow `i` to `1..2` and `case i of 1 => …, 2 => …` is then
+    // complete. Text is dense — `"a".."b"` holds infinitely many strings — so
+    // only integers enumerate.
+    if (type.domain !== "int") return null;
+    if (typeof type.low !== "bigint" || typeof type.high !== "bigint") {
+      return null;
+    }
+    const span = type.high - type.low;
+    // Past this, listing is not how a program should be covering the range,
+    // and building the list would cost more than the check is worth.
+    if (span >= LISTABLE) return null;
+    const values: Literal[] = [];
+    for (let value = type.low; value <= type.high; value += 1n) {
+      values.push({ domain: "int", value });
+    }
+    return values;
   }
   if (type.tag !== "union") return null;
 
@@ -103,8 +123,17 @@ export function uncovered(
  */
 export function unlistable(type: SimpleType): boolean {
   if (type.tag === "range") {
+    // Only a set no finite arm list could exhaust. A bounded integer range is
+    // finite and `enumerate` lists it, so it is not unlistable — saying it was
+    // rejected `case i of 1 => …, 2 => …` over the `1..2` a pair of
+    // comparisons had just proved.
     if (type.low === null || type.high === null) return true;
-    return type.low !== type.high;
+    if (type.low === type.high) return false;
+    if (type.domain !== "int") return true;
+    if (typeof type.low !== "bigint" || typeof type.high !== "bigint") {
+      return true;
+    }
+    return type.high - type.low >= LISTABLE;
   }
   if (type.tag !== "union") return false;
   return type.members.some(unlistable);

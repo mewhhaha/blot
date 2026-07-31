@@ -1,0 +1,1 @@
+{ .below = "zero or less"; .one = "one"; .two = "two"; .above = "three or more"; .small = "one"; }
