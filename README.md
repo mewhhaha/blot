@@ -30,6 +30,20 @@ annotations anywhere, enforces `sig` by subsumption, and rejects unhandled
 effects at the module boundary. See [docs/inference.md](docs/inference.md),
 including what it does _not_ yet prove.
 
+A branch proves what its condition computes, and the proof is set algebra on
+types. `if n == 1` narrows `n` to `1` in the taken branch and to `T \\ 1` in the
+untaken one; comparisons compose, and `&&` proves what both halves prove. A
+`case` over what a branch proved can then be complete, and one over an
+unbounded domain is refused rather than left to trap — `@panic` is how an arm
+says why reaching it is impossible. An array's length is a bound an index can
+be compared against, so a checked read is accepted and a constant past the end
+is a compile error.
+
+Nothing is recognised by name: a comparison and a junction are both identified
+by *tabulating* them, so a module that shadows `Eq` or `Logic.and` with
+something that is not equality or conjunction proves nothing rather than
+something false.
+
 Linearity and ownership (M3) landed too: `!` is checked exactly-once on every
 path, `?` at most once — which is what makes `resume` one-shot statically rather
 than by runtime check — `&` may be read but never moved, and a closure inherits
