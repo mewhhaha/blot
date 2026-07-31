@@ -20,6 +20,7 @@ import type { Env as ValueEnv } from "../comptime/value.ts";
 import {
   childEnv,
   lookup as lookupValue,
+  show,
   type Value,
 } from "../comptime/value.ts";
 import {
@@ -1003,9 +1004,15 @@ function inferDeclarations(
       }
       const bridged = bridge(value);
       if (bridged === null) {
+        // Naming what it got matters here: the commonest mistake is reaching
+        // for a namespace whose name reads like a type — `Text` is the record
+        // of text functions and `Str` is the type — and the old message left
+        // the reader to guess which of the two they had.
         fail(
           "BLOT_SIG_NOT_A_TYPE",
-          "This `sig` does not evaluate to a type.",
+          `A \`sig\` must evaluate to a type; this one evaluates to ${
+            show(value)
+          }.`,
           declaration.span,
         );
       }

@@ -121,7 +121,13 @@ function report(path: string, error: unknown): void {
     return;
   }
   if (error instanceof BlotError) {
-    console.error(`${path}: ${error.message}`);
+    if (error.origin === null) {
+      console.error(`${path}: ${error.message}`);
+      return;
+    }
+    console.error(
+      render(error.origin.path, error.origin.source, error.diagnostic),
+    );
     return;
   }
   if (error instanceof Error && error.message === "check failed") return;

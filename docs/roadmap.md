@@ -121,13 +121,18 @@ bindings — rather than claiming the captured name is unbound. Refusing in the
 checker instead, so `check` and `eval` agree with `build`, is still open
 (item 1d).
 
-**Diagnostics.** `blot check` prints type errors with no location at all —
-`d1.blot: BLOT_TYPE_ERROR: 1 is not text.` — while parse errors on the same path
-print `file:line:col:`. `describe` collapses every range to the word "an
-integer", so `sig n = Nat; let n = -1;` reports ``-1 is outside an integer``.
-`sig f = Text -> Int;` is `BLOT_SIG_NOT_A_TYPE` because the printer prints
-`Text` and the type is spelled `Str`. There is no `blot fmt` (``unknown command
-`fmt` ``). 26 `unsupported()` sites, no user-readable list.
+**Diagnostics.** A type error now prints `file:line:col:` like a parse error on
+the same path does. The checker always had the span; what was missing was the
+file that span indexes into, which the diagnostic now carries — so an error
+inside an imported module names *that* module, not the entry file. `describe`
+renders a range through the printer, so `sig n = Nat; let n = -1;` names the
+bound the value fell outside of (`0..`) rather than the word "an integer", which
+was true of every range at once. The printer spells the unbounded text range
+`Str`, the name a `sig` accepts; it used to print `Text`, which is the prelude's
+*namespace record*, so copying the compiler's own output into a `sig` failed
+with `BLOT_SIG_NOT_A_TYPE`. Still open: one error per run, the file-wide span
+fallback, no `blot fmt` (``unknown command `fmt` ``), and 26 `unsupported()`
+sites with no user-readable list.
 
 **The standard library ends early.** The complete text surface is
 `@text.concat`, `@text.len`, `@text.cmp`, `@text.contains`, `@text.of_int` —

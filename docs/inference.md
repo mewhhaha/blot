@@ -56,7 +56,7 @@ already knows how to compute, because a row is a lattice element like any other.
 const Console = @effect { .write = Str -> Unit; };
 const Clock = @effect { .now = Unit -> Int; };
 
-let greet = name => Console.write name;   // Text -> () ~ { Console }
+let greet = name => Console.write name;   // Str -> () ~ { Console }
 let quiet = n => @int.add n 1;            // Int -> Int
 ```
 

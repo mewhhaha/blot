@@ -15,8 +15,22 @@ export interface Diagnostic {
   readonly span: Span;
 }
 
+/** The file a diagnostic's span indexes into. */
+export interface Origin {
+  readonly path: string;
+  readonly source: string;
+}
+
 export class BlotError extends Error {
-  constructor(readonly diagnostic: Diagnostic) {
+  constructor(
+    readonly diagnostic: Diagnostic,
+    /**
+     * A span is an offset into one file, and nothing below the module boundary
+     * knows which file. `null` means no pass has claimed the error yet; the
+     * module being checked attaches itself as the error propagates out.
+     */
+    readonly origin: Origin | null = null,
+  ) {
     super(`${diagnostic.code}: ${diagnostic.message}`);
     this.name = "BlotError";
   }

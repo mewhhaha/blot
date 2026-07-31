@@ -358,13 +358,19 @@ function isTuple(fields: ReadonlyMap<string, SimpleType>): boolean {
   return true;
 }
 
-function showRange(domain: "int" | "text", low: Bound, high: Bound): string {
+export function showRange(
+  domain: "int" | "text",
+  low: Bound,
+  high: Bound,
+): string {
   if (low !== null && low === high) {
     return domain === "text" ? JSON.stringify(low) : String(low);
   }
-  if (low === null && high === null) return domain === "int" ? "Int" : "Text";
+  // `Str`, not `Text`: `Text` is the prelude's namespace record, so the name
+  // this printer gives a type has to be the name a `sig` accepts.
+  if (low === null && high === null) return domain === "int" ? "Int" : "Str";
   // `""` is the bottom of the lexicographic order, so `""..` is every text.
-  if (domain === "text" && low === "" && high === null) return "Text";
+  if (domain === "text" && low === "" && high === null) return "Str";
   const left = low === null
     ? ""
     : domain === "text"

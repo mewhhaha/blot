@@ -23,6 +23,7 @@ import {
   type Typing,
   type Variable,
 } from "./type.ts";
+import { showRange } from "./print.ts";
 
 export class TypeError_ extends Error {
   constructor(readonly detail: string) {
@@ -45,12 +46,10 @@ function describe(type: SimpleType): string {
     case "forall":
       return "a polymorphic type";
     case "range":
-      if (type.low !== null && type.low === type.high) {
-        return type.domain === "text"
-          ? JSON.stringify(type.low)
-          : String(type.low);
-      }
-      return type.domain === "int" ? "an integer" : "text";
+      // A range is ground, so naming it needs nothing from a finished
+      // inference — and naming it is the point: `0..` says which bound `-1`
+      // fell outside of, where "an integer" does not.
+      return `\`${showRange(type.domain, type.low, type.high)}\``;
     case "unit":
       return "()";
     case "fun":

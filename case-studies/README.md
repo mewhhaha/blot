@@ -30,8 +30,8 @@ did.
 is the `Terminal` effect:
 
 ```text
-read_line : () -> Text
-write     : Text -> ()
+read_line : () -> Str
+write     : Str -> ()
 ```
 
 An empty line is treated as an anonymous answer. A richer terminal program

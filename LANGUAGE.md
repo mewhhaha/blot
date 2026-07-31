@@ -707,18 +707,19 @@ inference lattice only when it denotes a type.
 
 Compiler output uses notation that is not additional source syntax:
 
-| display                   | meaning                     |
-| ------------------------- | --------------------------- |
-| `Int`, `Str`, `1`, `"x"`  | ranges and singleton ranges |
-| `{ .x = Int; }`           | structural record           |
-| `[Int]`                   | homogeneous array           |
-| `#None \| #Some Int`      | constructor variant         |
-| `#Some Int \| ..`         | variant with an open set    |
-| `A -> B`                  | pure function               |
-| `A -> B ~ { Console, e }` | function with an effect row |
-| `'a`, `'b`                | inferred type variables     |
-| `forall 'q0. ...`         | explicit quantified type    |
-| `⊤`, `⊥`                  | top and bottom              |
+| display                   | meaning                         |
+| ------------------------- | ------------------------------- |
+| `Int`, `Str`, `1`, `"x"`  | ranges and singleton ranges     |
+| `0..9`, `0..`             | bounded and half-bounded ranges |
+| `{ .x = Int; }`           | structural record               |
+| `[Int]`                   | homogeneous array               |
+| `#None \| #Some Int`      | constructor variant             |
+| `#Some Int \| ..`         | variant with an open set        |
+| `A -> B`                  | pure function                   |
+| `A -> B ~ { Console, e }` | function with an effect row     |
+| `'a`, `'b`                | inferred type variables         |
+| `forall 'q0. ...`         | explicit quantified type        |
+| `⊤`, `⊥`                  | top and bottom                  |
 
 Effect-row notation is printed by the checker and is not written in a `sig`.
 Effectful function type values are produced from effect declarations and

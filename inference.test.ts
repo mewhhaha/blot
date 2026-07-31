@@ -7,7 +7,7 @@
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { checkFile } from "./src/check/mod.ts";
-import { BlotError } from "./src/diagnostic.ts";
+import { BlotError, render } from "./src/diagnostic.ts";
 
 const scratch = await Deno.makeTempDir();
 
@@ -211,7 +211,7 @@ check(
 rejects(
   "a guard rejects a payload used at the wrong type",
   'let f = m => do\n  if let #Some inner = m else do\n    return "none";\n  end;\n  in Text.append inner "!"\nend;\nreturn f (#Some 3);',
-  "3 is not text",
+  "`3` is not `Str`",
 );
 
 rejects(
@@ -223,7 +223,7 @@ rejects(
 rejects(
   "a declared literal union rejects a value outside it",
   "sig level = 1 | 2 | 3;\nlet level = 7;\nreturn level;",
-  "7 is not one of 1 | 2 | 3",
+  "`7` is not one of `1` | `2` | `3`",
 );
 
 // --- effects are a lattice element, not a separate pass ---------------------
@@ -239,7 +239,7 @@ check(
   `const Console = @effect { .write = Str -> Unit; };
 let greet = name => Console.write name;
 return { .greet = greet; };`,
-  "{ .greet = Text -> () ~ { Console }; }",
+  "{ .greet = Str -> () ~ { Console }; }",
 );
 
 check(
@@ -252,7 +252,7 @@ let stamped = name => do
   in t
 end;
 return { .stamped = stamped; };`,
-  "{ .stamped = Text -> Int ~ { Clock, Console }; }",
+  "{ .stamped = Str -> Int ~ { Clock, Console }; }",
 );
 
 // A wrapper adds its own effect to whatever its callback performs, and the row
@@ -291,7 +291,7 @@ check(
 rejects(
   "a signature that disagrees with the body is rejected",
   'sig double = Int -> Int;\nlet double = v => @text.concat v "!";\nreturn double;',
-  "an integer is not text",
+  "`Int` is not `Str`",
 );
 
 // --- types are values -------------------------------------------------------
@@ -313,6 +313,39 @@ rejects(
   "sig small = range (0, 9);\nlet small = 42;\nreturn small;",
   "is outside",
 );
+
+// A range names itself. "outside an integer" was true of every range at once,
+// which is the one thing the reader already knew.
+rejects(
+  "a range names the bound the value fell outside of",
+  "sig n = Nat;\nlet n = -1;\nreturn n;",
+  "`-1` is outside `0..`",
+);
+
+// A span reaches the reader. The checker has always had one; until the
+// diagnostic carried the file it indexes into, nothing could render it.
+Deno.test("a type error renders with a file, line, and column", async () => {
+  const path = `${scratch}/located_${crypto.randomUUID()}.blot`;
+  await Deno.writeTextFile(
+    path,
+    PRELUDE +
+      "sig greet = Str -> Str;\nlet greet = name => name;\nreturn greet 1;\n",
+  );
+  try {
+    await checkFile(path);
+  } catch (error) {
+    if (!(error instanceof BlotError)) throw error;
+    if (error.origin === null) {
+      throw new Error("the diagnostic named no file to render against");
+    }
+    assertEquals(
+      render(error.origin.path, error.origin.source, error.diagnostic),
+      `${path}:4:8: BLOT_TYPE_ERROR: \`1\` is not \`Str\`.`,
+    );
+    return;
+  }
+  throw new Error("expected this program to be rejected");
+});
 
 // --- staging is a guarantee, not an optimization ---------------------------
 
@@ -355,7 +388,7 @@ let text = {
   .return = value => @text.concat value ".";
 };
 return @handle (Ask, work, text);`,
-  "Text",
+  "Str",
 );
 
 rejects(
@@ -367,7 +400,7 @@ let wrong = {
   .return = value => value;
 };
 return @handle (Ask, work, wrong);`,
-  "an integer is not text",
+  "`Int` is not `Str`",
 );
 
 // --- explicit predicative Rank-N -------------------------------------------
@@ -389,7 +422,7 @@ let use = identity => {
 };
 let identity = value => value;
 return use identity;`,
-  "{ .number = Int; .text = Text; }",
+  "{ .number = Int; .text = Str; }",
 );
 
 rejects(

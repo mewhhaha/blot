@@ -197,7 +197,30 @@ export function show(value: Value): string {
   if (value.tag === "operation") return `<operation ${value.name}>`;
   if (value.tag === "extended") return show(value.inner);
   if (value.tag === "sealed") return `${value.name} ${show(value.inner)}`;
-  if (value.tag === "range") return `${show(value.low)}..${show(value.high)}`;
+  if (value.tag === "range") {
+    // The same names the checker's printer uses. A range unbounded at both
+    // ends is `Int` or `Str`; anything else shows its bounds. Rendering `Int`
+    // as `@type.unbounded..@type.unbounded` was true and unreadable, and it
+    // reached the user through every printed type value and every diagnostic
+    // that quoted one.
+    const open = value.low.tag === "unbounded";
+    const shut = value.high.tag === "unbounded";
+    const domain = value.domain !== undefined
+      ? value.domain
+      : value.low.tag === "text" || value.high.tag === "text"
+      ? "text"
+      : "int";
+    if (open && shut) {
+      if (domain === "text") return "Str";
+      return "Int";
+    }
+    if (domain === "text" && value.low.tag === "text" && value.low.value === "" && shut) {
+      return "Str";
+    }
+    const left = open ? "" : show(value.low);
+    const right = shut ? "" : show(value.high);
+    return `${left}..${right}`;
+  }
   if (value.tag === "arrow") {
     return `${show(value.domain)} -> ${show(value.codomain)}`;
   }

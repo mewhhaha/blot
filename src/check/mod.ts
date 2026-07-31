@@ -208,6 +208,9 @@ function checkLoaded(
     cache.set(loaded.path, complete);
     return complete;
   } catch (error) {
+    // The innermost module still being checked is the one its spans index into,
+    // so an importer must not relabel a dependency's diagnostic as its own.
+    const origin = { path: loaded.path, source: loaded.source };
     if (error instanceof TypeError_) {
       throw new BlotError(
         {
@@ -215,7 +218,11 @@ function checkLoaded(
           message: `${error.detail}.`,
           span: loaded.module.span,
         } satisfies Diagnostic,
+        origin,
       );
+    }
+    if (error instanceof BlotError && error.origin === null) {
+      throw new BlotError(error.diagnostic, origin);
     }
     throw error;
   }
