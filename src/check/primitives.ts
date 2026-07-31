@@ -127,7 +127,7 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ["@float.div", mono(curried([FLOAT, FLOAT], FLOAT))],
   ["@float.rem", mono(curried([FLOAT, FLOAT], FLOAT))],
   ["@float.neg", mono(curried([FLOAT], FLOAT))],
-  ["@float.eq", mono(curried([FLOAT, FLOAT], BOOL))],
+  ["@float.is_nan", mono(curried([FLOAT], BOOL))],
   ["@float.cmp", mono(curried([FLOAT, FLOAT], ORDERING))],
   ["@float.of_int", mono(curried([INT], FLOAT))],
   ["@int.of_float", mono(curried([FLOAT], INT))],

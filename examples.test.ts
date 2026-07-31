@@ -98,6 +98,7 @@ const REJECTIONS: Record<
   "spread_of_a_parameter": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "shadowed_accumulator": { code: "BLOT_SHADOWED_ACCUMULATOR", stage: "check" },
   "float_export": { code: "BLOT_FLOAT_AT_BOUNDARY", stage: "build" },
+  "float_unordered": { code: "BLOT_UNORDERED", stage: "run" },
   "unbounded_case": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
   "guard_may_continue": {
     code: "BLOT_GUARD_MAY_CONTINUE",

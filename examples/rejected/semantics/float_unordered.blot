@@ -1,0 +1,18 @@
+// Comparing against NaN.
+//
+// No ordering accepts NaN, and `@float.cmp` has three answers, none of which
+// is true of it. Reporting one would be claiming a relation the format denies,
+// so it refuses — here while compiling, and as a trap in a program where the
+// value only shows up at run time. `@int.div` by zero takes the same two
+// shapes.
+//
+// `Float.is_nan` is the question that does have an answer, and asking it first
+// is what `examples/floats.blot` does. It is a primitive for exactly this
+// reason: comparing is what refuses, so nothing written over `Float.cmp` could
+// have reported it.
+
+open {} = (@import "blot:prelude") ();
+
+let nothing = Float.div 0.0 0.0;
+
+return is_less (Float.cmp nothing 1.0);

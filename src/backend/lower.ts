@@ -2857,17 +2857,30 @@ function lowerApply(
         ),
       );
     }
-    if (spine.callee.name === "@float.eq" && spine.args.length === 2) {
-      return at.binary(
-        BinaryOperator.EqualFloat64,
+    // A value is NaN exactly when it is unequal to itself, which is the one
+    // thing `@float.cmp` cannot report — it refuses NaN rather than ordering
+    // it. The binding is so the argument is evaluated once.
+    if (spine.callee.name === "@float.is_nan" && spine.args.length === 1) {
+      const value = lowering.fresh("value");
+      return surface.let(
+        value,
         lower(spine.args[0], scope, lowering),
-        lower(spine.args[1], scope, lowering),
+        at.binary(
+          BinaryOperator.NotEqualFloat64,
+          at.name(value),
+          at.name(value),
+        ),
       );
     }
-    // The same shape as `@int.cmp`, over the float comparisons. NaN reaches
-    // `#Greater` here, where the comptime evaluator refuses instead — so a
-    // program that compares one disagrees with itself, and `Float.cmp` in the
-    // prelude tests for NaN before it gets here.
+    // The same shape as `@int.cmp`, plus a fourth case the integers do not
+    // have. Testing `greater` explicitly rather than falling through to it is
+    // what makes the remaining branch mean *unordered*, and NaN is the only
+    // way to reach it. Without that test NaN answered `#Greater` in both
+    // directions at once — not an order at all, and a disagreement with the
+    // comptime evaluator, which refuses.
+    //
+    // The cost is one comparison, and only on the path that is not already
+    // `Less` or `Equal`.
     if (spine.callee.name === "@float.cmp" && spine.args.length === 2) {
       const sum = lowering.sum([
         { name: "Less", payload: false },
@@ -2894,7 +2907,15 @@ function lowerApply(
                 at.name(right),
               ),
               tag("Equal"),
-              tag("Greater"),
+              at.if(
+                at.binary(
+                  BinaryOperator.GreaterFloat64,
+                  at.name(left),
+                  at.name(right),
+                ),
+                tag("Greater"),
+                at.runtimeFault("float comparison against NaN"),
+              ),
             ),
           ),
         ),

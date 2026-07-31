@@ -68,6 +68,13 @@ check(
 );
 
 check(
+  "a float has no equality, only an ordering that refuses NaN",
+  'open {} = (@import "blot:prelude") ();\n' +
+    "return { .same = is_equal (Float.cmp 0.5 0.5); .nan = Float.is_nan 1.0; };",
+  "{ .same = (#True | #False); .nan = #True | #False; }",
+);
+
+check(
   "crossing between the numeric types is explicit and exact",
   'open {} = (@import "blot:prelude") ();\n' +
     "return { .up = Float.of_int 7; .down = Float.truncate 3.75; };",

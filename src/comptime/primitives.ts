@@ -829,14 +829,15 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
   }],
   // NaN is unordered against everything including itself, and there is no
   // fourth answer to give. Refusing is the only option that does not claim a
-  // relation the format denies.
-  // Equality is total where ordering is not: NaN is unequal to everything
-  // including itself, which is a fact rather than a refusal. This is the one
-  // float comparison a program can always ask.
-  ["@float.eq", {
-    arity: 2,
-    run: ([l, r], s) =>
-      bool(floatOf(l, s, "@float.eq") === floatOf(r, s, "@float.eq")),
+  // relation the format denies — and it is what the emitted code does too,
+  // where the unordered case traps. `@int.div` by zero takes the same two
+  // shapes: a diagnostic while compiling, a trap while running.
+  // The one float question that always has an answer. Ordering refuses NaN, so
+  // `@float.cmp x x` cannot be asked to report it, and nothing else in the
+  // language can: this is what a primitive is for.
+  ["@float.is_nan", {
+    arity: 1,
+    run: ([value], s) => bool(Number.isNaN(floatOf(value, s, "@float.is_nan"))),
   }],
   ["@float.cmp", {
     arity: 2,

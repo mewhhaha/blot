@@ -45,19 +45,25 @@ let negative = Float.truncate (Float.negate 3.75);
 
 // --- comparison, and the value no ordering accepts --------------------------
 //
-// `@float.cmp` refuses NaN rather than inventing a fourth answer, so a program
-// that might hold one asks `Float.is_nan` first. Equality is a separate
-// primitive precisely because it *can* answer: NaN is unequal to everything,
-// including itself, and that is a fact rather than a refusal.
+// There is no `Float.eq`. Exact comparison is `is_equal (Float.cmp a b)`, and
+// that is not a shorthand missing — it is the same test with the NaN case left
+// in. An equality that answered `#False` for NaN would be answering a question
+// the format says has no answer, and it would look exactly like the integer
+// `==` that `0.1 + 0.2 == 0.3` is famous for failing.
+//
+// So `Float.cmp` refuses a NaN, in both executions: a diagnostic while
+// compiling and a trap while running, the way `@int.div` by zero already does.
+// A program that might hold one asks `Float.is_nan` first, and that question
+// needs a primitive precisely because comparing is what refuses.
 
 sig ordered = Bool;
 let ordered = is_less (Float.cmp 1.5 2.5);
 
 sig same = Bool;
-let same = Float.eq 0.5 (Float.div 1.0 2.0);
+let same = is_equal (Float.cmp 0.5 (Float.div 1.0 2.0));
 
 sig tenth_is_exact = Bool;
-let tenth_is_exact = Float.eq (Float.add 0.1 0.2) 0.3;
+let tenth_is_exact = is_equal (Float.cmp (Float.add 0.1 0.2) 0.3);
 
 sig nan_is_nan = Bool;
 let nan_is_nan = Float.is_nan (Float.div 0.0 0.0);

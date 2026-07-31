@@ -83,9 +83,13 @@ produces an infinity and one with no defined answer produces a NaN, both of
 which are values a program may go on to use. This is the difference from
 integer arithmetic, where the result would be a number the machine cannot hold.
 
-`Float.cmp` refuses NaN rather than answering, because no ordering accepts it.
-`Float.eq` answers, because equality can: NaN is unequal to everything
-including itself, which is how `Float.is_nan` is written.
+`Float.cmp` refuses NaN rather than answering, because no ordering accepts it:
+a diagnostic while compiling and a trap while running, the two shapes
+`@int.div` by zero already takes. There is no float equality. Exact comparison
+is `is_equal (Float.cmp a b)` — the same test with the NaN case left in, rather
+than an equality that answers `#False` to a question the format says has no
+answer. `Float.is_nan` is how a program asks first, and it is a primitive
+because comparing is precisely what refuses.
 
 There is no implicit conversion between the two numeric types, and no operator
 serves both. An operator resolves to one binding by name (§4.6), so a `+` over
@@ -1180,8 +1184,8 @@ Everything not listed here belongs in source, normally the prelude.
 | `@float.div`     | division                                             |
 | `@float.rem`     | remainder                                            |
 | `@float.neg`     | negation                                             |
-| `@float.eq`      | equality, which NaN answers and ordering cannot      |
 | `@float.cmp`     | order two floats, refusing NaN                       |
+| `@float.is_nan`  | test for the value no ordering accepts               |
 | `@float.of_int`  | widen an integer to a float                          |
 | `@int.of_float`  | truncate a float toward zero                         |
 | `@text.concat`   | concatenate text                                     |

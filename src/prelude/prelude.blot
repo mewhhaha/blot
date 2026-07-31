@@ -216,8 +216,6 @@ end;
 // not have. `Float.add` is the addition, and a module that wants `+.` or `+`
 // to mean it says so in its own `operators` header.
 
-const float_eq = (left, right) => @float.eq left right;
-
 const Float = {
   .add = left => (right => @float.add left right);
   .sub = left => (right => @float.sub left right);
@@ -225,23 +223,26 @@ const Float = {
   .div = left => (right => @float.div left right);
   .rem = left => (right => @float.rem left right);
   .negate = value => @float.neg value;
-  .eq = left => (right => @float.eq left right);
+  // No `.eq`. Exact comparison is `is_equal (Float.cmp a b)`, which is the
+  // same test and refuses NaN instead of quietly answering `#False` for it —
+  // and a float equality that looks like the integer one invites the
+  // comparison that `0.1 + 0.2` is famous for failing.
   .cmp = left => (right => @float.cmp left right);
   .of_int = value => @float.of_int value;
   .truncate = value => @int.of_float value;
   .abs = value =>
     if is_less (@float.cmp value 0.0) then @float.neg value else value end;
 
-  // `@float.cmp` refuses NaN rather than inventing a fourth ordering, so this
-  // is how a program asks before comparing. Only NaN is unequal to itself,
-  // which is why equality is a primitive and this is not.
-  .is_nan = value => not (@float.eq value value);
+  // How a program asks before comparing. It cannot be written over `Float.cmp`,
+  // because comparing a NaN is the thing that refuses — which is exactly why
+  // this one is a primitive and float equality is not.
+  .is_nan = value => @float.is_nan value;
 
   // Newton's method, seeded at the value. Core has no f64 square root, so a
   // `@float.sqrt` primitive would have been open-coded at lowering anyway —
   // and a primitive is for what blot cannot write, which this is not.
   .sqrt = value =>
-    if @float.eq value 0.0 then 0.0
+    if is_equal (@float.cmp value 0.0) then 0.0
     else if is_less (@float.cmp value 0.0) then @float.div 0.0 0.0
     else fold (
       upto (0, 24),
@@ -741,7 +742,6 @@ return {
   .Eq = Eq;
   .Num = Num;
   .Float = Float;
-  .float_eq = float_eq;
   .Text = Text;
   .Semigroup = Semigroup;
 
