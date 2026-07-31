@@ -33,14 +33,14 @@ including what it does _not_ yet prove.
 A branch proves what its condition computes, and the proof is set algebra on
 types. `if n == 1` narrows `n` to `1` in the taken branch and to `T \\ 1` in the
 untaken one; comparisons compose, and `&&` proves what both halves prove. A
-`case` over what a branch proved can then be complete, and one over an
-unbounded domain is refused rather than left to trap — `@panic` is how an arm
-says why reaching it is impossible. An array's length is a bound an index can
-be compared against, so a checked read is accepted and a constant past the end
-is a compile error.
+`case` over what a branch proved can then be complete, and one over an unbounded
+domain is refused rather than left to trap — `@panic` is how an arm says why
+reaching it is impossible. An array's length is a bound an index can be compared
+against, so a checked read is accepted and a constant past the end is a compile
+error.
 
 Nothing is recognised by name: a comparison and a junction are both identified
-by *tabulating* them, so a module that shadows `Eq` or `Logic.and` with
+by _tabulating_ them, so a module that shadows `Eq` or `Logic.and` with
 something that is not equality or conjunction proves nothing rather than
 something false.
 
@@ -67,6 +67,8 @@ just run examples/tour.blot   # evaluate a program
 just check-file examples/tour.blot  # infer its type and check ownership
 just ownership examples/tour.blot   # last-use and linearity facts
 just build examples/compiled.blot   # compile to WebAssembly
+just serve                          # keep the GPU compiler resident
+just build-service examples/compiled.blot
 just wasm                           # interpreter vs GPU evaluator vs Wasm
 just test                     # corpus goldens, rejections, profile gate
 just parity                   # CPU oracle vs WebGPU frontend, needs an adapter
@@ -74,6 +76,15 @@ just generate                 # regenerate the parser; fails if the profile regr
 just inspect                  # the counters recorded in docs/gpu-profile.md
 just install                  # Helix: grammar, queries, `.blot` association
 ```
+
+`just build` is an isolated direct build and releases its GPU device on exit.
+For repeated local builds, run `just serve` in one terminal and use
+`just build-service file.blot` from another. The service binds loopback only,
+retains the parser, checked module graph, lowered Surface, GPU device, compiler
+pipelines, and Wasm caches, and invalidates an edited module together with its
+importers. `build-service` is a small `curl` client: it does not start Deno or
+load either compiler. Both modes call the same compiler session and emit
+identical Wasm and manifest bytes.
 
 `just install` builds the Tree-sitter grammar from the same `grammar.baba` as
 the GPU parser, installs highlight, indent, textobject, tag, and rainbow

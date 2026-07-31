@@ -1,6 +1,7 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { checkFile } from "./src/check/mod.ts";
 import { BlotError } from "./src/diagnostic.ts";
+import { refreshLoadedModules } from "./src/load.ts";
 
 async function writeModule(
   directory: string,
@@ -57,6 +58,22 @@ Deno.test("transitive module result types reach the importer", async () => {
 
   const checked = await checkFile(root);
   assertEquals(checked.type, "42");
+});
+
+Deno.test("checking observes an edited dependency after a cached build", async () => {
+  const directory = await Deno.makeTempDir();
+  const dependency = await writeModule(directory, "dependency", "return 1;");
+  const root = await writeModule(
+    directory,
+    "root",
+    'return (@import "./dependency.blot") ();',
+  );
+  assertEquals((await checkFile(root)).type, "1");
+
+  await Deno.writeTextFile(dependency, "return 2;");
+  await refreshLoadedModules();
+
+  assertEquals((await checkFile(root)).type, "2");
 });
 
 Deno.test("an import cycle reports the complete cycle", async () => {

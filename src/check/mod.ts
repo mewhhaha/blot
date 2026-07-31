@@ -65,7 +65,7 @@ function imports(loaded: Loaded) {
 
 export async function checkFile(path: string): Promise<CheckResult> {
   const loaded = await load(path);
-  return checkLoaded(loaded, new Map()).result;
+  return checkLoaded(loaded, checkedFiles).result;
 }
 
 interface CheckedFile {
@@ -73,11 +73,14 @@ interface CheckedFile {
   readonly result: CheckResult;
 }
 
+/** Loader identity is the invalidation token for every AST-keyed inference fact. */
+const checkedFiles = new WeakMap<Loaded, CheckedFile>();
+
 function checkLoaded(
   loaded: Loaded,
-  cache: Map<string, CheckedFile>,
+  cache: WeakMap<Loaded, CheckedFile>,
 ): CheckedFile {
-  const cached = cache.get(loaded.path);
+  const cached = cache.get(loaded);
   if (cached !== undefined) return cached;
 
   if (loaded.closure.tag !== "closure") {
@@ -206,7 +209,7 @@ function checkLoaded(
       values,
     };
     const complete = { checked, result };
-    cache.set(loaded.path, complete);
+    cache.set(loaded, complete);
     return complete;
   } catch (error) {
     // The innermost module still being checked is the one its spans index into,

@@ -58,6 +58,38 @@ for (const name of ["handler_aborts.blot", "handlers.blot"]) {
   });
 }
 
+Deno.test("return control lowers without synthetic variant declarations", async () => {
+  const path = join("examples", "returning.blot");
+  const loaded = await load(path);
+  const checked = await checkFile(path);
+  const lowered = lowerModule(loaded.module, checked, checked.values);
+
+  assertEquals(
+    lowered.types.some((type) =>
+      type.constructors.some((constructor) =>
+        /^(?:Function|Conditional)Return\$/.test(constructor.name)
+      )
+    ),
+    false,
+  );
+});
+
+Deno.test("loop control lowers without synthetic variant declarations", async () => {
+  const path = join("examples", "breaking.blot");
+  const loaded = await load(path);
+  const checked = await checkFile(path);
+  const lowered = lowerModule(loaded.module, checked, checked.values);
+
+  assertEquals(
+    lowered.types.some((type) =>
+      type.constructors.some((constructor) =>
+        /^Loop(?:Body)?(?:Return|Continue|Break)\$/.test(constructor.name)
+      )
+    ),
+    false,
+  );
+});
+
 // A `const` is compile time and a `let` is not, so a hoisted compile-time
 // closure has no frame to find a `let` in. The refusal has to say that: the
 // captured name is in scope at the source level, and reporting it as unbound
@@ -86,6 +118,22 @@ Deno.test("runtime integers cross WebAssembly as signed i64", async () => {
     kind: "signed-integer-64",
     value: 2147483648n,
   });
+});
+
+Deno.test("a dependency may have source spans beyond the end of its importer", async () => {
+  const directory = await Deno.makeTempDir();
+  const dependencyPath = join(directory, "dependency.blot");
+  const entryPath = join(directory, "entry.blot");
+  await Deno.writeTextFile(
+    dependencyPath,
+    `// ${"padding ".repeat(700)}\nreturn 42;`,
+  );
+  await Deno.writeTextFile(
+    entryPath,
+    'return (@import "./dependency.blot") ();',
+  );
+
+  await validateLowering(entryPath);
 });
 
 Deno.test("runtime integer overflow traps in emitted WebAssembly", async () => {

@@ -10,6 +10,7 @@ import {
   type CanonicalAbiImport,
   type CanonicalAbiInterface,
   type CanonicalAbiType,
+  type CompilationOptions,
   compileModuleToWasm,
   CpuCompiler,
   EvaluationProfile,
@@ -21,13 +22,15 @@ import {
   runWasmModule,
   STORE_TYPE_NAME,
   TEXT_TYPE_NAME,
+  tryRegisterLiteralModuleUpdate,
   type Type,
   type TypeSchema,
   type WasmInit,
   type WasmValue,
 } from "gpufuck";
+import { resolve } from "@std/path";
 import { BlotError } from "../diagnostic.ts";
-import { load } from "../load.ts";
+import { load, type Loaded, refreshLoadedModules } from "../load.ts";
 import { checkFile } from "../check/mod.ts";
 import type { Imports } from "../comptime/eval.ts";
 import { bridge } from "../check/bridge.ts";
@@ -132,8 +135,83 @@ export interface Built {
   readonly constructors: ReadonlyMap<string, RuntimeConstructor>;
 }
 
+export class BlotCompilerSession {
+  readonly #device: GPUDevice;
+  readonly #compiler: GpuCompiler;
+  #evaluator: Promise<GpuEvaluator> | undefined;
+  #destroyed = false;
+
+  private constructor(device: GPUDevice, compiler: GpuCompiler) {
+    this.#device = device;
+    this.#compiler = compiler;
+  }
+
+  static async create(): Promise<BlotCompilerSession> {
+    const device = await requestWebGpuDevice();
+    try {
+      return new BlotCompilerSession(device, await GpuCompiler.create(device));
+    } catch (error) {
+      device.destroy();
+      throw error;
+    }
+  }
+
+  async build(path: string): Promise<Built> {
+    this.#requireActive();
+    await refreshLoadedModules();
+    return await buildWithSession(this, resolve(path));
+  }
+
+  async verify(path: string, options: VerifyOptions = {}): Promise<Verified> {
+    this.#requireActive();
+    await refreshLoadedModules();
+    return await verifyWithSession(this, resolve(path), options);
+  }
+
+  async compileModule(
+    module: Parameters<GpuCompiler["compileModule"]>[0],
+    options: CompilationOptions = {},
+  ) {
+    this.#requireActive();
+    return await this.#compiler.compileModule(module, options);
+  }
+
+  async evaluate(
+    module: Parameters<GpuEvaluator["evaluate"]>[0],
+    options: Parameters<GpuEvaluator["evaluate"]>[1],
+  ) {
+    this.#requireActive();
+    this.#evaluator ??= GpuEvaluator.create(this.#device);
+    return await (await this.#evaluator).evaluate(module, options);
+  }
+
+  destroy(): void {
+    if (this.#destroyed) return;
+    this.#destroyed = true;
+    this.#device.destroy();
+  }
+
+  #requireActive(): void {
+    if (this.#destroyed) {
+      throw new Error("Blot compiler session was destroyed.");
+    }
+  }
+}
+
 export async function build(path: string): Promise<Built> {
-  const compiled = await compile(path);
+  const session = await BlotCompilerSession.create();
+  try {
+    return await session.build(path);
+  } finally {
+    session.destroy();
+  }
+}
+
+async function buildWithSession(
+  session: BlotCompilerSession,
+  path: string,
+): Promise<Built> {
+  const compiled = await compile(path, session);
   try {
     const internalManifest = manifest(
       path,
@@ -166,7 +244,6 @@ export async function build(path: string): Promise<Built> {
     };
   } finally {
     compiled.module.destroy();
-    compiled.device.destroy();
   }
 }
 
@@ -265,18 +342,30 @@ export async function verify(
   path: string,
   options: VerifyOptions = {},
 ): Promise<Verified> {
+  const session = await BlotCompilerSession.create();
+  try {
+    return await session.verify(path, options);
+  } finally {
+    session.destroy();
+  }
+}
+
+async function verifyWithSession(
+  session: BlotCompilerSession,
+  path: string,
+  options: VerifyOptions,
+): Promise<Verified> {
   let evaluatorInit: WasmInit = {};
   if (options.evaluatorInit !== undefined) {
     evaluatorInit = options.evaluatorInit;
   }
   let wasmInit: WasmInit = {};
   if (options.wasmInit !== undefined) wasmInit = options.wasmInit;
-  const compiled = await compile(path);
+  const compiled = await compile(path, session);
   try {
     let value: unknown = null;
     try {
-      const evaluator = await GpuEvaluator.create(compiled.device);
-      const execution = await evaluator.evaluate(compiled.module, {
+      const execution = await session.evaluate(compiled.module, {
         resultForm: "deep",
         wasmInit: evaluatorInit,
       });
@@ -338,38 +427,46 @@ export async function verify(
     };
   } finally {
     compiled.module.destroy();
-    compiled.device.destroy();
   }
 }
 
-async function compile(path: string) {
+async function compile(path: string, session: BlotCompilerSession) {
   const prepared = await prepare(path);
-  const device = await requestWebGpuDevice();
-  const compiler = await GpuCompiler.create(device);
-  const compilation = await compiler.compileModule(prepared.module);
+  const compilation = await session.compileModule(prepared.module);
   if (!compilation.ok) {
-    device.destroy();
     throw loweringBug(compilation.diagnostics, prepared.loaded.module.span);
   }
   return {
-    device,
     module: compilation.module,
     lowered: prepared.lowered,
     exports: prepared.exports,
   };
 }
 
+interface PreparedModule {
+  readonly loaded: Loaded;
+  readonly module: ReturnType<typeof buildSurfaceModule>;
+  readonly lowered: ReturnType<typeof lowerModule>;
+  readonly exports: readonly StagedExport[];
+}
+
+const preparedModules = new WeakMap<Loaded, PreparedModule>();
+const latestPreparedModuleByPath = new Map<string, PreparedModule>();
+const MAXIMUM_INCREMENTAL_MODULES = 64;
+
 async function prepare(path: string) {
   const loaded = await load(path);
+  const cached = preparedModules.get(loaded);
+  if (cached !== undefined) return cached;
   // Checking first is not politeness: lowering consumes the field and
   // constructor sets inference recorded, and cannot proceed without them.
   const checked = await checkFile(path);
   if (loaded.closure.tag !== "closure") {
     throw new Error("a module must load as a closure");
   }
-  const moduleImports = loaded.closure.imports;
+  const resolvedImports = loaded.closure.imports;
   let imports: Imports = new Map();
-  if (moduleImports !== undefined) imports = moduleImports;
+  if (resolvedImports !== undefined) imports = resolvedImports;
   const staged = stageModule(
     loaded.module,
     checked.values,
@@ -403,12 +500,28 @@ async function prepare(path: string) {
     checked.values,
     runtimeExports,
   );
+  const sourceEncoder = new TextEncoder();
+  let sourceByteLength = sourceEncoder.encode(loaded.source).byteLength;
+  const remainingDependencies = [...loaded.dependencies.values()];
+  const measuredDependencies = new Set<Loaded>();
+  for (let index = 0; index < remainingDependencies.length; index += 1) {
+    const dependency = remainingDependencies[index];
+    if (dependency === undefined || measuredDependencies.has(dependency)) {
+      continue;
+    }
+    measuredDependencies.add(dependency);
+    sourceByteLength = Math.max(
+      sourceByteLength,
+      sourceEncoder.encode(dependency.source).byteLength,
+    );
+    remainingDependencies.push(...dependency.dependencies.values());
+  }
 
   const module = buildSurfaceModule(
     lowered.definitions,
     lowered.types,
     lowered.entry,
-    loaded.source.length,
+    sourceByteLength,
     {
       evaluationProfile: EvaluationProfile.StrictEager,
       hostCapabilities: lowered.capabilities,
@@ -419,12 +532,24 @@ async function prepare(path: string) {
       })),
     },
   );
-  return {
+  const prepared: PreparedModule = {
     loaded,
     module,
     lowered,
     exports: staged.exports,
   };
+  const previous = latestPreparedModuleByPath.get(loaded.path);
+  if (previous !== undefined) {
+    tryRegisterLiteralModuleUpdate(previous.module, prepared.module);
+  }
+  preparedModules.set(loaded, prepared);
+  latestPreparedModuleByPath.set(loaded.path, prepared);
+  while (latestPreparedModuleByPath.size > MAXIMUM_INCREMENTAL_MODULES) {
+    const oldestPath = latestPreparedModuleByPath.keys().next().value;
+    if (oldestPath === undefined) break;
+    latestPreparedModuleByPath.delete(oldestPath);
+  }
+  return prepared;
 }
 
 function exportType(type: SimpleType, sourceName: string): SimpleType {

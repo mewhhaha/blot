@@ -124,6 +124,51 @@ export function importExpressions(module: Module): ReadonlyMap<Expr, string> {
  */
 const modules = new Map<string, Loaded>();
 
+/**
+ * Drop cached modules whose files changed, together with every importer that captured them.
+ *
+ * A resident compiler cannot trust paths alone: inference and comptime facts are keyed by the AST
+ * objects in this cache. Reading the known graph before each service build keeps those identities
+ * stable for unchanged files and replaces the complete dependent closure after an edit.
+ */
+export async function refreshLoadedModules(): Promise<void> {
+  const changed = new Set<string>();
+  await Promise.all([...modules].map(async ([path, loaded]) => {
+    try {
+      if (await Deno.readTextFile(path) !== loaded.source) changed.add(path);
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) {
+        changed.add(path);
+        return;
+      }
+      throw new Error(
+        `could not refresh cached Blot source ${JSON.stringify(path)}`,
+        {
+          cause: error,
+        },
+      );
+    }
+  }));
+  if (changed.size === 0) return;
+
+  let foundDependent = true;
+  while (foundDependent) {
+    foundDependent = false;
+    for (const [path, loaded] of modules) {
+      if (changed.has(path)) continue;
+      if (
+        [...loaded.dependencies.values()].some((dependency) =>
+          changed.has(dependency.path)
+        )
+      ) {
+        changed.add(path);
+        foundDependent = true;
+      }
+    }
+  }
+  for (const path of changed) modules.delete(path);
+}
+
 export async function load(
   path: string,
   cache: Map<string, Loaded> = modules,

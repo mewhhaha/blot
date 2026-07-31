@@ -383,6 +383,8 @@ class Lowering {
 
 interface Scope {
   readonly names: Map<string, string>;
+  /** Source-unspellable control constructors lowered as typed forward jumps. */
+  readonly exits: Map<string, string>;
   /**
    * Bindings whose value is a shape written right there.
    *
@@ -419,6 +421,7 @@ function childScope(parent: Scope | null, values?: ValueEnv): Scope {
     : childEnv(values);
   return {
     names: new Map(),
+    exits: new Map(),
     literals: new Map(),
     parent,
     values: visibleValues,
@@ -452,6 +455,16 @@ function resolve(scope: Scope, name: string): string | null {
   let current: Scope | null = scope;
   while (current !== null) {
     const found = current.names.get(name);
+    if (found !== undefined) return found;
+    current = current.parent;
+  }
+  return null;
+}
+
+function resolveExit(scope: Scope, constructor: string): string | null {
+  let current: Scope | null = scope;
+  while (current !== null) {
+    const found = current.exits.get(constructor);
     if (found !== undefined) return found;
     current = current.parent;
   }
@@ -2058,6 +2071,7 @@ function lowerCase(
   lowering: Lowering,
   at: typeof surface,
 ): SurfaceExpression {
+  if (controlCase(expr)) return lowerControlCase(expr, scope, lowering, at);
   // The constructor set inference pinned, or — when a wildcard arm left it
   // open — the union the named arms belong to. Recovering it from the arms is
   // what avoids monomorphizing: gpufuck keeps Core polymorphic on measured
@@ -2186,6 +2200,76 @@ function lowerCase(
 
   if (fallback === null) return at.case(target, arms);
   return at.case(target, arms, { body: fallback });
+}
+
+function controlCase(expr: Expr & { tag: "case" }): boolean {
+  return expr.arms.length > 0 &&
+    expr.arms.every((arm) =>
+      arm.pattern.tag === "constructor" &&
+      syntheticControlName(arm.pattern.name)
+    );
+}
+
+function syntheticControlName(name: string): boolean {
+  return /^(?:Function|Conditional|Loop(?:Body)?)(?:Return|Continue|Break)\$\d+\$\d+$/
+    .test(name);
+}
+
+function controlPayloadPattern(pattern: Pattern | null): Pattern | null {
+  if (pattern?.tag !== "shape" || pattern.fields.length !== 1) return pattern;
+  const field = pattern.fields[0];
+  return field?.name === "value" ? field.pattern : pattern;
+}
+
+function controlPayloadValue(value: Expr): Expr {
+  if (value.tag !== "shape" || value.members.length !== 1) return value;
+  const member = value.members[0];
+  return member?.tag === "field" && member.name === "value"
+    ? member.value
+    : value;
+}
+
+/** Lowers the parser's control outcomes to typed join points instead of nominal sums. */
+function lowerControlCase(
+  expr: Expr & { tag: "case" },
+  scope: Scope,
+  lowering: Lowering,
+  at: typeof surface,
+): SurfaceExpression {
+  const targetScope = childScope(scope);
+  const joins = expr.arms.map((arm) => {
+    if (arm.pattern.tag !== "constructor") {
+      throw new Error("control case contains a non-constructor arm");
+    }
+    const name = lowering.fresh("exit");
+    targetScope.exits.set(arm.pattern.name, name);
+    return { arm, name, parameter: lowering.fresh("exit-value") };
+  });
+
+  let body = lower(expr.target, targetScope, lowering);
+  for (let index = joins.length - 1; index >= 0; index -= 1) {
+    const join = joins[index];
+    if (join === undefined) {
+      throw new Error(`control case omitted join ${index}`);
+    }
+    if (join.arm.pattern.tag !== "constructor") {
+      throw new Error(`control case join ${index} has a non-constructor arm`);
+    }
+    const inner = childScope(scope);
+    const payload = controlPayloadPattern(join.arm.pattern.payload);
+    let wrap = (value: SurfaceExpression): SurfaceExpression => value;
+    if (payload !== null) {
+      wrap = bind(
+        payload,
+        at.name(join.parameter),
+        inner,
+        lowering,
+      );
+    }
+    const continuation = wrap(lower(join.arm.body, inner, lowering));
+    body = at.join(join.name, join.parameter, body, continuation);
+  }
+  return body;
 }
 
 /**
@@ -2668,6 +2752,13 @@ function lowerApply(
   if (spine.callee.tag === "tag" && spine.args.length === 1) {
     if (spine.callee.name === "True" || spine.callee.name === "False") {
       return unsupported("a boolean constructor with a payload", expr.span);
+    }
+    const exit = resolveExit(scope, spine.callee.name);
+    if (exit !== null) {
+      return at.jump(
+        exit,
+        lower(controlPayloadValue(spine.args[0]), scope, lowering),
+      );
     }
     const sum = lowering.sumFor(spine.callee.name, true, expr.span);
     return at.apply(
