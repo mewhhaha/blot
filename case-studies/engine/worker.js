@@ -9,21 +9,43 @@
 // That is the whole reconciliation. The program keeps its own frame loop and
 // the page keeps its refresh rate; neither has to know about the other.
 
-/** Shared with the page: [0] tick, [1] axis, [2] running. */
+/**
+ * Shared with the page, so the guest reads input without a round trip:
+ * [0] tick, [1] running, [2] yaw, [3] pitch, [4] distance, [5] lens,
+ * [6] asset generation.
+ */
+const TICK = 0;
+const RUNNING = 1;
+const YAW = 2;
+const PITCH = 3;
+const DISTANCE = 4;
+const LENS = 5;
+const GENERATION = 6;
+
 let shared = null;
 let lastTick = 0;
-let batch = [];
 
+/** The scene, sent by the page and replaced whenever it changes on disk. */
+let scene = [];
+let batch = [];
 let instance = null;
 
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
-function memory() {
-  return instance.exports.memory.buffer;
+function readText(pointer, length) {
+  return decoder.decode(
+    new Uint8Array(instance.exports.memory.buffer, pointer, length),
+  );
 }
 
-function readText(pointer, length) {
-  return decoder.decode(new Uint8Array(memory(), pointer, length));
+function writeText(resultPointer, value) {
+  const bytes = new TextEncoder().encode(value);
+  const pointer = Number(instance.exports.cabi_realloc(0, 0, 1, bytes.length));
+  new Uint8Array(instance.exports.memory.buffer, pointer, bytes.length)
+    .set(bytes);
+  const view = new DataView(instance.exports.memory.buffer);
+  view.setUint32(resultPointer, pointer, true);
+  view.setUint32(resultPointer + 4, bytes.length, true);
 }
 
 const imports = {
@@ -31,51 +53,97 @@ const imports = {
     clear() {
       batch = [];
     },
-    // Canonical field order is alphabetical, so a record parameter arrives
-    // flattened as colour, h, w, x, y. `docs/abi.md` is the authority on that
-    // order; it is not the order the program wrote them in.
-    fill(colourPointer, colourLength, h, w, x, y) {
+    // A record parameter arrives flattened in *canonical* field order, which is
+    // alphabetical and not the order the program wrote them. `docs/abi.md` is
+    // the authority; getting this wrong silently transposes the geometry.
+    tri(ax, ay, bx, by, colourPointer, colourLength, cx, cy, depth, shade) {
       batch.push({
+        kind: "tri",
+        ax: Number(ax),
+        ay: Number(ay),
+        bx: Number(bx),
+        by: Number(by),
+        cx: Number(cx),
+        cy: Number(cy),
+        depth: Number(depth),
+        shade: Number(shade),
         colour: readText(colourPointer, colourLength),
-        h: Number(h),
-        w: Number(w),
+      });
+    },
+    sprite(depth, size, texturePointer, textureLength, x, y) {
+      batch.push({
+        kind: "sprite",
+        depth: Number(depth),
+        size: Number(size),
+        texture: readText(texturePointer, textureLength),
         x: Number(x),
         y: Number(y),
       });
     },
     present() {
-      self.postMessage({ kind: "frame", rects: batch });
+      self.postMessage({ kind: "frame", draws: batch });
     },
   },
-  "blot:host/Host": {
-    axis() {
-      return BigInt(Atomics.load(shared, 1));
+
+  "blot:host/View": {
+    yaw: () => BigInt(Atomics.load(shared, YAW)),
+    pitch: () => BigInt(Atomics.load(shared, PITCH)),
+    distance: () => BigInt(Atomics.load(shared, DISTANCE)),
+    lens: () => BigInt(Atomics.load(shared, LENS)),
+  },
+
+  "blot:host/Assets": {
+    generation: () => BigInt(Atomics.load(shared, GENERATION)),
+    count: () => BigInt(scene.length),
+    entry(id, resultPointer) {
+      const entity = scene[Number(id)];
+      // Canonical order again: colour, kind, scale, spin, x, y, z. The text
+      // field is written through the result pointer, the numbers follow it.
+      const view = new DataView(instance.exports.memory.buffer);
+      writeText(resultPointer, entity.colour);
+      view.setBigInt64(resultPointer + 8, BigInt(entity.kind), true);
+      view.setBigInt64(resultPointer + 16, BigInt(entity.scale), true);
+      view.setBigInt64(resultPointer + 24, BigInt(entity.spin), true);
+      view.setBigInt64(resultPointer + 32, BigInt(entity.x), true);
+      view.setBigInt64(resultPointer + 40, BigInt(entity.y), true);
+      view.setBigInt64(resultPointer + 48, BigInt(entity.z), true);
     },
+  },
+
+  "blot:host/Host": {
     frame() {
       // Park until the page has drawn. `Atomics.wait` is why this runs in a
       // worker at all — on the main thread it would deadlock the page it is
       // waiting for.
-      while (Atomics.load(shared, 0) === lastTick) {
-        if (Atomics.load(shared, 2) === 0) return 0n;
-        Atomics.wait(shared, 0, lastTick, 100);
+      while (Atomics.load(shared, TICK) === lastTick) {
+        if (Atomics.load(shared, RUNNING) === 0) return 0n;
+        Atomics.wait(shared, TICK, lastTick, 100);
       }
-      lastTick = Atomics.load(shared, 0);
-      return BigInt(Atomics.load(shared, 2));
+      lastTick = Atomics.load(shared, TICK);
+      return BigInt(Atomics.load(shared, RUNNING));
     },
   },
 };
 
 self.onmessage = async (event) => {
   const message = event.data;
+
+  // A scene reload does not touch the module. The page bumps the generation in
+  // shared memory and the guest reloads on its own next frame.
+  if (message.kind === "scene") {
+    scene = message.scene;
+    return;
+  }
+
   if (message.kind !== "start") return;
 
   shared = new Int32Array(message.shared);
-  lastTick = Atomics.load(shared, 0);
+  lastTick = Atomics.load(shared, TICK);
+  scene = message.scene;
 
   const module = await WebAssembly.compile(message.wasm);
   instance = await WebAssembly.instantiate(module, imports);
 
-  const main = instance.exports[message.export];
-  const frames = main();
+  const frames = instance.exports[message.export]();
   self.postMessage({ kind: "done", frames: Number(frames) });
 };

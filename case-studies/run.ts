@@ -19,6 +19,7 @@ type Study =
     readonly kind: "engine";
     readonly source: "case-studies/engine/main.blot";
     readonly frames: number;
+    readonly lens: number;
   };
 
 class GuestMemory {
@@ -32,6 +33,11 @@ class GuestMemory {
     return new TextDecoder("utf-8", { fatal: true }).decode(
       new Uint8Array(this.memory().buffer, pointer, length),
     );
+  }
+
+  /** One canonical i64 field of a record the host is returning. */
+  writeInt64(offset: number, value: number): void {
+    new DataView(this.memory().buffer).setBigInt64(offset, BigInt(value), true);
   }
 
   writeText(resultPointer: number, value: string): void {
@@ -98,17 +104,18 @@ if (studyName === "grep") {
     kind: "agent",
     source: "case-studies/agent/main.blot",
   };
-} else if (studyName === "engine" && studyArguments.length <= 1) {
-  const [frames] = studyArguments;
+} else if (studyName === "engine" && studyArguments.length <= 2) {
+  const [frames, lens] = studyArguments;
   study = {
     kind: "engine",
     source: "case-studies/engine/main.blot",
     frames: frames === undefined ? 120 : Number(frames),
+    lens: lens === "ortho" ? 1 : 0,
   };
 } else {
   throw new Error(
     "usage: deno task case-study " +
-      "<grep <pattern> <path>|terminal|agent|engine [frames]>",
+      "<grep <pattern> <path>|terminal|agent|engine [frames] [ortho]>",
   );
 }
 
@@ -155,68 +162,202 @@ if (study.kind === "grep") {
 } else if (study.kind === "terminal") {
   imports = { "blot:host/Terminal": terminal };
 } else if (study.kind === "engine") {
-  // The headless canvas. It draws to a character grid instead of a page, so
-  // the study runs in CI and its output is a value a test can compare — the
-  // browser host in `index.html` grants the same four operations against a
-  // real `CanvasRenderingContext2D`.
-  const columns = 40;
-  const rows = 20;
-  const scaleX = 320 / columns;
-  const scaleY = 200 / rows;
-  let grid: string[][] = [];
-  let drawn = 0;
-  const palette = new Map([
-    ["#e6e6e6", "="],
-    ["#ff5f56", "r"],
-    ["#ffbd2e", "y"],
-    ["#27c93f", "g"],
-  ]);
+  // The headless canvas. It rasterizes to a character grid instead of a page,
+  // so the study runs in CI and its output is a value a test can compare. It
+  // grants exactly the capabilities the browser host does, against a scene
+  // read from the same file — which is what makes this a check of the engine
+  // rather than of a second engine that happens to agree.
+  const ONE = 4096;
+  const columns = 78;
+  const rows = 30;
+  const scaleX = 480 / columns;
+  const scaleY = 300 / rows;
+  const ramp = " .:-=+*#%@";
+
+  const sceneText = await Deno.readTextFile(
+    "case-studies/engine/assets/scene.json",
+  );
+  const parsed = JSON.parse(sceneText);
+  const fixed = (value: unknown) =>
+    typeof value === "number" ? Math.round(value * ONE) : 0;
+  const scene = (parsed.entities as Record<string, unknown>[]).map((entity) => {
+    const mesh = entity.kind !== "sprite";
+    return {
+      kind: mesh ? 0 : 1,
+      x: fixed(entity.x),
+      y: fixed(entity.y),
+      z: fixed(entity.z),
+      scale: fixed(entity.scale),
+      spin: typeof entity.spin === "number" ? Math.round(entity.spin) : 0,
+      colour: mesh
+        ? String(entity.colour ?? "#888888")
+        : String(entity.texture ?? "spark"),
+    };
+  });
+
+  // Painter's algorithm over a character grid: the guest hands over projected
+  // geometry with a view depth, and sorting it is the host's job in both hosts.
+  let cells: { shade: number; depth: number }[][] = [];
   const frames = study.frames;
   let remaining = frames;
+  let batch: {
+    kind: string;
+    points: [number, number][];
+    depth: number;
+    shade: number;
+  }[] = [];
+
+  const plot = (
+    x: number,
+    y: number,
+    depth: number,
+    shade: number,
+  ) => {
+    const column = Math.round(x / scaleX);
+    const row = Math.round(y / scaleY);
+    if (row < 0 || row >= rows || column < 0 || column >= columns) return;
+    const cell = cells[row][column];
+    if (depth >= cell.depth) return;
+    cells[row][column] = { shade, depth };
+  };
+
+  // Scanline fill, so a triangle covers area rather than only its edges — the
+  // grid is coarse enough that outlines alone would not show a solid.
+  const fillTriangle = (
+    points: [number, number][],
+    depth: number,
+    shade: number,
+  ) => {
+    const ys = points.map((point) => point[1]);
+    const top = Math.max(0, Math.floor(Math.min(...ys)));
+    const bottom = Math.min(300, Math.ceil(Math.max(...ys)));
+    for (let y = top; y <= bottom; y += scaleY / 2) {
+      const crossings: number[] = [];
+      for (let i = 0; i < 3; i += 1) {
+        const [x1, y1] = points[i];
+        const [x2, y2] = points[(i + 1) % 3];
+        if ((y1 <= y && y2 > y) || (y2 <= y && y1 > y)) {
+          crossings.push(x1 + ((y - y1) / (y2 - y1)) * (x2 - x1));
+        }
+      }
+      if (crossings.length < 2) continue;
+      crossings.sort((a, b) => a - b);
+      for (let x = crossings[0]; x <= crossings[1]; x += scaleX / 2) {
+        plot(x, y, depth, shade);
+      }
+    }
+  };
 
   imports = {
     "blot:host/Canvas": {
       clear() {
-        grid = Array.from({ length: rows }, () => new Array(columns).fill("."));
+        batch = [];
       },
-      fill(
-        colourPointer: number,
-        colourLength: number,
-        h: bigint,
-        w: bigint,
+      tri(
+        ax: bigint,
+        ay: bigint,
+        bx: bigint,
+        by: bigint,
+        _colourPointer: number,
+        _colourLength: number,
+        cx: bigint,
+        cy: bigint,
+        depth: bigint,
+        shadeValue: bigint,
+      ) {
+        batch.push({
+          kind: "tri",
+          points: [
+            [Number(ax), Number(ay)],
+            [Number(bx), Number(by)],
+            [Number(cx), Number(cy)],
+          ],
+          depth: Number(depth),
+          shade: Number(shadeValue),
+        });
+      },
+      sprite(
+        depth: bigint,
+        size: bigint,
+        _texturePointer: number,
+        _textureLength: number,
         x: bigint,
         y: bigint,
       ) {
-        const colour = guest.readText(colourPointer, colourLength);
-        let mark = palette.get(colour);
-        if (mark === undefined) mark = "#";
-        const left = Math.round(Number(x) / scaleX);
-        const top = Math.round(Number(y) / scaleY);
-        const right = Math.round((Number(x) + Number(w)) / scaleX);
-        const bottom = Math.round((Number(y) + Number(h)) / scaleY);
-        for (let row = top; row < Math.max(bottom, top + 1); row += 1) {
-          for (let column = left; column < Math.max(right, left + 1); column += 1) {
-            if (row < 0 || row >= rows) continue;
-            if (column < 0 || column >= columns) continue;
-            grid[row][column] = mark;
-          }
-        }
-        drawn += 1;
+        const half = Number(size) / ONE * 32;
+        batch.push({
+          kind: "sprite",
+          points: [[Number(x) - half, Number(y) - half], [
+            Number(x) + half,
+            Number(y) + half,
+          ], [0, 0]],
+          depth: Number(depth),
+          shade: 255,
+        });
       },
       present() {
-        // Only the last frame is printed. Every frame is simulated.
         if (remaining > 0) return;
-        console.log(grid.map((row) => row.join("")).join("\n"));
+        cells = Array.from(
+          { length: rows },
+          () =>
+            Array.from({ length: columns }, () => ({
+              shade: -1,
+              depth: Number.MAX_SAFE_INTEGER,
+            })),
+        );
+        for (const item of batch) {
+          if (item.kind === "tri") {
+            fillTriangle(item.points, item.depth, item.shade);
+            continue;
+          }
+          const [[left, top], [right, bottom]] = item.points;
+          for (let y = top; y <= bottom; y += scaleY / 2) {
+            for (let x = left; x <= right; x += scaleX / 2) {
+              plot(x, y, item.depth, item.shade);
+            }
+          }
+        }
+        const picture = cells.map((row) =>
+          row.map((cell) => {
+            if (cell.shade < 0) return " ";
+            const step = Math.min(
+              ramp.length - 1,
+              Math.max(1, Math.round((cell.shade / 255) * (ramp.length - 1))),
+            );
+            return ramp[step];
+          }).join("")
+        ).join("\n");
+        console.log(picture);
       },
     },
-    "blot:host/Host": {
-      // A scripted input, so the study is deterministic and the drawn frame
-      // shows it: hold right for the first half, then let go.
-      axis(): bigint {
-        const elapsed = frames - remaining;
-        if (elapsed < frames / 2) return 1n;
-        return 0n;
+
+    // A fixed camera, so the study is deterministic. The browser host puts a
+    // pointer behind these four.
+    "blot:host/View": {
+      yaw: () => 34n,
+      pitch: () => 18n,
+      distance: () => BigInt(9 * ONE),
+      lens: () => BigInt(study.kind === "engine" ? study.lens : 0),
+    },
+
+    "blot:host/Assets": {
+      // Nothing changes on disk during a headless run, so the generation is
+      // constant and the guest loads once.
+      generation: () => 1n,
+      count: () => BigInt(scene.length),
+      entry(id: bigint, resultPointer: number) {
+        const entity = scene[Number(id)];
+        guest.writeText(resultPointer, entity.colour);
+        guest.writeInt64(resultPointer + 8, entity.kind);
+        guest.writeInt64(resultPointer + 16, entity.scale);
+        guest.writeInt64(resultPointer + 24, entity.spin);
+        guest.writeInt64(resultPointer + 32, entity.x);
+        guest.writeInt64(resultPointer + 40, entity.y);
+        guest.writeInt64(resultPointer + 48, entity.z);
       },
+    },
+
+    "blot:host/Host": {
       frame(): bigint {
         const answer = remaining;
         remaining -= 1;

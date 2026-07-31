@@ -14,7 +14,7 @@ WGPU_BACKENDS=vulkan deno task case-study agent
 WGPU_BACKENDS=vulkan deno task case-study engine 60
 ```
 
-The engine also has a browser host:
+The engine also has a browser host, with hot reload:
 
 ```bash
 WGPU_BACKENDS=vulkan deno task engine
@@ -59,13 +59,17 @@ an ambient network call.
 
 ## engine
 
-`engine/main.blot` is an entity-component-system running a paddle and three
-bouncing blocks, drawn to a canvas.
+`engine/main.blot` is a small 3D engine: an entity-component-system, a camera
+with two lenses, fixed-point maths, and hot reload for both the scene and the
+code. It draws to a canvas through four host capabilities and reaches nothing
+else on the page.
+
+### The world is the frame loop
 
 An ECS normally exists because game state is a large mutable graph and every
-system wants a different slice of it. Blot has no mutation, so that framing does
-not apply — but the layout an ECS arrives at still does: components in parallel
-arrays keyed by entity, and each system a function over the arrays it reads.
+system wants a different slice. Blot has no mutation, so that framing does not
+apply — but the layout an ECS arrives at still does: components in parallel
+arrays keyed by entity, each system a function over the arrays it reads.
 
 What the language adds is that the world does not have to be a value. A `for`
 body's `:=` names are its accumulator, so the frame loop *is* the world:
@@ -74,63 +78,130 @@ body's `:=` names are its accumulator, so the frame loop *is* the world:
 for ever do
   let remaining = Host.frame ();
   if remaining <= 0 then do break; end;
-  axis <- Host.axis;
 
-  positions := control (positions, axis);
-  velocities := bounce (velocities, positions, sprites);
-  positions := movement (positions, velocities);
+  current <- Assets.generation;
+  if current != generation then do
+    transforms := load_transforms ();
+    models := load_models ();
+    generation := current;
+  end;
 
-  let _ = render (positions, sprites);
-  frames := frames + 1;
+  let camera = camera_of (View.yaw (), View.pitch (), View.distance (), View.lens ());
+  transforms := advance transforms;
+  let _ = render (transforms, models, camera);
 end;
 ```
 
-Each system is `store -> store`, and a system that does not rebind a name
-provably cannot affect it — the property an ECS usually arranges with
-scheduling and declared access. Adding a component means adding a name.
+A system that does not rebind a name provably cannot affect it — the property
+an ECS usually arranges with scheduling and declared access. Adding a component
+means adding a name.
 
-The join helpers hold the only awkward part. `case (at (l, id), at (r, id)) of`
-with a tuple pattern is the natural way to write "entities that have both", and
-that shape does not lower yet — a tuple pattern in a `case` with a wildcard arm
-reaches `a tuple pattern over a literal is not lowered to Wasm yet`. The
-helpers nest their `case`s instead, once, so the systems stay one-liners.
+### Fixed point, and a table the artifact never computes
 
-`render` is also the one binding here with no `sig`: an effectful arrow's type
-includes its row, and a row is printed but never written.
+Blot has one numeric type and it is an integer, so this is a fixed-point engine
+at `ONE = 4096`. `lib/math.blot` needs sine and cosine, and gets them from a
+Taylor series that runs in the *comptime evaluator*: `const` forces the series
+to be evaluated while compiling, so the table reaches WebAssembly as data and
+the series that produced it is not in the artifact. The checker even knows the
+exact set of values a lookup can return — it prints as a union of 65 singletons.
+
+Accuracy is what you would want: `sin 32` is `2897` against an exact 2896.3, and
+`sin 64` is `4096` to the last bit.
+
+### 2D is the same renderer with the lens switched
+
+The camera carries a lens, and `to_screen` is the only place it matters:
+
+```blot
+const to_screen = (view, camera) =>
+  if camera.lens == 0
+  then { .x = CX + view.x * FOCAL / view.z; .y = CY - view.y * FOCAL / view.z; }
+  else { .x = CX + M.mul (view.x, camera.zoom); .y = CY - M.mul (view.y, camera.zoom); }
+  end;
+```
+
+A perspective divide, or no divide. Sprites follow the same rule: a 2D texture's
+size divides by depth under one lens and does not under the other, so it is a
+billboard in 3D and a plain sprite in 2D without a second code path. Press `L`
+in the browser to switch mid-flight; the guest reads the lens every frame, so
+nothing reloads.
+
+### Hot reload, two kinds
+
+```bash
+WGPU_BACKENDS=vulkan deno task engine        # http://localhost:8321
+```
+
+**Assets.** Edit `assets/scene.json` and the server re-reads it and bumps a
+generation. The guest compares that generation each frame and rebuilds its
+stores from the new scene. No compiler runs and the module is untouched — the
+reload path is the same fold as the first load, so there is no second path to
+keep correct.
+
+**Code.** Edit `main.blot` or `lib/math.blot` and the server rebuilds the module
+and the page swaps in a new worker. The camera survives, because the camera was
+never in the guest: `View` is a host capability backed by the page's pointer and
+wheel. A rebuild that fails leaves the last good module running and shows the
+diagnostic on the page.
+
+One `BlotCompilerSession` is held for the life of the server, so a rebuild is a
+compile and not a device acquisition.
 
 ### The host boundary
 
-Four operations, and no canvas handle anywhere in the program:
-
 ```text
-Canvas.clear   : () -> ()
-Canvas.fill    : { .x, .y, .w, .h : Int; .colour : Str } -> ()
-Canvas.present : () -> ()
-Host.axis      : () -> Int     -- -1, 0, or 1
-Host.frame     : () -> Int     -- frames remaining; 0 stops the loop
+Canvas.clear/present : () -> ()
+Canvas.tri           : { ax, ay, bx, by, cx, cy, depth, shade : Int; colour : Str } -> ()
+Canvas.sprite        : { x, y, size, depth : Int; texture : Str } -> ()
+View.yaw/pitch/distance/lens : () -> Int
+Assets.generation/count      : () -> Int
+Assets.entry         : Int -> { kind, x, y, z, scale, spin : Int; colour : Str }
+Host.frame           : () -> Int
 ```
 
-`Canvas.fill` takes a record, so it flattens to six core parameters in
-*canonical* field order — `colour, h, w, x, y`, not the order the program wrote
-them. `docs/abi.md` is the authority on that; both hosts below depend on it.
+The guest projects geometry and hands over triangles with a view depth; sorting
+them is the host's job. That is the same split a depth buffer makes, and it is
+why the guest never needs one.
+
+Record parameters flatten in *canonical* field order, which is alphabetical and
+not the order the program wrote them — `Canvas.tri` arrives as
+`ax, ay, bx, by, colour, cx, cy, depth, shade`. `docs/abi.md` is the authority;
+getting it wrong silently transposes the geometry.
 
 ### Two hosts
 
-`deno task case-study engine [frames]` is the headless one. It rasterizes to a
-character grid, scripts the input (hold right, then let go), and prints the last
-frame, so the study runs in CI and its output is a value a test can compare.
+`deno task case-study engine [frames] [ortho]` is the headless one. It
+rasterizes to a character grid with a painter's algorithm and a scanline fill,
+reads the same `scene.json`, and prints the last frame — so the study runs in CI
+and its output is a value a test can compare.
 
-`deno task engine` serves `index.html` on port 8321 against a real
-`CanvasRenderingContext2D`, with arrow keys for input.
+`deno task engine` serves the browser host, which has a real
+`CanvasRenderingContext2D`, an orbit camera on the pointer, and procedural
+textures for the sprite path.
 
-That one has a mismatch to resolve: ABI 1 calls host effects synchronously, and
-`requestAnimationFrame` is not something a synchronous call can wait for. So the
-module runs in a worker, where blocking is allowed, and `Host.frame` parks on
-`Atomics.wait` until the page's animation frame bumps a shared counter. The
-program keeps its own frame loop, the page keeps its refresh rate, and neither
-has to know about the other. `SharedArrayBuffer` is why `serve.ts` sends the
-cross-origin isolation headers.
+The browser one has a mismatch to resolve: ABI 1 calls host effects
+synchronously, and `requestAnimationFrame` is not something a synchronous call
+can wait for. So the module runs in a worker, where blocking is allowed, and
+`Host.frame` parks on `Atomics.wait` until the page's animation frame bumps a
+shared counter. The camera and lens live in that same `SharedArrayBuffer`, so
+input costs no round trip. `serve.ts` sends the cross-origin isolation headers
+that `SharedArrayBuffer` requires.
 
-This is the same seam the agent study names: a suspending host-effect ABI would
-remove the worker. A worker is a reasonable answer in the meantime, and unlike
-the agent's asynchronous model call it does not need the program to change.
+This is the seam the agent study names: a suspending host-effect ABI would
+remove the worker.
+
+### What the language made awkward
+
+- **A two-component join wants a tuple pattern.**
+  `case (at (l, id), at (r, id)) of (#Some a, #Some b) => …` is how this should
+  read, and it does not lower — *"a tuple pattern over a literal is not lowered
+  to Wasm yet"*. The join helpers nest their `case`s instead, once, so the
+  systems stay one expression each.
+- **An effect row cannot be written.** `render` is the one binding here with no
+  `sig`: an effectful arrow's type includes its row, and a row is printed but
+  never written.
+- **No SIMD, because no floats.** gpufuck's SIMD is f32x4 and blot has no
+  floating-point type at all — no `@float.*` primitives, no float row in the
+  ABI. That is why the maths here is fixed point. Reaching f32x4 would mean
+  giving blot floats first, in the value domain, the lattice, the ABI, and the
+  comptime evaluator, so that all three executions still agree.

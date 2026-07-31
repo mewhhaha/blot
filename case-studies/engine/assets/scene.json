@@ -1,0 +1,12 @@
+{
+  "comment": "Edit this while the engine is running. The host bumps a generation, the guest rebuilds its stores from it, and nothing recompiles. Positions and scales are whole units; the host converts them to the guest's fixed point. A spin is angle units per frame, where a turn is 256.",
+  "entities": [
+    { "kind": "mesh", "x": 0, "y": 0, "z": 0, "scale": 1.4, "spin": 1, "colour": "#4c8dff" },
+    { "kind": "mesh", "x": -2.6, "y": 0.4, "z": -1.2, "scale": 0.8, "spin": 2, "colour": "#ff5f56" },
+    { "kind": "mesh", "x": 2.6, "y": -0.3, "z": 1.4, "scale": 0.9, "spin": -2, "colour": "#27c93f" },
+    { "kind": "mesh", "x": 0.2, "y": 2.2, "z": -2.4, "scale": 0.6, "spin": 3, "colour": "#ffbd2e" },
+    { "kind": "sprite", "x": -1.8, "y": 1.9, "z": 1.8, "scale": 1.0, "spin": 0, "texture": "spark" },
+    { "kind": "sprite", "x": 2.2, "y": 1.6, "z": -1.6, "scale": 0.8, "spin": 0, "texture": "ring" },
+    { "kind": "sprite", "x": 0.0, "y": -2.1, "z": 2.2, "scale": 0.9, "spin": 0, "texture": "grid" }
+  ]
+}

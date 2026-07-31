@@ -1,80 +1,122 @@
-// A game engine, in a language with no assignment.
+// A small 3D engine, in a language with no assignment and no floating point.
 //
-// The problem an ECS usually solves is that game state is a large mutable
-// graph and every system wants a different slice of it. Blot has no mutation,
-// so that framing does not apply — but the answer an ECS reaches still does:
-// keep components in parallel arrays keyed by entity, and write each system as
-// a function over the arrays it cares about.
+// The world is a set of parallel arrays keyed by entity, and each system is a
+// function over the arrays it reads — the layout an ECS arrives at. What the
+// language adds is that the world does not have to be a value: a `for` body's
+// `:=` names are its accumulator, so the frame loop at the bottom *is* the
+// world. A system that does not rebind a name cannot affect it, which is the
+// property an ECS normally arranges with scheduling and declared access.
 //
-// What blot adds is that the world does not have to be a value. A `for` body's
-// `:=` names *are* the accumulator, so the loop at the bottom is the world:
-// every component array is a name, each system rebinds the arrays it owns, and
-// the fold threads them to the next frame. There is no World type to pass
-// around, and a system that does not rebind a name cannot affect it — which is
-// the property an ECS normally arranges with scheduling and access
-// declarations.
+// Everything is fixed point at `ONE = 4096`, because blot has one numeric type
+// and it is an integer. `lib/math.blot` builds its trig table with the comptime
+// evaluator, so the series that produced it is not in the artifact.
 //
-// Rendering and input are host effects. The runner supplies a canvas.
+// The scene comes from the host and is rebuilt whenever the host says its
+// generation changed, so editing `assets/scene.json` restocks the world without
+// recompiling. The camera comes from the host too — which is what lets a code
+// reload keep your viewpoint, since the viewpoint was never in here.
 
+// `!=` is not in the default fixity table, and a default fixity names a binding
+// by string — so declaring it here is the ordinary way to get one, not a
+// workaround. It resolves to whatever `Eq.ne` the prelude opened below.
 operators {
-  infixl 65 (++) = Text.append;
+  infix 40 (!=) = Eq.ne;
 };
 
 open {} = (@import "blot:prelude") ();
 
+const M = (@import "./lib/math.blot") ();
+const ONE = M.one;
+
 // --- the host boundary ------------------------------------------------------
 //
-// Every authority this program has is written here. There is no canvas handle,
-// no DOM node, and no way to reach either: the runner grants four operations
-// and the program can do nothing else to the page.
+// Four capabilities and nothing else. There is no canvas handle, no file
+// handle, and no clock; this program cannot reach the page except through them.
 
 const Canvas = @effect.host {
   .clear = Unit -> Unit;
-  .fill = {
-    .x = Int;
-    .y = Int;
-    .w = Int;
-    .h = Int;
+  // A projected triangle. `depth` is the view distance the host sorts by — the
+  // guest owns geometry and the host owns rasterization order, which is the
+  // same split a depth buffer makes.
+  .tri = {
+    .ax = Int; .ay = Int;
+    .bx = Int; .by = Int;
+    .cx = Int; .cy = Int;
+    .depth = Int;
+    .shade = Int;
     .colour = Str;
+  } -> Unit;
+  // A 2D texture, always square to the screen. Under an orthographic lens this
+  // is a plain sprite; under a perspective one it is a billboard, and the only
+  // difference is what scaled its size.
+  .sprite = {
+    .x = Int; .y = Int;
+    .size = Int;
+    .depth = Int;
+    .texture = Str;
   } -> Unit;
   .present = Unit -> Unit;
 };
 
-// `axis` is -1, 0, or 1: the horizontal input for this frame. `frame` blocks
-// until the host is ready to draw and answers how many frames remain, so the
-// host owns the clock and the program owns what happens on each tick.
+// The camera lives in the host because the host owns the input device. Keeping
+// it there is what lets the code hot-reload without losing the view.
+const View = @effect.host {
+  .yaw = Unit -> Int;
+  .pitch = Unit -> Int;
+  .distance = Unit -> Int;
+  // `0` is a perspective lens and `1` is orthographic. A 2D scene is this
+  // engine with the lens switched, not a second renderer.
+  .lens = Unit -> Int;
+};
+
+const Assets = @effect.host {
+  .generation = Unit -> Int;
+  .count = Unit -> Int;
+  .entry = Int -> {
+    .kind = Int;
+    .x = Int; .y = Int; .z = Int;
+    .scale = Int;
+    .spin = Int;
+    .colour = Str;
+  };
+};
+
 const Host = @effect.host {
-  .axis = Unit -> Int;
   .frame = Unit -> Int;
 };
 
-// --- components -------------------------------------------------------------
-//
-// A component is an ordinary shape type, and a store is an array of them
-// indexed by entity. `#None` is how an entity says it does not have this
-// component, which is what lets one system skip an entity another system owns.
+// --- the screen -------------------------------------------------------------
 
-const Position = { .x = Int; .y = Int; };
-const Velocity = { .dx = Int; .dy = Int; };
-const Sprite = { .w = Int; .h = Int; .colour = Str; };
+const WIDTH = 480;
+const HEIGHT = 300;
+const CX = WIDTH / 2;
+const CY = HEIGHT / 2;
+
+// Pixels across one unit at one unit of depth, and how close a vertex may come
+// before its face is dropped.
+const FOCAL = 420;
+const NEAR = ONE / 4;
+
+const KIND_MESH = 0;
+
+// --- components -------------------------------------------------------------
+
+const Vec3 = { .x = Int; .y = Int; .z = Int; };
+const Transform = { .position = Vec3; .angle = Int; .spin = Int; .scale = Int; };
+const Model = { .kind = Int; .colour = Str; };
 
 const Store = component => [Option component];
 
-// --- storage and queries ----------------------------------------------------
-//
-// Plain functions over plain arrays, and every one of them is a fold — which
-// is what a loop already is here.
-
 const attach = (store, value) => @array.push store (Some value);
-
 const at = (store, id) => @array.get store id;
-
 const count = store => @array.len store;
 
-// The join every system in this program wants. The left store is the one being
-// rebuilt; the right is read. An entity missing either component is skipped,
-// which is the whole of "this system runs on entities that have a position and
-// a velocity" — no registration, no signature bitset, no scheduler.
+// The join every system here wants: rebuild the left store for entities that
+// have both components and skip the rest. Written once, so the systems stay one
+// expression each.
+//
+// The nesting is not a preference. `case (at (l, id), at (r, id)) of` with a
+// tuple pattern says this in one arm, and that shape does not lower yet.
 const each_2 = (left, right, step) => fold (
   upto (0, count left),
   left,
@@ -87,9 +129,6 @@ const each_2 = (left, right, step) => fold (
   end)
 );
 
-// The same join for a system whose result is an effect rather than a store.
-// `visit` runs in whatever row the caller is in, so `Canvas` reaches it
-// without this function mentioning canvases anywhere.
 const visit_2 = (left, right, visit) => each (
   upto (0, count left),
   (id => case at (left, id) of
@@ -101,121 +140,268 @@ const visit_2 = (left, right, visit) => each (
   end)
 );
 
-// --- the field --------------------------------------------------------------
+// --- geometry ---------------------------------------------------------------
+//
+// A unit cube, as six faces with a normal each. Corners are named by index, so
+// a face is four numbers rather than four points and its winding stays visible.
 
-const width = 320;
-const height = 200;
-const paddle_width = 40;
+const HALF = ONE / 2;
 
-// The paddle is entity zero. A tag component would make the control system a
-// query like the others, but with a single controlled entity an id is clearer
-// than a store holding `#Some ()` once and `#None` three times.
-const paddle = 0;
+const corners = [
+  { .x = 0 - HALF; .y = 0 - HALF; .z = 0 - HALF; },
+  { .x = HALF; .y = 0 - HALF; .z = 0 - HALF; },
+  { .x = HALF; .y = HALF; .z = 0 - HALF; },
+  { .x = 0 - HALF; .y = HALF; .z = 0 - HALF; },
+  { .x = 0 - HALF; .y = 0 - HALF; .z = HALF; },
+  { .x = HALF; .y = 0 - HALF; .z = HALF; },
+  { .x = HALF; .y = HALF; .z = HALF; },
+  { .x = 0 - HALF; .y = HALF; .z = HALF; }
+];
 
-sig clamp = (Int, Int, Int) -> Int;
-let clamp = (value, low, high) =>
-  if value < low then low
-  else if value > high then high
-  else value
+const faces = [
+  { .a = 1; .b = 0; .c = 3; .d = 2; .nx = 0; .ny = 0; .nz = 0 - ONE; },
+  { .a = 4; .b = 5; .c = 6; .d = 7; .nx = 0; .ny = 0; .nz = ONE; },
+  { .a = 0; .b = 4; .c = 7; .d = 3; .nx = 0 - ONE; .ny = 0; .nz = 0; },
+  { .a = 5; .b = 1; .c = 2; .d = 6; .nx = ONE; .ny = 0; .nz = 0; },
+  { .a = 3; .b = 7; .c = 6; .d = 2; .nx = 0; .ny = ONE; .nz = 0; },
+  { .a = 0; .b = 1; .c = 5; .d = 4; .nx = 0; .ny = 0 - ONE; .nz = 0; }
+];
+
+// A fixed light, normalized in advance so shading stays one dot product.
+const LIGHT = { .x = 2260; .y = 3277; .z = 1638; };
+
+// --- transforms -------------------------------------------------------------
+
+// Rotation about Y, the only model rotation this engine has: a scene of
+// spinning boxes needs one axis, and a second would be more code and no more
+// to look at.
+const turn_y = (point, angle) => do
+  let s = M.sin angle;
+  let c = M.cos angle;
+  in {
+    .x = M.mul (point.x, c) + M.mul (point.z, s);
+    .y = point.y;
+    .z = M.mul (point.z, c) - M.mul (point.x, s);
+  }
+end;
+
+// World to view. The camera orbits the origin, so its rotation is the inverse
+// of the yaw and pitch that placed it.
+const to_view = (point, camera) => do
+  let dx = point.x - camera.eye.x;
+  let dy = point.y - camera.eye.y;
+  let dz = point.z - camera.eye.z;
+  let x1 = M.mul (dx, camera.cos_yaw) - M.mul (dz, camera.sin_yaw);
+  let z1 = M.mul (dx, camera.sin_yaw) + M.mul (dz, camera.cos_yaw);
+  in {
+    .x = x1;
+    .y = M.mul (dy, camera.cos_pitch) - M.mul (z1, camera.sin_pitch);
+    // Negated because the rotations above put the forward axis at -z, the
+    // convention a projection matrix expects. Everything downstream wants a
+    // depth that grows away from the eye, so the sign is fixed here rather
+    // than in the divide, the near test, and the sort.
+    .z = 0 - (M.mul (dy, camera.sin_pitch) + M.mul (z1, camera.cos_pitch));
+  }
+end;
+
+// View to screen. The two lenses differ in one line: a perspective divide, or
+// no divide at all. That is the whole of "2D is an orthographic camera".
+const to_screen = (view, camera) =>
+  if camera.lens == 0
+  then {
+    .x = CX + view.x * FOCAL / view.z;
+    .y = CY - view.y * FOCAL / view.z;
+  }
+  else {
+    .x = CX + M.mul (view.x, camera.zoom);
+    .y = CY - M.mul (view.y, camera.zoom);
+  }
   end;
 
+// Where the camera sits, and the rotations that undo getting it there. Built
+// once a frame rather than per vertex, because every vertex wants the same four
+// sines.
+const camera_of = (yaw, pitch, distance, lens) => do
+  let flat = M.cos pitch;
+  in {
+    .eye = {
+      .x = M.mul (distance, M.mul (flat, M.sin yaw));
+      .y = M.mul (distance, M.sin pitch);
+      .z = M.mul (distance, M.mul (flat, M.cos yaw));
+    };
+    .sin_yaw = M.sin yaw;
+    .cos_yaw = M.cos yaw;
+    .sin_pitch = M.sin pitch;
+    .cos_pitch = M.cos pitch;
+    .lens = lens;
+    // Pixels across one world unit, which is what the perspective divide works
+    // out to at the camera's own distance — so switching lenses holds the scene
+    // at roughly the size it already was, and pulling back still zooms out.
+    // Plain pixels, not fixed point: `to_screen` divides by `ONE` once, and
+    // that divide is already spending the units `view.x` carries.
+    .zoom = ONE * FOCAL / distance;
+  }
+end;
+
 // --- systems ----------------------------------------------------------------
-//
-// Store in, store out. That is the entire calling convention, and it is why
-// the frame loop reads as a list of names being rebound.
 
-sig movement = (Store Position, Store Velocity) -> Store Position;
-let movement = (ps, vs) => each_2 (ps, vs, ((p, v) => {
-  .x = p.x + v.dx;
-  .y = p.y + v.dy;
-}));
-
-// Reflection off the walls. A sprite has to know its own width to say when it
-// has left the field, so this reads three stores: velocities out, positions
-// and sprites in. Entity zero is skipped because the paddle is the player's,
-// and a system that starts at 1 says so without needing a component to mark it.
-sig bounce = (Store Velocity, Store Position, Store Sprite) -> Store Velocity;
-let bounce = (vs, ps, ss) => fold (
-  upto (1, count vs),
-  vs,
-  ((state, id) => case at (vs, id) of
-    #Some v => case at (ps, id) of
-      #Some p => case at (ss, id) of
-        #Some s => @array.set state id (Some {
-          .dx = if p.x < 0 || p.x + s.w > width then 0 - v.dx else v.dx end;
-          .dy = if p.y < 0 || p.y + s.h > height then 0 - v.dy else v.dy end;
-        }),
-        #None => state
-      end,
-      #None => state
-    end,
+sig advance = Store Transform -> Store Transform;
+let advance = ts => fold (
+  upto (0, count ts),
+  ts,
+  ((state, id) => case at (ts, id) of
+    #Some t => @array.set state id (Some {
+      .position = t.position;
+      .angle = @int.rem (t.angle + t.spin) M.turn;
+      .spin = t.spin;
+      .scale = t.scale;
+    }),
     #None => state
   end)
 );
 
-sig control = (Store Position, Int) -> Store Position;
-let control = (ps, axis) => case at (ps, paddle) of
-  #Some p => @array.set ps paddle (Some {
-    .x = clamp (p.x + axis * 6, 0, width - paddle_width);
-    .y = p.y;
-  }),
-  #None => ps
+// How lit a face is: its world normal against the light, clamped, widened to
+// the 0..255 the host multiplies the colour by.
+const shade_of = normal => do
+  let dot = M.mul (normal.x, LIGHT.x) + M.mul (normal.y, LIGHT.y) +
+    M.mul (normal.z, LIGHT.z);
+  let lit = if dot < 0 then 0 else dot end;
+  in 60 + lit * 195 / ONE
 end;
 
-// Rendering is a system like the others, except its result is an effect. It
-// joins position with sprite, so an entity without a sprite is invisible
-// rather than special-cased anywhere.
-//
-// The one system with no `sig`: an effectful arrow's type includes its row,
-// and a row is printed but never written — `Canvas` is inferred from the calls
-// below and there is no syntax for saying so here.
-let render = (ps, ss) => do
+// One face of one box: place its corners, project them, and hand the host two
+// triangles. A face pointing away, or crossing the near plane, is dropped
+// before either triangle is built.
+const draw_face = (transform, model, camera, face) => do
+  let corner = index => do
+    let local = @array.get corners index;
+    let spun = turn_y ({
+      .x = M.mul (local.x, transform.scale);
+      .y = M.mul (local.y, transform.scale);
+      .z = M.mul (local.z, transform.scale);
+    }, transform.angle);
+    in to_view ({
+      .x = spun.x + transform.position.x;
+      .y = spun.y + transform.position.y;
+      .z = spun.z + transform.position.z;
+    }, camera)
+  end;
+
+  let a = corner face.a;
+  let b = corner face.b;
+  let c = corner face.c;
+  let d = corner face.d;
+
+  let normal = turn_y (
+    { .x = face.nx; .y = face.ny; .z = face.nz; },
+    transform.angle
+  );
+
+  // Backface culling: a face is visible when its normal leans towards the
+  // camera. Comparing against the box's centre rather than the face's own is
+  // exact enough for convex geometry and costs one vector.
+  let outward = M.mul (normal.x, transform.position.x - camera.eye.x) +
+    M.mul (normal.y, transform.position.y - camera.eye.y) +
+    M.mul (normal.z, transform.position.z - camera.eye.z);
+
+  let behind = a.z < NEAR || b.z < NEAR || c.z < NEAR || d.z < NEAR;
+  let hidden = outward > 0;
+
+  in if behind || hidden then ()
+  else do
+    let pa = to_screen (a, camera);
+    let pb = to_screen (b, camera);
+    let pc = to_screen (c, camera);
+    let pd = to_screen (d, camera);
+    let depth = (a.z + b.z + c.z + d.z) / 4;
+    let shade = shade_of normal;
+    let _ = Canvas.tri {
+      .ax = pa.x; .ay = pa.y;
+      .bx = pb.x; .by = pb.y;
+      .cx = pc.x; .cy = pc.y;
+      .depth = depth; .shade = shade; .colour = model.colour;
+    };
+    in Canvas.tri {
+      .ax = pa.x; .ay = pa.y;
+      .bx = pc.x; .by = pc.y;
+      .cx = pd.x; .cy = pd.y;
+      .depth = depth; .shade = shade; .colour = model.colour;
+    }
+  end
+  end
+end;
+
+// A 2D texture placed in the 3D world. Its size divides by depth under a
+// perspective lens and does not under an orthographic one — the same one-line
+// difference `to_screen` makes.
+const draw_sprite = (transform, model, camera) => do
+  let view = to_view (transform.position, camera);
+  in if view.z < NEAR then ()
+  else do
+    let point = to_screen (view, camera);
+    let size = if camera.lens == 0
+      then transform.scale * FOCAL / view.z
+      else M.mul (transform.scale, camera.zoom)
+      end;
+    in Canvas.sprite {
+      .x = point.x; .y = point.y;
+      .size = size;
+      .depth = view.z;
+      .texture = model.colour;
+    }
+  end
+  end
+end;
+
+// `render` is the one binding here with no `sig`: an effectful arrow's type
+// includes its row, and a row is printed but never written.
+let render = (transforms, models, camera) => do
   let _ = Canvas.clear ();
-  let _2 = visit_2 (ps, ss, ((p, s) => Canvas.fill {
-    .x = p.x;
-    .y = p.y;
-    .w = s.w;
-    .h = s.h;
-    .colour = s.colour;
-  }));
+  let _2 = visit_2 (transforms, models, ((transform, model) =>
+    if model.kind == KIND_MESH
+    then each (faces, (face => draw_face (transform, model, camera, face)))
+    else draw_sprite (transform, model, camera)
+    end));
   in Canvas.present ()
 end;
 
-// --- the world --------------------------------------------------------------
+// --- loading ----------------------------------------------------------------
 //
-// Four entities: a paddle the player moves and three blocks that bounce. Every
-// store is written in the same order, so entity `n` means the same thing in
-// all of them.
+// The scene is the host's. Reading it is a fold over `Assets.count`, so a
+// reload runs the same code as the first load and there is no second path to
+// keep correct.
 
-sig positions = Store Position;
-let positions = attach (attach (attach (attach (
+let load_transforms = () => fold (
+  upto (0, Assets.count ()),
   @array.empty,
-  { .x = 140; .y = 186; }),
-  { .x = 20; .y = 20; }),
-  { .x = 150; .y = 40; }),
-  { .x = 260; .y = 70; });
+  ((store, id) => do
+    let entry = Assets.entry id;
+    in attach (store, {
+      .position = { .x = entry.x; .y = entry.y; .z = entry.z; };
+      .angle = 0;
+      .spin = entry.spin;
+      .scale = entry.scale;
+    })
+  end)
+);
 
-sig velocities = Store Velocity;
-let velocities = attach (attach (attach (attach (
+let load_models = () => fold (
+  upto (0, Assets.count ()),
   @array.empty,
-  { .dx = 0; .dy = 0; }),
-  { .dx = 3; .dy = 2; }),
-  { .dx = 0 - 2; .dy = 3; }),
-  { .dx = 2; .dy = 0 - 3; });
-
-sig sprites = Store Sprite;
-let sprites = attach (attach (attach (attach (
-  @array.empty,
-  { .w = paddle_width; .h = 8; .colour = "#e6e6e6"; }),
-  { .w = 12; .h = 12; .colour = "#ff5f56"; }),
-  { .w = 12; .h = 12; .colour = "#ffbd2e"; }),
-  { .w = 12; .h = 12; .colour = "#27c93f"; });
+  ((store, id) => do
+    let entry = Assets.entry id;
+    in attach (store, { .kind = entry.kind; .colour = entry.colour; })
+  end)
+);
 
 // --- the frame loop ---------------------------------------------------------
 //
-// The three stores are the accumulator, so this is the world and the fold at
-// once. Adding a component to this game means adding a name here.
+// The two stores and the generation are the accumulator, so this is the world
+// and the fold at once. Adding a component means adding a name.
 
+let transforms = load_transforms ();
+let models = load_models ();
+let generation = Assets.generation ();
 let frames = 0;
 
 for ever do
@@ -224,13 +410,24 @@ for ever do
     break;
   end;
 
-  axis <- Host.axis;
+  // Hot reload. The host bumps its generation when a watched file changes, and
+  // the world is rebuilt from the new scene; nothing else has to know.
+  current <- Assets.generation;
+  if current != generation then do
+    transforms := load_transforms ();
+    models := load_models ();
+    generation := current;
+  end;
 
-  positions := control (positions, axis);
-  velocities := bounce (velocities, positions, sprites);
-  positions := movement (positions, velocities);
+  let camera = camera_of (
+    View.yaw (),
+    View.pitch (),
+    View.distance (),
+    View.lens ()
+  );
 
-  let _ = render (positions, sprites);
+  transforms := advance transforms;
+  let _ = render (transforms, models, camera);
 
   frames := frames + 1;
 end;
