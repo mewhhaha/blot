@@ -1,0 +1,1 @@
+{ .type = #Money -2147483648..2147483647; .value = #Money 42; .distinct_from_i32 = #False; .same = #True; .differs = #False; .summed = #Money 50; }
