@@ -1084,6 +1084,44 @@ signed 64-bit range trap.
 
 Array indexing is zero-based and bounds-checked.
 
+#### An index the source already decides
+
+`@array.get` and `@array.set` are rejected at check time with
+`BLOT_OUT_OF_BOUNDS` when the index and the array's length are both decided by
+the source, instead of trapping when the program runs:
+
+```blot
+let xs = [1, 2, 3];
+return @array.get xs 99;   // BLOT_OUT_OF_BOUNDS: Index 99 is outside an array of 3.
+```
+
+An array's type carries no length and this does not put one there. The length is
+read from the array literal the binding was written with, it is read for this
+diagnostic and for nothing else, and no index is ever proved in bounds: the call
+is still typed by the primitive's ordinary scheme, and `@array.get` still emits
+a checked read.
+
+The length is decided in exactly three cases — the array is written out at the
+call site, the name denotes a compile-time array value, or the name was bound to
+an array literal with no spread. The index must be one compile-time integer,
+which is the same witness a condition needs to narrow (§8.5): a name bound by
+`let` is not one, for the reason `if n == -9` narrows nothing.
+
+Everything else is silent rather than approximated, and a read through it traps
+at run time exactly as before:
+
+- an aliased array — `let ys = xs;` says nothing about `ys`;
+- an array a function returned, or one a prelude combinator built;
+- an array written with a spread, whose length includes one this cannot see;
+- a name rebound by `:=` to anything but an array literal, which erases the
+  length the name had. A `:=` to an array literal records that literal's length.
+
+A shadowed binding is measured by the binding that shadows it or not at all. A
+lambda parameter, a pattern binder, and a later `let` each install a type of
+their own, and a length is recorded against the one it was written beside — so
+`let xs = [1, 2, 3]; let read = xs => @array.get xs 99;` reports nothing,
+because the `xs` being read is the caller's.
+
 ### 13.4 Type values
 
 | primitive         | meaning                                     |

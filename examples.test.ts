@@ -53,6 +53,10 @@ const REJECTIONS: Record<
   // leaves the scrutinee exactly as wide as it was declared.
   "shadowed_equality": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
   "compared_names": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
+  // The one bounds failure the checker can already decide: both the index and
+  // the array's length are written out in the source. It is the same code the
+  // evaluator raises, and it has migrated from `run` to `check`.
+  "index_outside_array": { code: "BLOT_OUT_OF_BOUNDS", stage: "check" },
   "wrong_argument": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "missing_field": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "linear_consumed_twice": {

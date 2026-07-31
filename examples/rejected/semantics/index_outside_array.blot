@@ -1,0 +1,16 @@
+// A read the source already decides cannot succeed.
+//
+// `xs` is written out as three elements and `99` is written out as the index,
+// so nothing has to run for this to be wrong. The array's type is `[(1|2|3)]`
+// and carries no length — the length comes from the literal the binding was
+// given, and it is read for this diagnostic and for nothing else.
+//
+// The rule is narrow on purpose. An aliased array (`let ys = xs;`), an array a
+// function returned, an array written with a spread, and an index that is only
+// *typed* as one integer are all refused by name: they say nothing here and
+// still trap at run time.
+
+open {} = (@import "blot:prelude") ();
+
+let xs = [1, 2, 3];
+return @array.get xs 99;

@@ -84,6 +84,21 @@ interface TypeEnv {
    * object, so `lookupComptime` sees the mismatch and declines.
    */
   readonly comptime: Map<string, { value: Value; typing: Typing }>;
+  /**
+   * The element count of the spread-free array literal a binding was written
+   * with, paired with the `Typing` installed beside it.
+   *
+   * A length is a fact about a value, not about a type: `[a]` carries no
+   * length, and this deliberately does not put one there. It is recorded only
+   * so a read whose index cannot be in range is reported where it is written
+   * instead of trapping, and it is read nowhere else.
+   *
+   * The `Typing` pairing is the same discipline `comptime` uses, and it is
+   * needed for the same reason: a lambda parameter named `xs` installs a fresh
+   * `Typing`, so this answers `null` for it rather than reporting the length of
+   * an array the callee never receives.
+   */
+  readonly arrayLengths: Map<string, { length: bigint; typing: Typing }>;
   readonly parent: TypeEnv | null;
 }
 
@@ -92,6 +107,7 @@ function childTypeEnv(parent: TypeEnv | null): TypeEnv {
     names: new Map(),
     literals: new Map(),
     comptime: new Map(),
+    arrayLengths: new Map(),
     parent,
   };
 }
@@ -142,6 +158,40 @@ function recordComptimeBinding(
   const typing = scope.names.get(name);
   if (typing === undefined) return;
   scope.comptime.set(name, { value, typing });
+}
+
+/**
+ * Pairs the length of a spread-free array literal with the `Typing` installed
+ * beside it. A spread contributes a length this cannot see, so an array written
+ * with one records nothing rather than recording the part that is visible.
+ */
+function recordArrayLength(
+  scope: TypeEnv,
+  name: string,
+  value: Expr & { tag: "array" },
+): void {
+  if (value.elements.some((item) => item.spread)) return;
+  const typing = scope.names.get(name);
+  if (typing === undefined) return;
+  scope.arrayLengths.set(name, {
+    length: BigInt(value.elements.length),
+    typing,
+  });
+}
+
+function lookupArrayLength(env: TypeEnv, name: string): bigint | null {
+  const typing = lookupType(env, name);
+  if (typing === undefined) return null;
+  let scope: TypeEnv | null = env;
+  while (scope !== null) {
+    const found = scope.arrayLengths.get(name);
+    if (found !== undefined) {
+      if (found.typing !== typing) return null;
+      return found.length;
+    }
+    scope = scope.parent;
+  }
+  return null;
 }
 
 function lookupLiteral(env: TypeEnv, name: string): Expr | undefined {
@@ -562,6 +612,31 @@ function inferSpecial(
     return result;
   }
 
+  // A read whose index and whose array's length are both decided by the source
+  // cannot succeed, and saying so where it is written beats trapping.
+  //
+  // This is a diagnostic and nothing else. It contributes no type — the ordinary
+  // curried scheme still types the call — and pushes no bound anywhere, so no
+  // index is ever *proved* in bounds by it. The length is a fact about a value
+  // the source wrote out, not a fact in the type, which carries none. And an
+  // index that is merely *typed* as one integer is not enough: the witness rule
+  // is the one `narrowing` uses, so a `let`-bound index is refused here for the
+  // reason `if n == -9` narrows nothing.
+  if (
+    (callee.name === "@array.get" || callee.name === "@array.set") &&
+    head.args.length >= 2
+  ) {
+    const length = comptimeArrayLength(head.args[0], context.types);
+    const index = comptimeInt(head.args[1], context.types);
+    if (length !== null && index !== null && (index < 0n || index >= length)) {
+      fail(
+        "BLOT_OUT_OF_BOUNDS",
+        `Index ${index} is outside an array of ${length}.`,
+        expr.span,
+      );
+    }
+  }
+
   if (callee.name === "@handle" && head.args.length === 1) {
     const parts = head.args[0];
     if (parts.tag !== "tuple" || parts.elements.length !== 3) {
@@ -888,6 +963,32 @@ function comptimeInt(expr: Expr, scope: TypeEnv): bigint | null {
   if (value === null) return null;
   if (value.tag !== "int") return null;
   return value.value;
+}
+
+/**
+ * How many elements an array expression has, when that is decided by the source
+ * rather than by running the program.
+ *
+ * Three ways, and no others: the array is written out at the call site, the name
+ * denotes a compile-time array value, or the name was bound to a spread-free
+ * array literal. `let ys = xs;` is none of them, and neither is any array a
+ * function returned, so those answer `null` and nothing is reported about them.
+ */
+function comptimeArrayLength(expr: Expr, scope: TypeEnv): bigint | null {
+  if (expr.tag === "array") {
+    if (expr.elements.some((item) => item.spread)) return null;
+    return BigInt(expr.elements.length);
+  }
+  const path = namePath(expr);
+  if (path === null) return null;
+  const value = comptimeAt(path, scope);
+  if (value !== null && value.tag === "array") {
+    return BigInt(value.elements.length);
+  }
+  // A `let` binding records no compile-time value, so a length written into one
+  // is reached through its own record, and only for a plain name.
+  if (path.length !== 1) return null;
+  return lookupArrayLength(scope, path[0]);
 }
 
 function sameGround(left: SimpleType, right: SimpleType): boolean {
@@ -1316,8 +1417,15 @@ function inferDeclarations(
       // given, so the `Typing` pairing alone would not always notice a `:=` in
       // the same scope as the binding it shadows.
       context.types.comptime.delete(declaration.name);
+      // And the length, for the same reason: after `xs := f ();` the name holds
+      // an array of unknown size, and the literal it was declared with says
+      // nothing about it. A rebinding to another literal records that one.
+      context.types.arrayLengths.delete(declaration.name);
       if (named !== null) {
         recordComptimeBinding(context.types, declaration.name, named);
+      }
+      if (declaration.value.tag === "array") {
+        recordArrayLength(context.types, declaration.name, declaration.value);
       }
       continue;
     }
@@ -1437,6 +1545,15 @@ function inferDeclarations(
         declaration.value.tag === "lambda")
     ) {
       context.types.literals.set(
+        declaration.pattern.name,
+        declaration.value,
+      );
+    }
+    if (
+      declaration.pattern.tag === "name" && declaration.value.tag === "array"
+    ) {
+      recordArrayLength(
+        context.types,
         declaration.pattern.name,
         declaration.value,
       );

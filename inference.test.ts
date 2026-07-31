@@ -499,6 +499,85 @@ check(
   "1 | 2 | 3 -> Str",
 );
 
+// --- a read the source already decides --------------------------------------
+//
+// An array's type carries no length, so nothing here is proved from a type. The
+// length comes from the array literal a binding was written with, the index from
+// the same compile-time-integer witness a condition needs, and the answer is a
+// diagnostic rather than a fact: the call is still typed by the ordinary scheme.
+//
+// The refusals matter more than the acceptance, and they are asserted as types,
+// because refusing to decide has to leave the program exactly as it was.
+
+check(
+  "an index inside the array is still an ordinary read",
+  "let xs = [1, 2, 3];\nreturn @array.get xs 2;",
+  "(1 | 2 | 3)",
+);
+
+rejects(
+  "an index outside an array written at the call site is refused",
+  "return @array.get [1, 2, 3] 99;",
+  "Index 99 is outside an array of 3",
+);
+
+rejects(
+  "an index outside the literal a `let` was given is refused",
+  "let xs = [1, 2, 3];\nreturn @array.get xs 99;",
+  "Index 99 is outside an array of 3",
+);
+
+rejects(
+  "an index outside a compile-time array is refused",
+  "const xs = [1, 2, 3];\nreturn @array.get xs 99;",
+  "Index 99 is outside an array of 3",
+);
+
+rejects(
+  "`@array.set` is decided by the same rule",
+  "let xs = [1, 2, 3];\nreturn @array.set xs 99 0;",
+  "Index 99 is outside an array of 3",
+);
+
+rejects(
+  "a rebinding is measured by the array it rebound to",
+  "let xs = [1, 2, 3];\nxs := [4, 5, 6, 7];\nreturn @array.get xs 5;",
+  "Index 5 is outside an array of 4",
+);
+
+// A parameter is the case that would make this unsound. `xs` inside the lambda
+// is whatever the caller passed, and the enclosing `xs` says nothing about it —
+// so the length is paired with the `Typing` its binding installed, and a fresh
+// `Typing` for the parameter makes the outer record stop matching.
+
+check(
+  "a parameter shadowing an array binding is not measured by it",
+  "let xs = [1, 2, 3];\nlet read = xs => @array.get xs 99;\nreturn read;",
+  "['a] -> 'a",
+);
+
+check(
+  "an aliased array is not measured by the array it aliases",
+  "let xs = [1, 2, 3];\nlet ys = xs;\nreturn @array.get ys 99;",
+  "(1 | 2 | 3)",
+);
+
+check(
+  "an array written with a spread has no length here",
+  "let base = [1, 2, 3];\nlet xs = [0, ...base];\nreturn @array.get xs 99;",
+  "(0 | 1 | 2 | 3)",
+);
+
+// The index has to be one compile-time integer, not merely a name whose type is
+// one integer. This is the same line `narrowing` draws, and drawing it anywhere
+// else would mean two different answers to "what is a witness".
+
+check(
+  "an index bound by `let` is not a compile-time integer",
+  "let n = 99;\nlet xs = [1, 2, 3];\nreturn @array.get xs n;",
+  "(1 | 2 | 3)",
+);
+
 // --- effects are a lattice element, not a separate pass ---------------------
 
 check(
