@@ -535,7 +535,8 @@ A branch is a scope for `let` but not for `:=`. A name a branch rebinds with
 `:=` is rebound for the statements that follow the conditional: the name was
 already in scope and keeps its type, so every path agrees on what it holds —
 including a missing `else`, which passes the name through unchanged. A `let`
-inside a branch stays local to that branch.
+inside a branch stays local to that branch, shadowing any outer binding of that
+name for the rest of the branch and escaping with nothing.
 
 `then do` begins the branch body; the final `end;` closes the whole conditional.
 
@@ -823,6 +824,18 @@ accumulator record:
 - their final values shadow the incoming bindings after the loop;
 - zero iterations preserve the incoming values; and
 - a `let` inside the body is local to that iteration.
+
+A `let` is local whether or not the name is taken outside. `let n = …` in the
+body introduces a binding that ends with the body, so the outer `n` is
+untouched and the local is free to hold a different type — only `:=` carries a
+value out. Where a `let` shadows a name, every `:=` after it in that block
+rebinds the local and therefore escapes nothing.
+
+Rebinding a name with `:=` and then shadowing it with a `let` in the same block
+is an error. The carried value is read where the block ends, which is inside
+the shadow, so the local would leave under the accumulator's name; the two
+readings of such a block are equally defensible and neither is chosen. Rename
+the local, or write the `let` above the first `:=`.
 
 This is a fold, not assignment. During CST lowering, `for` becomes ordinary
 `rec`/`case` recursion. No loop node reaches inference, ownership, evaluation,

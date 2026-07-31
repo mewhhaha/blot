@@ -39,6 +39,26 @@ for n in Iter.range (1, 4) do
   squares := squares + square;
 end;
 
+// Local means local even when the name is already taken outside. `:=` is what
+// hands a value out of the body; a `let` of the same name is a different
+// binding that happens to be spelled the same, so the outer one is untouched
+// and free to hold a different type.
+let kept = 0;
+for n in Iter.range (0, 3) do
+  let kept = "not this one";
+end;
+
+// The two together: the outer `sum` accumulates, and `sum` inside the nested
+// binder is nobody else's business.
+let sum = 0;
+for n in Iter.range (1, 4) do
+  let doubled = do
+    let sum = n * 2;
+    in sum
+  end;
+  sum := sum + doubled;
+end;
+
 // Zero iterations leave every accumulator alone.
 let untouched = 7;
 for Iter.range (0, 0) do
@@ -95,6 +115,8 @@ return {
   .total = total;
   .joined = joined;
   .squares = squares;
+  .kept = kept;
+  .sum = sum;
   .untouched = untouched;
   .halved = steps;
   .doubled = doubled;

@@ -24,6 +24,7 @@ import type {
   ShapePatternField,
   Span,
 } from "./ast.ts";
+import { patternNames } from "./ast.ts";
 import {
   buildFixityTable,
   type ChainStep,
@@ -1152,10 +1153,18 @@ function desugarLoop(
  * to and both paths agree on what it holds. A `let` introduces a new name with
  * a possibly new type and must not escape its branch — a name bound only when a
  * condition happened to hold is exactly what must not leak.
+ *
+ * Which is why a `let` earlier in the stream takes the name out of the running.
+ * After `let total = 100;` the name denotes that local, so `total := total + 1;`
+ * rebinds the local and has nothing to hand outward — carrying it would publish
+ * a value the outer binding never held, at a type it may not even have. The
+ * shadow reaches the statements after the `let` and into the blocks nested in
+ * them, and stops at the end of the stream that introduced it.
  */
 function reboundNames(statements: readonly Cursor[]): readonly string[] {
   const rebound: string[] = [];
-  const visit = (cursors: readonly Cursor[]): void => {
+  const visit = (cursors: readonly Cursor[], outer: ReadonlySet<string>): void => {
+    const shadowed = new Set(outer);
     for (const cursor of cursors) {
       const declaration = statementRule(cursor);
       if (
@@ -1163,17 +1172,43 @@ function reboundNames(statements: readonly Cursor[]): readonly string[] {
         tokenOf(required(declaration, "arrow")).text === ":="
       ) {
         const name = tokenOf(required(declaration, "name")).text;
-        if (!rebound.includes(name)) rebound.push(name);
+        if (!shadowed.has(name) && !rebound.includes(name)) rebound.push(name);
         continue;
       }
       // Not into a nested `for`. Its own desugaring already threads what it
       // rebinds into this stream as a `let`, and the names it introduces for
       // itself are not this scope's to carry.
       if (declaration.name === "iteration") continue;
-      for (const nested of nestedStatementLists(declaration)) visit(nested);
+      // The initializer is read before the name it binds is in scope, so a
+      // block inside it still sees the outer binding.
+      for (const nested of nestedStatementLists(declaration)) {
+        visit(nested, shadowed);
+      }
+      if (declaration.name !== "binding") continue;
+      const kind = tokenOf(required(declaration, "kind")).text;
+      if (kind !== "let" && kind !== "const") continue;
+      const pattern = lowerPattern(asRule(field(declaration, "pattern"), "pattern"));
+      for (const name of patternNames(pattern)) {
+        // Shadowing a name this stream already handed outward. The escaping
+        // value is read where the stream ends, which is inside the shadow, so
+        // the local would leave under the accumulator's name and at whatever
+        // type it happens to have. Rebinding the name first and shadowing it
+        // second reads as either intent, so neither is chosen for the program.
+        if (rebound.includes(name)) {
+          fail(
+            "BLOT_SHADOWED_ACCUMULATOR",
+            `\`${name}\` is rebound with \`:=\` earlier in this block, so it ` +
+              `leaves the block; a \`let\` here would shadow the name that ` +
+              `carries it out. Rename the local, or move the \`let\` above the ` +
+              `first \`:=\`.`,
+            declaration.span,
+          );
+        }
+        shadowed.add(name);
+      }
     }
   };
-  visit(statements);
+  visit(statements, new Set());
   return rebound;
 }
 

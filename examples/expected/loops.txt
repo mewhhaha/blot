@@ -1,1 +1,1 @@
-{ .counted = 5; .total = 10; .joined = "abc"; .squares = 14; .untouched = 7; .halved = 78; .doubled = [2, 4, 6]; .found = 321; .labelled = "one1two2"; .collected = [0, 1, 2, 3]; .folded = 6; }
+{ .counted = 5; .total = 10; .joined = "abc"; .squares = 14; .kept = 0; .sum = 12; .untouched = 7; .halved = 78; .doubled = [2, 4, 6]; .found = 321; .labelled = "one1two2"; .collected = [0, 1, 2, 3]; .folded = 6; }

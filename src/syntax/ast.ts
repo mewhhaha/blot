@@ -194,3 +194,24 @@ export interface Module {
   readonly result: Expr;
   readonly span: Span;
 }
+
+/** Every name a pattern binds, in the order it binds them. */
+export function patternNames(pattern: Pattern): readonly string[] {
+  switch (pattern.tag) {
+    case "name":
+      return [pattern.name];
+    case "wildcard":
+    case "int":
+    case "text":
+    case "unit":
+      return [];
+    case "tuple":
+    case "array":
+      return pattern.elements.flatMap(patternNames);
+    case "constructor":
+      if (pattern.payload === null) return [];
+      return patternNames(pattern.payload);
+    case "shape":
+      return pattern.fields.flatMap((field) => patternNames(field.pattern));
+  }
+}

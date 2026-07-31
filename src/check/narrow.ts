@@ -55,6 +55,7 @@
 // It answers one question about one value.
 
 import type { Arm, Decl, Expr, Pattern } from "../syntax/ast.ts";
+import { patternNames } from "../syntax/ast.ts";
 import { apply, evaluationRuntime, run } from "../comptime/eval.ts";
 import type { Value } from "../comptime/value.ts";
 import {
@@ -358,26 +359,6 @@ class Scan {
     this.expr(left);
     this.expr(right);
     return true;
-  }
-}
-
-function patternNames(pattern: Pattern): readonly string[] {
-  switch (pattern.tag) {
-    case "name":
-      return [pattern.name];
-    case "wildcard":
-    case "int":
-    case "text":
-    case "unit":
-      return [];
-    case "tuple":
-    case "array":
-      return pattern.elements.flatMap(patternNames);
-    case "constructor":
-      if (pattern.payload === null) return [];
-      return patternNames(pattern.payload);
-    case "shape":
-      return pattern.fields.flatMap((field) => patternNames(field.pattern));
   }
 }
 

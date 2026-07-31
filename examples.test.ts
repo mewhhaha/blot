@@ -96,6 +96,7 @@ const REJECTIONS: Record<
   "rebinding_unbound": { code: "BLOT_UNBOUND", stage: "check" },
   "generic_refused": { code: "BLOT_REFUSED", stage: "check" },
   "spread_of_a_parameter": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "shadowed_accumulator": { code: "BLOT_SHADOWED_ACCUMULATOR", stage: "check" },
   "unbounded_case": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
   "guard_may_continue": {
     code: "BLOT_GUARD_MAY_CONTINUE",

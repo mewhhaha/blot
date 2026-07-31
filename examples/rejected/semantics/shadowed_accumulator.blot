@@ -1,0 +1,20 @@
+// A `let` shadowing a name the same block already handed outward.
+//
+// `total := total + 1` makes `total` part of what the loop carries out, and
+// the carried value is read where the block ends — which is inside the shadow
+// the `let` casts. So the local would leave under the accumulator's name, at
+// whatever type it happens to have.
+//
+// Both readings are defensible from the source, which is why neither is
+// chosen: rename the local, or put the `let` above the first `:=`, where it
+// shadows for the whole block and nothing escapes under that name at all.
+
+open {} = (@import "blot:prelude") ();
+
+let total = 0;
+for n in Iter.range (0, 3) do
+  total := total + 1;
+  let total = "a different thing entirely";
+end;
+
+return total;
