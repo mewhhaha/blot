@@ -519,6 +519,61 @@ const opened = (name, t) => case reflect t of
   _ => None
 end;
 
+// Comparison derived from a type, rather than dispatched at run time.
+//
+// The type is a compile-time value, so it can *select* the implementation:
+// `@int.cmp` for an integer domain, `@text.cmp` for a text one, and a fold over
+// the fields for a record. Nothing is left to decide at run time, so this needs
+// no primitive of its own — a comparison that inspected its arguments would,
+// and blot erases types, so it could not have one anyway.
+//
+// `==` cannot use this on its own: an operator has no type argument at its call
+// site. What it does instead is name `Eq`, and `Eq` is an ordinary binding —
+// so a module over text writes `const Eq = eq_for Str;` once and `==` means
+// text equality for the rest of it.
+const cmp_for = rec (T => case reflect T of
+  #Range r => case r.domain of
+    #Int => left => (right => @int.cmp left right),
+    #Text => left => (right => @text.cmp left right)
+  end,
+  #Int _ => left => (right => @int.cmp left right),
+  #Text _ => left => (right => @text.cmp left right),
+  _ => @fail "no ordering derived for this type"
+end);
+
+const ord_for = T => do
+  let compare = cmp_for T;
+  in {
+    .cmp = compare;
+    .eq = left => (right => is_equal (compare left right));
+    .ne = left => (right => not (is_equal (compare left right)));
+    .lt = left => (right => is_less (compare left right));
+    .le = left => (right => not (is_greater (compare left right)));
+    .gt = left => (right => is_greater (compare left right));
+    .ge = left => (right => not (is_less (compare left right)));
+    .min = left => (right => if is_greater (compare left right) then right else left end);
+    .max = left => (right => if is_less (compare left right) then right else left end);
+  }
+end;
+
+// Equality goes further than ordering: a record has no order, but it does have
+// equality, field by field.
+const eq_for = rec (T => case reflect T of
+  #Shape fields => do
+    let same = left => (right => every (@shape.names fields, (name =>
+      ((eq_for (@shape.get fields name)).eq
+        (@shape.get left name)) (@shape.get right name))));
+    in { .eq = same; .ne = left => (right => not ((same left) right)); }
+  end,
+  _ => do
+    let compare = cmp_for T;
+    in {
+      .eq = left => (right => is_equal (compare left right));
+      .ne = left => (right => not (is_equal (compare left right)));
+    }
+  end
+end);
+
 const Reflect = {
   .of = reflect;
   .members = members;
@@ -529,6 +584,9 @@ const Reflect = {
   .pick = Pick;
   .omit = Omit;
   .opened = opened;
+  .cmp_for = cmp_for;
+  .ord_for = ord_for;
+  .eq_for = eq_for;
 };
 
 // --- structs ----------------------------------------------------------------
@@ -733,6 +791,9 @@ return {
   .Pick = Pick;
   .Omit = Omit;
   .opened = opened;
+  .cmp_for = cmp_for;
+  .ord_for = ord_for;
+  .eq_for = eq_for;
   .any = any;
   .every = every;
   .text_eq = text_eq;
