@@ -15,7 +15,7 @@
     "format": "baba-runtime-implementation",
     "version": 3,
     "semantics": "baba-runtime-portable-v3",
-    "hash": "fnv1a64:9b6c0d11d9947c5a"
+    "hash": "fnv1a64:faad3af38e42ece0"
   },
   "module": "parser.wasm",
   "plan": "parser.plan"

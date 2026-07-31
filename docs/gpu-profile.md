@@ -32,6 +32,10 @@ blot beats the gpu-duck reference on both counters that matter most for
 occupancy, because it has three declaration forms where gpu-duck has six and no
 type sublanguage at all.
 
+Updating baba from 7.9.0 to 7.10.0 changed no counter at all — `lexerStates`,
+`islandStates`, `denseTransitionBytes`, and `packedBytes` are byte-identical,
+and byte parity still holds across all 39 corpus programs.
+
 Updating baba from 7.3.0 to 7.9.0 increased `packedBytes` by 448 bytes for the
 new runtime metadata. The grammar-dependent counters did not change.
 
