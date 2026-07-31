@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>blot — engine case study</title>
+    <style>
+      body {
+        background: #14161a;
+        color: #e6e6e6;
+        font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+        padding: 2rem 1rem;
+        margin: 0;
+      }
+      canvas {
+        background: #0b0c0e;
+        border: 1px solid #2a2e35;
+        image-rendering: pixelated;
+        width: 640px;
+        height: 400px;
+        max-width: 100%;
+      }
+      p { margin: 0; color: #8b949e; }
+      strong { color: #e6e6e6; font-weight: 500; }
+    </style>
+  </head>
+  <body>
+    <canvas id="screen" width="320" height="200"></canvas>
+    <p>
+      <strong>←</strong> and <strong>→</strong> move the paddle,
+      <strong>Esc</strong> stops.
+      <span id="status">starting…</span>
+    </p>
+
+    <script type="module">
+      // The page owns the canvas, the keyboard, and the clock. The program
+      // owns everything else, and reaches none of them except through the four
+      // operations it declared as host effects.
+
+      const screen = document.getElementById("screen");
+      const context = screen.getContext("2d");
+      const status = document.getElementById("status");
+
+      // [0] tick, [1] axis, [2] frames remaining. The worker blocks on [0].
+      const shared = new Int32Array(new SharedArrayBuffer(12));
+      Atomics.store(shared, 2, 100000);
+
+      const held = new Set();
+      const axisOf = () => {
+        let axis = 0;
+        if (held.has("ArrowLeft")) axis -= 1;
+        if (held.has("ArrowRight")) axis += 1;
+        return axis;
+      };
+      addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        held.add(event.key);
+        Atomics.store(shared, 1, axisOf());
+      });
+      addEventListener("keyup", (event) => {
+        held.delete(event.key);
+        Atomics.store(shared, 1, axisOf());
+      });
+      addEventListener("keydown", (event) => {
+        // `Host.frame` answers how many frames remain and the program breaks
+        // on zero, so stopping it is a store — the page never reaches into the
+        // loop, it just stops answering.
+        if (event.key === "Escape") Atomics.store(shared, 2, 0);
+      });
+
+      let rects = [];
+      let running = true;
+      const worker = new Worker("./worker.js", { type: "module" });
+      worker.onmessage = (event) => {
+        const message = event.data;
+        if (message.kind === "frame") rects = message.rects;
+        if (message.kind === "done") {
+          running = false;
+          status.textContent = `stopped after ${message.frames} frames`;
+        }
+      };
+
+      const response = await fetch("./main.wasm");
+      const wasm = await response.arrayBuffer();
+      const exported = await (await fetch("./export.txt")).text();
+      worker.postMessage(
+        { kind: "start", wasm, shared: shared.buffer, export: exported.trim() },
+        [wasm],
+      );
+      status.textContent = "running";
+
+      const draw = () => {
+        context.fillStyle = "#0b0c0e";
+        context.fillRect(0, 0, screen.width, screen.height);
+        for (const rect of rects) {
+          context.fillStyle = rect.colour;
+          context.fillRect(rect.x, rect.y, rect.w, rect.h);
+        }
+        // Release the worker for the next frame, then wake it.
+        if (running) {
+          Atomics.add(shared, 0, 1);
+          Atomics.notify(shared, 0);
+        }
+        requestAnimationFrame(draw);
+      };
+      requestAnimationFrame(draw);
+    </script>
+  </body>
+</html>

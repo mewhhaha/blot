@@ -6,14 +6,15 @@
     "generate": "deno run --allow-read --allow-write @mewhhaha/baba/cli grammar.baba --out generated --name blot --root program --metadata baba.json --target wasm",
     "inspect": "deno run --allow-read scripts/inspect_plan.ts",
     "parse": "deno run --allow-read scripts/parse.ts",
-    "check": "deno check scripts/*.ts case-studies/*.ts src/cli.ts src/compiler_service.ts src/load.test.ts src/check/setops.test.ts src/check/narrow.test.ts src/check/type.test.ts src/check/coverage.test.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts",
+    "check": "deno check scripts/*.ts case-studies/*.ts case-studies/engine/serve.ts src/cli.ts src/compiler_service.ts src/load.test.ts src/check/setops.test.ts src/check/narrow.test.ts src/check/type.test.ts src/check/coverage.test.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts",
     "test": "deno test --allow-read --allow-write",
     "blot": "deno run --allow-read src/cli.ts",
     "serve": "deno run --unstable-webgpu --allow-read --allow-write --allow-net --allow-env src/cli.ts serve",
     "bench:service": "deno run --unstable-webgpu --allow-read --allow-write --allow-run=deno,scripts/blot-service-client --allow-net --allow-env scripts/compiler_service_bench.ts",
     "bench:modules": "deno run --unstable-webgpu --allow-read --allow-write --allow-env scripts/module_incremental_bench.ts",
     "case-study": "deno run --unstable-webgpu --allow-read --allow-env case-studies/run.ts",
-    "install": "deno run --allow-read --allow-write --allow-env --allow-run=deno,tree-sitter scripts/setup_helix.ts"
+    "install": "deno run --allow-read --allow-write --allow-env --allow-run=deno,tree-sitter scripts/setup_helix.ts",
+    "engine": "deno run --unstable-webgpu --allow-read --allow-net --allow-env case-studies/engine/serve.ts"
   },
   "imports": {
     "@mewhhaha/baba": "jsr:@mewhhaha/baba@^7.10.0",

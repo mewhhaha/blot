@@ -14,6 +14,11 @@ type Study =
   | {
     readonly kind: "agent";
     readonly source: "case-studies/agent/main.blot";
+  }
+  | {
+    readonly kind: "engine";
+    readonly source: "case-studies/engine/main.blot";
+    readonly frames: number;
   };
 
 class GuestMemory {
@@ -93,9 +98,17 @@ if (studyName === "grep") {
     kind: "agent",
     source: "case-studies/agent/main.blot",
   };
+} else if (studyName === "engine" && studyArguments.length <= 1) {
+  const [frames] = studyArguments;
+  study = {
+    kind: "engine",
+    source: "case-studies/engine/main.blot",
+    frames: frames === undefined ? 120 : Number(frames),
+  };
 } else {
   throw new Error(
-    "usage: deno task case-study <grep <pattern> <path>|terminal|agent>",
+    "usage: deno task case-study " +
+      "<grep <pattern> <path>|terminal|agent|engine [frames]>",
   );
 }
 
@@ -141,6 +154,76 @@ if (study.kind === "grep") {
   };
 } else if (study.kind === "terminal") {
   imports = { "blot:host/Terminal": terminal };
+} else if (study.kind === "engine") {
+  // The headless canvas. It draws to a character grid instead of a page, so
+  // the study runs in CI and its output is a value a test can compare — the
+  // browser host in `index.html` grants the same four operations against a
+  // real `CanvasRenderingContext2D`.
+  const columns = 40;
+  const rows = 20;
+  const scaleX = 320 / columns;
+  const scaleY = 200 / rows;
+  let grid: string[][] = [];
+  let drawn = 0;
+  const palette = new Map([
+    ["#e6e6e6", "="],
+    ["#ff5f56", "r"],
+    ["#ffbd2e", "y"],
+    ["#27c93f", "g"],
+  ]);
+  const frames = study.frames;
+  let remaining = frames;
+
+  imports = {
+    "blot:host/Canvas": {
+      clear() {
+        grid = Array.from({ length: rows }, () => new Array(columns).fill("."));
+      },
+      fill(
+        colourPointer: number,
+        colourLength: number,
+        h: bigint,
+        w: bigint,
+        x: bigint,
+        y: bigint,
+      ) {
+        const colour = guest.readText(colourPointer, colourLength);
+        let mark = palette.get(colour);
+        if (mark === undefined) mark = "#";
+        const left = Math.round(Number(x) / scaleX);
+        const top = Math.round(Number(y) / scaleY);
+        const right = Math.round((Number(x) + Number(w)) / scaleX);
+        const bottom = Math.round((Number(y) + Number(h)) / scaleY);
+        for (let row = top; row < Math.max(bottom, top + 1); row += 1) {
+          for (let column = left; column < Math.max(right, left + 1); column += 1) {
+            if (row < 0 || row >= rows) continue;
+            if (column < 0 || column >= columns) continue;
+            grid[row][column] = mark;
+          }
+        }
+        drawn += 1;
+      },
+      present() {
+        // Only the last frame is printed. Every frame is simulated.
+        if (remaining > 0) return;
+        console.log(grid.map((row) => row.join("")).join("\n"));
+      },
+    },
+    "blot:host/Host": {
+      // A scripted input, so the study is deterministic and the drawn frame
+      // shows it: hold right for the first half, then let go.
+      axis(): bigint {
+        const elapsed = frames - remaining;
+        if (elapsed < frames / 2) return 1n;
+        return 0n;
+      },
+      frame(): bigint {
+        const answer = remaining;
+        remaining -= 1;
+        return BigInt(answer);
+      },
+    },
+  };
 } else {
   imports = {
     "blot:host/Terminal": terminal,
@@ -179,3 +262,4 @@ if (typeof main !== "function") {
 }
 const result = main();
 if (study.kind === "grep" && result === 0n) Deno.exitCode = 1;
+if (study.kind === "engine") console.log(`${result} frames simulated`);

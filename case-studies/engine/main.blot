@@ -1,0 +1,238 @@
+// A game engine, in a language with no assignment.
+//
+// The problem an ECS usually solves is that game state is a large mutable
+// graph and every system wants a different slice of it. Blot has no mutation,
+// so that framing does not apply — but the answer an ECS reaches still does:
+// keep components in parallel arrays keyed by entity, and write each system as
+// a function over the arrays it cares about.
+//
+// What blot adds is that the world does not have to be a value. A `for` body's
+// `:=` names *are* the accumulator, so the loop at the bottom is the world:
+// every component array is a name, each system rebinds the arrays it owns, and
+// the fold threads them to the next frame. There is no World type to pass
+// around, and a system that does not rebind a name cannot affect it — which is
+// the property an ECS normally arranges with scheduling and access
+// declarations.
+//
+// Rendering and input are host effects. The runner supplies a canvas.
+
+operators {
+  infixl 65 (++) = Text.append;
+};
+
+open {} = (@import "blot:prelude") ();
+
+// --- the host boundary ------------------------------------------------------
+//
+// Every authority this program has is written here. There is no canvas handle,
+// no DOM node, and no way to reach either: the runner grants four operations
+// and the program can do nothing else to the page.
+
+const Canvas = @effect.host {
+  .clear = Unit -> Unit;
+  .fill = {
+    .x = Int;
+    .y = Int;
+    .w = Int;
+    .h = Int;
+    .colour = Str;
+  } -> Unit;
+  .present = Unit -> Unit;
+};
+
+// `axis` is -1, 0, or 1: the horizontal input for this frame. `frame` blocks
+// until the host is ready to draw and answers how many frames remain, so the
+// host owns the clock and the program owns what happens on each tick.
+const Host = @effect.host {
+  .axis = Unit -> Int;
+  .frame = Unit -> Int;
+};
+
+// --- components -------------------------------------------------------------
+//
+// A component is an ordinary shape type, and a store is an array of them
+// indexed by entity. `#None` is how an entity says it does not have this
+// component, which is what lets one system skip an entity another system owns.
+
+const Position = { .x = Int; .y = Int; };
+const Velocity = { .dx = Int; .dy = Int; };
+const Sprite = { .w = Int; .h = Int; .colour = Str; };
+
+const Store = component => [Option component];
+
+// --- storage and queries ----------------------------------------------------
+//
+// Plain functions over plain arrays, and every one of them is a fold — which
+// is what a loop already is here.
+
+const attach = (store, value) => @array.push store (Some value);
+
+const at = (store, id) => @array.get store id;
+
+const count = store => @array.len store;
+
+// The join every system in this program wants. The left store is the one being
+// rebuilt; the right is read. An entity missing either component is skipped,
+// which is the whole of "this system runs on entities that have a position and
+// a velocity" — no registration, no signature bitset, no scheduler.
+const each_2 = (left, right, step) => fold (
+  upto (0, count left),
+  left,
+  ((state, id) => case at (left, id) of
+    #Some a => case at (right, id) of
+      #Some b => @array.set state id (Some (step (a, b))),
+      #None => state
+    end,
+    #None => state
+  end)
+);
+
+// The same join for a system whose result is an effect rather than a store.
+// `visit` runs in whatever row the caller is in, so `Canvas` reaches it
+// without this function mentioning canvases anywhere.
+const visit_2 = (left, right, visit) => each (
+  upto (0, count left),
+  (id => case at (left, id) of
+    #Some a => case at (right, id) of
+      #Some b => visit (a, b),
+      #None => ()
+    end,
+    #None => ()
+  end)
+);
+
+// --- the field --------------------------------------------------------------
+
+const width = 320;
+const height = 200;
+const paddle_width = 40;
+
+// The paddle is entity zero. A tag component would make the control system a
+// query like the others, but with a single controlled entity an id is clearer
+// than a store holding `#Some ()` once and `#None` three times.
+const paddle = 0;
+
+sig clamp = (Int, Int, Int) -> Int;
+let clamp = (value, low, high) =>
+  if value < low then low
+  else if value > high then high
+  else value
+  end;
+
+// --- systems ----------------------------------------------------------------
+//
+// Store in, store out. That is the entire calling convention, and it is why
+// the frame loop reads as a list of names being rebound.
+
+sig movement = (Store Position, Store Velocity) -> Store Position;
+let movement = (ps, vs) => each_2 (ps, vs, ((p, v) => {
+  .x = p.x + v.dx;
+  .y = p.y + v.dy;
+}));
+
+// Reflection off the walls. A sprite has to know its own width to say when it
+// has left the field, so this reads three stores: velocities out, positions
+// and sprites in. Entity zero is skipped because the paddle is the player's,
+// and a system that starts at 1 says so without needing a component to mark it.
+sig bounce = (Store Velocity, Store Position, Store Sprite) -> Store Velocity;
+let bounce = (vs, ps, ss) => fold (
+  upto (1, count vs),
+  vs,
+  ((state, id) => case at (vs, id) of
+    #Some v => case at (ps, id) of
+      #Some p => case at (ss, id) of
+        #Some s => @array.set state id (Some {
+          .dx = if p.x < 0 || p.x + s.w > width then 0 - v.dx else v.dx end;
+          .dy = if p.y < 0 || p.y + s.h > height then 0 - v.dy else v.dy end;
+        }),
+        #None => state
+      end,
+      #None => state
+    end,
+    #None => state
+  end)
+);
+
+sig control = (Store Position, Int) -> Store Position;
+let control = (ps, axis) => case at (ps, paddle) of
+  #Some p => @array.set ps paddle (Some {
+    .x = clamp (p.x + axis * 6, 0, width - paddle_width);
+    .y = p.y;
+  }),
+  #None => ps
+end;
+
+// Rendering is a system like the others, except its result is an effect. It
+// joins position with sprite, so an entity without a sprite is invisible
+// rather than special-cased anywhere.
+//
+// The one system with no `sig`: an effectful arrow's type includes its row,
+// and a row is printed but never written — `Canvas` is inferred from the calls
+// below and there is no syntax for saying so here.
+let render = (ps, ss) => do
+  let _ = Canvas.clear ();
+  let _2 = visit_2 (ps, ss, ((p, s) => Canvas.fill {
+    .x = p.x;
+    .y = p.y;
+    .w = s.w;
+    .h = s.h;
+    .colour = s.colour;
+  }));
+  in Canvas.present ()
+end;
+
+// --- the world --------------------------------------------------------------
+//
+// Four entities: a paddle the player moves and three blocks that bounce. Every
+// store is written in the same order, so entity `n` means the same thing in
+// all of them.
+
+sig positions = Store Position;
+let positions = attach (attach (attach (attach (
+  @array.empty,
+  { .x = 140; .y = 186; }),
+  { .x = 20; .y = 20; }),
+  { .x = 150; .y = 40; }),
+  { .x = 260; .y = 70; });
+
+sig velocities = Store Velocity;
+let velocities = attach (attach (attach (attach (
+  @array.empty,
+  { .dx = 0; .dy = 0; }),
+  { .dx = 3; .dy = 2; }),
+  { .dx = 0 - 2; .dy = 3; }),
+  { .dx = 2; .dy = 0 - 3; });
+
+sig sprites = Store Sprite;
+let sprites = attach (attach (attach (attach (
+  @array.empty,
+  { .w = paddle_width; .h = 8; .colour = "#e6e6e6"; }),
+  { .w = 12; .h = 12; .colour = "#ff5f56"; }),
+  { .w = 12; .h = 12; .colour = "#ffbd2e"; }),
+  { .w = 12; .h = 12; .colour = "#27c93f"; });
+
+// --- the frame loop ---------------------------------------------------------
+//
+// The three stores are the accumulator, so this is the world and the fold at
+// once. Adding a component to this game means adding a name here.
+
+let frames = 0;
+
+for ever do
+  let remaining = Host.frame ();
+  if remaining <= 0 then do
+    break;
+  end;
+
+  axis <- Host.axis;
+
+  positions := control (positions, axis);
+  velocities := bounce (velocities, positions, sprites);
+  positions := movement (positions, velocities);
+
+  let _ = render (positions, sprites);
+
+  frames := frames + 1;
+end;
+
+return frames;
