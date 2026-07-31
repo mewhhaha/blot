@@ -991,6 +991,14 @@ function comptimeArrayLength(expr: Expr, scope: TypeEnv): bigint | null {
   return lookupArrayLength(scope, path[0]);
 }
 
+/**
+ * Whether two ground types are the same set, written the same way.
+ *
+ * `===` on the bounds is exact for every `Bound` there is: two literals are
+ * equal when their values are, and a length bound is interned per
+ * `(occurrence, offset)` pair, so one object per denotation is what makes
+ * `len xs..len xs` recognise itself.
+ */
 function sameGround(left: SimpleType, right: SimpleType): boolean {
   if (left.tag === "range" && right.tag === "range") {
     return left.domain === right.domain && left.low === right.low &&
@@ -1075,7 +1083,9 @@ function inferCase(
       if (scrutinee !== null && unlistable(scrutinee)) {
         fail(
           "BLOT_INCOMPLETE_CASE",
-          `\`${showType(scrutinee)}\` has more values than these arms can cover. ` +
+          `\`${
+            showType(scrutinee)
+          }\` has more values than these arms can cover. ` +
             "Add the arms it is missing, or a `_` arm — `@panic` says why " +
             "reaching it is impossible.",
           expr.target.span,

@@ -36,6 +36,11 @@
 //     the values just below `"m"`; splitting `Str` at `"m"` would print
 //     `.."m" | "m"..` and readmit the value it was asked to remove. Integers are
 //     discrete, so the same split is exact for them and is performed.
+//   * A length cannot be subtracted from, or subtracted out of. `len xs` names
+//     an integer the compiler cannot see, so the two pieces a subtraction
+//     leaves cannot be shown to stay inside the range they came from. The
+//     ordering questions intersection asks are answered where a length permits
+//     it and refused where it does not; difference is refused outright.
 //   * An open `variant` is "these constructors, and possibly others". `variant`
 //     carries only `cases` and `open`, so there is no way to write down "those
 //     others, minus `#A`" — a negated constructor set is unrepresentable.
@@ -52,8 +57,16 @@
 // A set operation that silently readmits a value is worse than one that refuses.
 
 import { expect } from "../diagnostic.ts";
-import { BOTTOM, type Bound, type SimpleType, union } from "./type.ts";
-import { show } from "./print.ts";
+import {
+  BOTTOM,
+  type Bound,
+  boundAtMost,
+  type ClosedBound,
+  isLength,
+  type SimpleType,
+  union,
+} from "./type.ts";
+import { show, showRange } from "./print.ts";
 
 /**
  * Why an operation could not be performed exactly.
@@ -212,6 +225,21 @@ function differenceAtoms(left: Atom, right: Atom): Atom[] {
 
   if (left.tag === "range" && right.tag === "range") {
     if (left.domain !== right.domain) return [left];
+    // Subtraction splits an interval, and each piece keeps one of `left`'s own
+    // bounds beside one stepped off `right` — so a piece is inside `left` only
+    // if the two were comparable. `0..len xs - 1` minus `3` would otherwise
+    // yield `0..2`, which holds 2 even when the array holds one element.
+    // Refused rather than approximated: intersection is the operation the
+    // checker calls, and it loses nothing here.
+    for (const bound of [left.low, left.high, right.low, right.high]) {
+      if (isLength(bound)) {
+        refuse(
+          `\`${show(right)}\` cannot be removed from \`${
+            show(left)
+          }\`: a length is not a literal, so the values on either side of it cannot be listed`,
+        );
+      }
+    }
     if (apart(left.high, right.low) || apart(right.high, left.low)) {
       return [left];
     }
@@ -260,34 +288,66 @@ function differenceAtoms(left: Atom, right: Atom): Atom[] {
   return [left];
 }
 
-/** The greater of two lower bounds. `null` is unbounded below. */
+/**
+ * The greater of two lower bounds. `null` is unbounded below.
+ *
+ * Refuses when neither bound is known to be at most the other. It cannot
+ * approximate: naming the wrong one as the greater either drops values the
+ * intersection contains or admits values it does not.
+ *
+ * `boundAtMost` rather than a strict comparison is what makes the headline case
+ * work. `higherLow(0, len xs)` asks which of the two is greater when they may
+ * be equal, and `0 <= len xs` is decided even though `0 < len xs` is not.
+ */
 function higherLow(left: Bound, right: Bound): Bound {
   if (left === null) return right;
   if (right === null) return left;
-  if (below(left, right)) return right;
-  return left;
+  if (boundAtMost(left, right) === true) return right;
+  if (boundAtMost(right, left) === true) return left;
+  refuse(
+    `\`${showBound(left)}\` and \`${
+      showBound(right)
+    }\` cannot be ordered, so which of them starts the intersection is unknown`,
+  );
 }
 
 /** The lesser of two upper bounds. `null` is unbounded above. */
 function lowerHigh(left: Bound, right: Bound): Bound {
   if (left === null) return right;
   if (right === null) return left;
-  if (below(left, right)) return left;
-  return right;
+  if (boundAtMost(left, right) === true) return left;
+  if (boundAtMost(right, left) === true) return right;
+  refuse(
+    `\`${showBound(left)}\` and \`${
+      showBound(right)
+    }\` cannot be ordered, so which of them ends the intersection is unknown`,
+  );
 }
 
-/** No value satisfies both: the interval ran backwards. */
+/**
+ * No value satisfies both: the interval ran backwards.
+ *
+ * Unknown is read as "not crossed". Answering yes turns a range into `bottom`,
+ * which tells the rest of the compiler that a branch is unreachable — a claim
+ * about a program that a length nobody has measured cannot support. Keeping a
+ * range that may hold nothing costs only precision.
+ */
 function crossed(low: Bound, high: Bound): boolean {
   if (low === null || high === null) return false;
-  return below(high, low);
+  return boundAtMost(low, high) === false;
 }
 
-/** Every value at or below `high` is strictly below every value at or above `low`. */
+/**
+ * Every value at or below `high` is strictly below every value at or above
+ * `low`. Unknown is read as "not apart", which sends the difference on to the
+ * split — and the split refuses a length outright.
+ */
 function apart(high: Bound, low: Bound): boolean {
   if (high === null || low === null) return false;
-  return below(high, low);
+  return boundAtMost(low, high) === false;
 }
 
+/** Unknown is read as "does not cover": nothing is removed on a guess. */
 function covers(
   low: Bound,
   high: Bound,
@@ -295,20 +355,20 @@ function covers(
   innerHigh: Bound,
 ): boolean {
   const belowStart = low === null ||
-    (innerLow !== null && !below(innerLow, low));
+    (innerLow !== null && boundAtMost(low, innerLow) === true);
   const aboveEnd = high === null ||
-    (innerHigh !== null && !below(high, innerHigh));
+    (innerHigh !== null && boundAtMost(innerHigh, high) === true);
   return belowStart && aboveEnd;
 }
 
-function below(left: Bound, right: Bound): boolean {
-  if (typeof left === "bigint" && typeof right === "bigint") {
-    return left < right;
-  }
-  if (typeof left === "string" && typeof right === "string") {
-    return left < right;
-  }
-  expect(false, "a range compared bounds across two domains");
+/**
+ * A bound on its own, for a refusal that has no range to show.
+ *
+ * Only a length is ever undecided, and a length is an integer, so this is
+ * never asked to spell a text bound.
+ */
+function showBound(bound: ClosedBound): string {
+  return showRange("int", bound, bound);
 }
 
 function stepDown(bound: Bound): Bound {

@@ -17,7 +17,14 @@
 // printer has to be canonical: variables are named in the order they are
 // reached, never by allocation id.
 
-import type { Bound, SimpleType, Variable } from "./type.ts";
+import {
+  type Bound,
+  isLength,
+  type LengthBound,
+  lengthSubject,
+  type SimpleType,
+  type Variable,
+} from "./type.ts";
 
 interface Occurrences {
   readonly positive: Set<number>;
@@ -364,6 +371,7 @@ export function showRange(
   high: Bound,
 ): string {
   if (low !== null && low === high) {
+    if (isLength(low)) return showLength(low);
     return domain === "text" ? JSON.stringify(low) : String(low);
   }
   // `Str`, not `Text`: `Text` is the prelude's namespace record, so the name
@@ -371,17 +379,29 @@ export function showRange(
   if (low === null && high === null) return domain === "int" ? "Int" : "Str";
   // `""` is the bottom of the lexicographic order, so `""..` is every text.
   if (domain === "text" && low === "" && high === null) return "Str";
-  const left = low === null
-    ? ""
-    : domain === "text"
-    ? JSON.stringify(low)
-    : String(low);
-  const right = high === null
-    ? ""
-    : domain === "text"
-    ? JSON.stringify(high)
-    : String(high);
-  return `${left}..${right}`;
+  return `${showEnd(domain, low)}..${showEnd(domain, high)}`;
+}
+
+function showEnd(domain: "int" | "text", bound: Bound): string {
+  if (bound === null) return "";
+  if (isLength(bound)) return showLength(bound);
+  if (domain === "text") return JSON.stringify(bound);
+  return String(bound);
+}
+
+/**
+ * `len xs`, `len xs - 1`, `len xs + 1`.
+ *
+ * Spelled as the arithmetic it is, because a reader who is told their index is
+ * outside `0..len xs - 1` can act on it, and one who is told `0..[object
+ * Object]` cannot. The subject is `lengthSubject`'s, so two occurrences written
+ * with the same name are still told apart.
+ */
+function showLength(bound: LengthBound): string {
+  const subject = `len ${lengthSubject(bound)}`;
+  if (bound.offset === 0n) return subject;
+  if (bound.offset < 0n) return `${subject} - ${-bound.offset}`;
+  return `${subject} + ${bound.offset}`;
 }
 
 /** The module-level row: empty means nothing escaped unhandled. */

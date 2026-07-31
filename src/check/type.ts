@@ -17,10 +17,60 @@
 // bounds rather than by unifying. It is polynomial, which is what pays for
 // keeping ownership and linearity out of the lattice entirely.
 
+import { expect } from "../diagnostic.ts";
+
 export type Level = number;
 
+/**
+ * `length(binding) + offset` — the number of elements in the array value bound
+ * at one binding occurrence, shifted by a literal.
+ *
+ * WHY A LENGTH IS A BOUND AND NOT A TYPE
+ *
+ * An array's type is `{ tag: "array", element }` and carries no length, because
+ * a length is a fact about a *value*. What an index needs is not the array's
+ * type but something it can be compared against, and the thing an integer range
+ * compares against is a `Bound`. So the symbol goes here, in the one place the
+ * lattice already reads relationally, and nowhere else: there is no new
+ * `SimpleType` constructor, no equation store, and no constraint between two
+ * symbols. Comparison is same-root-or-unknown, which is O(1) and total.
+ *
+ * IDENTITY IS THE BINDING OCCURRENCE
+ *
+ * `binding` is an id minted at a binder — `let`, `const`, `:=`, a lambda
+ * parameter, a pattern binder, a `for` binder. blot has no assignment and
+ * arrays are immutable, so one binding occurrence denotes exactly one value for
+ * its whole lifetime, and `len(b)` therefore denotes exactly one integer.
+ *
+ * The two cheaper keys are unsound, each with a program that shows it:
+ *
+ *   * By name. `let measure = vs => @array.len vs; let read = vs => (i =>
+ *     @array.get vs i);` — two lambdas, two different arrays, one name. A
+ *     measurement of the first would license a read of the second.
+ *   * By type variable. `@array.push`'s scheme builds parameter and result from
+ *     the same `element` object (primitives.ts), so `let bigger = @array.push
+ *     xs 9;` shares `xs`'s variable. Measuring `bigger` would license a read of
+ *     `xs` one element past its end.
+ *
+ * The cost of the sound key is that `let ys = xs;` gives `len(ys) != len(xs)`:
+ * a fact proved about `xs` says nothing about `ys`. Sound, incomplete, and
+ * visible in the source.
+ *
+ * `name` is for the reader only. Two occurrences may share it; it takes no part
+ * in identity, and `lengthSubject` is what disambiguates it in a message.
+ */
+export interface LengthBound {
+  readonly tag: "len";
+  readonly binding: number;
+  readonly offset: bigint;
+  readonly name: string;
+}
+
 /** `null` is an open end: the domain is unbounded in that direction. */
-export type Bound = bigint | string | null;
+export type Bound = bigint | string | LengthBound | null;
+
+/** A bound that names a value — everything but the open end. */
+export type ClosedBound = Exclude<Bound, null>;
 
 export interface Variable {
   readonly tag: "var";
@@ -183,17 +233,127 @@ export function tupleType(elements: readonly SimpleType[]): SimpleType {
   );
 }
 
-/** `-Infinity <= x` and `x <= Infinity`, spelled for `null` bounds. */
+const lengthBounds = new Map<string, LengthBound>();
+/** The first occurrence to claim each display name. See `lengthSubject`. */
+const lengthClaims = new Map<string, number>();
+
+/**
+ * `len(binding) + offset`, interned so that `===` is denotational equality.
+ *
+ * The interning is load-bearing rather than a cache. `sameGround` in infer.ts
+ * compares bounds with `===`, and `boundAtMost` must accept
+ * `0..len xs - 1 <: 0..len xs - 1`; on two structurally equal objects a raw
+ * `===` would answer no and a raw `<=` would answer yes in *both* directions,
+ * because JavaScript stringifies every object to `"[object Object]"`. One
+ * object per pair removes the question.
+ */
+export function lengthBound(
+  binding: number,
+  offset: bigint,
+  name: string,
+): LengthBound {
+  const key = `${binding}:${offset}`;
+  const existing = lengthBounds.get(key);
+  if (existing !== undefined) return existing;
+  if (!lengthClaims.has(name)) lengthClaims.set(name, binding);
+  const minted: LengthBound = { tag: "len", binding, offset, name };
+  lengthBounds.set(key, minted);
+  return minted;
+}
+
+export function isLength(bound: Bound): bound is LengthBound {
+  return bound !== null && typeof bound === "object";
+}
+
+/**
+ * How a message names the array whose length this is.
+ *
+ * Two occurrences may be written with the same name, and an error that said
+ * `len xs` about either of them would read as a compiler bug. The occurrence
+ * that claimed the name first keeps it; every other one is spelled `xs#7`.
+ */
+export function lengthSubject(bound: LengthBound): string {
+  if (lengthClaims.get(bound.name) === bound.binding) return bound.name;
+  return `${bound.name}#${bound.binding}`;
+}
+
+/**
+ * The one fact the compiler assumes about a length it cannot see.
+ *
+ * `@array.len` lowers to `at.storeLength` converted through
+ * `SignedInteger32ToSignedInteger64` (src/backend/lower.ts), so an array's
+ * length is an i32 and `0 <= len(b) <= 2147483647` holds of every array a blot
+ * program can build. It is admitted here because without it nothing narrows:
+ * `n >= 0` proves `0..` and `n < @array.len xs` proves `..len xs - 1`, and
+ * intersecting those two needs `0 <= len xs` to pick a lower bound at all.
+ *
+ * It is not the first step of a theory, because there is no second step
+ * available. A bound holds one symbol and one literal offset, so relating a
+ * symbol to a literal is the only assumption there is room to make; relating
+ * two symbols would need a normal form this representation cannot express.
+ */
+export const LONGEST_ARRAY = 2147483647n;
+
+/**
+ * `left <= right`, or `null` when the lengths involved do not settle it.
+ *
+ * Partial, and that is the representation's whole soundness. A three-way
+ * ordering cannot express the state of `0` against `len xs` — below or same,
+ * and which one is unknown — which is the state of the comparison the feature
+ * exists to make. Every caller is told which arm it took and decides for
+ * itself what an unknown means; none of them may treat it as an ordering.
+ */
+export function boundAtMost(
+  left: ClosedBound,
+  right: ClosedBound,
+): boolean | null {
+  if (typeof left === "bigint" && typeof right === "bigint") {
+    return left <= right;
+  }
+  if (typeof left === "string" && typeof right === "string") {
+    return left <= right;
+  }
+  if (isLength(left) && isLength(right)) {
+    // The same occurrence denotes the same integer, so only the offsets differ.
+    // Two different occurrences are two unrelated integers: no envelope can
+    // settle them, and asking would be the first constraint between symbols.
+    if (left.binding !== right.binding) return null;
+    return left.offset <= right.offset;
+  }
+  if (isLength(left) && typeof right === "bigint") {
+    if (LONGEST_ARRAY + left.offset <= right) return true;
+    if (left.offset > right) return false;
+    return null;
+  }
+  if (typeof left === "bigint" && isLength(right)) {
+    if (left <= right.offset) return true;
+    if (left > LONGEST_ARRAY + right.offset) return false;
+    return null;
+  }
+  // A length is an integer, so this is a text bound against an int one. A
+  // range's domain is checked before its bounds are, so reaching here is the
+  // compiler having built a range whose bounds disagree with its domain.
+  expect(false, "a range compared bounds across two domains");
+}
+
+/**
+ * `-Infinity <= x` and `x <= Infinity`, spelled for `null` bounds.
+ *
+ * Unknown is read as "does not hold". These two decide whether one range is
+ * inside another, so a false negative refuses a program and a false positive
+ * accepts an unsound one; refusing is the direction that can be corrected by
+ * writing the fact down.
+ */
 export function boundBelow(outer: Bound, inner: Bound): boolean {
   if (outer === null) return true;
   if (inner === null) return false;
-  return outer <= inner;
+  return boundAtMost(outer, inner) === true;
 }
 
 export function boundAbove(inner: Bound, outer: Bound): boolean {
   if (outer === null) return true;
   if (inner === null) return false;
-  return inner <= outer;
+  return boundAtMost(inner, outer) === true;
 }
 
 export function levelOf(type: SimpleType): Level {

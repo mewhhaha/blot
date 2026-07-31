@@ -10,10 +10,13 @@ import { difference, intersect, UNSUPPORTED_SET_OP } from "./setops.ts";
 import { show } from "./print.ts";
 import {
   BOTTOM,
+  type Bound,
   freshVar,
   fun,
   INT,
   intLiteral,
+  lengthBound,
+  LONGEST_ARRAY,
   openVariant,
   PURE,
   record,
@@ -228,6 +231,105 @@ Deno.test("nested differences stay linear in the number of cuts", () => {
   assertEquals(
     show(current),
     "..9 | 11..19 | 21..29 | 31..39 | 41..49 | 51..59 | 61..",
+  );
+});
+
+// A length bound is what an index gets compared against. The occurrence ids
+// here stand in for ones the checker would mint at a binder.
+const lenXs = lengthBound(301, 0n, "xs");
+const lastXs = lengthBound(301, -1n, "xs");
+const lenYs = lengthBound(302, 0n, "ys");
+const lastYs = lengthBound(302, -1n, "ys");
+
+function bounded(low: Bound, high: Bound): SimpleType {
+  return { tag: "range", domain: "int", low, high };
+}
+
+Deno.test("two comparisons against a length intersect to the array's own indices", () => {
+  // `n >= 0` proves `0..` and `n < @array.len xs` proves `..len xs - 1`. This
+  // is the intersection the feature exists to compute, and it is decided only
+  // because `0 <= len xs` is admitted.
+  assertEquals(
+    got(intersect(bounded(0n, null), bounded(null, lastXs))),
+    "0..len xs - 1",
+  );
+  // The branch not taken is the half nobody traced: `0.. ∩ len xs..`. It has
+  // to answer too, because a proof is thrown away unless both sides of the
+  // condition give a type.
+  assertEquals(
+    got(intersect(bounded(0n, null), bounded(lenXs, null))),
+    "len xs..",
+  );
+  assertEquals(got(intersect(bounded(0n, lastXs), INT)), "0..len xs - 1");
+  assertEquals(
+    got(intersect(bounded(0n, lastXs), bounded(0n, lastXs))),
+    "0..len xs - 1",
+  );
+});
+
+Deno.test("two arrays' lengths cannot be ordered, so the intersection refuses", () => {
+  // The unsound answer is either one of them; the useless answer is the wider
+  // of the two. Both are wrong, and nothing here is allowed to guess which
+  // array is longer.
+  assertStringIncludes(
+    refusal(intersect(bounded(0n, lastXs), bounded(0n, lastYs))),
+    "cannot be ordered",
+  );
+  assertStringIncludes(
+    refusal(intersect(bounded(lenXs, null), bounded(lenYs, null))),
+    "cannot be ordered",
+  );
+});
+
+Deno.test("a length against a literal refuses unless the envelope settles it", () => {
+  // `0 <= len xs <= 2147483647` is the whole theory. It decides these:
+  assertEquals(
+    got(intersect(bounded(lenXs, null), bounded(0n, null))),
+    "len xs..",
+  );
+  assertEquals(
+    got(intersect(bounded(null, lastXs), bounded(null, LONGEST_ARRAY))),
+    "..len xs - 1",
+  );
+  // and not these, because an empty array answers one way and a longer one the
+  // other.
+  assertStringIncludes(
+    refusal(intersect(bounded(0n, lastXs), bounded(0n, 5n))),
+    "cannot be ordered",
+  );
+  assertStringIncludes(
+    refusal(intersect(bounded(lenXs, null), bounded(1n, null))),
+    "cannot be ordered",
+  );
+});
+
+Deno.test("a range that may be empty stays a range rather than becoming bottom", () => {
+  // `len xs..0` holds nothing when the array is not empty. Answering `⊥` would
+  // tell the rest of the compiler that a branch is unreachable, which is a
+  // claim about the program that a length nobody measured cannot support.
+  assertEquals(
+    got(intersect(bounded(lenXs, null), bounded(null, 0n))),
+    "len xs..0",
+  );
+});
+
+Deno.test("a length cannot be subtracted from, or subtracted out of", () => {
+  // Subtraction splits an interval and each piece keeps one of the original
+  // bounds beside one stepped off the other, so a piece is inside the range it
+  // came from only if the two were comparable. `0..len xs - 1` minus `3` would
+  // otherwise leave `0..2`, which holds 2 even when the array holds one
+  // element.
+  assertStringIncludes(
+    refusal(difference(bounded(0n, lastXs), intLiteral(3n))),
+    "a length is not a literal",
+  );
+  assertStringIncludes(
+    refusal(difference(INT, bounded(lenXs, lenXs))),
+    "a length is not a literal",
+  );
+  assertStringIncludes(
+    refusal(difference(bounded(0n, lastXs), bounded(0n, lastXs))),
+    "a length is not a literal",
   );
 });
 
