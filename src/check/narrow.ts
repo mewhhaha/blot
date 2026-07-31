@@ -405,6 +405,63 @@ function tabulate(value: Value): ReadonlySet<Ordering> | null {
  * that performs an effect finds no host, and a probe that refuses raises
  * `BLOT_REFUSED` — none of which is a diagnosis of the user's program.
  */
+/** Whether a two-argument boolean function is conjunction or disjunction. */
+export type Junction = "and" | "or";
+
+const junctions = new WeakMap<Value, { readonly result: Junction | null }>();
+
+/**
+ * Which junction `value` computes, or `null` when it is neither.
+ *
+ * Tabulated over all four boolean inputs rather than recognised by name, for
+ * the same reason a comparison is: `&&` is `Logic.and`, an ordinary binding a
+ * module may shadow, and a shadowed one that is not conjunction must not be
+ * mistaken for it. Four probes settle it exactly.
+ */
+export function junction(value: Value): Junction | null {
+  const cached = junctions.get(value);
+  if (cached !== undefined) return cached.result;
+  const result = deriveJunction(value);
+  junctions.set(value, { result });
+  return result;
+}
+
+function deriveJunction(value: Value): Junction | null {
+  const truth: boolean[] = [];
+  for (const left of [true, false]) {
+    for (const right of [true, false]) {
+      const answer = probeBool(value, left, right);
+      if (answer === null) return null;
+      truth.push(answer);
+    }
+  }
+  const [tt, tf, ft, ff] = truth;
+  if (tt && !tf && !ft && !ff) return "and";
+  if (tt && tf && ft && !ff) return "or";
+  return null;
+}
+
+function probeBool(value: Value, left: boolean, right: boolean): boolean | null {
+  const asTag = (flag: boolean): Value => {
+    if (flag) return { tag: "tag", name: "True", payload: null };
+    return { tag: "tag", name: "False", payload: null };
+  };
+  try {
+    const runtime = evaluationRuntime(new Map(), "comptime", PROBE_FUEL);
+    const answer = run((function* () {
+      const partial = yield* apply(value, asTag(left), NOWHERE, runtime);
+      return yield* apply(partial, asTag(right), NOWHERE, runtime);
+    })());
+    if (answer.tag !== "tag") return null;
+    if (answer.payload !== null) return null;
+    if (answer.name === "True") return true;
+    if (answer.name === "False") return false;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function probe(value: Value, left: bigint, right: bigint): boolean | null {
   try {
     const runtime = evaluationRuntime(new Map(), "comptime", PROBE_FUEL);

@@ -732,10 +732,14 @@ the branch failing to cover a set the condition would have shrunk.
   through to an outer one. This is what makes shadowing safe: the checker never
   reasons about a function the program does not call, and an operator record
   supplied by the _caller_ could never be reasoned about at all.
-- **A condition built from two comparisons.** `if n >= 0 && n < 3` proves
-  nothing, and neither does `||`. `&&` is an ordinary fixity entry naming a
-  prelude function of two booleans (§7), and what is recognised is a comparison
-  of two integers — so a conjunction has to be written as nested `if`s.
+- **The other half of a junction.** `if a && b` proves what *both* halves prove
+  about one name, and the branch it does not take proves nothing: failing a
+  conjunction can mean failing either half. `||` is the mirror — its untaken
+  branch proves both, its taken branch proves nothing. A junction is recognised
+  by its truth table, tabulated over the four boolean inputs, so a shadowed
+  `Logic.and` that is not conjunction proves nothing rather than being mistaken
+  for one. Two halves that speak about *different* names also prove nothing: a
+  proof narrows one name.
 - **A length reached by anything but a name.** `@array.len box.values`,
   `@array.len (f ())`, and the prelude's `Array.length xs` name no binding
   occurrence, so there is no symbol to compare against. Only the primitive

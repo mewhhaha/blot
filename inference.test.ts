@@ -624,17 +624,34 @@ check(
 );
 
 // `&&` proves nothing, so the guard has to nest. This is pinned as the type it
-// leaves rather than as a wish: `Logic.and` is an ordinary prelude function over
-// two booleans, and nothing recognises it as a conjunction of comparisons.
+// leaves rather than as a wish: a junction is recognised by its truth table,
+// so `&&` narrows — and an index range is still not `1 | 2`.
+check(
+  "`&&` proves both halves, so a bounded range is covered",
+  'sig f = Int -> Str;\n' +
+    'let f = i => if i > 0 && i < 3 then case i of 1 => "a", 2 => "b" end else "out" end;\n' +
+    "return f;",
+  "Int -> Str",
+);
+
 rejects(
-  "`&&` leaves the index exactly as wide as it was",
+  "a junction that is not conjunction proves nothing",
+  "const Logic = { .not = v => v; .and = a => (b => True); .or = a => (b => a); };\n" +
+    "sig f = Int -> Str;\n" +
+    'let f = i => if i > 0 && i < 3 then case i of 1 => "a", 2 => "b" end else "out" end;\n' +
+    "return f;",
+  "BLOT_INCOMPLETE_CASE",
+);
+
+rejects(
+  "`&&` narrows the index, and an index range is still not `1 | 2`",
   "sig small = 1 | 2 -> Str;\n" +
     'let small = k => case k of 1 => "one", 2 => "two" end;\n' +
     "sig at = [Int] -> Int -> Str;\n" +
     "let at = xs => (n =>\n" +
     '  if n >= 0 && n < @array.len xs then small n else "lo" end);\n' +
     "return at;",
-  "`Int` is not one of `1` | `2`",
+  "is not one of `1` | `2`",
 );
 
 // The rejections. Every value the index can take is past the end, whatever the

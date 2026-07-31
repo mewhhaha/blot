@@ -34,8 +34,9 @@
       "jsr:@std/path@1"
     ],
     "links": {
-      "jsr:@mewhhaha/gpufuck@0.7.0": {
+      "jsr:@mewhhaha/gpufuck@0.8.0": {
         "dependencies": [
+          "jsr:@mewhhaha/baba@7.10.0",
           "jsr:@mewhhaha/baba@7.9.0"
         ]
       }

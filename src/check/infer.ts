@@ -35,6 +35,8 @@ import { bridge, effectLabel } from "./bridge.ts";
 import { showLiterals, uncovered, unlistable } from "./coverage.ts";
 import {
   complement,
+  type Junction,
+  junction,
   mirror,
   type Ordering,
   recognise,
@@ -855,6 +857,20 @@ function narrowing(condition: Expr, scope: TypeEnv): Narrowing | null {
   if (path === null) return null;
   const callee = comptimeAt(path, scope);
   if (callee === null) return null;
+
+  // `a && b` and `a || b` are ordinary applications of ordinary bindings, so
+  // they are recognised by their truth table rather than by name — a shadowed
+  // `Logic.and` that is not conjunction tabulates as neither and proves
+  // nothing. This is the same discipline the comparisons use.
+  const shape = junction(callee);
+  if (shape !== null) {
+    return combined(
+      shape,
+      narrowing(condition.fn.arg, scope),
+      narrowing(condition.arg, scope),
+    );
+  }
+
   const answers = recognise(callee);
   if (answers === null) return null;
 
@@ -902,6 +918,46 @@ function proves(
     name: subject.name,
     before: subject.type,
     taken: taken.type,
+    untaken: untaken.type,
+  };
+}
+
+/**
+ * What `a && b` or `a || b` proves, from what each side proves.
+ *
+ * Only when both sides speak about the *same* name: a `Narrowing` carries one,
+ * and two names would need two scopes.
+ *
+ * One side of each junction proves nothing, and it is the side De Morgan turns
+ * into a union. `not (a && b)` is `not a || not b` — a value failing the
+ * conjunction may fail either half, so the untaken branch learns nothing and
+ * keeps the type it had. `a || b` is the mirror: its taken branch learns
+ * nothing, and its untaken branch learns both.
+ */
+function combined(
+  shape: Junction,
+  left: Narrowing | null,
+  right: Narrowing | null,
+): Narrowing | null {
+  if (left === null || right === null) return null;
+  if (left.name !== right.name) return null;
+
+  if (shape === "and") {
+    const taken = intersect(left.taken, right.taken);
+    if (taken.tag !== "type") return null;
+    return {
+      name: left.name,
+      before: left.before,
+      taken: taken.type,
+      untaken: left.before,
+    };
+  }
+  const untaken = intersect(left.untaken, right.untaken);
+  if (untaken.tag !== "type") return null;
+  return {
+    name: left.name,
+    before: left.before,
+    taken: left.before,
     untaken: untaken.type,
   };
 }
