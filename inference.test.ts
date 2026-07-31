@@ -264,9 +264,15 @@ check(
   '\'a -> ("one" | "two")',
 );
 
-check(
-  "an unbounded domain carries no coverage requirement",
+rejects(
+  "an unbounded domain cannot be covered by literal arms",
   'sig f = Int -> Str;\nlet f = n => case n of 1 => "one" end;\nreturn f;',
+  "BLOT_INCOMPLETE_CASE",
+);
+
+check(
+  "a `_` arm covers what literals cannot, and `@panic` says why it is unreachable",
+  'sig f = Int -> Str;\nlet f = n => case n of 1 => "one", _ => @panic "not one" end;\nreturn f;',
   "Int -> Str",
 );
 

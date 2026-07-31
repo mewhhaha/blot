@@ -86,6 +86,7 @@ const REJECTIONS: Record<
   "rebinding_type_change": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "rebinding_unbound": { code: "BLOT_UNBOUND", stage: "check" },
   "generic_refused": { code: "BLOT_REFUSED", stage: "check" },
+  "unbounded_case": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
   "guard_may_continue": {
     code: "BLOT_GUARD_MAY_CONTINUE",
     stage: "check",

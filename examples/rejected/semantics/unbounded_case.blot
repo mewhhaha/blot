@@ -1,0 +1,10 @@
+// Literal arms cannot cover an unbounded domain. `Int` holds infinitely many
+// values, so no finite set of arms exhausts it — the choice is to narrow the
+// type, add the arms, or write the `_` arm and say with `@panic` why reaching
+// it is impossible.
+open {} = (@import "blot:prelude") ();
+
+sig describe = Int -> Str;
+let describe = n => case n of 1 => "one", 2 => "two" end;
+
+return describe 1;

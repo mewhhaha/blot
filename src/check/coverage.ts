@@ -91,6 +91,25 @@ export function uncovered(
   );
 }
 
+/**
+ * Whether a scalar domain is too large for literal arms to cover.
+ *
+ * A range with an open end holds infinitely many values, so no finite set of
+ * literal arms can be exhaustive over it and `uncovered` has nothing to list.
+ * Reading that silence as "covered" is how `case n of 1 => …` over `Int` was
+ * accepted and then trapped at run time. Saying so instead lets the program
+ * choose: widen the type, add the missing arms, or write the `_` arm and say
+ * with `@panic` why reaching it is impossible.
+ */
+export function unlistable(type: SimpleType): boolean {
+  if (type.tag === "range") {
+    if (type.low === null || type.high === null) return true;
+    return type.low !== type.high;
+  }
+  if (type.tag !== "union") return false;
+  return type.members.some(unlistable);
+}
+
 /** `1 | 2`, spelled the way a `sig` would spell it. */
 export function showLiterals(literals: readonly Literal[]): string {
   return literals

@@ -32,7 +32,7 @@ import {
   run,
 } from "../comptime/eval.ts";
 import { bridge, effectLabel } from "./bridge.ts";
-import { showLiterals, uncovered } from "./coverage.ts";
+import { showLiterals, uncovered, unlistable } from "./coverage.ts";
 import {
   complement,
   mirror,
@@ -957,13 +957,29 @@ function inferCase(
   // and the constraint would pin it to whatever the arms happen to list rather
   // than reporting what they miss. Literal arms stay non-constraining.
   if (!open) {
-    const missing = uncovered(target, accepted.map((arm) => arm.accepted));
+    const armTypes = accepted.map((arm) => arm.accepted);
+    const missing = uncovered(target, armTypes);
     if (missing !== null && missing.length > 0) {
       fail(
         "BLOT_INCOMPLETE_CASE",
         `No arm covers \`${showLiterals(missing)}\`.`,
         expr.target.span,
       );
+    }
+    // A scrutinee with an open end holds infinitely many values, so literal
+    // arms can never exhaust it. `uncovered` returns nothing to list, and
+    // reading that as "covered" is what let this trap at run time instead.
+    if (missing === null && armTypes.length > 0 && scalarArms(armTypes)) {
+      const scrutinee = groundScalar(target);
+      if (scrutinee !== null && unlistable(scrutinee)) {
+        fail(
+          "BLOT_INCOMPLETE_CASE",
+          `\`${showType(scrutinee)}\` has more values than these arms can cover. ` +
+            "Add the arms it is missing, or a `_` arm — `@panic` says why " +
+            "reaching it is impossible.",
+          expr.target.span,
+        );
+      }
     }
   }
   // Recorded after the arms, not before: the scrutinee's constructor set is
@@ -1061,6 +1077,27 @@ interface AcceptedArm {
  * the backend lowers by. A literal payload is a guard rather than a
  * requirement, so it constrains nothing on its own.
  */
+/** Every arm matches a single scalar literal — nothing structural. */
+function scalarArms(arms: readonly SimpleType[]): boolean {
+  return arms.every((arm) => arm.tag === "range");
+}
+
+/** The scrutinee as a scalar set, through a variable's bounds if need be. */
+function groundScalar(type: SimpleType): SimpleType | null {
+  if (type.tag === "range") return type;
+  if (type.tag === "union") {
+    if (type.members.every((member) => member.tag === "range")) return type;
+    return null;
+  }
+  if (type.tag === "var") {
+    for (const bound of type.upper) {
+      const found = groundScalar(bound);
+      if (found !== null) return found;
+    }
+  }
+  return null;
+}
+
 function mergeAccepted(
   accepted: readonly AcceptedArm[],
   open: boolean,

@@ -586,12 +586,34 @@ end;
 is refused: `3` is a member of the target's type that no arm covers. Adding a
 `3` arm, or any irrefutable arm, accepts it.
 
-The requirement applies only where the target's type enumerates its members: a
-declared union of literals, or a single literal. `Int`, `Str`, a range with an
-open end, and a target whose type inference has not pinned carry no coverage
-requirement, since no finite arm list could discharge one. Literal arms
-therefore still constrain nothing on their own: without the `sig` above, `rank`
-accepts any argument and owes no coverage at all.
+A target whose type has an *open end* — `Int`, `Str`, any unbounded range —
+holds infinitely many values, so no finite list of literal arms can exhaust it.
+Such a `case` is refused rather than accepted in silence:
+
+```blot
+sig describe = Int -> Str;
+let describe = n => case n of 1 => "one", 2 => "two" end;
+// BLOT_INCOMPLETE_CASE: `Int` has more values than these arms can cover.
+```
+
+The choice is to narrow the target's type, add the missing arms, or write an
+irrefutable arm. `@panic` is how that arm says why reaching it is impossible:
+
+```blot
+let describe = n => case n of
+  1 => "one",
+  2 => "two",
+  _ => @panic "callers are checked against `1 | 2` upstream"
+end;
+```
+
+`@panic` takes a text and returns the empty type, so it may stand where any
+value is expected. It is not a caught failure: reaching it stops the program.
+
+A target whose type inference has not pinned carries no coverage requirement,
+since there is nothing to enumerate. Literal arms therefore still constrain
+nothing on their own: without the `sig` above, `rank` accepts any argument and
+owes no coverage at all.
 
 An arm's pattern types the names the arm binds: what the target carries for a
 constructor flows into that arm's payload pattern. An irrefutable arm leaves the
