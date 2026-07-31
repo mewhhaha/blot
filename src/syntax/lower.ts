@@ -1587,6 +1587,9 @@ function lowerPattern(rule: Rule): Pattern {
     if (core.kind === "INTEGER") {
       return { tag: "int", value: BigInt(core.text), span: rule.span };
     }
+    if (core.kind === "FLOAT") {
+      return { tag: "float", value: Number(core.text), span: rule.span };
+    }
     if (core.kind === "TEXT") {
       return {
         tag: "text",
@@ -1871,6 +1874,9 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     }
     if (cursor.kind === "INTEGER") {
       return { tag: "int", value: BigInt(cursor.text), span };
+    }
+    if (cursor.kind === "FLOAT") {
+      return { tag: "float", value: Number(cursor.text), span };
     }
     if (cursor.kind === "TEXT") {
       return { tag: "text", value: decodeText(cursor.text, span), span };

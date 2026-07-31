@@ -58,6 +58,7 @@ import {
   effects,
   freshVar,
   INT,
+  FLOAT,
   intLiteral,
   lengthBound,
   type Level,
@@ -384,6 +385,8 @@ export function infer(
   switch (expr.tag) {
     case "int":
       return intLiteral(expr.value);
+    case "float":
+      return FLOAT;
     case "text":
       return textLiteral(expr.value);
     case "unit":
@@ -1575,6 +1578,12 @@ function bindPattern(
     }
     case "int":
       return intLiteral(pattern.value);
+    // A float pattern accepts every float, not the one it names: the type says
+    // what the arm may receive, and a float carries no singleton to say less.
+    // The arm still runs only on a match — this is why a `case` over floats
+    // never becomes exhaustive without a wildcard.
+    case "float":
+      return FLOAT;
     case "text":
       return textLiteral(pattern.value);
     case "unit":

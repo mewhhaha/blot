@@ -93,6 +93,7 @@ export type MainTokenKind =
   | "IDENT"
   | "TYPE_IDENT"
   | "INTEGER"
+  | "FLOAT"
   | "TEXT"
   | "ELSE_IF"
   | "INTRINSIC"

@@ -56,6 +56,14 @@ The flat core types are:
 | variant    | `i32` discriminant followed by the joined payload |
 | seal       | its carrier                                       |
 
+`F64` is absent, and that is a limit rather than an omission. gpufuck's
+canonical ABI has no float case, so there is no stable layout to publish one
+under, even though the Component Model's own canonical ABI has `float64` and
+Core computes with doubles internally. A float is therefore a program's own
+arithmetic and not its interface: an export or host operation that mentions one
+is refused with `BLOT_FLOAT_AT_BOUNDARY`, and `@int.of_float` at the boundary is
+the whole of the workaround. Adding the case is additive and would be a minor.
+
 Variant payload slots join `i32` and `i64` as `i64`. Missing payload slots are
 zero. A seal is nominal inside Blot but transparent at the caller boundary; its
 manifest name still prevents callers from confusing two source contracts.

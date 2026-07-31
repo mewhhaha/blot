@@ -171,3 +171,13 @@ generation still succeeds — which has already happened once, over `_`.
 The corpus includes `src/prelude/*.blot`. The prelude is blot source and gets no
 exemption; parsing it only through the CPU path would have hidden the signed-i32
 literal bound until some user hit it.
+
+## A float token
+
+Adding `FLOAT = /[0-9]+\.[0-9]+/` at priority 3 moved `lexerStates` from 114 to
+116 and changed nothing else: `maxCandidateMultiplicity` stayed at 6 and
+`contractionRounds` at 33, and the profile is still accepted with
+`"throughput": "strict"`. Two states is what a token costs when it is a fixed
+terminal identity rather than a contextual promotion — the digit-point-digit
+shape is decided by the lexer alone, with no island having to know whether a
+dot begins a projection or continues a number.

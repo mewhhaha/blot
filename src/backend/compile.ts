@@ -33,7 +33,7 @@ import {
   type WasmValue,
 } from "gpufuck";
 import { resolve } from "@std/path";
-import { BlotError } from "../diagnostic.ts";
+import { BlotError, fail } from "../diagnostic.ts";
 import { load, type Loaded, refreshLoadedModules } from "../load.ts";
 import { checkFile } from "../check/mod.ts";
 import type { Imports } from "../comptime/eval.ts";
@@ -895,6 +895,22 @@ function canonicalType(
     return { kind: "signed-integer-64" };
   }
   if (schema.kind === "boolean") return { kind: "boolean" };
+  if (schema.kind === "float-64") {
+    // A program's own arithmetic, not its interface. gpufuck's canonical ABI
+    // has no float case — `CanonicalAbiType` is unit, integer, boolean, text,
+    // array, record, variant, and seal — so a float has no stable layout to
+    // publish, even though Core computes with it and the Component Model's own
+    // canonical ABI has `float64`. This is a diagnostic rather than a crash
+    // because it is a fact about the program's boundary, which the author
+    // chose and can change.
+    fail(
+      "BLOT_FLOAT_AT_BOUNDARY",
+      "A float cannot cross the module boundary: Blot Core Wasm ABI 1 has no " +
+        "float layout. Convert with `@int.of_float` at the export, or keep " +
+        "the float inside the program.",
+      { start: 0, end: 0 },
+    );
+  }
   if (schema.kind !== "named") {
     throw new Error(
       `Blot ABI cannot publish gpufuck ${schema.kind} as a stable type`,

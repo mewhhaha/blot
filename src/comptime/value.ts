@@ -15,6 +15,11 @@ export interface Env {
 
 export type Value =
   | { readonly tag: "int"; readonly value: bigint }
+  /**
+   * A double. Blot's only inexact number, and deliberately not a singleton
+   * type: `1.5` inhabits `Float` and nothing narrower (see `Domain`).
+   */
+  | { readonly tag: "float"; readonly value: number }
   | { readonly tag: "text"; readonly value: string }
   | { readonly tag: "unit" }
   /** Records and tuples. Tuples use `"0"`, `"1"`, … as labels. */
@@ -64,7 +69,7 @@ export type Value =
     readonly tag: "range";
     readonly low: Value;
     readonly high: Value;
-    readonly domain?: "int" | "text";
+    readonly domain?: "int" | "text" | "float";
   }
   | { readonly tag: "union"; readonly members: readonly Value[] }
   | { readonly tag: "unbounded" }
@@ -180,6 +185,14 @@ export function lookup(env: Env, name: string): Value | undefined {
 
 export function show(value: Value): string {
   if (value.tag === "int") return value.value.toString();
+  if (value.tag === "float") {
+    // A float always prints with a point, so `2` and `2.0` stay distinguishable
+    // in a diagnostic and in a recorded example's expected output.
+    if (Number.isFinite(value.value) && Number.isInteger(value.value)) {
+      return `${value.value}.0`;
+    }
+    return String(value.value);
+  }
   if (value.tag === "text") return JSON.stringify(value.value);
   if (value.tag === "unit") return "()";
   if (value.tag === "unbounded") return "@type.unbounded";
@@ -212,6 +225,7 @@ export function show(value: Value): string {
       : "int";
     if (open && shut) {
       if (domain === "text") return "Str";
+      if (domain === "float") return "F64";
       return "Int";
     }
     if (
@@ -250,7 +264,7 @@ export function show(value: Value): string {
 /** Which ordered domain a range lives in: its own label, else its bounds. */
 export function rangeDomainOf(
   value: Value & { tag: "range" },
-): "int" | "text" {
+): "int" | "text" | "float" {
   if (value.domain !== undefined) return value.domain;
   if (value.low.tag === "text" || value.high.tag === "text") return "text";
   return "int";
@@ -263,6 +277,11 @@ export function equal(left: Value, right: Value): boolean {
   if (left.tag !== right.tag) return false;
   if (left.tag === "int" && right.tag === "int") {
     return left.value === right.value;
+  }
+  if (left.tag === "float" && right.tag === "float") {
+    // Bit equality, so `equal` stays an equivalence: `NaN` is the same value as
+    // itself here even though `@float.cmp` refuses to order it.
+    return Object.is(left.value, right.value);
   }
   if (left.tag === "text" && right.tag === "text") {
     return left.value === right.value;

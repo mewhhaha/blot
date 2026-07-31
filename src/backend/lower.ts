@@ -25,6 +25,7 @@ import {
   type HostDefinitionBinding,
   HostTypes,
   NumericConversion,
+  UnaryOperator,
   storeType,
   surface,
   type SurfaceDefinition,
@@ -478,6 +479,15 @@ const BINARY: ReadonlyMap<string, BinaryOperator> = new Map([
   ["@int.mul", BinaryOperator.MultiplySignedInteger64],
   ["@int.div", BinaryOperator.DivideSignedInteger64],
   ["@int.rem", BinaryOperator.RemainderSignedInteger64],
+  // No overflow guard for these: `lowerIntegerBinary` passes anything that is
+  // not signed add, subtract, or multiply straight through, and IEEE 754 has
+  // an answer for every float operation — an infinity or a NaN, both of which
+  // are values the program may go on to use.
+  ["@float.add", BinaryOperator.AddFloat64],
+  ["@float.sub", BinaryOperator.SubtractFloat64],
+  ["@float.mul", BinaryOperator.MultiplyFloat64],
+  ["@float.div", BinaryOperator.DivideFloat64],
+  ["@float.rem", BinaryOperator.RemainderFloat64],
 ]);
 
 export function lowerModule(
@@ -697,6 +707,7 @@ function exportSchema(
       return { kind: "unit" };
     case "range":
       if (type.domain === "int") return { kind: "signed-integer-64" };
+      if (type.domain === "float") return { kind: "float-64" };
       return HostTypes.text;
     case "fun":
       return {
@@ -768,6 +779,7 @@ function exportSchema(
         const domain = ranges[0].domain;
         if (ranges.every((range) => range.domain === domain)) {
           if (domain === "int") return { kind: "signed-integer-64" };
+          if (domain === "float") return { kind: "float-64" };
           return HostTypes.text;
         }
       }
@@ -846,6 +858,8 @@ function bridgeRuntimeValue(value: Value): SimpleType | null {
         low: value.value,
         high: value.value,
       };
+    case "float":
+      return { tag: "range", domain: "float", low: null, high: null };
     case "text":
       return {
         tag: "range",
@@ -1055,6 +1069,7 @@ function schemaOf(
   if (type.tag === "unit") return { kind: "unit" };
   if (type.tag === "range") {
     if (type.domain === "int") return { kind: "signed-integer-64" };
+    if (type.domain === "float") return { kind: "float-64" };
     return HostTypes.text;
   }
   if (type.tag === "variant") {
@@ -1221,6 +1236,7 @@ function boundaryType(
     const domain = value.domain ??
       (value.low.tag === "int" || value.high.tag === "int" ? "int" : "text");
     if (domain === "int") return { kind: "signed-integer-64" };
+    if (domain === "float") return { kind: "float-64" };
     return HostTypes.text;
   }
   if (value.tag === "shape") {
@@ -1535,12 +1551,17 @@ function bind(
       }], { body: at.runtimeFault("constructor pattern did not match") });
   }
 
-  if (pattern.tag === "int" || pattern.tag === "text") {
+  if (
+    pattern.tag === "int" || pattern.tag === "text" || pattern.tag === "float"
+  ) {
     let literal: SurfaceExpression;
     let operator: BinaryOperator = BinaryOperator.Equal;
     if (pattern.tag === "int") {
       literal = at.signedInteger64(pattern.value);
       operator = BinaryOperator.EqualSignedInteger64;
+    } else if (pattern.tag === "float") {
+      literal = at.float64(pattern.value);
+      operator = BinaryOperator.EqualFloat64;
     } else {
       literal = at.text(pattern.value);
     }
@@ -1625,6 +1646,9 @@ function lower(
   switch (expr.tag) {
     case "int":
       return at.signedInteger64(expr.value);
+
+    case "float":
+      return at.float64(expr.value);
 
     case "text":
       return at.text(expr.value);
@@ -2457,6 +2481,8 @@ function lowerValue(
   switch (value.tag) {
     case "int":
       return at.signedInteger64(value.value);
+    case "float":
+      return at.float64(value.value);
     case "text":
       return at.text(value.value);
     case "unit":
@@ -2829,6 +2855,67 @@ function lowerApply(
             ),
           ),
         ),
+      );
+    }
+    if (spine.callee.name === "@float.eq" && spine.args.length === 2) {
+      return at.binary(
+        BinaryOperator.EqualFloat64,
+        lower(spine.args[0], scope, lowering),
+        lower(spine.args[1], scope, lowering),
+      );
+    }
+    // The same shape as `@int.cmp`, over the float comparisons. NaN reaches
+    // `#Greater` here, where the comptime evaluator refuses instead — so a
+    // program that compares one disagrees with itself, and `Float.cmp` in the
+    // prelude tests for NaN before it gets here.
+    if (spine.callee.name === "@float.cmp" && spine.args.length === 2) {
+      const sum = lowering.sum([
+        { name: "Less", payload: false },
+        { name: "Equal", payload: false },
+        { name: "Greater", payload: false },
+      ]);
+      const left = lowering.fresh("left");
+      const right = lowering.fresh("right");
+      const tag = (name: string): SurfaceExpression =>
+        at.name(constructorName(sum, name));
+      return surface.let(
+        left,
+        lower(spine.args[0], scope, lowering),
+        surface.let(
+          right,
+          lower(spine.args[1], scope, lowering),
+          at.if(
+            at.binary(BinaryOperator.LessFloat64, at.name(left), at.name(right)),
+            tag("Less"),
+            at.if(
+              at.binary(
+                BinaryOperator.EqualFloat64,
+                at.name(left),
+                at.name(right),
+              ),
+              tag("Equal"),
+              tag("Greater"),
+            ),
+          ),
+        ),
+      );
+    }
+    if (spine.callee.name === "@float.neg" && spine.args.length === 1) {
+      return at.unary(
+        UnaryOperator.NegateFloat64,
+        lower(spine.args[0], scope, lowering),
+      );
+    }
+    if (spine.callee.name === "@float.of_int" && spine.args.length === 1) {
+      return at.convert(
+        NumericConversion.SignedInteger64ToFloat64,
+        lower(spine.args[0], scope, lowering),
+      );
+    }
+    if (spine.callee.name === "@int.of_float" && spine.args.length === 1) {
+      return at.convert(
+        NumericConversion.Float64ToSignedInteger64,
+        lower(spine.args[0], scope, lowering),
       );
     }
     if (spine.callee.name === "@int.neg" && spine.args.length === 1) {

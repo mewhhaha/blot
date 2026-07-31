@@ -56,6 +56,39 @@ check(
 );
 
 check(
+  "a float literal is not a singleton",
+  "return 1.5;",
+  "F64",
+);
+
+check(
+  "float arithmetic stays in the one float type",
+  'open {} = (@import "blot:prelude") ();\nreturn Float.add 1.5 2.5;',
+  "F64",
+);
+
+check(
+  "crossing between the numeric types is explicit and exact",
+  'open {} = (@import "blot:prelude") ();\n' +
+    "return { .up = Float.of_int 7; .down = Float.truncate 3.75; };",
+  "{ .up = F64; .down = Int; }",
+);
+
+rejects(
+  "a float case is never exhaustive on its own",
+  'open {} = (@import "blot:prelude") ();\n' +
+    "sig pick = F64 -> Int;\nlet pick = x => case x of 1.5 => 1 end;\n" +
+    "return pick 1.5;",
+  "BLOT_INCOMPLETE_CASE",
+);
+
+rejects(
+  "the two numeric types do not mix",
+  'open {} = (@import "blot:prelude") ();\nreturn Float.add 1.5 2;',
+  "BLOT_TYPE_ERROR",
+);
+
+check(
   "identity preserves the singleton",
   "let identity = x => x;\nreturn identity 42;",
   "42",

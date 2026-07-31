@@ -1,0 +1,100 @@
+// Floats.
+//
+// Blot's second numeric type, and its first inexact one. A float literal needs
+// a digit on both sides of the point, which is what keeps `1.5` a float and
+// `pair.0` a projection: the field has no digit before its dot and a float
+// always does.
+//
+// `F64` is the only float type. There is no `1.5` singleton the way there is a
+// `1` singleton, because a float bound would have to be a real number and
+// nothing the lattice does with bounds — adjacency, enumeration — has a
+// meaning there. So a float literal inhabits `F64` and the narrowing machinery
+// never has to answer a question about reals.
+
+open {} = (@import "blot:prelude") ();
+
+// --- arithmetic -------------------------------------------------------------
+//
+// `Float.add` rather than `+`. An operator resolves to one binding by name, so
+// a single `+` over both numeric types would have to dispatch on a value's
+// type at run time, which is the typeclass machinery this language does not
+// have. A module that wants an operator for these says so in its own header.
+
+sig quarter = F64;
+let quarter = Float.div 1.0 4.0;
+
+sig sum = F64;
+let sum = Float.add 1.5 2.25;
+
+sig scaled = F64;
+let scaled = Float.mul quarter 8.0;
+
+// --- crossing between the two -----------------------------------------------
+//
+// Explicitly, in both directions. `truncate` rounds toward zero, which is what
+// WebAssembly's saturating conversion does.
+
+sig widened = F64;
+let widened = Float.of_int 7;
+
+sig narrowed = Int;
+let narrowed = Float.truncate 3.75;
+
+sig negative = Int;
+let negative = Float.truncate (Float.negate 3.75);
+
+// --- comparison, and the value no ordering accepts --------------------------
+//
+// `@float.cmp` refuses NaN rather than inventing a fourth answer, so a program
+// that might hold one asks `Float.is_nan` first. Equality is a separate
+// primitive precisely because it *can* answer: NaN is unequal to everything,
+// including itself, and that is a fact rather than a refusal.
+
+sig ordered = Bool;
+let ordered = is_less (Float.cmp 1.5 2.5);
+
+sig same = Bool;
+let same = Float.eq 0.5 (Float.div 1.0 2.0);
+
+sig tenth_is_exact = Bool;
+let tenth_is_exact = Float.eq (Float.add 0.1 0.2) 0.3;
+
+sig nan_is_nan = Bool;
+let nan_is_nan = Float.is_nan (Float.div 0.0 0.0);
+
+sig ordinary_is_not = Bool;
+let ordinary_is_not = Float.is_nan 1.0;
+
+// --- a root, written in blot ------------------------------------------------
+//
+// `@float.sqrt` is not a primitive. Core has no f64 square root either, so it
+// would have been open-coded at lowering — and a primitive is for what blot
+// cannot write, which this is not.
+
+sig root = Int;
+let root = Float.truncate (Float.mul (Float.sqrt 2.0) 1000.0);
+
+// --- the boundary -----------------------------------------------------------
+//
+// Every export here is an `Int` or a `Bool`. A float cannot cross the module
+// boundary: gpufuck's canonical ABI has no float case, so there is no stable
+// layout to publish one under. Converting at the export is the whole of the
+// workaround, and `examples/rejected/semantics/float_export.blot` is the
+// program that does not.
+
+return {
+  .quarter = Float.truncate (Float.mul quarter 100.0);
+  .sum = Float.truncate (Float.mul sum 100.0);
+  .scaled = Float.truncate scaled;
+  .widened = Float.truncate widened;
+  .narrowed = narrowed;
+  .negative = negative;
+
+  .ordered = ordered;
+  .same = same;
+  .tenth_is_exact = tenth_is_exact;
+  .nan_is_nan = nan_is_nan;
+  .ordinary_is_not = ordinary_is_not;
+
+  .root = root;
+};

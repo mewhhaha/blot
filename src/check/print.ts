@@ -19,6 +19,7 @@
 
 import {
   type Bound,
+  type Domain,
   isLength,
   type LengthBound,
   lengthSubject,
@@ -366,7 +367,7 @@ function isTuple(fields: ReadonlyMap<string, SimpleType>): boolean {
 }
 
 export function showRange(
-  domain: "int" | "text",
+  domain: Domain,
   low: Bound,
   high: Bound,
 ): string {
@@ -376,13 +377,17 @@ export function showRange(
   }
   // `Str`, not `Text`: `Text` is the prelude's namespace record, so the name
   // this printer gives a type has to be the name a `sig` accepts.
-  if (low === null && high === null) return domain === "int" ? "Int" : "Str";
+  if (low === null && high === null) {
+    if (domain === "int") return "Int";
+    if (domain === "float") return "F64";
+    return "Str";
+  }
   // `""` is the bottom of the lexicographic order, so `""..` is every text.
   if (domain === "text" && low === "" && high === null) return "Str";
   return `${showEnd(domain, low, high)}..${showEnd(domain, high, low)}`;
 }
 
-function showEnd(domain: "int" | "text", bound: Bound, beside: Bound): string {
+function showEnd(domain: Domain, bound: Bound, beside: Bound): string {
   if (bound === null) return "";
   if (isLength(bound)) return showLength(bound, beside);
   if (domain === "text") return JSON.stringify(bound);

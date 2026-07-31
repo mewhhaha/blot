@@ -1,0 +1,1 @@
+{ .quarter = 25; .sum = 375; .scaled = 2; .widened = 7; .narrowed = 3; .negative = -3; .ordered = #True; .same = #True; .tenth_is_exact = #False; .nan_is_nan = #True; .ordinary_is_not = #False; .root = 1414; }

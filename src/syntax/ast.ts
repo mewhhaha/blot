@@ -25,6 +25,7 @@ export type Pattern =
   }
   | { readonly tag: "wildcard"; readonly span: Span }
   | { readonly tag: "int"; readonly value: bigint; readonly span: Span }
+  | { readonly tag: "float"; readonly value: number; readonly span: Span }
   | { readonly tag: "text"; readonly value: string; readonly span: Span }
   | { readonly tag: "unit"; readonly span: Span }
   | {
@@ -76,6 +77,7 @@ export interface Arm {
 export type Expr =
   | { readonly tag: "var"; readonly name: string; readonly span: Span }
   | { readonly tag: "int"; readonly value: bigint; readonly span: Span }
+  | { readonly tag: "float"; readonly value: number; readonly span: Span }
   | { readonly tag: "text"; readonly value: string; readonly span: Span }
   | { readonly tag: "unit"; readonly span: Span }
   /** An `@`-primitive. The whole compiler surface lives in this namespace. */
@@ -202,6 +204,7 @@ export function patternNames(pattern: Pattern): readonly string[] {
       return [pattern.name];
     case "wildcard":
     case "int":
+    case "float":
     case "text":
     case "unit":
       return [];

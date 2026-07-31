@@ -14,6 +14,7 @@
 
 import { show, type Value } from "../comptime/value.ts";
 import {
+  type Domain,
   effects as effectRow,
   freshRigid,
   fun,
@@ -203,7 +204,7 @@ function scalar(value: Value): bigint | string | null {
   return null;
 }
 
-function domainOf(value: Value): "int" | "text" | null {
+function domainOf(value: Value): Domain | null {
   if (value.tag === "int") return "int";
   if (value.tag === "text") return "text";
   return null;

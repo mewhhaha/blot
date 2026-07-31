@@ -156,6 +156,7 @@ const Semigroup = { .append = Text.append; };
 
 const text_eq = (left, right) => is_equal (@text.cmp left right);
 
+
 // --- arrays -----------------------------------------------------------------
 
 const Array = {
@@ -206,6 +207,49 @@ const upto = (low, high) => do
     end);
   in build (low, @array.empty)
 end;
+
+// --- floats -----------------------------------------------------------------
+//
+// A separate namespace rather than an overload of `Num`: an operator resolves
+// to one binding by name, and a `+` that worked on both would have to dispatch
+// on a value's type at run time — the typeclass machinery this language does
+// not have. `Float.add` is the addition, and a module that wants `+.` or `+`
+// to mean it says so in its own `operators` header.
+
+const float_eq = (left, right) => @float.eq left right;
+
+const Float = {
+  .add = left => (right => @float.add left right);
+  .sub = left => (right => @float.sub left right);
+  .mul = left => (right => @float.mul left right);
+  .div = left => (right => @float.div left right);
+  .rem = left => (right => @float.rem left right);
+  .negate = value => @float.neg value;
+  .eq = left => (right => @float.eq left right);
+  .cmp = left => (right => @float.cmp left right);
+  .of_int = value => @float.of_int value;
+  .truncate = value => @int.of_float value;
+  .abs = value =>
+    if is_less (@float.cmp value 0.0) then @float.neg value else value end;
+
+  // `@float.cmp` refuses NaN rather than inventing a fourth ordering, so this
+  // is how a program asks before comparing. Only NaN is unequal to itself,
+  // which is why equality is a primitive and this is not.
+  .is_nan = value => not (@float.eq value value);
+
+  // Newton's method, seeded at the value. Core has no f64 square root, so a
+  // `@float.sqrt` primitive would have been open-coded at lowering anyway —
+  // and a primitive is for what blot cannot write, which this is not.
+  .sqrt = value =>
+    if @float.eq value 0.0 then 0.0
+    else if is_less (@float.cmp value 0.0) then @float.div 0.0 0.0
+    else fold (
+      upto (0, 24),
+      value,
+      ((guess, _) => @float.mul 0.5 (@float.add guess (@float.div value guess)))
+    )
+    end;
+};
 
 // --- option and result ------------------------------------------------------
 
@@ -350,6 +394,7 @@ const pow2 = rec (n => if is_less (@int.cmp n 1) then 1 else @int.mul 2 (pow2 (@
 const Int = @type.int;
 const Str = @type.text;
 
+const F64 = @type.float;
 const I32 = range (-2147483648, 2147483647);
 const I64 = range (@int.neg (pow2 63), @int.sub (pow2 63) 1);
 const U8 = range (0, 255);
@@ -695,6 +740,8 @@ return {
   .Ord = Ord;
   .Eq = Eq;
   .Num = Num;
+  .Float = Float;
+  .float_eq = float_eq;
   .Text = Text;
   .Semigroup = Semigroup;
 
@@ -743,6 +790,7 @@ return {
   .layout = layout;
   .aligned = aligned;
   .sort_by = sort_by;
+  .F64 = F64;
   .I32 = I32;
   .I64 = I64;
   .U8 = U8;

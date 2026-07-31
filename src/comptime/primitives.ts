@@ -53,6 +53,13 @@ function intOf(value: Value, span: Span, what: string): bigint {
   return value.value;
 }
 
+function floatOf(value: Value, span: Span, what: string): number {
+  if (value.tag !== "float") {
+    fail("BLOT_TYPE", `${what} expects a float, found ${show(value)}.`, span);
+  }
+  return value.value;
+}
+
 function textOf(value: Value, span: Span, what: string): string {
   if (value.tag !== "text") {
     fail("BLOT_TYPE", `${what} expects text, found ${show(value)}.`, span);
@@ -216,7 +223,7 @@ function without(member: Value, other: Value, span: Span): Value[] {
  * second primitive to ask.
  */
 /** Which ordered domain a range lives in: its own label, else its bounds. */
-function rangeDomain(value: Value & { tag: "range" }): "int" | "text" {
+function rangeDomain(value: Value & { tag: "range" }): "int" | "text" | "float" {
   if (value.domain !== undefined) return value.domain;
   if (value.low.tag === "text" || value.high.tag === "text") return "text";
   return "int";
@@ -407,6 +414,15 @@ export const PRIMITIVE_VALUES: ReadonlyMap<string, Value> = new Map<
     low: { tag: "unbounded" },
     high: { tag: "unbounded" },
     domain: "text",
+  }],
+  // Always open at both ends. A float bound would have to be a real number and
+  // nothing in the lattice could use one, so `Float` is the only float type
+  // there is.
+  ["@type.float", {
+    tag: "range",
+    low: { tag: "unbounded" },
+    high: { tag: "unbounded" },
+    domain: "float",
   }],
   ["@shape.empty", { tag: "shape", fields: new Map() }],
   ["@array.empty", { tag: "array", elements: [] }],
@@ -757,6 +773,105 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
   ["@linear.maybe", { arity: 1, run: ([value]) => value }],
   ["@linear.borrow", { arity: 1, run: ([value]) => value }],
 
+  // --- floats ---------------------------------------------------------------
+  //
+  // Doubles, and no range checks: IEEE 754 says what overflow produces and the
+  // answer is an infinity, which is a value the program may go on to use. That
+  // is the difference from `@int.add`, where the result would be a number the
+  // machine cannot hold.
+
+  ["@float.add", {
+    arity: 2,
+    run: ([l, r], s) =>
+      ({
+        tag: "float",
+        value: floatOf(l, s, "@float.add") + floatOf(r, s, "@float.add"),
+      }),
+  }],
+  ["@float.sub", {
+    arity: 2,
+    run: ([l, r], s) =>
+      ({
+        tag: "float",
+        value: floatOf(l, s, "@float.sub") - floatOf(r, s, "@float.sub"),
+      }),
+  }],
+  ["@float.mul", {
+    arity: 2,
+    run: ([l, r], s) =>
+      ({
+        tag: "float",
+        value: floatOf(l, s, "@float.mul") * floatOf(r, s, "@float.mul"),
+      }),
+  }],
+  // Division by zero is an infinity rather than a diagnostic, unlike
+  // `@int.div`. The three executions have to agree, and WebAssembly's `f64.div`
+  // does not trap.
+  ["@float.div", {
+    arity: 2,
+    run: ([l, r], s) =>
+      ({
+        tag: "float",
+        value: floatOf(l, s, "@float.div") / floatOf(r, s, "@float.div"),
+      }),
+  }],
+  ["@float.rem", {
+    arity: 2,
+    run: ([l, r], s) =>
+      ({
+        tag: "float",
+        value: floatOf(l, s, "@float.rem") % floatOf(r, s, "@float.rem"),
+      }),
+  }],
+  ["@float.neg", {
+    arity: 1,
+    run: ([value], s) => ({ tag: "float", value: -floatOf(value, s, "@float.neg") }),
+  }],
+  // NaN is unordered against everything including itself, and there is no
+  // fourth answer to give. Refusing is the only option that does not claim a
+  // relation the format denies.
+  // Equality is total where ordering is not: NaN is unequal to everything
+  // including itself, which is a fact rather than a refusal. This is the one
+  // float comparison a program can always ask.
+  ["@float.eq", {
+    arity: 2,
+    run: ([l, r], s) =>
+      bool(floatOf(l, s, "@float.eq") === floatOf(r, s, "@float.eq")),
+  }],
+  ["@float.cmp", {
+    arity: 2,
+    run: ([l, r], s) => {
+      const left = floatOf(l, s, "@float.cmp");
+      const right = floatOf(r, s, "@float.cmp");
+      if (Number.isNaN(left) || Number.isNaN(right)) {
+        fail(
+          "BLOT_UNORDERED",
+          "@float.cmp cannot order NaN. Test for it before comparing.",
+          s,
+        );
+      }
+      if (left < right) return ordering(-1);
+      if (left > right) return ordering(1);
+      return ordering(0);
+    },
+  }],
+  ["@float.of_int", {
+    arity: 1,
+    run: ([value], s) => ({
+      tag: "float",
+      value: Number(intOf(value, s, "@float.of_int")),
+    }),
+  }],
+  // Truncation toward zero, which is what `f64.trunc_sat_s` does. A value with
+  // no integer to round to answers zero there, so it answers zero here.
+  ["@int.of_float", {
+    arity: 1,
+    run: ([value], s, phase) => {
+      const number = floatOf(value, s, "@int.of_float");
+      if (!Number.isFinite(number)) return { tag: "int", value: 0n };
+      return integerResult(BigInt(Math.trunc(number)), s, "@int.of_float", phase);
+    },
+  }],
   ["@panic", {
     arity: 1,
     run: ([message], span) =>

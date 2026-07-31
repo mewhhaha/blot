@@ -87,7 +87,17 @@ export interface RigidVariable {
   readonly id: number;
 }
 
-export type Domain = "int" | "text";
+/**
+ * The ordered domains a range lives in.
+ *
+ * `float` ranges are always open at both ends. A float bound would have to be
+ * a real number, and the operations this lattice performs on bounds — adjacency
+ * in `difference`, enumeration in coverage — have no meaning there: there is no
+ * next float after 1.5 that a program could name, and equality is not something
+ * to narrow on when NaN and rounding exist. So `1.5` is a `Float` rather than a
+ * singleton, and the machinery that would need a real number is never reached.
+ */
+export type Domain = "int" | "text" | "float";
 
 export type SimpleType =
   | Variable
@@ -187,6 +197,17 @@ export const INT: SimpleType = {
 export const TEXT: SimpleType = {
   tag: "range",
   domain: "text",
+  low: null,
+  high: null,
+};
+/**
+ * The only float type. There is no `floatLiteral`, because a float range is
+ * always open at both ends — `1.5` is a `Float`, not a singleton (see
+ * `Domain`).
+ */
+export const FLOAT: SimpleType = {
+  tag: "range",
+  domain: "float",
   low: null,
   high: null,
 };

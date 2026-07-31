@@ -73,6 +73,25 @@ frontend's signed-32-bit input profile; wider values, including the bounds of
 Runtime integers are signed 64-bit values and trap on overflow. Compile-time
 integer arithmetic is arbitrary precision.
 
+A float literal is decimal digits, a point, and decimal digits — both sides are
+required. That is what keeps `1.5` a float while `pair.0` stays a projection:
+the field after a dot has no digit before it and a float always does. There is
+no exponent form and no negative literal; negation is the prefix operator.
+
+Floats are IEEE 754 doubles. They do not trap: an operation that overflows
+produces an infinity and one with no defined answer produces a NaN, both of
+which are values a program may go on to use. This is the difference from
+integer arithmetic, where the result would be a number the machine cannot hold.
+
+`Float.cmp` refuses NaN rather than answering, because no ordering accepts it.
+`Float.eq` answers, because equality can: NaN is unequal to everything
+including itself, which is how `Float.is_nan` is written.
+
+There is no implicit conversion between the two numeric types, and no operator
+serves both. An operator resolves to one binding by name (§4.6), so a `+` over
+both would have to dispatch on a value's type at run time. `Float.of_int` and
+`Float.truncate` cross explicitly; `truncate` rounds toward zero.
+
 A text literal is delimited by `"`. The defined escapes are:
 
 | escape | value           |
@@ -884,6 +903,7 @@ const Meter = seal ("Meter", I32);
 The principal inferred forms are:
 
 - integer and text ranges, including singleton literals;
+- `F64`, the float type;
 - unit;
 - functions with effect rows;
 - structural records and tuples;
@@ -906,6 +926,15 @@ The checker uses algebraic subtyping and biunification:
 
 Integer and text literals infer singleton ranges. `identity 42` therefore
 returns type `42`, not merely `Int`.
+
+Float literals do not. `1.5` infers `F64`, and `F64` is the only float type
+there is. A singleton float would put a real number where the lattice keeps a
+bound, and every operation it performs on bounds has no meaning there: there is
+no next float after 1.5 for `difference` to name, nothing for coverage to
+enumerate, and equality is not something to narrow on where NaN and rounding
+exist. So a `case` over floats never becomes exhaustive without an irrefutable
+arm, and a float pattern matches by equality without proving anything about the
+scrutinee.
 
 Type checking evaluates compile-time code because signatures and type
 constructors are ordinary values. A compile-time value is bridged into the
@@ -941,8 +970,8 @@ inference.
 
 ### 10.2 Type-value primitives
 
-The primitive type values are `@type.int`, `@type.text`, `@type.unit`, and
-`@type.unbounded`.
+The primitive type values are `@type.int`, `@type.float`, `@type.text`,
+`@type.unit`, and `@type.unbounded`.
 
 The type algebra includes:
 
@@ -1134,7 +1163,7 @@ Everything not listed here belongs in source, normally the prelude.
 | `@fail`        | refuse compile-time evaluation with a diagnostic        |
 | `@panic`       | trap with a text message                                |
 
-### 13.2 Integer and text operations
+### 13.2 Numeric and text operations
 
 | primitive        | meaning                                              |
 | ---------------- | ---------------------------------------------------- |
@@ -1145,6 +1174,16 @@ Everything not listed here belongs in source, normally the prelude.
 | `@int.rem`       | remainder                                            |
 | `@int.neg`       | negation                                             |
 | `@int.cmp`       | return `#Less`, `#Equal`, or `#Greater` for integers |
+| `@float.add`     | addition                                             |
+| `@float.sub`     | subtraction                                          |
+| `@float.mul`     | multiplication                                       |
+| `@float.div`     | division                                             |
+| `@float.rem`     | remainder                                            |
+| `@float.neg`     | negation                                             |
+| `@float.eq`      | equality, which NaN answers and ordering cannot      |
+| `@float.cmp`     | order two floats, refusing NaN                       |
+| `@float.of_int`  | widen an integer to a float                          |
+| `@int.of_float`  | truncate a float toward zero                         |
 | `@text.concat`   | concatenate text                                     |
 | `@text.len`      | count Unicode code points                            |
 | `@text.cmp`      | compare text and return an ordering constructor      |
@@ -1251,6 +1290,7 @@ and both of these forms name the array twice — once to measure and once to rea
 | `@type.unbounded` | open range bound                            |
 | `@type.int`       | unbounded integer domain                    |
 | `@type.text`      | unbounded text domain                       |
+| `@type.float`     | the float domain, which has no bounds       |
 | `@type.unit`      | unit type/value                             |
 | `@type.range`     | inclusive range                             |
 | `@type.union`     | flattened duplicate-free union              |

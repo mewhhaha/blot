@@ -147,6 +147,11 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
         );
       }
       return { tag: "int", value: expr.value };
+    // No range check: every literal the grammar admits is a finite double, and
+    // one too large for the format rounded to an infinity while being read
+    // rather than being a value the program can still name.
+    case "float":
+      return { tag: "float", value: expr.value };
     case "text":
       return { tag: "text", value: expr.value };
     case "unit":
@@ -724,6 +729,11 @@ export function match(pattern: Pattern, value: Value, scope: Env): boolean {
       return true;
     case "int":
       return value.tag === "int" && value.value === pattern.value;
+    // `Object.is`, so a `NaN` pattern matches a `NaN` scrutinee. `==` would
+    // make the arm unreachable, and an arm that can never run is worse than
+    // one that disagrees with IEEE about a value no ordering accepts anyway.
+    case "float":
+      return value.tag === "float" && Object.is(value.value, pattern.value);
     case "text":
       return value.tag === "text" && value.value === pattern.value;
     case "unit":

@@ -8,6 +8,12 @@ grammar Blot
 token IDENT = /[a-z_][A-Za-z0-9_]*/ ;
 token TYPE_IDENT = /[A-Z][A-Za-z0-9_]*/ ;
 token INTEGER = /[0-9]+/ ;
+// A float needs a digit on both sides of the point. That is what keeps it
+// disjoint from `INTEGER "." field_name`, which is how `pair.0` reads: the
+// field there has no digit before the dot, and a float always does. The
+// priority states the tie rather than leaving it to longest-match, because the
+// GPU profile wants terminal identity fixed rather than resolved.
+token FLOAT priority 3 = /[0-9]+\.[0-9]+/ ;
 token TEXT = /"([^"\\]|\\[ntr"\\])*"/ ;
 token ELSE_IF priority 3 = /else[ \t\r\n]+if/ ;
 token INTRINSIC priority 3 = /@[a-z_][A-Za-z0-9_]*(\.[a-z_][A-Za-z0-9_]*)*/ ;
@@ -195,6 +201,7 @@ pattern_core = (
   IDENT
   | TYPE_IDENT
   | INTEGER
+  | FLOAT
   | TEXT
   | unit_pattern
   | tuple_pattern
@@ -297,6 +304,7 @@ primary_expression = (
   IDENT
   | TYPE_IDENT
   | INTEGER
+  | FLOAT
   | TEXT
   | INTRINSIC
   | constructor_expression
@@ -314,6 +322,7 @@ application_primary = (
   IDENT
   | TYPE_IDENT
   | INTEGER
+  | FLOAT
   | TEXT
   | INTRINSIC
   | constructor_expression

@@ -17,6 +17,7 @@ import {
   effects,
   freshVar,
   fun,
+  FLOAT,
   INT,
   record,
   type Scheme,
@@ -114,6 +115,22 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ["@int.neg", mono(curried([INT], INT))],
   // One comparison primitive; `Eq` and `Ord` are prelude source over it.
   ["@int.cmp", mono(curried([INT, INT], ORDERING))],
+
+  // --- floats ---
+  //
+  // `Float` is one type: every float range is open at both ends, so unlike the
+  // integer primitives these say nothing about the value they produce beyond
+  // its domain.
+  ["@float.add", mono(curried([FLOAT, FLOAT], FLOAT))],
+  ["@float.sub", mono(curried([FLOAT, FLOAT], FLOAT))],
+  ["@float.mul", mono(curried([FLOAT, FLOAT], FLOAT))],
+  ["@float.div", mono(curried([FLOAT, FLOAT], FLOAT))],
+  ["@float.rem", mono(curried([FLOAT, FLOAT], FLOAT))],
+  ["@float.neg", mono(curried([FLOAT], FLOAT))],
+  ["@float.eq", mono(curried([FLOAT, FLOAT], BOOL))],
+  ["@float.cmp", mono(curried([FLOAT, FLOAT], ORDERING))],
+  ["@float.of_int", mono(curried([INT], FLOAT))],
+  ["@int.of_float", mono(curried([FLOAT], INT))],
 
   // --- text ---
   ["@text.concat", mono(curried([TEXT, TEXT], TEXT))],
