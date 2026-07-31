@@ -47,6 +47,12 @@ const REJECTIONS: Record<
   // A constructor set is covered by subtyping and reports through `constrain`;
   // a literal set is covered by membership and has its own code.
   "missing_literal_case": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
+  // Both of these would be *accepted* by an `if` rule that narrowed on the
+  // spelling of `==` or on the witness's type rather than its value, and both
+  // trap at run time. They report through coverage because a refused narrowing
+  // leaves the scrutinee exactly as wide as it was declared.
+  "shadowed_equality": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
+  "compared_names": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
   "wrong_argument": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "missing_field": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "linear_consumed_twice": {

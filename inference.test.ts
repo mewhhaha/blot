@@ -276,6 +276,223 @@ check(
   '("one" | "many" | "none")',
 );
 
+// --- what a condition proves ------------------------------------------------
+//
+// Everything below is downstream of one fact, so it is pinned first: a
+// `sig`-bound parameter arrives at the `if` as a ground union, not as a variable
+// with the union among its bounds. If that ever stops being true, narrowing has
+// nothing to intersect and every assertion here goes quiet rather than failing.
+//
+// The proofs are recorded by shadowing the name in a child scope, which is the
+// mechanism a `case` arm already uses. No bound is pushed and no `constrain`
+// call is made, so the *whole function type* is the thing to assert: an
+// implementation that narrowed by adding an upper bound would leak
+// `(Int & 1) -> ...` into the signature and break nothing else.
+
+check(
+  "a signature binds a parameter to the ground union itself",
+  "sig f = 1 | 2 | 3 -> 1 | 2 | 3;\nlet f = n => n;\nreturn f;",
+  "1 | 2 | 3 -> 1 | 2 | 3",
+);
+
+rejects(
+  "an unnarrowed parameter is the whole union",
+  'sig h = 1 -> Str;\nlet h = k => "one";\nsig f = 1 | 2 | 3 -> Str;\nlet f = n => h n;\nreturn f;',
+  "`2` is outside `1`",
+);
+
+check(
+  "the branch a condition proves accepts the narrowed value",
+  'sig h = 1 -> Str;\nlet h = k => "one";\nsig f = 1 | 2 | 3 -> Str;\nlet f = n => if n == 1 then h n else "rest" end;\nreturn f;',
+  "1 | 2 | 3 -> Str",
+);
+
+// Read together with the previous two: the proven branch is exactly `1`, no
+// wider and no narrower.
+rejects(
+  "the proven branch holds nothing but the narrowed value",
+  'sig h = 2 -> Str;\nlet h = k => "two";\nsig f = 1 | 2 | 3 -> Str;\nlet f = n => if n == 1 then h n else "rest" end;\nreturn f;',
+  "`1` is outside `2`",
+);
+
+rejects(
+  "the other branch does not accept it",
+  'sig h = 1 -> Str;\nlet h = k => "one";\nsig f = 1 | 2 | 3 -> Str;\nlet f = n => if n == 1 then "one" else h n end;\nreturn f;',
+  "`2` is outside `1`",
+);
+
+check(
+  "the other branch accepts what the condition excluded",
+  'sig k = 2 | 3 -> Str;\nlet k = v => "rest";\nsig f = 1 | 2 | 3 -> Str;\nlet f = n => if n == 1 then "one" else k n end;\nreturn f;',
+  "1 | 2 | 3 -> Str",
+);
+
+check(
+  "a proof survives into a case, which is then complete",
+  'sig f = 1 | 2 | 3 -> Str;\nlet f = n => if n == 1 then case n of 1 => "one" end else case n of 2 => "two", 3 => "three" end end;\nreturn f;',
+  "1 | 2 | 3 -> Str",
+);
+
+rejects(
+  "a proof does not excuse an arm the narrowed set still needs",
+  'sig f = 1 | 2 | 3 -> Str;\nlet f = n => if n == 1 then case n of 1 => "one" end else case n of 2 => "two" end end;\nreturn f;',
+  "No arm covers `3`",
+);
+
+check(
+  "an else-if chain leaves the fallback with what is left",
+  'sig f = 1 | 2 | 3 -> Str;\nlet f = n => if n == 1 then "one" else if n == 2 then "two" else case n of 3 => "three" end end;\nreturn f;',
+  "1 | 2 | 3 -> Str",
+);
+
+// `@int.cmp` answers on every pair of integers, so the proof does not depend on
+// the domain being enumerable. This is the capability no enumeration can have.
+
+check(
+  "a comparison narrows an unbounded domain",
+  'sig low = range (@type.unbounded, 9) -> Str;\nlet low = n => "low";\nsig f = Int -> Str;\nlet f = n => if n < 10 then low n else "high" end;\nreturn f;',
+  "Int -> Str",
+);
+
+check(
+  "the other half of an unbounded domain is the complement",
+  'sig high = range (10, @type.unbounded) -> Str;\nlet high = n => "high";\nsig f = Int -> Str;\nlet f = n => if n < 10 then "low" else high n end;\nreturn f;',
+  "Int -> Str",
+);
+
+check(
+  "a subject on the right mirrors the comparison",
+  'sig high = range (1, @type.unbounded) -> Str;\nlet high = n => "high";\nsig f = Int -> Str;\nlet f = n => if 0 < n then high n else "low" end;\nreturn f;',
+  "Int -> Str",
+);
+
+check(
+  "adjacent orderings narrow to one range",
+  'sig low = range (@type.unbounded, 9) -> Str;\nlet low = n => "low";\nsig f = Int -> Str;\nlet f = n => if n <= 9 then low n else "high" end;\nreturn f;',
+  "Int -> Str",
+);
+
+check(
+  "a disequality narrows the branch where it fails",
+  'sig f = 1 | 2 | 3 -> Str;\nlet f = n => if n /= 1 then case n of 2 => "two", 3 => "three" end else "one" end;\nreturn f;',
+  "1 | 2 | 3 -> Str",
+);
+
+// A statement `if` lowers to the same node, so it proves the same thing. There
+// is no second rule to keep in step.
+
+check(
+  "a statement conditional proves it too",
+  'sig h = 1 -> Str;\nlet h = k => "one";\nsig f = 1 | 2 | 3 -> Str;\nlet f = n => do\n  if n == 1 then do\n    return h n;\n  end;\n  in "rest"\nend;\nreturn f;',
+  "1 | 2 | 3 -> Str",
+);
+
+// Nesting is linear, not exponential: a region has at most two pieces, so `d`
+// conditions leave at most `d + 1`, and adjacent cuts collapse. Three exclusions
+// from `Int` leave two pieces, and the same call outside the nest is refused.
+
+check(
+  "nested exclusions accumulate into a bounded number of pieces",
+  'sig only = range (@type.unbounded, 0) | range (4, @type.unbounded) -> Str;\nlet only = k => "k";\nsig f = Int -> Str;\nlet f = n => if n /= 1 then (if n /= 2 then (if n /= 3 then only n else "c" end) else "b" end) else "a" end;\nreturn f;',
+  "Int -> Str",
+);
+
+rejects(
+  "the same call outside the nest is not proved",
+  'sig only = range (@type.unbounded, 0) | range (4, @type.unbounded) -> Str;\nlet only = k => "k";\nsig f = Int -> Str;\nlet f = n => only n;\nreturn f;',
+  "`Int` is not one of `..0` | `4..`",
+);
+
+// The proof is a name shadow, so it must not reach the function's own type.
+
+check(
+  "a narrowing never widens the signature it was proved under",
+  'let f = n => if n == 1 then "y" else "n" end;\nreturn f;',
+  'Int -> ("y" | "n")',
+);
+
+check(
+  "two conditions on one name do not accumulate an intersection",
+  'sig f = 1 | 2 | 3 -> Str;\nlet f = n => do\n  let a = if n == 1 then "x" else "y" end;\n  let b = if n == 2 then "x" else "y" end;\n  in Text.append a b\nend;\nreturn f;',
+  "1 | 2 | 3 -> Str",
+);
+
+// A rebinding preserves the *stable* type, so it widens the singleton the branch
+// proved. A proof does not survive a `:=` of the name it is about.
+
+check(
+  "a rebinding inside a proven branch widens back to the domain",
+  "sig f = 1 | 2 | 3 -> Int;\nlet f = n => if n == 1 then do\n  n := 5;\n  in n\nend else 0 end;\nreturn f;",
+  "1 | 2 | 3 -> Int",
+);
+
+// --- what a condition refuses to prove --------------------------------------
+//
+// Each of these would be a false fact, and each is refused by a different clause.
+// The assertions are types rather than errors: a refusal leaves the program
+// exactly as it was, which is the shape a "narrow nothing" answer has to have.
+
+rejects(
+  "a runtime shadow of the operator proves nothing",
+  'let Eq = { .eq = a => (b => True); .ne = a => (b => False); };\nsig f = 1 | 2 | 3 -> Str;\nlet f = n => if n == 1 then case n of 1 => "one" end else "rest" end;\nreturn f;',
+  "No arm covers `2 | 3`",
+);
+
+rejects(
+  "an operator supplied by the caller proves nothing",
+  'sig g = { .eq = 1 | 2 | 3 -> 1 -> #True | #False; } -> (1 | 2 | 3 -> Str);\nlet g = Eq => (n => if n == 1 then case n of 1 => "one" end else "rest" end);\nreturn g;',
+  "No arm covers `2 | 3`",
+);
+
+rejects(
+  "a witness that is another runtime name proves nothing",
+  'sig f = 1 | 2 | 3 -> (1 | 2 -> Str);\nlet f = n => (m => if n == m then "same" else case n of 3 => "three" end end);\nreturn f;',
+  "No arm covers `1 | 2`",
+);
+
+rejects(
+  "a witness bound by `let` is not a compile-time integer",
+  'let k = 1;\nsig f = 1 | 2 | 3 -> Str;\nlet f = n => if n == k then case n of 1 => "one" end else "rest" end;\nreturn f;',
+  "No arm covers `2 | 3`",
+);
+
+check(
+  "a witness bound by `const` is",
+  'const k = 1;\nsig f = 1 | 2 | 3 -> Str;\nlet f = n => if n == k then case n of 1 => "one" end else case n of 2 => "two", 3 => "three" end end;\nreturn f;',
+  "1 | 2 | 3 -> Str",
+);
+
+// Recognition reads the value, not the spelling, so an operator reached by its
+// own name proves exactly what `==` does — and one whose body is not a
+// comparison proves nothing, however it is named.
+
+check(
+  "the operator's own name proves the same thing",
+  'sig f = 1 | 2 | 3 -> Str;\nlet f = n => if Eq.eq n 1 then case n of 1 => "one" end else case n of 2 => "two", 3 => "three" end end;\nreturn f;',
+  "1 | 2 | 3 -> Str",
+);
+
+rejects(
+  "an operator carried through a binding proves nothing",
+  'sig f = 1 | 2 | 3 -> Str;\nlet f = n => do\n  let same = Eq.eq;\n  in if same n 1 then case n of 1 => "one" end else "rest" end\nend;\nreturn f;',
+  "No arm covers `2 | 3`",
+);
+
+check(
+  "a condition that proves nothing leaves the branch types alone",
+  'sig f = 1 | 2 | 3 -> Str;\nlet f = n => if Ord.min n 1 == 1 then "y" else "n" end;\nreturn f;',
+  "1 | 2 | 3 -> Str",
+);
+
+// An unreachable branch is not yet a diagnostic, and narrowing to `⊥` would make
+// every use inside it check against nothing. The branch keeps the wider type.
+
+check(
+  "a condition no value satisfies narrows nothing",
+  'sig f = 1 | 2 | 3 -> Str;\nlet f = n => if n == 7 then "never" else case n of 1 => "a", 2 => "b", 3 => "c" end end;\nreturn f;',
+  "1 | 2 | 3 -> Str",
+);
+
 // --- effects are a lattice element, not a separate pass ---------------------
 
 check(

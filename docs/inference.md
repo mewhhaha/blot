@@ -120,6 +120,52 @@ silently widening to "anything" would turn a missing case into a passing check.
 The consequence is that `blot check` evaluates compile-time code. That is not an
 implementation shortcut; it is what "types are values" means.
 
+## A branch narrows without touching the lattice
+
+`if n == 1` leaves the then-branch knowing `n : 1` and the else-branch knowing
+`n : 2 | 3`. The obvious implementation — push `1` as an upper bound on `n`
+inside the branch — is not available and should not be made available.
+`Variable.upper` is a shared mutable array with no scope, no snapshot, and no
+undo, so a bound pushed in a branch outlives it; and arbitrary intersections in
+positive position plus complements in either are what turn an
+algebraic-subtyping lattice into a boolean algebra and cost the polynomial
+bound.
+
+So narrowing pushes nothing. It shadows the name in a `childTypeEnv` with an
+ordinary ground type, which is the mechanism `inferCase` already uses to type an
+arm from its own pattern. The narrowed type is _computed_, never represented:
+`(1 | 2 | 3) ∩ 1` is the type `1`, so there is no intersection constructor and
+no complement constructor to add. `constrain` is not called at all, and
+biunification cannot observe that the feature exists.
+
+The set algebra is `src/check/setops.ts`, written over ground types only and
+refusing everything else. It is deliberately not `@type.intersect` or
+`@type.diff`, which filter members with the comptime `equal` — and `equal` on a
+range compares exact bounds, so `@type.diff Int 1` answers `Int` and readmits
+the value it was asked to remove.
+
+What a condition proves comes from `src/check/narrow.ts`, and the interesting
+part is that it is derived from the operator's compile-time _value_ rather than
+from its name. `==` is a fixity entry naming `Eq.eq`, and any module may bind
+that name to anything, so a checker that assumed `==` meant equality would prove
+a false fact about a program that shadowed it — a program writable today.
+Instead a value is accepted only when it is `p1 => (p2 => body)` with every
+occurrence of both parameters inside one `@int.cmp p1 p2`. Then
+`op(a, b) = H(cmp(a, b))` for some `H` the checker never sees, `@int.cmp` is
+compiler-owned and total on integers with a three-element codomain, and three
+probes tabulate `H` everywhere. That is why narrowing reaches `Int` and not just
+an enumerable union: no sampling argument could.
+
+Two guards carry the soundness, and both were measured rather than assumed. The
+first is that the operator's value is read out of the _type_ environment, paired
+with the exact `Typing` its binding installed — `context.values` is not written
+by a plain `let` or by a lambda parameter, so reading the operator from there
+would find the prelude's `Eq` under a runtime shadow of it, or under an `Eq` the
+_caller_ supplies. The second is that the other operand must be a single
+compile-time integer rather than a ground type: intersecting against a whole
+type is sound and complementing against one is not, and `n == m` only ever said
+that `n` equals this `m`.
+
 ## What is not yet proven
 
 Stated plainly, because a checker that quietly admits these is worse than one
@@ -152,6 +198,19 @@ and still traps. Closing that would need a difference operation on the lattice
 (`Int \ 1`), which is a real design question — an intersection lives in negative
 position and a complement in neither, so adding both is what would turn the
 lattice into a boolean algebra and cost the polynomial bound.
+
+**Narrowing stops at integers, and at one comparison.** A condition proves
+something only when it applies a recognised comparison to a name whose type is
+already a ground set of integers. `if flag then` does not prove `flag : #True`:
+a `variant` carries its constructors and whether the set is open, so a negated
+constructor set is unrepresentable, and a narrowed constructor set would also
+disagree with the set `context.variants` records for the backend. `&&`, `||` and
+`not` prove nothing, because a recognised value is one comparison rather than a
+composition of them. Text is excluded by the lattice rather than by effort:
+`Bound` is inclusive and text order is dense, so splitting `Str` at `"m"` gives
+`.."m" | "m"..` and readmits `"m"`. And a branch whose narrowed type is empty is
+unreachable; that is not yet a diagnostic, so the branch simply keeps the wider
+type.
 
 **Higher-kinded types** are not inference's problem by design: type constructors
 are comptime functions that are specialized away, so the lattice never needs

@@ -1,0 +1,21 @@
+// A comparison against another runtime name proves nothing.
+//
+// `n == m` says `n` equals *this* `m`. On the branch where it is false, all that
+// follows is that `n` differs from one value — not that `n` is outside `m`'s
+// whole type. Narrowing the else-branch to `(1 | 2 | 3) \ (1 | 2)` would leave
+// `3`, bless `case n of 3 => "three" end` as complete, and then trap on
+// `name 1 2`, which takes the else-branch with `n` still `1`.
+//
+// So the witness must be a single compile-time integer, not a ground type. Here
+// it is a parameter, nothing is proved, and the `case` is judged against the
+// whole of `1 | 2 | 3`.
+
+open {} = (@import "blot:prelude") ();
+
+sig name = 1 | 2 | 3 -> (1 | 2 -> Str);
+let name = n => (m => if n == m
+  then "same"
+  else case n of 3 => "three" end
+end);
+
+return name 1 2;

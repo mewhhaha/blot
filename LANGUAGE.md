@@ -617,6 +617,89 @@ is a guard rather than a requirement and constrains nothing on its own.
 Like expression `if`, `case` is a value boundary: `return` and `break` cannot
 escape from an arm.
 
+### 8.5 What a branch proves
+
+A condition can narrow a name. Inside the branch it is taken, and inside every
+branch reached because it was not, the name's type is the part of its declared
+set that the condition allows.
+
+```blot
+sig name = 1 | 2 | 3 -> Str;
+let name = n => if n == 1
+  then case n of 1 => "one" end
+  else case n of 2 => "two", 3 => "three" end
+end;
+```
+
+`n` is `1` in the `then` branch and `2 | 3` in the `else`, so both `case`
+expressions cover their target without a catch-all arm. An `else if` chain
+accumulates: each condition is read knowing that none of the earlier ones fired,
+and the final `else` knows that none of them did.
+
+Narrowing is set algebra on the types that are already there. The proved type is
+computed, not written down: `(1 | 2 | 3) ∩ 1` is the type `1`. There is no
+intersection type, no complement type, and no difference operation on types.
+
+**What proves it.** The condition must apply a function whose compile-time value
+the checker can read and recognise as a comparison of two integers. Recognition
+is a property of the function, not of the name it is bound to and not of the
+operator spelled at the call site. `==` is an ordinary fixity entry naming the
+binding `Eq.eq` (§7), so `if n == 1` and `if Eq.eq n 1` prove exactly the same
+thing, and a module that binds `Eq` to something else gets whatever that
+something else actually computes.
+
+A value is recognised when it is `p1 => (p2 => body)` and every occurrence of
+`p1` and `p2` in `body` lies inside a single application `@int.cmp p1 p2` — one
+occurrence each, with no binder in `body` rebinding either name. The body may
+then be evaluated only through that call, so the function is some decision on
+`@int.cmp`'s three answers, and the checker determines which by applying it to
+one pair of integers per answer. That is why narrowing reaches an unbounded
+domain: `if n < 10` proves `..9` and `10..` without enumerating anything.
+
+The other operand must be a single compile-time integer — an integer literal, or
+a name whose `const` value is one. `if 0 < n` reads the same as `if n > 0`.
+
+Narrowing never changes a program's type. It only lets a branch use a name at a
+type the branch has proved, so a function's own signature is what it was.
+
+**What it does not prove.** Narrowing is silent, not an error, wherever it
+declines. A refused condition leaves every name exactly as wide as it was
+declared, which is usually reported by something else — most often a `case` in
+the branch failing to cover a set the condition would have shrunk.
+
+- **A name the compile-time environment cannot see through.** A `let` binding
+  and a function parameter give a name a type without giving it a compile-time
+  value, so a `let`-bound or parameter-bound `Eq` is refused rather than read
+  through to an outer one. This is what makes shadowing safe: the checker never
+  reasons about a function the program does not call, and an operator record
+  supplied by the _caller_ could never be reasoned about at all.
+- **A witness that is another runtime name.** `n == m` says `n` equals this `m`,
+  not that `n` is somewhere in `m`'s type. Intersecting against a whole type
+  would be sound and complementing against it would not, so neither is done.
+- **A function whose body is not a single comparison.** `Ord.cmp`, `Ord.min` and
+  `Ord.max` are refused, as is any equality written with two comparisons rather
+  than one. Refusal here is a limitation, not a judgement: the function is fine,
+  the checker just cannot say what it computes.
+- **A body containing `open` or `rec`.** Both bind names that appear in no node
+  of the body, so the occurrence count that licenses the whole argument cannot
+  see them.
+- **Text.** A text range cannot have a value cut out of its interior: range
+  bounds are inclusive and text order is dense, so splitting `Str` at `"m"`
+  would give `.."m" | "m"..` and readmit the value it was asked to remove.
+  Integers are discrete, so the same split is exact for them and is performed. A
+  recognised comparison is over `@int.cmp` in any case, which fails on text.
+- **Constructors.** `if flag then` does not prove `flag : #True`. A `variant`
+  carries its constructors and whether the set is open, so "those others, minus
+  `#A`" is unrepresentable, and a narrowed constructor set would also disagree
+  with the set recorded for the backend.
+- **An empty result.** A condition no value satisfies makes the branch
+  unreachable. The branch keeps the wider type rather than being given the empty
+  one; reporting unreachability is not yet a diagnostic.
+
+A proof is a shadow of the name, so it lasts as long as the name does. Rebinding
+the name inside the branch with `:=` replaces it under the ordinary rule (§4.3)
+— the stable type, not the proved one — and the proof does not survive.
+
 ## 9. Iteration
 
 `for` is a declaration, not an expression.

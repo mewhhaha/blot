@@ -34,6 +34,14 @@ import {
 import { bridge, effectLabel } from "./bridge.ts";
 import { showLiterals, uncovered } from "./coverage.ts";
 import {
+  complement,
+  mirror,
+  type Ordering,
+  recognise,
+  region,
+} from "./narrow.ts";
+import { intersect } from "./setops.ts";
+import {
   constrain,
   instantiate,
   instantiateForall,
@@ -63,11 +71,29 @@ import {
 interface TypeEnv {
   readonly names: Map<string, Typing>;
   readonly literals: Map<string, Expr>;
+  /**
+   * The compile-time value a binding installed *alongside* the type it put in
+   * `names`, together with that exact `Typing` object.
+   *
+   * `context.values` cannot answer this question. A plain `let` and a lambda
+   * parameter write only the type environment, so a runtime shadow of `Eq` is
+   * invisible there while being entirely visible to evaluation — and a checker
+   * that read the compile-time `Eq` through a runtime shadow of it would prove
+   * facts about a function the program never calls. Pairing the value with the
+   * `Typing` object makes that detectable: a later binding installs a different
+   * object, so `lookupComptime` sees the mismatch and declines.
+   */
+  readonly comptime: Map<string, { value: Value; typing: Typing }>;
   readonly parent: TypeEnv | null;
 }
 
 function childTypeEnv(parent: TypeEnv | null): TypeEnv {
-  return { names: new Map(), literals: new Map(), parent };
+  return {
+    names: new Map(),
+    literals: new Map(),
+    comptime: new Map(),
+    parent,
+  };
 }
 
 function lookupType(env: TypeEnv, name: string): Typing | undefined {
@@ -78,6 +104,44 @@ function lookupType(env: TypeEnv, name: string): Typing | undefined {
     scope = scope.parent;
   }
   return undefined;
+}
+
+/**
+ * The compile-time value of `name`, but only when the binding that gives `name`
+ * its type is the same one that recorded the value.
+ *
+ * This is the whole of the shadowing story. `let Eq = { .eq = a => (b => True); };`
+ * installs a fresh `Typing` for `Eq` and records no value, so the recorded pair
+ * from the enclosing `open` no longer matches and this answers `null` — the
+ * checker proves nothing rather than proving something about the prelude's `Eq`
+ * while the program calls the user's. A lambda parameter named `Eq` is refused
+ * for the same reason, which matters because no analysis of a compile-time value
+ * could ever be sound when the caller supplies the function.
+ */
+function lookupComptime(env: TypeEnv, name: string): Value | null {
+  const typing = lookupType(env, name);
+  if (typing === undefined) return null;
+  let scope: TypeEnv | null = env;
+  while (scope !== null) {
+    const found = scope.comptime.get(name);
+    if (found !== undefined) {
+      if (found.typing !== typing) return null;
+      return found.value;
+    }
+    scope = scope.parent;
+  }
+  return null;
+}
+
+/** Pairs a name's compile-time value with the `Typing` installed beside it. */
+function recordComptimeBinding(
+  scope: TypeEnv,
+  name: string,
+  value: Value,
+): void {
+  const typing = scope.names.get(name);
+  if (typing === undefined) return;
+  scope.comptime.set(name, { value, typing });
 }
 
 function lookupLiteral(env: TypeEnv, name: string): Expr | undefined {
@@ -401,16 +465,30 @@ export function infer(
 
     case "if": {
       const result = freshVar(level);
+      // `else if` is one flat chain of branches, so the knowledge accumulates:
+      // branch `i` is inferred already knowing that branches `0..i-1` did not
+      // fire, and the fallback knows that none of them did. `outer` is that
+      // running scope.
+      let outer = context.types;
       for (const branch of expr.branches) {
-        const condition = infer(branch.condition, context, level, row);
+        const scoped: Context = { ...context, types: outer };
+        const condition = infer(branch.condition, scoped, level, row);
         located(branch.condition.span, () => {
           constrain(condition, variant([["True", UNIT], ["False", UNIT]]));
         });
-        const consequence = infer(branch.consequence, context, level, row);
+        const proof = narrowing(branch.condition, outer);
+        const consequence = infer(
+          branch.consequence,
+          { ...context, types: proven(outer, proof, "taken") },
+          level,
+          row,
+        );
         located(branch.consequence.span, () => constrain(consequence, result));
+        outer = proven(outer, proof, "untaken");
       }
       if (expr.fallback !== null) {
-        const fallback = infer(expr.fallback, context, level, row);
+        const inner: Context = { ...context, types: outer };
+        const fallback = infer(expr.fallback, inner, level, row);
         located(expr.fallback.span, () => constrain(fallback, result));
       }
       return result;
@@ -636,6 +714,194 @@ function spine(expr: Expr): Spine | null {
   }
   if (args.length === 0) return null;
   return { callee: current, args };
+}
+
+/**
+ * What one branch of an `if` proves about one name.
+ *
+ * Both types are computed, never represented: `taken` is the type `1`, not the
+ * type `(1 | 2 | 3) & 1`. Nothing is written into the lattice, no `constrain`
+ * call is made, and no variable bound is pushed — narrowing is a name shadow in
+ * a child scope, exactly the mechanism `inferCase` already uses for an arm. That
+ * is what keeps intersection out of the positive polarity and complement out of
+ * both, so biunification stays where it was.
+ */
+interface Narrowing {
+  readonly name: string;
+  /** The type the name had before the branch, for recognising a no-op. */
+  readonly before: SimpleType;
+  readonly taken: SimpleType;
+  readonly untaken: SimpleType;
+}
+
+/**
+ * What `condition` proves, when the function it calls is a recognised comparison
+ * of an integer against a compile-time integer.
+ *
+ * Nothing here knows what `==` is. `n == 1` has already become the ordinary
+ * application `Eq.eq n 1`, and this reads the compile-time value bound to that
+ * path — through `lookupComptime`, so a shadowed `Eq` is refused rather than
+ * mistaken for the prelude's — and asks `recognise` what it computes.
+ */
+function narrowing(condition: Expr, scope: TypeEnv): Narrowing | null {
+  if (condition.tag !== "apply") return null;
+  if (condition.fn.tag !== "apply") return null;
+  const path = namePath(condition.fn.fn);
+  if (path === null) return null;
+  const callee = comptimeAt(path, scope);
+  if (callee === null) return null;
+  const answers = recognise(callee);
+  if (answers === null) return null;
+
+  // The witness decides which side is the subject. One side must be a single
+  // compile-time integer — not merely a ground type. `n == m` where `m`'s type
+  // is `1 | 2` would let the untaken branch conclude `n ∉ {1, 2}`, but all the
+  // condition said is that `n` differs from *this* `m`. A whole type is a sound
+  // witness for the intersection and an unsound one for the complement, so
+  // neither is taken unless the witness is one value.
+  const left = condition.fn.arg;
+  const right = condition.arg;
+  const leftWitness = comptimeInt(left, scope);
+  const rightWitness = comptimeInt(right, scope);
+  if (leftWitness !== null && rightWitness !== null) return null;
+
+  if (rightWitness !== null) {
+    const subject = comparedName(left, scope);
+    if (subject === null) return null;
+    return proves(subject, answers, rightWitness);
+  }
+  if (leftWitness !== null) {
+    const subject = comparedName(right, scope);
+    if (subject === null) return null;
+    // `1 < n` is `n > 1`. Mirroring the three-element ordering set is a
+    // bijection, so mirroring before complementing and after agree.
+    return proves(subject, mirror(answers), leftWitness);
+  }
+  return null;
+}
+
+function proves(
+  subject: { readonly name: string; readonly type: SimpleType },
+  answers: ReadonlySet<Ordering>,
+  witness: bigint,
+): Narrowing | null {
+  const taken = intersect(subject.type, region(answers, witness));
+  const untaken = intersect(
+    subject.type,
+    region(complement(answers), witness),
+  );
+  if (taken.tag !== "type" || untaken.tag !== "type") return null;
+  return {
+    name: subject.name,
+    before: subject.type,
+    taken: taken.type,
+    untaken: untaken.type,
+  };
+}
+
+/** The branch's scope, carrying what it proved. */
+function proven(
+  scope: TypeEnv,
+  proof: Narrowing | null,
+  side: "taken" | "untaken",
+): TypeEnv {
+  if (proof === null) return scope;
+  let narrowed = proof.taken;
+  if (side === "untaken") narrowed = proof.untaken;
+  // An empty intersection means the branch cannot be reached. Reporting that is
+  // a separate diagnostic; installing `⊥` here would instead make every use of
+  // the name inside it check against nothing.
+  if (narrowed.tag === "bottom") return scope;
+  // Built once per branch, and only when it says something new: `constrain`
+  // memoises on object identity, so a fresh copy of an unchanged type would
+  // quietly defeat the cache.
+  if (sameGround(narrowed, proof.before)) return scope;
+  const inner = childTypeEnv(scope);
+  inner.names.set(proof.name, narrowed);
+  return inner;
+}
+
+/** A name whose type is already a ground set of integers — the `sig` case. */
+function comparedName(
+  expr: Expr,
+  scope: TypeEnv,
+): { readonly name: string; readonly type: SimpleType } | null {
+  if (expr.tag !== "var") return null;
+  const type = groundIntType(lookupType(scope, expr.name));
+  if (type === null) return null;
+  return { name: expr.name, type };
+}
+
+function groundIntType(typing: Typing | undefined): SimpleType | null {
+  if (typing === undefined) return null;
+  if (typing.tag === "scheme") return null;
+  if (typing.tag === "range") {
+    if (typing.domain !== "int") return null;
+    return typing;
+  }
+  if (typing.tag === "union") {
+    for (const member of typing.members) {
+      if (member.tag !== "range") return null;
+      if (member.domain !== "int") return null;
+    }
+    return typing;
+  }
+  return null;
+}
+
+/** `Eq.eq` as `["Eq", "eq"]`. Anything computed is not a path. */
+function namePath(expr: Expr): readonly string[] | null {
+  if (expr.tag === "var") return [expr.name];
+  if (expr.tag !== "field") return null;
+  const prefix = namePath(expr.target);
+  if (prefix === null) return null;
+  return [...prefix, expr.name];
+}
+
+function comptimeAt(
+  path: readonly string[],
+  scope: TypeEnv,
+): Value | null {
+  let value = lookupComptime(scope, path[0]);
+  for (const name of path.slice(1)) {
+    if (value === null) return null;
+    if (value.tag !== "shape") return null;
+    const found = value.fields.get(name);
+    if (found === undefined) return null;
+    value = found;
+  }
+  return value;
+}
+
+/**
+ * A witness reached without running any user code.
+ *
+ * `-9` is `Num.negate 9`, an application, and evaluating it would mean calling
+ * whatever `Num.negate` happens to name. So it is not a witness, and `if n == -9`
+ * narrows nothing.
+ */
+function comptimeInt(expr: Expr, scope: TypeEnv): bigint | null {
+  if (expr.tag === "int") return expr.value;
+  const path = namePath(expr);
+  if (path === null) return null;
+  const value = comptimeAt(path, scope);
+  if (value === null) return null;
+  if (value.tag !== "int") return null;
+  return value.value;
+}
+
+function sameGround(left: SimpleType, right: SimpleType): boolean {
+  if (left.tag === "range" && right.tag === "range") {
+    return left.domain === right.domain && left.low === right.low &&
+      left.high === right.high;
+  }
+  if (left.tag === "union" && right.tag === "union") {
+    if (left.members.length !== right.members.length) return false;
+    return left.members.every((member, index) =>
+      sameGround(member, right.members[index])
+    );
+  }
+  return false;
 }
 
 function inferCase(
@@ -946,6 +1212,7 @@ function inferDeclarations(
         // make every use share them — `fold` used once on text could then
         // never be used on integers.
         context.types.names.set(binding.target, scheme(field, -1));
+        recordComptimeBinding(context.types, binding.target, binding.value);
       }
       continue;
     }
@@ -1007,6 +1274,14 @@ function inferDeclarations(
           stableRebindingType(previous),
         );
       }
+      // A rebinding whose value is not known at compile time erases the one the
+      // name had. `stableRebindingType` can hand back the very type it was
+      // given, so the `Typing` pairing alone would not always notice a `:=` in
+      // the same scope as the binding it shadows.
+      context.types.comptime.delete(declaration.name);
+      if (named !== null) {
+        recordComptimeBinding(context.types, declaration.name, named);
+      }
       continue;
     }
 
@@ -1055,6 +1330,7 @@ function inferDeclarations(
     ) {
       signature = pendingSig.type;
     }
+    let bound: Value | null = null;
     if (declaration.kind === "const") {
       // Through `bind`, not `evaluate`: a `const` may be `rec`, and `rec` only
       // means anything when it knows the name it is being bound to.
@@ -1073,6 +1349,7 @@ function inferDeclarations(
       if (value !== null) {
         recordComptime(declaration.pattern, value, context);
         context.comptimeValues.set(declaration.value, value);
+        bound = value;
         const bridged = bridge(value);
         if (bridged !== null) type = bridged;
       }
@@ -1114,6 +1391,9 @@ function inferDeclarations(
     }
 
     bindDeclaration(declaration.pattern, type, context, level);
+    if (bound !== null && declaration.pattern.tag === "name") {
+      recordComptimeBinding(context.types, declaration.pattern.name, bound);
+    }
     if (
       declaration.pattern.tag === "name" &&
       (declaration.value.tag === "shape" ||
