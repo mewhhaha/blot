@@ -207,6 +207,15 @@ Scopes are lexical and declarations are processed in source order. A new binding
 may shadow an existing binding. A block, lambda, conditional branch, and case
 arm introduces a nested scope.
 
+A declaration sees the declarations above it and not the ones below it. The one
+exception is a recursive group (section 6.5): a run of adjacent `rec` bindings,
+whose names are all in scope in all of their bodies.
+
+A name that is read before the block binds it is a scope error,
+`BLOT_FORWARD_REFERENCE`, reported at the read. It is distinct from an unbound
+name because the fix is different: the binding exists, and either it belongs
+above the reader or the two belong in one recursive group.
+
 Every declaration ends in `;`.
 
 ### 4.1 Runtime and compile-time bindings
@@ -563,6 +572,52 @@ const factorial = rec (fn n =>
 The bound name is visible inside the lambda body. `rec` applied outside such a
 binding, applied to a non-lambda, or bound through a compound pattern is an
 error.
+
+A run of adjacent `rec` bindings of the same kind is one **recursive group**,
+and every name the run binds is in scope in every member's body:
+
+```blot
+let is_even = rec (fn n => if n == 0 then True else is_odd (n - 1) end);
+let is_odd = rec (fn n => if n == 0 then False else is_even (n - 1) end);
+```
+
+A group of one is ordinary self-recursion, so this states the existing rule for
+a run rather than adding a second rule beside it. Membership is adjacency, not
+participation: a `rec` binding that calls nobody is still a member of the run it
+sits in.
+
+A run ends at any declaration that is not a `rec` binding of a lambda to one
+name, and at a change of kind. A `let` run and a `const` run are therefore
+separate groups, because a `const` may not capture a `let` (section 4.1) and the
+members of a group are bound together.
+
+A `sig` neither joins a run nor ends one. A signature must be immediately
+followed by the binding it constrains, so a `sig` written inside a run is one
+member's own signature.
+
+A tagged binding (section 4.2) is not a member and ends a run. A tag replaces
+the binding's value with the transform applied to it, so what the binding holds
+is no longer a `rec`.
+
+The names entering scope together fixes the rest of the rule:
+
+- A member must be a function. Every name in the group is in scope from the
+  first member onward, but none holds a value until all of them are bound. A
+  function body can wait for that and a value cannot, so `rec` applied to a
+  non-lambda is refused.
+- A name may not be bound twice in one group. A repeated `let` shadows an
+  earlier binding, and in a group there is no earlier one to shadow. Another
+  declaration between the two ends the group and restores ordinary shadowing.
+- A group may shadow names from an enclosing scope. All of its members shadow at
+  once, so every member's body sees the group's binding rather than the outer
+  one.
+
+Only a group is mutually visible. Two plain `let` bindings are not, which is
+what keeps `let value = value + 1;` reading the binding above it rather than
+reading itself.
+
+A member's type is inferred with the whole group's names bound monomorphically
+and generalized afterwards, so recursion within a group is not polymorphic.
 
 ### 6.6 Compile-time evaluation
 
@@ -1623,7 +1678,7 @@ Before gpufuck lowering, Blot:
 - lowers constructor sets to nominal variants;
 - lowers arrays to gpufuck `Store`;
 - marks a Store update owned only when it consumes a proved linear array;
-- lowers `rec` to local `let-rec`;
+- lowers each recursive group to one local `let-rec` group;
 - specializes source handlers with selective CPS; and
 - turns host effects and entry-module projections into typed imports.
 

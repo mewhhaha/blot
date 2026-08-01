@@ -1,0 +1,16 @@
+// A block binds in source order, so a value cannot read a name the block has
+// not reached yet.
+//
+// Mutual visibility is a property of a recursive group, and a group's members
+// are functions: their names are in scope throughout the group but hold no
+// value until all of them are bound, which is exactly what a function body can
+// wait for and a sum cannot. So this is a scope error, reported where the name
+// is read, and the message says the name is bound further down rather than
+// leaving the reader to hunt for a typo.
+
+open {} = (@import "blot:prelude") ();
+
+let total = later + 1;
+let later = 2;
+
+return total;

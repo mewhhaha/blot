@@ -1305,3 +1305,152 @@ check(
   'return fn shape => @shape.get shape "a";',
   "{ .a = 'a; } -> 'a",
 );
+
+// --- recursive groups --------------------------------------------------------
+//
+// A run of adjacent `rec` bindings of one kind is one group, and every name in
+// the run is in scope in every member. Nothing else changes: a `let` still
+// shadows the binding above it, which is exactly why the run has to be marked
+// rather than the whole block being mutually visible.
+
+check(
+  "two `rec` bindings in a run see each other",
+  "let is_even = rec (fn n => if n == 0 then True else is_odd (n - 1) end);\n" +
+    "let is_odd = rec (fn n => if n == 0 then False else is_even (n - 1) end);\n" +
+    "return is_even 10;",
+  "(#True | #False)",
+);
+
+check(
+  "three `rec` bindings in a cycle see each other",
+  "let a = rec (fn n => if n == 0 then 0 else b (n - 1) end);\n" +
+    "let b = rec (fn n => if n == 0 then 1 else c (n - 1) end);\n" +
+    "let c = rec (fn n => if n == 0 then 2 else a (n - 1) end);\n" +
+    "return a 7;",
+  "(0 | 1 | 2)",
+);
+
+// Membership is adjacency, not participation: a group is what the source marks
+// as one, so a member calling nobody is still typed with the rest.
+check(
+  "a group member that is not recursive at all is still a member",
+  "let ping = rec (fn n => if n == 0 then 0 else pong (n - 1) end);\n" +
+    "let pong = rec (fn n => if n == 0 then 1 else ping (n - 1) end);\n" +
+    "let plain = rec (fn n => n + 1);\n" +
+    "return plain (ping 5);",
+  "Int",
+);
+
+check(
+  "a group inside a nested block sees itself",
+  "return do\n" +
+    "  let up = rec (fn n => if n == 0 then 0 else down (n - 1) end);\n" +
+    "  let down = rec (fn n => if n == 0 then 1 else up (n - 1) end);\n" +
+    "  in up 9\n" +
+    "end;",
+  "(0 | 1)",
+);
+
+check(
+  "a group inside a lambda body sees itself",
+  "let outer = fn start => do\n" +
+    "  let up = rec (fn n => if n == 0 then 0 else down (n - 1) end);\n" +
+    "  let down = rec (fn n => if n == 0 then 1 else up (n - 1) end);\n" +
+    "  in up start\n" +
+    "end;\n" +
+    "return outer 9;",
+  "(0 | 1)",
+);
+
+// A `sig` has to be followed by the binding it constrains, so one written
+// inside a run is a member's own signature and cannot be separating anything.
+check(
+  "a member's `sig` does not break the run",
+  "sig ping = Int -> Int;\n" +
+    "let ping = rec (fn n => if n == 0 then 0 else pong (n - 1) end);\n" +
+    "sig pong = Int -> Int;\n" +
+    "let pong = rec (fn n => if n == 0 then 1 else ping (n - 1) end);\n" +
+    "return ping 4;",
+  "Int",
+);
+
+check(
+  "a `const` run is a group too",
+  "const even = rec (fn n => if n == 0 then True else odd (n - 1) end);\n" +
+    "const odd = rec (fn n => if n == 0 then False else even (n - 1) end);\n" +
+    "return even 12;",
+  "(#True | #False)",
+);
+
+// The reason the rule is a marked run rather than the whole block. Under
+// block-wide mutual visibility this program would rebind `value` to itself.
+check(
+  "a repeated `let` still shadows the binding above it",
+  "let value = 1;\nlet value = value + 1;\nlet value = value + 1;\nreturn value;",
+  "Int",
+);
+
+rejects(
+  "a declaration between two `rec` bindings ends the run",
+  "let a = rec (fn n => b n);\n" +
+    "let gap = 1;\n" +
+    "let b = rec (fn n => n + gap);\n" +
+    "return a 1;",
+  "`b` is bound further down",
+);
+
+rejects(
+  "a value that reads a later binding names the ordering, not a typo",
+  "let total = later + 1;\nlet later = 2;\nreturn total;",
+  "`later` is bound further down",
+);
+
+// The hint has to be earned. A name nothing binds is still just unbound.
+rejects(
+  "a name no declaration binds is still an ordinary unbound name",
+  "let total = nowhere + 1;\nreturn total;",
+  "`nowhere` is not in scope",
+);
+
+rejects(
+  "a group member that is not a function is refused",
+  "let total = rec (later 1);\nlet later = rec (fn n => n + 1);\nreturn total;",
+  "`rec` applies to a lambda",
+);
+
+rejects(
+  "one name cannot be bound twice in one group",
+  "let step = rec (fn n => step n);\nlet step = rec (fn n => n + 1);\nreturn step 3;",
+  "bound twice in one recursive group",
+);
+
+// Two `rec` bindings of different kinds are two groups, not one. A `const` and
+// a `let` in one knot would be a compile-time closure capturing a runtime one,
+// which is the capture rule's whole subject.
+rejects(
+  "a `const` and a `let` do not share a group",
+  "const up = rec (fn n => if n == 0 then 0 else down (n - 1) end);\n" +
+    "let down = rec (fn n => if n == 0 then 1 else up (n - 1) end);\n" +
+    "return up 4;",
+  "`down` is bound further down",
+);
+
+// A tag replaces the binding's value with the transform applied to it, so a
+// tagged binding holds no `rec` to group and ends the run it sits in.
+rejects(
+  "a tagged binding is not a group member",
+  "@[derive(identity)]\n" +
+    "let up = rec (fn n => if n == 0 then 0 else down (n - 1) end);\n" +
+    "let down = rec (fn n => if n == 0 then 1 else up (n - 1) end);\n" +
+    "return up 5;",
+  "`down` is bound further down",
+);
+
+// The ordering fact outlives the block it was recorded in: a nested block sits
+// inside one of the enclosing declarations, so a name it reads too early is
+// early for the same reason.
+rejects(
+  "a nested block reads an enclosing binding too early",
+  "let a = do let t = 1; in t + later end;\nlet later = 2;\nreturn a;",
+  "`later` is bound further down",
+);

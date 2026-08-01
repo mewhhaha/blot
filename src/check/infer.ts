@@ -14,8 +14,16 @@
 // mechanism that lets `const Console = @effect {...}` give `Console.write` a row
 // without a single annotation, and it is why blot needs no type sublanguage.
 
-import type { Decl, Expr, Module, Pattern, Span } from "../syntax/ast.ts";
-import { BlotError, fail } from "../diagnostic.ts";
+import type {
+  Decl,
+  Expr,
+  Module,
+  Pattern,
+  RecursiveMember,
+  Span,
+} from "../syntax/ast.ts";
+import { patternNames, recursiveGroups } from "../syntax/ast.ts";
+import { BlotError, expect, fail } from "../diagnostic.ts";
 import type { Env as ValueEnv } from "../comptime/value.ts";
 import { childEnv, show, type Value } from "../comptime/value.ts";
 import {
@@ -335,6 +343,17 @@ interface Context {
   readonly modules: ReadonlyMap<string, SimpleType>;
   readonly opens: Map<Expr, ReadonlyMap<string, Value>>;
   readonly declarationTags: Map<Decl, TaggedDeclaration>;
+  /**
+   * The names the declaration lists being checked have still to bind, innermost
+   * and enclosing together.
+   *
+   * Read only to tell one unbound name from another. Declarations bind in
+   * source order, so a name that is bound further down is not a typo but an
+   * ordering mistake, and the two deserve different sentences. An enclosing
+   * list counts because a nested block is inside one of its declarations: a
+   * name that block reads too early is early for the same reason.
+   */
+  forward: ReadonlySet<string>;
 }
 
 function located<T>(span: Span, work: () => T): T {
@@ -459,6 +478,13 @@ export function infer(
     case "var": {
       const found = lookupType(context.types, expr.name);
       if (found === undefined) {
+        if (context.forward.has(expr.name)) {
+          fail(
+            "BLOT_FORWARD_REFERENCE",
+            `\`${expr.name}\` is bound further down, so it is not in scope here. Declarations are evaluated in order: move the binding above this one, or — if the two call each other — write both as \`rec\` bindings of functions with nothing between them.`,
+            expr.span,
+          );
+        }
         fail("BLOT_UNBOUND", `\`${expr.name}\` is not in scope.`, expr.span);
       }
       return instantiate(found, level, context.instances);
@@ -573,7 +599,14 @@ export function infer(
 
     case "rec": {
       if (expr.lambda.tag !== "lambda") {
-        fail("BLOT_TYPE_ERROR", "`rec` applies to a lambda.", expr.span);
+        // The names of a recursive group are in scope throughout it but hold
+        // no value until the whole group is bound, so a member that is not a
+        // function would have to read one of them before it exists.
+        fail(
+          "BLOT_TYPE_ERROR",
+          "`rec` applies to a lambda: a recursive binding is a function, because its group's names are in scope before any of them has a value.",
+          expr.span,
+        );
       }
       return infer(expr.lambda, context, level, row);
     }
@@ -1923,6 +1956,24 @@ function bindPattern(
   }
 }
 
+/**
+ * The names a declaration puts in scope, as far as the syntax says.
+ *
+ * An `open` is missing here on purpose: which names it binds is a compile-time
+ * value, not a fact about the declaration's shape. That only costs a sharper
+ * sentence on a name an `open` would have bound later, and the ordinary
+ * unbound message is still correct.
+ */
+function boundNames(declaration: Decl): readonly string[] {
+  if (declaration.tag !== "binding") return [];
+  if (declaration.kind === "sig") return [];
+  return patternNames(declaration.pattern);
+}
+
+function declaredNames(declarations: readonly Decl[]): Set<string> {
+  return new Set(declarations.flatMap(boundNames));
+}
+
 function inferDeclarations(
   declarations: readonly Decl[],
   context: Context,
@@ -1932,8 +1983,17 @@ function inferDeclarations(
   let pendingSig:
     | { name: string; type: SimpleType; span: Span }
     | null = null;
+  const groups = recursiveGroups(declarations);
+  const groupTypes = new Map<Decl, Typing>();
+  const enclosing = context.forward;
+  const remaining = declaredNames(declarations);
 
   for (const declaration of declarations) {
+    // Spent before the declaration is checked, so a name this one binds is not
+    // reported to itself as a forward reference.
+    for (const name of boundNames(declaration)) remaining.delete(name);
+    context.forward = new Set([...enclosing, ...remaining]);
+
     if (pendingSig !== null) {
       const adjacent = declaration.tag === "binding" &&
         declaration.kind !== "sig" &&
@@ -2148,6 +2208,17 @@ function inferDeclarations(
       }
     }
 
+    const group = groups.get(declaration);
+    if (type === null && group !== undefined) {
+      // Typed once, at the first member: the group's names have to be in scope
+      // together, and one pass over the whole run is the only way to do that.
+      if (!groupTypes.has(declaration)) {
+        inferRecursiveGroup(group, context, level, row, groupTypes);
+      }
+      const member = groupTypes.get(declaration);
+      expect(member !== undefined, "recursive group missed one of its members");
+      type = member;
+    }
     if (type === null) {
       if (signature !== null && declaration.value.tag === "lambda") {
         type = checkAgainst(
@@ -2158,16 +2229,7 @@ function inferDeclarations(
           row,
         );
       } else {
-        type =
-          declaration.value.tag === "rec" && declaration.pattern.tag === "name"
-            ? generalizeRec(
-              declaration.pattern.name,
-              declaration.value,
-              context,
-              level,
-              row,
-            )
-            : generalize(declaration.value, context, level, row);
+        type = generalize(declaration.value, context, level, row);
       }
     }
 
@@ -2449,29 +2511,45 @@ function generalize(
 }
 
 /**
- * `rec` makes a binding's own name visible inside its lambda, so the name has to
- * be in scope before the body is inferred. It is bound monomorphically: a
- * recursive call sees one type, and generalization happens once the body is
- * known.
+ * A recursive group: every member's name is in scope inside every member's
+ * lambda, so all of them are bound before any body is inferred.
+ *
+ * The names are bound monomorphically — a recursive call sees one type — and
+ * generalization happens per member once its body is known. A group of one is
+ * ordinary self-recursion, which is why there is no separate rule for it.
  */
-function generalizeRec(
-  name: string,
-  expr: Expr & { tag: "rec" },
+function inferRecursiveGroup(
+  members: readonly RecursiveMember[],
   context: Context,
   level: Level,
   row: SimpleType,
-): Typing {
+  into: Map<Decl, Typing>,
+): void {
   const scope = childTypeEnv(context.types);
-  const placeholder = freshVar(level + 1);
-  scope.names.set(name, placeholder);
-  const inner = infer(
-    expr.lambda,
-    { ...context, types: scope },
-    level + 1,
-    row,
-  );
-  located(expr.span, () => constrain(inner, placeholder));
-  return scheme(inner, level);
+  const inner: Context = { ...context, types: scope };
+  const placeholders = new Map<string, SimpleType>();
+  for (const member of members) {
+    if (placeholders.has(member.name)) {
+      fail(
+        "BLOT_DUPLICATE_RECURSIVE_BINDING",
+        `\`${member.name}\` is bound twice in one recursive group. The group's names all enter scope together, so there is no order in which one could shadow the other; rename one, or put another declaration between them.`,
+        member.declaration.span,
+      );
+    }
+    const placeholder = freshVar(level + 1);
+    placeholders.set(member.name, placeholder);
+    scope.names.set(member.name, placeholder);
+  }
+  for (const member of members) {
+    const inferred = infer(member.lambda, inner, level + 1, row);
+    const placeholder = placeholders.get(member.name);
+    expect(placeholder !== undefined, "recursive member lost its placeholder");
+    located(
+      member.declaration.span,
+      () => constrain(inferred, placeholder),
+    );
+    into.set(member.declaration, scheme(inferred, level));
+  }
 }
 
 /** Evaluates a shadow's value and names the effect it may have produced. */
@@ -2632,6 +2710,7 @@ export function checkModule(
     imports,
     modules,
     declarationTags,
+    forward: new Set(),
   };
   const level = 0;
   const row = freshVar(level);

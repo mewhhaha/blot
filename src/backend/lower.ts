@@ -46,9 +46,11 @@ import type {
   Expr,
   Module,
   Pattern,
+  RecursiveMember,
   ShapeMember,
   Span,
 } from "../syntax/ast.ts";
+import { recursiveGroups } from "../syntax/ast.ts";
 import { fail } from "../diagnostic.ts";
 import {
   type GrantSignature,
@@ -1518,6 +1520,7 @@ function lowerBlock(
 ): SurfaceExpression {
   const inner = childScope(scope);
   const wrappers: ((body: SurfaceExpression) => SurfaceExpression)[] = [];
+  const groups = recursiveGroups(declarations);
 
   for (const declaration of declarations) {
     // `open` emits nothing — a use of a name it brought in specializes to the
@@ -1562,6 +1565,23 @@ function lowerBlock(
       inner.literals.set(declaration.pattern.name, declaration.value);
     }
 
+    // A recursive group becomes a *local* `let-rec` binding all its members at
+    // once. Lifting it to top-level definitions would strand whatever the
+    // lambdas captured.
+    //
+    // A group whose members are all compile-time values is specialized instead,
+    // through the `const` branch below: each use hoists the closure it names,
+    // and the hoisted definitions reach each other through the environment the
+    // checker evaluated them in. Deciding for the whole group is what keeps the
+    // two routes from splitting one knot in half.
+    const group = groups.get(declaration);
+    if (group !== undefined && !specialized(group, lowering)) {
+      if (group[0].declaration === declaration) {
+        wrappers.push(recursiveGroup(group, inner, lowering));
+      }
+      continue;
+    }
+
     // A `const` the checker evaluated is compile time and emits nothing: a use
     // specializes it, so one holding a type disappears and one holding a
     // closure becomes a definition only if something calls it.
@@ -1577,24 +1597,6 @@ function lowerBlock(
       }
     }
     if (declaration.kind === "sig") continue;
-
-    // `rec` becomes a *local* recursive binding. Lifting it to a top-level
-    // definition would strand whatever the lambda captured.
-    if (
-      declaration.value.tag === "rec" &&
-      declaration.value.lambda.tag === "lambda" &&
-      declaration.pattern.tag === "name"
-    ) {
-      wrappers.push(
-        recursiveBinding(
-          declaration.pattern,
-          declaration.value.lambda,
-          inner,
-          lowering,
-        ),
-      );
-      continue;
-    }
 
     if (
       (declaration.value.tag === "shape" ||
@@ -1803,39 +1805,66 @@ function destructuredFields(
 }
 
 /**
- * A `rec` binding, as a local recursive group.
+ * Does this group have a compile-time value for every member?
  *
- * Core has `let-rec`, which is what this needs: the lambda may capture names
- * from the block it is written in, and only a local binding keeps those in
- * scope. Lifting it to a top-level definition stranded them — `fold`'s inner
- * `go` closes over `values`, and a definition has no enclosing scope for that
- * to come from. The surface builder has no helper for this node, so it is a
- * literal.
+ * Asked of the whole group rather than of each member: a group half specialized
+ * and half emitted would leave the emitted half calling names that never became
+ * locals.
  */
-function recursiveBinding(
-  pattern: NamePattern,
-  lambda: Expr & { tag: "lambda" },
+function specialized(
+  members: readonly RecursiveMember[],
+  lowering: Lowering,
+): boolean {
+  return members.every((member) =>
+    member.declaration.kind === "const" &&
+    lowering.facts.comptimeValues.get(member.declaration.value) !== undefined
+  );
+}
+
+/**
+ * A run of `rec` bindings, as one local recursive group.
+ *
+ * Core has `let-rec`, which is what this needs: the lambdas may capture names
+ * from the block they are written in, and only a local binding keeps those in
+ * scope. Lifting them to top-level definitions stranded those — `fold`'s inner
+ * `go` closes over `values`, and a definition has no enclosing scope for that
+ * to come from. Every member's name goes into scope before any body is lowered,
+ * which is the whole of what makes the members visible to each other. The
+ * surface builder has no helper for this node, so it is a literal.
+ */
+function recursiveGroup(
+  members: readonly RecursiveMember[],
   scope: Scope,
   lowering: Lowering,
 ): (body: SurfaceExpression) => SurfaceExpression {
-  const binding = lowering.fresh(pattern.name);
-  bindName(pattern, binding, scope);
-  const inner = childScope(scope);
-  const parameter = lowering.fresh("arg");
-  const wrap = bindParameter(
-    lambda.parameter,
-    parameter,
-    inner,
-    lowering,
-  );
-  const value = wrap(lambda.body);
-  const span = { startByte: lambda.span.start, endByte: lambda.span.end };
-  return (body) => ({
-    kind: "let-rec-group",
-    bindings: [{ name: binding, parameters: [parameter], body: value, span }],
-    body,
-    span,
+  const names = members.map((member) => {
+    const binding = lowering.fresh(member.name);
+    bindName(member.pattern, binding, scope);
+    return binding;
   });
+  const bindings = members.map((member, index) => {
+    const inner = childScope(scope);
+    const parameter = lowering.fresh("arg");
+    const wrap = bindParameter(
+      member.lambda.parameter,
+      parameter,
+      inner,
+      lowering,
+    );
+    return {
+      name: names[index],
+      parameters: [parameter],
+      body: wrap(member.lambda.body),
+      span: {
+        startByte: member.lambda.span.start,
+        endByte: member.lambda.span.end,
+      },
+    };
+  });
+  const first = members[0].lambda.span;
+  const last = members[members.length - 1].lambda.span;
+  const span = { startByte: first.start, endByte: last.end };
+  return (body) => ({ kind: "let-rec-group", bindings, body, span });
 }
 
 function lower(

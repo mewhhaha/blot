@@ -1091,3 +1091,84 @@ Deno.test("a shape inside a tuple pattern is refused rather than guessed", async
     "BLOT_UNSUPPORTED_LOWERING",
   );
 });
+
+// A recursive group has to survive lowering as one Core `let-rec-group`. Two
+// separate `let-rec`s would put each name in scope only after the other's body
+// was built, which is the arrangement the surface rule exists to replace.
+Deno.test("a `let` recursive group reaches WebAssembly", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "mutual.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "let is_even = rec (fn n => if n == 0 then 1 else is_odd (n - 1) end);",
+      "let is_odd = rec (fn n => if n == 0 then 0 else is_even (n - 1) end);",
+      "return is_even 11;",
+    ].join("\n"),
+  );
+
+  assertEquals(await runLowering(path), {
+    kind: "signed-integer-64",
+    value: 0n,
+  });
+});
+
+// Each member's lambda captures the block it is written in, so the group has
+// to stay a *local* binding. Lifting the members to top-level definitions
+// would strand `step`.
+Deno.test("a recursive group's members keep what they captured", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "captured.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "let total = fn step => do",
+      "  let down = rec (fn n => if n < step then 0 else n + up (n - step) end);",
+      "  let up = rec (fn n => down n);",
+      "  in up 10",
+      "end;",
+      "return total 3;",
+    ].join("\n"),
+  );
+
+  assertEquals(await runLowering(path), {
+    kind: "signed-integer-64",
+    value: 21n,
+  });
+});
+
+// A `const` group specializes instead of becoming a `let-rec-group`: each use
+// hoists the compile-time closure it names, and the hoisted definitions find
+// each other through the environment the checker evaluated them in.
+Deno.test("a `const` recursive group reaches WebAssembly", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "mutual_const.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "const even = rec (fn n => if n == 0 then 1 else odd (n - 1) end);",
+      "const odd = rec (fn n => if n == 0 then 0 else even (n - 1) end);",
+      "let counted = fn n => even n;",
+      "return counted 12;",
+    ].join("\n"),
+  );
+
+  assertEquals(await runLowering(path), {
+    kind: "signed-integer-64",
+    value: 1n,
+  });
+});
+
+Deno.test("examples/walker.blot walks its tree in WebAssembly", async () => {
+  assertEquals(await runLowering("examples/walker.blot"), {
+    kind: "constructor",
+    name: "Shape2",
+    fields: [
+      { kind: "signed-integer-64", value: 45n },
+      { kind: "boolean", value: true },
+    ],
+  });
+});

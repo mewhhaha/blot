@@ -203,6 +203,82 @@ export interface Module {
   readonly span: Span;
 }
 
+/** One member of a recursive group: a `rec` binding of a lambda to one name. */
+export interface RecursiveMember {
+  readonly declaration: Decl & { readonly tag: "binding" };
+  readonly name: string;
+  readonly pattern: Extract<Pattern, { readonly tag: "name" }>;
+  readonly lambda: Expr & { readonly tag: "lambda" };
+}
+
+/**
+ * The recursive groups a declaration list contains, keyed by every member of
+ * each. Members of one group share the returned array, so a caller recognises
+ * the first by identity.
+ *
+ * A group is a run of adjacent `rec` bindings of the same kind. Three passes
+ * need the same answer — the checker puts the names in scope, the evaluator
+ * lets their closures share one environment, and the backend emits one Core
+ * `let-rec-group` — and a rule each derived for itself would be three rules
+ * free to disagree about which declarations belong together.
+ *
+ * A `sig` neither joins a run nor ends one. It constrains the binding that has
+ * to follow it immediately, so a `sig` between two members is one member's own
+ * signature and separates nothing.
+ */
+export function recursiveGroups(
+  declarations: readonly Decl[],
+): ReadonlyMap<Decl, readonly RecursiveMember[]> {
+  const groups = new Map<Decl, readonly RecursiveMember[]>();
+  let members: RecursiveMember[] = [];
+  const close = (): void => {
+    if (members.length > 0) {
+      for (const member of members) groups.set(member.declaration, members);
+      members = [];
+    }
+  };
+  for (const declaration of declarations) {
+    if (declaration.tag === "binding" && declaration.kind === "sig") continue;
+    const member = recursiveMember(declaration);
+    if (member === null) {
+      close();
+      continue;
+    }
+    // A `let` and a `const` bound together would put a compile-time closure
+    // and a runtime one in the same knot, which is the capture rule's whole
+    // subject. Changing kind starts a new run instead of being an error,
+    // because two adjacent bindings of different kinds usually have nothing to
+    // do with each other.
+    const previous = members[members.length - 1];
+    if (
+      previous !== undefined &&
+      previous.declaration.kind !== member.declaration.kind
+    ) {
+      close();
+    }
+    members.push(member);
+  }
+  close();
+  return groups;
+}
+
+function recursiveMember(declaration: Decl): RecursiveMember | null {
+  if (declaration.tag !== "binding") return null;
+  if (declaration.kind === "sig") return null;
+  // A `rec` that is not a lambda, or is bound through a compound pattern, is
+  // an error every pass already reports where it stands. Leaving it out of the
+  // group keeps that report rather than replacing it with a grouping message.
+  if (declaration.value.tag !== "rec") return null;
+  if (declaration.value.lambda.tag !== "lambda") return null;
+  if (declaration.pattern.tag !== "name") return null;
+  return {
+    declaration,
+    name: declaration.pattern.name,
+    pattern: declaration.pattern,
+    lambda: declaration.value.lambda,
+  };
+}
+
 /** Every name a pattern binds, in the order it binds them. */
 export function patternNames(pattern: Pattern): readonly string[] {
   switch (pattern.tag) {

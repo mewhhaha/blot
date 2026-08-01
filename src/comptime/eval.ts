@@ -325,6 +325,18 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
   expect(false, `unhandled expression ${(expr as Expr).tag}`);
 }
 
+/**
+ * Every declaration of a block binds into one environment, and every closure a
+ * declaration produces captures that environment rather than a copy of it. That
+ * is the whole of what makes a recursive group run: a member's body resolves
+ * its siblings when it is called, by which time the block has bound all of
+ * them. Giving each declaration its own scope would leave the evaluator
+ * disagreeing with a checker that already accepted the group.
+ *
+ * Reading a name the block has not bound yet is a scope error the checker
+ * refuses (`BLOT_FORWARD_REFERENCE`), so nothing here relies on the order in
+ * which the bodies happen to be forced.
+ */
 function* runDeclarations(
   declarations: readonly Decl[],
   scope: Env,

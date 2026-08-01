@@ -1,0 +1,12 @@
+// A repeated `let` shadows, and shadowing needs an earlier binding to shadow.
+// The members of one recursive group enter scope together, so neither of these
+// is the earlier one and there is no reading of the first body that is not a
+// guess. Any declaration between them ends the group and restores the ordinary
+// shadowing rule.
+
+open {} = (@import "blot:prelude") ();
+
+let step = rec (fn n => if n == 0 then 0 else step (n - 1) end);
+let step = rec (fn n => n + 1);
+
+return step 3;

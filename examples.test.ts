@@ -109,6 +109,22 @@ const REJECTIONS: Record<
   "for_type_drift": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "rebinding_type_change": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "rebinding_unbound": { code: "BLOT_UNBOUND", stage: "check" },
+  // A scope error with its own code, because the name is not missing — it is
+  // bound further down the same block, and telling the reader that is the
+  // whole difference between this and a typo. It is not a comptime failure:
+  // the binding is a `let`, and a `const` reading a later `const` would reach
+  // this same rule first.
+  "forward_reference": { code: "BLOT_FORWARD_REFERENCE", stage: "check" },
+  // Mutual visibility belongs to a group of functions. A member that is not
+  // one would have to read a name the group has not given a value to yet, so
+  // `rec` refuses it where it stands.
+  "recursive_value": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  // Two members of one group cannot shadow each other: they enter scope
+  // together, so neither is "the earlier one".
+  "duplicate_recursive_binding": {
+    code: "BLOT_DUPLICATE_RECURSIVE_BINDING",
+    stage: "check",
+  },
   "generic_refused": { code: "BLOT_REFUSED", stage: "check" },
   "bad_declaration_tag": {
     code: "BLOT_BAD_DECLARATION_TAG",
