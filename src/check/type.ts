@@ -97,7 +97,7 @@ export interface RigidVariable {
  * to narrow on when NaN and rounding exist. So `1.5` is a `Float` rather than a
  * singleton, and the machinery that would need a real number is never reached.
  */
-export type Domain = "int" | "text" | "float" | "float32";
+export type Domain = "int" | "text" | "float" | "float32" | "f32x4";
 
 export type SimpleType =
   | Variable
@@ -219,6 +219,20 @@ export const FLOAT: SimpleType = {
 export const FLOAT32: SimpleType = {
   tag: "range",
   domain: "float32",
+  low: null,
+  high: null,
+};
+/**
+ * Four `F32` lanes, as one value.
+ *
+ * A distinct type rather than a tuple of four, because it is one machine
+ * register and a tuple is four fields: the point of naming it is that the
+ * operations over it are single instructions, and a shape blot could take
+ * apart field by field would not be.
+ */
+export const F32X4: SimpleType = {
+  tag: "range",
+  domain: "f32x4",
   low: null,
   high: null,
 };

@@ -260,6 +260,11 @@ async function buildWithSession(
     const trace = new CompilerPerformanceTrace();
     const coreWasm = await compileModuleToWasm(compiled.module, {
       canonicalAbi: canonicalInterface(internalManifest),
+      // The four-lane operations become single instructions. Their scalar
+      // bodies stay in the module and stay correct, so this is a choice about
+      // how the same program is emitted rather than about what it means — and
+      // `just wasm` is what holds the two to the same answers.
+      simd: "wasm-simd",
       trace,
     });
     const wasm = appendCustomSection(coreWasm, "blot:abi", manifestBytes);
@@ -444,6 +449,11 @@ async function verifyWithSession(
     const trace = new CompilerPerformanceTrace();
     const coreWasm = await compileModuleToWasm(compiled.module, {
       canonicalAbi: canonicalInterface(internalManifest),
+      // The four-lane operations become single instructions. Their scalar
+      // bodies stay in the module and stay correct, so this is a choice about
+      // how the same program is emitted rather than about what it means — and
+      // `just wasm` is what holds the two to the same answers.
+      simd: "wasm-simd",
       trace,
     });
     const wasm = appendCustomSection(coreWasm, "blot:abi", manifestBytes);

@@ -26,6 +26,11 @@ export type Value =
    * drift apart between operations.
    */
   | { readonly tag: "float32"; readonly value: number }
+  /**
+   * Four single-precision lanes. Always exactly four, and each already rounded
+   * to f32, so the interpreter holds what one SIMD register holds.
+   */
+  | { readonly tag: "vector"; readonly lanes: readonly number[] }
   | { readonly tag: "text"; readonly value: string }
   | { readonly tag: "unit" }
   /** Records and tuples. Tuples use `"0"`, `"1"`, … as labels. */
@@ -75,7 +80,7 @@ export type Value =
     readonly tag: "range";
     readonly low: Value;
     readonly high: Value;
-    readonly domain?: "int" | "text" | "float" | "float32";
+    readonly domain?: "int" | "text" | "float" | "float32" | "f32x4";
   }
   | { readonly tag: "union"; readonly members: readonly Value[] }
   | { readonly tag: "unbounded" }
@@ -191,6 +196,12 @@ export function lookup(env: Env, name: string): Value | undefined {
 
 export function show(value: Value): string {
   if (value.tag === "int") return value.value.toString();
+  if (value.tag === "vector") {
+    const lanes = value.lanes.map((lane) =>
+      Number.isInteger(lane) ? `${lane}.0` : String(lane)
+    );
+    return `<${lanes.join(" ")}>`;
+  }
   if (value.tag === "float32") {
     const shown = Number.isInteger(value.value)
       ? `${value.value}.0`
@@ -239,6 +250,7 @@ export function show(value: Value): string {
       if (domain === "text") return "Str";
       if (domain === "float") return "F64";
       if (domain === "float32") return "F32";
+      if (domain === "f32x4") return "F32x4";
       return "Int";
     }
     if (
@@ -277,7 +289,7 @@ export function show(value: Value): string {
 /** Which ordered domain a range lives in: its own label, else its bounds. */
 export function rangeDomainOf(
   value: Value & { tag: "range" },
-): "int" | "text" | "float" | "float32" {
+): "int" | "text" | "float" | "float32" | "f32x4" {
   if (value.domain !== undefined) return value.domain;
   if (value.low.tag === "text" || value.high.tag === "text") return "text";
   return "int";
@@ -290,6 +302,11 @@ export function equal(left: Value, right: Value): boolean {
   if (left.tag !== right.tag) return false;
   if (left.tag === "int" && right.tag === "int") {
     return left.value === right.value;
+  }
+  if (left.tag === "vector" && right.tag === "vector") {
+    return left.lanes.every((lane, index) =>
+      Object.is(lane, right.lanes[index])
+    );
   }
   if (left.tag === "float32" && right.tag === "float32") {
     return Object.is(left.value, right.value);

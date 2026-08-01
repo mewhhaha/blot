@@ -19,6 +19,9 @@
 
 import {
   BinaryOperator,
+  f32x4,
+  FIXED_VECTOR_DEFINITIONS,
+  FIXED_VECTOR_TYPE_DECLARATIONS,
   defineEffectOperation,
   effectSet,
   type HostCapabilityDeclaration,
@@ -195,6 +198,16 @@ class Lowering {
   readonly sums = new Map<string, Sum>();
   readonly seals = new Map<string, Sealed>();
   readonly definitions: SurfaceDefinition[] = [];
+  /**
+   * Whether this module used a four-lane vector.
+   *
+   * The declarations and the scalar bodies are gpufuck's, under names its
+   * codegen matches to decide whether an application can become one
+   * instruction. Emitting them unconditionally would put four unused
+   * definitions in every artifact, so a program that never mentions a vector
+   * carries none of it.
+   */
+  vectors = false;
   /** Hoisted prelude closures, by identity: one definition per closure. */
   readonly hoisted = new Map<Value, string>();
   /** One capability per host effect, and one definition per operation. */
@@ -353,6 +366,7 @@ class Lowering {
       };
     });
     return [
+      ...(this.vectors ? FIXED_VECTOR_TYPE_DECLARATIONS : []),
       ...sums,
       ...[...this.seals.values()].map((sealed) => ({
         name: sealed.name,
@@ -551,7 +565,12 @@ export function lowerModule(
   }
 
   return {
-    definitions: lowering.definitions,
+    // The scalar bodies come first: they are ordinary definitions the rest of
+    // the module may call, and gpufuck replaces their call sites rather than
+    // their bodies.
+    definitions: lowering.vectors
+      ? [...FIXED_VECTOR_DEFINITIONS, ...lowering.definitions]
+      : lowering.definitions,
     types: lowering.declarations(),
     entry: ENTRY,
     capabilities: [...lowering.capabilities.values()],
@@ -868,6 +887,8 @@ function bridgeRuntimeValue(value: Value): SimpleType | null {
       return { tag: "range", domain: "float", low: null, high: null };
     case "float32":
       return { tag: "range", domain: "float32", low: null, high: null };
+    case "vector":
+      return { tag: "range", domain: "f32x4", low: null, high: null };
     case "text":
       return {
         tag: "range",
@@ -2493,6 +2514,14 @@ function lowerValue(
       return at.float64(value.value);
     case "float32":
       return at.float32(value.value);
+    case "vector":
+      lowering.vectors = true;
+      return f32x4.make([
+        at.float32(value.lanes[0]),
+        at.float32(value.lanes[1]),
+        at.float32(value.lanes[2]),
+        at.float32(value.lanes[3]),
+      ]);
     case "text":
       return at.text(value.value);
     case "unit":
@@ -2929,6 +2958,54 @@ function lowerApply(
             ),
           ),
         ),
+      );
+    }
+    // --- four lanes --------------------------------------------------------
+    //
+    // These become `f32x4.*` instructions when the backend is asked for
+    // `wasm-simd` and the scalar bodies gpufuck ships when it is not. The names
+    // are the whole contract: its codegen matches them and checks both
+    // arguments are provably vectors, so a chain of these stays in a register
+    // rather than being rebuilt between operations.
+    if (spine.callee.name === "@f32x4.of" && spine.args.length === 4) {
+      lowering.vectors = true;
+      return f32x4.make([
+        lower(spine.args[0], scope, lowering),
+        lower(spine.args[1], scope, lowering),
+        lower(spine.args[2], scope, lowering),
+        lower(spine.args[3], scope, lowering),
+      ]);
+    }
+    if (spine.callee.name === "@f32x4.splat" && spine.args.length === 1) {
+      lowering.vectors = true;
+      return f32x4.splat(lower(spine.args[0], scope, lowering));
+    }
+    const LANES: ReadonlyMap<string, number> = new Map([
+      ["@f32x4.x", 0],
+      ["@f32x4.y", 1],
+      ["@f32x4.z", 2],
+      ["@f32x4.w", 3],
+    ]);
+    const lane = LANES.get(spine.callee.name);
+    if (lane !== undefined && spine.args.length === 1) {
+      lowering.vectors = true;
+      return f32x4.extractLane(lower(spine.args[0], scope, lowering), lane);
+    }
+    const VECTOR: ReadonlyMap<
+      string,
+      (left: SurfaceExpression, right: SurfaceExpression) => SurfaceExpression
+    > = new Map([
+      ["@f32x4.add", f32x4.add],
+      ["@f32x4.sub", f32x4.subtract],
+      ["@f32x4.mul", f32x4.multiply],
+      ["@f32x4.div", f32x4.divide],
+    ]);
+    const vectorOp = VECTOR.get(spine.callee.name);
+    if (vectorOp !== undefined && spine.args.length === 2) {
+      lowering.vectors = true;
+      return vectorOp(
+        lower(spine.args[0], scope, lowering),
+        lower(spine.args[1], scope, lowering),
       );
     }
     if (spine.callee.name === "@f32.is_nan" && spine.args.length === 1) {

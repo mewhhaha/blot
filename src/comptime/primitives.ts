@@ -82,6 +82,33 @@ function float32Of(value: Value, span: Span, what: string): number {
   return value.value;
 }
 
+function do_splat(lane: number): Value {
+  return { tag: "vector", lanes: [lane, lane, lane, lane] };
+}
+
+function vectorOf(
+  value: Value,
+  span: Span,
+  what: string,
+): readonly number[] {
+  if (value.tag !== "vector") {
+    fail("BLOT_TYPE", `${what} expects an F32x4, found ${show(value)}.`, span);
+  }
+  return value.lanes;
+}
+
+/** Lane-wise, rounding each result the way one f32 lane does. */
+function lanewise(
+  left: readonly number[],
+  right: readonly number[],
+  step: (a: number, b: number) => number,
+): Value {
+  return {
+    tag: "vector",
+    lanes: left.map((lane, index) => Math.fround(step(lane, right[index]))),
+  };
+}
+
 function textOf(value: Value, span: Span, what: string): string {
   if (value.tag !== "text") {
     fail("BLOT_TYPE", `${what} expects text, found ${show(value)}.`, span);
@@ -247,7 +274,7 @@ function without(member: Value, other: Value, span: Span): Value[] {
 /** Which ordered domain a range lives in: its own label, else its bounds. */
 function rangeDomain(
   value: Value & { tag: "range" },
-): "int" | "text" | "float" | "float32" {
+): "int" | "text" | "float" | "float32" | "f32x4" {
   if (value.domain !== undefined) return value.domain;
   if (value.low.tag === "text" || value.high.tag === "text") return "text";
   return "int";
@@ -442,6 +469,12 @@ export const PRIMITIVE_VALUES: ReadonlyMap<string, Value> = new Map<
   // Always open at both ends. A float bound would have to be a real number and
   // nothing in the lattice could use one, so `Float` is the only float type
   // there is.
+  ["@type.f32x4", {
+    tag: "range",
+    low: { tag: "unbounded" },
+    high: { tag: "unbounded" },
+    domain: "f32x4",
+  }],
   ["@type.float32", {
     tag: "range",
     low: { tag: "unbounded" },
@@ -966,6 +999,88 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     arity: 1,
     run: ([value], s) =>
       ({ tag: "float", value: float32Of(value, s, "@float.of_f32") }),
+  }],
+
+  // --- four lanes -----------------------------------------------------------
+  //
+  // One register, not four fields. Each of these becomes a single instruction
+  // when the backend is asked for `wasm-simd`, and the same arithmetic done
+  // one lane at a time when it is not — which is why the results here have to
+  // be identical either way, and why every lane rounds to f32 as it lands.
+
+  ["@f32x4.of", {
+    arity: 4,
+    run: ([a, b, c, d], s) => ({
+      tag: "vector",
+      lanes: [
+        float32Of(a, s, "@f32x4.of"),
+        float32Of(b, s, "@f32x4.of"),
+        float32Of(c, s, "@f32x4.of"),
+        float32Of(d, s, "@f32x4.of"),
+      ],
+    }),
+  }],
+  ["@f32x4.splat", {
+    arity: 1,
+    run: ([value], s) => do_splat(float32Of(value, s, "@f32x4.splat")),
+  }],
+  ["@f32x4.add", {
+    arity: 2,
+    run: ([l, r], s) =>
+      lanewise(
+        vectorOf(l, s, "@f32x4.add"),
+        vectorOf(r, s, "@f32x4.add"),
+        (a, b) => a + b,
+      ),
+  }],
+  ["@f32x4.sub", {
+    arity: 2,
+    run: ([l, r], s) =>
+      lanewise(
+        vectorOf(l, s, "@f32x4.sub"),
+        vectorOf(r, s, "@f32x4.sub"),
+        (a, b) => a - b,
+      ),
+  }],
+  ["@f32x4.mul", {
+    arity: 2,
+    run: ([l, r], s) =>
+      lanewise(
+        vectorOf(l, s, "@f32x4.mul"),
+        vectorOf(r, s, "@f32x4.mul"),
+        (a, b) => a * b,
+      ),
+  }],
+  ["@f32x4.div", {
+    arity: 2,
+    run: ([l, r], s) =>
+      lanewise(
+        vectorOf(l, s, "@f32x4.div"),
+        vectorOf(r, s, "@f32x4.div"),
+        (a, b) => a / b,
+      ),
+  }],
+  // Four named lane reads rather than one taking an index, because the target
+  // has four instructions and no way to pick between them at run time.
+  ["@f32x4.x", {
+    arity: 1,
+    run: ([v], s) =>
+      ({ tag: "float32", value: vectorOf(v, s, "@f32x4.x")[0] }),
+  }],
+  ["@f32x4.y", {
+    arity: 1,
+    run: ([v], s) =>
+      ({ tag: "float32", value: vectorOf(v, s, "@f32x4.y")[1] }),
+  }],
+  ["@f32x4.z", {
+    arity: 1,
+    run: ([v], s) =>
+      ({ tag: "float32", value: vectorOf(v, s, "@f32x4.z")[2] }),
+  }],
+  ["@f32x4.w", {
+    arity: 1,
+    run: ([v], s) =>
+      ({ tag: "float32", value: vectorOf(v, s, "@f32x4.w")[3] }),
   }],
 
   ["@panic", {

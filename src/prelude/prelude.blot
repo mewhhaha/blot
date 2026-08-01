@@ -278,6 +278,41 @@ const Float32 = {
     end;
 };
 
+// --- four lanes -------------------------------------------------------------
+//
+// One register rather than four fields. Each operation here is a single
+// instruction in the emitted module, and the same arithmetic done one lane at a
+// time when the backend is not asked for SIMD — so a program cannot tell which
+// it got except by timing it.
+//
+// The lanes are read by name because the target has four instructions and no
+// way to choose between them at run time. That is also why there is no `.get`
+// taking an index.
+
+const Vec4 = {
+  .of = (x, y, z, w) => @f32x4.of x y z w;
+  .splat = value => @f32x4.splat value;
+  .add = left => (right => @f32x4.add left right);
+  .sub = left => (right => @f32x4.sub left right);
+  .mul = left => (right => @f32x4.mul left right);
+  .div = left => (right => @f32x4.div left right);
+  .x = value => @f32x4.x value;
+  .y = value => @f32x4.y value;
+  .z = value => @f32x4.z value;
+  .w = value => @f32x4.w value;
+
+  // A dot product is a multiply and three adds of the lanes. Written here
+  // rather than as a primitive because it is writable here.
+  .dot = left => (right => do
+    let product = @f32x4.mul left right;
+    in @f32.add
+      (@f32.add (@f32x4.x product) (@f32x4.y product))
+      (@f32.add (@f32x4.z product) (@f32x4.w product))
+  end);
+
+  .scale = (value, factor) => @f32x4.mul value (@f32x4.splat factor);
+};
+
 // --- option and result ------------------------------------------------------
 
 const Option = value => #None | #Some value;
@@ -423,6 +458,7 @@ const Str = @type.text;
 
 const F64 = @type.float;
 const F32 = @type.float32;
+const F32x4 = @type.f32x4;
 const I32 = range (-2147483648, 2147483647);
 const I64 = range (@int.neg (pow2 63), @int.sub (pow2 63) 1);
 const U8 = range (0, 255);
@@ -770,6 +806,7 @@ return {
   .Num = Num;
   .Float = Float;
   .Float32 = Float32;
+  .Vec4 = Vec4;
   .Text = Text;
   .Semigroup = Semigroup;
 
@@ -820,6 +857,7 @@ return {
   .sort_by = sort_by;
   .F64 = F64;
   .F32 = F32;
+  .F32x4 = F32x4;
   .I32 = I32;
   .I64 = I64;
   .U8 = U8;

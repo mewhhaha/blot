@@ -1,0 +1,78 @@
+// Four lanes, as one value.
+//
+// `F32x4` is a distinct type rather than a tuple of four `F32`. The point of
+// naming it is that the operations over it are single instructions, and a shape
+// blot could take apart field by field would not be — so the type says
+// "register" and the primitives say which instruction.
+//
+// The same program is emitted twice over: gpufuck ships scalar bodies for these
+// operations, and its codegen replaces the *call sites* with `f32x4.*`
+// instructions when it is asked for SIMD. Both are in the artifact, both are
+// correct, and `just wasm` is what holds them to the same answers — the
+// comptime evaluator does the arithmetic one lane at a time and has to agree
+// with the register.
+
+open {} = (@import "blot:prelude") ();
+
+// There is no f32 literal and no vector literal. `Float32.of_int` narrows and
+// `Vec4.of` gathers, which keeps the grammar at one float token and makes both
+// steps something the program wrote down.
+const lane = Float32.of_int;
+
+sig axis = F32x4;
+let axis = Vec4.of (lane 1, lane 2, lane 3, lane 4);
+
+sig ten = F32x4;
+let ten = Vec4.splat (lane 10);
+
+// --- arithmetic -------------------------------------------------------------
+//
+// Lane-wise, and one instruction each. A chain stays in the register: gpufuck
+// checks that both arguments are provably vectors before it replaces a call,
+// so `mul (add a b) b` never rebuilds the value in between.
+
+sig scaled = F32x4;
+let scaled = Vec4.mul (Vec4.add axis ten) ten;
+
+sig difference = F32x4;
+let difference = Vec4.sub scaled ten;
+
+sig halved = F32x4;
+let halved = Vec4.div scaled (Vec4.splat (lane 2));
+
+// --- reading a lane ---------------------------------------------------------
+//
+// By name, not by index. The target has four extract instructions and no way to
+// choose between them at run time, so a `get` taking a number could not lower —
+// naming them is what makes that limit visible rather than a surprise.
+
+sig first = Int;
+let first = Float32.truncate (Vec4.x scaled);
+
+sig last = Int;
+let last = Float32.truncate (Vec4.w scaled);
+
+// --- what the lanes are for -------------------------------------------------
+//
+// A dot product is a multiply and three adds. It is prelude source rather than
+// a primitive because it is writable in blot — only the four instructions it is
+// written over could not be.
+
+sig dot = Int;
+let dot = Float32.truncate (Vec4.dot axis axis);
+
+// Single precision, still: the lanes round the way `F32` does, and a sum that
+// needs more than 24 bits of mantissa says so here as much as anywhere.
+sig thirds = Int;
+let thirds = Float32.truncate (Vec4.dot
+  (Vec4.splat (Float32.of_float (Float.div 1.0 3.0)))
+  (Vec4.splat (lane 3)));
+
+return {
+  .first = first;
+  .last = last;
+  .second_of_difference = Float32.truncate (Vec4.y difference);
+  .third_of_halved = Float32.truncate (Vec4.z halved);
+  .dot = dot;
+  .thirds = thirds;
+};

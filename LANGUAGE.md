@@ -97,6 +97,12 @@ sometimes has. There is no f32 literal — the grammar has one float token, and
 than one performed on it. `Float32.widen` goes back, exactly, because every
 `F32` is an `F64`.
 
+`F32x4` is four `F32` lanes as one value, and a distinct type rather than a
+tuple of four: the operations over it are single instructions, and a shape the
+compiler could take apart field by field would not be. Lanes are read by name —
+`Vec4.x` through `Vec4.w` — because the target has four extract instructions and
+no way to choose between them at run time.
+
 There is no implicit conversion between the numeric types, and no operator
 serves more than one. An operator resolves to one binding by name (§4.6), so a `+` over
 both would have to dispatch on a value's type at run time. `Float.of_int` and
@@ -914,6 +920,7 @@ The principal inferred forms are:
 
 - integer and text ranges, including singleton literals;
 - `F64` and `F32`, the float types;
+- `F32x4`, four `F32` lanes as one value;
 - unit;
 - functions with effect rows;
 - structural records and tuples;
@@ -981,7 +988,7 @@ inference.
 ### 10.2 Type-value primitives
 
 The primitive type values are `@type.int`, `@type.float`, `@type.float32`,
-`@type.text`, `@type.unit`, and `@type.unbounded`.
+`@type.f32x4`, `@type.text`, `@type.unit`, and `@type.unbounded`.
 
 The type algebra includes:
 
@@ -1201,6 +1208,13 @@ Everything not listed here belongs in source, normally the prelude.
 | `@f32.is_nan`    | test an `F32` for NaN                                |
 | `@f32.of_float`  | narrow an `F64`, which may lose the value            |
 | `@float.of_f32`  | widen an `F32`, which never does                     |
+| `@f32x4.of`      | gather four `F32` into one vector                    |
+| `@f32x4.splat`   | one `F32` into every lane                            |
+| `@f32x4.add`     | lane-wise addition                                   |
+| `@f32x4.sub`     | lane-wise subtraction                                |
+| `@f32x4.mul`     | lane-wise multiplication                             |
+| `@f32x4.div`     | lane-wise division                                   |
+| `@f32x4.x`       | read lane zero, and `.y`, `.z`, `.w` for the rest    |
 | `@float.of_int`  | widen an integer to a float                          |
 | `@int.of_float`  | truncate a float toward zero                         |
 | `@text.concat`   | concatenate text                                     |
@@ -1311,6 +1325,7 @@ and both of these forms name the array twice — once to measure and once to rea
 | `@type.text`      | unbounded text domain                       |
 | `@type.float`     | the double domain, which has no bounds      |
 | `@type.float32`   | the single-precision domain                 |
+| `@type.f32x4`     | four single-precision lanes                 |
 | `@type.unit`      | unit type/value                             |
 | `@type.range`     | inclusive range                             |
 | `@type.union`     | flattened duplicate-free union              |

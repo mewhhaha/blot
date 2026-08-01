@@ -565,3 +565,62 @@ Deno.test("a reachable @panic traps with the reason the program gave", async () 
   const manifest = await validateLowering(path);
   assertEquals(manifest.exports.map((exported) => exported.sourceName), ["ok"]);
 });
+
+Deno.test("four-lane operations become SIMD instructions", async () => {
+  // The scalar bodies gpufuck ships are what the comptime evaluator agrees
+  // with, so a program whose vectors all fold is proof of meaning and not of
+  // instructions — `examples/vectors.blot` is exactly that program. This one
+  // takes a lane from a host effect, so the arithmetic has to survive to the
+  // artifact, and then reads the opcodes back out of it.
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "lanes.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "const Source = @effect.host { .read = Unit -> Int; };",
+      "let live = Float32.of_int (Source.read ());",
+      "let a = Vec4.of (live, Float32.of_int 2, Float32.of_int 3, Float32.of_int 4);",
+      "let b = Vec4.splat (Float32.of_int 10);",
+      "let c = Vec4.mul (Vec4.add a b) b;",
+      "return { .x = Float32.truncate (Vec4.x c); .dot = Float32.truncate (Vec4.dot c b); };",
+    ].join("\n"),
+  );
+
+  const built = await build(path);
+  const bytes = new Uint8Array(built.wasm);
+  // Every SIMD instruction is the `0xfd` prefix and a LEB128 opcode.
+  const opcodes = new Set<number>();
+  for (let index = 0; index < bytes.length - 2; index += 1) {
+    if (bytes[index] !== 0xfd) continue;
+    let opcode = bytes[index + 1] & 0x7f;
+    if ((bytes[index + 1] & 0x80) !== 0) {
+      opcode |= (bytes[index + 2] & 0x7f) << 7;
+    }
+    opcodes.add(opcode);
+  }
+  assert(opcodes.has(228), "expected f32x4.add");
+  assert(opcodes.has(230), "expected f32x4.mul");
+  assert(opcodes.has(19), "expected f32x4.splat");
+  assert(opcodes.has(31), "expected f32x4.extract_lane");
+});
+
+Deno.test("a program with no vectors carries none of their machinery", async () => {
+  // The declarations and the four scalar bodies are emitted only when a module
+  // used them, so this is what keeps them out of every other artifact.
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "plain.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "const Source = @effect.host { .read = Unit -> Int; };",
+      "return Source.read () + 1;",
+    ].join("\n"),
+  );
+
+  const built = await build(path);
+  const text = new TextDecoder("utf-8", { fatal: false })
+    .decode(new Uint8Array(built.wasm));
+  assertEquals(text.includes("$FunctionalF32x4"), false);
+});
