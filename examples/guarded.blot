@@ -1,0 +1,55 @@
+// A guard on a `case` arm.
+//
+// `pattern if condition => body` takes the arm when the pattern matches *and*
+// the condition holds. A false guard falls through to the arms below, so the
+// arms are still tried in the order they were written — which is the whole
+// reason a guard is spelled here rather than as an `if` inside the body: a
+// nested `if` cannot reach the arm underneath it.
+//
+// A guarded arm never counts towards exhaustiveness, because its guard may be
+// false. The arms that are left have to cover the scrutinee on their own, and
+// that is what the `_` arms below are doing.
+
+open {} = (@import "blot:prelude") ();
+
+let describe = fn n => case n of
+  0 => "zero",
+  m if m > 0 => "positive",
+  _ => "negative"
+end;
+
+// An arm above a guard still wins. `5` answers "five" even though the guard
+// below it would hold, because the guard is a fall-through and not a reordering.
+let name = fn n => case n of
+  5 => "five",
+  m if m > 0 => "positive",
+  _ => "other"
+end;
+
+// Guards chain, and each one falls to everything under it.
+let size = fn n => case n of
+  m if m > 100 => 3,
+  m if m > 10 => 2,
+  m if m > 0 => 1,
+  _ => 0
+end;
+
+// A guard reads what the pattern bound, so a payload is refined where it comes
+// apart rather than in a second `case` inside the body.
+let progress = fn m => case m of
+  #Step p if p >= 100 => 100,
+  #Step p => p,
+  #Failed code => 0 - code
+end;
+
+return {
+  .zero = describe 0;
+  .positive = describe 7;
+  .negative = describe (0 - 7);
+  .five = name 5;
+  .named = name 2;
+  .sizes = [size 500, size 50, size 5, size 0];
+  .done = progress (#Step 120);
+  .partial = progress (#Step 30);
+  .failed = progress (#Failed 4);
+};

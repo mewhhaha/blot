@@ -80,11 +80,18 @@ function bridgeValue(
       const domain = bridgeValue(value.domain, variables);
       const codomain = bridgeValue(value.codomain, variables);
       if (domain === null || codomain === null) return null;
-      // A written arrow says nothing about effects, and inference is what
-      // supplies the row. `⊤` here would be a lie in the other direction, so
-      // the row is left open by using the pure row: a `sig` constrains what the
-      // function accepts and returns, not what it performs.
-      return fun(domain, codomain, effectRow([]));
+      // The row is written or it is empty, and an empty one is the claim that
+      // the function performs nothing — not the absence of a claim. A fresh
+      // variable here would be the licence version of "says nothing": it
+      // satisfies every later constraint, so the effect the body performs would
+      // pass the `sig` and then vanish from what the caller is told.
+      const labels: string[] = [];
+      for (const effect of value.effects) {
+        if (effect.tag !== "effect") return null;
+        if (effect.host) hostLabels.add(effectLabel(effect));
+        labels.push(effectLabel(effect));
+      }
+      return fun(domain, codomain, effectRow(labels));
     }
 
     case "union": {

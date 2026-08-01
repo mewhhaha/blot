@@ -36,6 +36,12 @@ export const DEFAULT_FIXITIES: readonly Fixity[] = [
   entry("$", "right", 10, "Fn.apply"),
   entry("|>", "left", 20, "Fn.pipe"),
 
+  // Looser than the arrow it annotates, so `A -> B ~ { Console }` is
+  // `(A -> B) ~ { Console }`: the row is what the whole function performs, not
+  // part of `B`. Left-associative, so a curried chain fills its arrows from the
+  // inside out — the order the printer writes them in.
+  entry("~", "left", 21, "@type.performs"),
+
   // Distinct spellings from `|` and `&`, which are set algebra. Both are
   // ordinary curried functions, so both arguments are evaluated — `if` is the
   // short-circuiting form.

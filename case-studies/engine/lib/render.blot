@@ -353,6 +353,10 @@ end;
 // and a different field subset at each of the four places that reads one, and
 // the shapes only agree because inference sees the record reach them — which it
 // can only do while the record does not leave.
+sig frame = ({
+  .mesh = (F32x4, Int, F32, Str) -> Unit ~ { Canvas };
+  .sprite = (F32x4, F32, Str) -> Unit ~ { Canvas };
+} -> Unit ~ { Canvas }) -> Unit ~ { Canvas, View };
 let frame = fn paint => do
   let _ = Canvas.clear ();
   let camera = camera_of (

@@ -73,6 +73,14 @@ let logged = fn f => fn x => do let _ = Console.write "call"; in f x end;
 `logged` adds `Console` to whatever its callback performs. Nothing there is
 annotated.
 
+A row is also source: `sig greet = Str -> Unit ~ { Console };` is checked like
+any other signature, by subsumption — so a body may perform fewer effects than
+its signature names, and a bare `->` is the empty row rather than an unwritten
+one. What cannot be written is the `e`. A signature is an upper bound, and an
+unquantified row variable in one would be satisfied by every row; the binding
+then takes its signature as its type, so the effect would pass the check and
+disappear from what callers are told. A written row names effects and is closed.
+
 `quiet` is pure because nothing made it otherwise. Nothing becomes effectful by
 proximity.
 

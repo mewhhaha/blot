@@ -121,6 +121,15 @@
         }
       },
       {
+        "rule": "effect_row",
+        "boundary": {
+          "kind": "separated",
+          "open": "{",
+          "close": "}",
+          "separator": ","
+        }
+      },
+      {
         "rule": "conditional",
         "boundary": {
           "kind": "terminated",

@@ -1,0 +1,23 @@
+// A spread that could replace a field written before it.
+//
+// Shape members apply left to right, so `...r` wins over the `.tag` above it.
+// `r`'s fields are not known where `defaulting` is defined, so nothing here can
+// say whether it carries one — width subtyping means a value typed
+// `{ .x = Int; }` may carry a `.tag` too. Contributing no names for the spread
+// and keeping `.tag = 1` would type this shape `{ .tag = 1; }` for a call that
+// hands it `{ .tag = "hi"; }`, which is not a type too wide but a type the run
+// disagrees with.
+//
+// So the shape is refused where it is written. The default-then-override idiom
+// this reads as needs a type that says "`.tag` is `r`'s if `r` has one and `1`
+// otherwise", and that is presence polymorphism rather than the width
+// subtyping this lattice has. Writing the spread first — `{ ...r; .tag = 1; }`
+// — is decided, and so is naming the fields wanted from `r`.
+
+open {} = (@import "blot:prelude") ();
+
+let defaulting = fn r => { .tag = 1; ...r; };
+
+let tagged = defaulting { .tag = "hi"; };
+
+return tagged.tag;

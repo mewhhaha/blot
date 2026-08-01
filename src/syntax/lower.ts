@@ -2038,6 +2038,18 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     return { tag: "array", elements, span: rule.span };
   }
 
+  // An effect row is a list of effects, and an array is already the list a
+  // compile-time value can be. `~` is what gives the list its meaning, exactly
+  // as `->` is what gives two type values theirs, so the row needs no node of
+  // its own — only a spelling that a shape cannot be mistaken for.
+  if (rule.name === "effect_row") {
+    const elements: ArrayElement[] = fieldList(rule, "effects").map((c) => ({
+      spread: false,
+      value: lowerExpression(asRule(c, "effect"), context),
+    }));
+    return { tag: "array", elements, span: rule.span };
+  }
+
   if (rule.name === "shape") {
     const members: ShapeMember[] = fieldList(rule, "members").map((c) => {
       const member = asRule(unwrap(asRule(c, "shape_member")), "shape member");
@@ -2108,7 +2120,7 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
       loop: null,
       escapeBoundary: "value-condition",
     };
-    const arms: Arm[] = [
+    const arms: GuardedArm[] = [
       lowerArm(asRule(field(rule, "first"), "first"), closed),
     ];
     for (const cursor of fieldList(rule, "rest")) {
@@ -2116,12 +2128,11 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
       const pair = cursor as unknown as readonly Cursor[];
       arms.push(lowerArm(asRule(pair[1], "case_arm"), closed));
     }
-    return {
-      tag: "case",
-      target: lowerExpression(asRule(field(rule, "target"), "target"), closed),
-      arms,
-      span: rule.span,
-    };
+    const target = lowerExpression(
+      asRule(field(rule, "target"), "target"),
+      closed,
+    );
+    return lowerGuards(target, arms, rule.span);
   }
 
   if (rule.name === "handler_composition") {
@@ -2244,11 +2255,175 @@ function lowerHandlerCompositionAction(
   };
 }
 
-function lowerArm(rule: Rule, context: Context): Arm {
+/** A `case` arm as written: its pattern, the guard refining it, and its body. */
+interface GuardedArm {
+  readonly pattern: Pattern;
+  readonly guard: Expr | null;
+  readonly body: Expr;
+}
+
+function lowerArm(rule: Rule, context: Context): GuardedArm {
+  const guard = field(rule, "guard");
   return {
     pattern: lowerPattern(asRule(field(rule, "pattern"), "pattern")),
+    guard: guard === null ? null : lowerExpression(
+      asRule(field(asRule(guard, "case_guard"), "condition"), "condition"),
+      context,
+    ),
     body: lowerValue(asRule(field(rule, "body"), "body"), context),
   };
+}
+
+function plainArm(arm: GuardedArm): Arm {
+  return { pattern: arm.pattern, body: arm.body };
+}
+
+/**
+ * A `case` with guarded arms, rewritten into ordinary ones.
+ *
+ * A guard is a refinement the pattern cannot state, so a guarded arm is taken
+ * when the pattern matches *and* the guard holds. A false guard has to reach
+ * the arms below, and a `case` has no fall-through — so the arms below become a
+ * nullary binding that the guard's `else` calls, and the level left behind
+ * decides one guard and nothing else.
+ *
+ * The arms above the guarded one stay at that level, with their binders erased
+ * and their bodies replaced by the same call. They are what keeps the order the
+ * arms were written in — `case n of 5 => "five", m if m > 0 => "positive" end`
+ * answers `"five"` for 5 — while the body each of them runs is the one the
+ * fall-through holds. Every body is therefore written exactly once, at the
+ * level that dropped the guard it stood after, and a chain of guards costs a
+ * level each rather than a copy of everything below it.
+ *
+ * What is left when the last guard is gone is the arm matrix with the guarded
+ * rows removed, and that residual `case` is where exhaustiveness is decided: a
+ * guard may be false, so a guarded arm cannot be the arm that matches, and a
+ * row that cannot match must not close a column. Nothing downstream knows a
+ * guard existed. Coverage checks the residual, and every guarded level carries
+ * a `_` arm that makes it complete on its own.
+ */
+function lowerGuards(
+  target: Expr,
+  arms: readonly GuardedArm[],
+  span: Span,
+): Expr {
+  if (arms.every((arm) => arm.guard === null)) {
+    return { tag: "case", target, arms: arms.map(plainArm), span };
+  }
+  // Every level matches the same scrutinee, so it is evaluated once and named.
+  // A name is already one evaluation, and keeping it is also what lets an arm
+  // narrow the binding the `case` was written over.
+  if (target.tag === "var") return guardLevel(target, arms, span, 0);
+  const subject = `subject$${span.start}$${span.end}`;
+  return {
+    tag: "block",
+    declarations: [{
+      tag: "binding",
+      kind: "let",
+      tags: [],
+      pattern: { tag: "name", name: subject, qualifier: "none", span },
+      value: target,
+      span,
+    }],
+    result: guardLevel({ tag: "var", name: subject, span }, arms, span, 0),
+    span,
+  };
+}
+
+/** One guard removed, with the rest of the arms behind a nullary binding. */
+function guardLevel(
+  subject: Expr,
+  arms: readonly GuardedArm[],
+  span: Span,
+  depth: number,
+): Expr {
+  const index = arms.findIndex((arm) => arm.guard !== null);
+  if (index === -1) {
+    return { tag: "case", target: subject, arms: arms.map(plainArm), span };
+  }
+  const guarded = arms[index];
+  const condition = guarded.guard;
+  expect(condition !== null, "a guarded arm without its guard");
+
+  const name = `fallthrough$${span.start}$${span.end}$${depth}`;
+  const fallthrough = (): Expr => ({
+    tag: "apply",
+    fn: { tag: "var", name, span },
+    arg: { tag: "unit", span },
+    span,
+  });
+
+  const level: Arm[] = arms.slice(0, index).map((arm) => ({
+    pattern: eraseBinders(arm.pattern),
+    body: fallthrough(),
+  }));
+  level.push({
+    pattern: guarded.pattern,
+    body: {
+      tag: "if",
+      branches: [{ condition, consequence: guarded.body }],
+      fallback: fallthrough(),
+      span,
+    },
+  });
+  // The guarded pattern not matching is the other way down, and it is what
+  // makes this level complete without the arms it no longer holds.
+  level.push({ pattern: { tag: "wildcard", span }, body: fallthrough() });
+
+  return {
+    tag: "block",
+    declarations: [{
+      tag: "binding",
+      kind: "let",
+      tags: [],
+      pattern: { tag: "name", name, qualifier: "none", span },
+      value: {
+        tag: "lambda",
+        parameter: { tag: "unit", span },
+        body: guardLevel(
+          subject,
+          [...arms.slice(0, index), ...arms.slice(index + 1)],
+          span,
+          depth + 1,
+        ),
+        span,
+      },
+      span,
+    }],
+    result: { tag: "case", target: subject, arms: level, span },
+    span,
+  };
+}
+
+/**
+ * The same test, binding nothing.
+ *
+ * An arm kept above a guarded one is there for the order it was written in;
+ * its body has moved to the fall-through, so nothing at this level reads what
+ * its pattern binds. Erasing the binders is what keeps a linear name from
+ * being bound where it can never be spent.
+ */
+function eraseBinders(pattern: Pattern): Pattern {
+  switch (pattern.tag) {
+    case "name":
+      return { tag: "wildcard", span: pattern.span };
+    case "tuple":
+    case "array":
+      return { ...pattern, elements: pattern.elements.map(eraseBinders) };
+    case "constructor":
+      if (pattern.payload === null) return pattern;
+      return { ...pattern, payload: eraseBinders(pattern.payload) };
+    case "shape":
+      return {
+        ...pattern,
+        fields: pattern.fields.map((member) => ({
+          ...member,
+          pattern: eraseBinders(member.pattern),
+        })),
+      };
+    default:
+      return pattern;
+  }
 }
 
 export { textOf };

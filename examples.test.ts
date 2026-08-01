@@ -136,9 +136,32 @@ const REJECTIONS: Record<
   },
   "transformed_sig": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "spread_of_a_parameter": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  // The other half of the spread rule, and the half that was wrong: a spread
+  // whose fields are unknown contributes no names, so keeping the fields
+  // written before it typed `{ .tag = 1; ...r; }` as `{ .tag = 1; }` for a call
+  // that hands it `{ .tag = "hi"; }`. `blot check` reported `1` and `blot eval`
+  // returned `"hi"`. A rule that answers with the narrower of two values it
+  // cannot choose between is not incomplete, it is wrong.
+  "spread_after_a_field": { code: "BLOT_SPREAD_MAY_OVERWRITE", stage: "check" },
   "shadowed_accumulator": { code: "BLOT_SHADOWED_ACCUMULATOR", stage: "check" },
   "float_unordered": { code: "BLOT_UNORDERED", stage: "run" },
   "unbounded_case": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
+  // A guard may be false, so a guarded arm is dropped from the matrix that
+  // decides coverage. With every arm guarded there is no matrix left, and the
+  // scrutinee's own set is what reports the rest: a constructor named only
+  // under a guard is a constructor no arm covers.
+  "all_arms_guarded": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
+  "guarded_arm_does_not_cover": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  // A guard falls through, and a fall-through tests the target again. That is
+  // one consumption too many for a linear one, which is why this is recorded
+  // rather than left to be rediscovered.
+  "guarded_linear_target": {
+    code: "BLOT_LINEAR_CONSUMED_TWICE",
+    stage: "check",
+  },
+  // A bare `->` is the empty row, so a `sig` without `~` on an effectful
+  // binding is a mismatch rather than an omission.
+  "sig_without_row": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "guard_may_continue": {
     code: "BLOT_GUARD_MAY_CONTINUE",
     stage: "check",

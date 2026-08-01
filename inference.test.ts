@@ -405,6 +405,73 @@ check(
   '("one" | "many" | "none")',
 );
 
+// --- a guarded arm is not one the matrix can count on -----------------------
+//
+// A guard is a refinement no pattern states, so an arm carrying one is taken
+// only when its guard also holds. Coverage therefore reads the arms with the
+// guarded ones removed: they cannot be the arm that matches, and a row that
+// cannot match must not close a column. Everything below is that one rule seen
+// from a different side.
+
+rejects(
+  "a guarded arm does not cover the literal it names",
+  "sig f = 1 | 2 -> Str;\n" +
+    'let f = fn n => case n of 1 => "one", m if m > 1 => "big" end;\nreturn f;',
+  "No arm covers `2`",
+);
+
+rejects(
+  "a `case` whose arms are all guarded covers nothing",
+  'let f = fn n => case n of m if m > 0 => "up", m if m < 0 => "down" end;\n' +
+    "return f;",
+  "No arm of this `case` can be the one that matches",
+);
+
+rejects(
+  "a guarded arm does not close a constructor set",
+  'let f = fn o => case o of #Some n if n > 0 => "big", #None => "none" end;\n' +
+    "return f (#Some 1);",
+  "`#Some` is not one of #None",
+);
+
+check(
+  "an unguarded arm below a guarded one is what covers the set",
+  'let f = fn o => case o of #Some n if n > 0 => "big", #Some _ => "small", ' +
+    '#None => "none" end;\nreturn f (#Some 1);',
+  '("big" | "small" | "none")',
+);
+
+check(
+  "the arms above a guard keep their priority",
+  "sig f = 1 | 2 -> Str;\n" +
+    'let f = fn n => case n of 1 => "one", m if m > 1 => "big", _ => "rest" end;\n' +
+    "return f 2;",
+  "Str",
+);
+
+// A tuple target is read the same way: the rows that cover the cross-product
+// are the unguarded ones, so the combination this guards is a combination no
+// arm covers.
+rejects(
+  "a guarded row does not cover a column combination",
+  "sig join = (Option Int, Option Int) -> Int;\n" +
+    "let join = fn pair => case pair of\n" +
+    "  (#Some a, #Some b) => a + b,\n" +
+    "  (#Some a, #None) => a,\n" +
+    "  (#None, #Some b) => b,\n" +
+    "  (#None, #None) if 1 > 0 => 0\n" +
+    "end;\nreturn join (None, None);",
+  "No arm covers `(#None, #None)`",
+);
+
+// The guard is an ordinary condition in the arm's own scope: it reads what the
+// pattern bound, and it has to be a `Bool` like every other condition.
+rejects(
+  "a guard that is not a condition is rejected",
+  'let f = fn n => case n of m if m => "yes", _ => "no" end;\nreturn f 1;',
+  "BLOT_TYPE_ERROR",
+);
+
 // --- what a condition proves ------------------------------------------------
 //
 // Everything below is downstream of one fact, so it is pinned first: a
@@ -901,6 +968,58 @@ check(
 let quiet = fn n => @int.add n 1;
 return { .quiet = quiet; };`,
   "{ .quiet = Int -> Int; }",
+);
+
+// A row is written the way it is printed. It is exact in one direction only:
+// the body may perform fewer effects than the signature names, because fewer
+// effects is a subtype — but never more, and a bare `->` is the empty row
+// rather than silence about effects.
+
+check(
+  "a written row is what the printer prints",
+  `const Console = @effect { .write = Str -> Unit; };
+sig greet = Str -> Unit ~ { Console };
+let greet = fn name => Console.write name;
+return { .greet = greet; };`,
+  "{ .greet = Str -> () ~ { Console }; }",
+);
+
+check(
+  "a signature may name an effect the body never performs",
+  `const Console = @effect { .write = Str -> Unit; };
+sig quiet = Int -> Int ~ { Console };
+let quiet = fn n => @int.add n 1;
+return { .quiet = quiet; };`,
+  "{ .quiet = Int -> Int ~ { Console }; }",
+);
+
+rejects(
+  "a bare arrow is the empty row, not an unwritten one",
+  `const Console = @effect { .write = Str -> Unit; };
+sig greet = Str -> Unit;
+let greet = fn name => Console.write name;
+return { .greet = greet; };`,
+  "is not handled",
+);
+
+// The row lands on the arrow that runs once every argument has arrived, which
+// is where the printer puts it. A second `~` fills the next arrow out, so a
+// printed type reads back as itself.
+check(
+  "a curried signature carries its row on the last arrow",
+  `const Console = @effect { .write = Str -> Unit; };
+sig join = Str -> Str -> Unit ~ { Console };
+let join = fn a => fn b => Console.write (a <> b);
+return { .join = join; };`,
+  "{ .join = Str -> Str -> () ~ { Console }; }",
+);
+
+// A row lists effects, and an effect is an ordinary compile-time value — so a
+// row naming something else is refused where every other `sig` mistake is.
+rejects(
+  "a row lists effects and nothing else",
+  "sig f = Int -> Int ~ { Int };\nlet f = fn n => n;\nreturn f;",
+  "BLOT_SIG_NOT_COMPTIME",
 );
 
 rejects(

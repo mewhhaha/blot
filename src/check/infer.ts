@@ -660,12 +660,29 @@ export function infer(
           const spread = shapeOf(memberType, context.instances);
           if (spread !== null) context.shapes.set(member.value, spread);
         });
-        // A spread of a shape whose fields are not statically known cannot
-        // contribute names. Saying so is better than inventing them.
         if (memberType.tag === "record") {
           for (const [name, inner] of memberType.fields) {
             fields.set(name, inner);
           }
+          continue;
+        }
+        // A spread of a shape whose fields are not statically known contributes
+        // no names, which is honest about what it adds and silent about what it
+        // may *replace*. A later spread overrides an earlier field, so the
+        // fields written before this one are no longer known to survive it:
+        // `{ .tag = 1; ...r; }` has whatever `.tag` `r` carries, and typing it
+        // `1` is a claim the run refutes rather than a type the checker merely
+        // failed to widen. Width subtyping is why nothing here can rule it out —
+        // a value typed `{ .x = Int; }` may carry a `.tag` as well — so the
+        // shape is refused where it is written.
+        if (fields.size > 0) {
+          fail(
+            "BLOT_SPREAD_MAY_OVERWRITE",
+            `This spread may carry a field already written in this shape — ${
+              [...fields.keys()].map((name) => `\`.${name}\``).join(", ")
+            } — and its own fields are not known here, so which value wins is not decided until the program runs. Write the spread before those fields, or name the fields you want from it.`,
+            member.value.span,
+          );
         }
       }
       return record(fields);
@@ -1506,6 +1523,20 @@ function inferCase(
   const target = infer(expr.target, context, level, row);
   const result = freshVar(level);
   const accepted: AcceptedArm[] = [];
+
+  // The grammar demands an arm, so an arm-less `case` is one the guard
+  // desugaring left behind: every arm the program wrote was guarded, and a
+  // guarded row is dropped from the matrix that decides coverage. Reading no
+  // arms as no requirement is how that hole would reopen.
+  if (expr.arms.length === 0) {
+    fail(
+      "BLOT_INCOMPLETE_CASE",
+      "No arm of this `case` can be the one that matches. A guarded arm is " +
+        "not one — its guard may be false — so a `case` needs an arm without " +
+        "a guard.",
+      expr.target.span,
+    );
+  }
 
   // An arm that matches every value leaves the constructor set unbounded, but
   // not unknown: the refutable arms still say what their payloads carry.

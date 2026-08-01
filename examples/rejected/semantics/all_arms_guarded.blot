@@ -1,0 +1,14 @@
+// A guard may be false, so a guarded arm is never the arm that is guaranteed
+// to match. A `case` whose every arm is guarded therefore covers nothing at
+// all, however many arms it has and whatever the guards say.
+//
+// This is the rule that keeps a guard from reopening exhaustiveness: the arms
+// that decide coverage are the unguarded ones, and here there are none.
+
+open {} = (@import "blot:prelude") ();
+
+let sign = fn n => case n of
+  m if m > 0 => "positive",
+  m if m < 0 => "negative"
+end;
+return sign;

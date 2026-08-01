@@ -10,6 +10,12 @@
 // for a perform form to declare — which leaves `<-` one honest job: naming what
 // a computation *returns* without spelling the `()`. Requiring a nullary value
 // is what stops it from being a second spelling for `let`.
+//
+// The row is inferred and it is also writable. `A -> B ~ { Console }` is what a
+// function that performs `Console` prints as, and a `sig` spells it the same
+// way — an effect is an ordinary compile-time value, so a row is the ordinary
+// list of them. A bare `->` is not silence about effects: it is the empty row,
+// so `sig greet = Unit -> Str;` below would be rejected.
 
 open {} = (@import "blot:prelude") ();
 
@@ -26,6 +32,7 @@ const Terminal = @effect {
   .read = Unit -> Str;
 };
 
+sig ask = Unit -> Str ~ { Terminal };
 let ask = fn () => do
   answer <- Terminal.read;
   in answer <> "!"
@@ -36,7 +43,9 @@ let answering = {
   .return = fn value => value;
 };
 
-// Nothing here says "effectful". The row is inferred; performing is a call.
+// Performing is a call, and the row follows from it. The `sig` says the same
+// thing the printer would: the body may perform `Console` and nothing else.
+sig greet = Unit -> Str ~ { Console };
 let greet = fn () => do
   let _ = Console.write "hello";
   let _2 = Console.write "world";

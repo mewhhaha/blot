@@ -768,6 +768,83 @@ in a `sig` and — since `LANGUAGE.md` §15 requires a concrete first-order type
 never be exported. State this in `LANGUAGE.md` §10 next to the
 `const Message = ...` example; do not attempt the lattice change.
 
+**No record row variable.** Investigated as a go/no-go and refused. The case for
+one is that three limits look like one missing feature: a spread of a parameter
+carries no fields through
+(`examples/rejected/semantics/spread_of_a_parameter.blot`), a record's field set
+does not survive a module boundary, and `@shape.get` with a runtime field name
+answers an unconstrained variable. They are three different problems, and a row
+closes at most one of them.
+
+_It does not close the module boundary._ Reproduced with a two-file program
+whose library is `let zoom_of = fn c => c.zoom;` and whose importer passes
+`{ .zoom = 3; .angle = 7; }` built behind an effect so staging cannot fold it.
+`blot check` accepts it and lowering refuses with
+`F2102: expected Shape1['a], received Shape2[I64, I64]`. There is no spread in
+that program and no row would appear anywhere in its type. What fails is that
+`checkLoaded` runs each dependency's whole check — including the `pending`
+closures that compute `shapeOf` — before the importer's module exists, so the
+library's projection is pinned to the one-field demand it can see locally. That
+is M3c, already on this list at ~60 lines, and it is a fact-collection ordering
+fix rather than a lattice change. Its unstated hazard is that `checkedFiles` is
+a process-wide `WeakMap`: sharing one instantiation registry across a dependency
+tree while caching the dependency's result would let the file checked first
+decide the nominals of the file checked second, which is the same contamination
+`load`'s one-cache-per-process rule exists to prevent. Solve that before writing
+the sixty lines.
+
+_It does not close `@shape.get` over a runtime name._ A row variable stands for
+a remainder; it does not enumerate the remainder's labels. Typing
+`@shape.get value name` needs the join of the field types over a field set known
+to be complete, and under width subtyping no record type is complete — a value
+typed `{ .a = Int; }` may carry a `.b` the call is reading, with or without a
+row in the type. Closing this one means making record types exact, which is
+deleting width subtyping, which is deleting what `duck` became. It stays a
+listed limit in `LANGUAGE.md` §10.3.
+
+_It would close the spread, and the backend is already waiting for it._ For
+`let tagging = fn r => { ...r; .tag = 1; };` applied once, `shapeOf` already
+records `{ .x; }` for the spread operand through the instantiation copies M3a
+added, and `lower.ts` already expands a spread field-by-field into the union
+nominal. The only wrong thing is the type: `infer` returns `record({tag})`, so
+the projection's own shape fact is `{ .tag; }` and Core sees `Shape2[I64, I64]`
+against `Shape3['a]`. A record carrying an optional row tail — the spread mints
+`ρ`, constrains the operand under `{ | ρ }`, and returns `{ .tag = Int; | ρ }` —
+types it, and because a spread demand has no fields of its own the subtyping
+rule never constructs a new record object, so `constrain`'s identity cache still
+catches cycles and the algorithm stays polynomial.
+
+_And it is still refused, for four reasons._ First, the payoff is bounded by
+monomorphization, not by the lattice: one call site resolves, two different
+shapes are `BLOT_SHAPE_DISAGREEMENT`, and an exported projector is a lowering
+refusal — so the programs it actually unblocks are the ones M3b unblocks anyway,
+and it buys the type without buying the program. Second, the language would get
+smaller in the same diff the lattice got bigger. Shape members apply left to
+right, so `{ .tag = 1; ...r; }` and `{ ...a; ...b; }` are legal source whose
+types are an override of unknown presence and a concatenation of two unknown
+rows; neither has a principal solution without presence variables and a ternary
+flag relation, and `constrain(lhs, rhs)` records unary bounds — a ternary
+constraint has no home in biunification, which is where "biunification stays
+polynomial" would actually be spent. Both forms would have to become new
+refusals. Third, the cost lands in the one structure every other pass depends
+on: `rest` has to be threaded through `extrude`, `levelBelow`, `freshenAbove`,
+`substituteRigid`, `levelOf`, `collect`, `merge`, and `show`, and a single
+missed site is a variable that escapes its level, which is the "unconstrained
+variable is a licence" family this repository keeps closing. Fourth,
+`LANGUAGE.md` §6 already documents the workaround — name the fields at the
+spread — and the two record spreads in the whole corpus are both over records
+written beside them.
+
+The smaller thing that would help, and did: the spread rule was not merely
+incomplete, it was unsound in the other direction. A spread whose fields are
+unknown contributed no names _and left the fields written before it standing_,
+so `fn r => { .tag = 1; ...r; }` applied to `{ .tag = "hi"; }` type-checked
+against `sig t = 1;` and evaluated to `"hi"` — the checker and the evaluator
+disagreeing, verified with `blot check` and `blot eval` on the same file. Such a
+shape is now refused with `BLOT_SPREAD_MAY_OVERWRITE`
+(`examples/rejected/semantics/spread_after_a_field.blot`). No principal type
+moved; `inference.test.ts` is unchanged.
+
 **No mutual recursion without a grammar decision.** `rec` binds one name;
 `const is_even = rec (...); const is_odd = rec (...)` dies on `BLOT_UNBOUND`.
 The minimum is a diagnostic that distinguishes "not in scope" from "not in scope

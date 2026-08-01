@@ -21,11 +21,11 @@ in a benchmark months later.
 | -------------------------- | ----------------: | -------: | -------------------------------------------------- |
 | `lexerStates`              |               118 |      175 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity` |                 5 |        9 | worst-case island candidates allocated per token   |
-| `islandCount`              |                20 |       24 |                                                    |
-| `islandStates`             |               628 |        — |                                                    |
+| `islandCount`              |                21 |       24 |                                                    |
+| `islandStates`             |               639 |        — |                                                    |
 | `contractionRounds`        |                33 |        — | fixed dispatch bound                               |
-| `denseTransitionBytes`     |           535,056 |        — | immutable device table                             |
-| `packedBytes`              |           658,072 |        — | version-3 runtime section                          |
+| `denseTransitionBytes`     |           552,096 |        — | immutable device table                             |
+| `packedBytes`              |           674,048 |        — | version-3 runtime section                          |
 | `rootLoopIsland`           | 3 (`declaration`) |        — | strict root loop proven                            |
 
 blot beats the gpu-duck reference on both counters that matter most for
@@ -38,6 +38,28 @@ and byte parity still holds across all 39 corpus programs.
 
 Updating baba from 7.3.0 to 7.9.0 increased `packedBytes` by 448 bytes for the
 new runtime metadata. The grammar-dependent counters did not change.
+
+A pattern guard and a written effect row were measured together, because both
+change the grammar and the profile is proved once. Together they cost eleven
+island states, one island, 17,040 dense-transition bytes, and 15,976 packed
+bytes; `lexerStates`, `maxCandidateMultiplicity`, and `contractionRounds` did
+not move, and neither did the scratch factors for regions or candidates.
+
+`pattern if condition => body` is free of lexer states because `if` is already a
+keyword and a pattern can never end in one — no pattern form contains a keyword,
+so the parser needs no lookahead to know the pattern is over. Nothing else in
+the grammar knows a guard exists: CST lowering rewrites a guarded arm into a
+level that decides the guard and a fall-through holding the rest, so coverage,
+the evaluator, and the backend see ordinary arms.
+
+An effect row is `{ Console, Timer }`, and it is its own separated island rather
+than an alternative inside `shape`. Two islands then open on `{`, which is what
+`maxCandidateMultiplicity` measures, and it stayed at 5: a row's members carry
+no leading `.` where a shape's members always do, so one token after the brace
+decides which island is live. Without the island declaration the grammar is
+rejected outright — `effect_row` contains `expression`, which contains it back,
+and an undeclared region leaves that recursion residual. Requiring a row to be
+non-empty is what leaves `{}` unambiguously the empty shape.
 
 Declaration tags use `@[descriptor]`: `@[` is disjoint from an intrinsic's
 `@name`, so it costs one lexer state and ten island states while leaving

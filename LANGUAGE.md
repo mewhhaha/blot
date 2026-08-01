@@ -324,6 +324,10 @@ A signature:
 The binding's inferred type must be a subtype of the signature. A signature
 constrains a binding; it does not introduce a name or evaluate at runtime.
 
+A function type includes the effects it performs, so a signature for a binding
+that performs names them: `Str -> Unit ~ { Console }` (§12.4). A bare `->` is
+the empty row rather than an unwritten one.
+
 ### 4.4 Stable rebinding
 
 ```blot
@@ -478,6 +482,30 @@ subtyping says what a function may _read_ from a record it is handed; it does
 not carry the unread fields through a spread, which would need a row variable
 this lattice does not have. Naming the fields at the spread avoids the limit
 entirely.
+
+A spread whose fields are not known is rejected where any field is written
+before it. Members apply left to right, so such a spread may replace one of
+them, and nothing decides which value wins until the program runs: in
+`fn r => { .tag = 1; ...r; }` the result's `.tag` is `r`'s where `r` carries one
+and `1` where it does not, and width subtyping is exactly why the checker cannot
+tell — a value typed `{ .x = Int; }` may carry a `.tag` as well. Saying `1`
+would be a claim the run refutes rather than a type too wide, so the shape is
+refused with `BLOT_SPREAD_MAY_OVERWRITE`. Writing the spread before those fields
+decides the question, and so does naming the fields wanted from it. The
+default-then-override idiom this reads as would need a type saying "`r`'s field
+if it has one, this one otherwise", which is presence polymorphism rather than
+width subtyping.
+
+Braces with no leading `.` on their members are an effect row rather than a
+shape:
+
+```blot
+{ Console, Timer }
+```
+
+A row is one or more comma-separated expressions. It is a list of the values
+between the braces, and `~` is what gives that list its meaning (§12.4); `{}` is
+the empty shape, and a row is never empty.
 
 Field projection is postfix and may be chained:
 
@@ -641,7 +669,7 @@ operators {
   infixl 65 (++) = Text.append;
   infixr 10 ($) = Fn.apply;
   infix 30 (===) = Eq.eq;
-  prefix 90 (~) = negate;
+  prefix 90 (!!) = negate;
 };
 ```
 
@@ -655,6 +683,7 @@ Default fixities, from loosest to tightest:
 | ----- | --------------------------- | --------------- | ------------------------------- |
 | 10    | `$`                         | right           | `Fn.apply`                      |
 | 20    | `\|>`                       | left            | `Fn.pipe`                       |
+| 21    | `~`                         | left            | `@type.performs`                |
 | 22    | `\|\|`                      | right           | `Logic.or`                      |
 | 24    | `&&`                        | right           | `Logic.and`                     |
 | 25    | `->`                        | right           | `@type.arrow`                   |
@@ -890,6 +919,54 @@ closed by its arms.
 
 Like expression `if`, `case` is a value boundary: `return` and `break` cannot
 escape from an arm.
+
+An arm may carry a **guard**, which is a refinement no pattern states:
+
+```blot
+case n of
+  0 => "zero",
+  m if m > 0 => "positive",
+  _ => "negative"
+end
+```
+
+`pattern if condition => body` is taken when the pattern matches _and_ the
+condition holds. The condition is an ordinary expression of type `Bool`, in the
+arm's own scope, so it reads what the pattern bound. A guard that does not hold
+falls through to the arms below, which is what a nested `if` inside the arm
+cannot do: the arms keep the order they are written in, so
+
+```blot
+case n of
+  5 => "five",
+  m if m > 0 => "positive",
+  _ => "other"
+end
+```
+
+answers `"five"` for 5 even though the guard below would hold.
+
+**A guarded arm does not count towards coverage.** Its guard may be false, so it
+can never be the arm that is guaranteed to match, and the arms that remain must
+cover the target on their own. Every rule above then applies unchanged to those
+arms:
+
+```blot
+let describe = fn option => case option of
+  #Some n if n > 0 => "positive",
+  #None => "none"
+end;
+```
+
+is refused, because with the guarded arm set aside the only constructor named is
+`#None`. A `case` whose arms are _all_ guarded covers nothing and is
+`BLOT_INCOMPLETE_CASE` however many arms it has. A tuple target is read the same
+way: a guarded row is not one of the rows that cover the cross-product.
+
+A guard cannot refine a **linear or borrowed** target. Falling through means
+testing the target again, and a linear value is spent by the first test, so the
+second is `BLOT_LINEAR_CONSUMED_TWICE`. Match such a target once and put the
+condition inside the arm.
 
 ### 8.5 What a branch proves
 
@@ -1183,9 +1260,11 @@ holds (§8.5), and a `sig` has no syntax for it. Where a range's two ends are th
 lengths of two different arrays that share a name, each is printed with the
 occurrence that distinguishes it — `len xs#7`.
 
-Effect-row notation is printed by the checker and is not written in a `sig`.
-Effectful function type values are produced from effect declarations and
-inference.
+An effect row is the one piece of this notation that is also source:
+`A -> B ~ {
+Console }` is written in a `sig` exactly as it is printed (§12.4). A
+row _variable_ — the `e` in `A -> B ~ { Console, e }` — is printed and not
+written; a written row names effects and is closed.
 
 ### 10.2 Type-value primitives
 
@@ -1196,7 +1275,7 @@ The type algebra includes:
 
 - inclusive ranges;
 - union, intersection, and difference;
-- function arrows;
+- function arrows, and the effect row an arrow performs;
 - structural shapes and arrays;
 - nominal sealing and opening;
 - namespace attachment;
@@ -1234,11 +1313,22 @@ The implemented checker does not currently prove:
 - the result of `@shape.get`, `@shape.set`, or `@shape.remove` whose field name
   is a runtime value (§13.3);
 - anything about a namespace member that is a function, or about a call to one
-  whose arguments are not compile-time values (§10.2); or
+  whose arguments are not compile-time values (§10.2);
+- the fields a spread carries through from an operand whose own fields are not
+  known where the spread is written (§6); or
 - impredicative instantiation.
 
 Rank-N types are explicit and predicative through `@forall`. Higher-kinded
 abstraction is compile-time function application rather than a kind system.
+
+There is no record row variable, and there is not going to be one; the reasoning
+is in `docs/roadmap.md`. The lattice has width subtyping, which says what a
+function may _read_ from a record, and that is a different fact from what a
+value _carries_ — a spread needs the second. The effect row in
+`A -> B ~ { Console, e }` is a row over a set of labels with no types under
+them; a record row would be a second sort with types, and the operations shape
+syntax can write over it — concatenating two unknown rows, or overriding a field
+that may or may not be there — have no principal solution in this lattice.
 
 ## 11. Ownership and linearity
 
@@ -1376,6 +1466,66 @@ Host-effect operations may use the concrete first-order boundary values listed
 in section 15: integers, text, unit, booleans, records, arrays, variants, and
 seals. A host capability's source name is part of its external contract and is
 not silently mangled.
+
+### 12.4 Written effect rows
+
+A function type carries the row it performs, and a `sig` writes that row the way
+the checker prints it:
+
+```blot
+const Console = @effect { .write = Str -> Unit; };
+
+sig greet = Str -> Unit ~ { Console };
+let greet = fn name => Console.write name;
+```
+
+`~` is an ordinary infix operator (`@type.performs`, precedence 21) whose right
+operand is a **row**: one or more comma-separated expressions between braces,
+each of which must evaluate at compile time to an effect. A row's members carry
+no leading `.` where a shape's members always do, which is what tells
+`{ Console
+}` and `{ .x = Int; }` apart; `{}` is the empty shape, and a row is
+never empty because a function that performs nothing is written without `~`.
+
+An effect is an ordinary compile-time value, so only an effect that is in scope
+can be named. A module that acquires authority by importing a library — the
+library declares the effect and does not export it — receives that effect in its
+own inferred rows and cannot write them.
+
+Four rules decide what a written row means.
+
+**A written row is an upper bound.** The binding's inferred type must be a
+subtype of the signature, and fewer effects is a subtype, so a body may perform
+fewer effects than its signature names. `sig quiet = Int -> Int ~ { Console };`
+over a body that performs nothing is accepted, and callers are told what the
+signature says.
+
+**A bare `->` is the empty row.** It is a claim, not the absence of one, so a
+`sig` without `~` on a body that performs is rejected. Reading it as "says
+nothing about effects" would make the row a variable that every later constraint
+satisfies — and since the binding takes its signature as its type, the effect
+would pass the check and then be missing from what every caller is told.
+
+**A written row is closed.** There is no way to write a row variable: `e` in a
+printed `~ { Console, e }` is the rest of the row inference found, and a
+signature naming one would be an unconstrained variable admitting every effect.
+The cost is that a function polymorphic in a callback's row —
+`('a -> 'b ~ { e
+}) -> 'a -> 'b ~ { Console, e }` — can be given a signature
+only by fixing that row.
+
+**The row lands on the last arrow.** `A -> B -> C ~ { Console }` is the function
+that performs when its second argument arrives, which is where the printer puts
+a row. A second `~` fills the next arrow outwards, so
+`A -> B -> C ~ { Inner } ~
+{ Outer }` reads back as itself; a `~` on a chain
+whose arrows all carry rows is an error.
+
+Reflection (§10.2) describes an arrow's `.domain`, `.codomain`, and `.effects`,
+but an effect itself reflects as `#Opaque` — nothing in blot takes one apart. So
+the prelude's `refines` decides an arrow's row only when the narrow side
+performs nothing, and refuses rather than guesses otherwise. Rows are decided by
+the checker, at the `sig`.
 
 ## 13. Primitive namespace
 
@@ -1582,6 +1732,7 @@ and both of these forms name the array twice — once to measure and once to rea
 | `@type.intersect`  | intersection of union members               |
 | `@type.diff`       | difference of union members                 |
 | `@type.arrow`      | function type value                         |
+| `@type.performs`   | attach an effect row to a function type     |
 | `@type.of`         | structural singleton type of a value        |
 | `@type.seal`       | nominally seal a carrier under a text name  |
 | `@type.open`       | recover a sealed carrier                    |

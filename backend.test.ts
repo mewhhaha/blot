@@ -626,19 +626,44 @@ Deno.test("a reachable @panic traps with the reason the program gave", async () 
  * The SIMD opcodes an artifact contains.
  *
  * Every SIMD instruction is the `0xfd` prefix and a LEB128 opcode, so this
- * reads the emitted bytes rather than any claim the compiler makes about them.
- * A module whose vectors all folded has no `0xfd` in it at all, which is what
- * makes the empty answer meaningful.
+ * reads the emitted code rather than any claim the compiler makes about it.
+ * Custom sections can contain the same byte in metadata, including encoded
+ * branch-hint offsets, so only section 10 can provide instruction evidence.
  */
 function simdOpcodes(bytes: Uint8Array): Set<number> {
   const opcodes = new Set<number>();
-  for (let index = 0; index < bytes.length - 2; index += 1) {
-    if (bytes[index] !== 0xfd) continue;
-    let opcode = bytes[index + 1] & 0x7f;
-    if ((bytes[index + 1] & 0x80) !== 0) {
-      opcode |= (bytes[index + 2] & 0x7f) << 7;
+  let sectionStart = 8;
+  while (sectionStart < bytes.length) {
+    const sectionId = bytes[sectionStart];
+    let sectionSize = 0;
+    let sectionSizeShift = 0;
+    sectionStart += 1;
+    while (true) {
+      const sizeByte = bytes[sectionStart];
+      sectionStart += 1;
+      sectionSize |= (sizeByte & 0x7f) << sectionSizeShift;
+      if ((sizeByte & 0x80) === 0) break;
+      sectionSizeShift += 7;
     }
-    opcodes.add(opcode);
+    const sectionEnd = sectionStart + sectionSize;
+    if (sectionEnd > bytes.length) {
+      throw new Error(
+        `Wasm section ${sectionId} ends at ${sectionEnd}, past ${bytes.length}`,
+      );
+    }
+    if (sectionId !== 10) {
+      sectionStart = sectionEnd;
+      continue;
+    }
+    for (let index = sectionStart; index < sectionEnd - 2; index += 1) {
+      if (bytes[index] !== 0xfd) continue;
+      let opcode = bytes[index + 1] & 0x7f;
+      if ((bytes[index + 1] & 0x80) !== 0) {
+        opcode |= (bytes[index + 2] & 0x7f) << 7;
+      }
+      opcodes.add(opcode);
+    }
+    return opcodes;
   }
   return opcodes;
 }

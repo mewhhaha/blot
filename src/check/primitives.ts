@@ -88,7 +88,18 @@ function reflection(fresh: () => SimpleType): SimpleType {
     ["Union", { tag: "array", element: fresh() }],
     ["Shape", fresh()],
     ["Array", { tag: "array", element: fresh() }],
-    ["Arrow", record([["domain", fresh()], ["codomain", fresh()]])],
+    [
+      "Arrow",
+      record([
+        ["domain", fresh()],
+        ["codomain", fresh()],
+        // The row, as the effects themselves. Nothing in blot can take an
+        // effect apart — it reflects as `#Opaque` — so what this buys a program
+        // is how many there are, which is enough to refuse an arrow that
+        // performs rather than guess whether one row contains another.
+        ["effects", { tag: "array", element: fresh() }],
+      ]),
+    ],
     ["Sealed", record([["name", TEXT], ["inner", fresh()]])],
   ]);
 }
@@ -248,6 +259,7 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ["@type.intersect", poly((fresh) => curried([fresh(), fresh()], TYPE))],
   ["@type.diff", poly((fresh) => curried([fresh(), fresh()], TYPE))],
   ["@type.arrow", poly((fresh) => curried([fresh(), fresh()], TYPE))],
+  ["@type.performs", poly((fresh) => curried([fresh(), fresh()], TYPE))],
   ["@type.of", poly((fresh) => curried([fresh()], TYPE))],
   ["@type.seal", poly((fresh) => curried([TEXT, fresh()], TYPE))],
   ["@type.open", poly((fresh) => curried([fresh()], fresh()))],

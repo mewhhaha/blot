@@ -201,6 +201,23 @@ A binder that cannot fail is a `let`. One that can becomes the `case` it looks
 like, with the other arm handing the accumulator back untouched — so filtering
 is one arm rather than a second construct.
 
+A `case` arm may carry a guard, which is a refinement no pattern states:
+
+```blot
+case n of
+  0 => "zero",
+  m if m > 0 => "positive",
+  _ => "negative"
+end
+```
+
+A false guard falls through to the arms below, so the arms keep their order —
+`5 => "five"` above a guard still wins for 5. A guarded arm never counts towards
+coverage, because its guard may be false: the arms that remain have to cover the
+target on their own, and a `case` whose arms are all guarded covers nothing.
+Guards desugar during CST lowering like every other surface form, so what
+reaches coverage, the evaluator, and the backend is ordinary arms.
+
 `for` desugars to `rec`/`case` recursion during CST lowering, so there is no
 loop in the AST, none in the evaluator, and none in the backend. `break` carries
 the accumulator as it exists at that point; it can appear inside a standalone
@@ -306,7 +323,11 @@ seals are ordinary calls too, and reflection over a shape's fields is a `fold`,
 which is why `derive` is a function rather than a macro.
 
 Effects are a shape of operation types handed to one primitive, and performing
-one is an ordinary call — the row is never written:
+one is an ordinary call, so the row is inferred rather than declared. It is
+still writable: `sig report = Unit -> Str ~ { Console };` says exactly what the
+printer prints, a bare `->` is the empty row rather than an unwritten one, and a
+row names effects that are in scope, so it is closed — there is no way to write
+the row variable inference uses for a callback's effects.
 
 `x <- computation;` reads from one. It is `let x = computation ();` and nothing
 more — performing is already a call and the row is already inferred, so there is

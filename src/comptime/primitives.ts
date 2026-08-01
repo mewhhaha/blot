@@ -163,6 +163,64 @@ function arrayElements(
   return value.elements;
 }
 
+/**
+ * `f ~ { Console }`: the row an arrow performs.
+ *
+ * The row lands on the innermost arrow that has none yet, which is the arrow
+ * that runs once every argument has arrived — `Scene -> Frame -> () ~ { Draw }`
+ * performs when it is given the frame, not when it is given the scene. That is
+ * also where the checker's printer puts a row, so what a type prints as is what
+ * a `sig` can be written as. A second `~` fills the next arrow out, which is
+ * how `A -> B -> C ~ { Inner } ~ { Outer }` reads back as itself.
+ *
+ * An arrow whose chain performs everywhere already is an error rather than a
+ * silent overwrite: two rows on one arrow are two claims about it, and the
+ * program means only one of them.
+ */
+function performs(arrow: Value, effects: Value, span: Span): Value {
+  if (arrow.tag !== "arrow") {
+    fail(
+      "BLOT_TYPE",
+      `\`~\` names what a function performs, and ${show(arrow)} is not one.`,
+      span,
+    );
+  }
+  // A row is a set, so a name written twice is written once. Keeping the
+  // duplicate would make two spellings of one row two unequal type values.
+  const row: Value[] = [];
+  for (const effect of arrayElements(effects, span, "`~`")) {
+    if (effect.tag !== "effect") {
+      fail(
+        "BLOT_TYPE",
+        `\`~ { … }\` lists effects, and ${show(effect)} is not one.`,
+        span,
+      );
+    }
+    if (!row.some((seen) => equal(seen, effect))) row.push(effect);
+  }
+  const attached = attach(arrow, row);
+  if (attached === null) {
+    fail(
+      "BLOT_TYPE",
+      `${show(arrow)} already says what every one of its arrows performs.`,
+      span,
+    );
+  }
+  return attached;
+}
+
+function attach(
+  arrow: Value & { tag: "arrow" },
+  row: readonly Value[],
+): Value | null {
+  if (arrow.codomain.tag === "arrow") {
+    const inner = attach(arrow.codomain, row);
+    if (inner !== null) return { ...arrow, codomain: inner };
+  }
+  if (arrow.effects.length > 0) return null;
+  return { ...arrow, effects: row };
+}
+
 /** Unions are flat and duplicate-free, so `1 | 1 | 2` and `1 | 2` are one value. */
 function union(left: Value, right: Value): Value {
   const members: Value[] = [];
@@ -374,7 +432,11 @@ function reflect(value: Value): Value {
     case "arrow":
       return tagged(
         "Arrow",
-        record({ domain: value.domain, codomain: value.codomain }),
+        record({
+          domain: value.domain,
+          codomain: value.codomain,
+          effects: { tag: "array", elements: [...value.effects] },
+        }),
       );
     case "sealed":
       return tagged(
@@ -558,7 +620,16 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
   }],
   ["@type.arrow", {
     arity: 2,
-    run: ([domain, codomain]) => ({ tag: "arrow", domain, codomain }),
+    run: ([domain, codomain]) => ({
+      tag: "arrow",
+      domain,
+      codomain,
+      effects: [],
+    }),
+  }],
+  ["@type.performs", {
+    arity: 2,
+    run: ([arrow, effects], span) => performs(arrow, effects, span),
   }],
   ["@type.of", { arity: 1, run: ([value]) => typeOf(value) }],
   ["@type.seal", {

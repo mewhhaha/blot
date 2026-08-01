@@ -1,0 +1,18 @@
+// A guard cannot refine a linear target.
+//
+// A false guard falls through to the arms below, and those arms have to test
+// the target again — that is what a fall-through is. A linear value is spent by
+// the first test, so the second one is a second consumption, and it is reported
+// as one even though only one of the two can ever run.
+//
+// The way out is to test the payload rather than the value that owns it: match
+// the linear target once and put the condition inside the arm.
+
+open {} = (@import "blot:prelude") ();
+
+let spend = fn !token => case token of
+  #Ready n if n > 0 => n,
+  #Ready n => 0 - n,
+  #Idle => 0
+end;
+return spend (#Ready 3);

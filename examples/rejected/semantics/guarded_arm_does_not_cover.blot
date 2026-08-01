@@ -1,0 +1,15 @@
+// A guarded arm does not close the set its pattern belongs to. `#Some` is
+// named only under a guard, so a `#Some` whose payload fails that guard reaches
+// the arms below and finds only `#None` — which is exactly what an unguarded
+// `case option of #None => …` is rejected for.
+//
+// The message names `#Some` for that reason: the arms that decide coverage are
+// the unguarded ones, and among those the constructor is missing.
+
+open {} = (@import "blot:prelude") ();
+
+let describe = fn option => case option of
+  #Some n if n > 0 => "positive",
+  #None => "none"
+end;
+return describe (#Some 1);

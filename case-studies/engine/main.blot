@@ -96,9 +96,12 @@ let advance = fn ts => E.each_1 (ts, (fn t => {
   .scale = t.scale;
 }));
 
-// `render` carries no `sig`, and neither do the two loaders below: an effectful
-// arrow's type includes its row, and a row is printed but never written.
-// `advance` above can have one because it touches no capability.
+// The two loaders below name their rows: an effectful arrow's type includes
+// what it performs, and `~ { Assets }` is how a signature says so. `render`
+// still carries none, and now for a different reason — a row names effects, an
+// effect is an ordinary compile-time value, and `Canvas` and `View` are the
+// renderer's own and are not in this module's scope. Importing the library is
+// what grants the authority; nothing hands over the name.
 //
 // The renderer opens the frame and hands back the two brushes it has; which
 // entity gets which is the scene format's question, so it is answered here. A
@@ -123,6 +126,7 @@ let render = fn (transforms, models) => R.frame (fn draw =>
 // blot module boundary, which costs nothing: the modules are inlined into one
 // artifact.
 
+sig load_transforms = Unit -> Store Transform ~ { Assets };
 let load_transforms = fn () => fold (
   upto (0, Assets.count ()),
   @array.empty,
@@ -137,6 +141,7 @@ let load_transforms = fn () => fold (
   end)
 );
 
+sig load_models = Unit -> Store Model ~ { Assets };
 let load_models = fn () => fold (
   upto (0, Assets.count ()),
   @array.empty,

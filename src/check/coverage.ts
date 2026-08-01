@@ -182,6 +182,15 @@ export function showLiterals(literals: readonly Literal[]): string {
 // program refused here is a diagnostic its author answers with a `_` arm; a
 // non-exhaustive one accepted is a `BLOT_NO_MATCH` at run time, which is the
 // bug this exists to stop.
+//
+// A guarded arm never reaches here, and that is the point rather than an
+// omission. `pattern if condition => body` is desugared during CST lowering
+// into a level that decides the guard and a fall-through holding the rest, and
+// the matrix left at the bottom is the arms with the guarded rows removed —
+// which is exactly the rule a guard needs, because a guard may be false and a
+// row that cannot match must not close a column. So nothing in this file tests
+// for a guard: the rows it is given are the ones that can match, and teaching
+// it a guard flag would be a second place for that rule to live and disagree.
 
 /**
  * A column of the matrix: what a value in it can be, and whether the arms are

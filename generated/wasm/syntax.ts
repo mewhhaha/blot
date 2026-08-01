@@ -252,6 +252,7 @@ export type RuleName =
   | "field_name"
   | "keyword"
   | "primary_expression"
+  | "effect_row"
   | "application_primary"
   | "constructor_expression"
   | "unit"
@@ -275,6 +276,7 @@ export type RuleName =
   | "conditional_statement_else_clause"
   | "case_expression"
   | "case_arm"
+  | "case_guard"
   | "handler_composition"
   | "handler_composition_step"
   | "handler_composition_action"
@@ -514,6 +516,12 @@ export interface KeywordCursor extends RuleCursorBase<"keyword"> {
 export interface PrimaryExpressionCursor extends RuleCursorBase<"primary_expression"> {
 }
 
+export interface EffectRowCursor extends RuleCursorBase<"effect_row"> {
+  field(name: "effects"): ReadonlyArray<ExpressionCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
 export interface ApplicationPrimaryCursor extends RuleCursorBase<"application_primary"> {
 }
 
@@ -653,7 +661,14 @@ export interface CaseExpressionCursor extends RuleCursorBase<"case_expression"> 
 
 export interface CaseArmCursor extends RuleCursorBase<"case_arm"> {
   field(name: "body"): ValueCursor;
+  field(name: "guard"): CaseGuardCursor | null;
   field(name: "pattern"): BindingPatternCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface CaseGuardCursor extends RuleCursorBase<"case_guard"> {
+  field(name: "condition"): ExpressionCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -736,6 +751,7 @@ export type AnyRuleCursor =
   | FieldNameCursor
   | KeywordCursor
   | PrimaryExpressionCursor
+  | EffectRowCursor
   | ApplicationPrimaryCursor
   | ConstructorExpressionCursor
   | UnitCursor
@@ -759,6 +775,7 @@ export type AnyRuleCursor =
   | ConditionalStatementElseClauseCursor
   | CaseExpressionCursor
   | CaseArmCursor
+  | CaseGuardCursor
   | HandlerCompositionCursor
   | HandlerCompositionStepCursor
   | HandlerCompositionActionCursor

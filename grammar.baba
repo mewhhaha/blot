@@ -325,7 +325,20 @@ primary_expression = (
   | block
   | array
   | shape
+  | effect_row
   | parenthesized_or_tuple
+) ;
+
+// The set of effects a function may perform, written the way the printer
+// prints it: `A -> B ~ { Console }`. A row's members carry no leading `.`
+// where a shape's members always do, so one token after `{` tells the two
+// brace forms apart and neither needs a keyword to announce it. A row is
+// never empty — a function that performs nothing is written without `~` —
+// which is what leaves `{}` unambiguously the empty shape.
+effect_row = (
+  "{"
+  effects:(expression % ",")
+  "}"
 ) ;
 
 application_primary = (
@@ -510,11 +523,20 @@ case_expression = (
   "end"
 ) ;
 
+// An arm may refine its pattern with a guard: the arm is taken when the
+// pattern matches *and* the guard holds, and a failed guard falls through to
+// the arms below. The guard is spelled with `if`, which costs no lexer state
+// because the keyword already exists, and no ambiguity because a pattern never
+// ends where one could continue it — the only keyword a pattern admits is a
+// shape field's name, which is preceded by `.` and terminated by `;`.
 case_arm = (
   pattern:binding_pattern
+  guard:case_guard?
   "=>"
   body:value
 ) ;
+
+case_guard = ( "if" condition:expression ) ;
 
 // Compose statically known handlers around one nullary computation. Each
 // bound step receives the computation produced by handling the previous

@@ -1,0 +1,18 @@
+// A written arrow with no `~` is the claim that the function performs nothing,
+// not the absence of a claim. `notify` performs `Console`, so its `sig` has to
+// say `Str -> Unit ~ { Console }`.
+//
+// The alternative — reading a bare arrow as "says nothing about effects" —
+// would make the row a fresh variable that every later constraint satisfies,
+// and the binding takes its signature as its type, so the effect would pass
+// the check here and then be missing from what every caller is told.
+
+open {} = (@import "blot:prelude") ();
+
+const Console = @effect {
+  .write = Str -> Unit;
+};
+
+sig notify = Str -> Unit;
+let notify = fn message => Console.write message;
+return notify;

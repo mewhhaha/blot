@@ -621,8 +621,13 @@ const refines = rec (fn (narrow, wide) => case reflect wide of
     _ => False
   end,
   #Arrow w => case reflect narrow of
-    // Contravariant in the domain, covariant in the codomain.
-    #Arrow n => refines (w.domain, n.domain) && refines (n.codomain, w.codomain),
+    // Contravariant in the domain, covariant in the codomain. The row is the
+    // one part this cannot decide: an effect reflects as `#Opaque`, so there is
+    // no way here to ask whether one row contains another. A function that
+    // performs is therefore refused rather than guessed at — the checker
+    // decides rows, at the `sig`, where both of them are known.
+    #Arrow n => refines (w.domain, n.domain) && refines (n.codomain, w.codomain)
+      && Ord.eq (@array.len n.effects) 0,
     _ => False
   end,
   #Tag w => case reflect narrow of

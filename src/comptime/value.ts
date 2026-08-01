@@ -96,7 +96,18 @@ export type Value =
   }
   | { readonly tag: "union"; readonly members: readonly Value[] }
   | { readonly tag: "unbounded" }
-  | { readonly tag: "arrow"; readonly domain: Value; readonly codomain: Value }
+  /**
+   * A function type. `effects` is the row it performs, written `~ { Console }`
+   * and empty for a bare `->`: a function type that names no effect is the one
+   * that performs none, which is what makes a row part of a `sig` rather than
+   * a hint attached to one.
+   */
+  | {
+    readonly tag: "arrow";
+    readonly domain: Value;
+    readonly codomain: Value;
+    readonly effects: readonly Value[];
+  }
   | { readonly tag: "type-variable"; readonly id: number }
   | {
     readonly tag: "forall";
@@ -291,7 +302,13 @@ export function show(value: Value): string {
     return `${left}..${right}`;
   }
   if (value.tag === "arrow") {
-    return `${show(value.domain)} -> ${show(value.codomain)}`;
+    // The checker's printer spells a row the same way, sorted for the same
+    // reason: a row is a set, and a type value is read next to an inferred type
+    // often enough that the two must agree down to the order.
+    const row = value.effects.length === 0
+      ? ""
+      : ` ~ { ${value.effects.map(effectName).sort().join(", ")} }`;
+    return `${show(value.domain)} -> ${show(value.codomain)}${row}`;
   }
   if (value.tag === "union") return value.members.map(show).join(" | ");
   if (value.tag === "tag") {
@@ -310,6 +327,12 @@ export function show(value: Value): string {
     `.${name} = ${show(member)}`
   );
   return `{ ${members.join("; ")}${members.length === 0 ? "" : ";"} }`;
+}
+
+/** The name a row shows an effect under: `Console`, not `<effect Console>`. */
+function effectName(value: Value): string {
+  if (value.tag === "effect") return value.name;
+  return show(value);
 }
 
 /** Structural equality. Closures and primitives are compared by identity. */
@@ -379,8 +402,15 @@ export function equal(left: Value, right: Value): boolean {
     return equal(left.low, right.low) && equal(left.high, right.high);
   }
   if (left.tag === "arrow" && right.tag === "arrow") {
+    // The row is part of the identity. Two arrows that agree on what they
+    // accept and return but not on what they perform are two types, and
+    // treating them as one would let `@type.diff` remove the effectful one.
     return equal(left.domain, right.domain) &&
-      equal(left.codomain, right.codomain);
+      equal(left.codomain, right.codomain) &&
+      left.effects.length === right.effects.length &&
+      left.effects.every((effect) =>
+        right.effects.some((other) => equal(effect, other))
+      );
   }
   if (left.tag === "type-variable" && right.tag === "type-variable") {
     return left.id === right.id;

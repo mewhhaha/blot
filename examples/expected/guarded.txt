@@ -1,0 +1,1 @@
+{ .zero = "zero"; .positive = "positive"; .negative = "negative"; .five = "five"; .named = "positive"; .sizes = [3, 2, 1, 0]; .done = 100; .partial = 30; .failed = -4; }
