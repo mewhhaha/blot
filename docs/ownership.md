@@ -9,9 +9,9 @@ blot ownership examples/tour.blot    # the facts the backend will consume
 
 ```blot
 let !token = 41;                        // linear: exactly once
-let consume = (!value) => value + 1;    // takes ownership
-let peek = (&p) => p.x + p.y;           // borrows; the caller keeps its value
-let handler = (message, ?resume) => …;  // affine: at most once
+let consume = fn !value => value + 1;   // takes ownership
+let peek = fn &p => p.x + p.y;          // borrows; the caller keeps its value
+let handler = fn (message, ?resume) => …; // affine: at most once
 
 consume (!token)
 ```
@@ -34,8 +34,8 @@ and a promise in a comment; they are now a static one:
 
 ```blot
 let collecting = {
-  .write = (message, ?resume) => message ++ resume ();
-  .return = value => value;
+  .write = fn (message, ?resume) => message ++ resume ();
+  .return = fn value => value;
 };
 ```
 
@@ -76,7 +76,7 @@ into the closure_, and whoever holds it owes exactly one call:
 
 ```blot
 let !ticket = 7;
-let deferred = () => consume (!ticket);   // deferred : linear
+let deferred = fn () => consume (!ticket); // deferred : linear
 let settled = deferred ();                // discharged
 ```
 

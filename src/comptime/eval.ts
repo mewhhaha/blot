@@ -221,7 +221,7 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
       // recursion rather than through a reserved self-reference.
       fail(
         "BLOT_MISPLACED_REC",
-        "`rec` marks a named binding, as in `const go = rec (x => ... go ... );`.",
+        "`rec` marks a named binding, as in `const go = rec (fn x => ... go ... );`.",
         expr.span,
       );
       break;

@@ -1,0 +1,18 @@
+// A member is a closure in a type's side table, so there is no arrow to read
+// off it: a call to one is typed by running it while checking, and the value it
+// produces is the type. `T.make 7` produces `#Some { .x = 7; }`, the `case`
+// answers `7`, and the `sig` says `0` — so this is a type error.
+//
+// It is here because the alternative to computing the type is a type variable,
+// and a variable is the join of nothing: every constraint on it holds, so this
+// `sig` would be *believed* rather than checked and the program would export
+// the type `0` for a value that is `7`.
+
+open {} = (@import "blot:prelude") ();
+
+const T = { .x = Int; } <+ { .make = fn n => #Some { .x = n; }; };
+
+let found = T.make 7;
+sig answer = 0;
+let answer = case found of #Some p => p.x, #None => 0 end;
+return answer;

@@ -6,8 +6,8 @@
 
 open {} = (@import "blot:prelude") ();
 
-let consume = (!value) => value + 1;
-let peek = (&point) => point.x + point.y;
+let consume = fn !value => value + 1;
+let peek = fn &point => point.x + point.y;
 
 let !token = 41;
 let owned = consume (!token);
@@ -19,14 +19,14 @@ let borrowed = peek { .x = 20; .y = 22; };
 // nothing here says `!` — it is linear because of what it holds — so it must be
 // called exactly once.
 let !ticket = 7;
-let deferred = () => consume (!ticket);
+let deferred = fn () => consume (!ticket);
 let settled = deferred ();
 
 // `?` is affine: at most once. Not a weaker `!` but a different rule, and the
 // right one for a continuation — spending it on one branch and not the other is
 // still at most once, so branches need not agree.
-let choose = (?resume) => if 1 < 2 then resume 10 else 0 end;
-let chosen = choose (n => n);
+let choose = fn ?resume => if 1 < 2 then resume 10 else 0 end;
+let chosen = choose (fn n => n);
 
 // Branches have to agree about what a *linear* value spent, so this consumes on
 // both.

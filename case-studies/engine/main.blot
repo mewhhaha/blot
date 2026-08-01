@@ -89,7 +89,7 @@ const Model = { .kind = Int; .colour = Str; };
 // --- systems ----------------------------------------------------------------
 
 sig advance = Store Transform -> Store Transform;
-let advance = ts => E.each_1 (ts, (t => {
+let advance = fn ts => E.each_1 (ts, (fn t => {
   .position = t.position;
   .angle = @int.rem (t.angle + t.spin) M.turn;
   .spin = t.spin;
@@ -105,8 +105,8 @@ let advance = ts => E.each_1 (ts, (t => {
 // brush takes placement and a colour rather than a component, because a record
 // carries its whole field set across a module boundary and the renderer has no
 // business knowing that a transform of this game's also has a spin.
-let render = (transforms, models) => R.frame (draw =>
-  E.visit_2 (transforms, models, ((transform, model) =>
+let render = fn (transforms, models) => R.frame (fn draw =>
+  E.visit_2 (transforms, models, (fn (transform, model) =>
     if model.kind == KIND_MESH
     then draw.mesh (
       transform.position, transform.angle, transform.scale, model.colour
@@ -118,16 +118,15 @@ let render = (transforms, models) => R.frame (draw =>
 //
 // The scene is the host's. Reading it is a fold over `Assets.count`, so a
 // reload runs the same code as the first load and there is no second path to
-// keep correct. A float cannot cross the *host* boundary — `Assets.entry` is a
-// module import, and gpufuck's canonical ABI has no float layout — so the
-// entries arrive as thousandths and `R.point` and `R.unit` turn them into
-// lanes. Those two return floats across a blot module boundary, which is a
-// different edge and costs nothing: the modules are inlined into one artifact.
+// keep correct. The scene contract carries coordinates as thousandths, and
+// `R.point` and `R.unit` turn them into lanes. Those two return floats across a
+// blot module boundary, which costs nothing: the modules are inlined into one
+// artifact.
 
-let load_transforms = () => fold (
+let load_transforms = fn () => fold (
   upto (0, Assets.count ()),
   @array.empty,
-  ((store, id) => do
+  (fn (store, id) => do
     let entry = Assets.entry id;
     in E.attach (store, {
       .position = R.point (entry.x, entry.y, entry.z);
@@ -138,10 +137,10 @@ let load_transforms = () => fold (
   end)
 );
 
-let load_models = () => fold (
+let load_models = fn () => fold (
   upto (0, Assets.count ()),
   @array.empty,
-  ((store, id) => do
+  (fn (store, id) => do
     let entry = Assets.entry id;
     in E.attach (store, { .kind = entry.kind; .colour = entry.colour; })
   end)

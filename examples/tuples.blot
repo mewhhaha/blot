@@ -1,0 +1,76 @@
+// Matching a tuple, which is a pattern matrix one column per element.
+//
+// A join over two things is written as one `case` over the pair rather than as
+// a `case` inside a `case`. Nothing new is introduced to say that: the arms are
+// tried in source order, each tests its columns left to right, and the first
+// one whose columns all match is the one that runs. What fails falls to the
+// next arm, so an arm is a row and an element is a column.
+//
+// `examples/matching.blot` is the same rule with one column.
+
+open {} = (@import "blot:prelude") ();
+
+// The join that motivates the form: two options, one arm for the case where
+// both are present.
+let combine = fn (left, right) => case (left, right) of
+  (#Some a, #Some b) => a + b,
+  (#Some a, #None) => a,
+  (#None, #Some b) => b,
+  (#None, #None) => 0
+end;
+
+// Both elements have the same type, so reading the wrong column is a wrong
+// answer rather than a type error. `9 - 4` is not `4 - 9`.
+let difference = fn pair => case pair of
+  (a, b) => a - b
+end;
+
+// Overlapping arms, so their order is what decides. `(0, 0)` matches the first
+// two arms and the third; only the first runs.
+let quadrant = fn point => case point of
+  (0, 0) => 1,
+  (0, _) => 2,
+  (_, 0) => 3,
+  (x, y) => 4 + x * y
+end;
+
+// Four columns, a literal in one and a name in another.
+let score = fn roll => case roll of
+  (1, 1, 1, 1) => 100,
+  (a, 2, c, d) => a + c + d,
+  (a, b, c, d) => a * 1000 + b * 100 + c * 10 + d
+end;
+
+// A tuple inside a tuple, with a constructor under it.
+let nested = fn value => case value of
+  ((#Some a, b), #None) => a * b,
+  ((#None, b), #Some c) => b + c,
+  _ => 0
+end;
+
+// An arm that names the whole tuple rather than taking it apart, which is what
+// a fall-through with a use for the scrutinee looks like.
+let rest = fn pair => case pair of
+  (0, y) => y,
+  whole => difference whole
+end;
+
+return {
+  .both = combine (Some 3, Some 4);
+  .left = combine (Some 3, None);
+  .right = combine (None, Some 4);
+  .neither = combine (None, None);
+  .difference = difference (9, 4);
+  .origin = quadrant (0, 0);
+  .vertical = quadrant (0, 7);
+  .horizontal = quadrant (7, 0);
+  .elsewhere = quadrant (2, 3);
+  .ones = score (1, 1, 1, 1);
+  .seconds = score (5, 2, 6, 7);
+  .digits = score (1, 3, 5, 7);
+  .left_nested = nested ((Some 5, 6), None);
+  .right_nested = nested ((None, 5), Some 6);
+  .no_nested = nested ((Some 5, 6), Some 7);
+  .named = rest (0, 8);
+  .whole = rest (9, 4);
+};

@@ -35,12 +35,12 @@ const QUARTER = 64;
 
 const STEP_RADIANS = Float32.of_float (Float.div TAU 256.0);
 
-const radians = steps => Float32.mul (Float32.of_int steps) STEP_RADIANS;
+const radians = fn steps => Float32.mul (Float32.of_int steps) STEP_RADIANS;
 
 // sin over [0, pi/2], seven terms. Odd powers only, and evaluated left to
 // right so each is the previous one times x squared — which keeps the largest
 // intermediate at x to the thirteenth rather than a factorial.
-const sin_quarter = k => do
+const sin_quarter = fn k => do
   let x = Float.mul (Float.of_int k) (Float.div HALF_PI (Float.of_int QUARTER));
   let x2 = Float.mul x x;
   let x3 = Float.mul x2 x;
@@ -65,12 +65,12 @@ end;
 const table = fold (
   upto (0, QUARTER + 1),
   @array.empty,
-  ((built, k) => @array.push built (Float32.of_float (sin_quarter k)))
+  (fn (built, k) => @array.push built (Float32.of_float (sin_quarter k)))
 );
 
 // `steps` is any integer; the quadrant decides which end of the table to read
 // and which sign to give it.
-const sin_steps = steps => do
+const sin_steps = fn steps => do
   let a = @int.rem (@int.rem steps TURN + TURN) TURN;
   let quadrant = a / QUARTER;
   let step = @int.rem a QUARTER;
@@ -81,7 +81,7 @@ const sin_steps = steps => do
   end
 end;
 
-const cos_steps = steps => sin_steps (steps + QUARTER);
+const cos_steps = fn steps => sin_steps (steps + QUARTER);
 
 return {
   .pi = Float32.of_float PI;

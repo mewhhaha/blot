@@ -12,7 +12,7 @@
 //
 // THE FACTORIZATION LEMMA, which is the whole argument
 //
-// `recognise` accepts a value only when it is `p1 => (p2 => B)` and every free
+// `recognise` accepts a value only when it is `fn p1 => fn p2 => B` and every free
 // occurrence of `p1` and `p2` in `B` sits inside one application
 // `@int.cmp p1 p2` — one occurrence each, and no binder in `B` rebinds either
 // name. Then `B` cannot observe `p1` or `p2` except through that call, so
@@ -200,7 +200,7 @@ function derive(value: Value): ReadonlySet<Ordering> | null {
   return tabulate(value);
 }
 
-/** Whether `value` is `p1 => (p2 => ... @int.cmp p1 p2 ...)` and nothing more. */
+/** Whether `value` is `fn p1 => fn p2 => ... @int.cmp p1 p2 ...` and nothing more. */
 function factored(value: Value): boolean {
   if (value.tag !== "closure") return false;
   // A `rec` closure can reach itself, and its self name is not a binder in the

@@ -38,10 +38,16 @@ const REJECTIONS: Record<
     code: "BLOT_HANDLER_RESUME_NOT_AFFINE",
     stage: "check",
   },
-  "uncurried_lambda": { code: "BLOT_UNPARENTHESIZED_LAMBDA", stage: "check" },
+  "lambda_without_fn": { code: "BLOT_LAMBDA_WITHOUT_FN", stage: "check" },
   "unknown_operator": { code: "BLOT_UNKNOWN_OPERATOR", stage: "check" },
   "unhandled_effect": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },
   "sig_mismatch": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  // Both halves of how a member call is typed, and both would be *accepted* by
+  // a rule that answered with a type variable: the first because the computed
+  // value would never be compared against the `sig`, the second because a
+  // variable satisfies every constraint put on it.
+  "member_sig_unchecked": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "member_sig_unknowable": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "literal_outside_union": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "missing_case": { code: "BLOT_TYPE_ERROR", stage: "check" },
   // A constructor set is covered by subtyping and reports through `constrain`;
@@ -97,7 +103,6 @@ const REJECTIONS: Record<
   "generic_refused": { code: "BLOT_REFUSED", stage: "check" },
   "spread_of_a_parameter": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "shadowed_accumulator": { code: "BLOT_SHADOWED_ACCUMULATOR", stage: "check" },
-  "float_export": { code: "BLOT_FLOAT_AT_BOUNDARY", stage: "build" },
   "float_unordered": { code: "BLOT_UNORDERED", stage: "run" },
   "unbounded_case": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
   "guard_may_continue": {

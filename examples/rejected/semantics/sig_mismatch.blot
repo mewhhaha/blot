@@ -5,5 +5,5 @@
 open {} = (@import "blot:prelude") ();
 
 sig double = Int -> Int;
-let double = value => @text.concat value "!";
+let double = fn value => @text.concat value "!";
 return double;

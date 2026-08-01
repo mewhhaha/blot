@@ -156,6 +156,7 @@ export type LiteralKind =
   | "case"
   | "of"
   | "try"
+  | "fn"
   | "..."
   | "=>";
 
@@ -261,6 +262,7 @@ export type RuleName =
   | "shape_spread"
   | "shape_field"
   | "lambda"
+  | "lambda_parameter"
   | "conditional"
   | "else_if_clause"
   | "else_clause"
@@ -464,8 +466,8 @@ export interface InfixOperationCursor extends RuleCursorBase<"infix_operation"> 
 }
 
 export interface OperandCursor extends RuleCursorBase<"operand"> {
-  field(name: "prefixes"): ReadonlyArray<PrefixOperatorCursor> | null;
-  field(name: "value"): PostfixExpressionCursor | null;
+  field(name: "prefixes"): ReadonlyArray<PrefixOperatorCursor>;
+  field(name: "value"): PostfixExpressionCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -563,7 +565,13 @@ export interface ShapeFieldCursor extends RuleCursorBase<"shape_field"> {
 
 export interface LambdaCursor extends RuleCursorBase<"lambda"> {
   field(name: "body"): ExpressionCursor;
-  field(name: "parameter"): PostfixExpressionCursor;
+  field(name: "parameters"): ReadonlyArray<LambdaParameterCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface LambdaParameterCursor extends RuleCursorBase<"lambda_parameter"> {
+  field(name: "pattern"): BindingPatternCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -730,6 +738,7 @@ export type AnyRuleCursor =
   | ShapeSpreadCursor
   | ShapeFieldCursor
   | LambdaCursor
+  | LambdaParameterCursor
   | ConditionalCursor
   | ElseIfClauseCursor
   | ElseClauseCursor

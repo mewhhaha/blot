@@ -133,10 +133,11 @@ iteration = (
 ) ;
 
 // `head` is parsed as a value and reclassified into a pattern when `in`
-// follows — the same trick `lambda` uses for its parameter. Making the binder a
-// separate alternative would need the parser to decide between a pattern and an
-// expression from the first token, which they share; deciding after `in` costs
-// nothing and keeps the FIRST sets disjoint.
+// follows. Making the binder a separate alternative would need the parser to
+// decide between a pattern and an expression from the first token, which they
+// share; deciding after `in` costs nothing and keeps the FIRST sets disjoint.
+// A lambda escapes this because `fn` announces it, but `for` has no second
+// keyword to spend and needs none.
 //
 // A keyword rather than an arrow, so `<-` stays in the operator class and is
 // free for perform-binding an effect.
@@ -258,12 +259,9 @@ infix_operation = (
   right:operand
 ) ;
 
-// Spelled as two alternatives rather than `prefix_operator* postfix_expression`
-// so that no empty-repetition reduction has to be decided before the parser
-// knows whether it is inside a lambda parameter or an expression.
 operand = (
-  postfix_expression
-  | prefixes:prefix_operator+ value:postfix_expression
+  prefixes:prefix_operator*
+  value:postfix_expression
 ) ;
 
 // `...` is deliberately absent: spreading is only meaningful in array and
@@ -297,7 +295,7 @@ keyword = (
   "module" | "operators" | "infixl" | "infixr" | "infix" | "prefix"
   | "let" | "const" | "sig" | "return" | "do" | "end"
   | "if" | "then" | "else" | "case" | "of" | "rec" | "comptime" | "open"
-  | "for" | "in" | "break" | "try"
+  | "for" | "in" | "break" | "try" | "fn"
 ) ;
 
 primary_expression = (
@@ -357,9 +355,9 @@ array_element = (
   value:value
 ) ;
 
-// A lambda is admissible wherever a value is. Without this, `=>` still lexes
-// as an ordinary OPERATOR — every character in it is in the operator class —
-// so `(x => x)` would quietly parse as an infix chain instead of failing.
+// A lambda is admissible wherever a value is. The two alternatives are told
+// apart by their first token — `fn` begins one and nothing else — so this is a
+// decision the parser makes without lookahead.
 value = lambda | expression ;
 
 // One structural aggregate. Tuples are shapes with integer labels; the
@@ -386,18 +384,29 @@ shape_field = (
   ";"
 ) ;
 
-// One parameter, sharing the `postfix_expression` prefix with an ordinary
-// operand so that the parser never has to choose between "pattern" and
-// "expression" before it sees `=>`. Semantic analysis reclassifies the head as
-// a pattern and rejects heads that are not valid ones.
+// `fn` is the only lambda form, and it is what makes a lambda lexically
+// identifiable from its first token. That one keyword pays for everything else
+// here: `value = lambda | expression` gets disjoint FIRST sets, which is
+// requirements 3 and 4 rather than a convenience, and the parameter is an
+// actual `binding_pattern` instead of an expression semantic analysis has to
+// reclassify afterwards.
 //
-// Currying therefore needs parentheses: `f => (x => f (f x))`. That is the
-// honest cost of a locatable island boundary, and it is a small one in a
-// language where the idiomatic multi-argument function takes one shape.
+// A curried chain is a repetition rather than a lambda whose body is another
+// lambda. Both accept exactly the same source — `fn f => fn x => f (f x)` — but
+// an island with no closing terminal cannot contain itself as a placeholder, so
+// the recursive spelling is residual recursion and the flat one is a bounded
+// transducer. Lowering folds the parameters to the right, which is the same
+// division of labour `expression` has with `fold-fixity`: the grammar stays
+// flat and the tree is built semantically.
 lambda = (
-  parameter:postfix_expression
-  "=>"
+  parameters:lambda_parameter+
   body:expression
+) ;
+
+lambda_parameter = (
+  "fn"
+  pattern:binding_pattern
+  "=>"
 ) ;
 
 conditional = (

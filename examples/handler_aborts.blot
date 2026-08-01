@@ -4,6 +4,6 @@
 open {} = (@import "blot:prelude") ();
 
 const Ask = @effect { .ask = Int -> Int; };
-let quiet = { .ask = (n, ?resume) => 0; };
-let work = () => Ask.ask 1;
+let quiet = { .ask = fn (n, ?resume) => 0; };
+let work = fn () => Ask.ask 1;
 return @handle (Ask, work, quiet);

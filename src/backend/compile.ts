@@ -19,6 +19,7 @@ import {
   GpuCompiler,
   GpuEvaluator,
   type HostCapabilityDeclaration,
+  MASK32X4_TYPE_NAME,
   requestWebGpuDevice,
   runWasmExport,
   runWasmModule,
@@ -88,6 +89,8 @@ export interface WasmAbiImport {
 export type WasmAbiType =
   | { readonly kind: "unit" }
   | { readonly kind: "signed-integer-64" }
+  | { readonly kind: "float-32" }
+  | { readonly kind: "float-64" }
   | { readonly kind: "boolean" }
   | { readonly kind: "text" }
   | { readonly kind: "array"; readonly element: WasmAbiType }
@@ -863,6 +866,8 @@ function publicType(type: CanonicalAbiType): WasmAbiType {
   if (
     type.kind === "unit" ||
     type.kind === "signed-integer-64" ||
+    type.kind === "float-32" ||
+    type.kind === "float-64" ||
     type.kind === "boolean" ||
     type.kind === "text"
   ) return { kind: type.kind };
@@ -922,28 +927,21 @@ function canonicalType(
     return { kind: "signed-integer-64" };
   }
   if (schema.kind === "boolean") return { kind: "boolean" };
-  if (schema.kind === "float-32" || schema.kind === "float-64") {
-    // A program's own arithmetic, not its interface. gpufuck's canonical ABI
-    // has no float case — `CanonicalAbiType` is unit, integer, boolean, text,
-    // array, record, variant, and seal — so a float has no stable layout to
-    // publish, even though Core computes with it and the Component Model's own
-    // canonical ABI has `float64`. This is a diagnostic rather than a crash
-    // because it is a fact about the program's boundary, which the author
-    // chose and can change.
+  if (schema.kind === "float-32") return { kind: "float-32" };
+  if (schema.kind === "float-64") return { kind: "float-64" };
+  if (schema.kind === "named" && schema.name === F32X4_TYPE_NAME) {
     fail(
-      "BLOT_FLOAT_AT_BOUNDARY",
-      "A float cannot cross the module boundary: Blot Core Wasm ABI 1 has no " +
-        "float layout. Convert with `@int.of_float` at the export, or keep " +
-        "the float inside the program.",
+      "BLOT_VECTOR_AT_BOUNDARY",
+      "An `F32x4` cannot cross the module boundary: Blot Core Wasm ABI 1 " +
+        "does not publish native vector values. Read its lanes at the export.",
       { start: 0, end: 0 },
     );
   }
-  if (schema.kind === "named" && schema.name === F32X4_TYPE_NAME) {
+  if (schema.kind === "named" && schema.name === MASK32X4_TYPE_NAME) {
     fail(
-      "BLOT_FLOAT_AT_BOUNDARY",
-      "An `F32x4` cannot cross the module boundary: Blot Core Wasm ABI 1 has " +
-        "no float layout, and a vector of them has none either. Read the " +
-        "lanes and convert them at the export.",
+      "BLOT_VECTOR_AT_BOUNDARY",
+      "An `F32x4Mask` cannot cross the module boundary. Use it with " +
+        "`Vec4.select` before exporting the selected value.",
       { start: 0, end: 0 },
     );
   }
@@ -1059,28 +1057,35 @@ function canonicalResultIsIndirect(type: CanonicalAbiType): boolean {
 
 function flattenCanonicalType(
   type: CanonicalAbiType,
-): readonly ("i32" | "i64")[] {
+): readonly ("i32" | "i64" | "f32" | "f64")[] {
   if (type.kind === "unit") return [];
   if (type.kind === "signed-integer-64") return ["i64"];
+  if (type.kind === "float-32") return ["f32"];
+  if (type.kind === "float-64") return ["f64"];
   if (type.kind === "boolean") return ["i32"];
   if (type.kind === "text" || type.kind === "array") return ["i32", "i32"];
   if (type.kind === "sealed") return flattenCanonicalType(type.inner);
   if (type.kind === "record") {
     return type.fields.flatMap((field) => flattenCanonicalType(field.type));
   }
-  let payload: ("i32" | "i64")[] = [];
+  let payload: ("i32" | "i64" | "f32" | "f64")[] = [];
   for (const case_ of type.cases) {
-    let flattened: readonly ("i32" | "i64")[] = [];
+    let flattened: readonly ("i32" | "i64" | "f32" | "f64")[] = [];
     if (case_.payload !== undefined) {
       flattened = flattenCanonicalType(case_.payload);
     }
-    const joined: ("i32" | "i64")[] = [];
+    const joined: ("i32" | "i64" | "f32" | "f64")[] = [];
     const length = Math.max(payload.length, flattened.length);
     for (let index = 0; index < length; index += 1) {
       const left = payload[index];
       const right = flattened[index];
-      if (left === "i64" || right === "i64") joined.push("i64");
-      else joined.push("i32");
+      if (left === undefined) joined.push(right ?? "i32");
+      else if (right === undefined || left === right) joined.push(left);
+      else if (
+        (left === "i32" || left === "f32") &&
+        (right === "i32" || right === "f32")
+      ) joined.push("i32");
+      else joined.push("i64");
     }
     payload = joined;
   }

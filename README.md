@@ -126,7 +126,7 @@ of its branches. A standalone conditional is surrounding control flow, has an
 optional `else`, and may transfer control:
 
 ```blot
-let describe = value => do
+let describe = fn value => do
   if value < 0 then do
     return "negative";
   end;
@@ -260,7 +260,7 @@ imprecise is not predictable storage.
 
 ```blot
 const Meters = seal ("Meters", I32)
-  <+ { .of = n => seal ("Meters", n); }
+  <+ { .of = fn n => seal ("Meters", n); }
   <+ { .unit = "m"; };
 ```
 
@@ -304,7 +304,7 @@ of naming what a computation returns without spelling the `()`:
 ```blot
 const Terminal = @effect { .read = Unit -> Str; };
 
-let ask = () => do
+let ask = fn () => do
   answer <- Terminal.read;
   in answer <> "!"
 end;
@@ -313,14 +313,14 @@ end;
 ```blot
 const Console = @effect { .write = Str -> Unit; };
 
-let report = () => do
+let report = fn () => do
   let _ = Console.write "one";
   in "done"
 end;
 
 let joining = {
-  .write = (message, ?resume) => message ++ resume ();
-  .return = value => value;
+  .write = fn (message, ?resume) => message ++ resume ();
+  .return = fn value => value;
 };
 
 @handle (Console, report, joining)   // "onedone"
@@ -352,7 +352,7 @@ is the program's declared interface rather than something left unhandled:
 
 ```blot
 const Console = @effect.host { .write = Str -> Unit; };
-let report = () => Console.write "compiled";   // () -> () ~ { Console }
+let report = fn () => Console.write "compiled";   // () -> () ~ { Console }
 ```
 
 A handler the program did not write is a host capability. The entry module's
@@ -363,11 +363,11 @@ clock, nothing to import for more:
 module init;
 
 let printing = {
-  .write = (message, resume) => do
+  .write = fn (message, resume) => do
     let _ = init.print message;     // opaque; the program can only call it
     in resume ()
   end;
-  .return = value => value;
+  .return = fn value => value;
 };
 ```
 
@@ -376,7 +376,7 @@ no type-level `case` — there is `@type.reflect`, which names which case of the
 value domain a type is and hands back the parts as an ordinary tagged value:
 
 ```blot
-const element_of = t => case reflect t of
+const element_of = fn t => case reflect t of
   #Sealed s => if text_eq (s.name, "List") then Some s.inner else None end,
   _ => None
 end;

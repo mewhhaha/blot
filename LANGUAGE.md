@@ -57,7 +57,7 @@ The reserved words are:
 module operators infixl infixr infix prefix
 let const sig return do end
 if then else case of rec comptime open
-for in break try
+for in break try fn
 ```
 
 Reserved words and capitalized names remain valid field names: `.return`,
@@ -109,6 +109,13 @@ narrow against and no literal that names one. The only fact about the type is
 its name: `F32x4` matches `F32x4` and nothing else, `@type.reflect` reports it
 as `#Opaque` (§13.4), and `Reflect.refines` therefore answers `#False` for it,
 having nothing to compare.
+
+Lane comparisons produce the separate opaque `F32x4Mask` type. A mask can be
+passed to `Vec4.select` but has no lane projection or module-boundary layout.
+`Vec4.shuffle` selects four constant lanes from two vectors; `Vec4.swizzle` is
+the one-vector spelling. Lane selectors are integers in `0..7` for shuffle and
+`0..3` for swizzle, and must be known while compiling so they can become the
+instruction immediate.
 
 There is no implicit conversion between the numeric types, and no operator
 serves more than one. An operator resolves to one binding by name (§4.6), so a `+` over
@@ -392,8 +399,8 @@ more than once is rejected.
 
 A spread contributes the fields its operand is *known* to have. Where the
 operand is a shape written nearby, that is all of them. Where it is a parameter,
-it is none of them: `r => { ...r; .tag = 1; }` returns a shape with `.tag` and
-nothing else, and reading any other field off the result is an error. Width
+it is none of them: `fn r => { ...r; .tag = 1; }` returns a shape with `.tag`
+and nothing else, and reading any other field off the result is an error. Width
 subtyping says what a function may *read* from a record it is handed; it does
 not carry the unread fields through a spread, which would need a row variable
 this lattice does not have. Naming the fields at the spread avoids the limit
@@ -426,11 +433,16 @@ payload types. There is no separate constructor declaration.
 
 ### 6.3 Functions and application
 
-A function has one parameter pattern:
+A function is written with `fn` and has one parameter pattern:
 
 ```blot
-parameter => body
+fn parameter => body
 ```
+
+`fn` is the only lambda form. The keyword is what makes a lambda identifiable
+from its first token, which is why the parameter is an ordinary binding pattern
+— qualifiers, tuples, shapes, arrays, and constructor patterns are all admitted
+there — rather than an expression reinterpreted after the fact.
 
 Application is juxtaposition and associates left:
 
@@ -443,15 +455,22 @@ f x y
 Multi-argument functions conventionally accept one tuple or shape:
 
 ```blot
-(left, right) => left
+fn (left, right) => left
 ```
 
-A lambda body is an expression. Nested currying must make the inner lambda a
-bounded value:
+Currying needs no parentheses. A lambda's body may be another lambda:
 
 ```blot
-f => (x => f (f x))
+fn f => fn x => f (f x)
 ```
+
+The body extends as far to the right as it can, so an inner lambda that is
+followed by more of the enclosing expression is parenthesized like any other
+operand.
+
+Because every character of `=>` is in the operator class, a lambda written
+without `fn` is a well-formed operator chain rather than a syntax error. It is
+reported as `BLOT_LAMBDA_WITHOUT_FN` when the chain reaches the fixity table.
 
 ### 6.4 Blocks
 
@@ -473,7 +492,7 @@ expression is not permitted.
 `rec` is a prefix form that is valid only as the value of a binding to one name:
 
 ```blot
-const factorial = rec (n =>
+const factorial = rec (fn n =>
   if n < 2 then 1 else n * factorial (n - 1) end);
 ```
 
@@ -629,7 +648,7 @@ do not name are reported, and the target's own type is left alone.
 
 ```blot
 sig rank = 1 | 2 | 3 -> Int;
-let rank = level => case level of
+let rank = fn level => case level of
   1 => 100,
   2 => 200
 end;
@@ -644,7 +663,7 @@ Such a `case` is refused rather than accepted in silence:
 
 ```blot
 sig describe = Int -> Str;
-let describe = n => case n of 1 => "one", 2 => "two" end;
+let describe = fn n => case n of 1 => "one", 2 => "two" end;
 // BLOT_INCOMPLETE_CASE: `Int` has more values than these arms can cover.
 ```
 
@@ -652,7 +671,7 @@ The choice is to narrow the target's type, add the missing arms, or write an
 irrefutable arm. `@panic` is how that arm says why reaching it is impossible:
 
 ```blot
-let describe = n => case n of
+let describe = fn n => case n of
   1 => "one",
   2 => "two",
   _ => @panic "callers are checked against `1 | 2` upstream"
@@ -678,7 +697,7 @@ constructor set open rather than unknown — the named arms still say what their
 payloads carry, so
 
 ```blot
-let unwrap_or = m => case m of
+let unwrap_or = fn m => case m of
   #Some inner => inner,
   _ => "none"
 end;
@@ -693,6 +712,35 @@ runs. A payload pattern that only binds cannot fail, so it settles what that
 constructor carries and every later arm for it is unreachable. A literal payload
 is a guard rather than a requirement and constrains nothing on its own.
 
+A target may be a tuple, which is how a join over two values is written:
+
+```blot
+case (left, right) of
+  (#Some a, #Some b) => a + b,
+  (#Some a, #None) => a,
+  _ => 0
+end
+```
+
+Each arm is a row and each element is a column. Arms are tested in source order
+and an arm's columns left to right; an arm that fails any column falls to the
+next _arm_, not to the next column, and an arm that matches binds every name in
+it. A column is an ordinary pattern, so it may be a constructor, a literal, a
+name, a wildcard, or another tuple.
+
+Coverage does not read the columns:
+
+```blot
+case (left, right) of
+  (#Some a, #Some b) => a + b
+end
+```
+
+is accepted with no irrefutable arm, and reaching it with `(#Some 1, #None)`
+traps as an unreachable path rather than being the checked error the same
+omission is for a single target. Until coverage reads them, an irrefutable arm
+is what makes a tuple `case` total.
+
 Like expression `if`, `case` is a value boundary: `return` and `break` cannot
 escape from an arm.
 
@@ -704,7 +752,7 @@ set that the condition allows.
 
 ```blot
 sig name = 1 | 2 | 3 -> Str;
-let name = n => if n == 1
+let name = fn n => if n == 1
   then case n of 1 => "one" end
   else case n of 2 => "two", 3 => "three" end
 end;
@@ -727,12 +775,12 @@ binding `Eq.eq` (§7), so `if n == 1` and `if Eq.eq n 1` prove exactly the same
 thing, and a module that binds `Eq` to something else gets whatever that
 something else actually computes.
 
-A value is recognised when it is `p1 => (p2 => body)` and every occurrence of
-`p1` and `p2` in `body` lies inside a single application `@int.cmp p1 p2` — one
-occurrence each, with no binder in `body` rebinding either name. The body may
-then be evaluated only through that call, so the function is some decision on
-`@int.cmp`'s three answers, and the checker determines which by applying it to
-one pair of integers per answer. That is why narrowing reaches an unbounded
+A value is recognised when it is `fn p1 => fn p2 => body` and every occurrence
+of `p1` and `p2` in `body` lies inside a single application `@int.cmp p1 p2` —
+one occurrence each, with no binder in `body` rebinding either name. The body
+may then be evaluated only through that call, so the function is some decision
+on `@int.cmp`'s three answers, and the checker determines which by applying it
+to one pair of integers per answer. That is why narrowing reaches an unbounded
 domain: `if n < 10` proves `..9` and `10..` without enumerating anything.
 
 **What it is compared against.** The other operand must be a value the checker
@@ -746,11 +794,11 @@ The second is the length of an array a name in scope holds, written
 
 ```blot
 sig at = [Int] -> Int -> Int;
-let at = xs => (n =>
+let at = fn xs => fn n =>
   if n >= 0
   then (if n < @array.len xs then @array.get xs n else 0 end)
   else 0
-  end);
+  end;
 ```
 
 `n` is `..len xs - 1` in the inner branch and `0..len xs - 1` inside both, where
@@ -849,7 +897,7 @@ An iterator is a shape:
 ```blot
 {
   .state = initial_state;
-  .step = state => #Some (element, next_state); // or #None
+  .step = fn state => #Some (element, next_state); // or #None
 }
 ```
 
@@ -1014,6 +1062,16 @@ An attached namespace is transparent to type checking. This is how the prelude
 `struct` returns one value that is both a storage type and a namespace
 containing `.new`, accessors, and layout metadata.
 
+A namespace member is a compile-time value, and projecting one is typed by that
+value rather than by the field rule. A member that is itself a type projects to
+that type. A member that is a function has no arrow to read off it and projects
+to `⊤`. Calling one is typed by evaluating the whole application at compile
+time, and the value produced is the result type. The arguments must therefore be
+values the checker can compute: a literal, a `const`, or a binding whose value
+it already computed to type an earlier member call. A call it cannot evaluate
+has result type `⊤`, so nothing can be done with the result and no `sig` is
+satisfied by it.
+
 A sealed type is nominal and invariant. Its identity is its name together with
 its carrier.
 
@@ -1027,7 +1085,9 @@ The implemented checker does not currently prove:
 - an index bound that came from anywhere but a comparison against a literal or
   against `@array.len` applied to a name (§8.5, §13.3);
 - precise results of value-named `@shape.get`, `@shape.set`, and
-  `@shape.remove`; or
+  `@shape.remove`;
+- anything about a namespace member that is a function, or about a call to one
+  whose arguments are not compile-time values (§10.2); or
 - impredicative instantiation.
 
 Rank-N types are explicit and predicative through `@forall`. Higher-kinded
@@ -1093,8 +1153,8 @@ WebAssembly imports and therefore constitute part of the module interface.
 
 ```blot
 let logging = {
-  .write = (message, ?resume) => message <> resume ();
-  .return = value => value;
+  .write = fn (message, ?resume) => message <> resume ();
+  .return = fn value => value;
 };
 
 @handle (Console, computation, logging)
@@ -1143,9 +1203,9 @@ The example lowers to the equivalent of:
 
 ```blot
 let program_without_terminal =
-  () => @handle (Terminal, program, fake_terminal);
+  fn () => @handle (Terminal, program, fake_terminal);
 let program_without_clock =
-  () => @handle (Clock, program_without_terminal, fake_clock);
+  fn () => @handle (Clock, program_without_terminal, fake_clock);
 @handle (Random, program_without_clock, fake_random)
 ```
 
@@ -1221,6 +1281,10 @@ Everything not listed here belongs in source, normally the prelude.
 | `@f32x4.sub`     | lane-wise subtraction                                |
 | `@f32x4.mul`     | lane-wise multiplication                             |
 | `@f32x4.div`     | lane-wise division                                   |
+| `@f32x4.eq`      | lane-wise equality mask                              |
+| `@f32x4.less`    | lane-wise less-than mask                             |
+| `@f32x4.select`  | choose lanes from two vectors by mask                |
+| `@f32x4.shuffle` | four constant lanes selected from two vectors        |
 | `@f32x4.sum`     | add the four lanes together                          |
 | `@f32x4.x`       | read lane zero, and `.y`, `.z`, `.w` for the rest    |
 | `@float.of_int`  | widen an integer to a float                          |
@@ -1265,7 +1329,7 @@ return @array.get xs 99;   // BLOT_OUT_OF_BOUNDS: Index 99 is outside an array o
 
 ```blot
 sig at = [Int] -> Int -> Int;
-let at = xs => (n => if n >= @array.len xs then @array.get xs n else 0 end);
+let at = fn xs => fn n => if n >= @array.len xs then @array.get xs n else 0 end;
 // BLOT_OUT_OF_BOUNDS: Index len xs.. is outside an array of len xs.
 ```
 
@@ -1315,7 +1379,7 @@ read inside the body is unproved and still bounds-checked.
 A shadowed binding is measured by the binding that shadows it or not at all. A
 lambda parameter, a pattern binder, and a later `let` each install a type of
 their own, and a length is recorded against the one it was written beside — so
-`let xs = [1, 2, 3]; let read = xs => @array.get xs 99;` reports nothing,
+`let xs = [1, 2, 3]; let read = fn xs => @array.get xs 99;` reports nothing,
 because the `xs` being read is the caller's.
 
 All of this is for unqualified arrays. Every argument position is a move (§11),
@@ -1326,27 +1390,28 @@ and both of these forms name the array twice — once to measure and once to rea
 
 ### 13.4 Type values
 
-| primitive         | meaning                                     |
-| ----------------- | ------------------------------------------- |
-| `@type.unbounded` | open range bound                            |
-| `@type.int`       | unbounded integer domain                    |
-| `@type.text`      | unbounded text domain                       |
-| `@type.float`     | the double domain, which has no bounds      |
-| `@type.float32`   | the single-precision domain                 |
-| `@type.f32x4`     | four single-precision lanes, an opaque type |
-| `@type.unit`      | unit type/value                             |
-| `@type.range`     | inclusive range                             |
-| `@type.union`     | flattened duplicate-free union              |
-| `@type.intersect` | intersection of union members               |
-| `@type.diff`      | difference of union members                 |
-| `@type.arrow`     | function type value                         |
-| `@type.of`        | structural singleton type of a value        |
-| `@type.seal`      | nominally seal a carrier under a text name  |
-| `@type.open`      | recover a sealed carrier                    |
-| `@type.attach`    | attach one namespace member to a type value |
-| `@type.members`   | recover attached namespace members          |
-| `@type.reflect`   | inspect the representation of a type value  |
-| `@type.union_of`  | union a non-empty array of type values      |
+| primitive          | meaning                                     |
+| ------------------ | ------------------------------------------- |
+| `@type.unbounded`  | open range bound                            |
+| `@type.int`        | unbounded integer domain                    |
+| `@type.text`       | unbounded text domain                       |
+| `@type.float`      | the double domain, which has no bounds      |
+| `@type.float32`    | the single-precision domain                 |
+| `@type.f32x4`      | four single-precision lanes, an opaque type |
+| `@type.f32x4_mask` | four comparison lanes, an opaque type       |
+| `@type.unit`       | unit type/value                             |
+| `@type.range`      | inclusive range                             |
+| `@type.union`      | flattened duplicate-free union              |
+| `@type.intersect`  | intersection of union members               |
+| `@type.diff`       | difference of union members                 |
+| `@type.arrow`      | function type value                         |
+| `@type.of`         | structural singleton type of a value        |
+| `@type.seal`       | nominally seal a carrier under a text name  |
+| `@type.open`       | recover a sealed carrier                    |
+| `@type.attach`     | attach one namespace member to a type value |
+| `@type.members`    | recover attached namespace members          |
+| `@type.reflect`    | inspect the representation of a type value  |
+| `@type.union_of`   | union a non-empty array of type values      |
 
 An empty intersection or difference, and `@type.union_of []`, are errors; Blot
 has no value representing an empty compile-time union.
@@ -1402,11 +1467,11 @@ Important conventional values include:
 
 ```blot
 const Bool = #True | #False;
-const Option = value => #None | #Some value;
+const Option = fn value => #None | #Some value;
 
 const ever = {
   .state = ();
-  .step = _ => #Some ((), ());
+  .step = fn _ => #Some ((), ());
 };
 ```
 
@@ -1447,9 +1512,16 @@ A residual structurally polymorphic function must be specialized to a concrete
 record shape before gpufuck. The shape is the one that *flows* to the
 projection, not the narrower one the body reads: inference follows what flowed
 into the projected variable, across the instantiation a `let`-bound scheme makes
-for each of its callers, so `let get_x = v => v.x;` takes its record from the
+for each of its callers, so `let get_x = fn v => v.x;` takes its record from the
 call sites. When nothing flows in — a parameter whose caller is outside the
 module — the fields the body demands decide instead, and they are unioned.
+
+A record does not flow through a tuple `case`. Where a record reaches a
+projection only by having been an element of a tuple target, what is recorded is
+the narrower set the projection's own body reads, and the nominal built from it
+is not the one the value was built with — so such a program is refused at
+lowering rather than compiled against the wrong record. Matching the record's
+own option directly is what keeps the wider set.
 
 Two *different* records reaching one projection decide nothing, and that
 includes a narrower and a wider one: a value of each is really built, Core
@@ -1477,6 +1549,7 @@ The boundary representations are:
 
 - `()` as no flat value and a zero-sized memory value;
 - `Int` as signed `i64`;
+- `F32` as canonical `f32` and `F64` as canonical `f64`;
 - `Bool` as `i32` or one byte in memory, restricted to zero or one;
 - `Text` as a pointer and UTF-8 byte length;
 - arrays as a pointer and element count;
@@ -1485,11 +1558,20 @@ The boundary representations are:
 - seals as their transparent carrier, while retaining their nominal source name
   in the manifest.
 
+`F32x4` and `F32x4Mask` stay private to the compiled artifact. Publishing either
+is `BLOT_VECTOR_AT_BOUNDARY`; extract lanes or select a vector before exporting.
+
 At most 16 flat parameters and one flat result are used. Larger parameter lists
 and results use canonical record memory. Parameters are borrowed. Indirect
 results and their nested buffers are owned until the declared post-return call.
 Malformed UTF-8, booleans, discriminants, lengths, pointers, and alignments
 trap.
+
+`@branch.likely condition` and `@branch.unlikely condition` are boolean
+identities. In an `if` condition they additionally emit WebAssembly branch-hint
+metadata for the consequent or alternate respectively. Engines that ignore the
+custom section observe identical semantics. The prelude exports them as `likely`
+and `unlikely`.
 
 `@text.len`, `@text.of_int`, `@text.cmp`, and `@text.contains` are module-local
 Wasm intrinsics, not host imports. Length counts Unicode scalar values,
@@ -1520,7 +1602,7 @@ const Console = @effect.host {
 
 const Message = #Ready | #Failed Str;
 
-let describe = message => case message of
+let describe = fn message => case message of
   #Ready => "ready",
   #Failed reason => reason
 end;
@@ -1533,7 +1615,7 @@ for ever do
   end;
 end;
 
-let report = () => do
+let report = fn () => do
   let text = describe #Ready ++ Text.of_int attempts;
   let _ = Console.write text;
   in text

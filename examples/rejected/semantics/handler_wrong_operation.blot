@@ -5,5 +5,5 @@
 open {} = (@import "blot:prelude") ();
 
 const Console = @effect { .write = Str -> Unit; };
-let handler = { .wrote = (m, ?resume) => resume (); .return = v => v; };
-return @handle (Console, (() => Console.write "x"), handler);
+let handler = { .wrote = fn (m, ?resume) => resume (); .return = fn v => v; };
+return @handle (Console, (fn () => Console.write "x"), handler);

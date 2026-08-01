@@ -101,7 +101,7 @@ function moduleSource(increment: number): string {
       ? "value"
       : `step_${(definitionIndex - 1).toString().padStart(2, "0")} value`;
     definitions.push(
-      `let ${definitionName} = value => ${input} + ${increment};`,
+      `let ${definitionName} = fn value => ${input} + ${increment};`,
     );
   }
   return [

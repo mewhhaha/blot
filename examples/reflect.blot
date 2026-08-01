@@ -13,7 +13,7 @@ open {} = (@import "blot:prelude") ();
 
 const Status = range (100, 599);
 
-const describe = t => case reflect t of
+const describe = fn t => case reflect t of
   #Int value => Text.append "the literal " (Text.of_int value),
   #Text _ => "a text literal",
   #Range _ => "a range",
@@ -48,10 +48,10 @@ const Message = Ok | Failed | #Timeout | 0;
 // is an ordinary function and `List I32` is one type however many times it is
 // written. `opened` is the blot reading of `case t of List a => ...`.
 
-const List = element => seal ("List", element);
-const Pair = element => seal ("Pair", { .first = element; .second = element; });
+const List = fn element => seal ("List", element);
+const Pair = fn element => seal ("Pair", { .first = element; .second = element; });
 
-const element_of = t => unwrap_or (opened ("List", t), Unit);
+const element_of = fn t => unwrap_or (opened ("List", t), Unit);
 
 // --- struct -----------------------------------------------------------------
 //

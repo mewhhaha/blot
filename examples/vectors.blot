@@ -5,11 +5,9 @@
 // blot could take apart field by field would not be — so the type says
 // "register" and the primitives say which instruction.
 //
-// The same program is emitted twice over: gpufuck ships scalar bodies for these
-// operations, and its codegen replaces the *call sites* with `f32x4.*`
-// instructions when it is asked for SIMD. Both are in the artifact, both are
-// correct, and `just wasm` is what holds them to the same answers — the
-// comptime evaluator does the arithmetic one lane at a time and has to agree
+// gpufuck ships scalar bodies for these operations, and its codegen replaces
+// their call sites with `f32x4.*` instructions when it is asked for SIMD. The
+// comptime evaluator does the same arithmetic one lane at a time and must agree
 // with the register.
 
 open {} = (@import "blot:prelude") ();
@@ -27,15 +25,10 @@ let ten = Vec4.splat (lane 10);
 
 // --- arithmetic -------------------------------------------------------------
 //
-// Lane-wise, and one instruction each — but only the arithmetic is one
-// instruction. gpufuck represents `F32x4` as a one-constructor type with four
-// `F32` fields, so a chain does *not* stay in a register: `mul (add a b) b`
-// tears the sum into lanes and builds a fresh vector before the multiply.
-// Measured on `examples/simd.blot`, five arithmetic instructions arrive with
-// eleven splats, twenty-four extracts, and thirty lane replacements around
-// them. The instructions are real and the value is boxed, and closing that gap
-// is a change to how the target holds the value rather than to anything
-// writable here.
+// Lane-wise, and one instruction each. Strict chains stay in a `v128` across
+// let bindings and calls when every argument is provably a vector; materialized
+// closures and lazy boundaries still box because a heap value must outlive the
+// native worker that produced it.
 
 sig scaled = F32x4;
 let scaled = Vec4.mul (Vec4.add axis ten) ten;
@@ -45,6 +38,12 @@ let difference = Vec4.sub scaled ten;
 
 sig halved = F32x4;
 let halved = Vec4.div scaled (Vec4.splat (lane 2));
+
+sig selected = F32x4;
+let selected = Vec4.select (Vec4.less axis ten) ten axis;
+
+sig shuffled = F32x4;
+let shuffled = Vec4.shuffle (selected, halved, 0, 5, 2, 7);
 
 // --- reading a lane ---------------------------------------------------------
 //
@@ -88,4 +87,5 @@ return {
   .dot = dot;
   .total = total;
   .thirds = thirds;
+  .shuffled = Float32.truncate (Vec4.sum shuffled);
 };

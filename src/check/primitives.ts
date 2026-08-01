@@ -16,6 +16,7 @@ import {
   BOTTOM,
   effects,
   F32X4,
+  F32X4_MASK,
   FLOAT,
   FLOAT32,
   freshVar,
@@ -155,11 +156,19 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ["@f32x4.sub", mono(curried([F32X4, F32X4], F32X4))],
   ["@f32x4.mul", mono(curried([F32X4, F32X4], F32X4))],
   ["@f32x4.div", mono(curried([F32X4, F32X4], F32X4))],
+  ["@f32x4.eq", mono(curried([F32X4, F32X4], F32X4_MASK))],
+  ["@f32x4.less", mono(curried([F32X4, F32X4], F32X4_MASK))],
+  ["@f32x4.select", mono(curried([F32X4_MASK, F32X4, F32X4], F32X4))],
+  ["@f32x4.shuffle", mono(curried([F32X4, F32X4, INT, INT, INT, INT], F32X4))],
   ["@f32x4.sum", mono(curried([F32X4], FLOAT32))],
   ["@f32x4.x", mono(curried([F32X4], FLOAT32))],
   ["@f32x4.y", mono(curried([F32X4], FLOAT32))],
   ["@f32x4.z", mono(curried([F32X4], FLOAT32))],
   ["@f32x4.w", mono(curried([F32X4], FLOAT32))],
+
+  // --- branch layout metadata ---
+  ["@branch.likely", mono(curried([BOOL], BOOL))],
+  ["@branch.unlikely", mono(curried([BOOL], BOOL))],
 
   // --- text ---
   ["@text.concat", mono(curried([TEXT, TEXT], TEXT))],

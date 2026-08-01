@@ -15,6 +15,7 @@ import {
   asTuple,
   bool,
   equal,
+  F32X4_MASK_NAME,
   F32X4_NAME,
   show,
   UNIT,
@@ -102,6 +103,21 @@ function vectorOf(
 ): readonly number[] {
   if (value.tag !== "vector") {
     fail("BLOT_TYPE", `${what} expects an F32x4, found ${show(value)}.`, span);
+  }
+  return value.lanes;
+}
+
+function vectorMaskOf(
+  value: Value,
+  span: Span,
+  what: string,
+): readonly boolean[] {
+  if (value.tag !== "vector-mask") {
+    fail(
+      "BLOT_TYPE",
+      `${what} expects an F32x4Mask, found ${show(value)}.`,
+      span,
+    );
   }
   return value.lanes;
 }
@@ -443,11 +459,12 @@ export function inhabits(value: Value, type: Value): boolean {
     // Nothing to compare: an opaque type is a name, so which values are in it
     // is a fact the evaluator holds rather than one it computes. `F32x4` is the
     // only one there is, and a vector is the only thing in it.
+    if (type.name === F32X4_NAME) return value.tag === "vector";
+    if (type.name === F32X4_MASK_NAME) return value.tag === "vector-mask";
     expect(
-      type.name === F32X4_NAME,
+      false,
       `the opaque type ${type.name} has no inhabitants the evaluator knows`,
     );
-    return value.tag === "vector";
   }
   if (type.tag === "range") {
     const aboveLow = type.low.tag === "unbounded" ||
@@ -501,6 +518,7 @@ export const PRIMITIVE_VALUES: ReadonlyMap<string, Value> = new Map<
   // Four lanes are not an interval, so this is the one type value with no parts
   // rather than a range that would never be asked about its bounds.
   ["@type.f32x4", { tag: "opaque-type", name: F32X4_NAME }],
+  ["@type.f32x4_mask", { tag: "opaque-type", name: F32X4_MASK_NAME }],
   // Always open at both ends. A float bound would have to be a real number and
   // nothing in the lattice could use one, so `Float` is the only float type
   // there is.
@@ -1094,6 +1112,63 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
         (a, b) => a / b,
       ),
   }],
+  ["@f32x4.eq", {
+    arity: 2,
+    run: ([left, right], span) => {
+      const leftLanes = vectorOf(left, span, "@f32x4.eq");
+      const rightLanes = vectorOf(right, span, "@f32x4.eq");
+      return {
+        tag: "vector-mask",
+        lanes: leftLanes.map((lane, index) => lane === rightLanes[index]),
+      };
+    },
+  }],
+  ["@f32x4.less", {
+    arity: 2,
+    run: ([left, right], span) => {
+      const leftLanes = vectorOf(left, span, "@f32x4.less");
+      const rightLanes = vectorOf(right, span, "@f32x4.less");
+      return {
+        tag: "vector-mask",
+        lanes: leftLanes.map((lane, index) => lane < rightLanes[index]),
+      };
+    },
+  }],
+  ["@f32x4.select", {
+    arity: 3,
+    run: ([mask, whenTrue, whenFalse], span) => {
+      const lanes = vectorMaskOf(mask, span, "@f32x4.select");
+      const trueLanes = vectorOf(whenTrue, span, "@f32x4.select");
+      const falseLanes = vectorOf(whenFalse, span, "@f32x4.select");
+      return {
+        tag: "vector",
+        lanes: lanes.map((selected, index) =>
+          selected ? trueLanes[index] : falseLanes[index]
+        ),
+      };
+    },
+  }],
+  ["@f32x4.shuffle", {
+    arity: 6,
+    run: ([left, right, ...selectors], span) => {
+      const lanes = [
+        ...vectorOf(left, span, "@f32x4.shuffle"),
+        ...vectorOf(right, span, "@f32x4.shuffle"),
+      ];
+      return {
+        tag: "vector",
+        lanes: selectors.map((selector) => {
+          const lane = Number(intOf(selector, span, "@f32x4.shuffle"));
+          if (lane >= 0 && lane < lanes.length) return lanes[lane];
+          fail(
+            "BLOT_TYPE",
+            `@f32x4.shuffle expects lane selectors within 0..7, found ${lane}.`,
+            span,
+          );
+        }),
+      };
+    },
+  }],
   // Four named lane reads rather than one taking an index, because the target
   // has four instructions and no way to pick between them at run time.
   // A horizontal sum. Every other operation here is lane-wise, so this is the
@@ -1127,6 +1202,9 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     arity: 1,
     run: ([v], s) => ({ tag: "float32", value: vectorOf(v, s, "@f32x4.w")[3] }),
   }],
+
+  ["@branch.likely", { arity: 1, run: ([condition]) => condition }],
+  ["@branch.unlikely", { arity: 1, run: ([condition]) => condition }],
 
   ["@panic", {
     arity: 1,

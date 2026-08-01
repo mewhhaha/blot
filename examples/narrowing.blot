@@ -7,12 +7,12 @@
 
 open {} = (@import "blot:prelude") ();
 
-let unwrap_or = m => case m of
+let unwrap_or = fn m => case m of
   #Some inner => inner,
   _ => "none"
 end;
 
-let shout = m => do
+let shout = fn m => do
   if let #Some inner = m else do
     return "none";
   end;

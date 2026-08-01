@@ -28,6 +28,7 @@ import {
   type HostCapabilityDeclaration,
   type HostDefinitionBinding,
   HostTypes,
+  MASK32X4_TYPE_NAME,
   NumericConversion,
   storeType,
   surface,
@@ -55,10 +56,16 @@ import {
   type Shape,
   type VariantCase,
 } from "../check/infer.ts";
-import { type Domain, F32X4, type SimpleType } from "../check/type.ts";
+import {
+  type Domain,
+  F32X4,
+  F32X4_MASK,
+  type SimpleType,
+} from "../check/type.ts";
 import {
   childEnv,
   type Env as ValueEnv,
+  F32X4_MASK_NAME,
   F32X4_NAME,
   lookup as lookupValue,
   type Value,
@@ -529,6 +536,12 @@ const VECTOR_SCHEMA: TypeSchema = {
   arguments: [],
 };
 
+const VECTOR_MASK_SCHEMA: TypeSchema = {
+  kind: "named",
+  name: MASK32X4_TYPE_NAME,
+  arguments: [],
+};
+
 /**
  * What an opaque type says at the module boundary.
  *
@@ -541,6 +554,7 @@ const VECTOR_SCHEMA: TypeSchema = {
  */
 function opaqueSchema(name: string): TypeSchema | null {
   if (name === F32X4_NAME) return VECTOR_SCHEMA;
+  if (name === F32X4_MASK_NAME) return VECTOR_MASK_SCHEMA;
   return null;
 }
 
@@ -1003,6 +1017,8 @@ function bridgeRuntimeValue(value: Value): SimpleType | null {
       return { tag: "range", domain: "float32", low: null, high: null };
     case "vector":
       return F32X4;
+    case "vector-mask":
+      return F32X4_MASK;
     // Deliberately absent: `opaque-type`. This maps a runtime value to its
     // type, and a type value has none to give — saying `F32x4` here would
     // claim the type of the type `F32x4` is `F32x4`. Every other type-shaped
@@ -2094,10 +2110,32 @@ function lower(
         : lower(expr.fallback, scope, lowering);
       for (let index = expr.branches.length - 1; index >= 0; index -= 1) {
         const branch = expr.branches[index];
+        const conditionSpine = flatten(branch.condition);
+        let branchPrimitive = conditionSpine.callee.tag === "intrinsic"
+          ? conditionSpine.callee.name
+          : undefined;
+        if (conditionSpine.callee.tag === "var") {
+          const value = lookupValue(scope.values, conditionSpine.callee.name);
+          const expanded = value === undefined
+            ? null
+            : etaExpandedPrimitive(value, conditionSpine.args);
+          branchPrimitive = expanded?.primitive;
+        }
+        const likelihood = conditionSpine.args.length === 1 &&
+            (branchPrimitive === "@branch.likely" ||
+              branchPrimitive === "@branch.unlikely")
+          ? branchPrimitive === "@branch.likely"
+            ? "consequent" as const
+            : "alternate" as const
+          : undefined;
+        const condition = likelihood === undefined
+          ? branch.condition
+          : conditionSpine.args[0];
         result = at.if(
-          lower(branch.condition, scope, lowering),
+          lower(condition, scope, lowering),
           lower(branch.consequence, scope, lowering),
           result,
+          likelihood === undefined ? undefined : { likely: likelihood },
         );
       }
       return result;
@@ -2271,6 +2309,12 @@ function lowerCase(
   at: typeof surface,
 ): SurfaceExpression {
   if (controlCase(expr)) return lowerControlCase(expr, scope, lowering, at);
+  // A tuple scrutinee pins no variant — the tuple is the dispatch, and its
+  // elements are what the arms discriminate on — so the arms decide this
+  // before anything asks inference for a constructor set.
+  if (expr.arms.some((arm) => arm.pattern.tag === "tuple")) {
+    return lowerTupleCase(expr, scope, lowering, at);
+  }
   // The constructor set inference pinned, or — when a wildcard arm left it
   // open — the union the named arms belong to. Recovering it from the arms is
   // what avoids monomorphizing: gpufuck keeps Core polymorphic on measured
@@ -2494,6 +2538,255 @@ function unionFromArms(
 }
 
 /**
+ * The binders a tuple of a given width comes apart into.
+ *
+ * A nominal's field order is the order the module first met that shape, and
+ * that need not be positional: `pair.1` before `pair.0` records `["1", "0"]`
+ * for the same type. Reading a column back by name rather than by its place in
+ * the binder list is what keeps a pattern from matching the wrong element.
+ */
+function tupleColumns(width: number, lowering: Lowering): {
+  readonly nominal: Nominal;
+  readonly binders: readonly string[];
+  readonly column: (index: number) => string;
+} {
+  const nominal = lowering.nominal(
+    Array.from({ length: width }, (_, index) => String(index)),
+  );
+  const binders = nominal.fields.map((field) =>
+    lowering.fresh(`element${field}`)
+  );
+  return {
+    nominal,
+    binders,
+    column: (index) => {
+      const position = nominal.fields.indexOf(String(index));
+      const binder = binders[position];
+      if (binder === undefined) {
+        throw new Error(`${nominal.name} has no field ${index}`);
+      }
+      return binder;
+    },
+  };
+}
+
+/**
+ * `case` over a tuple, which is a pattern matrix one column per element.
+ *
+ * The scrutinee is bound and taken apart once, and the arms are then tried in
+ * source order: each tests its sub-patterns left to right and falls to the next
+ * arm as soon as one of them fails. The fall-through is a join point rather
+ * than a copy of the arms that follow, because a copy per test is exponential
+ * in the width — four arms of four elements would emit the last one's body two
+ * hundred and fifty-six times.
+ */
+function lowerTupleCase(
+  expr: Expr & { tag: "case" },
+  scope: Scope,
+  lowering: Lowering,
+  at: typeof surface,
+): SurfaceExpression {
+  let width: number | null = null;
+  for (const arm of expr.arms) {
+    if (arm.pattern.tag !== "tuple") continue;
+    // Two widths would be two scrutinee types. A tuple of a different arity is
+    // a different type rather than a wider one, so inference cannot have let
+    // this through.
+    if (width !== null && width !== arm.pattern.elements.length) {
+      throw new Error("a `case` matches tuples of two different widths");
+    }
+    width = arm.pattern.elements.length;
+  }
+  if (width === null) throw new Error("a tuple `case` with no tuple arm");
+
+  const target = lower(expr.target, scope, lowering);
+  const subject = lowering.fresh("subject");
+  const columns = tupleColumns(width, lowering);
+
+  let fallback: SurfaceExpression | null = null;
+  const rows: { readonly next: string; readonly body: SurfaceExpression }[] =
+    [];
+  for (const arm of expr.arms) {
+    const inner = childScope(scope);
+    if (arm.pattern.tag === "wildcard" || arm.pattern.tag === "name") {
+      if (arm.pattern.tag === "name") {
+        inner.names.set(arm.pattern.name, subject);
+      }
+      // An arm that cannot fail ends the matrix. Every arm after it is
+      // unreachable, and emitting one would put a test in front of the arm
+      // that was written to catch everything.
+      fallback = lower(arm.body, inner, lowering);
+      break;
+    }
+    if (arm.pattern.tag !== "tuple") {
+      return unsupported(
+        `a ${arm.pattern.tag} pattern over a tuple`,
+        arm.pattern.span,
+      );
+    }
+    const next = lowering.fresh("next");
+    const fail = () => at.jump(next, at.name(UNIT_CONSTRUCTOR_NAME));
+    // The tests come first because they are what binds the arm's names, and
+    // the body is lowered in the scope they leave behind.
+    const tests = arm.pattern.elements.map((element, index) =>
+      matchElement(
+        element,
+        at.name(columns.column(index)),
+        inner,
+        lowering,
+        fail,
+      )
+    );
+    let body = lower(arm.body, inner, lowering);
+    for (let index = tests.length - 1; index >= 0; index -= 1) {
+      body = tests[index](body);
+    }
+    rows.push({ next, body });
+  }
+
+  // Everywhere else an arm-less tail is a path the checker proved cannot be
+  // taken, because exhaustiveness is a checked error. Coverage does not yet
+  // look inside a tuple pattern, so here it is a path that can be reached —
+  // `(#Some a, #Some b)` alone is accepted today and traps on `(#Some a,
+  // #None)`. Lowering cannot decide it either: `(#Some a, #Some b)`, `(#None,
+  // _)`, `(_, #None)` covers the same scrutinee with no wildcard in sight.
+  let matrix = fallback ?? at.unreachable("no arm matched");
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index];
+    matrix = at.join(row.next, lowering.fresh("unmatched"), row.body, matrix);
+  }
+  return surface.let(
+    subject,
+    target,
+    at.case(at.name(subject), [{
+      constructor: columns.nominal.name,
+      binders: [...columns.binders],
+      body: matrix,
+    }]),
+  );
+}
+
+/**
+ * One sub-pattern of a tuple arm, against the element the scrutinee was already
+ * taken apart into.
+ *
+ * `bind` is this without a fall-through: a binding has no next arm, so it
+ * faults where a pattern does not match, and that difference is the whole of
+ * it. The value handed in is always a binder's name, which is why a sub-pattern
+ * that tests nothing can drop it instead of keeping an evaluation alive.
+ */
+function matchElement(
+  pattern: Pattern,
+  value: SurfaceExpression,
+  scope: Scope,
+  lowering: Lowering,
+  fail: () => SurfaceExpression,
+): (body: SurfaceExpression) => SurfaceExpression {
+  const at = surface.at({
+    startByte: pattern.span.start,
+    endByte: pattern.span.end,
+  });
+
+  if (pattern.tag === "wildcard" || pattern.tag === "unit") {
+    return (body) => body;
+  }
+
+  if (pattern.tag === "name") {
+    const name = lowering.fresh(pattern.name);
+    scope.names.set(pattern.name, name);
+    return (body) => surface.let(name, value, body);
+  }
+
+  if (
+    pattern.tag === "int" || pattern.tag === "text" || pattern.tag === "float"
+  ) {
+    let literal: SurfaceExpression;
+    let operator: BinaryOperator = BinaryOperator.Equal;
+    if (pattern.tag === "int") {
+      literal = at.signedInteger64(pattern.value);
+      operator = BinaryOperator.EqualSignedInteger64;
+    } else if (pattern.tag === "float") {
+      literal = at.float64(pattern.value);
+      operator = BinaryOperator.EqualFloat64;
+    } else {
+      literal = at.text(pattern.value);
+    }
+    return (body) => at.if(at.binary(operator, value, literal), body, fail());
+  }
+
+  if (pattern.tag === "constructor") {
+    // `#True` and `#False` are Core's own boolean, so the element holds one
+    // rather than a tagged value with a constructor to strip.
+    if (pattern.payload === null) {
+      if (pattern.name === "True") {
+        return (body) => at.if(value, body, fail());
+      }
+      if (pattern.name === "False") {
+        return (body) => at.if(value, fail(), body);
+      }
+    }
+    const sum = lowering.sumFor(
+      pattern.name,
+      pattern.payload !== null,
+      pattern.span,
+    );
+    const constructor = constructorName(sum, pattern.name);
+    const payload = pattern.payload;
+    if (payload === null) {
+      return (body) =>
+        at.case(value, [{ constructor, binders: [], body }], {
+          body: fail(),
+        });
+    }
+    const binder = lowering.fresh("payload");
+    const nested = matchElement(
+      payload,
+      at.name(binder),
+      scope,
+      lowering,
+      fail,
+    );
+    return (body) =>
+      at.case(value, [{ constructor, binders: [binder], body: nested(body) }], {
+        body: fail(),
+      });
+  }
+
+  if (pattern.tag === "tuple") {
+    const columns = tupleColumns(pattern.elements.length, lowering);
+    const nested = pattern.elements.map((element, index) =>
+      matchElement(
+        element,
+        at.name(columns.column(index)),
+        scope,
+        lowering,
+        fail,
+      )
+    );
+    return (body) => {
+      let inner = body;
+      for (let index = nested.length - 1; index >= 0; index -= 1) {
+        inner = nested[index](inner);
+      }
+      return at.case(value, [{
+        constructor: columns.nominal.name,
+        binders: [...columns.binders],
+        body: inner,
+      }]);
+    };
+  }
+
+  // A shape pattern names fewer fields than the value carries, and inference
+  // records what a value carries only where a binding destructures it — so
+  // there is nothing here to name the record's Core type with. An array
+  // pattern would need a length test coverage does not account for.
+  return unsupported(
+    `a ${pattern.tag} pattern inside a tuple pattern`,
+    pattern.span,
+  );
+}
+
+/**
  * `case` over literals, which is a chain of equality tests.
  *
  * A union dispatches on its constructor; an integer or a text has nothing to
@@ -2667,6 +2960,14 @@ function lowerValue(
         at.float32(value.lanes[1]),
         at.float32(value.lanes[2]),
         at.float32(value.lanes[3]),
+      ]);
+    case "vector-mask":
+      lowering.vectors = true;
+      return f32x4.makeMask([
+        at.boolean(value.lanes[0]),
+        at.boolean(value.lanes[1]),
+        at.boolean(value.lanes[2]),
+        at.boolean(value.lanes[3]),
       ]);
     case "text":
       return at.text(value.value);
@@ -2956,19 +3257,16 @@ function lowerIntegerBinary(
  * The primitive a compile-time closure is an eta-expansion of, if it is one.
  *
  * The prelude spells its operations as closures over primitives —
- * `Vec4.add = left => (right => @f32x4.add left right)` — because a primitive
+ * `Vec4.add = fn left => fn right => @f32x4.add left right` — because a primitive
  * is not a value a module can put in a record. Lowering hoists such a closure
  * into a definition and calls it, which is right for a closure that does
  * something, and pure overhead for one that does nothing but pass its
  * arguments along in order.
  *
- * It is not only overhead. gpufuck decides whether a four-lane vector can live
- * in a register by looking at the *shape* of the Core it is given: an inline
- * `$F32x4Splat` is a vector it can keep, and a call to a definition that
- * happens to return one is not. So a chain written with `Vec4` boxed every
- * intermediate into a heap record while the identical chain written with
- * `@f32x4` stayed native — seven splats, thirteen extracts and twenty-one lane
- * replacements against one, one and three.
+ * gpufuck now carries provable vectors through strict let bindings and native
+ * workers, but the proof still begins with the Core shape it receives. Leaving
+ * a pass-through wrapper in front of the primitive hides that shape at the
+ * immediate use and creates a call that serves no source-level behavior.
  *
  * Recognising the eta-expansion costs nothing and terminates by construction:
  * the body must be one primitive application whose arguments are exactly the
@@ -3263,6 +3561,8 @@ function lowerApply(
       ["@f32x4.sub", f32x4.subtract],
       ["@f32x4.mul", f32x4.multiply],
       ["@f32x4.div", f32x4.divide],
+      ["@f32x4.eq", f32x4.equal],
+      ["@f32x4.less", f32x4.less],
     ]);
     const vectorOp = VECTOR.get(spine.callee.name);
     if (vectorOp !== undefined && spine.args.length === 2) {
@@ -3270,6 +3570,39 @@ function lowerApply(
       return vectorOp(
         lower(spine.args[0], scope, lowering),
         lower(spine.args[1], scope, lowering),
+      );
+    }
+    if (spine.callee.name === "@f32x4.select" && spine.args.length === 3) {
+      lowering.vectors = true;
+      return f32x4.select(
+        lower(spine.args[0], scope, lowering),
+        lower(spine.args[1], scope, lowering),
+        lower(spine.args[2], scope, lowering),
+      );
+    }
+    if (spine.callee.name === "@f32x4.shuffle" && spine.args.length === 6) {
+      const lanes = spine.args.slice(2).map((selector) => {
+        const known = selector.tag === "int"
+          ? selector
+          : lowering.facts.comptimeValues.get(selector);
+        return known?.tag === "int" ? Number(known.value) : undefined;
+      });
+      if (
+        lanes.some((lane) =>
+          lane === undefined || !Number.isSafeInteger(lane) || lane < 0 ||
+          lane > 7
+        )
+      ) {
+        return unsupported(
+          "an F32x4 shuffle without four constant lanes in 0..7",
+          expr.span,
+        );
+      }
+      lowering.vectors = true;
+      return f32x4.shuffle(
+        lower(spine.args[0], scope, lowering),
+        lower(spine.args[1], scope, lowering),
+        lanes as [number, number, number, number],
       );
     }
     if (spine.callee.name === "@f32.is_nan" && spine.args.length === 1) {

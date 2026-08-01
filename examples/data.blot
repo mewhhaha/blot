@@ -27,7 +27,7 @@ let values = [1, 2, 3];
 let [one, two, three] = values;
 let extended = [0, ...values, 4];
 
-let describe = m => case m of
+let describe = fn m => case m of
   #Ready => "ready",
   #Progress 0 => "idle",
   #Progress n => "working",
@@ -35,14 +35,14 @@ let describe = m => case m of
 end;
 
 // Literals are singleton types, so matching one narrows the union branch.
-let classify = value => case value of
+let classify = fn value => case value of
   -1 => "negative one",
   0 => "zero",
   1 => "one",
   _ => "other"
 end;
 
-let nested_match = value => case value of
+let nested_match = fn value => case value of
   #Progress (a, b) => a,
   #Progress n => n,
   _ => 0
@@ -62,7 +62,7 @@ return {
   .one = one;
   .three = three;
   .extended = extended;
-  .doubled = map (values, (v => @int.mul v 2));
+  .doubled = map (values, (fn v => @int.mul v 2));
   .ready = describe #Ready;
   .idle = describe (#Progress 0);
   .working = describe (#Progress 7);

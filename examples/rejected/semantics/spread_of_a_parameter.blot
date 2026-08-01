@@ -11,7 +11,7 @@
 
 open {} = (@import "blot:prelude") ();
 
-let tagging = r => { ...r; .tag = 1; };
+let tagging = fn r => { ...r; .tag = 1; };
 
 let tagged = tagging { .x = 1; };
 

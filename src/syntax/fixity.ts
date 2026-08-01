@@ -138,13 +138,14 @@ export function foldChain(
   const lookup = (step: ChainStep): Fixity => {
     const fixity = table.infix(step.operator);
     if (fixity === undefined) {
-      // `=>` reaching the fixity table means a lambda appeared where the
-      // grammar could not admit one. Every character of `=>` is in the operator
-      // class, so it lexes as an ordinary operator and lands here.
+      // `=>` reaching the fixity table means a lambda was written without its
+      // keyword. Every character of `=>` is in the operator class, so it lexes
+      // as an ordinary operator and the chain lands here rather than failing to
+      // parse.
       if (step.operator === "=>") {
         fail(
-          "BLOT_UNPARENTHESIZED_LAMBDA",
-          "A lambda body is an expression, not another lambda. Parenthesize the inner one: `a => (b => ...)`.",
+          "BLOT_LAMBDA_WITHOUT_FN",
+          "A lambda is written `fn pattern => body`.",
           step.span,
         );
       }

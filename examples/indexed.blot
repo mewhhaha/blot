@@ -20,20 +20,20 @@
 open {} = (@import "blot:prelude") ();
 
 sig at = [Int] -> Int -> Int;
-let at = xs => (n =>
+let at = fn xs => fn n =>
   if n >= 0
   then (if n < @array.len xs then @array.get xs n else 0 end)
   else 0
-  end);
+  end;
 
 // The same proof serves a write: `@array.set` takes the index `@array.get`
 // takes, and asks the same question of it.
 sig clear = [Int] -> Int -> [Int];
-let clear = xs => (n =>
+let clear = fn xs => fn n =>
   if n >= 0
   then (if n < @array.len xs then @array.set xs n 0 else xs end)
   else xs
-  end);
+  end;
 
 let values = [10, 20, 30];
 

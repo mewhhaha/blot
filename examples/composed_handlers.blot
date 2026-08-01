@@ -8,20 +8,20 @@ const Terminal = @effect { .read = Unit -> Int; };
 const Clock = @effect { .now = Unit -> Int; };
 const Random = @effect { .add = Int -> Int; };
 
-let program = () => do
+let program = fn () => do
   input <- Terminal.read;
   time <- Clock.now;
   in Random.add (input + time)
 end;
 
 let fake_terminal = {
-  .read = ((), ?resume) => resume 10;
+  .read = fn ((), ?resume) => resume 10;
 };
 let fake_clock = {
-  .now = ((), ?resume) => resume 20;
+  .now = fn ((), ?resume) => resume 20;
 };
 let fake_random = {
-  .add = (value, ?resume) => resume (value + 12);
+  .add = fn (value, ?resume) => resume (value + 12);
 };
 
 let result = try program then do

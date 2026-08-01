@@ -31,6 +31,7 @@ export type Value =
    * to f32, so the interpreter holds what one SIMD register holds.
    */
   | { readonly tag: "vector"; readonly lanes: readonly number[] }
+  | { readonly tag: "vector-mask"; readonly lanes: readonly boolean[] }
   /**
    * A type with no parts to take apart. `F32x4` is the only one.
    *
@@ -169,6 +170,7 @@ export type Value =
  * readers is how a name drifts, so there is one string.
  */
 export const F32X4_NAME = "F32x4";
+export const F32X4_MASK_NAME = "F32x4Mask";
 
 export const UNIT: Value = { tag: "unit" };
 export const TRUE: Value = { tag: "tag", name: "True", payload: null };
@@ -221,6 +223,11 @@ export function show(value: Value): string {
       Number.isInteger(lane) ? `${lane}.0` : String(lane)
     );
     return `<${lanes.join(" ")}>`;
+  }
+  if (value.tag === "vector-mask") {
+    return `<${
+      value.lanes.map((lane) => lane ? "#True" : "#False").join(" ")
+    }>`;
   }
   if (value.tag === "float32") {
     const shown = Number.isInteger(value.value)
@@ -327,6 +334,9 @@ export function equal(left: Value, right: Value): boolean {
     return left.lanes.every((lane, index) =>
       Object.is(lane, right.lanes[index])
     );
+  }
+  if (left.tag === "vector-mask" && right.tag === "vector-mask") {
+    return left.lanes.every((lane, index) => lane === right.lanes[index]);
   }
   if (left.tag === "float32" && right.tag === "float32") {
     return Object.is(left.value, right.value);

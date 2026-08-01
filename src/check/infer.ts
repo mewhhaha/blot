@@ -17,12 +17,7 @@
 import type { Decl, Expr, Module, Pattern, Span } from "../syntax/ast.ts";
 import { BlotError, fail } from "../diagnostic.ts";
 import type { Env as ValueEnv } from "../comptime/value.ts";
-import {
-  childEnv,
-  lookup as lookupValue,
-  show,
-  type Value,
-} from "../comptime/value.ts";
+import { childEnv, show, type Value } from "../comptime/value.ts";
 import {
   bind,
   evaluate,
@@ -123,6 +118,25 @@ interface TypeEnv {
    * scope.
    */
   readonly bindings: Map<string, { id: number; typing: Typing }>;
+  /**
+   * The value a binding holds, when typing it required the checker to compute
+   * one, paired with the `Typing` installed beside it.
+   *
+   * A declaration records what `inferMemberApplication` computed, and
+   * `foldedEnv` is the only reader: typing a call to a member means running it,
+   * and a call whose argument is one of these bindings needs its value to run
+   * at all. The value is the one the program will hold — evaluation is
+   * deterministic, an effect performed at compile time fails rather than
+   * happens, and blot has no assignment for the two runs to disagree about —
+   * but it is deliberately kept out of `comptime` and out of `context.values`,
+   * because a `let` is still a runtime binding and a `const` that captured it
+   * would still be a phase error.
+   *
+   * The `Typing` pairing is the discipline `comptime` uses, for the same
+   * reason: a name rebound to something the checker cannot compute must answer
+   * nothing rather than answer with the value it used to hold.
+   */
+  readonly folded: Map<string, { value: Value; typing: Typing }>;
   readonly parent: TypeEnv | null;
 }
 
@@ -133,6 +147,7 @@ function childTypeEnv(parent: TypeEnv | null): TypeEnv {
     comptime: new Map(),
     arrayLengths: new Map(),
     bindings: new Map(),
+    folded: new Map(),
     parent,
   };
 }
@@ -199,6 +214,37 @@ function lookupComptime(env: TypeEnv, name: string): Value | null {
   return null;
 }
 
+/** Pairs a computed value with the `Typing` installed beside it. */
+function recordFolded(scope: TypeEnv, name: string, value: Value): void {
+  const typing = scope.names.get(name);
+  if (typing === undefined) return;
+  scope.folded.set(name, { value, typing });
+}
+
+/**
+ * The evaluation environment a member call runs in: the compile-time bindings,
+ * plus the ones whose values the checker computed while typing an earlier call.
+ *
+ * Built outermost first, so an inner scope's binding shadows an outer one the
+ * way it does everywhere else.
+ */
+function foldedEnv(context: Context): ValueEnv {
+  const scopes: TypeEnv[] = [];
+  let scope: TypeEnv | null = context.types;
+  while (scope !== null) {
+    scopes.unshift(scope);
+    scope = scope.parent;
+  }
+  const env = childEnv(context.values);
+  for (const each of scopes) {
+    for (const [name, found] of each.folded) {
+      if (found.typing !== lookupType(context.types, name)) continue;
+      env.names.set(name, found.value);
+    }
+  }
+  return env;
+}
+
 /** Pairs a name's compile-time value with the `Typing` installed beside it. */
 function recordComptimeBinding(
   scope: TypeEnv,
@@ -259,6 +305,14 @@ interface Context {
   readonly shapes: Map<Expr, Shape>;
   /** Compile-time declaration values, keyed by their source expression. */
   readonly comptimeValues: Map<Expr, Value>;
+  /**
+   * What a member call produced while being typed, keyed by the call.
+   *
+   * Read only where a declaration turns it into a `folded` binding. Separate
+   * from `comptimeValues` because that map is the backend's record of which
+   * declarations are compile-time, and a member call in a `let` is not one.
+   */
+  readonly memberValues: Map<Expr, Value>;
   /** Facts read after checking, once every constraint has been seen. */
   readonly pending: (() => void)[];
   /** Instantiation copies, for the shape facts; see `Instances`. */
@@ -293,12 +347,16 @@ function located<T>(span: Span, work: () => T): T {
  * without running the program. A `sig` that depends on a runtime value is a
  * diagnostic elsewhere, not a reason to guess here.
  */
-function comptime(expr: Expr, context: Context): ReturnType<typeof run> | null {
+function comptime(
+  expr: Expr,
+  context: Context,
+  values: ValueEnv = context.values,
+): ReturnType<typeof run> | null {
   try {
     return run(
       evaluate(
         expr,
-        context.values,
+        values,
         evaluationRuntime(context.imports, "comptime"),
       ),
     );
@@ -434,6 +492,9 @@ export function infer(
       const special = inferSpecial(expr, context, level, row);
       if (special !== null) return special;
 
+      const applied = inferMemberApplication(expr, context, level, row);
+      if (applied !== null) return applied;
+
       const fnType = infer(expr.fn, context, level, row);
       const argType = infer(expr.arg, context, level, row);
       const result = freshVar(level);
@@ -448,18 +509,21 @@ export function infer(
       // does not describe it: `Point` bridges to its storage, so `.new` is not
       // a field of the type and asking for one would be a false error. When
       // the target is a name bound to such a value and the name is a member,
-      // the member decides. A member that is a closure has no type to read off
-      // the value, so this stays silent rather than guessing.
-      if (expr.target.tag === "var") {
-        const bound = lookupValue(context.values, expr.target.name);
-        if (bound !== undefined && bound.tag === "extended") {
-          const member = bound.members.get(expr.name);
-          if (member !== undefined) {
-            const bridged = bridge(member);
-            if (bridged === null) return freshVar(level);
-            return bridged;
-          }
-        }
+      // the member decides.
+      const member = memberOf(expr, context);
+      if (member !== null) {
+        const bridged = bridge(member);
+        if (bridged !== null) return bridged;
+        // A member that is a function has no type to read off the value, and no
+        // scope to infer one in either — a closure captures values, not
+        // typings, and `struct`'s accessors name their field by computing a
+        // string, so there is no arrow in the body to find. `⊤` is what the
+        // checker knows about the member: nothing. A variable would be the
+        // opposite claim, because every constraint on it is satisfiable and a
+        // `sig` naming any type at all would then be believed without being
+        // checked. `inferMemberApplication` is where a call to one of these
+        // still gets a type.
+        return TOP;
       }
       const target = infer(expr.target, context, level, row);
       const result = freshVar(level);
@@ -815,6 +879,71 @@ function inferSpecial(
   }
 
   return null;
+}
+
+/**
+ * The compile-time member a projection names, when its target is a name bound to
+ * a type value carrying a namespace.
+ *
+ * Through `lookupComptime` rather than through the value environment, so a
+ * runtime shadow of the name is declined instead of read as the compile-time
+ * one. `let Point = { .new = fn r => r; };` after `const Point = struct ...;`
+ * installs a fresh `Typing`, and answering with `struct`'s `.new` there would
+ * prove facts about a function the program never calls.
+ */
+function memberOf(
+  expr: Expr & { tag: "field" },
+  context: Context,
+): Value | null {
+  if (expr.target.tag !== "var") return null;
+  const bound = lookupComptime(context.types, expr.target.name);
+  if (bound === null || bound.tag !== "extended") return null;
+  const member = bound.members.get(expr.name);
+  if (member === undefined) return null;
+  return member;
+}
+
+/**
+ * A call to a member that is a function.
+ *
+ * The member itself has no type — see the `field` rule — so the call is typed by
+ * *making* the value rather than by applying an arrow: a member is a
+ * compile-time value, and when the arguments are compile-time values too the
+ * whole application runs during checking and what it produces is the type. This
+ * is the rule `const` already lives by, and it is sound for the same reason —
+ * the evaluator answering here is the one that will run the program, an effect
+ * performed at compile time fails rather than happens, and blot has no
+ * assignment for the two runs to disagree about.
+ *
+ * When an argument is only known at run time there is no value to read, and `⊤`
+ * says exactly that. It is the answer that costs the feature nothing it was
+ * entitled to: `Point.x somewhere` was never given a type, only a variable that
+ * agreed with whatever was asked of it.
+ */
+function inferMemberApplication(
+  expr: Expr & { tag: "apply" },
+  context: Context,
+  level: Level,
+  row: SimpleType,
+): SimpleType | null {
+  const head = spine(expr);
+  if (head === null) return null;
+  if (head.callee.tag !== "field") return null;
+  const member = memberOf(head.callee, context);
+  if (member === null) return null;
+  // A member that bridges has a type of its own, and the ordinary application
+  // rule is both more precise and more permissive about its arguments.
+  if (bridge(member) !== null) return null;
+  // The arguments are checked whether or not the call can be evaluated. They
+  // are ordinary expressions, and the field sets the backend reads are recorded
+  // while inferring them.
+  for (const argument of head.args) infer(argument, context, level, row);
+  const value = comptime(expr, context, foldedEnv(context));
+  if (value === null) return TOP;
+  const bridged = bridge(value);
+  if (bridged === null) return TOP;
+  context.memberValues.set(expr, value);
+  return bridged;
 }
 
 interface Spine {
@@ -1756,6 +1885,13 @@ function inferDeclarations(
       // an array of unknown size, and the literal it was declared with says
       // nothing about it. A rebinding to another literal records that one.
       context.types.arrayLengths.delete(declaration.name);
+      // And the computed value, which is a fact about the value the name held
+      // rather than about the name.
+      context.types.folded.delete(declaration.name);
+      const computed = context.memberValues.get(declaration.value);
+      if (computed !== undefined) {
+        recordFolded(context.types, declaration.name, computed);
+      }
       if (named !== null) {
         recordComptimeBinding(context.types, declaration.name, named);
       }
@@ -1876,6 +2012,17 @@ function inferDeclarations(
     bindDeclaration(declaration.pattern, type, context, level);
     if (bound !== null && declaration.pattern.tag === "name") {
       recordComptimeBinding(context.types, declaration.pattern.name, bound);
+    }
+    // A member call the checker had to run to type it is a value the name now
+    // holds, and the next member call may need it as an argument. `sig` widening
+    // the binding's type does not take the value back: which value a name holds
+    // and which type it was declared at are separate facts, exactly as they are
+    // for a `const`.
+    if (declaration.pattern.tag === "name") {
+      const computed = context.memberValues.get(declaration.value);
+      if (computed !== undefined) {
+        recordFolded(context.types, declaration.pattern.name, computed);
+      }
     }
     if (
       declaration.pattern.tag === "name" &&
@@ -2208,6 +2355,7 @@ export function checkModule(
   const grants = new Map<Expr, GrantSignature>();
   const opens = new Map<Expr, ReadonlyMap<string, Value>>();
   const comptimeValues = new Map<Expr, Value>();
+  const memberValues = new Map<Expr, Value>();
   const pending: (() => void)[] = [];
   // Bounded by this call: the map dies with the check that built it, so the
   // process-global primitive schemes accumulate nothing across files.
@@ -2215,6 +2363,7 @@ export function checkModule(
   const context: Context = {
     opens,
     comptimeValues,
+    memberValues,
     instances,
     shapes,
     variants,

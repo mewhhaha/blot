@@ -18,7 +18,7 @@
 // keeping ownership and linearity out of the lattice entirely.
 
 import { expect } from "../diagnostic.ts";
-import { F32X4_NAME } from "../comptime/value.ts";
+import { F32X4_MASK_NAME, F32X4_NAME } from "../comptime/value.ts";
 
 export type Level = number;
 
@@ -45,8 +45,8 @@ export type Level = number;
  *
  * The two cheaper keys are unsound, each with a program that shows it:
  *
- *   * By name. `let measure = vs => @array.len vs; let read = vs => (i =>
- *     @array.get vs i);` — two lambdas, two different arrays, one name. A
+ *   * By name. `let measure = fn vs => @array.len vs; let read = fn vs => fn i =>
+ *     @array.get vs i;` — two lambdas, two different arrays, one name. A
  *     measurement of the first would license a read of the second.
  *   * By type variable. `@array.push`'s scheme builds parameter and result from
  *     the same `element` object (primitives.ts), so `let bigger = @array.push
@@ -240,6 +240,7 @@ export const FLOAT32: SimpleType = {
  * and nothing else.
  */
 export const F32X4: SimpleType = { tag: "opaque", name: F32X4_NAME };
+export const F32X4_MASK: SimpleType = { tag: "opaque", name: F32X4_MASK_NAME };
 
 export function fun(
   param: SimpleType,

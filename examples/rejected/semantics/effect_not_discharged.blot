@@ -7,9 +7,9 @@ open {} = (@import "blot:prelude") ();
 const Console = @effect { .write = Str -> Unit; };
 const Clock = @effect { .now = Unit -> Int; };
 
-let logging = { .write = (m, ?resume) => resume (); .return = v => v; };
+let logging = { .write = fn (m, ?resume) => resume (); .return = fn v => v; };
 
-let stamped = () => do
+let stamped = fn () => do
   let _ = Console.write "start";
   in Clock.now ()
 end;

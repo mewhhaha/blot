@@ -7,10 +7,10 @@
 //
 // This is the other half. Every vector below descends from a block the
 // compiler cannot run, so nothing may fold it away and the whole chain has to
-// survive to `f32x4.add`, `f32x4.sub`, `f32x4.mul`, `f32x4.div`, the extracts,
-// and the horizontal sum. `backend.test.ts` compiles this file and reads those
-// opcodes back out of the bytes, which is the only thing that distinguishes an
-// emitted instruction from an answer the evaluator already knew.
+// survive to the arithmetic, comparison, select, shuffle, extracts, and
+// horizontal sum. `backend.test.ts` compiles this file and reads those opcodes
+// back out of the bytes, which is the only thing that distinguishes an emitted
+// instruction from an answer the evaluator already knew.
 
 open {} = (@import "blot:prelude") ();
 
@@ -23,8 +23,21 @@ const Console = @effect.host {
 // the four lanes it gathers become a value the running program builds. The
 // same `Vec4.of` written at the top level would be a constant vector before
 // the backend saw a lane, and so would everything computed from it.
-sig sample = F32x4;
-let sample = do
+// Four lane-wise operations, chained. Each one consumes the register the last
+// one produced, so a vector is never rebuilt in between — that is the property
+// the opcode assertions are really about, and a chain is the only way to state
+// it in a program.
+sig normalize = F32x4 -> F32x4;
+let normalize = fn input => do
+  let gain = Vec4.splat (Float32.of_int 10);
+  let biased = Vec4.add input gain;
+  let scaled = Vec4.mul biased gain;
+  let centered = Vec4.sub scaled gain;
+  in Vec4.div centered (Vec4.splat (Float32.of_int 2))
+end;
+
+sig normalized = F32x4;
+let normalized = normalize (do
   let _ = Console.write "sampling";
   in Vec4.of (
     Float32.of_int 1,
@@ -32,37 +45,28 @@ let sample = do
     Float32.of_int 3,
     Float32.of_int 4
   )
-end;
+end);
 
 sig gain = F32x4;
 let gain = Vec4.splat (Float32.of_int 10);
 
-// Four lane-wise operations, chained. Each one consumes the register the last
-// one produced, so a vector is never rebuilt in between — that is the property
-// the opcode assertions are really about, and a chain is the only way to state
-// it in a program.
+sig selected = F32x4;
+let selected = Vec4.select (Vec4.less normalized gain) gain normalized;
 
-sig biased = F32x4;
-let biased = Vec4.add sample gain;
+sig exact = F32x4;
+let exact = Vec4.select (Vec4.equal selected selected) selected gain;
 
-sig scaled = F32x4;
-let scaled = Vec4.mul biased gain;
-
-sig centered = F32x4;
-let centered = Vec4.sub scaled gain;
-
-sig normalized = F32x4;
-let normalized = Vec4.div centered (Vec4.splat (Float32.of_int 2));
+sig shuffled = F32x4;
+let shuffled = Vec4.shuffle (exact, normalized, 0, 5, 2, 7);
 
 // Every intermediate lane is a whole number a single-precision float holds
 // exactly, so the interpreter, the GPU evaluator, and the emitted Wasm agree on
 // the truncations below without rounding entering into it. A disagreement here
 // is a lowering bug and never a last-bit one.
 //
-// The results are `Int` because a float cannot cross the module boundary:
-// gpufuck's canonical ABI has no float case, and an export that named `F32` or
-// `F32x4` would be refused with `BLOT_FLOAT_AT_BOUNDARY`. Converting at the
-// edge is what an export of vector arithmetic looks like.
+// Scalars may cross the canonical boundary directly. This example converts to
+// integers so its answers remain compact and obvious; `F32x4` itself stays an
+// internal register value and cannot be exported.
 return {
   .first = Float32.truncate (Vec4.x normalized);
   .second = Float32.truncate (Vec4.y normalized);
@@ -72,4 +76,5 @@ return {
   // why `sum` is a primitive where `dot` is prelude source over it.
   .total = Float32.truncate (Vec4.sum normalized);
   .energy = Float32.truncate (Vec4.dot normalized gain);
+  .shuffled = Float32.truncate (Vec4.sum shuffled);
 };

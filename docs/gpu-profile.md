@@ -13,19 +13,19 @@ deno task generate && deno task inspect
 
 ## Recorded counters
 
-Measured against baba 7.9.0. These are checked into the repository so that a
+Measured against baba 7.10.0. These are checked into the repository so that a
 grammar change which quietly degrades parallelism shows up in a diff instead of
 in a benchmark months later.
 
 | counter                    |              blot | gpu-duck | note                                               |
 | -------------------------- | ----------------: | -------: | -------------------------------------------------- |
-| `lexerStates`              |               114 |      175 | direct multiplier in the parallel DFA summary pass |
-| `maxCandidateMultiplicity` |                 6 |        9 | worst-case island candidates allocated per token   |
+| `lexerStates`              |               117 |      175 | direct multiplier in the parallel DFA summary pass |
+| `maxCandidateMultiplicity` |                 5 |        9 | worst-case island candidates allocated per token   |
 | `islandCount`              |                20 |       24 |                                                    |
-| `islandStates`             |               854 |        — |                                                    |
+| `islandStates`             |               618 |        — |                                                    |
 | `contractionRounds`        |                33 |        — | fixed dispatch bound                               |
-| `denseTransitionBytes`     |           696,864 |        — | immutable device table                             |
-| `packedBytes`              |         1,002,782 |        — | version-3 runtime section                          |
+| `denseTransitionBytes`     |           519,120 |        — | immutable device table                             |
+| `packedBytes`              |           645,289 |        — | version-3 runtime section                          |
 | `rootLoopIsland`           | 3 (`declaration`) |        — | strict root loop proven                            |
 
 blot beats the gpu-duck reference on both counters that matter most for
@@ -48,8 +48,10 @@ the design fix was to notice that both are a name, an arrow, and a value —
 with the multiplicity and contraction bounds unmoved: an `end`-terminated region
 is a shape the profile already had four of. The binder is spelled with a keyword
 and costs no _alternative_ — `for x in src` is parsed as a value and
-reclassified into a pattern once `in` follows, the same trick `lambda` uses,
-rather than as a branch the parser would have to choose from the first token.
+reclassified into a pattern once `in` follows, rather than as a branch the
+parser would have to choose from the first token. `lambda` used the same trick
+until `fn` paid for a real pattern there; `for` has no second keyword to spend
+and needs none.
 
 Removing the separate `loop` form reduced the profile by three lexer states,
 twenty-five island states, 29,784 dense-transition bytes, and 34,237 packed
@@ -80,6 +82,48 @@ bytes. Its body is a repeated semicolon-terminated handler step followed by one
 final step, so candidate multiplicity and contraction rounds remain fixed. The
 two-argument `@handle` spelling is parsed only inside this region and becomes
 the existing three-argument primitive during CST lowering.
+
+`fn` is the largest reduction the grammar has taken. Before it a lambda was
+`postfix_expression "=>" expression`, sharing its opening tokens with an
+ordinary operand so that the parser could defer the lambda-versus-expression
+decision until `=>`; after it a lambda begins with a keyword nothing else begins
+with. One lexer state bought the rest:
+
+| counter                    |    before |  lambda |   final |    delta |
+| -------------------------- | --------: | ------: | ------: | -------: |
+| `lexerStates`              |       116 |     117 |     117 |       +1 |
+| `islandCount`              |        20 |      20 |      20 |        0 |
+| `islandStates`             |       865 |     794 |     618 |     −247 |
+| `islandTransitions`        |     6,397 |   5,412 |   3,160 |   −3,237 |
+| `maxCandidateMultiplicity` |         6 |       5 |       5 |       −1 |
+| `contractionRounds`        |        33 |      33 |      33 |        0 |
+| `denseTransitionBytes`     |   716,220 | 666,960 | 519,120 | −197,100 |
+| `packedBytes`              | 1,061,229 | 943,339 | 645,289 | −415,940 |
+
+`maxCandidateMultiplicity` is the one to read: it is the worst number of island
+candidates allocated per token, and it fell because the two alternatives of
+`value` now have disjoint FIRST sets — requirements 3 and 4 — where before a
+lambda and an ordinary expression shared every operand opener.
+`scratchExpansionFactors` for regions and candidates fell from 6 to 5 with it,
+so the runtime allocates less per token as well as dispatching over a smaller
+table.
+
+The body is `expression` and the parameters are a repetition, not a lambda whose
+body is another lambda. Those accept the same source — `fn a => fn b => e` — but
+a `root`-boundary island has no closing terminal, so it cannot appear inside
+itself as a placeholder, and the recursive spelling is rejected outright as
+residual recursion. Folding the repetition to the right during CST lowering is
+the same move `expression` makes with `fold-fixity`.
+
+The `lambda` and `final` columns are two edits, and the second is the larger
+one. `operand` was spelled as two alternatives — a bare `postfix_expression`, or
+`prefix_operator+ postfix_expression` — precisely so that no empty-repetition
+reduction had to be decided before the parser knew whether it was inside a
+lambda parameter or an expression. With `fn` it already knows, so the rule
+collapses to `prefix_operator* postfix_expression` and accepts the same
+language. That alone is 176 island states, 2,252 island transitions, 147,840
+dense-transition bytes, 298,050 packed bytes, and a drop in the `summaries`
+scratch factor from 360 to 184.
 
 `islandStates` and `packedBytes` rose by roughly 60% when field names were
 allowed to be keywords (`field_name = IDENT | INTEGER | keyword`). That was
@@ -125,14 +169,13 @@ The concessions are recorded here so they are not rediscovered as bugs:
   throughput requires the repeated root island not be self-nesting, and blocks
   nest declarations; routing block bodies through a second rule name keeps
   `declaration` non-self-nesting. The language does not distinguish them.
-- **Currying needs parentheses.** `f => (x => f (f x))`, not
-  `f => x => f (f x)`. A directly recursive lambda body has no locatable
-  boundary, and the flat `lambda_parameter+` alternative could not be
-  disambiguated from an ordinary expression until `=>` was already consumed. In
-  a language where the idiomatic multi-argument function takes one shape, this
-  is a small cost. Because every character of `=>` is in the operator class, an
-  unparenthesized inner lambda reaches the fixity table, so the diagnostic says
-  exactly this rather than "unknown operator".
+- **A lambda opens with a keyword.** `fn x => x`, not `x => x`. Requirement 4
+  wants an island's FIRST set to be lexically identifiable, and a bare parameter
+  shares every opener with an ordinary operand. This was once paid for the other
+  way — no keyword, and currying spelled `f => (x => f (f x))` — and the keyword
+  is cheaper by every counter above. Because every character of `=>` is in the
+  operator class, a lambda written without `fn` reaches the fixity table rather
+  than failing to parse, so the diagnostic says exactly this.
 - **A prefixed operand needs parentheses.** `consume (!token)`, not
   `consume !token`: in a flat chain a trailing operator reads as infix.
 - **`_` is an ordinary name, not a literal.** It also matches `IDENT`, so a
@@ -150,9 +193,11 @@ Two things the profile did _not_ cost, contrary to the gpu-duck reference:
 
 - **Lambdas in shape members need no `end`.** gpu-duck required a
   `bounded_lambda` form; blot's ordinary `lambda` rule works in member position.
-- **Lambda parameters are not restricted.** They share the `postfix_expression`
-  prefix with ordinary operands, exactly as in gpu-duck, and semantic analysis
-  reclassifies the head as a pattern.
+- **Lambda parameters are ordinary patterns.** gpu-duck shares the
+  `postfix_expression` prefix with ordinary operands and reclassifies the head
+  afterwards; `fn` lets blot parse a `binding_pattern` in the first place, so
+  `fn { .x; } => x` and `fn !value => …` are spelled the way every other binder
+  is.
 
 ## Parity
 
@@ -179,5 +224,5 @@ Adding `FLOAT = /[0-9]+\.[0-9]+/` at priority 3 moved `lexerStates` from 114 to
 `contractionRounds` at 33, and the profile is still accepted with
 `"throughput": "strict"`. Two states is what a token costs when it is a fixed
 terminal identity rather than a contextual promotion — the digit-point-digit
-shape is decided by the lexer alone, with no island having to know whether a
-dot begins a projection or continues a number.
+shape is decided by the lexer alone, with no island having to know whether a dot
+begins a projection or continues a number.

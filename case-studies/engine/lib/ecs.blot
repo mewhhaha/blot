@@ -20,19 +20,19 @@ open {} = (@import "blot:prelude") ();
 //
 // An entity id indexes every store alike, which is what makes a join an index
 // walk rather than a search.
-const Store = component => [Option component];
+const Store = fn component => [Option component];
 
-const attach = (store, value) => @array.push store (Some value);
-const at = (store, id) => @array.get store id;
-const count = store => @array.len store;
+const attach = fn (store, value) => @array.push store (Some value);
+const at = fn (store, id) => @array.get store id;
+const count = fn store => @array.len store;
 
 // A system over one component: rebuild the store from the entities that have
 // it. The entities that do not are carried through untouched, so a system is a
 // total function over the world even when it reads a slice of it.
-const each_1 = (store, step) => fold (
+const each_1 = fn (store, step) => fold (
   upto (0, count store),
   store,
-  ((state, id) => case at (store, id) of
+  (fn (state, id) => case at (store, id) of
     #Some value => @array.set state id (Some (step value)),
     #None => state
   end)
@@ -41,25 +41,31 @@ const each_1 = (store, step) => fold (
 // The join a two-component system wants: rebuild the left store for entities
 // that have both components and skip the rest.
 //
-// The nesting is not a preference. `case (at (l, id), at (r, id)) of` with a
-// tuple pattern says this in one arm, and that shape does not lower yet.
-const each_2 = (left, right, step) => fold (
+// The pair is the scrutinee, so the entity that has both components is one arm
+// and everything else is the other. Reading both stores before either is
+// tested is what "an entity id indexes every store alike" already promised.
+const each_2 = fn (left, right, step) => fold (
   upto (0, count left),
   left,
-  ((state, id) => case at (left, id) of
-    #Some a => case at (right, id) of
-      #Some b => @array.set state id (Some (step (a, b))),
-      #None => state
-    end,
-    #None => state
+  (fn (state, id) => case (at (left, id), at (right, id)) of
+    (#Some a, #Some b) => @array.set state id (Some (step (a, b))),
+    _ => state
   end)
 );
 
 // The same join for a system that produces effects rather than components,
 // which is what a renderer is.
-const visit_2 = (left, right, visit) => each (
+//
+// The nesting here is not a preference, and it is no longer the backend
+// refusing the shape. Written as `case (at (left, id), at (right, id)) of`, the
+// pair is what carries the component out — and inference then records, at the
+// visitor's own `transform.position`, the three fields that visitor projects
+// rather than the four the store holds. The backend builds the record's Core
+// type from that set and gpufuck refuses the mismatch. Until a shape survives
+// a tuple scrutinee, a renderer's join stays two `case`s.
+const visit_2 = fn (left, right, visit) => each (
   upto (0, count left),
-  (id => case at (left, id) of
+  (fn id => case at (left, id) of
     #Some a => case at (right, id) of
       #Some b => visit (a, b),
       #None => ()

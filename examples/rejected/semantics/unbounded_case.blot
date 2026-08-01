@@ -5,6 +5,6 @@
 open {} = (@import "blot:prelude") ();
 
 sig describe = Int -> Str;
-let describe = n => case n of 1 => "one", 2 => "two" end;
+let describe = fn n => case n of 1 => "one", 2 => "two" end;
 
 return describe 1;

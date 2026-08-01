@@ -34,7 +34,7 @@ let (across, up) = somewhere;
 
 const Record = { .flag = U8; .id = I32; .code = U8; .name = Str; };
 
-const byte_width = t =>
+const byte_width = fn t =>
   if refines (t, U8)
   then 1
   else (if refines (t, I32) then 4 else 8 end)
@@ -42,7 +42,7 @@ const byte_width = t =>
 
 const Declared = struct Record;
 
-const alphabetical = names => sort_by (names, ((left, right) => is_less (@text.cmp left right)));
+const alphabetical = fn names => sort_by (names, (fn (left, right) => is_less (@text.cmp left right)));
 const Sorted = struct (reorder (Record, alphabetical (@shape.names Record)));
 
 // --- packing is a different question ----------------------------------------
@@ -68,7 +68,7 @@ const raw = layout (Record, byte_width);
 // as nested calls.
 
 const Meters = seal ("Meters", I32)
-  <+ { .of = n => seal ("Meters", n); }
+  <+ { .of = fn n => seal ("Meters", n); }
   <+ { .unit = "m"; };
 
 const Located = Point <+ { .origin = { .x = 0; .y = 0; }; };

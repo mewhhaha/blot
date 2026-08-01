@@ -171,7 +171,7 @@
         "lambda": {
           "opcode": "lambda",
           "fields": {
-            "parameter": "pattern",
+            "parameters": "pattern",
             "body": "body"
           }
         },

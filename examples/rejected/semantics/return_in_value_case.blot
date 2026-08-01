@@ -1,6 +1,6 @@
 open {} = @import "blot:prelude" ();
 
-let unwrap = option => do
+let unwrap = fn option => do
   let value = case option of
     #Some inner => do
       return inner;

@@ -18,28 +18,39 @@ open {} = (@import "blot:prelude") ();
 const Money = #Money I32;
 
 Money := Money <+ {
-  .of = n => #Money n;
+  .of = fn n => #Money n;
   .zero = #Money 0;
-  .eq = left => (right => case (left, right) of
+  .eq = fn left => fn right => case (left, right) of
     (#Money a, #Money b) => Ord.eq a b
-  end);
-  .add = left => (right => case (left, right) of
+  end;
+  .add = fn left => fn right => case (left, right) of
     (#Money a, #Money b) => #Money (a + b)
-  end);
+  end;
 };
 
 sig price = Money;
 let price = Money.of 42;
 
 // The table is reached through the *name*, not through a parameter. A type's
-// members are invisible to typing, so `(table, a, b) => table.eq a b` applied
+// members are invisible to typing, so `fn (table, a, b) => table.eq a b` applied
 // to `Money` is `#Money is not a shape with .eq` — the same limit that stops a
 // function from reading `.fields` off a `struct` it was passed. Duck typing on
 // a *value* that carries `.eq` works and is a different thing.
 
-// `sig` pins the comparison results: a table's function is reached through a
-// compile-time projection, so inference cannot say what it returns on its own,
-// and an export must be concrete to reach WebAssembly.
+// A member has no type of its own — it is a closure in a side table, and there
+// is no arrow to read off a value. So a call to one is typed by *running* it
+// while checking, and the value it produces is the type: `Money.eq price` on a
+// `price` the checker could compute is `#True`, which is why the `sig` below is
+// a real obligation rather than a formality. It widens `#True` to `Bool`
+// because an export must be concrete to reach WebAssembly, and it is checked
+// on the way — write `sig same = #False;` and this program is rejected.
+//
+// The other half of that rule is the honest one: a member call the checker
+// cannot run — one whose argument the program only produces at run time, say —
+// has a result nothing is known about, and `⊤` is what it gets. A `sig` cannot
+// be believed for a `⊤`, and that is the whole point of answering with one. A
+// type variable is the join of nothing, so every constraint on it holds and
+// every `sig` naming any type at all would pass.
 sig same = Bool;
 let same = (Money.eq price) (Money.of 42);
 

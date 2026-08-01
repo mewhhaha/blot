@@ -78,7 +78,7 @@ bounds are the records the program demanded of it, and those answer different
 questions. What flowed in decides, because a value carries exactly the fields of
 the record that reached it. Demands speak only when nothing flowed in at all — a
 parameter whose caller is outside the module is pinned from above, which is what
-gives `(&p) => p.x + p.y` a shape — and then they are unioned, because each
+gives `fn &p => p.x + p.y` a shape — and then they are unioned, because each
 projection writes its own one-field record.
 
 A `let`-bound function is generalized, so the record its callers pass never
@@ -90,7 +90,7 @@ lattice, in `Instances` — one map per `checkModule` call, never a field on
 `Variable`, because `PRIMITIVE_TYPES` holds process-global scheme variables that
 outlive every check. `constrain` never reads it, so biunification propagates the
 bounds it always did and stays polynomial; the shape walk follows it, and that
-is what lets `let get_x = v => v.x;` learn the record its call sites built.
+is what lets `let get_x = fn v => v.x;` learn the record its call sites built.
 
 Two _different_ records flowing to one node is not a wider record, it is two
 shapes, and the fact says so rather than unioning them. The backend refuses with
@@ -181,13 +181,13 @@ Three shape cases still reach gpufuck's own type checker rather than a blot
 refusal, and each reports `BLOT_LOWERING_BUG` with an `F2102` from gpufuck:
 
 - **A spread of a value whose type is still a variable.**
-  `r => { ...r; .x = 1; }` infers the result `{ .x }` however wide `r` is,
+  `fn r => { ...r; .x = 1; }` infers the result `{ .x }` however wide `r` is,
   because `case "shape"` in inference only widens the result when the spread
   member is already a record. The construction the backend emits copies every
   field, so the two disagree. Closing it needs row variables or a deferred
   record type, not a shape fact.
-- **A parameter destructured in place**, as in `({ .x = a; }) => a` applied to a
-  wider record. A shape pattern's type _is_ a record rather than a variable
+- **A parameter destructured in place**, as in `fn { .x = a; } => a` applied to
+  a wider record. A shape pattern's type _is_ a record rather than a variable
   bounded by one, so there is nothing for the value's fields to flow into and
   the pattern's own fields are all the fact can say.
 - **A projecting function reached across `@import`.** A dependency is checked
@@ -233,7 +233,7 @@ WebAssembly imports.
 ```blot
 const Console = @effect.host { .write = Str -> Unit; };
 
-let report = () => Console.write "compiled";   // () -> () ~ { Console }
+let report = fn () => Console.write "compiled";   // () -> () ~ { Console }
 ```
 
 This is why blot needs no raw import form: you declare an effect, and the
@@ -293,8 +293,8 @@ of the computation to the matching clause.
 
 ```blot
 const Counter = @effect { .bump = Int -> Int; };
-let doubling = { .bump = (n, ?resume) => resume (n * 2); };
-let counted = () => Counter.bump 20 + Counter.bump 1;
+let doubling = { .bump = fn (n, ?resume) => resume (n * 2); };
+let counted = fn () => Counter.bump 20 + Counter.bump 1;
 
 @handle (Counter, counted, doubling)   // 42
 ```
@@ -338,7 +338,7 @@ because the alternative is a bug report filed against the wrong project.
 
 ## Width subtyping is specialized before Core
 
-blot's records are structurally width-subtyped: `value => value.x` infers a
+blot's records are structurally width-subtyped: `fn value => value.x` infers a
 function that accepts any record with `.x`. gpufuck's records are nominal and
 invariant, so an open structural type cannot be handed over unchanged.
 
@@ -350,7 +350,7 @@ nominals. A runtime export instead needs to state the concrete boundary:
 ```blot
 const Point = { .x = Int; .y = Int; };
 sig project = Point -> Int;
-let project = point => point.x;
+let project = fn point => point.x;
 
 return { .project = project; };
 ```

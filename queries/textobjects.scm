@@ -7,8 +7,10 @@
 (lambda
   body: (_) @function.inside) @function.around
 
-(lambda
-  parameter: (_) @parameter.inside) @parameter.around
+; One `lambda` holds the whole `fn a => fn b =>` chain, so a parameter object is
+; a `lambda_parameter` rather than a field of the lambda.
+(lambda_parameter
+  pattern: (_) @parameter.inside) @parameter.around
 
 (tuple_pattern
   (binding_pattern) @parameter.inside)

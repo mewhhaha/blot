@@ -96,9 +96,9 @@ end;
 // Nothing about `Iter.range` is privileged. A step function and a starting
 // state is the whole protocol.
 
-const halving = start => {
+const halving = fn start => {
   .state = start;
-  .step = value =>
+  .step = fn value =>
     if is_less (@int.cmp value 1)
     then None
     else Some (value, @int.div value 2)
@@ -123,5 +123,5 @@ return {
   .found = found;
   .labelled = labelled;
   .collected = collect (Iter.range (0, 4));
-  .folded = iterate (Iter.range (1, 4), 1, ((product, n) => product * n));
+  .folded = iterate (Iter.range (1, 4), 1, (fn (product, n) => product * n));
 };

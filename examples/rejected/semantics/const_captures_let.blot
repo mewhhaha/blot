@@ -8,11 +8,11 @@
 //
 // The refusal points at the capture rather than at `helper`'s declaration:
 // `helper` is perfectly in scope here, it is in the wrong phase. Writing
-// `let use = y => helper y;` compiles.
+// `let use = fn y => helper y;` compiles.
 
 open {} = (@import "blot:prelude") ();
 
-let helper = x => x + 1;
-const use = y => helper y;
+let helper = fn x => x + 1;
+const use = fn y => helper y;
 
 return use 1;

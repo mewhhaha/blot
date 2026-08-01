@@ -23,20 +23,20 @@ const Counter = struct { .current = I32; .limit = I32; };
 
 // --- functions --------------------------------------------------------------
 
-let double = value => value * 2;
-let increment = value => value + 1;
+let double = fn value => value * 2;
+let increment = fn value => value + 1;
 
-// Currying needs parentheses; the idiomatic multi-argument function takes one
-// shape instead.
-let apply_twice = f => (x => f (f x));
-let distance = (from, to) => Num.abs (to - from);
+// `fn` opens a lambda, so a curried chain needs no parentheses; the idiomatic
+// multi-argument function takes one shape instead.
+let apply_twice = fn f => fn x => f (f x);
+let distance = fn (from, to) => Num.abs (to - from);
 
 // `rec` makes the binding's own name visible inside the lambda.
-const factorial = rec (n => if n < 2 then 1 else n * factorial (n - 1) end);
+const factorial = rec (fn n => if n < 2 then 1 else n * factorial (n - 1) end);
 
 // --- matching ---------------------------------------------------------------
 
-let describe = m => case m of
+let describe = fn m => case m of
   #Ready => "ready",
   #Progress 0 => "idle",
   #Progress n => "working",
@@ -44,7 +44,7 @@ let describe = m => case m of
 end;
 
 // Literal patterns narrow the union branch they match.
-let classify = value => case value of
+let classify = fn value => case value of
   -1 => "down",
   1 => "up",
   _ => "flat"
@@ -90,25 +90,25 @@ end;
 
 const Console = @effect { .write = Str -> Unit; };
 
-let report = () => do
+let report = fn () => do
   let _ = Console.write "one";
   let _2 = Console.write "two";
   in "done"
 end;
 
 let joining = {
-  .write = (message, ?resume) => message ++ resume ();
-  .return = value => value;
+  .write = fn (message, ?resume) => message ++ resume ();
+  .return = fn value => value;
 };
 
 // The host's handler is one blot did not write. `init.print` is an opaque
 // function and the program's entire authority.
 let printing = {
-  .write = (message, ?resume) => do
+  .write = fn (message, ?resume) => do
     let _ = init.print message;
     in resume ()
   end;
-  .return = value => value;
+  .return = fn value => value;
 };
 
 // --- ownership --------------------------------------------------------------
@@ -117,7 +117,7 @@ let printing = {
 // linearity pass gives them teeth; here they are ordinary binders.
 
 let !token = 41;
-let consume = (!value) => value + 1;
+let consume = fn !value => value + 1;
 
 return {
   .small = Small;

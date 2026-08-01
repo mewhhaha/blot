@@ -49,6 +49,8 @@ The flat core types are:
 | ---------- | ------------------------------------------------- |
 | `()`       | none                                              |
 | `Int`      | `i64`                                             |
+| `F32`      | `f32`                                             |
+| `F64`      | `f64`                                             |
 | `Bool`     | `i32`, restricted to 0 or 1                       |
 | `Text`     | `i32` pointer, `i32` UTF-8 byte length            |
 | array      | `i32` pointer, `i32` element count                |
@@ -56,17 +58,13 @@ The flat core types are:
 | variant    | `i32` discriminant followed by the joined payload |
 | seal       | its carrier                                       |
 
-`F64`, `F32`, and `F32x4` are absent, and that is a limit rather than an omission. gpufuck's
-canonical ABI has no float case, so there is no stable layout to publish one
-under, even though the Component Model's own canonical ABI has `float64` and
-Core computes with doubles internally. A float is therefore a program's own
-arithmetic and not its interface: an export or host operation that mentions one
-is refused with `BLOT_FLOAT_AT_BOUNDARY`, and `@int.of_float` at the boundary is
-the whole of the workaround. Adding the case is additive and would be a minor.
+`F32x4` and `F32x4Mask` remain private computation types. An export or host
+operation that mentions either is refused with `BLOT_VECTOR_AT_BOUNDARY`.
 
-Variant payload slots join `i32` and `i64` as `i64`. Missing payload slots are
-zero. A seal is nominal inside Blot but transparent at the caller boundary; its
-manifest name still prevents callers from confusing two source contracts.
+Variant payload slots join `i32` and `f32` as `i32`; other mismatched core types
+join as `i64`. Missing payload slots are zero. A seal is nominal inside Blot but
+transparent at the caller boundary; its manifest name still prevents callers
+from confusing two source contracts.
 
 ## Memory layouts
 
@@ -76,7 +74,9 @@ All integers are little-endian.
 | ------ | --------: | ---: |
 | `()`   |         1 |    0 |
 | `Bool` |         1 |    1 |
+| `F32`  |         4 |    4 |
 | `Int`  |         8 |    8 |
+| `F64`  |         8 |    8 |
 | `Text` |         4 |    8 |
 | array  |         4 |    8 |
 

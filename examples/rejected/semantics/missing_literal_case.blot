@@ -7,7 +7,7 @@
 open {} = (@import "blot:prelude") ();
 
 sig describe = 1 | 2 | 3 -> Str;
-let describe = level => case level of
+let describe = fn level => case level of
   1 => "low"
 end;
 return describe;

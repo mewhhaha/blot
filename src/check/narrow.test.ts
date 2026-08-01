@@ -34,43 +34,43 @@ const Probes = {
 
   // Every free occurrence of a parameter is inside the one comparison, but
   // \`open\` binds \`right\` from a compile-time value, so no node in the body
-  // carries the name. This function is \`a => (b => a == 0)\`.
-  .opened = left => (right => do
+  // carries the name. This function is \`fn a => fn b => a == 0\`.
+  .opened = fn left => fn right => do
       open {} = Sneaky;
-    in is_equal (@int.cmp left right) end);
+    in is_equal (@int.cmp left right) end;
 
   // \`left\` occurs once as a \`var\`, but a binder rebinds it first.
-  .rebound = left => (right => do
+  .rebound = fn left => fn right => do
       let left = 5;
-    in is_equal (@int.cmp left right) end);
+    in is_equal (@int.cmp left right) end;
 
   // Reversed arguments are still one comparison of both parameters.
-  .reversed = l => (r => is_equal (@int.cmp r l));
+  .reversed = fn l => fn r => is_equal (@int.cmp r l);
 
   // The same equality, spelled with two comparisons. Refused: the occurrence
   // count is what licenses the factorization, and this body has four.
-  .twice = l => (r => if is_less (@int.cmp l r)
+  .twice = fn l => fn r => if is_less (@int.cmp l r)
       then False
       else not (is_less (@int.cmp r l))
-    end);
+    end;
 
   // Hand-written, in terms of the intrinsic rather than the prelude's helpers.
-  .handwritten = l => (r => case @int.cmp l r of
+  .handwritten = fn l => fn r => case @int.cmp l r of
     #Equal => True,
     #Less => False,
     #Greater => False
-  end);
+  end;
 
-  .constantly = a => (b => True);
-  .never = a => (b => False);
+  .constantly = fn a => fn b => True;
+  .never = fn a => fn b => False;
   // A parameter used outside the comparison.
-  .leaks = l => (r => if is_equal (@int.cmp l r) then l == l else False end);
+  .leaks = fn l => fn r => if is_equal (@int.cmp l r) then l == l else False end;
   // The right domain, the wrong answer type.
-  .ordering = l => (r => @int.cmp l r);
+  .ordering = fn l => fn r => @int.cmp l r;
   // Unary.
-  .unary = l => is_equal (@int.cmp l l);
+  .unary = fn l => is_equal (@int.cmp l l);
   // Refuses on one probe. \`blot check\` must survive it.
-  .refusing = l => (r => if is_less (@int.cmp l r) then @fail "no" else True end);
+  .refusing = fn l => fn r => if is_less (@int.cmp l r) then @fail "no" else True end;
 };
 return 0;
 `;

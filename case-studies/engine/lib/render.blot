@@ -35,11 +35,11 @@ const ONE = lane 1.0;
 
 // Whole units on the far side of a module boundary are thousandths on the wire.
 // One conversion at the edge, and nothing downstream knows.
-const unit = value => Float32.div (Float32.of_int value) (lane 1000.0);
+const unit = fn value => Float32.div (Float32.of_int value) (lane 1000.0);
 
 // A world point out of the host's thousandths. Its fourth lane is 1, which is
 // what lets a camera row's translation reach it.
-const point = (x, y, z) => Vec4.of (unit x, unit y, unit z, ONE);
+const point = fn (x, y, z) => Vec4.of (unit x, unit y, unit z, ONE);
 
 // --- the host boundary ------------------------------------------------------
 
@@ -145,7 +145,7 @@ const LIGHT = Vec4.of (lane 0.53, lane 0.76, lane 0.38, ZERO);
 // Two rows rather than three, because the y row is (0, 1, 0, 0) and reading a
 // lane is cheaper than dotting against it. Neither row translates, so the
 // fourth lane passes through and a direction stays a direction.
-const rotation_of = angle => do
+const rotation_of = fn angle => do
   let s = M.sin angle;
   let c = M.cos angle;
   in {
@@ -154,7 +154,7 @@ const rotation_of = angle => do
   }
 end;
 
-const turn_y = (point, rotation) => Vec4.of (
+const turn_y = fn (point, rotation) => Vec4.of (
   Vec4.dot point rotation.to_x,
   Vec4.y point,
   Vec4.dot point rotation.to_z,
@@ -162,7 +162,7 @@ const turn_y = (point, rotation) => Vec4.of (
 );
 
 // World to view: one dot per view coordinate, against the camera's own axes.
-const to_view = (point, camera) => Vec4.of (
+const to_view = fn (point, camera) => Vec4.of (
   Vec4.dot point camera.right,
   Vec4.dot point camera.up,
   Vec4.dot point camera.forward,
@@ -172,7 +172,7 @@ const to_view = (point, camera) => Vec4.of (
 // View to screen. The two lenses differ in what the view point is measured
 // against: focal axes over its own depth, or zoom axes and no divide at all.
 // That is the whole of "2D is an orthographic camera".
-const to_screen = (view, camera) =>
+const to_screen = fn (view, camera) =>
   if camera.lens == 0
   then Vec4.add
     SCREEN_CENTRE
@@ -183,7 +183,7 @@ const to_screen = (view, camera) =>
 // Where the camera sits, and the three rows that take a world point to it.
 // Built once a frame rather than per vertex, because every vertex wants the
 // same four sines.
-const camera_of = (yaw, pitch, distance, lens) => do
+const camera_of = fn (yaw, pitch, distance, lens) => do
   let sin_yaw = M.sin yaw;
   let cos_yaw = M.cos yaw;
   let sin_pitch = M.sin pitch;
@@ -231,7 +231,7 @@ end;
 // How lit a face is: its world normal against the light, clamped, widened to
 // the 0..255 the host multiplies the colour by. The dot product is what the
 // four lanes are for — one multiply and one horizontal sum.
-const shade_of = normal => do
+const shade_of = fn normal => do
   let dot = Vec4.dot normal LIGHT;
   let lit = if is_less (Float32.cmp dot ZERO) then ZERO else dot end;
   in 60 + Float32.truncate (Float32.mul lit (lane 195.0))
@@ -240,7 +240,7 @@ end;
 // One face of one box: place its corners, project them, and hand the host two
 // triangles. A face pointing away, or crossing the near plane, is dropped
 // before either triangle is built.
-const draw_face = (position, angle, scale, colour, camera, face) => do
+const draw_face = fn (position, angle, scale, colour, camera, face) => do
   // Every corner of a box turns by the same angle, so the rows are built once
   // here rather than once per corner.
   let rotation = rotation_of angle;
@@ -248,7 +248,7 @@ const draw_face = (position, angle, scale, colour, camera, face) => do
   // Scale, turn, place, and view — four steps and no field ever named. The add
   // is where the fourth lane changes from 0 to 1, and so where an offset from
   // the model's origin becomes a point the camera can translate.
-  let corner = index => do
+  let corner = fn index => do
     let local = @array.get corners index;
     let spun = turn_y (Vec4.scale (local, scale), rotation);
     in to_view (Vec4.add spun position, camera)
@@ -273,7 +273,7 @@ const draw_face = (position, angle, scale, colour, camera, face) => do
   let zb = Vec4.z b;
   let zc = Vec4.z c;
   let zd = Vec4.z d;
-  let near = z => is_less (Float32.cmp z NEAR);
+  let near = fn z => is_less (Float32.cmp z NEAR);
   let behind = near za || near zb || near zc || near zd;
   let hidden = is_greater (Float32.cmp outward ZERO);
 
@@ -281,7 +281,7 @@ const draw_face = (position, angle, scale, colour, camera, face) => do
   else do
     // Pixels, and the last place a float exists in this function. `Canvas` is
     // a module import, so its record is the boundary a float cannot cross.
-    let pixel = point => {
+    let pixel = fn point => {
       .x = Float32.truncate (Vec4.x point);
       .y = Float32.truncate (Vec4.y point);
     };
@@ -314,15 +314,15 @@ end;
 // A box. Six faces, each culled on its own, which is the whole of the mesh
 // path — an application that wants a second shape adds geometry here rather
 // than a second renderer.
-const draw_mesh = (position, angle, scale, colour, camera) => each (
+const draw_mesh = fn (position, angle, scale, colour, camera) => each (
   faces,
-  (face => draw_face (position, angle, scale, colour, camera, face))
+  (fn face => draw_face (position, angle, scale, colour, camera, face))
 );
 
 // A 2D texture placed in the 3D world. Its size divides by depth under a
 // perspective lens and does not under an orthographic one — the same one-line
 // difference `to_screen` makes.
-const draw_sprite = (position, scale, texture, camera) => do
+const draw_sprite = fn (position, scale, texture, camera) => do
   let view = to_view (position, camera);
   let depth = Vec4.z view;
   in if is_less (Float32.cmp depth NEAR) then ()
@@ -353,7 +353,7 @@ end;
 // and a different field subset at each of the four places that reads one, and
 // the shapes only agree because inference sees the record reach them — which it
 // can only do while the record does not leave.
-let frame = paint => do
+let frame = fn paint => do
   let _ = Canvas.clear ();
   let camera = camera_of (
     View.yaw (),
@@ -362,9 +362,9 @@ let frame = paint => do
     View.lens ()
   );
   let _2 = paint {
-    .mesh = ((position, angle, scale, colour) =>
+    .mesh = (fn (position, angle, scale, colour) =>
       draw_mesh (position, angle, scale, colour, camera));
-    .sprite = ((position, scale, texture) =>
+    .sprite = (fn (position, scale, texture) =>
       draw_sprite (position, scale, texture, camera));
   };
   in Canvas.present ()

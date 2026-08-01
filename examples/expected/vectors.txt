@@ -1,1 +1,1 @@
-{ .first = 110; .last = 140; .second_of_difference = 110; .third_of_halved = 65; .dot = 30; .total = 500; .thirds = 4; }
+{ .first = 110; .last = 140; .second_of_difference = 110; .third_of_halved = 65; .dot = 30; .total = 500; .thirds = 4; .shuffled = 150; }

@@ -1,4 +1,4 @@
-let stop = () => do
+let stop = fn () => do
   break;
   in ()
 end;

@@ -30,7 +30,7 @@ Deno.test("evaluation stops at its deterministic fuel limit", async () => {
   const error = await assertRejects(
     async () => {
       await evaluate(
-        "const spin = rec (() => spin ());\nreturn spin ();",
+        "const spin = rec (fn () => spin ());\nreturn spin ();",
         100,
       );
     },

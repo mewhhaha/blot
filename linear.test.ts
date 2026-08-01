@@ -40,7 +40,7 @@ function rejects(name: string, source: string, code: string): void {
   });
 }
 
-const CONSUME = "let consume = (!value) => @int.add value 1;\n";
+const CONSUME = "let consume = fn !value => @int.add value 1;\n";
 
 accepts(
   "a linear value consumed once is accepted",
@@ -79,14 +79,14 @@ return if 1 < 2 then consume (!token) else 0 end;`,
 accepts(
   "a closure capturing a linear value is linear, and one call discharges it",
   `${CONSUME}let !token = 41;
-let go = () => consume (!token);
+let go = fn () => consume (!token);
 return go ();`,
 );
 
 rejects(
   "calling a linear closure twice is rejected",
   `${CONSUME}let !token = 41;
-let go = () => consume (!token);
+let go = fn () => consume (!token);
 return @int.add (go ()) (go ());`,
   "BLOT_LINEAR_CONSUMED_TWICE",
 );
@@ -94,7 +94,7 @@ return @int.add (go ()) (go ());`,
 rejects(
   "a linear closure nobody calls leaks what it captured",
   `${CONSUME}let !token = 41;
-let go = () => consume (!token);
+let go = fn () => consume (!token);
 return 0;`,
   "BLOT_LINEAR_NOT_CONSUMED",
 );
@@ -102,7 +102,7 @@ return 0;`,
 rejects(
   "spending a capture twice inside the body is still caught",
   `${CONSUME}let !token = 41;
-let go = () => @int.add (consume (!token)) (consume (!token));
+let go = fn () => @int.add (consume (!token)) (consume (!token));
 return go ();`,
   "BLOT_LINEAR_CONSUMED_TWICE",
 );
@@ -110,19 +110,19 @@ return go ();`,
 rejects(
   "storing a linear closure in a shape is reported, not lost",
   `${CONSUME}let !token = 41;
-return { .go = () => consume (!token); };`,
+return { .go = fn () => consume (!token); };`,
   "BLOT_LINEAR_CLOSURE_ESCAPES",
 );
 
 // A borrow reads without spending, which is the whole reason to have one.
 accepts(
   "a borrowed parameter may be projected",
-  "let peek = (&p) => @int.add p.x p.y;\nreturn peek { .x = 1; .y = 2; };",
+  "let peek = fn &p => @int.add p.x p.y;\nreturn peek { .x = 1; .y = 2; };",
 );
 
 rejects(
   "a borrowed parameter may not be moved",
-  "let steal = (&p) => p;\nreturn steal { .x = 1; };",
+  "let steal = fn &p => p;\nreturn steal { .x = 1; };",
   "BLOT_BORROW_MOVED",
 );
 
@@ -131,28 +131,28 @@ rejects(
 
 accepts(
   "an affine value spent once is accepted",
-  "let once = (?r) => r 1;\nreturn once (x => x);",
+  "let once = fn ?r => r 1;\nreturn once (fn x => x);",
 );
 
 accepts(
   "an affine value never spent is accepted, unlike a linear one",
-  "let never = (?r) => 0;\nreturn never (x => x);",
+  "let never = fn ?r => 0;\nreturn never (fn x => x);",
 );
 
 rejects(
   "spending an affine value twice is rejected",
-  "let twice = (?r) => @int.add (r 1) (r 2);\nreturn twice (x => x);",
+  "let twice = fn ?r => @int.add (r 1) (r 2);\nreturn twice (fn x => x);",
   "BLOT_LINEAR_CONSUMED_TWICE",
 );
 
 accepts(
   "affine branches need not agree, because either way it is at most once",
-  "let some = (?r) => if 1 < 2 then r 1 else 0 end;\nreturn some (x => x);",
+  "let some = fn ?r => if 1 < 2 then r 1 else 0 end;\nreturn some (fn x => x);",
 );
 
 // The facts the backend will consume. Nothing applies them yet — an in-place
 // rewrite needs a Core to rewrite — so they are asserted directly instead.
-// Both the parameter and the binding: `(!value) => ...` is as linear as
+// Both the parameter and the binding: `fn !value => ...` is as linear as
 // `let !token`, and the pass proves each of them spent exactly once.
 Deno.test("every linear binding proved spent is recorded", async () => {
   const checked = await analyze(

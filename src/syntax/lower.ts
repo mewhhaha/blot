@@ -3,11 +3,10 @@
 // Two jobs beyond shape translation:
 //
 //   1. fold flat operator chains into trees (delegated to fixity.ts);
-//   2. reclassify a lambda's head as a pattern. The grammar parses that head as
-//      an ordinary `postfix_expression` because sharing the operand prefix is
-//      what lets the parser defer the lambda-versus-expression decision to
-//      `=>`. Reclassification happens here, on the lowered tree, rather than as
-//      a second walk over the CST.
+//   2. fold the flat forms the grammar keeps flat so that its islands stay
+//      bounded — a lambda's `fn a => fn b =>` prefix is a repetition here and a
+//      nest of one-parameter lambdas in the AST — and reclassify a `for` head
+//      as a pattern, which the parser could not commit to before seeing `in`.
 
 import type {
   Arm,
@@ -1660,8 +1659,10 @@ function lowerPattern(rule: Rule): Pattern {
 }
 
 /**
- * Reclassifies a lambda head. The grammar could not commit to "pattern" before
- * seeing `=>`, so the head arrives as an expression and is converted here.
+ * Reclassifies a `for` head. The grammar could not commit to "pattern" before
+ * seeing `in`, so the head arrives as an expression and is converted here. A
+ * lambda needs none of this: `fn` announces it, so its parameter is parsed as a
+ * pattern in the first place.
  */
 function patternFromExpr(expr: Expr): Pattern {
   if (expr.tag === "var") {
@@ -1685,7 +1686,7 @@ function patternFromExpr(expr: Expr): Pattern {
   if (expr.tag === "array") {
     for (const element of expr.elements) {
       if (element.spread) {
-        fail("BLOT_BAD_PARAMETER", "A parameter cannot spread.", expr.span);
+        fail("BLOT_BAD_BINDER", "A binder cannot spread.", expr.span);
       }
     }
     return {
@@ -1697,7 +1698,7 @@ function patternFromExpr(expr: Expr): Pattern {
   if (expr.tag === "shape") {
     const fields: ShapePatternField[] = expr.members.map((member) => {
       if (member.tag === "spread") {
-        fail("BLOT_BAD_PARAMETER", "A parameter cannot spread.", expr.span);
+        fail("BLOT_BAD_BINDER", "A binder cannot spread.", expr.span);
       }
       return { name: member.name, pattern: patternFromExpr(member.value) };
     });
@@ -1733,7 +1734,7 @@ function patternFromExpr(expr: Expr): Pattern {
         const inner = patternFromExpr(expr.arg);
         if (inner.tag !== "name") {
           fail(
-            "BLOT_BAD_PARAMETER",
+            "BLOT_BAD_BINDER",
             "`!`, `?`, and `&` qualify a name, not a compound pattern.",
             expr.span,
           );
@@ -1743,8 +1744,8 @@ function patternFromExpr(expr: Expr): Pattern {
     }
   }
   fail(
-    "BLOT_BAD_PARAMETER",
-    "This is not a valid parameter pattern.",
+    "BLOT_BAD_BINDER",
+    "This is not a valid binder.",
     expr.span,
   );
 }
@@ -1758,24 +1759,32 @@ function lowerValue(rule: Rule, context: Context): Expr {
   return lowerExpression(target, context);
 }
 
+// `fn a => fn b => e` parses as one lambda with two parameters, because an
+// island without a closing terminal cannot nest inside itself. Every parameter
+// after the first becomes a lambda whose body is what follows it, so the AST
+// has only one-parameter lambdas and the rest of the compiler never learns that
+// currying has a spelling.
 function lowerLambda(rule: Rule, context: Context): Expr {
-  const head = lowerPostfix(
-    asRule(field(rule, "parameter"), "parameter"),
-    context,
+  const parameters = fieldList(rule, "parameters")
+    .map((cursor) => asRule(cursor, "lambda_parameter"));
+  expect(parameters.length > 0, "a lambda has no parameter");
+  let result = lowerExpression(
+    asRule(field(rule, "body"), "body"),
+    {
+      ...context,
+      loop: null,
+      escapeBoundary: "none",
+    },
   );
-  return {
-    tag: "lambda",
-    parameter: patternFromExpr(head),
-    body: lowerExpression(
-      asRule(field(rule, "body"), "body"),
-      {
-        ...context,
-        loop: null,
-        escapeBoundary: "none",
-      },
-    ),
-    span: rule.span,
-  };
+  for (const parameter of [...parameters].reverse()) {
+    result = {
+      tag: "lambda",
+      parameter: lowerPattern(asRule(field(parameter, "pattern"), "pattern")),
+      body: result,
+      span: { start: parameter.span.start, end: rule.span.end },
+    };
+  }
+  return result;
 }
 
 function lowerExpression(rule: Rule, context: Context): Expr {
@@ -1793,13 +1802,10 @@ function lowerExpression(rule: Rule, context: Context): Expr {
 }
 
 function lowerOperand(rule: Rule, context: Context): Expr {
-  const valueCursor = field(rule, "value");
-  if (valueCursor === null) {
-    // The bare `postfix_expression` alternative binds no fields.
-    return lowerPostfix(asRule(rule.child(0), "postfix_expression"), context);
-  }
-
-  let result = lowerPostfix(asRule(valueCursor, "postfix_expression"), context);
+  let result = lowerPostfix(
+    asRule(field(rule, "value"), "postfix_expression"),
+    context,
+  );
   const prefixes = fieldList(rule, "prefixes")
     .map((cursor) => tokenOf(cursor))
     .reverse();

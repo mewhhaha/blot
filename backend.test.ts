@@ -1,4 +1,10 @@
-import { buildSurfaceModule, CpuCompiler, EvaluationProfile } from "gpufuck";
+import {
+  buildSurfaceModule,
+  compileModuleToWasm,
+  CompilerPerformanceTrace,
+  CpuCompiler,
+  EvaluationProfile,
+} from "gpufuck";
 import {
   assert,
   assertEquals,
@@ -199,7 +205,7 @@ Deno.test("runtime fields are callable by their blot export names", async () => 
     [
       'open {} = (@import "blot:prelude") ();',
       "sig increment = Int -> Int;",
-      "let increment = value => value + 1;",
+      "let increment = fn value => value + 1;",
       "return { .increment = increment; };",
     ].join("\n"),
   );
@@ -225,7 +231,7 @@ Deno.test("a concrete record signature specializes an exported projection", asyn
       'open {} = (@import "blot:prelude") ();',
       "const Point = { .x = Int; .y = Int; };",
       "sig project = Point -> Int;",
-      "let project = point => point.x;",
+      "let project = fn point => point.x;",
       "return { .project = project; };",
     ].join("\n"),
   );
@@ -250,9 +256,9 @@ Deno.test("a generalized projection takes its shape from the call site", async (
     path,
     [
       'open {} = (@import "blot:prelude") ();',
-      "let get_x = v => v.x;",
+      "let get_x = fn v => v.x;",
       "sig at = Int -> Int;",
-      "let at = n => get_x { .x = n; .y = 0; };",
+      "let at = fn n => get_x { .x = n; .y = 0; };",
       "return { .at = at; };",
     ].join("\n"),
   );
@@ -298,9 +304,9 @@ Deno.test("two shapes at one generalized projection are refused, not merged", as
     path,
     [
       'open {} = (@import "blot:prelude") ();',
-      "let get_x = v => v.x;",
+      "let get_x = fn v => v.x;",
       "sig at = Int -> Int;",
-      "let at = n => get_x { .x = n; .y = 0; } + get_x { .x = 1; .z = n; };",
+      "let at = fn n => get_x { .x = n; .y = 0; } + get_x { .x = 1; .z = n; };",
       "return { .at = at; };",
     ].join("\n"),
   );
@@ -324,9 +330,9 @@ Deno.test("subset shapes at one generalized projection are refused too", async (
     path,
     [
       'open {} = (@import "blot:prelude") ();',
-      "let get_x = v => v.x;",
+      "let get_x = fn v => v.x;",
       "sig at = Int -> Int;",
-      "let at = n => get_x { .x = n; } + get_x { .x = 1; .y = n; };",
+      "let at = fn n => get_x { .x = n; } + get_x { .x = 1; .y = n; };",
       "return { .at = at; };",
     ].join("\n"),
   );
@@ -350,10 +356,10 @@ Deno.test("a generalized projection keeps its shape through a forwarder", async 
     path,
     [
       'open {} = (@import "blot:prelude") ();',
-      "let get_x = v => v.x;",
-      "let twice = v => get_x v + get_x v;",
+      "let get_x = fn v => v.x;",
+      "let twice = fn v => get_x v + get_x v;",
       "sig at = Int -> Int;",
-      "let at = n => twice { .x = n; .y = 0; };",
+      "let at = fn n => twice { .x = n; .y = 0; };",
       "return { .at = at; };",
     ].join("\n"),
   );
@@ -376,9 +382,9 @@ Deno.test("a generalized destructuring takes its shape from the call site", asyn
     path,
     [
       'open {} = (@import "blot:prelude") ();',
-      "let get_x = v => do let { .x = a; } = v; in a end;",
+      "let get_x = fn v => do let { .x = a; } = v; in a end;",
       "sig at = Int -> Int;",
-      "let at = n => get_x { .x = n; .y = 0; };",
+      "let at = fn n => get_x { .x = n; .y = 0; };",
       "return { .at = at; };",
     ].join("\n"),
   );
@@ -554,7 +560,7 @@ Deno.test("a reachable @panic traps with the reason the program gave", async () 
       'open {} = (@import "blot:prelude") ();',
       "const Source = @effect.host { .read = Unit -> Int; };",
       "sig pick = Int -> Int;",
-      "let pick = n => case n of",
+      "let pick = fn n => case n of",
       "  0 => 100,",
       '  _ => @panic "pick expects zero"',
       "end;",
@@ -602,7 +608,64 @@ Deno.test("four-lane operations become SIMD instructions", async () => {
   assert(opcodes.has(229), "expected f32x4.sub");
   assert(opcodes.has(230), "expected f32x4.mul");
   assert(opcodes.has(231), "expected f32x4.div");
+  assert(opcodes.has(65), "expected f32x4.eq");
+  assert(opcodes.has(67), "expected f32x4.less");
+  assert(opcodes.has(82), "expected v128.bitselect");
+  assert(opcodes.has(13), "expected i8x16.shuffle");
   assert(opcodes.has(31), "expected f32x4.extract_lane");
+});
+
+Deno.test("unlikely conditions become Wasm branch metadata", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "unlikely.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "const Source = @effect.host { .ready = Unit -> Bool; };",
+      "return if unlikely (Source.ready ()) then 1 else 2 end;",
+    ].join("\n"),
+  );
+  const built = await build(path);
+  const module = new WebAssembly.Module(Uint8Array.from(built.wasm));
+  const [section] = WebAssembly.Module.customSections(
+    module,
+    "metadata.code.branch_hint",
+  );
+  assert(section !== undefined, "branch metadata custom section is missing");
+
+  const bytes = new Uint8Array(section);
+  let offset = 0;
+  const unsigned = () => {
+    let value = 0;
+    let shift = 0;
+    while (true) {
+      const byte = bytes[offset++];
+      assert(byte !== undefined, "branch metadata ended inside an integer");
+      value |= (byte & 0x7f) << shift;
+      if ((byte & 0x80) === 0) return value;
+      shift += 7;
+    }
+  };
+  const directions: number[] = [];
+  const functionCount = unsigned();
+  for (
+    let functionIndex = 0;
+    functionIndex < functionCount;
+    functionIndex += 1
+  ) {
+    unsigned();
+    const hintCount = unsigned();
+    for (let hintIndex = 0; hintIndex < hintCount; hintIndex += 1) {
+      unsigned();
+      assertEquals(unsigned(), 1);
+      directions.push(unsigned());
+    }
+  }
+  assert(
+    directions.includes(0),
+    "the annotated condition was not marked likely false",
+  );
 });
 
 Deno.test("a horizontal sum lowers to gpufuck's reduction", async () => {
@@ -637,6 +700,50 @@ Deno.test("a horizontal sum lowers to gpufuck's reduction", async () => {
     "dot",
     "blot",
   ]);
+});
+
+Deno.test("Blot SIMD chains stay native through gpufuck let bindings", async () => {
+  const path = join("examples", "simd.blot");
+  const loaded = await load(path);
+  const checked = await checkFile(path);
+  const lowered = lowerModule(loaded.module, checked, checked.values);
+  const encoded = buildSurfaceModule(
+    lowered.definitions,
+    lowered.types,
+    lowered.entry,
+    loaded.source.length,
+    {
+      evaluationProfile: EvaluationProfile.StrictEager,
+      hostCapabilities: lowered.capabilities,
+      hostDefinitions: lowered.hostDefinitions,
+    },
+  );
+  const compilation = await new CpuCompiler().compileModule(encoded);
+  assert(
+    compilation.ok,
+    compilation.ok ? undefined : compilation.diagnostics[0].message,
+  );
+  if (!compilation.ok) return;
+  try {
+    const trace = new CompilerPerformanceTrace();
+    await compileModuleToWasm(compilation.module, {
+      simd: "wasm-simd",
+      trace,
+    });
+    const emission = trace.snapshot().find((event) =>
+      event.stage === "wasm.emit"
+    );
+    assert(
+      emission !== undefined,
+      "gpufuck omitted its Wasm emission measurement",
+    );
+    const nativeCalls = emission.annotations.nativeF32x4CallSites;
+    const nativeLets = emission.annotations.nativeF32x4LetBindings;
+    assertEquals(nativeCalls, 0);
+    assertEquals(nativeLets, 2);
+  } finally {
+    compilation.module.destroy();
+  }
 });
 
 Deno.test("a prelude wrapper over a primitive is not a definition", async () => {
@@ -691,11 +798,12 @@ Deno.test("a program with no vectors carries none of their machinery", async () 
   assertEquals([...simdOpcodes(built.wasm)], []);
 });
 
-Deno.test("an F32x4 is refused at the boundary rather than published as text", async () => {
+Deno.test("scalar floats cross the boundary while F32x4 remains private", async () => {
   // The domain switches that produce a boundary type used to end in a `text`
   // fallthrough, so a domain none of them named was published as `Text` and
   // the diagnostic arrived from inside gpufuck as a type mismatch. Both float
-  // domains and the vector now say what they are, and the boundary refuses.
+  // domains and the vector now say what they are. Scalars have canonical ABI
+  // layouts; the private four-lane representation still does not.
   const directory = await Deno.makeTempDir();
   const write = async (name: string, result: string) => {
     const path = join(directory, `${name}.blot`);
@@ -713,11 +821,223 @@ Deno.test("an F32x4 is refused at the boundary rather than published as text", a
   await assertRejects(
     () => validateLowering(vector),
     Error,
-    "BLOT_FLOAT_AT_BOUNDARY",
+    "BLOT_VECTOR_AT_BOUNDARY",
   );
+  const manifest = await validateLowering(single);
+  assertEquals(manifest.exports[0]?.function?.result, { kind: "float-32" });
+  const built = await build(single);
+  const { instance } = await WebAssembly.instantiate(
+    Uint8Array.from(built.wasm),
+  );
+  const exported = instance.exports["blot:default"];
+  assert(typeof exported === "function");
+  assertEquals(exported(), Math.fround(1));
+});
+
+/**
+ * A tuple `case` compiled and run, as one integer per column.
+ *
+ * The emitted Wasm is the thing under test rather than the lowering's shape:
+ * a mis-projected element or a reordered arm is a wrong *answer*, and only
+ * running it says which answer came out.
+ */
+async function tupleCase(
+  directory: string,
+  name: string,
+  lines: readonly string[],
+): Promise<unknown> {
+  const path = join(directory, `${name}.blot`);
+  await Deno.writeTextFile(
+    path,
+    ['open {} = (@import "blot:prelude") ();', ...lines].join("\n"),
+  );
+  return await runLowering(path);
+}
+
+Deno.test("a tuple `case` reads each element from its own position", async () => {
+  // Both columns hold an integer, so swapping them is a wrong answer and not a
+  // type error. `9 - 4` is the whole assertion.
+  const directory = await Deno.makeTempDir();
+  assertEquals(
+    await tupleCase(directory, "columns", [
+      "let difference = fn pair => case pair of",
+      "  (a, b) => a - b",
+      "end;",
+      "return difference (9, 4);",
+    ]),
+    { kind: "signed-integer-64", value: 5n },
+  );
+});
+
+Deno.test("overlapping tuple arms fire in source order", async () => {
+  // `(0, 0)` matches three of these arms. Only the first may run, and the
+  // answers are far enough apart that the wrong one cannot be mistaken for
+  // arithmetic.
+  const directory = await Deno.makeTempDir();
+  const quadrant = [
+    "let quadrant = fn point => case point of",
+    "  (0, 0) => 1,",
+    "  (0, _) => 2,",
+    "  (_, 0) => 3,",
+    "  (x, y) => 4 + x * y",
+    "end;",
+  ];
+  assertEquals(
+    await tupleCase(directory, "origin", [
+      ...quadrant,
+      "return quadrant (0, 0);",
+    ]),
+    { kind: "signed-integer-64", value: 1n },
+  );
+  assertEquals(
+    await tupleCase(directory, "vertical", [
+      ...quadrant,
+      "return quadrant (0, 7);",
+    ]),
+    { kind: "signed-integer-64", value: 2n },
+  );
+  assertEquals(
+    await tupleCase(directory, "horizontal", [
+      ...quadrant,
+      "return quadrant (7, 0);",
+    ]),
+    { kind: "signed-integer-64", value: 3n },
+  );
+  assertEquals(
+    await tupleCase(directory, "elsewhere", [
+      ...quadrant,
+      "return quadrant (2, 3);",
+    ]),
+    { kind: "signed-integer-64", value: 10n },
+  );
+});
+
+Deno.test("a tuple `case` matches wider than a pair", async () => {
+  // Three and four columns, with the answer built from the positions so that a
+  // rotation of them is a different number.
+  const directory = await Deno.makeTempDir();
+  assertEquals(
+    await tupleCase(directory, "three", [
+      "let place = fn triple => case triple of",
+      "  (a, b, c) => a * 100 + b * 10 + c",
+      "end;",
+      "return place (1, 2, 3);",
+    ]),
+    { kind: "signed-integer-64", value: 123n },
+  );
+  assertEquals(
+    await tupleCase(directory, "four", [
+      "let score = fn roll => case roll of",
+      "  (1, 1, 1, 1) => 100,",
+      "  (a, 2, c, d) => a + c + d,",
+      "  (a, b, c, d) => a * 1000 + b * 100 + c * 10 + d",
+      "end;",
+      "return score (1, 1, 1, 1) + score (5, 2, 6, 7) * 10",
+      "  + score (1, 3, 5, 7) * 100000;",
+    ]),
+    // `100 + 18 * 10 + 1357 * 100000`.
+    { kind: "signed-integer-64", value: 135700280n },
+  );
+});
+
+Deno.test("a tuple pattern nests, and a wildcard column tests nothing", async () => {
+  const directory = await Deno.makeTempDir();
+  const nested = [
+    "let nested = fn value => case value of",
+    "  ((#Some a, b), #None) => a * b,",
+    "  ((#None, b), #Some c) => b + c,",
+    "  (_, #Some c) => c,",
+    "  _ => 0",
+    "end;",
+  ];
+  assertEquals(
+    await tupleCase(directory, "inner_left", [
+      ...nested,
+      "return nested ((Some 5, 6), None);",
+    ]),
+    { kind: "signed-integer-64", value: 30n },
+  );
+  assertEquals(
+    await tupleCase(directory, "inner_right", [
+      ...nested,
+      "return nested ((None, 5), Some 6);",
+    ]),
+    { kind: "signed-integer-64", value: 11n },
+  );
+  // The first arm's inner `#Some` matched and its outer `#None` did not, so
+  // this falls past both nested arms to the one whose first column is a
+  // wildcard — the fall-through has to leave the whole arm, not just its
+  // failing column.
+  assertEquals(
+    await tupleCase(directory, "inner_fallthrough", [
+      ...nested,
+      "return nested ((Some 5, 6), Some 7);",
+    ]),
+    { kind: "signed-integer-64", value: 7n },
+  );
+});
+
+Deno.test("a tuple `case` matches booleans and text as themselves", async () => {
+  // `#True` and `#False` are Core's own boolean and text has no constructor to
+  // dispatch on, so neither column becomes a tagged value on the way in.
+  const directory = await Deno.makeTempDir();
+  assertEquals(
+    await tupleCase(directory, "mixed", [
+      "let label = fn value => case value of",
+      '  (#True, "ready") => 1,',
+      "  (#True, _) => 2,",
+      '  (#False, "ready") => 3,',
+      "  (_, _) => 4",
+      "end;",
+      'return label (True, "ready") + label (True, "busy") * 10',
+      '  + label (False, "ready") * 100 + label (False, "busy") * 1000;',
+    ]),
+    { kind: "signed-integer-64", value: 4321n },
+  );
+});
+
+Deno.test("an arm naming the whole tuple binds the scrutinee", async () => {
+  const directory = await Deno.makeTempDir();
+  assertEquals(
+    await tupleCase(directory, "whole", [
+      "let difference = fn pair => case pair of",
+      "  (a, b) => a - b",
+      "end;",
+      "let rest = fn pair => case pair of",
+      "  (0, y) => y,",
+      "  whole => difference whole",
+      "end;",
+      "return rest (0, 8) + rest (9, 4) * 10;",
+    ]),
+    { kind: "signed-integer-64", value: 58n },
+  );
+});
+
+Deno.test("a shape inside a tuple pattern is refused rather than guessed", async () => {
+  // Width subtyping means a shape pattern names fewer fields than the value
+  // carries, and inference records what a value carries only where a binding
+  // destructures it. Nothing here can name the record's Core type, so this
+  // reports instead of picking the pattern's own fields and hoping. A host
+  // effect keeps the scrutinee out of the comptime evaluator's reach, which is
+  // what leaves the pattern for lowering to meet at all.
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "shape_column.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "const Source = @effect.host { .read = Unit -> Int; };",
+      "let total = fn pair => case pair of",
+      "  ({ .x; }, #Some b) => x + b,",
+      "  _ => 0",
+      "end;",
+      "return total ({ .x = Source.read (); .y = 2; }, Some 3);",
+    ].join("\n"),
+  );
+
   await assertRejects(
-    () => validateLowering(single),
-    Error,
-    "BLOT_FLOAT_AT_BOUNDARY",
+    () => validateLowering(path),
+    BlotError,
+    "BLOT_UNSUPPORTED_LOWERING",
   );
 });

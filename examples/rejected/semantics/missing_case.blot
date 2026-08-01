@@ -5,7 +5,7 @@ open {} = (@import "blot:prelude") ();
 
 const Message = #Ready | #Progress Int | #Failed Str;
 sig describe = Message -> Str;
-let describe = m => case m of
+let describe = fn m => case m of
   #Ready => "ready",
   #Progress n => "working"
 end;

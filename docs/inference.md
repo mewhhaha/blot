@@ -38,7 +38,7 @@ The one place subtyping is strictly _more_ general than Hindley-Milner is worth
 seeing:
 
 ```blot
-let twice = f => (x => f (f x));
+let twice = fn f => fn x => f (f x);
 ```
 
 HM must unify the two uses of `f` and produces `('a -> 'a) -> 'a -> 'a`. blot
@@ -56,8 +56,8 @@ already knows how to compute, because a row is a lattice element like any other.
 const Console = @effect { .write = Str -> Unit; };
 const Clock = @effect { .now = Unit -> Int; };
 
-let greet = name => Console.write name;   // Str -> () ~ { Console }
-let quiet = n => @int.add n 1;            // Int -> Int
+let greet = fn name => Console.write name;   // Str -> () ~ { Console }
+let quiet = fn n => @int.add n 1;            // Int -> Int
 ```
 
 A row is written `~ { … }`: braces without a leading `.` on each member, because
@@ -66,7 +66,7 @@ pairs, and the two should not look alike. `e` is the rest of the row — a row
 variable — and it is what makes a wrapper effect-polymorphic without saying so:
 
 ```blot
-let logged = f => (x => do let _ = Console.write "call"; in f x end);
+let logged = fn f => fn x => do let _ = Console.write "call"; in f x end;
 // ('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }
 ```
 
@@ -149,7 +149,7 @@ part is that it is derived from the operator's compile-time _value_ rather than
 from its name. `==` is a fixity entry naming `Eq.eq`, and any module may bind
 that name to anything, so a checker that assumed `==` meant equality would prove
 a false fact about a program that shadowed it — a program writable today.
-Instead a value is accepted only when it is `p1 => (p2 => body)` with every
+Instead a value is accepted only when it is `fn p1 => fn p2 => body` with every
 occurrence of both parameters inside one `@int.cmp p1 p2`. Then
 `op(a, b) = H(cmp(a, b))` for some `H` the checker never sees, `@int.cmp` is
 compiler-owned and total on integers with a three-element codomain, and three

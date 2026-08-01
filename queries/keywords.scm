@@ -89,6 +89,9 @@
   "do" @keyword.control
   "end" @keyword.control)
 
+(lambda_parameter
+  "fn" @keyword.function)
+
 (prefix_operator
   [
     "rec"

@@ -3,5 +3,5 @@
 
 open {} = (@import "blot:prelude") ();
 
-let steal = (&p) => p;
+let steal = fn &p => p;
 return steal { .x = 1; };

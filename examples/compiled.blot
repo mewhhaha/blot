@@ -11,18 +11,18 @@ open {} = (@import "blot:prelude") ();
 
 const Message = #Ready | #Busy Int | #Done Int;
 
-const describe = m => case m of
+const describe = fn m => case m of
   #Ready => 0,
   #Busy n => n,
   #Done n => n * 2
 end;
 
-const sum_to = rec (n => if n < 1 then 0 else n + sum_to (n - 1) end);
+const sum_to = rec (fn n => if n < 1 then 0 else n + sum_to (n - 1) end);
 
 let point = { .x = 20; .y = 22; };
 let moved = { ...point; .x = 18; };
 let { .x; .y = height; } = moved;
-let add = (a, b) => a + b;
+let add = fn (a, b) => a + b;
 
 // A spread destructures its source once and rebuilds, and a destructuring
 // binding is the `case` it always meant.

@@ -34,11 +34,11 @@ const Centimeter = @type.seal "Centimeter" 42;
 
 // Type constructors are ordinary functions, which is where higher-kinded
 // abstraction lives in blot: staged, not in the inference lattice.
-const Pair = (a, b) => { .first = a; .second = b; };
-const Boxed = a => { .value = a; };
-const Compose = (f, g) => (a => f (g a));
+const Pair = fn (a, b) => { .first = a; .second = b; };
+const Boxed = fn a => { .value = a; };
+const Compose = fn (f, g) => fn a => f (g a);
 
-const BoxedPair = Compose (Boxed, (a => Pair (a, a)));
+const BoxedPair = Compose (Boxed, (fn a => Pair (a, a)));
 
 // Reflection is a normal call, so `derive` is a function rather than a macro,
 // an attribute, or a compiler builtin.
@@ -52,9 +52,9 @@ const Record = struct {
 // tuple — so a function that wanted `.fields` off its parameter would have no
 // type to ask for. Handing it `Record.fields` is both what type checks and
 // what the derivation actually needs.
-const derive_names = names => map (names, (name => @text.concat "." name));
+const derive_names = fn names => map (names, (fn name => @text.concat "." name));
 
-const describe = names => fold (names, "", ((state, name) =>
+const describe = fn names => fold (names, "", (fn (state, name) =>
   @text.concat state (@text.concat name " ")));
 
 return {

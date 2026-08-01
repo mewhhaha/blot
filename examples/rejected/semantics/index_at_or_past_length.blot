@@ -16,6 +16,6 @@
 open {} = (@import "blot:prelude") ();
 
 sig at = [Int] -> Int -> Int;
-let at = xs => (n => if n >= @array.len xs then @array.get xs n else 0 end);
+let at = fn xs => fn n => if n >= @array.len xs then @array.get xs n else 0 end;
 
 return at [1, 2, 3] 0;

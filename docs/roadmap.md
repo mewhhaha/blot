@@ -45,13 +45,13 @@ resolved in the current tree — I could not reproduce any of them.
 **Rank-N landed.** `docs/inference.md:147` is now accurate:
 
 ```
-sig apply_both = @forall (a => (a -> a)) -> Int;
-let apply_both = f => f 1 + Text.length (f "ab");
-return apply_both (x => x);            -> Int
+sig apply_both = @forall (fn a => a -> a) -> Int;
+let apply_both = fn f => f 1 + Text.length (f "ab");
+return apply_both (fn x => x);            -> Int
 
-sig run2 = @forall (a => (a -> a)) -> Int;
-let run2 = f => f 1;
-return run2 (x => 42);
+sig run2 = @forall (fn a => a -> a) -> Int;
+let run2 = fn f => f 1;
+return run2 (fn x => 42);
   -> BLOT_TYPE_ERROR: 42 is not the rigid type 's2.
 ```
 
@@ -67,7 +67,7 @@ entirely foldable.
 ```blot
 open {} = (@import "blot:prelude") ();
 const Source = @effect.host { .value = Unit -> Int; };
-let get_x = v => v.x;
+let get_x = fn v => v.x;
 n <- Source.value;
 return get_x { .x = n; .y = 0; };
 ```
@@ -90,7 +90,7 @@ projector reached across `@import` (M3c).
 
 | program | `blot check` | `blot eval` |
 | --- | --- | --- |
-| `let f = c => case c of #Some v => v, _ => 0 end; f (#Some "hi")` | `0` | `"hi"` |
+| `let f = fn c => case c of #Some v => v, _ => 0 end; f (#Some "hi")` | `0` | `"hi"` |
 | `if let #Some v = c else do return 999; end; return v;` | `999` | `3` |
 | `if let #Some v = c else do return "none"; end; in Text.append v "!"` applied to `Some 3` | `(Text \| "none")` | `BLOT_TYPE: @text.concat expects text, found 3.` |
 
@@ -318,7 +318,7 @@ judged three ways.
 
 *Design 2, coercion insertion at the instantiation edge, is rejected outright.*
 All three judges ranked it last and one demonstrated a silent miscompile: for
-`let orDefault = v => if v.x > 0 then v else { .x = 0; } end;` applied to `{.x=5;
+`let orDefault = fn v => if v.x > 0 then v else { .x = 0; } end;` applied to `{.x=5;
 .y=6;}`, the design's own `coreLabels` collapses to `{x}` on both sides of the
 instantiation edge, so its `BLOT_UNCOERCIBLE_SHAPE` refusal cannot fire, the
 narrowing is emitted, and the Wasm returns `{.x=5}` where the interpreter
@@ -336,7 +336,7 @@ per value, the backend synthesizes nothing). The invariants judge picked design
 about the two things that make design 3 unshippable as prototyped:
 
 - Design 3's STEP 3 makes `blot check` stack-overflow on a well-typed program
-  (`let bump = r => { ...r; .x = r.x + 1; };` reached through `twice`), because
+  (`let bump = fn r => { ...r; .x = r.x + 1; };` reached through `twice`), because
   `flowsIn` resets its cycle guard at every spread hop. Two judges reproduced
   it independently. It takes down the formatter and language-server path.
 - Design 3's instantiation registry is a module-level global, so a file's
@@ -591,7 +591,7 @@ what hover and go-to-definition want, and `blot check` is verified device-free.
 Also here, because it is the same complaint from the other end: parse
 diagnostics carry no expectation. Every syntax mistake reports `Unexpected token
 ";"`, including the omitted `else` on an expression `if` — the language's most
-emphatic rule. A missing comma between `case` arms reports `BLOT_BAD_PARAMETER`.
+emphatic rule. A missing comma between `case` arms reports `BLOT_BAD_BINDER`.
 A missing `;` after `let x = 1` reports `BLOT_MISSING_RESULT` at 1:1 for an error
 on line 2, and the claim is false. Surfacing baba's admissible-token set at the
 failure state is the real fix and a baba question; a table of recovery patterns
@@ -747,7 +747,7 @@ Four documents currently overlap and three carry claims I verified to be false:
   describes a corpus failure that no longer reproduces; M3 rewrites it around
   the *staging* explanation and the runtime-source reproduction.
 - `docs/inference.md`'s rank-N paragraph is now correct — but no example
-  exercises it. M3 or M1 adds `examples/rankn.blot` plus the `run2 (x => 42)`
+  exercises it. M3 or M1 adds `examples/rankn.blot` plus the `run2 (fn x => 42)`
   rejection, per the one-program-per-feature catalog rule.
 - `docs/editor.md:15` promises a language server "with the inference milestone".
   M7 corrects it.

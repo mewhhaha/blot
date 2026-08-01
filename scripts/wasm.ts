@@ -46,6 +46,9 @@ function render(
   if (node?.kind === "unit") return "()";
   if (node?.kind === "integer") return String(node.value);
   if (node?.kind === "signed-integer-64") return String(node.value);
+  if (node?.kind === "float-32" || node?.kind === "float-64") {
+    return String(node.value);
+  }
   if (node?.kind === "text") return JSON.stringify(node.value);
   if (node?.kind === "array" || node?.kind === "slice") {
     if (node.values === undefined) return String(value);

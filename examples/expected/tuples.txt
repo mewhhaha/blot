@@ -1,0 +1,1 @@
+{ .both = 7; .left = 3; .right = 4; .neither = 0; .difference = 5; .origin = 1; .vertical = 2; .horizontal = 3; .elsewhere = 10; .ones = 100; .seconds = 18; .digits = 1357; .left_nested = 30; .right_nested = 11; .no_nested = 0; .named = 8; .whole = 5; }

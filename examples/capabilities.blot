@@ -17,24 +17,24 @@ const Console = @effect {
 // A host capability is simply a handler blot did not write. Here the handler is
 // written in blot over the granted function, which is the ordinary case.
 const to_host = {
-  .write = (message, ?resume) => do
+  .write = fn (message, ?resume) => do
     let _ = init.print message;
     in resume ()
   end;
-  .return = value => value;
+  .return = fn value => value;
 };
 
 // The same computation, discharged two different ways. Nothing in `report`
 // mentions which.
-const report = () => do
+const report = fn () => do
   let _ = Console.write "compiled";
   let _2 = Console.write "linked";
   in "ok"
 end;
 
 const to_memory = {
-  .write = (message, ?resume) => @text.concat message (resume ());
-  .return = _ => "";
+  .write = fn (message, ?resume) => @text.concat message (resume ());
+  .return = fn _ => "";
 };
 
 return {

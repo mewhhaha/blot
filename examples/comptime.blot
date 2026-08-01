@@ -17,8 +17,8 @@ const Header = struct {
 // Structuring and padding are ordinary code over `@shape.*`, so a width
 // function is all a layout strategy is. `examples/storage.blot` takes this
 // further; here it is only evidence that it is a call.
-const byte_width = _ => 1;
-const word_width = _ => 4;
+const byte_width = fn _ => 1;
+const word_width = fn _ => 4;
 
 const packed_layout = layout (Header.shape, byte_width);
 const aligned_layout = layout (Header.shape, word_width);
@@ -27,16 +27,16 @@ const aligned_layout = layout (Header.shape, word_width);
 // over a shape's fields. It takes the names rather than the struct: a struct's
 // namespace is compile-time and does not appear in its type, so a parameter
 // that wanted `.fields` would have no type to ask for.
-const derive_show = names => (value =>
-  fold (names, "", ((state, name) => do
+const derive_show = fn names => fn value =>
+  fold (names, "", (fn (state, name) => do
     let rendered = @text.of_int (@shape.get value name);
     in @text.concat state (@text.concat name (@text.concat "=" (@text.concat rendered " ")))
-  end)));
+  end));
 
 const show_header = comptime (derive_show Header.fields);
 
-const derive_sum = names => (value =>
-  fold (names, 0, ((state, name) => @int.add state (@shape.get value name))));
+const derive_sum = fn names => fn value =>
+  fold (names, 0, (fn (state, name) => @int.add state (@shape.get value name)));
 
 const sum_header = comptime (derive_sum Header.fields);
 
@@ -44,8 +44,8 @@ let sample = { .kind = 5; .urgent = 1; .length = 120; };
 
 // Ordinary collection work, all of it prelude source over `fold`.
 let numbers = upto (0, 10);
-let evens = filter (numbers, (n => case @int.rem n 2 of 0 => #True, _ => #False end));
-let squares = map (evens, (n => @int.mul n n));
+let evens = filter (numbers, (fn n => case @int.rem n 2 of 0 => #True, _ => #False end));
+let squares = map (evens, (fn n => @int.mul n n));
 
 return {
   .folded = folded;

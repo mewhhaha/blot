@@ -17,10 +17,10 @@
 
 open {} = (@import "blot:prelude") ();
 
-let Eq = { .eq = a => (b => True); .ne = a => (b => False); };
+let Eq = { .eq = fn a => fn b => True; .ne = fn a => fn b => False; };
 
 sig name = 1 | 2 | 3 -> Str;
-let name = n => if n == 1
+let name = fn n => if n == 1
   then case n of 1 => "one" end
   else case n of 2 => "two", 3 => "three" end
 end;

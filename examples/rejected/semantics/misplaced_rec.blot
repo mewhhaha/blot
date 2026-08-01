@@ -3,4 +3,4 @@
 
 open {} = (@import "blot:prelude") ();
 
-return rec (n => n);
+return rec (fn n => n);

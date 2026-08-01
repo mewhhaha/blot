@@ -1,6 +1,6 @@
 // Two shapes reaching one projection.
 //
-// Width subtyping accepts this: `v => v.x` asks only for an `.x`, and both
+// Width subtyping accepts this: `fn v => v.x` asks only for an `.x`, and both
 // records have one. `blot check` types it and prints its principal type. Core
 // records are nominal and invariant, so there is no single record type behind
 // that one projection — `{ .x; .y; }` and `{ .x; .z; }` are two of them, and
@@ -16,7 +16,7 @@ const Console = @effect.host {
   .write = Str -> Unit;
 };
 
-let get_x = v => v.x;
+let get_x = fn v => v.x;
 
 let here = do
   let _ = Console.write "disagreeing";
