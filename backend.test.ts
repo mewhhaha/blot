@@ -411,6 +411,56 @@ Deno.test("Store values cross named exports as arrays", async () => {
   );
 });
 
+Deno.test("linear array updates carry ownership into gpufuck Store operations", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "owned-arrays.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      "let shared = [1, 2, 3];",
+      "let copied = @array.set shared 0 4;",
+      "let !set_source = [1, 2, 3];",
+      "let replaced = @array.set set_source 0 4;",
+      "let !push_source = [1, 2, 3];",
+      "let appended = @array.push push_source 4;",
+      "return @int.add (@int.add (@array.get copied 0) (@array.get replaced 0)) (@array.get appended 3);",
+    ].join("\n"),
+  );
+  const loaded = await load(path);
+  const checked = await checkFile(path);
+  const lowered = lowerModule(loaded.module, checked, checked.values);
+  const pending: unknown[] = lowered.definitions.map((definition) =>
+    definition.body
+  );
+  const updates: { readonly kind: string; readonly owned: boolean }[] = [];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (Array.isArray(value)) {
+      pending.push(...value);
+      continue;
+    }
+    if (value === null || typeof value !== "object") continue;
+    const expression = value as Record<string, unknown>;
+    if (expression.kind === "store-write" || expression.kind === "store-grow") {
+      updates.push({
+        kind: expression.kind,
+        owned: expression.owned === true,
+      });
+    }
+    pending.push(...Object.values(expression));
+  }
+
+  assertEquals(
+    updates.filter((update) => update.owned).map((update) => update.kind)
+      .sort(),
+    ["store-grow", "store-write"],
+  );
+  assert(
+    updates.some((update) => update.kind === "store-write" && !update.owned),
+    "shared array updates must remain persistent",
+  );
+});
+
 Deno.test("text primitives are self-contained in emitted WebAssembly", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "text-intrinsics.blot");

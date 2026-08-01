@@ -1218,6 +1218,12 @@ Linear closures cannot currently be stored in arrays, tuples, or shapes, because
 linear structures are not tracked. The compiler rejects such an escape. Last-use
 and proved-consumption facts are recorded for the backend.
 
+When the proved consumption of a linear binding is the array operand of
+`@array.set` or `@array.push`, the backend may reuse that array's Store. This is
+an implementation permission, not mutation in the language: the source binding
+is unavailable after the consuming use, and updates of ordinary shared arrays
+remain persistent with the immutable behavior specified in §5.3.
+
 ## 12. Effects and handlers
 
 An effect is a compile-time value built from a shape of operation types:
@@ -1616,6 +1622,7 @@ Before gpufuck lowering, Blot:
 - lowers shapes and tuples to nominal records;
 - lowers constructor sets to nominal variants;
 - lowers arrays to gpufuck `Store`;
+- marks a Store update owned only when it consumes a proved linear array;
 - lowers `rec` to local `let-rec`;
 - specializes source handlers with selective CPS; and
 - turns host effects and entry-module projections into typed imports.

@@ -17,11 +17,10 @@
 //     moved, so a borrowing function is one you can call without losing what you
 //     passed it.
 //
-// Alongside the check, the pass records the last use of every binding. Nothing
-// consumes those facts yet: gpufuck's Functional Surface has no in-place write
-// for them to select, so there is no instruction to emit — see
-// `docs/roadmap.md`'s "What blot needs from gpufuck". They are computed and
-// exposed rather than deferred, so the analysis can be tested on its own.
+// Alongside the check, the pass records the last use of every binding. The
+// backend spends the stronger, per-path linear fact on owned Store updates;
+// traversal-order last uses remain diagnostic evidence rather than a general
+// deadness proof.
 //
 // Every fact is keyed by the `name` pattern that introduced the binding, never
 // by the binding's name. A name is not an identity: two scopes may bind the

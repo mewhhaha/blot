@@ -102,8 +102,10 @@ Binding it to a name works, and so does calling it where it was built; anything
 else reports `BLOT_LINEAR_CLOSURE_ESCAPES` rather than losing the obligation
 quietly.
 
-**Reuse is analysed but not applied.** The pass records the last use of every
-binding and which linear bindings were proved spent exactly once. Rewriting a
-rebuild into an in-place write needs a Core to rewrite, which arrives with the
-backend. `blot ownership` prints the facts so the analysis is testable on its
-own rather than deferred until something can act on it.
+**Reuse requires the stronger proof.** The pass records both traversal-order
+last uses and the linear bindings proved consumed exactly once on every path.
+Only the second fact licenses Store reuse: when that proved consumption is the
+array operand of `@array.set` or `@array.push`, lowering marks the update owned.
+gpufuck may then write through the source allocation. An ordinary array, an
+affine binding consumed on only some paths, or a use that does not match the
+proved consumption stays persistent.

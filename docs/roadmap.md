@@ -698,75 +698,27 @@ blot files bugs against gpufuck rather than fixing them. This is the other half
 of that arrangement: the things blot cannot supply from its own side, written so
 the next person asks for the right thing.
 
-## An in-place store write
+## An in-place store write — landed
 
-**The gap.** gpufuck's Functional Surface has exactly six store forms —
-`store-empty`, `store-new`, `store-length`, `store-read`, `store-write`,
-`store-grow` — declared at
-`../gpufuck/src/functional/surface_contract.ts:32`–`:63`. None of them writes in
-place. `store-write` looks like the exception and is not: `compileStoreUpdates`
-(`../gpufuck/src/functional/wasm_codegen.ts:5197`) allocates a fresh store and
-copies the source into it (`:5278`, `:5279`) before applying the writes it
-collected. So every `@array.set` blot emits (`src/backend/lower.ts:3844`) is an
-O(n) rebuild, and so is every `@array.push` (`:3859`, through `store-grow`).
+gpufuck's `store-write` and `store-grow` Surface forms now accept an optional
+ownership witness. Blot supplies it only when the operand resolves to a linear
+binding, the ownership pass proved that binding consumed exactly once on every
+path, and this variable occurrence is the recorded consumption. Ordinary and
+affine bindings keep the persistent forms.
 
-**Why that blocks the ownership pass rather than merely costing time.**
-`src/linear/check.ts` proves which bindings are linear and discharged exactly
-once, and `src/check/mod.ts` merges those facts across every module the backend
-inlines. A fact is worth having only when some instruction selection consumes
-it, and here there is no instruction to select: whether or not blot knows `xs`
-is dead after `@array.set xs i v`, the only form it can emit copies. That is why
-the reuse half of linearity and ownership — README calls the whole of it M3 — is
-not finished, and why `blot ownership` prints facts nothing applies. It is not,
-as `src/cli.ts` used to say, that blot has no Core to rewrite; blot has had one
-since M4.
+The linear-memory backend writes through owned Stores. Growth keeps geometric
+capacity, so a uniquely threaded append loop copies only when it crosses a
+capacity boundary rather than once per element. WasmGC reuses the fixed backing
+array for owned same-length writes. Bounds faults and operand evaluation still
+happen before either backend mutates the source allocation.
 
-**The ask, in the shape `surface_builder.ts` already takes.** An ownership
-witness on the two updating forms, optional and defaulting to today's copying
-behaviour so that no existing frontend changes:
+`Ownership.lastUses` remains traversal order rather than general liveness. It
+does not license reuse for plain arrays; extending reuse beyond explicit linear
+ownership still requires a per-path liveness and alias proof.
 
-```ts
-// ../gpufuck/src/functional/surface_builder.ts:1990
-storeWrite(
-  store: SurfaceExpression,
-  index: SurfaceExpression,
-  value: SurfaceExpression,
-  options?: { readonly owned: boolean },
-): SurfaceExpression;
-```
-
-producing `{ kind: "store-write", store, index, value, owned?: boolean }` in
-`surface_contract.ts`, and the same field on `store-grow`. `owned: true` is the
-frontend promising that the value the `store` operand evaluates to is read by
-nothing else on any path once this expression has been evaluated, which is what
-licenses `compileStoreUpdates` to write through the source instead of allocating
-and copying. Absent means false, and then the emitted bytes are what they are
-today.
-
-A new kind — `store-write-owned` — says the same thing and is the worse ask.
-`store-write` is matched in six files besides the contract that declares it
-(`recursive_groups.ts`, `module_linker.ts`, `surface_reachability.ts`,
-`case_defaults.ts`, `compilation_trace.ts`, `surface_builder.ts`) and again by
-Core tag in `wasm_codegen.ts`. A form somebody forgot to handle fails as a
-missing case; a flag somebody forgot to read fails as a slower program.
-
-**What blot still owes, and must not skip if the form arrives.**
-`Ownership.lastUses` is the last read in _traversal_ order. Branches are walked
-one after another from the same incoming state and only the consumed-or-not
-state is restored between them, so a read in the last arm of a `case` overwrites
-a read in the first even though no execution takes both. That is not the claim
-`owned: true` requires: a read the pass stopped recording is not a read proved
-absent, and spending the weaker fact as though it were the stronger is how a
-silent miscompile gets written. The fact that already _is_ a per-path claim is
-the linear one — a binding in `Ownership.linear` was consumed exactly once on
-every path, because `agree` enforces it. So the first honest use of the new form
-is a linear array, not an arbitrary last use, and turning `lastUses` into a real
-liveness result is separate work on blot's side.
-
-**Gate.** None yet; this is an ask, not a milestone. When the form exists the
-gate is `just wasm` on a program that sets an element of a linear array — the
-interpreter, the GPU evaluator, and the emitted Wasm must still agree, and that
-is what catches an `owned` blot had no right to claim.
+**Gate.** Backend tests distinguish persistent and owned writes and growth,
+catalog lowering records owned `@array.set` and `@array.push`, and `just wasm`
+keeps the interpreter, GPU evaluator, and emitted Wasm on the same value.
 
 ---
 
