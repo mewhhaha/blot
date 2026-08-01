@@ -20,12 +20,12 @@ in a benchmark months later.
 | counter                    |              blot | gpu-duck | note                                               |
 | -------------------------- | ----------------: | -------: | -------------------------------------------------- |
 | `lexerStates`              |               118 |      175 | direct multiplier in the parallel DFA summary pass |
-| `maxCandidateMultiplicity` |                 5 |        9 | worst-case island candidates allocated per token   |
-| `islandCount`              |                21 |       24 |                                                    |
-| `islandStates`             |               639 |        — |                                                    |
+| `maxCandidateMultiplicity` |                 6 |        9 | worst-case island candidates allocated per token   |
+| `islandCount`              |                22 |       24 |                                                    |
+| `islandStates`             |               662 |        — |                                                    |
 | `contractionRounds`        |                33 |        — | fixed dispatch bound                               |
-| `denseTransitionBytes`     |           552,096 |        — | immutable device table                             |
-| `packedBytes`              |           674,048 |        — | version-3 runtime section                          |
+| `denseTransitionBytes`     |           579,912 |        — | immutable device table                             |
+| `packedBytes`              |           696,352 |        — | version-3 runtime section                          |
 | `rootLoopIsland`           | 3 (`declaration`) |        — | strict root loop proven                            |
 
 blot beats the gpu-duck reference on both counters that matter most for
@@ -33,8 +33,9 @@ occupancy, because it has three declaration forms where gpu-duck has six and no
 type sublanguage at all.
 
 Updating baba from 7.9.0 to 7.10.0 changed no counter at all — `lexerStates`,
-`islandStates`, `denseTransitionBytes`, and `packedBytes` are byte-identical,
-and byte parity still holds across all 39 corpus programs.
+`islandStates`, `denseTransitionBytes`, and `packedBytes` were byte-identical
+across it. Byte parity holds across all 59 corpus programs: `examples/`,
+`examples/lib/`, every case study and its libraries, and the prelude.
 
 Updating baba from 7.3.0 to 7.9.0 increased `packedBytes` by 448 bytes for the
 new runtime metadata. The grammar-dependent counters did not change.
@@ -60,6 +61,13 @@ decides which island is live. Without the island declaration the grammar is
 rejected outright — `effect_row` contains `expression`, which contains it back,
 and an undeclared region leaves that recursion residual. Requiring a row to be
 non-empty is what leaves `{}` unambiguously the empty shape.
+
+Standalone `case` adds one island and twenty-three island states, with 27,816
+dense-transition bytes and 22,304 packed bytes. Its shared `case` opener with
+the value form raises `maxCandidateMultiplicity` and the region and candidate
+scratch factors from 5 to 6. `lexerStates` and `contractionRounds` do not move,
+and the grammar remains accepted under strict throughput without a parser
+resolution.
 
 Declaration tags use `@[descriptor]`: `@[` is disjoint from an intrinsic's
 `@name`, so it costs one lexer state and ten island states while leaving

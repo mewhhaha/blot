@@ -3399,6 +3399,12 @@ function storeUpdateOptions(
   }
   const ownership = lowering.facts.ownership.get(pattern);
   if (!ownership?.spent || ownership.lastUse === null) return undefined;
+  // A read some closure makes across its own boundary happens when that closure
+  // is called, and a recursive group's members call each other in an order the
+  // block does not write down. Where the pass says so, the recorded last use is
+  // the last one it walked past rather than the last one taken, and updating in
+  // place would overwrite what a sibling still reads.
+  if (ownership.reentrant) return undefined;
   if (
     ownership.lastUse.start !== source.span.start ||
     ownership.lastUse.end !== source.span.end

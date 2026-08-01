@@ -17,12 +17,15 @@ import {
   type Checked,
   checkModule,
   type GrantSignature,
+  newStaging,
+  settle,
   type Shape,
+  type Staging,
   type TaggedDeclaration,
   type VariantCase,
 } from "./infer.ts";
 import type { Decl, Expr, Pattern, Span } from "../syntax/ast.ts";
-import { freshVar, type SimpleType } from "./type.ts";
+import type { SimpleType } from "./type.ts";
 import { show, showModuleRow as showRow } from "./print.ts";
 import { isHostEffect } from "./bridge.ts";
 import { TypeError_ } from "./constrain.ts";
@@ -51,6 +54,12 @@ export interface OwnedBinding {
   readonly lastUse: Span | null;
   /** Its linear or affine obligation was proved discharged exactly once. */
   readonly spent: boolean;
+  /**
+   * `lastUse` is the last read walked, not the last read taken; see
+   * `Ownership.reentrant`. Anything that would treat that read as the binding's
+   * death has to refuse when this is set.
+   */
+  readonly reentrant: boolean;
 }
 
 export interface CheckResult {
@@ -97,22 +106,43 @@ function imports(loaded: Loaded) {
   return loaded.closure.imports ?? new Map();
 }
 
+/**
+ * Check one program: its root module and everything that module imports.
+ *
+ * Two passes, because a fact and a diagnostic want opposite moments. A
+ * diagnostic belongs to the module that caused it, so checking runs bottom-up
+ * and a dependency's error is reported against the dependency's source. A field
+ * set belongs to the whole program: the record that reaches `fn c => c.zoom`
+ * may be built two files away, so the reads that answer it are held in one
+ * `Staging` and settled once, after every module has contributed its
+ * constraints. Only then is there an answer to assemble into results.
+ */
 export async function checkFile(path: string): Promise<CheckResult> {
   const loaded = await load(path);
-  return checkLoaded(loaded, checkedFiles).result;
+  // Per call, not per process. A dependency's facts depend on its importers, so
+  // there is no one answer it could carry between two programs — and since they
+  // are keyed by AST node identity, one map could not hold both answers anyway.
+  // The loader's cache does stay process-wide, which is what keeps those
+  // identities stable from one call to the next.
+  const checkedFiles = new Map<Loaded, CheckedFile>();
+  const staging = newStaging();
+  checkLoaded(loaded, checkedFiles, staging);
+  settle(staging);
+  return assemble(loaded, checkedFiles, new Map());
 }
 
 interface CheckedFile {
   readonly checked: Checked;
-  readonly result: CheckResult;
+  /** The row as the boundary check saw it, so what is reported is what passed. */
+  readonly effects: string;
+  readonly ownership: ReadonlyMap<NamePattern, OwnedBinding>;
+  readonly values: ValueEnv;
 }
-
-/** Loader identity is the invalidation token for every AST-keyed inference fact. */
-const checkedFiles = new WeakMap<Loaded, CheckedFile>();
 
 function checkLoaded(
   loaded: Loaded,
-  cache: WeakMap<Loaded, CheckedFile>,
+  cache: Map<Loaded, CheckedFile>,
+  staging: Staging,
 ): CheckedFile {
   const cached = cache.get(loaded);
   if (cached !== undefined) return cached;
@@ -122,36 +152,25 @@ function checkLoaded(
   }
 
   // Nothing is seeded. The prelude is reached through `@import` like any other
-  // module, so its exports arrive as a dependency's type and its facts travel
-  // in `dependencyFacts` — there is no branch here that knows what a prelude
-  // is.
+  // module, so its exports arrive as a dependency's type and `assemble` folds
+  // its facts in the way it folds any other's — there is no branch here that
+  // knows what a prelude is.
   const values = childEnv(loaded.closure.env);
 
   // Each dependency is checked before its importer, so a module's exports are
   // visible as types rather than as an opaque value.
   const modules = new Map<string, SimpleType>();
-  const dependencies = new Map<string, CheckedFile>();
-  // A dependency's facts travel with it for the same reason the prelude's do:
-  // the backend inlines an imported module, so it needs the field and
-  // constructor sets inference found *inside* that module.
-  const dependencyFacts: {
-    opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
-    comptimeValues: ReadonlyMap<Expr, Value>;
-    shapes: ReadonlyMap<Expr, Shape>;
-    variants: ReadonlyMap<Expr, readonly VariantCase[]>;
-    patternShapes: ReadonlyMap<Pattern, Shape>;
-    declarationTags: ReadonlyMap<Decl, TaggedDeclaration>;
-  }[] = [];
   for (const [specifier, dependency] of loaded.dependencies) {
-    const dependencyChecked = checkLoaded(dependency, cache);
-    dependencies.set(specifier, dependencyChecked);
-    dependencyFacts.push(dependencyChecked.checked);
-    const parameter = dependency.module.parameter === null
-      ? { tag: "unit" as const }
-      : freshVar(0);
+    const dependencyChecked = checkLoaded(dependency, cache, staging);
+    // The module's own parameter variable, not a stand-in for it. A fresh
+    // variable here would satisfy every argument, so an importer could omit a
+    // field the module reads and nothing would say so — and the record it does
+    // pass would never reach the projections inside the module that decide
+    // their nominal.
+    const parameter = dependencyChecked.checked.parameter;
     modules.set(specifier, {
       tag: "fun",
-      param: parameter,
+      param: parameter === null ? { tag: "unit" as const } : parameter,
       effects: dependencyChecked.checked.effects,
       result: dependencyChecked.checked.type,
     });
@@ -164,6 +183,7 @@ function checkLoaded(
       imports(loaded),
       null,
       modules,
+      staging,
     );
     // A module's own row is what it performs that nothing handled. Non-empty at
     // the top level means the program would reach a `perform` with no handler
@@ -185,74 +205,12 @@ function checkLoaded(
     if (linear.diagnostics.length > 0) {
       throw new BlotError(linear.diagnostics[0]);
     }
-    const resolvedModules = mergeAll([
-      ...[...dependencies.values()].map((dependency) =>
-        dependency.result.modules
-      ),
-      new Map(
-        [...importExpressions(loaded.module)].map(([site, specifier]) => {
-          const dependency = dependencies.get(specifier);
-          if (dependency === undefined) {
-            throw new Error(
-              `loaded module ${loaded.path} omitted dependency ${specifier}`,
-            );
-          }
-          const loadedDependency = loaded.dependencies.get(specifier);
-          if (loadedDependency === undefined) {
-            throw new Error(
-              `loaded module ${loaded.path} omitted dependency ${specifier}`,
-            );
-          }
-          return [
-            site,
-            {
-              module: loadedDependency.module,
-              values: dependency.result.values,
-            },
-          ] as const;
-        }),
-      ),
-    ]);
-    const result: CheckResult = {
-      type: show(checked.type),
+    const complete: CheckedFile = {
+      checked,
       effects: row,
-      moduleType: checked.type,
-      moduleEffects: checked.effects,
-      ownership: mergeAll([
-        ...[...dependencies.values()].map((dependency) =>
-          dependency.result.ownership
-        ),
-        own(loaded.path, linear.ownership),
-      ]),
-      opens: mergeAll([
-        ...dependencyFacts.map((facts) => facts.opens),
-        checked.opens,
-      ]),
-      comptimeValues: mergeAll([
-        ...dependencyFacts.map((facts) => facts.comptimeValues),
-        checked.comptimeValues,
-      ]),
-      shapes: mergeAll([
-        ...dependencyFacts.map((facts) => facts.shapes),
-        checked.shapes,
-      ]),
-      variants: mergeAll([
-        ...dependencyFacts.map((facts) => facts.variants),
-        checked.variants,
-      ]),
-      patternShapes: mergeAll([
-        ...dependencyFacts.map((facts) => facts.patternShapes),
-        checked.patternShapes,
-      ]),
-      declarationTags: mergeAll([
-        ...dependencyFacts.map((facts) => facts.declarationTags),
-        checked.declarationTags,
-      ]),
-      grants: checked.grants,
-      modules: resolvedModules,
+      ownership: own(loaded.path, linear.ownership),
       values,
     };
-    const complete = { checked, result };
     cache.set(loaded, complete);
     return complete;
   } catch (error) {
@@ -274,6 +232,105 @@ function checkLoaded(
     }
     throw error;
   }
+}
+
+/**
+ * One module's result, with every fact its dependencies contributed folded in.
+ *
+ * The backend inlines an imported module into its importer, so an importer's
+ * facts have to cover the dependency's bindings too — which is why every map
+ * here merges the dependency's before adding this module's own. Runs only after
+ * the compilation has settled: before that, a fact map is a promise rather than
+ * an answer, and merging it would copy the empty promise.
+ *
+ * Memoized because a diamond would otherwise assemble a shared dependency once
+ * per path to it.
+ */
+function assemble(
+  loaded: Loaded,
+  cache: ReadonlyMap<Loaded, CheckedFile>,
+  results: Map<Loaded, CheckResult>,
+): CheckResult {
+  const done = results.get(loaded);
+  if (done !== undefined) return done;
+
+  const file = cache.get(loaded);
+  if (file === undefined) {
+    throw new Error(
+      `module ${loaded.path} was assembled before it was checked`,
+    );
+  }
+  const dependencies = new Map<string, CheckResult>();
+  for (const [specifier, dependency] of loaded.dependencies) {
+    dependencies.set(specifier, assemble(dependency, cache, results));
+  }
+  // A dependency's assembled result, not the `Checked` of its own module: an
+  // importer's importer inlines the whole subtree, so a fact found two levels
+  // down has to arrive here too.
+  const below = [...dependencies.values()];
+
+  const checked = file.checked;
+  const result: CheckResult = {
+    type: show(checked.type),
+    effects: file.effects,
+    moduleType: checked.type,
+    moduleEffects: checked.effects,
+    ownership: mergeAll([
+      ...below.map((dependency) => dependency.ownership),
+      file.ownership,
+    ]),
+    opens: mergeAll([
+      ...below.map((dependency) => dependency.opens),
+      checked.opens,
+    ]),
+    comptimeValues: mergeAll([
+      ...below.map((dependency) => dependency.comptimeValues),
+      checked.comptimeValues,
+    ]),
+    shapes: mergeAll([
+      ...below.map((dependency) => dependency.shapes),
+      checked.shapes,
+    ]),
+    variants: mergeAll([
+      ...below.map((dependency) => dependency.variants),
+      checked.variants,
+    ]),
+    patternShapes: mergeAll([
+      ...below.map((dependency) => dependency.patternShapes),
+      checked.patternShapes,
+    ]),
+    declarationTags: mergeAll([
+      ...below.map((dependency) => dependency.declarationTags),
+      checked.declarationTags,
+    ]),
+    grants: checked.grants,
+    modules: mergeAll([
+      ...below.map((dependency) => dependency.modules),
+      importSites(loaded, dependencies),
+    ]),
+    values: file.values,
+  };
+  results.set(loaded, result);
+  return result;
+}
+
+/** Each literal `@import` in one module, paired with what it resolved to. */
+function importSites(
+  loaded: Loaded,
+  dependencies: ReadonlyMap<string, CheckResult>,
+): ReadonlyMap<Expr, { module: Loaded["module"]; values: ValueEnv }> {
+  const sites = new Map<Expr, { module: Loaded["module"]; values: ValueEnv }>();
+  for (const [site, specifier] of importExpressions(loaded.module)) {
+    const dependency = dependencies.get(specifier);
+    const resolved = loaded.dependencies.get(specifier);
+    if (dependency === undefined || resolved === undefined) {
+      throw new Error(
+        `loaded module ${loaded.path} omitted dependency ${specifier}`,
+      );
+    }
+    sites.set(site, { module: resolved.module, values: dependency.values });
+  }
+  return sites;
 }
 
 /**
@@ -314,11 +371,17 @@ function own(
 ): ReadonlyMap<NamePattern, OwnedBinding> {
   const facts = new Map<NamePattern, OwnedBinding>();
   for (const [pattern, lastUse] of ownership.lastUses) {
-    facts.set(pattern, { path, lastUse, spent: ownership.linear.has(pattern) });
+    facts.set(pattern, {
+      path,
+      lastUse,
+      spent: ownership.linear.has(pattern),
+      reentrant: ownership.reentrant.has(pattern),
+    });
   }
   for (const pattern of ownership.linear) {
     if (facts.has(pattern)) continue;
-    facts.set(pattern, { path, lastUse: null, spent: true });
+    // Nothing read it, so there is no read to be wrong about when it happened.
+    facts.set(pattern, { path, lastUse: null, spent: true, reentrant: false });
   }
   return facts;
 }

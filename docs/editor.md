@@ -12,7 +12,10 @@ Tree-sitter parser: ✓   Highlight queries: ✓   Textobject queries: ✓
 Indent queries: ✓       Tags queries: ✓        Rainbow queries: ✓
 ```
 
-There is no language server yet; that arrives with the inference milestone.
+There is no language server. Inference has landed, so what is missing is the
+server rather than anything for it to report: `blot check` already produces
+spans, and it initializes no WebGPU device, which is the property a server would
+need.
 
 ## What gets written
 

@@ -354,10 +354,13 @@ function levelBelow(type: SimpleType, level: Level): boolean {
  * bounds it propagated before and stays polynomial; only fact collection walks
  * it, and only to answer "what shapes reached this node".
  *
- * One map per `checkModule` call, which is what keeps it bounded. Hanging the
- * edge off the `Variable` would attach unbounded growth to `PRIMITIVE_TYPES`,
- * whose scheme variables are process-global and outlive every check — and would
- * let one file's records be seen while checking another's.
+ * One map per program checked, held in its `Staging`: a dependency's
+ * definition-site variable and its importer's instantiation of it have to be
+ * one edge, or a field set read inside the dependency could not find the record
+ * the importer built. Hanging the edge off the `Variable` instead would attach
+ * unbounded growth to `PRIMITIVE_TYPES`, whose scheme variables are
+ * process-global and outlive every check — and would let one program's records
+ * be seen while checking another's.
  */
 export type Instances = Map<Variable, Variable[]>;
 

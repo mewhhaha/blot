@@ -2,7 +2,7 @@
 
 blot infers everything. There are no annotations anywhere in `examples/` except
 where one is used to _narrow_ what inference already produced, and the prelude —
-260 lines of it — carries none at all.
+584 lines of code — carries none at all.
 
 ```bash
 blot check examples/tour.blot
@@ -42,8 +42,9 @@ let twice = fn f => fn x => f (f x);
 ```
 
 HM must unify the two uses of `f` and produces `('a -> 'a) -> 'a -> 'a`. blot
-infers `('a -> 'b & 'b -> 'c) -> 'a -> 'c`, their intersection. Writing the
-expected string down in `inference.test.ts` is what caught the assumption.
+infers `('a -> 'b ~ { e } & 'b -> 'c ~ { e }) -> 'a -> 'c ~ { e }`, their
+intersection, with the callback's row carried through. Writing the expected
+string down in `inference.test.ts` is what caught the assumption.
 
 ## Effects
 
@@ -186,39 +187,51 @@ honest signature. Range-refining arithmetic — `(a..b) + (c..d) : (a+c)..(b+d)`
 is what would close it, and it is the same machinery that would turn
 `if i < len` into a proof that an index is in bounds.
 
-**Comptime-built shapes.** `@shape.get`, `@shape.set`, and `@shape.remove`
-project a field named by a _value_. Their result is genuinely undetermined until
-the name is known, which happens during specialization. Their result type is an
-unconstrained variable: inference learns nothing and rejects nothing. This is
-what a struct's accessors cost: `Point.x` is `@shape.get value "0"` with the
-slot resolved at compile time, so inference cannot say what it returns even
-though the evaluator can. The value is exact; the inferred type is a variable.
+**Comptime-built shapes named at run time.** `@shape.get`, `@shape.set`, and
+`@shape.remove` project a field named by a _value_. Where the name alone is a
+compile-time text the call is an ordinary field projection and is typed as one —
+`@shape.get r "a"` has the type of `r.a` and is refused when `r` has no `.a` —
+and where the whole projection evaluates, what it produced is the type. A name
+that is only known at run time, as in a fold over `@shape.names`, leaves the
+result unconstrained, and a `sig` written over one of those is believed rather
+than checked. That last case is what a struct's accessors used to cost across
+the board; it now costs only the reflective fold.
 
-**Literal coverage stops where enumeration stops.** A `case` over a declared
-literal union is checked for coverage by listing the union's members and
-subtracting the arms, so `1 | 2 | 3` with only a `1` arm is refused. That works
-because a declared union is the one type constructor inference never builds for
-itself — when one reaches a `case`, it _is_ the set the program wrote down. It
-does not extend to a target whose type is `Int`, `Str`, a range with an open
-end, or a variable inference has not pinned: those enumerate no finite member
-list, so `sig f = Int -> Str` with `case n of 1 => "one" end` is still accepted
-and still traps. Closing that would need a difference operation on the lattice
-(`Int \ 1`), which is a real design question — an intersection lives in negative
-position and a complement in neither, so adding both is what would turn the
-lattice into a boolean algebra and cost the polynomial bound.
+**Literal coverage over a target nothing pinned.** A `case` over a declared
+literal union is checked by listing the union's members and subtracting the
+arms, so `1 | 2 | 3` with only a `1` arm is refused, and a target with an open
+end — `Int`, `Str`, any unbounded range — is refused outright as
+`BLOT_INCOMPLETE_CASE`, since no finite list of literal arms can exhaust it.
+What carries no requirement is a target inference has not pinned at all: literal
+arms constrain nothing on their own, so without a `sig` or a call site the
+`case` owes no coverage. Refining a target rather than refusing it would need a
+difference operation on the lattice (`Int \ 1`), which is a real design question
+— an intersection lives in negative position and a complement in neither, so
+adding both is what would turn the lattice into a boolean algebra and cost the
+polynomial bound.
 
-**Narrowing stops at integers, and at one comparison.** A condition proves
-something only when it applies a recognised comparison to a name whose type is
-already a ground set of integers. `if flag then` does not prove `flag : #True`:
-a `variant` carries its constructors and whether the set is open, so a negated
-constructor set is unrepresentable, and a narrowed constructor set would also
-disagree with the set `context.variants` records for the backend. `&&`, `||` and
-`not` prove nothing, because a recognised value is one comparison rather than a
-composition of them. Text is excluded by the lattice rather than by effort:
-`Bound` is inclusive and text order is dense, so splitting `Str` at `"m"` gives
-`.."m" | "m"..` and readmits `"m"`. And a branch whose narrowed type is empty is
-unreachable; that is not yet a diagnostic, so the branch simply keeps the wider
-type.
+**Narrowing stops at integers, and at one comparison per name.** A condition
+proves something only when it applies a recognised comparison to a name whose
+type is already a ground set of integers. `if flag then` does not prove
+`flag : #True`: a `variant` carries its constructors and whether the set is
+open, so a negated constructor set is unrepresentable, and a narrowed
+constructor set would also disagree with the set `context.variants` records for
+the backend. `&&` and `||` do compose — a junction is recognised by tabulating
+its truth table, so `&&` proves what both halves prove and `||` proves both in
+the branch it does not take — but `not` proves nothing, and two halves speaking
+about different names prove nothing, because a proof narrows one name. Text is
+excluded by the lattice rather than by effort: `Bound` is inclusive and text
+order is dense, so splitting `Str` at `"m"` gives `.."m" | "m"..` and readmits
+`"m"`. And a branch whose narrowed type is empty is unreachable; that is not yet
+a diagnostic, so the branch simply keeps the wider type.
+
+**A tuple target's cross-product, where nothing declared its columns.** Coverage
+of a tuple `case` enumerates each column from the type declared for it. Where no
+`sig` or call site declares one, the arms close each column of the sub-matrix
+they are read in rather than the column as a whole, so four arms over two
+`Option` columns minus the `(#None, #None)` row are accepted and reach
+`BLOT_NO_MATCH` at run time. `LANGUAGE.md` §8.4 says so at the rule; declaring
+the scrutinee is what makes the check exact.
 
 **Higher-kinded types** are not inference's problem by design: type constructors
 are comptime functions that are specialized away, so the lattice never needs
@@ -242,17 +255,23 @@ meaningless anyway.
 | ----- | --------------------------- | ------ | ------------------------------- |
 | 10    | `$`                         | right  | `Fn.apply`                      |
 | 20    | `\|>`                       | left   | `Fn.pipe`                       |
+| 21    | `~`                         | left   | `@type.performs`                |
 | 22    | `\|\|`                      | right  | `Logic.or`                      |
 | 24    | `&&`                        | right  | `Logic.and`                     |
 | 25    | `->`                        | right  | `@type.arrow`                   |
 | 30    | `==` `/=` `<` `<=` `>` `>=` | none   | `Eq.*`, `Ord.*`                 |
 | 40    | `\|` `\\`                   | left   | `Set.union`, `Set.diff`         |
 | 45    | `&`                         | left   | `Set.intersect`                 |
-| 50    | `<+`                        | left   | `Type.attach`                   |
+| 50    | `<+`                        | left   | `attach`                        |
 | 55    | `<>`                        | right  | `Semigroup.append`              |
 | 60    | `+` `-`                     | left   | `Num.add`, `Num.sub`            |
 | 70    | `*` `/` `%`                 | left   | `Num.mul`, `Num.div`, `Num.rem` |
 | 90    | `-` `!` `?` `&`             | prefix | `Num.negate`, `@linear.*`       |
+
+`~` sits below the arrow it annotates, so `A -> B ~ { Console }` is
+`(A -> B) ~ { Console }` — the row is what the whole function performs rather
+than part of `B`. It is left-associative, so a curried chain fills its arrows
+from the inside out, which is the order the printer writes them in.
 
 Three relationships are load-bearing and were each wrong once, so
 `examples/operators.blot` pins them:
@@ -272,7 +291,8 @@ algebra. Both are ordinary curried functions, so **both arguments are
 evaluated** — there is no laziness for an operator to exploit, and `if` is the
 short-circuiting form. `a && perform ()` performs whatever `a` is.
 
-`==` is `Ord.eq` over `@int.cmp` and compares integers. `Text.cmp` compares text
-— the evaluator used to accept text through `@int.cmp` while the checker
-rejected it, which is exactly the kind of divergence between the two executions
-that has to be an error rather than a convenience.
+`==` is the fixity entry naming `Eq.eq`, which the prelude binds to `Ord.eq`
+over `@int.cmp`, so it compares integers. `Text.cmp` compares text — the
+evaluator used to accept text through `@int.cmp` while the checker rejected it,
+which is exactly the kind of divergence between the two executions that has to
+be an error rather than a convenience.

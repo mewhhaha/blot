@@ -92,13 +92,14 @@ returned record is a runtime value and an effect cannot be a field of one. The
 renderer exports a `frame` instead, which clears, reads the camera, hands the
 application two brushes, and presents.
 
-That is also what keeps the projection lowering. A camera is one record inside
-`lib/render.blot` and a different field subset at each of the four places that
-reads one, and those shapes only agree because inference watches the record
-reach them — which it can only do while the record stays inside one module.
-Records that _do_ cross carry their whole field set, which is why a brush takes
-a position, an angle, a scale, and a colour rather than a `Transform`: the
-renderer has no business knowing that this game's transform also has a spin.
+A camera is one record inside `lib/render.blot` and a different field subset at
+each of the four places that reads one, and those shapes agree because inference
+watches the record reach them. It watches across a module boundary too, now — a
+record may cross carrying more fields than the module it enters reads. So a
+brush takes a position, an angle, a scale, and a colour rather than a
+`Transform` because the renderer has no business knowing that this game's
+transform also has a spin, which is a design reason and no longer a lowering
+one.
 
 ### The world is the frame loop
 
@@ -135,9 +136,11 @@ means adding a name.
 
 The geometry is `F32x4`. It was fixed point at 4096 until the language had a
 second numeric type, then `F64` scalars until it had a fourth, and neither move
-touched the boundary: a float cannot cross a module boundary at all, so the
-scene arrives as thousandths and the screen leaves as pixels, and everything
-between is a lane.
+touched the boundary: no float crossed one at the time, so the scene arrives as
+thousandths and the screen leaves as pixels, and everything between is a lane.
+Scalar floats cross now — `F32` and `F64` are canonical `f32` and `f64` at the
+ABI — so those two conversions are the port's history rather than a rule.
+`F32x4` is what still cannot cross, and that has not changed.
 
 A three-component vector in a four-lane register leaves one lane spare, and the
 whole port turns on spending it. A point carries 1 there and a direction carries
@@ -146,14 +149,14 @@ row's fourth lane is its translation, and the point's fourth lane decides
 whether that translation applies.
 
 ```blot
-const turn_y = (point, rotation) => Vec4.of (
+const turn_y = fn (point, rotation) => Vec4.of (
   Vec4.dot point rotation.to_x,
   Vec4.y point,
   Vec4.dot point rotation.to_z,
   Vec4.w point
 );
 
-const to_view = (point, camera) => Vec4.of (
+const to_view = fn (point, camera) => Vec4.of (
   Vec4.dot point camera.right,
   Vec4.dot point camera.up,
   Vec4.dot point camera.forward,
@@ -208,7 +211,7 @@ version could only approach. The module's square root takes an `F32` now, so
 The camera carries a lens, and `to_screen` is the only place it matters:
 
 ```blot
-const to_screen = (view, camera) =>
+const to_screen = fn (view, camera) =>
   if camera.lens == 0
   then Vec4.add
     SCREEN_CENTRE
@@ -297,46 +300,50 @@ remove the worker.
 
 ### What the language made awkward
 
-- **A two-component join wants a tuple pattern.**
-  `case (at (l, id), at (r, id)) of (#Some a, #Some b) => …` is how this should
-  read, and it does not lower — _"a tuple pattern over a literal is not lowered
-  to Wasm yet"_. `lib/ecs.blot` nests its `case`s instead, once, so the systems
-  stay one expression each.
-- **An effect row cannot be written.** Not one effectful binding in the engine
-  carries a `sig` — not `render`, not the two loaders, not the renderer's
-  `frame` — because an effectful arrow's type includes its row, and a row is
-  printed but never written. `advance` has one only because it is the one system
-  that touches no capability.
-- **A record crossing a module boundary carries its whole field set.** Inference
-  records the field set at each projection and the backend turns it into a
-  nominal, so a library that reads `.colour` off a record builds a one-field
-  shape and an application that passes it a two-field one is a lowering
-  mismatch. Inside a module inference reconciles the two, because it watches the
-  value reach the projection; across one it cannot. So the renderer's brushes
-  take a position, an angle, a scale, and a colour, and the camera never leaves
-  the module that builds it. That is a fine boundary to have arrived at, but it
-  was arrived at by the backend rather than chosen.
-- **A float cannot cross the module boundary.** gpufuck's `CanonicalAbiType` has
-  no float case, so `Assets.entry` carries thousandths and `Canvas.tri` carries
-  pixels. One conversion at each edge, which is where a renderer wants one
-  anyway — but it is a gap in the target rather than a choice here.
+- **A record does not survive a tuple scrutinee.** `each_2` writes the join the
+  way it should read —
+  `case (at (l, id), at (r, id)) of (#Some a, #Some b) => …` — and lowers,
+  because what it carries out is a component the visitor consumes whole.
+  `visit_2` cannot: its visitor projects `transform.position`, and a record
+  reaching a projection only by having been a tuple column records the narrower
+  set the projection's own body reads rather than the set the store built, so
+  the nominal is the wrong one and gpufuck refuses the mismatch (`LANGUAGE.md`
+  §15). So a renderer's join stays two nested `case`s, and the cause is the
+  record, not the tuple pattern.
 - **A lane cannot be written, only converted.** There is one float token in the
   grammar and it reads as an `F64`, so every single-precision constant in the
   engine is a `Float32.of_float` the program wrote down. That is the right
   default — narrowing should be visible — but a file whose every constant is
   single precision pays for it on every line.
-- **No lane-wise comparison, and no shuffle.** The near test is four `Vec4.z`
-  extracts and four scalar compares, because `Vec4` has no compare — although
-  gpufuck's fixed-vector contract does, in `$F32x4Less` and `$F32x4Select` over
-  a mask type the prelude never names. The absent shuffle is the target's
-  though, which is why a matrix-vector product here is one dot per row rather
-  than a transpose and three multiplies.
-- **A vector is four boxed lanes.** `F32x4` reaches Core as a one-constructor
-  type with four `F32` fields, so a `Vec4` operation emits one real `f32x4`
-  instruction with eight lane loads in front of it and five allocations behind
-  it. The instructions are in the artifact and this is the program that put them
-  there, as does `examples/simd.blot`, which takes a lane from a host effect so
-  that it cannot fold the way `examples/vectors.blot` does. Keeping a register
-  live across `Vec4.dot (Vec4.add a b) c` is a change to how the target
-  represents the value, not to anything writable here — and until it lands, this
-  port is a demonstration that the path works rather than one that it is faster.
+- **A vector is four boxed lanes at a lazy boundary.** `F32x4` reaches Core as a
+  one-constructor type with four `F32` fields. A strict chain stays in a `v128`
+  across let bindings and calls when every argument is provably a vector, so
+  `Vec4.dot (Vec4.add a b) c` keeps its register; a materialized closure or a
+  lazy boundary still boxes, because a heap value must outlive the native worker
+  that produced it. The instructions are in the artifact and this is one of the
+  programs that put them there, as is `examples/simd.blot`, which takes a lane
+  from a host effect so that it cannot fold the way `examples/vectors.blot`
+  does.
+
+Four more were true when this was written and are not now. The engine has not
+been rewritten to take them:
+
+- **An effect row can be written now** (`LANGUAGE.md` §12.4). Not one effectful
+  binding in the engine carries a `sig` — not `render`, not the two loaders, not
+  the renderer's `frame` — and that is now a thing to do rather than a thing the
+  language forbids.
+- **A record may cross a module boundary carrying more fields than the module
+  reads** (`LANGUAGE.md` §3). The renderer's brushes take a position, an angle,
+  a scale, and a colour because a boundary that names what it reads is a good
+  boundary, not because a `Transform` would fail to lower. Two importers handing
+  the same projection differently-shaped records is still
+  `BLOT_SHAPE_DISAGREEMENT`.
+- **A float crosses the module boundary.** `F32` and `F64` are canonical `f32`
+  and `f64` at the ABI (`docs/abi.md`), so `Assets.entry` carries thousandths
+  and `Canvas.tri` carries pixels by history rather than by necessity.
+- **There is a lane-wise comparison and a shuffle.** `Vec4.less`, `Vec4.equal`,
+  `Vec4.select`, `Vec4.shuffle`, and `Vec4.swizzle` are prelude source over
+  `@f32x4.*`, and `F32x4Mask` is the type the comparisons produce. The near test
+  is still four `Vec4.z` extracts and four scalar compares, and the comment in
+  `lib/render.blot` still says there is no lane-wise comparison; both are the
+  port, not the language.

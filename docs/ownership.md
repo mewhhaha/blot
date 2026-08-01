@@ -94,6 +94,54 @@ defining scope and then by the inner one from the outer, so both closures come
 out linear — which is the right answer, and it falls out of resolving one link
 at a time rather than being a special case.
 
+## A recursive group is one scope
+
+A recursive group's names are in scope in every member's body, and the pass sees
+it that way: a reference to a sibling is a use of it wherever the sibling
+stands. Declaration order inside a group decides nothing. Each of these is one
+spend of `token`, and each is counted whether `hold` is written above `start` or
+below:
+
+```blot
+let start = rec (fn n => hold n);
+let hold = rec (fn n => consume (!token));
+```
+
+An ordinary declaration is walked before its name exists, which is right for a
+binding nothing before it can mention. A group's members mention each other, so
+walking one that way meets a name the scope has never heard of and its uses go
+uncounted — a linear sibling then looks unconsumed however many times the group
+spends it. That was not merely a wrong number: a second use elsewhere made the
+total come out right, and the program was accepted while spending the closure
+twice.
+
+Declaring the names first is not enough on its own, because a member's qualifier
+is not written on its pattern. It is _discovered_ from its body, and a sibling
+that holds a member discovered linear is linear in turn. So the qualifiers are
+settled against a throwaway analysis first — raising each member until walking
+the bodies stops raising any — and the group is then walked once for real
+against them.
+
+**A closure holding a spendable value may not be called from inside its own
+group.** Its own body is inside its own group, so this reaches plain recursion:
+
+```blot
+let go = rec (fn n =>
+  if n < 1 then consume (!token) else go (n - 1) end);
+return go 3;
+```
+
+is `BLOT_LINEAR_CONSUMED_TWICE` on `go`. A recursive call is a second call, and
+a closure owing exactly one call cannot promise it. The pass counts uses and
+cannot count calls, so this refuses a program that may in fact spend the value
+once — the conservative side, and the same answer for an affine member, where a
+second call is a second consumption too. What the two do not share is what
+happens when nothing outside the group calls it: for affine that was never a
+leak, and for linear the group's own recursive call is what discharges the
+obligation, so neither reports. `examples/rejected/semantics/` carries both
+shapes, as `recursive_linear_capture.blot` and
+`recursive_group_consumed_twice.blot`.
+
 ## What is not proven
 
 **A linear closure cannot be stored in a structure.** Putting one in a shape
@@ -109,3 +157,13 @@ array operand of `@array.set` or `@array.push`, lowering marks the update owned.
 gpufuck may then write through the source allocation. An ordinary array, an
 affine binding consumed on only some paths, or a use that does not match the
 proved consumption stays persistent.
+
+**A last use is not a death.** It is where the pass stopped seeing the name.
+Inside a closure that is not where the binding dies, because the body runs when
+the closure is called and nothing in declaration order dates that call — a
+recursive group is only the sharpest case of that, since its members call each
+other in an order the block never wrote down. So a binding read across a closure
+boundary _and_ read somewhere else has no last read this pass can name; the fact
+says so, and anything that would read a death off it has to refuse rather than
+guess. A binding a closure holds the only read of keeps its last use, because
+how often that closure runs is what the linear proof is about.

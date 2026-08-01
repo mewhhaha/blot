@@ -191,6 +191,24 @@ Imports are resolved before evaluation. Importing a module grants it no
 authority: the imported module can observe only the value passed as its module
 argument. The entry module's parameter is therefore its complete host authority.
 
+Applying an imported module checks the argument against the parameter type
+inference found _inside_ that module. Nothing declares that requirement — a
+module never writes a signature for its parameter, and the demand is whatever
+its bodies reach for — so the rule is that the importer's record must satisfy
+every field the module projects off its parameter. A record missing one is
+`BLOT_TYPE_ERROR` at the application, naming the field. A fresh variable in the
+parameter's place would satisfy every argument, and the program would then read
+a field that is not there.
+`examples/rejected/semantics/module_argument_missing_field.blot` is the catalog
+entry.
+
+The argument may carry _more_ fields than the module reads. Width subtyping
+holds across the boundary in both directions: as the argument to a module, and
+as an argument to a function that module exports. Such a program checks and
+lowers — the record the importer built is what reaches the projection inside the
+dependency, so the nominal the backend mints is the one the value has.
+`examples/widened.blot` and `examples/lib/camera.blot` are the catalog entry.
+
 Nothing, including the prelude, is implicitly in scope. The conventional prelude
 opening is:
 
@@ -882,24 +900,31 @@ cross-product: a combination of columns no arm accepts is
 target. So
 
 ```blot
-case (left, right) of
+sig join = (Option Int, Option Int) -> Int;
+let join = fn pair => case pair of
   (#Some a, #Some b) => a + b,
   (#Some a, #None) => a,
   (#None, #Some b) => b,
   (#None, #None) => 0
-end
+end;
 ```
 
 is total with no irrefutable arm at all, and dropping its last arm is refused
 with `` No arm covers `(#None, #None)` ``.
 
+The `sig` is load-bearing there, and this is the one place a tuple target is
+weaker than a single one. A column is enumerated from the type declared for it,
+and where nothing declares one the arms close each column of the sub-matrix they
+are read in rather than the column as a whole — so the same four arms without
+the `sig`, minus the last, are accepted and reach `BLOT_NO_MATCH` at run time.
+Declare the scrutinee to get the cross-product checked.
+
 Each column is covered on its own terms. A column whose type is a constructor
-set must have every constructor named in it, and — as for a single target — the
-arms are what close a column no `sig` declared: a column naming `#Some` and
-`#None` makes the scrutinee's column that union, so a target declared wider is
-refused there. A column whose type has more values than arms can list — `Int`,
-`F64`, an opaque type, a shape — can only be covered by an irrefutable pattern
-in that column, so
+set must have every constructor named in it, and the arms are what close a
+column no `sig` declared: a column naming `#Some` and `#None` makes the
+scrutinee's column that union, so a target declared wider is refused there. A
+column whose type has more values than arms can list — `Int`, `F64`, an opaque
+type, a shape — can only be covered by an irrefutable pattern in that column, so
 
 ```blot
 sig pick = (Int, Option Int) -> Int;
@@ -919,6 +944,32 @@ closed by its arms.
 
 Like expression `if`, `case` is a value boundary: `return` and `break` cannot
 escape from an arm.
+
+A standalone `case` is control flow in the surrounding body rather than a value:
+
+```blot
+case choice of
+  1 => do
+    answer <- first_effect;
+  end,
+  _ => do
+    answer <- other_effect;
+  end
+end;
+```
+
+The target is still evaluated once and the patterns have the same order, scopes,
+typing, and exhaustiveness rule. `=> do` opens an arm's statement body, the
+arm-local `end` closes it, and the final `end;` closes the whole case. An arm
+may perform effects, `return` from the surrounding source function, or `break`
+from the surrounding `for`.
+
+As in a statement `if`, a `let` inside an arm stays local while a name rebound
+with `:=` is rebound for the statements after the case. Every arm must produce
+the same stable rebound-name record, and exhaustiveness means there is no
+implicit pass-through arm. The form lowers during CST lowering to an ordinary
+value `case` whose arms are blocks returning that record; no statement-case node
+reaches inference, ownership, evaluation, or the backend.
 
 An arm may carry a **guard**, which is a refinement no pattern states:
 
@@ -946,6 +997,9 @@ end
 
 answers `"five"` for 5 even though the guard below would hold.
 
+The statement form writes the same guard before `=> do`; a false guard falls
+through before any statement in that arm runs.
+
 **A guarded arm does not count towards coverage.** Its guard may be false, so it
 can never be the arm that is guaranteed to match, and the arms that remain must
 cover the target on their own. Every rule above then applies unchanged to those
@@ -956,10 +1010,16 @@ let describe = fn option => case option of
   #Some n if n > 0 => "positive",
   #None => "none"
 end;
+return describe (#Some 1);
 ```
 
 is refused, because with the guarded arm set aside the only constructor named is
-`#None`. A `case` whose arms are _all_ guarded covers nothing and is
+`#None`, so the argument is not one the arms close. The call is what makes it
+report: like every coverage rule here, a target inference has not pinned carries
+no requirement, and this one reports through subtyping —
+`` `#Some` is not one
+of #None `` — because a constructor set is covered by
+subtyping (above). A `case` whose arms are _all_ guarded covers nothing and is
 `BLOT_INCOMPLETE_CASE` however many arms it has. A tuple target is read the same
 way: a guarded row is not one of the rows that cover the cross-product.
 
@@ -1363,11 +1423,57 @@ Linear closures cannot currently be stored in arrays, tuples, or shapes, because
 linear structures are not tracked. The compiler rejects such an escape. Last-use
 and proved-consumption facts are recorded for the backend.
 
+### 11.1 A recursive group
+
+A recursive group's names are in scope in every member's body (§6.5), and that
+includes here. A reference to a sibling is a use of it wherever the sibling is
+declared, so declaration order inside a group changes neither what the program
+means nor whether it is accepted.
+
+A member's qualifier is not what is written on it. A member that captured a
+linear value is linear, and a sibling that holds such a member is linear in
+turn: the obligation is relocated, not restated. That is the rule an ordinary
+binding already had (above), applied to the whole group at once because the
+group's names are bound at once.
+
+**A closure holding a spendable value may not be called from inside its own
+recursive group, including from its own body.** A recursive call is a second
+call, and a closure owing exactly one call cannot promise it:
+
+```blot
+let go = rec (fn n =>
+  if n < 1 then consume (!token) else go (n - 1) end);
+return go 3;
+```
+
+is `BLOT_LINEAR_CONSUMED_TWICE`, naming `go`. This refuses a program that may in
+fact spend the value once — the pass counts uses and cannot count calls — and
+refusing is the conservative side. An affine member is refused the same way for
+the same reason, because a second call is a second consumption there too; what
+differs is that leaving the group's closures uncalled is a leak for neither, so
+an affine member no caller reaches is accepted where a linear one is only
+accepted because its own recursive call is counted as the consumption it owed.
+
+`examples/rejected/semantics/recursive_linear_capture.blot` is a group of one
+and `examples/rejected/semantics/recursive_group_consumed_twice.blot` is a group
+of two.
+
+### 11.2 Facts recorded for the backend
+
+A recorded last use is where the pass stopped seeing a name. Inside a closure
+that is not where the binding dies, because the closure's body runs when the
+closure is called, and nothing in declaration order dates that call. Where a
+binding is read across a closure boundary _and_ read somewhere else too, the
+pass records that it cannot date the read, and an owned in-place store update is
+refused rather than guessed. A binding a closure holds the only read of keeps
+its last use, because how often that closure runs is exactly what the linear
+proof is about.
+
 When the proved consumption of a linear binding is the array operand of
 `@array.set` or `@array.push`, the backend may reuse that array's Store. This is
 an implementation permission, not mutation in the language: the source binding
 is unavailable after the consuming use, and updates of ordinary shared arrays
-remain persistent with the immutable behavior specified in §5.3.
+remain persistent with the immutable behavior specified in §6.1.
 
 ## 12. Effects and handlers
 
@@ -1756,7 +1862,7 @@ has no value representing an empty compile-time union.
 #Union members
 #Shape fields
 #Array elements
-#Arrow { .domain; .codomain; }
+#Arrow { .domain; .codomain; .effects = [effect]; }
 #Sealed { .name; .inner; }
 #Opaque
 ```
@@ -1768,8 +1874,10 @@ function, an effect, and `F32x4`, whose whole content is its name.
 
 `@linear.own` and `@linear.borrow` are runtime identities whose meaning comes
 from ownership analysis and the default prefix fixities `!` and `&`.
-`@linear.maybe` is the reserved target of prefix `?`; affine obligations are
-introduced by `?name` patterns, not by applying the primitive.
+`@linear.maybe` is the reserved target of prefix `?` and is not a primitive the
+checker knows: `?expression` is `BLOT_UNKNOWN_PRIMITIVE`. Affine obligations are
+introduced by `?name` patterns, and there is no expression form for them —
+unlike `!` and `&`, prefix `?` is a fixity entry with nothing behind it.
 
 ## 14. Standard prelude
 
@@ -1781,6 +1889,8 @@ record currently exports:
 - booleans: `Bool`, `True`, `False`, `Logic`, `not`, `expect`;
 - ordering and arithmetic: `Ordering`, `is_equal`, `is_less`, `is_greater`,
   `Ord`, `Eq`, `Num`;
+- floats and lanes: `Float`, `Float32`, and `Vec4`;
+- branch hints: `likely` and `unlikely` (§15.1);
 - text: `Text`, `Semigroup`, `text_eq`;
 - arrays: `Array`, `fold`, `each`, `map`, `filter`, `sum`, `upto`, `any`,
   `every`, and `sort_by`;
@@ -1790,7 +1900,8 @@ record currently exports:
   `refines`, `members`, `union_of`, `Extract`, `Exclude`, `Pick`, `Omit`,
   `opened`, and `range`;
 - storage tools: `struct`, `reorder`, `layout`, `aligned`, and `packed`; and
-- standard types: `I32`, `I64`, `U8`, `Nat`, `Int`, `Str`, and `Unit`.
+- standard types: `I32`, `I64`, `U8`, `Nat`, `Int`, `Str`, `Unit`, `F64`, `F32`,
+  `F32x4`, and `F32x4Mask`.
 
 Important conventional values include:
 
@@ -1844,7 +1955,13 @@ projection, not the narrower one the body reads: inference follows what flowed
 into the projected variable, across the instantiation a `let`-bound scheme makes
 for each of its callers, so `let get_x = fn v => v.x;` takes its record from the
 call sites. When nothing flows in — a parameter whose caller is outside the
-module — the fields the body demands decide instead, and they are unioned.
+program — the fields the body demands decide instead, and they are unioned.
+
+Those call sites may be in another module. A record crosses into a module
+carrying more fields than that module reads and lowers there (§3), because the
+field sets are settled after every module in the program has been checked rather
+than as each one finishes: the answer for a projection in one file is decided by
+a call site in another.
 
 A record does not flow through a tuple `case`. Where a record reaches a
 projection only by having been an element of a tuple target, what is recorded is
@@ -1863,17 +1980,25 @@ not a type error: the program is well typed under width subtyping, and
 unconstrained structural function is rejected rather than assigned an arbitrary
 nominal ABI.
 
+The same value read at one place from two modules is now the common way to reach
+this. Two importers passing differently-shaped records to one library projection
+are `BLOT_SHAPE_DISAGREEMENT` naming both field sets — previously unreachable
+across a boundary, because neither caller's record arrived at the projection at
+all.
+
 ### 15.1 Core WebAssembly ABI
 
 `blot build` emits Blot Core Wasm ABI 1.0. gpufuck's tagged words and heap
 objects are private implementation details; generated adapters expose the
 synchronous memory32, UTF-8 subset of the Component Model Canonical ABI.
 
-Each runtime field is exported as `blot:<field>`. Host effects import their
-operations from `blot:host/<capability>`. The module exports `memory`,
-`cabi_realloc`, and immutable `blot:abi-major` and `blot:abi-minor` globals. An
-indirect result also exports `cabi_post_blot:<field>`, which the caller must
-invoke exactly once after reading the result.
+Each runtime field of a record module result is exported as `blot:<field>`. A
+module whose result is not a record has one export, `blot:default`, which is
+that result. Host effects import their operations from `blot:host/<capability>`.
+The module exports `memory`, `cabi_realloc`, and immutable `blot:abi-major` and
+`blot:abi-minor` globals. An indirect result also exports
+`cabi_post_blot:<field>`, which the caller must invoke exactly once after
+reading the result.
 
 The boundary representations are:
 

@@ -1,0 +1,13 @@
+// A library that reads part of the record it is handed.
+//
+// Neither function names the whole record, and nothing here can: the value that
+// arrives is built by whichever module calls these, and that module is not this
+// one. Width subtyping is what lets the interface be the record rather than the
+// two numbers a caller would otherwise have to unpack for it.
+
+open {} = (@import "blot:prelude") ();
+
+return {
+  .zoom_of = fn camera => camera.zoom;
+  .doubled = fn camera => camera.zoom * 2;
+};

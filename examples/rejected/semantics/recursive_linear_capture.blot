@@ -1,0 +1,12 @@
+// A function's own name is in scope in its body, which is what makes `rec` a
+// recursive group of one. A closure that captured a linear value owes exactly
+// one call, and a call from inside its own body is one of them — so the call
+// that starts the recursion is the second, and `go` cannot promise the token is
+// spent once.
+
+open {} = (@import "blot:prelude") ();
+
+let consume = fn !value => @int.add value 1;
+let !token = 41;
+let go = rec (fn n => if n < 1 then consume (!token) else go (@int.sub n 1) end);
+return go 3;

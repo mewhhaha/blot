@@ -18,9 +18,11 @@
 //     passed it.
 //
 // Alongside the check, the pass records the last use of every binding. The
-// backend spends the stronger, per-path linear fact on owned Store updates;
-// traversal-order last uses remain diagnostic evidence rather than a general
-// deadness proof.
+// backend spends the stronger, per-path linear fact on owned Store updates, so
+// the traversal-order last use is not evidence on its own: it is where the walk
+// stopped seeing a name, and inside a closure that is not where the binding
+// dies. Where the pass cannot date the read it recorded, it says so, and the
+// backend has to refuse rather than treat it as a death.
 //
 // Every fact is keyed by the `name` pattern that introduced the binding, never
 // by the binding's name. A name is not an identity: two scopes may bind the
@@ -34,8 +36,10 @@ import type {
   Module,
   Pattern,
   Qualifier,
+  RecursiveMember,
   Span,
 } from "../syntax/ast.ts";
+import { recursiveGroups } from "../syntax/ast.ts";
 import type { Diagnostic } from "../diagnostic.ts";
 
 /** The only pattern that introduces a binding, and therefore the fact key. */
@@ -90,6 +94,18 @@ export interface Ownership {
    * path consumed it exactly once, which is what `agree` enforces.
    */
   readonly linear: ReadonlySet<NamePattern>;
+  /**
+   * The bindings whose `lastUses` entry is the last read *walked* rather than
+   * the last read *taken*.
+   *
+   * A closure's body runs when the closure is called, and nothing in
+   * declaration order dates that call — a recursive group is only the sharpest
+   * case, since its members call each other in an order the block does not
+   * write down. So a binding one closure reads across its own boundary, and
+   * something else reads as well, has no last read this pass can name, and
+   * anything that would read a death off `lastUses` has to refuse here instead.
+   */
+  readonly reentrant: ReadonlySet<NamePattern>;
 }
 
 export interface LinearResult {
@@ -101,6 +117,10 @@ class Analysis {
   readonly diagnostics: Diagnostic[] = [];
   readonly lastUses = new Map<NamePattern, Span>();
   readonly linear = new Set<NamePattern>();
+  /** Where each binding was read, by the offset the read started at. */
+  readonly reads = new Map<NamePattern, Set<number>>();
+  /** The bindings some closure reached from outside its own body. */
+  readonly crossed = new Set<NamePattern>();
 
   report(code: string, message: string, span: Span): void {
     this.diagnostics.push({ code, message, span });
@@ -160,12 +180,24 @@ export function checkLinearity(module: Module): LinearResult {
   walk(module.result, scope, analysis, "move");
   closeScope(scope, analysis);
 
+  const reentrant = new Set<NamePattern>();
+  for (const [pattern, reads] of analysis.reads) {
+    // One read is one read wherever it stands: if a closure holds the only one,
+    // calling the closure is the only way to reach the binding, and the pass
+    // already proves how often that happens. Two put the order in question.
+    if (reads.size > 1 && analysis.crossed.has(pattern)) reentrant.add(pattern);
+  }
+
   // A captured value is shadowed inside the closure that took it, so it is
   // proved twice — once in each scope. That is bookkeeping, not two values, and
   // the shadow carries the same pattern, so keying by identity records one.
   return {
     diagnostics: analysis.diagnostics,
-    ownership: { lastUses: analysis.lastUses, linear: analysis.linear },
+    ownership: {
+      lastUses: analysis.lastUses,
+      linear: analysis.linear,
+      reentrant,
+    },
   };
 }
 
@@ -244,6 +276,16 @@ function use(
 
   analysis.lastUses.set(binding.pattern, span);
   binding.lastUse = span;
+  const reads = analysis.reads.get(binding.pattern);
+  if (reads === undefined) {
+    analysis.reads.set(binding.pattern, new Set([span.start]));
+  } else {
+    reads.add(span.start);
+  }
+  // A capture resolves through this function twice, once against the outer
+  // binding and once against the shadow it just installed, so the boundary is
+  // recorded on the way in and the offset set absorbs the second visit.
+  if (capturedBy !== null) analysis.crossed.add(binding.pattern);
 
   if (binding.qualifier === "borrow" && kind === "move") {
     analysis.report(
@@ -289,6 +331,7 @@ function walkDeclarations(
   scope: Scope,
   analysis: Analysis,
 ): void {
+  const groups = recursiveGroups(declarations);
   for (const declaration of declarations) {
     // `open` spreads a compile-time record, and a compile-time record cannot
     // hold a linear value — there is no run time for it to be consumed in. So
@@ -307,20 +350,189 @@ function walkDeclarations(
     }
     // A `sig` computes nothing at run time and consumes nothing.
     if (declaration.kind === "sig") continue;
-    const linear = walk(declaration.value, scope, analysis, "move");
+    const group = groups.get(declaration);
+    if (group !== undefined) {
+      // The members of one group share the array, so the first of them is the
+      // one that walks it and the rest have already been walked with it.
+      if (group[0].declaration === declaration) {
+        walkRecursiveGroup(group, scope, analysis);
+      }
+      continue;
+    }
+    const produced = walk(declaration.value, scope, analysis, "move");
     declare(declaration.pattern, scope, analysis);
-    // A closure that captured a linear value is linear itself, whether or not
-    // anyone wrote `!`. The obligation was not created here, only relocated,
-    // so it would be wrong to make the programmer restate it.
-    if (linear !== "none" && declaration.pattern.tag === "name") {
+    if (produced !== "none" && declaration.pattern.tag === "name") {
       const binding = scope.bindings.get(declaration.pattern.name);
       if (binding !== undefined) {
         scope.bindings.set(declaration.pattern.name, {
           ...binding,
-          qualifier: linear,
+          qualifier: inherited(binding.qualifier, produced),
         });
       }
     }
+  }
+}
+
+/**
+ * The qualifier a binding ends up with.
+ *
+ * A closure that captured a linear value is linear itself, whether or not
+ * anyone wrote `!`. The obligation was not created there, only relocated, so it
+ * would be wrong to make the programmer restate it — and wrong to keep a
+ * written marker that describes a weaker obligation than the one being held.
+ */
+function inherited(written: Qualifier, produced: Produced): Qualifier {
+  if (produced === "none") return written;
+  return produced;
+}
+
+/**
+ * A recursive group, whose names are in scope in every member's body.
+ *
+ * An ordinary declaration is walked before its name exists, which is right for
+ * a binding nothing before it can mention. A group's members mention each
+ * other, so a member walked that way meets a name the scope has never heard of
+ * and its uses go uncounted — a linear sibling then looks unconsumed however
+ * many times the group spends it.
+ *
+ * Declaring the names first does not fix that on its own, because a member's
+ * qualifier is not written on its pattern: it is discovered from its body, and
+ * a sibling that holds a member discovered linear is linear in turn. So the
+ * qualifiers are settled first against a throwaway analysis, and the group is
+ * then walked once for real against them.
+ */
+function walkRecursiveGroup(
+  members: readonly RecursiveMember[],
+  scope: Scope,
+  analysis: Analysis,
+): void {
+  const settled = members.map((member) => member.pattern.qualifier);
+  // A closure becomes linear only by holding something linear. With nothing
+  // spendable within reach there is nothing for a member to hold, so every
+  // attempt would settle on what was written and the group is walked once.
+  if (reachesSpendable(scope) || settled.some(spendable)) {
+    settleQualifiers(members, settled, scope);
+  }
+
+  declareGroup(members, settled, scope);
+  for (const [index, member] of members.entries()) {
+    const produced = walk(member.declaration.value, scope, analysis, "move");
+    if (inherited(settled[index], produced) !== settled[index]) {
+      throw new Error(
+        `recursive group member \`${member.name}\` produced a ${produced} obligation the settled qualifiers did not carry`,
+      );
+    }
+  }
+}
+
+/**
+ * Raises the group's qualifiers until walking its bodies stops raising them.
+ *
+ * Each attempt starts from the scope the group started from, because a walk
+ * consumes and the next attempt must not inherit what the last one spent.
+ */
+function settleQualifiers(
+  members: readonly RecursiveMember[],
+  settled: Qualifier[],
+  scope: Scope,
+): void {
+  // Each member's qualifier is a function of its siblings' over a lattice two
+  // steps deep, so the search is short and bounded. Running past the bound is
+  // not a program to refuse — it is this function disagreeing with its own
+  // lattice, and a diagnostic would report the mistake as the programmer's.
+  const attempts = 2 * members.length + 2;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const undo = checkpoint(scope);
+    declareGroup(members, settled, scope);
+    const probe = new Analysis();
+    let raised = false;
+    for (const [index, member] of members.entries()) {
+      const produced = walk(member.declaration.value, scope, probe, "move");
+      const qualifier = inherited(member.pattern.qualifier, produced);
+      if (qualifier !== settled[index]) {
+        settled[index] = qualifier;
+        raised = true;
+      }
+    }
+    rewind(undo);
+    if (!raised) return;
+  }
+  throw new Error(
+    `the qualifiers of the recursive group binding \`${
+      members.map((member) => member.name).join("`, `")
+    }\` did not settle`,
+  );
+}
+
+/** The group's names, all at once, so that every body sees every one of them. */
+function declareGroup(
+  members: readonly RecursiveMember[],
+  settled: readonly Qualifier[],
+  scope: Scope,
+): void {
+  for (const [index, member] of members.entries()) {
+    scope.bindings.set(member.name, {
+      pattern: member.pattern,
+      qualifier: settled[index],
+      moved: null,
+      borrows: 0,
+      lastUse: null,
+    });
+  }
+}
+
+/** Is there anything in reach for a closure to become linear by holding? */
+function reachesSpendable(scope: Scope): boolean {
+  let current: Scope | null = scope;
+  while (current !== null) {
+    for (const binding of current.bindings.values()) {
+      if (spendable(binding.qualifier)) return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+/**
+ * Everything a walk can leave behind in the scopes it could see.
+ *
+ * Settling walks the same bodies more than once, and a walk marks bindings
+ * moved and rewrites a capturing scope's own bindings with the shadows it took.
+ * None of that may survive into the next attempt or into the walk that counts,
+ * so the whole visible chain is written down rather than the moves alone.
+ */
+interface Undo {
+  readonly scope: Scope;
+  readonly bindings: readonly (readonly [string, Binding])[];
+  readonly captures: readonly Binding[];
+  readonly moved: readonly (readonly [Binding, Span | null])[];
+}
+
+function checkpoint(scope: Scope): readonly Undo[] {
+  const undo: Undo[] = [];
+  let current: Scope | null = scope;
+  while (current !== null) {
+    const bindings = [...current.bindings];
+    undo.push({
+      scope: current,
+      bindings,
+      captures: [...current.captures],
+      moved: bindings.map(([, binding]) => [binding, binding.moved] as const),
+    });
+    current = current.parent;
+  }
+  return undo;
+}
+
+function rewind(undo: readonly Undo[]): void {
+  for (const entry of undo) {
+    entry.scope.bindings.clear();
+    for (const [name, binding] of entry.bindings) {
+      entry.scope.bindings.set(name, binding);
+    }
+    entry.scope.captures.clear();
+    for (const binding of entry.captures) entry.scope.captures.add(binding);
+    for (const [binding, moved] of entry.moved) binding.moved = moved;
   }
 }
 

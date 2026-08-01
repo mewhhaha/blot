@@ -1,0 +1,12 @@
+// A recursive group's names are in scope in every member's body, so a member
+// spends a sibling wherever the sibling stands. `hold` is linear because of what
+// it captured, and `start` spends it — so the call in the result is a second
+// spend, whichever of the two the block walks first.
+
+open {} = (@import "blot:prelude") ();
+
+let consume = fn !value => @int.add value 1;
+let !token = 41;
+let start = rec (fn n => hold n);
+let hold = rec (fn n => consume (!token));
+return @int.add (start 1) (hold 2);

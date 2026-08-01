@@ -5,8 +5,8 @@ from the start, rather than retrofitted to one.
 
 See [LANGUAGE.md](LANGUAGE.md) for the complete language specification.
 Executable application studies live in [case-studies/](case-studies/): a
-grep-like file search, an interactive terminal program, and an agent-style
-conversation loop.
+grep-like file search, an interactive terminal program, an agent-style
+conversation loop, and a 3D engine with a browser host and hot reload.
 
 The TypeScript frontend is published as `@mewhhaha/blot`:
 
@@ -57,9 +57,12 @@ something false.
 Linearity and ownership (M3) landed too: `!` is checked exactly-once on every
 path, `?` at most once — which is what makes `resume` one-shot statically rather
 than by runtime check — `&` may be read but never moved, and a closure inherits
-the strongest obligation it captured. `blot ownership` prints the last-use facts
-the backend consumes. A final `@array.set` or `@array.push` on a proved linear
-array reuses its Store allocation; ordinary shared arrays remain persistent. See
+the strongest obligation it captured. A recursive group is one scope here as
+well: a member spends a sibling wherever the sibling is written, and a closure
+holding a spendable value cannot be called from inside its own group, because a
+recursive call is a second call. `blot ownership` prints the last-use facts the
+backend consumes. A final `@array.set` or `@array.push` on a proved linear array
+reuses its Store allocation; ordinary shared arrays remain persistent. See
 [docs/ownership.md](docs/ownership.md).
 
 The gpufuck backend (M4) now lowers every accepted catalog program. `blot build`
@@ -258,6 +261,15 @@ That line is what makes `+` work: the default fixity for `+` names `Num.add`,
 and a fixity whose target is not in scope is useless. A module that skips it
 does not have `+`.
 
+A module's parameter is checked, and nothing declares it. No module writes a
+signature for its own parameter, so the demand is whatever its bodies reach for:
+the record an importer hands over must carry every field the module projects,
+and one that omits a field is a type error at the application rather than a
+missing field at run time. It may carry _more_ — width subtyping holds across
+the boundary in both directions, and such a record lowers, because the field
+sets are settled once the whole program has been checked rather than as each
+file finishes.
+
 That is the whole of it. `type`, `interface`, `effect`, and `duck` do not exist
 as declaration forms, because types are ordinary compile-time values:
 
@@ -311,16 +323,16 @@ index. A struct's namespace does not appear in its type, so a function that
 takes a struct cannot read `.fields` off its parameter — hand it `Point.fields`
 instead, which is what derivation wants anyway.
 
-`struct` is prelude source — about fifteen lines over `@shape.*` — not a
-compiler builtin. Types are sets, so `|`, `&`, and `\` are bound to `Set.union`,
-`Set.intersect`, and `Set.diff` the same way `+` is bound to `Num.add` — at a
-prelude record, never at a primitive. Because the binding resolves by name at
-the use site, a module that defines its own `Set` with those three fields
-rebinds all three operators for itself; structural width subtyping is the whole
-of the dispatch, and there is no coherence rule because there is no instance
-table. `examples/sets.blot` does exactly that over arrays. Ranges, arrows, and
-seals are ordinary calls too, and reflection over a shape's fields is a `fold`,
-which is why `derive` is a function rather than a macro.
+`struct` is prelude source — about forty lines over `@shape.*` and
+`@type.attach` — not a compiler builtin. Types are sets, so `|`, `&`, and `\`
+are bound to `Set.union`, `Set.intersect`, and `Set.diff` the same way `+` is
+bound to `Num.add` — at a prelude record, never at a primitive. Because the
+binding resolves by name at the use site, a module that defines its own `Set`
+with those three fields rebinds all three operators for itself; structural width
+subtyping is the whole of the dispatch, and there is no coherence rule because
+there is no instance table. `examples/sets.blot` does exactly that over arrays.
+Ranges, arrows, and seals are ordinary calls too, and reflection over a shape's
+fields is a `fold`, which is why `derive` is a function rather than a macro.
 
 Effects are a shape of operation types handed to one primitive, and performing
 one is an ordinary call, so the row is inferred rather than declared. It is

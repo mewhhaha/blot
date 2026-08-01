@@ -79,6 +79,13 @@ const REJECTIONS: Record<
   "index_at_or_past_length": { code: "BLOT_OUT_OF_BOUNDS", stage: "check" },
   "wrong_argument": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "missing_field": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  // The same rule across a module boundary, and the half that was wrong: an
+  // imported module's parameter used to be a fresh variable rather than the one
+  // its own bodies constrained, and a variable satisfies every argument.
+  "module_argument_missing_field": {
+    code: "BLOT_TYPE_ERROR",
+    stage: "check",
+  },
   "linear_consumed_twice": {
     code: "BLOT_LINEAR_CONSUMED_TWICE",
     stage: "check",
@@ -98,6 +105,14 @@ const REJECTIONS: Record<
   },
   "linear_closure_escapes": {
     code: "BLOT_LINEAR_CLOSURE_ESCAPES",
+    stage: "check",
+  },
+  "recursive_group_consumed_twice": {
+    code: "BLOT_LINEAR_CONSUMED_TWICE",
+    stage: "check",
+  },
+  "recursive_linear_capture": {
+    code: "BLOT_LINEAR_CONSUMED_TWICE",
     stage: "check",
   },
   "borrow_moved": { code: "BLOT_BORROW_MOVED", stage: "check" },

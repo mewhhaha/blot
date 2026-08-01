@@ -65,11 +65,32 @@ identity. The backend reads them rather than re-deriving them, because
 re-deriving them means a second type checker.
 
 That is also why `load` keeps one cache per process. Two `load` calls returning
-two structurally equal trees would silently lose every recorded fact. Checking
-caches its result by that loaded tree's identity. A source edit gives the
-changed module and its importers new trees, while unrelated dependencies retain
-both their trees and checked facts; no path-keyed result can survive an edit
+two structurally equal trees would silently lose every recorded fact. A source
+edit gives the changed module and its importers new trees, while unrelated
+dependencies retain theirs; no path-keyed result can survive an edit
 accidentally.
+
+**Two caches, opposite lifetimes.** The loader's cache is process-wide and is
+what keeps AST node identity — the key for every inference fact — stable from
+one call to the next. The _check_ cache is per `checkFile` call, because a
+dependency's facts depend on its importers: there is no single answer it could
+carry between two programs, and one AST-keyed map could not hold both answers
+anyway. Anything that reintroduces a process-wide check cache reintroduces that
+bug.
+
+### Checking a program is two passes
+
+Bottom-up first, because a diagnostic belongs to the module that caused it and a
+dependency's spans index the dependency's source — an importer that relabelled
+one would name the wrong line. Then one settle of the held field-set reads. Then
+a second pass that assembles each module's result. The two passes exist because
+a fact and a diagnostic want opposite moments: an error is local to its module,
+and a field set belongs to the whole program, since the record that reaches
+`fn c => c.zoom` may be built two files away.
+
+Facts merge from a dependency's _assembled_ result rather than from its own
+module's `Checked`. The backend inlines the whole subtree into the root, so a
+fact found two levels down has to arrive at the root too.
 
 ### What a shape fact reads
 
@@ -86,11 +107,16 @@ reaches the definition-site variable through the bound graph at all. `extrude`
 links its copies into that graph; `freshenAbove` must not, because a scheme's
 instantiations are exactly what does not constrain each other. The edge from a
 definition-site variable to each of its copies is therefore recorded beside the
-lattice, in `Instances` — one map per `checkModule` call, never a field on
-`Variable`, because `PRIMITIVE_TYPES` holds process-global scheme variables that
-outlive every check. `constrain` never reads it, so biunification propagates the
-bounds it always did and stays polynomial; the shape walk follows it, and that
-is what lets `let get_x = fn v => v.x;` learn the record its call sites built.
+lattice, in `Instances` — one map per program checked, held in that program's
+`Staging` alongside the held reads, never a field on `Variable`, because
+`PRIMITIVE_TYPES` holds process-global scheme variables that outlive every
+check. One map per program rather than per module: a dependency's
+definition-site variable and its importer's instantiation of it have to be one
+edge, or a read inside the dependency cannot find the record the importer built.
+`constrain` never reads it, so biunification propagates the bounds it always did
+and stays polynomial; the shape walk follows it, and that is what lets
+`let get_x = fn v => v.x;` learn the record its call sites built — including
+when those call sites are in another file.
 
 Two _different_ records flowing to one node is not a wider record, it is two
 shapes, and the fact says so rather than unioning them. The backend refuses with
@@ -181,7 +207,7 @@ representation:
   specialized at their blot call sites; an unconstrained runtime export is
   rejected instead of being assigned an arbitrary nominal ABI.
 
-Three shape cases still reach gpufuck's own type checker rather than a blot
+Two shape cases still reach gpufuck's own type checker rather than a blot
 refusal, and each reports `BLOT_LOWERING_BUG` with an `F2102` from gpufuck:
 
 - **A spread of a value whose type is still a variable.**
@@ -194,11 +220,14 @@ refusal, and each reports `BLOT_LOWERING_BUG` with an `F2102` from gpufuck:
   a wider record. A shape pattern's type _is_ a record rather than a variable
   bounded by one, so there is nothing for the value's fields to flow into and
   the pattern's own fields are all the fact can say.
-- **A projecting function reached across `@import`.** A dependency is checked
-  before its importers exist, so its shape facts are read while no caller has
-  instantiated it. The rule holds inside a module and not yet across the module
-  graph; closing it means computing the facts once for the whole graph rather
-  than once per `checkModule`.
+
+A projecting function reached across `@import` used to be a third. It is not one
+now: the reads are held until every module has been checked and settled once, so
+a projection inside a dependency is answered by the record an importer built.
+`examples/widened.blot` and `examples/lib/camera.blot` are the catalog entry,
+and two importers building differently-shaped records for one library projection
+reach `BLOT_SHAPE_DISAGREEMENT` — the ordinary refusal, now reachable across a
+boundary because the records arrive at all.
 
 ## The module parameter is the module's imports
 

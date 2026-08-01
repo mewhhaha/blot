@@ -72,14 +72,14 @@ fixity_declaration = (
 // compile-time values.
 declaration =
   binding | rebinding | opening | iteration | breaking
-  | conditional_statement | result ;
+  | conditional_statement | case_statement | result ;
 
 // `statement` is `declaration` under a second name. The duplication is
 // mechanical and exists only so that `declaration` is not self-nesting, which
 // is what "throughput": "strict" requires of the repeated root island.
 statement =
   binding | rebinding | opening | iteration | breaking
-  | conditional_statement | result ;
+  | conditional_statement | case_statement | result ;
 
 binding = (
   tags:declaration_tag*
@@ -512,6 +512,29 @@ conditional_statement_else_clause = (
   "else"
   "do"
   alternative:statement*
+) ;
+
+// A standalone `case` is control flow in the surrounding body. Each arm is a
+// statement scope, so it can perform effects, `return`, `break`, or hand stable
+// rebindings back to the statements after the case. The arm-local `end` closes
+// its `do`; the final `end;` closes the case itself.
+case_statement = (
+  "case"
+  target:expression
+  "of"
+  first:case_statement_arm
+  rest:("," case_statement_arm)*
+  "end"
+  ";"
+) ;
+
+case_statement_arm = (
+  pattern:binding_pattern
+  guard:case_guard?
+  "=>"
+  "do"
+  body:statement*
+  "end"
 ) ;
 
 case_expression = (

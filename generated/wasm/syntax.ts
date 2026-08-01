@@ -274,6 +274,8 @@ export type RuleName =
   | "conditional_statement_branches"
   | "conditional_statement_else_if_clause"
   | "conditional_statement_else_clause"
+  | "case_statement"
+  | "case_statement_arm"
   | "case_expression"
   | "case_arm"
   | "case_guard"
@@ -651,6 +653,22 @@ export interface ConditionalStatementElseClauseCursor extends RuleCursorBase<"co
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
+export interface CaseStatementCursor extends RuleCursorBase<"case_statement"> {
+  field(name: "first"): CaseStatementArmCursor;
+  field(name: "rest"): ReadonlyArray<readonly [TokenCursor<"literal", ",">, CaseStatementArmCursor]>;
+  field(name: "target"): ExpressionCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface CaseStatementArmCursor extends RuleCursorBase<"case_statement_arm"> {
+  field(name: "body"): ReadonlyArray<StatementCursor>;
+  field(name: "guard"): CaseGuardCursor | null;
+  field(name: "pattern"): BindingPatternCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
 export interface CaseExpressionCursor extends RuleCursorBase<"case_expression"> {
   field(name: "first"): CaseArmCursor;
   field(name: "rest"): ReadonlyArray<readonly [TokenCursor<"literal", ",">, CaseArmCursor]>;
@@ -773,6 +791,8 @@ export type AnyRuleCursor =
   | ConditionalStatementBranchesCursor
   | ConditionalStatementElseIfClauseCursor
   | ConditionalStatementElseClauseCursor
+  | CaseStatementCursor
+  | CaseStatementArmCursor
   | CaseExpressionCursor
   | CaseArmCursor
   | CaseGuardCursor

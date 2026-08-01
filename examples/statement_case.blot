@@ -1,0 +1,88 @@
+// A standalone `case` selects a statement body. It works at module level and
+// inside `do`, where arms may perform effects or leave their surrounding
+// function with `return`.
+
+open {} = @import "blot:prelude" ();
+
+let top_level = "unset";
+case 1 of
+  1 => do
+    top_level := "matched";
+  end,
+  _ => do
+    top_level := "fallback";
+  end
+end;
+
+const Output = @effect {
+  .write = Str -> Unit;
+};
+
+let emit = fn message => fn () => Output.write message;
+
+let choose = fn selected => do
+  let label = "unset";
+  case selected of
+    1 => do
+      written <- emit "one";
+      label := "first";
+    end,
+    n if n > 1 => do
+      written <- emit "many";
+      label := "later";
+    end,
+    _ => do
+      written <- emit "other";
+      label := "fallback";
+    end
+  end;
+  in label
+end;
+
+let describe = fn selected => do
+  case selected of
+    0 => do
+      return "zero";
+    end,
+    _ => do
+      let ignored = ();
+    end
+  end;
+  in "nonzero"
+end;
+
+let stop_after_three = fn () => do
+  let count = 0;
+  for value in Iter.range (0, 5) do
+    count := count + 1;
+    case value of
+      2 => do
+        break;
+      end,
+      _ => do
+        let ignored = ();
+      end
+    end;
+  end;
+  in count
+end;
+
+let recording = {
+  .write = fn (message, ?resume) => do
+    let result = resume ();
+    in message <> ":" <> result
+  end;
+  .return = fn value => value;
+};
+
+let first = @handle (Output, (fn () => choose 1), recording);
+let later = @handle (Output, (fn () => choose 2), recording);
+
+return {
+  .top_level = top_level;
+  .first = first;
+  .later = later;
+  .zero = describe 0;
+  .nonzero = describe 1;
+  .stopped = stop_after_three ();
+};

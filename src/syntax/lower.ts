@@ -219,9 +219,23 @@ function conditionalStatementBody(rule: Rule): Rule {
   return asRule(field(rule, "body"), "conditional statement");
 }
 
+function caseStatementArms(rule: Rule): readonly Rule[] {
+  const arms = [
+    asRule(field(rule, "first"), "case statement arm"),
+  ];
+  for (const cursor of fieldList(rule, "rest")) {
+    const pair = cursor as unknown as readonly Cursor[];
+    arms.push(asRule(pair[1], "case statement arm"));
+  }
+  return arms;
+}
+
 function nestedStatementLists(rule: Rule): readonly (readonly Cursor[])[] {
   if (rule.name === "iteration") {
     return [fieldList(rule, "body")];
+  }
+  if (rule.name === "case_statement") {
+    return caseStatementArms(rule).map((arm) => fieldList(arm, "body"));
   }
   if (rule.name !== "conditional_statement") return [];
 
@@ -307,6 +321,13 @@ function statementsCanContinue(cursors: readonly Cursor[]): boolean {
   for (const cursor of cursors) {
     const rule = statementRule(cursor);
     if (rule.name === "result" || rule.name === "breaking") return false;
+    if (rule.name === "case_statement") {
+      const everyArmLeaves = nestedStatementLists(rule).every((nested) =>
+        !statementsCanContinue(nested)
+      );
+      if (everyArmLeaves) return false;
+      continue;
+    }
     if (rule.name !== "conditional_statement") continue;
 
     const body = conditionalStatementBody(rule);
@@ -613,6 +634,97 @@ function lowerControlOutcome(
       arms,
       span: rule.span,
     };
+  }
+  if (rule.name === "case_statement") {
+    const rebound = reboundNames(nestedStatementLists(rule).flat());
+    let branchContinue: Expr = loopState(rebound, rule.span);
+    let branchConstructors = constructors;
+    let branchContext = context;
+    if (remaining.length === 0) branchContinue = continueValue;
+    if (remaining.length > 0) {
+      branchConstructors = {
+        return: syntheticConstructor("CaseReturn", rule.span),
+        continue: syntheticConstructor("CaseContinue", rule.span),
+      };
+      if (context.loop !== null && context.loop.tag === "control") {
+        branchContext = {
+          ...context,
+          loop: {
+            ...context.loop,
+            breakConstructor: syntheticConstructor("CaseBreak", rule.span),
+          },
+        };
+      }
+    }
+    const matched = lowerCaseStatement(
+      rule,
+      branchContext,
+      (arm) =>
+        lowerControlOutcome(
+          fieldList(arm, "body"),
+          branchContext,
+          arm.span,
+          branchContinue,
+          branchConstructors,
+        ),
+    );
+    if (remaining.length === 0) return matched;
+
+    const arms: Arm[] = [];
+    if (statementsContainReturn([rule])) {
+      arms.push({
+        pattern: {
+          tag: "constructor",
+          name: branchConstructors.return,
+          payload: controlPayloadPattern("returned$", rule.span),
+          span: rule.span,
+        },
+        body: controlOutcome(
+          constructors.return,
+          { tag: "var", name: "returned$", span: rule.span },
+          rule.span,
+        ),
+      });
+    }
+    if (statementsCanContinue([rule])) {
+      arms.push({
+        pattern: {
+          tag: "constructor",
+          name: branchConstructors.continue,
+          payload: controlStatePattern(rebound, rule.span),
+          span: rule.span,
+        },
+        body: lowerControlOutcome(
+          remaining,
+          context,
+          span,
+          continueValue,
+          constructors,
+        ),
+      });
+    }
+    if (
+      context.loop !== null &&
+      context.loop.tag === "control" &&
+      branchContext.loop !== null &&
+      branchContext.loop.tag === "control" &&
+      statementsContainBreak([rule])
+    ) {
+      arms.push({
+        pattern: {
+          tag: "constructor",
+          name: branchContext.loop.breakConstructor,
+          payload: controlPayloadPattern("stopped$", rule.span),
+          span: rule.span,
+        },
+        body: controlOutcome(
+          context.loop.breakConstructor,
+          { tag: "var", name: "stopped$", span: rule.span },
+          rule.span,
+        ),
+      });
+    }
+    return { tag: "case", target: matched, arms, span: rule.span };
   }
   if (rule.name === "iteration") {
     const loop = lowerControlLoop(rule, context);
@@ -1148,9 +1260,10 @@ function desugarLoop(
 /**
  * The names a statement stream rebinds with `:=`.
  *
- * Recursive through nested statement lists, because a statement conditional is
- * part of the same stream: `if c then do n := n + 1; end;` rebinds `n` for
- * everything after it, and a loop containing that rebinds `n` per iteration.
+ * Recursive through nested statement lists, because a statement branch is part
+ * of the same stream: both `if c then do n := n + 1; end;` and an arm of a
+ * standalone `case` rebind `n` for everything after them, and a loop containing
+ * that rebinds `n` per iteration.
  *
  * `:=` is the only form collected, and that is what makes this well defined.
  * A rebinding requires the name to be in scope already and to keep its type
@@ -1425,6 +1538,29 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       );
     }
     throw new Error("control break reached declaration lowering");
+  }
+  if (rule.name === "case_statement") {
+    const rebound = reboundNames(nestedStatementLists(rule).flat());
+    const value = lowerCaseStatement(
+      rule,
+      context,
+      (arm) => ({
+        tag: "block",
+        declarations: fieldList(arm, "body").map((statement) =>
+          lowerDecl(asRule(unwrap(statement), "statement"), context)
+        ),
+        result: loopState(rebound, arm.span),
+        span: arm.span,
+      }),
+    );
+    return {
+      tag: "binding",
+      kind: "let",
+      tags: [],
+      pattern: loopPattern(rebound, rule.span),
+      value,
+      span: rule.span,
+    };
   }
   if (rule.name === "conditional_statement") {
     const body = conditionalStatementBody(rule);
@@ -2262,16 +2398,38 @@ interface GuardedArm {
   readonly body: Expr;
 }
 
-function lowerArm(rule: Rule, context: Context): GuardedArm {
+function lowerCaseGuard(rule: Rule, context: Context): Expr | null {
   const guard = field(rule, "guard");
+  if (guard === null) return null;
+  return lowerExpression(
+    asRule(field(asRule(guard, "case_guard"), "condition"), "condition"),
+    context,
+  );
+}
+
+function lowerArm(rule: Rule, context: Context): GuardedArm {
   return {
     pattern: lowerPattern(asRule(field(rule, "pattern"), "pattern")),
-    guard: guard === null ? null : lowerExpression(
-      asRule(field(asRule(guard, "case_guard"), "condition"), "condition"),
-      context,
-    ),
+    guard: lowerCaseGuard(rule, context),
     body: lowerValue(asRule(field(rule, "body"), "body"), context),
   };
+}
+
+function lowerCaseStatement(
+  rule: Rule,
+  context: Context,
+  lowerBody: (arm: Rule) => Expr,
+): Expr {
+  const arms = caseStatementArms(rule).map((arm) => ({
+    pattern: lowerPattern(asRule(field(arm, "pattern"), "pattern")),
+    guard: lowerCaseGuard(arm, context),
+    body: lowerBody(arm),
+  }));
+  const target = lowerExpression(
+    asRule(field(rule, "target"), "target"),
+    context,
+  );
+  return lowerGuards(target, arms, rule.span);
 }
 
 function plainArm(arm: GuardedArm): Arm {

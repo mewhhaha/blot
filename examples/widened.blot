@@ -1,0 +1,28 @@
+// A record crossing a module boundary with more fields than the library reads.
+//
+// `lib/camera.blot` projects `.zoom` and nothing else. This module builds a
+// record with three fields and hands it over. Core's records are nominal, so
+// lowering needs the set the *caller* built — the demand at the projection is
+// one field, and a nominal minted from that would not be the record that
+// arrives.
+//
+// Which is why the field sets are read after every module has been checked
+// rather than as each one finishes: the answer for a projection in one file is
+// decided by a call site in another.
+
+module init;
+
+open {} = (@import "blot:prelude") ();
+
+const camera = @import "./lib/camera.blot" ();
+
+// The capability is opaque at compile time, so the record survives to the
+// backend instead of being folded away before it can be lowered.
+let observed = fn zoom => do
+  let _ = init.print "framing";
+  in { .zoom = zoom; .angle = 7; .scale = 3; }
+end;
+
+let seen = observed 4;
+
+return camera.zoom_of seen + camera.doubled seen;

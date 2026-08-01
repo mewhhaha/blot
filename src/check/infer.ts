@@ -313,6 +313,45 @@ function lookupLiteral(env: TypeEnv, name: string): Expr | undefined {
   return undefined;
 }
 
+/**
+ * The fact reads a compilation owes, and the instantiation copies that answer
+ * them.
+ *
+ * A field set is not a property of the module that wrote the projection.
+ * `fn c => c.zoom` demands one field; the record that reaches `c` is built by
+ * whoever calls the function, and that caller is often in another file. Reading
+ * the set when the defining module finishes checking would pin it to the local
+ * demand, so lowering would mint a one-field nominal for a value the caller
+ * built with two.
+ *
+ * So the reads are held until every module in the compilation has been checked,
+ * and every module shares this one registry of copies — a dependency's
+ * definition-site variable and its importer's instantiation of it have to be
+ * the same edge for the read to find the record at all.
+ *
+ * One of these per root check, which is what keeps it bounded and what keeps
+ * one compilation's records out of another's. Hanging the edge off the
+ * `Variable` instead would attach unbounded growth to `PRIMITIVE_TYPES`, whose
+ * scheme variables are process-global and outlive every check.
+ */
+export interface Staging {
+  readonly instances: Instances;
+  readonly reads: (() => void)[];
+}
+
+export function newStaging(): Staging {
+  return { instances: new Map(), reads: [] };
+}
+
+/**
+ * Answer every held read. A compilation settles once, at its root, because that
+ * is the first moment no further constraint can arrive.
+ */
+export function settle(staging: Staging): void {
+  for (const read of staging.reads) read();
+  staging.reads.length = 0;
+}
+
 interface Context {
   /** Field sets and constructor sets, recorded for the backend. */
   readonly shapes: Map<Expr, Shape>;
@@ -326,10 +365,14 @@ interface Context {
    * declarations are compile-time, and a member call in a `let` is not one.
    */
   readonly memberValues: Map<Expr, Value>;
-  /** Facts read after checking, once every constraint has been seen. */
+  /**
+   * Constraints this module still owes, applied once its own body has been
+   * inferred. Its row is read at the module boundary right after, so these
+   * cannot wait for the compilation the way a fact read does.
+   */
   readonly pending: (() => void)[];
-  /** Instantiation copies, for the shape facts; see `Instances`. */
-  readonly instances: Instances;
+  /** Fact reads and instantiation copies for the whole compilation. */
+  readonly staging: Staging;
   readonly variants: Map<Expr, readonly VariantCase[]>;
   readonly patternShapes: Map<Pattern, Shape>;
   readonly grants: Map<Expr, GrantSignature>;
@@ -487,7 +530,7 @@ export function infer(
         }
         fail("BLOT_UNBOUND", `\`${expr.name}\` is not in scope.`, expr.span);
       }
-      return instantiate(found, level, context.instances);
+      return instantiate(found, level, context.staging.instances);
     }
 
     case "intrinsic": {
@@ -507,7 +550,7 @@ export function infer(
           expr.span,
         );
       }
-      return instantiate(primitive, level, context.instances);
+      return instantiate(primitive, level, context.staging.instances);
     }
 
     case "tag":
@@ -563,12 +606,12 @@ export function infer(
         constrain(target, record([[expr.name, result]]));
       });
       // Record what the target's whole field set is, if it is known. Lowering
-      // cannot see it and cannot build the nominal without it. Deferred to the
-      // end of checking, because a later use may add a field this one does not
-      // mention — and because a generalized projection learns its shape from
-      // call sites that have not been inferred yet.
-      context.pending.push(() => {
-        const shape = shapeOf(target, context.instances);
+      // cannot see it and cannot build the nominal without it. Held until the
+      // compilation settles, because a later use may add a field this one does
+      // not mention — and because a generalized projection learns its shape
+      // from call sites that may not even be in this file.
+      context.staging.reads.push(() => {
+        const shape = shapeOf(target, context.staging.instances);
         if (shape !== null) context.shapes.set(expr, shape);
       });
       // A projection off the module parameter is a granted capability. Read
@@ -578,7 +621,7 @@ export function infer(
         expr.target.tag === "var" &&
         expr.target.name === context.parameterName
       ) {
-        context.pending.push(() => {
+        context.staging.reads.push(() => {
           const signature = arrowOf(result);
           if (signature !== null) context.grants.set(expr, signature);
         });
@@ -656,8 +699,8 @@ export function infer(
         }
         // A spread contributes whatever the spread value holds, and the
         // backend has to copy those fields one by one — so record the set.
-        context.pending.push(() => {
-          const spread = shapeOf(memberType, context.instances);
+        context.staging.reads.push(() => {
+          const spread = shapeOf(memberType, context.staging.instances);
           if (spread !== null) context.shapes.set(member.value, spread);
         });
         if (memberType.tag === "record") {
@@ -769,7 +812,11 @@ function inferSpecial(
     if (specifier.tag !== "text") return null;
     const moduleType = context.modules.get(specifier.value);
     if (moduleType === undefined) return null;
-    let result = instantiate(scheme(moduleType, -1), level, context.instances);
+    let result = instantiate(
+      scheme(moduleType, -1),
+      level,
+      context.staging.instances,
+    );
     for (const argument of head.args.slice(1)) {
       const argumentType = infer(argument, context, level, row);
       const applied = freshVar(level);
@@ -899,7 +946,7 @@ function inferSpecial(
           result: handledResult,
         });
       }
-      const handlerShape = shapeOf(handler, context.instances);
+      const handlerShape = shapeOf(handler, context.staging.instances);
       if (
         handlerShape !== null && handlerShape.tag === "fields" &&
         handlerShape.fields.includes("return")
@@ -2102,10 +2149,10 @@ function inferDeclarations(
         inferred = bridged;
       }
       const previousType = stableRebindingType(
-        instantiate(previous, level + 1, context.instances),
+        instantiate(previous, level + 1, context.staging.instances),
       );
       const inferredType = stableRebindingType(
-        instantiate(inferred, level + 1, context.instances),
+        instantiate(inferred, level + 1, context.staging.instances),
       );
       try {
         constrain(previousType, inferredType);
@@ -2271,7 +2318,7 @@ function inferDeclarations(
       const expected = pendingSig.type;
       located(declaration.span, () => {
         constrain(
-          instantiate(type as Typing, level, context.instances),
+          instantiate(type as Typing, level, context.staging.instances),
           expected,
         );
       });
@@ -2283,7 +2330,7 @@ function inferDeclarations(
     if (resolvedTags.length > 0) {
       context.declarationTags.set(declaration, {
         tags: resolvedTags,
-        type: instantiate(type, level, context.instances),
+        type: instantiate(type, level, context.staging.instances),
       });
     }
     if (bound !== null && declaration.pattern.tag === "name") {
@@ -2495,7 +2542,7 @@ function bindDeclaration(
   // the shape the pattern requires.
   const scope = context.types;
   const required = bindPattern(pattern, scope, level);
-  const whole = instantiate(type, level, context.instances);
+  const whole = instantiate(type, level, context.staging.instances);
   located(pattern.span, () => constrain(whole, required));
   recordPatternShapes(pattern, whole, context);
 }
@@ -2524,8 +2571,8 @@ function recordPatternShapes(
   context: Context,
 ): void {
   if (pattern.tag !== "shape") return;
-  context.pending.push(() => {
-    const shape = shapeOf(type, context.instances);
+  context.staging.reads.push(() => {
+    const shape = shapeOf(type, context.staging.instances);
     if (shape !== null) context.patternShapes.set(pattern, shape);
   });
 }
@@ -2624,6 +2671,14 @@ function recordComptime(
 
 export interface Checked {
   readonly type: SimpleType;
+  /**
+   * The type of the module's own parameter, or null where it takes none.
+   *
+   * An importer applies the module to a record, and this is the variable that
+   * record has to satisfy. Standing in a fresh variable instead would accept
+   * every argument, including one missing a field the module reads.
+   */
+  readonly parameter: SimpleType | null;
   readonly effects: SimpleType;
   /**
    * What each `open` brought into scope.
@@ -2701,7 +2756,8 @@ export function checkModule(
   values: ValueEnv,
   imports: Imports,
   prelude: ReadonlyMap<string, SimpleType> | null,
-  modules: ReadonlyMap<string, SimpleType> = new Map(),
+  modules: ReadonlyMap<string, SimpleType>,
+  staging: Staging,
 ): Checked {
   const types = childTypeEnv(null);
   if (prelude !== null) {
@@ -2720,14 +2776,11 @@ export function checkModule(
   const memberValues = new Map<Expr, Value>();
   const declarationTags = new Map<Decl, TaggedDeclaration>();
   const pending: (() => void)[] = [];
-  // Bounded by this call: the map dies with the check that built it, so the
-  // process-global primitive schemes accumulate nothing across files.
-  const instances: Instances = new Map();
   const context: Context = {
     opens,
     comptimeValues,
     memberValues,
-    instances,
+    staging,
     shapes,
     variants,
     patternShapes,
@@ -2746,20 +2799,23 @@ export function checkModule(
   const level = 0;
   const row = freshVar(level);
 
-  if (module.parameter !== null) {
-    // The entry module's parameter is the program's whole authority, and its
-    // shape is whatever the program actually reaches for — inference discovers
-    // the capability requirement rather than the program declaring it.
-    bindPattern(module.parameter, types, level);
-  }
+  // The entry module's parameter is the program's whole authority, and its
+  // shape is whatever the program actually reaches for — inference discovers
+  // the capability requirement rather than the program declaring it. An
+  // imported module's parameter is the same variable, and reporting it is what
+  // lets an importer's argument be checked against what the module reads.
+  const parameter = module.parameter === null
+    ? null
+    : bindPattern(module.parameter, types, level);
 
   inferDeclarations(module.declarations, context, level, row);
   const result = infer(module.result, context, level, row);
-  // Every constraint has been seen by now, so a field set read here is the
-  // whole one rather than whatever the first projection happened to mention.
-  for (const read of pending) read();
+  // The module's own body has been inferred, so a constraint it owed can be
+  // applied before anything reads its row at the boundary.
+  for (const owed of pending) owed();
   return {
     type: result,
+    parameter,
     effects: row,
     opens,
     comptimeValues,

@@ -411,21 +411,10 @@ Deno.test("Store values cross named exports as arrays", async () => {
   );
 });
 
-Deno.test("linear array updates carry ownership into gpufuck Store operations", async () => {
-  const directory = await Deno.makeTempDir();
-  const path = join(directory, "owned-arrays.blot");
-  await Deno.writeTextFile(
-    path,
-    [
-      "let shared = [1, 2, 3];",
-      "let copied = @array.set shared 0 4;",
-      "let !set_source = [1, 2, 3];",
-      "let replaced = @array.set set_source 0 4;",
-      "let !push_source = [1, 2, 3];",
-      "let appended = @array.push push_source 4;",
-      "return @int.add (@int.add (@array.get copied 0) (@array.get replaced 0)) (@array.get appended 3);",
-    ].join("\n"),
-  );
+/** Every Store update the lowering emitted, and which of them write in place. */
+async function storeUpdates(
+  path: string,
+): Promise<readonly { readonly kind: string; readonly owned: boolean }[]> {
   const loaded = await load(path);
   const checked = await checkFile(path);
   const lowered = lowerModule(loaded.module, checked, checked.values);
@@ -449,6 +438,30 @@ Deno.test("linear array updates carry ownership into gpufuck Store operations", 
     }
     pending.push(...Object.values(expression));
   }
+  return updates;
+}
+
+async function fixture(
+  name: string,
+  lines: readonly string[],
+): Promise<string> {
+  const path = join(await Deno.makeTempDir(), name);
+  await Deno.writeTextFile(path, lines.join("\n"));
+  return path;
+}
+
+Deno.test("linear array updates carry ownership into gpufuck Store operations", async () => {
+  const updates = await storeUpdates(
+    await fixture("owned-arrays.blot", [
+      "let shared = [1, 2, 3];",
+      "let copied = @array.set shared 0 4;",
+      "let !set_source = [1, 2, 3];",
+      "let replaced = @array.set set_source 0 4;",
+      "let !push_source = [1, 2, 3];",
+      "let appended = @array.push push_source 4;",
+      "return @int.add (@int.add (@array.get copied 0) (@array.get replaced 0)) (@array.get appended 3);",
+    ]),
+  );
 
   assertEquals(
     updates.filter((update) => update.owned).map((update) => update.kind)
@@ -460,6 +473,57 @@ Deno.test("linear array updates carry ownership into gpufuck Store operations", 
     "shared array updates must remain persistent",
   );
 });
+
+// A recursive group's members call each other in an order the block never wrote
+// down, so a read inside one is not the array's death just because the walk
+// reached it last. Writing in place there would overwrite what `peek` still
+// reads, and the program's value would depend on which member was declared
+// first — a wrong answer out of a program that type checks, which is why this
+// asserts what the lowering decided rather than that it compiled.
+Deno.test("a recursive group member does not own a store its sibling reads", async () => {
+  const updates = await storeUpdates(
+    await fixture("group-shared-array.blot", [
+      'open {} = (@import "blot:prelude") ();',
+      "let !cells = [7, 2, 3];",
+      "let peek = rec (fn n => @array.get (&cells) n);",
+      "let write = rec (fn n => @array.set cells 0 n);",
+      "return @int.add (@array.get (write 1) 0) (peek 0);",
+    ]),
+  );
+  assertEquals(updates.filter((update) => update.owned), []);
+});
+
+// The refusal is about the second read, not about `rec`. A group holding the
+// only read of a linear array still updates it in place — and because the
+// group's names are in scope throughout it, the member order does not change
+// what is emitted.
+for (
+  const [order, members] of [
+    ["a sibling declared before it", [
+      "let start = rec (fn n => @array.get (bump n) 0);",
+      "let bump = rec (fn n => @array.set cells 0 n);",
+    ]],
+    ["a sibling declared after it", [
+      "let bump = rec (fn n => @array.set cells 0 n);",
+      "let start = rec (fn n => @array.get (bump n) 0);",
+    ]],
+  ] as const
+) {
+  Deno.test(`a recursive group member owns the store it alone reads, called by ${order}`, async () => {
+    const updates = await storeUpdates(
+      await fixture("group-owned-array.blot", [
+        'open {} = (@import "blot:prelude") ();',
+        "let !cells = [7, 2, 3];",
+        ...members,
+        "return start 4;",
+      ]),
+    );
+    assertEquals(
+      updates.filter((update) => update.owned).map((update) => update.kind),
+      ["store-write"],
+    );
+  });
+}
 
 Deno.test("text primitives are self-contained in emitted WebAssembly", async () => {
   const directory = await Deno.makeTempDir();

@@ -18,6 +18,10 @@ Every artifact exports:
 - immutable globals `blot:abi-major` and `blot:abi-minor`; and
 - one function named `blot:<source-name>` per runtime module export.
 
+A module whose result is a record exports one function per runtime field, under
+that field's name. A module whose result is anything else has one export whose
+source name is `default`, so the function is `blot:default`.
+
 An export with an indirect result also exports
 `cabi_post_blot:<source-name>(result_pointer)`. The caller must invoke it once,
 after it has finished reading that result.

@@ -154,11 +154,76 @@ accepts(
   "let some = fn ?r => if 1 < 2 then r 1 else 0 end;\nreturn some (fn x => x);",
 );
 
-// The facts the backend will consume. Nothing applies them yet — gpufuck's
-// Functional Surface has no in-place write for them to select — so they are
-// asserted directly instead. Both the parameter and the binding:
-// `fn !value => ...` is as linear as `let !token`, and the pass proves each of
-// them spent exactly once.
+// A recursive group's names are in scope in every member's body, so the block
+// cannot walk a member before its name exists the way it walks an ordinary
+// binding — a sibling it has not reached yet would contribute no use at all,
+// and a linear one would look unconsumed however many times the group spends
+// it. Declaration order inside a group means nothing, so each of these is
+// written with the sibling ahead of its definition.
+
+accepts(
+  "a member's linearity reaches a sibling the block has not reached yet",
+  `${CONSUME}let !token = 41;
+let start = rec (fn n => hold n);
+let hold = rec (fn n => consume (!token));
+return start 1;`,
+);
+
+rejects(
+  "a member that spends a sibling twice is counted twice",
+  `${CONSUME}let !token = 41;
+let user = rec (fn n => @int.add (hold n) (hold n));
+let hold = rec (fn n => consume (!token));
+return user 1;`,
+  "BLOT_LINEAR_CONSUMED_TWICE",
+);
+
+// The uncounted use was not only a wrong number: a second use elsewhere made
+// the total come out right, and the program was accepted while spending the
+// closure twice.
+rejects(
+  "a use elsewhere no longer balances a member the block spent",
+  `${CONSUME}let !token = 41;
+let start = rec (fn n => hold n);
+let hold = rec (fn n => consume (!token));
+return @int.add (start 1) (hold 2);`,
+  "BLOT_LINEAR_CONSUMED_TWICE",
+);
+
+// A function's own name is in scope in its body for the same reason a group's
+// are, so the same rule reaches it: recursion is a second call, and a closure
+// holding a linear value cannot promise the one call it owes.
+rejects(
+  "a recursive function cannot hold a linear value and call itself",
+  `${CONSUME}let !token = 41;
+let go = rec (fn n => if n < 1 then consume (!token) else go (@int.sub n 1) end);
+return go 3;`,
+  "BLOT_LINEAR_CONSUMED_TWICE",
+);
+
+// Settling the qualifiers is a search, and a group with nothing spendable in
+// reach has nothing to search for. Its members stay what they were written, and
+// the group is walked once.
+Deno.test("a group with no linear member owes and proves nothing", async () => {
+  const { own } = await analyze(
+    `let even = rec (fn n => if n < 1 then 1 else odd (@int.sub n 1) end);
+let odd = rec (fn n => if n < 1 then 0 else even (@int.sub n 1) end);
+return @int.add (even 4) (odd 3);`,
+  );
+  const members = own.filter(([pattern]) =>
+    pattern.name === "even" || pattern.name === "odd"
+  );
+  assertEquals(members.length, 2);
+  for (const [pattern, fact] of members) {
+    assertEquals(fact.spent, false, `${pattern.name} owed nothing to spend`);
+    assert(fact.lastUse !== null, `${pattern.name} is read by its sibling`);
+  }
+});
+
+// The facts the backend consumes. `storeUpdateOptions` turns the linear one
+// into an in-place Store update, so both the parameter and the binding are
+// asserted here: `fn !value => ...` is as linear as `let !token`, and the pass
+// proves each of them spent exactly once.
 Deno.test("every linear binding proved spent is recorded", async () => {
   const { own } = await analyze(
     `${CONSUME}let !token = 41;\nreturn consume (!token);`,
@@ -192,6 +257,41 @@ Deno.test("two bindings sharing a name keep separate facts", async () => {
     .filter(([, fact]) => fact.lastUse !== null)
     .map(([pattern]) => pattern.name);
   assertEquals(read.sort(), ["f", "x", "x"]);
+});
+
+// A last use is where the pass stopped walking past a name, and inside a
+// closure that is not where the binding dies: the body runs when the closure is
+// called, and a recursive group's members call each other in an order the block
+// never wrote down. So a binding one closure reads and something else reads too
+// has no last read to act on, and the fact says so rather than naming one.
+Deno.test("a binding a closure and a sibling both read has no last read", async () => {
+  const { own } = await analyze(
+    `let !cells = [7, 2, 3];
+let peek = rec (fn n => @array.get (&cells) n);
+let write = rec (fn n => @array.set cells 0 n);
+return @int.add (@array.get (write 1) 0) (peek 0);`,
+  );
+  const cells = own.find(([pattern]) => pattern.name === "cells");
+  assert(cells !== undefined);
+  assertEquals(cells[1].spent, true);
+  assertEquals(cells[1].reentrant, true);
+});
+
+// One read is one read wherever it stands. A closure holding the only read of a
+// linear value is reached by calling it, and how often that happens is what the
+// linear proof is about — so this one keeps a last read the backend can spend.
+Deno.test("a binding read once inside a group keeps its last read", async () => {
+  const { own } = await analyze(
+    `let !cells = [7, 2, 3];
+let start = rec (fn n => @array.get (bump n) 0);
+let bump = rec (fn n => @array.set cells 0 n);
+return start 4;`,
+  );
+  const cells = own.find(([pattern]) => pattern.name === "cells");
+  assert(cells !== undefined);
+  assertEquals(cells[1].spent, true);
+  assertEquals(cells[1].reentrant, false);
+  assert(cells[1].lastUse !== null);
 });
 
 // The backend inlines an imported module into its importer, so an importer

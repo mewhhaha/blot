@@ -114,11 +114,15 @@ let lossy_round_trip = is_equal (Float.cmp
 
 // --- the boundary -----------------------------------------------------------
 //
-// Every export here is an `Int` or a `Bool`. A float cannot cross the module
-// boundary: gpufuck's canonical ABI has no float case, so there is no stable
-// layout to publish one under. Converting at the export is the whole of the
-// workaround, and `examples/rejected/semantics/float_export.blot` is the
-// program that does not.
+// Every export here is an `Int` or a `Bool`, and that is this file's choice
+// rather than a limit: `F32` and `F64` are canonical `f32` and `f64` at the
+// ABI, so a float crosses on its own — `examples/float_boundary.blot` is the
+// program that exports one. Truncating here keeps every answer below an exact
+// integer, which is what lets the interpreter, the GPU evaluator, and the
+// emitted Wasm be compared without a rounding argument.
+//
+// `F32x4` is the value that genuinely cannot cross. Publishing one is
+// `BLOT_VECTOR_AT_BOUNDARY`; extract a lane or select a vector first.
 
 return {
   .quarter = Float.truncate (Float.mul quarter 100.0);

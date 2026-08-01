@@ -1,8 +1,9 @@
-<!-- Produced by a 13-agent workflow, then spot-checked by hand. Four claims
-were re-verified directly before this was committed: the `for`/statement-`if`
-silent wrong answer, the two checker-vs-evaluator disagreements, and that all 31
-corpus programs lower. The width-subtyping reproduction is agent-verified only —
-`just build` is unavailable while gpufuck's tree is broken. -->
+<!-- Produced by a 13-agent workflow on 2026-07-30, then spot-checked by hand.
+Four claims were re-verified directly before it was committed: the
+`for`/statement-`if` silent wrong answer, the two checker-vs-evaluator
+disagreements, and that all 31 corpus programs of the day lowered. Every one of
+those four has since been fixed; see "What has landed since" below, and read the
+"State of the tree" section as the record it is. -->
 
 # The finishing roadmap
 
@@ -24,7 +25,32 @@ is true today for a program the corpus does not already contain.
 
 ## State of the tree, verified 2026-07-30
 
-Everything in this section was run. Anything not run is marked.
+Everything in this section was run on that date. Anything not run is marked.
+
+**What has landed since, re-run 2026-08-01.** Read the rest of this section as a
+record rather than as the tree:
+
+- The build works. `deno test --allow-read --allow-write` passes, `just wasm`
+  agrees across all three executions, and every case study lowers. M0 is done.
+- All four M1 defects are fixed. `case c of #Some v => v, _ => 0 end` applied to
+  `#Some "hi"` checks as `(0 | "hi")`; the `if let` success path checks as
+  `(999 | 3)`; a `:=` inside a statement `if` in a loop body is an accumulator
+  field and the counting program returns `2`; and a `const` capturing a `let` is
+  still refused at `build` rather than at `check`, which is the one part of 1d
+  left open.
+- M2's spans print. Every diagnostic carries `file:line:col:`, and ranges are
+  named rather than called "an integer". One error per run and `blot fmt` are
+  still open.
+- M3 is done, including M3c: a projecting function reached across `@import`
+  lowers, because the held reads settle once for the whole program rather than
+  once per module. `examples/widened.blot` is the catalog entry.
+- The literal-coverage gap below is closed for an open-ended target: a `case`
+  over `Int` with literal arms is `BLOT_INCOMPLETE_CASE`, not an accepted
+  program that traps.
+- The recursive-group linearity bug at the end of this file is fixed.
+- Still true: `Array.find`, `Iter.map`, and `Option.map` are absent;
+  `"a" == "a"` fails because `==` is over `@int.cmp`; there is no
+  `examples/rankn.blot`.
 
 **The corpus is green and that is the problem.** All 31 programs in `examples/`,
 all three case studies, and both library modules lower to gpufuck Core and pass
@@ -692,31 +718,36 @@ implying it is coming.
 
 ---
 
-## Linearity does not see a recursive group
+## Linearity does not see a recursive group — landed
 
 A recursive group's members are in scope in each other's bodies, and the linear
-pass walks a declaration's value before declaring its pattern. So a member named
-by a sibling that the block has not reached yet contributes no use at all.
+pass used to walk a declaration's value before declaring its pattern. So a
+member named by a sibling that the block had not reached yet contributed no use
+at all.
 
     let !once = 42;
     let user = rec (fn n => holder n + holder n);
     let holder = rec (fn n => if n == 0 then once else user (n - 1) end);
 
-reports `holder` is never consumed, for a value it consumes twice. The rejection
-is right by accident and the reason is wrong, which is the shape that becomes an
-acceptance as soon as another use balances the count.
+reported `holder` is never consumed, for a value it consumes twice. The
+rejection was right by accident and the reason was wrong, which is the shape
+that becomes an acceptance as soon as another use balances the count — and it
+did: `start 1 + hold 2` over a group spending one token was accepted.
 
-Pre-declaring the group's names before walking any body does not fix it, and it
-is worth writing down why so the cheap fix is not tried twice: a member's
-linearity is not written on its pattern. It is _discovered_ from its body — a
-closure that captured a linear value is linear itself, decided after the walk —
-so declaring the name early declares it with the qualifier it was written with,
-which is not `!`, and the sibling's uses are counted against the wrong binding.
+Pre-declaring the group's names before walking any body does not fix it on its
+own, and it is worth keeping why: a member's linearity is not written on its
+pattern. It is _discovered_ from its body — a closure that captured a linear
+value is linear itself, decided after the walk — so declaring the name early
+declares it with the qualifier it was written with, which is not `!`, and the
+sibling's uses are counted against the wrong binding.
 
-Getting it right needs the pass to reach a fixpoint, or to run twice: once to
-learn which members are linear, once to count uses against that. Both are more
-than the surrounding code assumes, which is that one walk in declaration order
-sees everything.
+The fix is the fixpoint. The qualifiers are settled against a throwaway analysis
+first, each attempt starting from the scope the group started from so a walk's
+consumptions do not leak into the next, and the group is then walked once for
+real against the settled qualifiers. The program above is now
+`BLOT_LINEAR_CONSUMED_TWICE` on `holder`, and the consequence that changed
+accepted programs is in `LANGUAGE.md` §11.1: a closure holding a spendable value
+cannot be called from inside its own group, its own body included.
 
 # What blot needs from gpufuck
 
@@ -884,7 +915,9 @@ a profile conflict as a design signal, not a metadata override.
 stays that way.
 
 **No general index-bounds proof.** The loop-index case stays listed as a
-deliberate limit in `LANGUAGE.md` §10.3. `@array.get` and `@text.slice` trap.
+deliberate limit in `LANGUAGE.md` §10.3. `@array.get` emits a checked read
+whatever a comparison proved, and a text-slicing primitive, when there is one,
+will do the same.
 
 **No language server in this repository.** `checkFile` will expose everything an
 LSP needs — a diagnostic _list_ with exact spans, plus the fact maps keyed by
@@ -899,24 +932,20 @@ verified to hold today.
 ## Documentation debt, to be paid inside the milestones that cause it
 
 `AGENTS.md` requires `LANGUAGE.md` to change in the same diff as the language.
-Four documents currently overlap and three carry claims I verified to be false:
+Most of the debt listed here has been paid; what remains is named as such.
 
-- `docs/backend.md`'s "Width subtyping is specialized before Core" section
-  describes a corpus failure that no longer reproduces; M3 rewrites it around
-  the _staging_ explanation and the runtime-source reproduction.
-- `docs/inference.md`'s rank-N paragraph is now correct — but no example
-  exercises it. M3 or M1 adds `examples/rankn.blot` plus the `run2 (fn x => 42)`
-  rejection, per the one-program-per-feature catalog rule.
-- `docs/editor.md:15` promises a language server "with the inference milestone".
-  M7 corrects it.
-- `README.md`'s "M4 now lowers every accepted catalog program" is true and
-  misleading in the same sentence; M3 qualifies it with what the catalog does
-  not contain.
-- `docs/ownership.md:105` and `README.md:57` both say the reuse rewrite is
-  waiting on a Core to rewrite. That reason is false — the real one is above,
-  under "What blot needs from gpufuck" — and `README.md` records the milestone
-  as landed while half of it is not built. Correct both, in the diff that either
-  supplies the missing half or retires the claim.
+- `docs/editor.md:15` promised a language server "with the inference milestone".
+  Corrected: inference has landed and the server has not, which is the honest
+  statement. M7 still owes the server.
+- `docs/inference.md`'s rank-N paragraph is correct — but no example exercises
+  it. `examples/rankn.blot` plus the `run2 (fn x => 42)` rejection is still
+  owed, per the one-program-per-feature catalog rule;
+  `grep -rn "@forall"
+  examples` is still empty.
+- `docs/backend.md`'s "Width subtyping is specialized before Core" section, its
+  "Remaining backend boundaries" list, `docs/inference.md`'s limits, and
+  `case-studies/README.md`'s "what the language made awkward" have all been
+  re-verified against the tree and rewritten where they had stopped being true.
 
 Merge `docs/inference.md`'s operator table and `docs/backend.md`'s refusal list
 into `LANGUAGE.md` where they are normative, and leave the `docs/` files as
