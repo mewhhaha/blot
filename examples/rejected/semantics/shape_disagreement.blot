@@ -18,8 +18,8 @@ const Console = @effect.host {
 
 let get_x = fn v => v.x;
 
-let here = do
-  let _ = Console.write "disagreeing";
+here <- do
+  _ <- Console.write "disagreeing";
   in { .x = 1; .y = 2; }
 end;
 

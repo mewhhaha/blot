@@ -42,6 +42,7 @@ const REJECTIONS: Record<
   "lambda_without_fn": { code: "BLOT_LAMBDA_WITHOUT_FN", stage: "check" },
   "unknown_operator": { code: "BLOT_UNKNOWN_OPERATOR", stage: "check" },
   "unhandled_effect": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },
+  "effect_in_let": { code: "BLOT_UNSEQUENCED_EFFECT", stage: "check" },
   "sig_mismatch": { code: "BLOT_TYPE_ERROR", stage: "check" },
   // Both halves of how a member call is typed, and both would be *accepted* by
   // a rule that answered with a type variable: the first because the computed
@@ -91,17 +92,12 @@ const REJECTIONS: Record<
     code: "BLOT_LINEAR_CONSUMED_TWICE",
     stage: "check",
   },
-  "linear_not_consumed": { code: "BLOT_LINEAR_NOT_CONSUMED", stage: "check" },
   "linear_branch_disagreement": {
     code: "BLOT_LINEAR_BRANCH_DISAGREEMENT",
     stage: "check",
   },
   "linear_closure_called_twice": {
     code: "BLOT_LINEAR_CONSUMED_TWICE",
-    stage: "check",
-  },
-  "linear_closure_never_called": {
-    code: "BLOT_LINEAR_NOT_CONSUMED",
     stage: "check",
   },
   "linear_closure_escapes": {

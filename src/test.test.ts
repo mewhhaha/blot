@@ -89,7 +89,8 @@ Deno.test("a test file cannot perform ambient initialization effects", async () 
   const path = await sourceFile(
     "const Console = @effect.host { .write = Str -> Unit; };\n" +
       "@[test] let isolated = fn () => ();\n" +
-      'return Console.write "initializing";',
+      '_ <- Console.write "initializing";\n' +
+      "return ();",
   );
   const error = await assertRejects(() => testFile(path), BlotError);
   assertStringIncludes(error.message, "must initialize without effects");

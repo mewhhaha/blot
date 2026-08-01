@@ -18,9 +18,11 @@ const Console = @effect.host {
 // Nothing here says "effectful". The row is inferred, and `report` comes out as
 // `() -> () ~ { Console }` — an interface, not a leak.
 let report = fn () => do
-  let _ = Console.write "compiled";
-  let _2 = Console.write "linked";
-  in Console.write "done"
+  _ <- Console.write "compiled";
+  _ <- Console.write "linked";
+  _ <- Console.write "done";
+  in ()
 end;
 
-return report ();
+result <- report ();
+return result;

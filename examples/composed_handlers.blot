@@ -9,19 +9,29 @@ const Clock = @effect { .now = Unit -> Int; };
 const Random = @effect { .add = Int -> Int; };
 
 let program = fn () => do
-  input <- Terminal.read;
-  time <- Clock.now;
-  in Random.add (input + time)
+  input <- Terminal.read ();
+  time <- Clock.now ();
+  result <- Random.add (input + time);
+  in result
 end;
 
 let fake_terminal = {
-  .read = fn ((), ?resume) => resume 10;
+  .read = fn ((), ?resume) => do
+    result <- resume 10;
+    in result
+  end;
 };
 let fake_clock = {
-  .now = fn ((), ?resume) => resume 20;
+  .now = fn ((), ?resume) => do
+    result <- resume 20;
+    in result
+  end;
 };
 let fake_random = {
-  .add = fn (value, ?resume) => resume (value + 12);
+  .add = fn (value, ?resume) => do
+    result <- resume (value + 12);
+    in result
+  end;
 };
 
 let result = try program then do

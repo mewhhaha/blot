@@ -5,5 +5,13 @@
 open {} = (@import "blot:prelude") ();
 
 const Choice = @effect { .pick = Unit -> I32; };
-const twice = { .pick = fn (_, resume) => @int.add (resume 1) (resume 2); .return = fn v => v; };
-return @handle (Choice, (fn () => Choice.pick ()), twice);
+const twice = { .pick = fn (_, resume) => do
+  first <- resume 1;
+  second <- resume 2;
+  in @int.add first second
+end; .return = fn v => v; };
+let work = fn () => do
+  result <- Choice.pick ();
+  in result
+end;
+return @handle (Choice, work, twice);

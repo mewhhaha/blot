@@ -39,6 +39,7 @@ import type {
   RecursiveMember,
   Span,
 } from "../syntax/ast.ts";
+import { liveDeclarations } from "../syntax/live.ts";
 import { recursiveGroups } from "../syntax/ast.ts";
 import type { Diagnostic } from "../diagnostic.ts";
 
@@ -176,7 +177,7 @@ export function checkLinearity(module: Module): LinearResult {
   if (module.parameter !== null) {
     declare(module.parameter, scope, analysis);
   }
-  walkDeclarations(module.declarations, scope, analysis);
+  walkDeclarations(module.declarations, module.result, scope, analysis);
   walk(module.result, scope, analysis, "move");
   closeScope(scope, analysis);
 
@@ -328,11 +329,14 @@ function spendable(qualifier: Qualifier): boolean {
 
 function walkDeclarations(
   declarations: readonly Decl[],
+  result: Expr,
   scope: Scope,
   analysis: Analysis,
 ): void {
   const groups = recursiveGroups(declarations);
+  const live = liveDeclarations(declarations, result);
   for (const declaration of declarations) {
+    if (!live.has(declaration)) continue;
     // `open` spreads a compile-time record, and a compile-time record cannot
     // hold a linear value — there is no run time for it to be consumed in. So
     // the expression is walked for what *it* consumes and nothing is declared.
@@ -666,7 +670,7 @@ function walk(
 
     case "block": {
       const inner = childScope(scope);
-      walkDeclarations(expr.declarations, inner, analysis);
+      walkDeclarations(expr.declarations, expr.result, inner, analysis);
       const result = walk(expr.result, inner, analysis, kind);
       closeScope(inner, analysis);
       return result;

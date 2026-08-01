@@ -42,7 +42,14 @@ export function stageModule(
   const stagedDeclarations = new Set<Decl>();
   let allDeclarationsStaged = true;
   for (const declaration of module.declarations) {
-    if (declaration.tag !== "binding" || declaration.kind !== "let") continue;
+    if (declaration.tag !== "binding" || declaration.kind !== "let") {
+      if (
+        declaration.tag === "binding" && declaration.kind === "effect"
+      ) {
+        allDeclarationsStaged = false;
+      }
+      continue;
+    }
     try {
       const value = run(
         bind(
@@ -207,6 +214,7 @@ export function stageModule(
       tag: "block",
       declarations: generatedDeclarations,
       result,
+      resultEffects: "pure",
       span: module.result.span,
     };
   }

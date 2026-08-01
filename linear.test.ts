@@ -1,8 +1,7 @@
 // Linearity and ownership.
 //
-// `!` is exactly-once, not at-most-once, so both failures are tested: spending
-// a value twice and never spending it at all. The second is the one a weaker
-// rule would let through, and it is the leak the marker exists to catch.
+// `!` is exactly-once once its definition is demanded. An unused pure
+// definition is discarded before ownership, so no resource exists to leak.
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { checkFile } from "./src/check/mod.ts";
@@ -58,10 +57,9 @@ return @int.add (consume (!token)) (consume (!token));`,
   "BLOT_LINEAR_CONSUMED_TWICE",
 );
 
-rejects(
-  "never spending a linear value is rejected",
+accepts(
+  "an unused linear definition is discarded",
   "let !handle = 41;\nreturn 0;",
-  "BLOT_LINEAR_NOT_CONSUMED",
 );
 
 accepts(
@@ -95,12 +93,11 @@ return @int.add (go ()) (go ());`,
   "BLOT_LINEAR_CONSUMED_TWICE",
 );
 
-rejects(
-  "a linear closure nobody calls leaks what it captured",
+accepts(
+  "an unused closure and its capture are discarded",
   `${CONSUME}let !token = 41;
 let go = fn () => consume (!token);
 return 0;`,
-  "BLOT_LINEAR_NOT_CONSUMED",
 );
 
 rejects(

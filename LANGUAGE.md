@@ -243,8 +243,8 @@ let pattern = value;
 const pattern = value;
 ```
 
-`let` evaluates its value in the current phase, matches the pattern, and binds
-the pattern's names.
+`let` defines a value in the current phase, matches its pattern when demanded,
+and binds the pattern's names.
 
 `const` evaluates its value at compile time even when the surrounding program is
 running. A `const` must be computable without runtime input. Compile-time
@@ -364,21 +364,24 @@ defines one of that loop's accumulator fields, including one written inside a
 statement conditional in that body. A `:=` inside a nested `for` defines a field
 of the inner loop instead.
 
-### 4.5 Nullary computation binding
+### 4.5 Effect sequencing
 
 ```blot
-name <- computation;
+name <- expression;
 ```
 
-As an ordinary declaration, this form lowers exactly to:
+This is the only declaration form that admits an effectful expression. It binds
+one name, not a pattern, and evaluates the expression exactly as written. It
+does not insert a unit argument, so a nullary operation is explicit:
 
 ```blot
-let name = computation ();
+request <- Runtime.request ();
 ```
 
-It binds one name, not a pattern. The ordinary function and effect typing rules
-therefore require `computation` to accept unit and propagate whatever effects
-the call performs.
+`let`, `const`, `:=`, `open`, block results, function results written without a
+block, and module results are pure value positions. Pure `let` bindings may be
+reordered, inlined, or discarded when their values are not demanded; sequencing
+an effect therefore requires `<-` even when its result is ignored.
 
 The left-hand binding in a `try` handler step is a separate bounded surface
 form. Section 12.2 specifies how it binds the newly handled computation without
@@ -441,19 +444,21 @@ during lowering.
 
 A name pattern may carry:
 
-| qualifier | obligation                       |
-| --------- | -------------------------------- |
-| `!name`   | linear: consume exactly once     |
-| `?name`   | affine: consume at most once     |
-| `&name`   | borrowed: may be read, not moved |
+| qualifier | obligation                                 |
+| --------- | ------------------------------------------ |
+| `!name`   | linear: consume exactly once when demanded |
+| `?name`   | affine: consume at most once               |
+| `&name`   | borrowed: may be read, not moved           |
 
 Qualifiers may appear recursively inside tuple, array, constructor, and shape
 patterns.
 
 ## 6. Values and expressions
 
-Evaluation is strict and left-to-right. Function position is evaluated before
-its argument; collection and record members are evaluated in source order.
+Demanded expressions are evaluated strictly and left-to-right. Function position
+is evaluated before its argument; collection and record members are evaluated in
+source order. An unused pure `let` definition is not demanded and does not
+evaluate. `<-` declarations are always demanded and retain source order.
 
 ### 6.1 Unit, arrays, tuples, and shapes
 
@@ -945,31 +950,15 @@ closed by its arms.
 Like expression `if`, `case` is a value boundary: `return` and `break` cannot
 escape from an arm.
 
-A standalone `case` is control flow in the surrounding body rather than a value:
+An effectful `case` remains a value expression. Select the effectful branch and
+sequence the selected expression once at the surrounding scope:
 
 ```blot
-case choice of
-  1 => do
-    answer <- first_effect;
-  end,
-  _ => do
-    answer <- other_effect;
-  end
+_ <- case choice of
+  1 => first_effect (),
+  _ => other_effect ()
 end;
 ```
-
-The target is still evaluated once and the patterns have the same order, scopes,
-typing, and exhaustiveness rule. `=> do` opens an arm's statement body, the
-arm-local `end` closes it, and the final `end;` closes the whole case. An arm
-may perform effects, `return` from the surrounding source function, or `break`
-from the surrounding `for`.
-
-As in a statement `if`, a `let` inside an arm stays local while a name rebound
-with `:=` is rebound for the statements after the case. Every arm must produce
-the same stable rebound-name record, and exhaustiveness means there is no
-implicit pass-through arm. The form lowers during CST lowering to an ordinary
-value `case` whose arms are blocks returning that record; no statement-case node
-reaches inference, ownership, evaluation, or the backend.
 
 An arm may carry a **guard**, which is a refinement no pattern states:
 
@@ -1491,8 +1480,8 @@ Projecting an operation from an effect and calling it performs that operation:
 Console.write "hello"
 ```
 
-There is no `perform` keyword. The operation's effect enters the surrounding
-inferred row.
+There is no `perform` keyword. Calling an operation produces an effectful
+expression; `<-` sequences it into the surrounding inferred row.
 
 An ordinary effect must be discharged before the module boundary. A host effect
 declared with `@effect.host` may reach the boundary; its operations become typed
@@ -1502,7 +1491,10 @@ WebAssembly imports and therefore constitute part of the module interface.
 
 ```blot
 let logging = {
-  .write = fn (message, ?resume) => message <> resume ();
+  .write = fn (message, ?resume) => do
+    rest <- resume ();
+    in message <> rest
+  end;
   .return = fn value => value;
 };
 
@@ -1582,7 +1574,10 @@ the checker prints it:
 const Console = @effect { .write = Str -> Unit; };
 
 sig greet = Str -> Unit ~ { Console };
-let greet = fn name => Console.write name;
+let greet = fn name => do
+  result <- Console.write name;
+  in result
+end;
 ```
 
 `~` is an ordinary infix operator (`@type.performs`, precedence 21) whose right
@@ -1829,7 +1824,7 @@ and both of these forms name the array twice — once to measure and once to rea
 _type_ of an expression satisfies a compile-time predicate.
 
 ```blot
-let reading = { .value = Source.read (); .label = "depth"; };
+reading <- { .value = Source.read (); .label = "depth"; };
 let checked = @type.satisfies (reading, Has { .value = Int; });
 ```
 
@@ -2108,7 +2103,7 @@ end;
 
 let report = fn () => do
   let text = describe #Ready ++ Text.of_int attempts;
-  let _ = Console.write text;
+  _ <- Console.write text;
   in text
 end;
 

@@ -184,16 +184,26 @@ const Array = {
 // Structural recursion, which is all a surface loop becomes before inference.
 // Rebindings form the accumulator; `for` does not introduce assignment.
 const fold = fn (values, state, step) => do
-  let go = rec (fn (index, current) =>
-    if is_less (@int.cmp index (@array.len values))
-    then go (@int.add index 1, step (current, @array.get values index))
-    else current
-    end);
-  in go (0, state)
+  let go = rec (fn (index, current) => do
+    result <- if is_less (@int.cmp index (@array.len values)) then do
+      next <- step (current, @array.get values index);
+      continued <- go (@int.add index 1, next);
+      in continued
+    end else current
+    end;
+    in result
+  end);
+  result <- go (0, state);
+  in result
 end;
 
-const each = fn (values, visit) =>
-  fold (values, (), (fn (_, value) => visit value));
+const each = fn (values, visit) => do
+  result <- fold (values, (), (fn (_, value) => do
+    _ <- visit value;
+    in ()
+  end));
+  in result
+end;
 
 const map = fn (values, f) =>
   fold (values, @array.empty, (fn (state, value) => @array.push state (f value)));

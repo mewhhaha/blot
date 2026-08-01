@@ -50,6 +50,7 @@ import type {
   ShapeMember,
   Span,
 } from "../syntax/ast.ts";
+import { liveDeclarations } from "../syntax/live.ts";
 import { recursiveGroups } from "../syntax/ast.ts";
 import { fail } from "../diagnostic.ts";
 import {
@@ -1521,8 +1522,10 @@ function lowerBlock(
   const inner = childScope(scope);
   const wrappers: ((body: SurfaceExpression) => SurfaceExpression)[] = [];
   const groups = recursiveGroups(declarations);
+  const live = liveDeclarations(declarations, result);
 
   for (const declaration of declarations) {
+    if (!live.has(declaration)) continue;
     // `open` emits nothing — a use of a name it brought in specializes to the
     // compile-time value, exactly as a `const` does — but the names still have
     // to be *in* this scope. An imported module is inlined into the importer's
@@ -4222,6 +4225,7 @@ function lowerHandle(
             tag: "block",
             declarations: [rewritten],
             result: sequence(index + 1),
+            resultEffects: "ambient",
             span: expr.span,
           };
         });

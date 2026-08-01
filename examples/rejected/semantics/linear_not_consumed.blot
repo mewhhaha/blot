@@ -1,6 +1,0 @@
-// Exactly once, not at-most-once: a resource nothing consumes is a leak.
-
-open {} = (@import "blot:prelude") ();
-
-let !handle = 41;
-return 0;

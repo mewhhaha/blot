@@ -1,0 +1,27 @@
+open {} = (@import "blot:prelude") ();
+
+const Console = @effect { .write = Str -> Unit; };
+
+let choose = fn selected => do
+  _ <- case selected of
+    1 => Console.write "one",
+    _ => Console.write "other"
+  end;
+  in ()
+end;
+
+let recording = {
+  .write = fn (message, ?resume) => message;
+  .return = fn _ => "none";
+};
+
+return {
+  .first = @handle (Console, (fn () => do
+    result <- choose 1;
+    in result
+  end), recording);
+  .other = @handle (Console, (fn () => do
+    result <- choose 2;
+    in result
+  end), recording);
+};

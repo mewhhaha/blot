@@ -3,5 +3,9 @@
 
 open {} = (@import "blot:prelude") ();
 
-let handler = fn ?resume => @int.add (resume 1) (resume 2);
+let handler = fn ?resume => do
+  first <- resume 1;
+  second <- resume 2;
+  in @int.add first second
+end;
 return handler (fn n => n);

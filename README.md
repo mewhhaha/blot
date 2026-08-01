@@ -125,7 +125,7 @@ break;                // exit the nearest `for`
 if c then do … end;   // conditional control flow
 if let p = x else do … end; // bind p or leave through the else branch
 name := expr;         // shadow an existing binding, preserving its type
-name <- expr;         // bind what a computation returns: `let name = expr ();`
+name <- expr;         // sequence an effectful expression and bind its result
 return expr;          // exit the nearest function or module
 ```
 
@@ -341,16 +341,14 @@ printer prints, a bare `->` is the empty row rather than an unwritten one, and a
 row names effects that are in scope, so it is closed — there is no way to write
 the row variable inference uses for a callback's effects.
 
-`x <- computation;` reads from one. It is `let x = computation ();` and nothing
-more — performing is already a call and the row is already inferred, so there is
-nothing left for a perform form to declare, which leaves `<-` the one honest job
-of naming what a computation returns without spelling the `()`:
+`x <- expression;` sequences one. The expression is evaluated as written, so a
+nullary operation keeps its explicit `()`; `let` remains a pure definition:
 
 ```blot
 const Terminal = @effect { .read = Unit -> Str; };
 
 let ask = fn () => do
-  answer <- Terminal.read;
+  answer <- Terminal.read ();
   in answer <> "!"
 end;
 ```
@@ -359,12 +357,15 @@ end;
 const Console = @effect { .write = Str -> Unit; };
 
 let report = fn () => do
-  let _ = Console.write "one";
+  _ <- Console.write "one";
   in "done"
 end;
 
 let joining = {
-  .write = fn (message, ?resume) => message ++ resume ();
+  .write = fn (message, ?resume) => do
+    rest <- resume ();
+    in message ++ rest
+  end;
   .return = fn value => value;
 };
 
@@ -397,7 +398,10 @@ is the program's declared interface rather than something left unhandled:
 
 ```blot
 const Console = @effect.host { .write = Str -> Unit; };
-let report = fn () => Console.write "compiled";   // () -> () ~ { Console }
+let report = fn () => do
+  result <- Console.write "compiled";
+  in result
+end; // () -> () ~ { Console }
 ```
 
 A handler the program did not write is a host capability. The entry module's
@@ -409,8 +413,9 @@ module init;
 
 let printing = {
   .write = fn (message, resume) => do
-    let _ = init.print message;     // opaque; the program can only call it
-    in resume ()
+    _ <- init.print message;     // opaque; the program can only call it
+    result <- resume ();
+    in result
   end;
   .return = fn value => value;
 };

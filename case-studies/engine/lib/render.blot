@@ -277,7 +277,7 @@ const draw_face = fn (position, angle, scale, colour, camera, face) => do
   let behind = near za || near zb || near zc || near zd;
   let hidden = is_greater (Float32.cmp outward ZERO);
 
-  in if behind || hidden then ()
+  _ <- if behind || hidden then ()
   else do
     // Pixels, and the last place a float exists in this function. `Canvas` is
     // a module import, so its record is the boundary a float cannot cross.
@@ -295,29 +295,37 @@ const draw_face = fn (position, angle, scale, colour, camera, face) => do
     let depth = Float32.truncate
       (Float32.mul (Vec4.sum (Vec4.of (za, zb, zc, zd))) (lane 250.0));
     let shade = shade_of normal;
-    let _ = Canvas.tri {
+    _ <- Canvas.tri {
       .ax = pa.x; .ay = pa.y;
       .bx = pb.x; .by = pb.y;
       .cx = pc.x; .cy = pc.y;
       .depth = depth; .shade = shade; .colour = colour;
     };
-    in Canvas.tri {
+    _ <- Canvas.tri {
       .ax = pa.x; .ay = pa.y;
       .bx = pc.x; .by = pc.y;
       .cx = pd.x; .cy = pd.y;
       .depth = depth; .shade = shade; .colour = colour;
-    }
+    };
+    in ()
   end
-  end
+  end;
+  in ()
 end;
 
 // A box. Six faces, each culled on its own, which is the whole of the mesh
 // path — an application that wants a second shape adds geometry here rather
 // than a second renderer.
-const draw_mesh = fn (position, angle, scale, colour, camera) => each (
-  faces,
-  (fn face => draw_face (position, angle, scale, colour, camera, face))
-);
+const draw_mesh = fn (position, angle, scale, colour, camera) => do
+  _ <- each (
+    faces,
+    (fn face => do
+      _ <- draw_face (position, angle, scale, colour, camera, face);
+      in ()
+    end)
+  );
+  in ()
+end;
 
 // A 2D texture placed in the 3D world. Its size divides by depth under a
 // perspective lens and does not under an orthographic one — the same one-line
@@ -325,22 +333,24 @@ const draw_mesh = fn (position, angle, scale, colour, camera) => each (
 const draw_sprite = fn (position, scale, texture, camera) => do
   let view = to_view (position, camera);
   let depth = Vec4.z view;
-  in if is_less (Float32.cmp depth NEAR) then ()
+  _ <- if is_less (Float32.cmp depth NEAR) then ()
   else do
     let point = to_screen (view, camera);
     let size = if camera.lens == 0
       then Float32.div (Float32.mul scale FOCAL) depth
       else Float32.mul scale camera.zoom
       end;
-    in Canvas.sprite {
+    _ <- Canvas.sprite {
       .x = Float32.truncate (Vec4.x point);
       .y = Float32.truncate (Vec4.y point);
       .size = Float32.truncate size;
       .depth = Float32.truncate (Float32.mul depth (lane 1000.0));
       .texture = texture;
-    }
+    };
+    in ()
   end
-  end
+  end;
+  in ()
 end;
 
 // A frame: clear, read the camera the host is holding, let the application say
@@ -358,20 +368,29 @@ sig frame = ({
   .sprite = (F32x4, F32, Str) -> Unit ~ { Canvas };
 } -> Unit ~ { Canvas }) -> Unit ~ { Canvas, View };
 let frame = fn paint => do
-  let _ = Canvas.clear ();
+  _ <- Canvas.clear ();
+  yaw <- View.yaw ();
+  pitch <- View.pitch ();
+  distance <- View.distance ();
+  lens <- View.lens ();
   let camera = camera_of (
-    View.yaw (),
-    View.pitch (),
-    unit (View.distance ()),
-    View.lens ()
+    yaw,
+    pitch,
+    unit distance,
+    lens
   );
-  let _2 = paint {
-    .mesh = (fn (position, angle, scale, colour) =>
-      draw_mesh (position, angle, scale, colour, camera));
-    .sprite = (fn (position, scale, texture) =>
-      draw_sprite (position, scale, texture, camera));
+  _ <- paint {
+    .mesh = (fn (position, angle, scale, colour) => do
+      _ <- draw_mesh (position, angle, scale, colour, camera);
+      in ()
+    end);
+    .sprite = (fn (position, scale, texture) => do
+      _ <- draw_sprite (position, scale, texture, camera);
+      in ()
+    end);
   };
-  in Canvas.present ()
+  _ <- Canvas.present ();
+  in ()
 end;
 
 // `Canvas` and `View` are not exported. An effect is a compile-time value and a

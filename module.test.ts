@@ -39,7 +39,7 @@ Deno.test("checking includes ownership errors in transitive dependencies", async
   await writeModule(
     directory,
     "leaf",
-    "let !token = 1;\nreturn 0;",
+    "let !token = 1;\nreturn @int.add token token;",
   );
   await writeModule(
     directory,
@@ -56,7 +56,7 @@ Deno.test("checking includes ownership errors in transitive dependencies", async
     () => checkFile(root),
     BlotError,
   );
-  assertEquals(error.diagnostic.code, "BLOT_LINEAR_NOT_CONSUMED");
+  assertEquals(error.diagnostic.code, "BLOT_LINEAR_CONSUMED_TWICE");
 });
 
 Deno.test("transitive module result types reach the importer", async () => {

@@ -113,18 +113,18 @@ body's `:=` names are its accumulator, so the frame loop _is_ the world:
 
 ```blot
 for ever do
-  let remaining = Host.frame ();
+  remaining <- Host.frame ();
   if remaining <= 0 then do break; end;
 
-  current <- Assets.generation;
+  current <- Assets.generation ();
   if current != generation then do
-    transforms := load_transforms ();
-    models := load_models ();
+    transforms <- load_transforms ();
+    models <- load_models ();
     generation := current;
   end;
 
   transforms := advance transforms;
-  let _ = render (transforms, models);
+  _ <- render (transforms, models);
 end;
 ```
 

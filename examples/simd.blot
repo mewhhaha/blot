@@ -37,8 +37,8 @@ let normalize = fn input => do
 end;
 
 sig normalized = F32x4;
-let normalized = normalize (do
-  let _ = Console.write "sampling";
+normalized <- normalize (do
+  _ <- Console.write "sampling";
   in Vec4.of (
     Float32.of_int 1,
     Float32.of_int 2,

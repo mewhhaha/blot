@@ -10,16 +10,28 @@
 open {} = (@import "blot:prelude") ();
 
 const Log = @effect { .write = Int -> Int; };
-let doubling = { .write = fn (n, ?resume) => resume (n * 2); };
-let work = fn () => Log.write 20;
+let doubling = { .write = fn (n, ?resume) => do
+  result <- resume (n * 2);
+  in result
+end; };
+let work = fn () => do
+  result <- Log.write 20;
+  in result
+end;
 let first = @handle (Log, work, doubling);
 
 // A second, different effect that happens to share both names. This is a new
 // compile-time binding: `:=` preserves the previous binding's effect identity,
 // so a fresh effect is introduced with another `const`.
 const Log = @effect { .write = Int -> Int; };
-let tripling = { .write = fn (n, ?resume) => resume (n * 3); };
-let other = fn () => Log.write 1;
+let tripling = { .write = fn (n, ?resume) => do
+  result <- resume (n * 3);
+  in result
+end; };
+let other = fn () => do
+  result <- Log.write 1;
+  in result
+end;
 let second = @handle (Log, other, tripling);
 
 return first + second;

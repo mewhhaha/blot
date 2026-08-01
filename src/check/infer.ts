@@ -637,7 +637,17 @@ export function infer(
       // A fresh row per lambda is what makes the inferred effect minimal:
       // nothing becomes effectful because something else nearby was.
       const bodyRow = freshVar(level);
-      const result = infer(expr.body, inner, level, bodyRow);
+      let result: SimpleType;
+      if (expr.body.tag === "block") {
+        result = infer(expr.body, inner, level, bodyRow);
+      } else {
+        result = inferPure(
+          expr.body,
+          inner,
+          level,
+          "A function result",
+        );
+      }
       return { tag: "fun", param, effects: bodyRow, result };
     }
 
@@ -771,6 +781,9 @@ export function infer(
       const values = childEnv(context.values);
       const inner: Context = { ...context, types: scope, values };
       inferDeclarations(expr.declarations, inner, level, row);
+      if (expr.resultEffects === "pure") {
+        return inferPure(expr.result, inner, level, "This value");
+      }
       return infer(expr.result, inner, level, row);
     }
   }
@@ -2201,7 +2214,12 @@ function inferDeclarations(
         declaration.value,
         new Map(bindings.map((binding) => [binding.target, binding.value])),
       );
-      const target = infer(declaration.value, context, level, row);
+      const target = inferPure(
+        declaration.value,
+        context,
+        level,
+        "An `open` value",
+      );
       for (const binding of bindings) {
         context.values.names.set(binding.target, binding.value);
         const field = freshVar(level);
@@ -2236,7 +2254,12 @@ function inferDeclarations(
       if (named !== null) bridged = bridge(named);
       let inferred: Typing;
       if (bridged === null) {
-        inferred = generalize(declaration.value, context, level, row);
+        inferred = generalizePure(
+          declaration.value,
+          context,
+          level,
+          "A `:=` value",
+        );
       } else {
         inferred = bridged;
       }
@@ -2391,15 +2414,34 @@ function inferDeclarations(
     }
     if (type === null) {
       if (signature !== null && declaration.value.tag === "lambda") {
-        type = checkAgainst(
+        if (declaration.kind === "effect") {
+          type = checkAgainst(
+            declaration.value,
+            signature,
+            context,
+            level,
+            row,
+          );
+        } else {
+          type = checkAgainstPure(
+            declaration.value,
+            signature,
+            context,
+            level,
+            "A `let` value",
+          );
+        }
+      } else if (declaration.kind === "effect") {
+        type = generalize(declaration.value, context, level, row);
+      } else {
+        let description = "A `let` value";
+        if (declaration.kind === "const") description = "A `const` value";
+        type = generalizePure(
           declaration.value,
-          signature,
           context,
           level,
-          row,
+          description,
         );
-      } else {
-        type = generalize(declaration.value, context, level, row);
       }
     }
 
@@ -2593,15 +2635,38 @@ function checkAgainst(
   const inner: Context = { ...context, types: scope };
   bindPatternAgainst(expr.parameter, expected.param, scope, level + 1);
   const bodyRow = freshVar(level + 1);
-  checkAgainst(
-    expr.body,
-    expected.result,
-    inner,
-    level + 1,
-    bodyRow,
-  );
+  if (expr.body.tag === "block") {
+    checkAgainst(
+      expr.body,
+      expected.result,
+      inner,
+      level + 1,
+      bodyRow,
+    );
+  } else {
+    checkAgainstPure(
+      expr.body,
+      expected.result,
+      inner,
+      level + 1,
+      "A function result",
+    );
+  }
   located(expr.span, () => constrain(bodyRow, expected.effects));
   return expected;
+}
+
+function checkAgainstPure(
+  expr: Expr,
+  expected: SimpleType,
+  context: Context,
+  level: Level,
+  description: string,
+): SimpleType {
+  const row = freshVar(level + 1);
+  const inferred = checkAgainst(expr, expected, context, level, row);
+  requirePure(row, expr.span, description);
+  return inferred;
 }
 
 function bindPatternAgainst(
@@ -2678,6 +2743,48 @@ function generalize(
 ): Typing {
   const inner = infer(expr, context, level + 1, row);
   return scheme(inner, level);
+}
+
+function generalizePure(
+  expr: Expr,
+  context: Context,
+  level: Level,
+  description: string,
+): Typing {
+  const row = freshVar(level + 1);
+  const inner = infer(expr, context, level + 1, row);
+  requirePure(row, expr.span, description);
+  return scheme(inner, level);
+}
+
+function inferPure(
+  expr: Expr,
+  context: Context,
+  level: Level,
+  description: string,
+): SimpleType {
+  const row = freshVar(level);
+  const inferred = infer(expr, context, level, row);
+  requirePure(row, expr.span, description);
+  return inferred;
+}
+
+function requirePure(
+  row: SimpleType,
+  span: Span,
+  description: string,
+): void {
+  try {
+    constrain(row, effects([]));
+  } catch (error) {
+    if (!(error instanceof TypeError_)) throw error;
+    fail(
+      "BLOT_UNSEQUENCED_EFFECT",
+      `${description} performs an effect. Sequence it with ` +
+        "`name <- expression;` instead.",
+      span,
+    );
+  }
 }
 
 /**
@@ -2901,7 +3008,17 @@ export function checkModule(
     : bindPattern(module.parameter, types, level);
 
   inferDeclarations(module.declarations, context, level, row);
-  const result = infer(module.result, context, level, row);
+  let result: SimpleType;
+  if (module.resultEffects === "pure") {
+    result = inferPure(
+      module.result,
+      context,
+      level,
+      "The module result",
+    );
+  } else {
+    result = infer(module.result, context, level, row);
+  }
   // The module's own body has been inferred, so a constraint it owed can be
   // applied before anything reads its row at the boundary.
   for (const owed of pending) owed();

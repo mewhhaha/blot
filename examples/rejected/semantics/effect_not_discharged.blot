@@ -7,11 +7,16 @@ open {} = (@import "blot:prelude") ();
 const Console = @effect { .write = Str -> Unit; };
 const Clock = @effect { .now = Unit -> Int; };
 
-let logging = { .write = fn (m, ?resume) => resume (); .return = fn v => v; };
+let logging = { .write = fn (m, ?resume) => do
+  result <- resume ();
+  in result
+end; .return = fn v => v; };
 
 let stamped = fn () => do
-  let _ = Console.write "start";
-  in Clock.now ()
+  _ <- Console.write "start";
+  time <- Clock.now ();
+  in time
 end;
 
-return @handle (Console, stamped, logging);
+result <- @handle (Console, stamped, logging);
+return result;

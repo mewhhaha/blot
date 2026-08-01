@@ -63,16 +63,22 @@ const each_2 = fn (left, right, step) => fold (
 // rather than the four the store holds. The backend builds the record's Core
 // type from that set and gpufuck refuses the mismatch. Until a shape survives
 // a tuple scrutinee, a renderer's join stays two `case`s.
-const visit_2 = fn (left, right, visit) => each (
-  upto (0, count left),
-  (fn id => case at (left, id) of
-    #Some a => case at (right, id) of
-      #Some b => visit (a, b),
-      #None => ()
-    end,
-    #None => ()
-  end)
-);
+const visit_2 = fn (left, right, visit) => do
+  _ <- each (
+    upto (0, count left),
+    (fn id => do
+      _ <- case at (left, id) of
+        #Some a => case at (right, id) of
+          #Some b => visit (a, b),
+          #None => ()
+        end,
+        #None => ()
+      end;
+      in ()
+    end)
+  );
+  in ()
+end;
 
 return {
   .Store = Store;

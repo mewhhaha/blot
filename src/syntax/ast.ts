@@ -133,13 +133,14 @@ export type Expr =
     readonly tag: "block";
     readonly declarations: readonly Decl[];
     readonly result: Expr;
+    readonly resultEffects: "pure" | "ambient";
     readonly span: Span;
   }
   /** `rec f` binds `rec` inside `f`'s body to `f` itself. */
   | { readonly tag: "rec"; readonly lambda: Expr; readonly span: Span }
   | { readonly tag: "comptime"; readonly body: Expr; readonly span: Span };
 
-export type DeclKind = "let" | "const" | "sig";
+export type DeclKind = "let" | "effect" | "const" | "sig";
 
 export interface DeclarationTag {
   readonly descriptor: Expr;
@@ -200,6 +201,7 @@ export interface Module {
   readonly fixities: readonly Fixity[];
   readonly declarations: readonly Decl[];
   readonly result: Expr;
+  readonly resultEffects: "pure" | "ambient";
   readonly span: Span;
 }
 

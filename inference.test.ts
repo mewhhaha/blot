@@ -270,7 +270,7 @@ check(
 check(
   "applying a parameter twice intersects its two uses",
   "let twice = fn f => fn x => f (f x);\nreturn twice;",
-  "('a -> 'b ~ { e } & 'b -> 'c ~ { e }) -> 'a -> 'c ~ { e }",
+  "('a -> 'b & 'b -> 'c) -> 'a -> 'c",
 );
 
 // --- records: width subtyping is the whole of a `duck` contract --------------
@@ -934,9 +934,23 @@ check(
 check(
   "performing an operation puts it in the row",
   `const Console = @effect { .write = Str -> Unit; };
-let greet = fn name => Console.write name;
+let greet = fn name => do
+  result <- Console.write name;
+  in result
+end;
 return { .greet = greet; };`,
   "{ .greet = Str -> () ~ { Console }; }",
+);
+
+check(
+  "effect binding sequences the expression without inserting a call",
+  `const Clock = @effect { .now = Unit -> Int; };
+let operation = fn () => do
+  read <- Clock.now;
+  in read
+end;
+return { .operation = operation; };`,
+  "{ .operation = () -> () -> Int ~ { Clock }; }",
 );
 
 check(
@@ -944,8 +958,8 @@ check(
   `const Console = @effect { .write = Str -> Unit; };
 const Clock = @effect { .now = Unit -> Int; };
 let stamped = fn name => do
-  let t = Clock.now ();
-  let _ = Console.write name;
+  t <- Clock.now ();
+  _ <- Console.write name;
   in t
 end;
 return { .stamped = stamped; };`,
@@ -957,7 +971,11 @@ return { .stamped = stamped; };`,
 check(
   "a row variable makes an effect-polymorphic wrapper",
   `const Console = @effect { .write = Str -> Unit; };
-let logged = fn f => fn x => do let _ = Console.write "call"; in f x end;
+let logged = fn f => fn x => do
+  _ <- Console.write "call";
+  result <- f x;
+  in result
+end;
 return { .logged = logged; };`,
   "{ .logged = ('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }; }",
 );
@@ -979,7 +997,10 @@ check(
   "a written row is what the printer prints",
   `const Console = @effect { .write = Str -> Unit; };
 sig greet = Str -> Unit ~ { Console };
-let greet = fn name => Console.write name;
+let greet = fn name => do
+  result <- Console.write name;
+  in result
+end;
 return { .greet = greet; };`,
   "{ .greet = Str -> () ~ { Console }; }",
 );
@@ -997,7 +1018,10 @@ rejects(
   "a bare arrow is the empty row, not an unwritten one",
   `const Console = @effect { .write = Str -> Unit; };
 sig greet = Str -> Unit;
-let greet = fn name => Console.write name;
+let greet = fn name => do
+  result <- Console.write name;
+  in result
+end;
 return { .greet = greet; };`,
   "is not handled",
 );
@@ -1009,7 +1033,10 @@ check(
   "a curried signature carries its row on the last arrow",
   `const Console = @effect { .write = Str -> Unit; };
 sig join = Str -> Str -> Unit ~ { Console };
-let join = fn a => fn b => Console.write (a <> b);
+let join = fn a => fn b => do
+  result <- Console.write (a <> b);
+  in result
+end;
 return { .join = join; };`,
   "{ .join = Str -> Str -> () ~ { Console }; }",
 );
@@ -1025,7 +1052,8 @@ rejects(
 rejects(
   "an unhandled effect at the module boundary is rejected",
   `const Console = @effect { .write = Str -> Unit; };
-return Console.write "nobody is listening";`,
+_ <- Console.write "nobody is listening";
+return ();`,
   "Nothing handles { Console }",
 );
 
@@ -1131,9 +1159,15 @@ rejects(
 check(
   "a handler result is the common clause result",
   `const Ask = @effect { .ask = Int -> Str; };
-let work = fn () => Ask.ask 1;
+let work = fn () => do
+  result <- Ask.ask 1;
+  in result
+end;
 let text = {
-  .ask = fn (_, ?resume) => @text.concat (resume "ok") "!";
+  .ask = fn (_, ?resume) => do
+    resumed <- resume "ok";
+    in @text.concat resumed "!"
+  end;
   .return = fn value => @text.concat value ".";
 };
 return @handle (Ask, work, text);`,
@@ -1143,9 +1177,15 @@ return @handle (Ask, work, text);`,
 rejects(
   "resume accepts the operation result type",
   `const Ask = @effect { .ask = Int -> Str; };
-let work = fn () => Ask.ask 1;
+let work = fn () => do
+  result <- Ask.ask 1;
+  in result
+end;
 let wrong = {
-  .ask = fn (argument, ?resume) => resume argument;
+  .ask = fn (argument, ?resume) => do
+    result <- resume argument;
+    in result
+  end;
   .return = fn value => value;
 };
 return @handle (Ask, work, wrong);`,

@@ -28,8 +28,8 @@ let first = fn p => do let { .x = a; } = p; in a end;
 // Writing is the host's, so the compiler cannot run this: `point` is built
 // while the program runs rather than folded away while it compiles, and the
 // projections above are what reaches WebAssembly.
-let point = do
-  let _ = Console.write "projected";
+point <- do
+  _ <- Console.write "projected";
   in { .x = 7; .y = 0; }
 end;
 

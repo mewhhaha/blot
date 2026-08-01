@@ -266,7 +266,10 @@ WebAssembly imports.
 ```blot
 const Console = @effect.host { .write = Str -> Unit; };
 
-let report = fn () => Console.write "compiled";   // () -> () ~ { Console }
+let report = fn () => do
+  result <- Console.write "compiled";
+  in result
+end; // () -> () ~ { Console }
 ```
 
 This is why blot needs no raw import form: you declare an effect, and the
@@ -326,8 +329,15 @@ of the computation to the matching clause.
 
 ```blot
 const Counter = @effect { .bump = Int -> Int; };
-let doubling = { .bump = fn (n, ?resume) => resume (n * 2); };
-let counted = fn () => Counter.bump 20 + Counter.bump 1;
+let doubling = { .bump = fn (n, ?resume) => do
+  result <- resume (n * 2);
+  in result
+end; };
+let counted = fn () => do
+  first <- Counter.bump 20;
+  second <- Counter.bump 1;
+  in first + second
+end;
 
 @handle (Counter, counted, doubling)   // 42
 ```

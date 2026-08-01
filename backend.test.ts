@@ -578,7 +578,8 @@ Deno.test("host effects publish structural first-order imports", async () => {
       'open {} = (@import "blot:prelude") ();',
       "const Pair = { .left = Int; .right = Int; };",
       "const Exchange = @effect.host { .swap = Pair -> Pair; };",
-      "return Exchange.swap { .left = 20; .right = 22; };",
+      "pair <- Exchange.swap { .left = 20; .right = 22; };",
+      "return pair;",
     ].join("\n"),
   );
 
@@ -632,7 +633,7 @@ Deno.test("residual module-result spreads still declare every export", async () 
     [
       'open {} = (@import "blot:prelude") ();',
       "const Source = @effect.host { .read = Unit -> Int; };",
-      "let base = { .a = Source.read (); .b = 2; };",
+      "base <- { .a = Source.read (); .b = 2; };",
       "return { ...base; .a = 3; };",
     ].join("\n"),
   );
@@ -649,14 +650,29 @@ Deno.test("residual module-result spreads still declare every export", async () 
 });
 
 Deno.test("proved array reads reach gpufuck with their bounds checks removed", async () => {
-  // blot proves an index in bounds and emits the read anyway; removing the
-  // check is gpufuck's range analysis, and the only way to know it recognises
-  // the shape our guards take is to read the count back. A proof nothing
-  // downstream acts on is a diagnostic wearing an optimization's clothes.
-  const built = await build("examples/tour.blot");
+  // blot emits the proved read anyway; removing the check is gpufuck's range
+  // analysis, and the only way to know it recognises the Core blot emits is to
+  // read the count back. A proof nothing downstream acts on is a diagnostic
+  // wearing an optimization's clothes.
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "proved-read.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "sig at = Int -> Int;",
+      "let at = fn value => do",
+      "  let [only] = [value];",
+      "  in only",
+      "end;",
+      "return { .at = at; };",
+    ].join("\n"),
+  );
+
+  const built = await build(path);
   assert(
     built.storeReads.total > 0,
-    "tour.blot must keep a Store read for this to measure anything",
+    "the fixture must keep a Store read for this to measure anything",
   );
   assertEquals(built.storeReads.proven, built.storeReads.total);
 });
@@ -678,12 +694,31 @@ Deno.test("a reachable @panic traps with the reason the program gave", async () 
       "  0 => 100,",
       '  _ => @panic "pick expects zero"',
       "end;",
-      "return { .ok = pick (Source.read ()); };",
+      "value <- Source.read ();",
+      "return { .ok = pick value; };",
     ].join("\n"),
   );
 
   const manifest = await validateLowering(path);
   assertEquals(manifest.exports.map((exported) => exported.sourceName), ["ok"]);
+});
+
+Deno.test("an unused pure binding does not reach Core", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "unused-panic.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      'let unused = @panic "unused";',
+      "return { .answer = 42; };",
+    ].join("\n"),
+  );
+
+  assertEquals(await runLoweringExport(path, "answer"), {
+    kind: "signed-integer-64",
+    value: 42n,
+  });
 });
 
 /**
@@ -762,7 +797,8 @@ Deno.test("unlikely conditions become Wasm branch metadata", async () => {
     [
       'open {} = (@import "blot:prelude") ();',
       "const Source = @effect.host { .ready = Unit -> Bool; };",
-      "return if unlikely (Source.ready ()) then 1 else 2 end;",
+      "ready <- Source.ready ();",
+      "return if unlikely ready then 1 else 2 end;",
     ].join("\n"),
   );
   const built = await build(path);
@@ -922,7 +958,8 @@ Deno.test("a program with no vectors carries none of their machinery", async () 
     [
       'open {} = (@import "blot:prelude") ();',
       "const Source = @effect.host { .read = Unit -> Int; };",
-      "return Source.read () + 1;",
+      "value <- Source.read ();",
+      "return value + 1;",
     ].join("\n"),
   );
 
@@ -1170,7 +1207,8 @@ Deno.test("a shape inside a tuple pattern is refused rather than guessed", async
       "  ({ .x; }, #Some b) => x + b,",
       "  _ => 0",
       "end;",
-      "return total ({ .x = Source.read (); .y = 2; }, Some 3);",
+      "value <- Source.read ();",
+      "return total ({ .x = value; .y = 2; }, Some 3);",
     ].join("\n"),
   );
 

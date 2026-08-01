@@ -144,13 +144,6 @@
         }
       },
       {
-        "rule": "case_statement",
-        "boundary": {
-          "kind": "terminated",
-          "terminal": ";"
-        }
-      },
-      {
         "rule": "handler_composition",
         "boundary": {
           "kind": "terminated",

@@ -108,14 +108,21 @@ let advance = fn ts => E.each_1 (ts, (fn t => {
 // brush takes placement and a colour rather than a component, because a record
 // carries its whole field set across a module boundary and the renderer has no
 // business knowing that a transform of this game's also has a spin.
-let render = fn (transforms, models) => R.frame (fn draw =>
-  E.visit_2 (transforms, models, (fn (transform, model) =>
-    if model.kind == KIND_MESH
-    then draw.mesh (
-      transform.position, transform.angle, transform.scale, model.colour
-    )
-    else draw.sprite (transform.position, transform.scale, model.colour)
-    end)));
+let render = fn (transforms, models) => do
+  _ <- R.frame (fn draw => do
+    _ <- E.visit_2 (transforms, models, (fn (transform, model) => do
+      _ <- if model.kind == KIND_MESH
+        then draw.mesh (
+          transform.position, transform.angle, transform.scale, model.colour
+        )
+        else draw.sprite (transform.position, transform.scale, model.colour)
+        end;
+      in ()
+    end));
+    in ()
+  end);
+  in ()
+end;
 
 // --- loading ----------------------------------------------------------------
 //
@@ -127,57 +134,65 @@ let render = fn (transforms, models) => R.frame (fn draw =>
 // artifact.
 
 sig load_transforms = Unit -> Store Transform ~ { Assets };
-let load_transforms = fn () => fold (
-  upto (0, Assets.count ()),
-  @array.empty,
-  (fn (store, id) => do
-    let entry = Assets.entry id;
-    in E.attach (store, {
-      .position = R.point (entry.x, entry.y, entry.z);
-      .angle = 0;
-      .spin = entry.spin;
-      .scale = R.unit entry.scale;
-    })
-  end)
-);
+let load_transforms = fn () => do
+  count <- Assets.count ();
+  store <- fold (
+    upto (0, count),
+    @array.empty,
+    (fn (store, id) => do
+      entry <- Assets.entry id;
+      in E.attach (store, {
+        .position = R.point (entry.x, entry.y, entry.z);
+        .angle = 0;
+        .spin = entry.spin;
+        .scale = R.unit entry.scale;
+      })
+    end)
+  );
+  in store
+end;
 
 sig load_models = Unit -> Store Model ~ { Assets };
-let load_models = fn () => fold (
-  upto (0, Assets.count ()),
-  @array.empty,
-  (fn (store, id) => do
-    let entry = Assets.entry id;
-    in E.attach (store, { .kind = entry.kind; .colour = entry.colour; })
-  end)
-);
+let load_models = fn () => do
+  count <- Assets.count ();
+  store <- fold (
+    upto (0, count),
+    @array.empty,
+    (fn (store, id) => do
+      entry <- Assets.entry id;
+      in E.attach (store, { .kind = entry.kind; .colour = entry.colour; })
+    end)
+  );
+  in store
+end;
 
 // --- the frame loop ---------------------------------------------------------
 //
 // The two stores and the generation are the accumulator, so this is the world
 // and the fold at once. Adding a component means adding a name.
 
-let transforms = load_transforms ();
-let models = load_models ();
-let generation = Assets.generation ();
+transforms <- load_transforms ();
+models <- load_models ();
+generation <- Assets.generation ();
 let frames = 0;
 
 for ever do
-  let remaining = Host.frame ();
+  remaining <- Host.frame ();
   if remaining <= 0 then do
     break;
   end;
 
   // Hot reload. The host bumps its generation when a watched file changes, and
   // the world is rebuilt from the new scene; nothing else has to know.
-  current <- Assets.generation;
+  current <- Assets.generation ();
   if current != generation then do
-    transforms := load_transforms ();
-    models := load_models ();
+    transforms <- load_transforms ();
+    models <- load_models ();
     generation := current;
   end;
 
   transforms := advance transforms;
-  let _ = render (transforms, models);
+  _ <- render (transforms, models);
 
   frames := frames + 1;
 end;

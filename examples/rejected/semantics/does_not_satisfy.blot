@@ -9,6 +9,6 @@ open {} = (@import "blot:prelude") ();
 
 const Source = @effect.host { .read = Unit -> Int; };
 
-let reading = { .value = Source.read (); };
+reading <- { .value = Source.read (); };
 
 return @type.satisfies (reading, Has { .missing = Int; });

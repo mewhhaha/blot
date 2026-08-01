@@ -16,18 +16,29 @@ const Scale = @effect { .by = Int -> Int; };
 
 // A clause is `fn (argument, ?resume) => …`. `?` is affine, so resuming twice is a
 // static error and never resuming is an abort — which is a different feature.
-let doubling = { .bump = fn (n, ?resume) => resume (n * 2); };
+let doubling = { .bump = fn (n, ?resume) => do
+  result <- resume (n * 2);
+  in result
+end; };
 
 // Resume may appear beneath a block, conditional, or case.
 let stepping = {
   .by = fn (n, ?resume) => do
     let scaled = n * 10;
-    in resume (if n < 0 then 0 else scaled end)
+    result <- resume (if n < 0 then 0 else scaled end);
+    in result
   end;
 };
 
-let counted = fn () => Counter.bump 20 + Counter.bump 1;
-let scaled = fn () => Scale.by 4;
+let counted = fn () => do
+  first <- Counter.bump 20;
+  second <- Counter.bump 1;
+  in first + second
+end;
+let scaled = fn () => do
+  result <- Scale.by 4;
+  in result
+end;
 
 // Nested handlers discharge only what they replace.
 return @handle (Counter, counted, doubling) - @handle (Scale, scaled, stepping);

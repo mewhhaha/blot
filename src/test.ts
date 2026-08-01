@@ -221,6 +221,7 @@ function runTest(loaded: Loaded, test: TestDeclaration): TestOutcome {
     parameter: null,
     declarations: loaded.module.declarations.slice(0, test.index + 1),
     result,
+    resultEffects: "pure",
   };
   let imports = loaded.closure.imports;
   if (imports === undefined) imports = new Map();

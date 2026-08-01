@@ -1,0 +1,6 @@
+open {} = (@import "blot:prelude") ();
+
+const Console = @effect { .write = Str -> Unit; };
+
+let ignored = Console.write "this is not sequenced";
+return ignored;

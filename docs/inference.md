@@ -57,7 +57,10 @@ already knows how to compute, because a row is a lattice element like any other.
 const Console = @effect { .write = Str -> Unit; };
 const Clock = @effect { .now = Unit -> Int; };
 
-let greet = fn name => Console.write name;   // Str -> () ~ { Console }
+let greet = fn name => do
+  result <- Console.write name;
+  in result
+end; // Str -> () ~ { Console }
 let quiet = fn n => @int.add n 1;            // Int -> Int
 ```
 
@@ -67,7 +70,11 @@ pairs, and the two should not look alike. `e` is the rest of the row — a row
 variable — and it is what makes a wrapper effect-polymorphic without saying so:
 
 ```blot
-let logged = fn f => fn x => do let _ = Console.write "call"; in f x end;
+let logged = fn f => fn x => do
+  _ <- Console.write "call";
+  result <- f x;
+  in result
+end;
 // ('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }
 ```
 
@@ -88,8 +95,8 @@ proximity.
 An effect's type comes from _bridging its value_:
 `const Console = @effect {...}` is evaluated at compile time, and the resulting
 effect becomes a record of functions whose rows carry it. That is the whole
-mechanism, and it is why blot needs no `perform`, no `<-`, and no effect
-declaration form.
+mechanism. Blot needs no `perform` or effect declaration form; `<-` is the
+explicit point where an effectful expression is sequenced into its scope.
 
 `@handle` names the effect it discharges, so the row arithmetic is real:
 

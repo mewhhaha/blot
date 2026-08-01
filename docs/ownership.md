@@ -8,7 +8,7 @@ blot ownership examples/tour.blot    # the facts the backend will consume
 ## Three qualifiers
 
 ```blot
-let !token = 41;                        // linear: exactly once
+let !token = 41;                        // linear when demanded: exactly once
 let consume = fn !value => value + 1;   // takes ownership
 let peek = fn &p => p.x + p.y;          // borrows; the caller keeps its value
 let handler = fn (message, ?resume) => …; // affine: at most once
@@ -16,10 +16,10 @@ let handler = fn (message, ?resume) => …; // affine: at most once
 consume (!token)
 ```
 
-- **`!x` is linear.** It must be consumed exactly once on every path. Not
-  once-or-fewer: a resource nothing consumes is a leak, and that is the failure
-  the marker exists to catch. `blot check` rejects spending it twice, never
-  spending it, and spending it on one branch but not another.
+- **`!x` is linear.** Once its pure definition is demanded, it must be consumed
+  exactly once on every path. An unused pure `let` is discarded before
+  ownership, so it creates no resource to leak. `blot check` rejects spending a
+  demanded value twice or spending it on one branch but not another.
 - **`?x` is affine**: at most once. Not a weaker linear but a different rule.
   The difference is whether _not_ spending is a leak or an abort, and for a
   continuation it is an abort — a handler that never resumes is discarding the
@@ -34,7 +34,10 @@ and a promise in a comment; they are now a static one:
 
 ```blot
 let collecting = {
-  .write = fn (message, ?resume) => message ++ resume ();
+  .write = fn (message, ?resume) => do
+    rest <- resume ();
+    in message ++ rest
+  end;
   .return = fn value => value;
 };
 ```

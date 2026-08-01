@@ -62,8 +62,9 @@ while changing its type.
 `rec`/`case` recursion, `break` becomes loop-local control, and early `return`
 becomes an unspellable compiler-local tagged result eliminated by a `case` at
 the source function boundary. A standalone `if` becomes an ordinary
-conditional over those results, and `x <- e` becomes `let x = e ()`, all during
-CST lowering. `try program then do ... end` likewise becomes named nullary
+conditional over those results, and `x <- e` explicitly sequences the already
+applied expression `e`, all during CST lowering. `try program then do ... end`
+likewise becomes named nullary
 computations containing ordinary three-argument `@handle` calls; its bounded
 left-hand `<-` binds that computation rather than using the general declaration
 form. Nothing downstream of the parser knows these forms exist. A desugaring

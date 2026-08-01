@@ -18,6 +18,7 @@ import type {
   Pattern,
   Span,
 } from "../syntax/ast.ts";
+import { liveDeclarations } from "../syntax/live.ts";
 import { expect, fail } from "../diagnostic.ts";
 import {
   asTuple,
@@ -318,7 +319,8 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
 
     case "block": {
       const scope = childEnv(env);
-      yield* runDeclarations(expr.declarations, scope, runtime);
+      const live = liveDeclarations(expr.declarations, expr.result);
+      yield* runDeclarations(expr.declarations, live, scope, runtime);
       return yield* evaluate(expr.result, scope, runtime);
     }
   }
@@ -339,10 +341,12 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
  */
 function* runDeclarations(
   declarations: readonly Decl[],
+  live: ReadonlySet<Decl>,
   scope: Env,
   runtime: Runtime,
 ): Generator<Perform, void, Value> {
   for (const declaration of declarations) {
+    if (!live.has(declaration)) continue;
     if (declaration.tag === "open") {
       const value = yield* evaluate(declaration.value, scope, runtime);
       if (value.tag !== "shape") {
@@ -800,6 +804,7 @@ export function moduleClosure(
     tag: "block",
     declarations: module.declarations,
     result: module.result,
+    resultEffects: module.resultEffects,
     span: module.span,
   };
   const parameter: Pattern = module.parameter ??

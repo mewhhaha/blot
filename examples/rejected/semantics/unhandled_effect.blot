@@ -4,4 +4,8 @@
 open {} = (@import "blot:prelude") ();
 
 const Console = @effect { .write = Str -> Unit; };
-return Console.write "nobody is listening";
+_ <- case 1 of
+  1 => Console.write "nobody is listening",
+  _ => Console.write "still nobody"
+end;
+return ();

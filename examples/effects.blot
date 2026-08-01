@@ -5,11 +5,8 @@
 // to one primitive; performing an operation is an ordinary call; a handler is
 // a shape; and `@handle` is a function.
 //
-// `x <- computation;` is `let x = computation ();` and nothing more. Performing
-// is already a call and the row is already inferred, so there is nothing left
-// for a perform form to declare — which leaves `<-` one honest job: naming what
-// a computation *returns* without spelling the `()`. Requiring a nullary value
-// is what stops it from being a second spelling for `let`.
+// `x <- expression;` is the sequencing form. The expression is evaluated as
+// written, so a nullary operation still carries its explicit `()`.
 //
 // The row is inferred and it is also writable. `A -> B ~ { Console }` is what a
 // function that performs `Console` prints as, and a `sig` spells it the same
@@ -34,12 +31,15 @@ const Terminal = @effect {
 
 sig ask = Unit -> Str ~ { Terminal };
 let ask = fn () => do
-  answer <- Terminal.read;
+  answer <- Terminal.read ();
   in answer <> "!"
 end;
 
 let answering = {
-  .read = fn ((), ?resume) => resume "42";
+  .read = fn ((), ?resume) => do
+    answer <- resume "42";
+    in answer
+  end;
   .return = fn value => value;
 };
 
@@ -47,8 +47,8 @@ let answering = {
 // thing the printer would: the body may perform `Console` and nothing else.
 sig greet = Unit -> Str ~ { Console };
 let greet = fn () => do
-  let _ = Console.write "hello";
-  let _2 = Console.write "world";
+  _ <- Console.write "hello";
+  _ <- Console.write "world";
   in "done"
 end;
 
@@ -60,19 +60,25 @@ end;
 // catches the second call statically.
 let collecting = {
   .write = fn (message, ?resume) => do
-    let rest = resume ();
+    rest <- resume ();
     in @text.concat (@text.concat message "|") rest
   end;
   .return = fn value => value;
 };
 
 let counting = {
-  .write = fn (_, ?resume) => @int.add 1 (resume ());
+  .write = fn (_, ?resume) => do
+    rest <- resume ();
+    in @int.add 1 rest
+  end;
   .return = fn _ => 0;
 };
 
 let passing = {
-  .write = fn (_, ?resume) => resume ();
+  .write = fn (_, ?resume) => do
+    value <- resume ();
+    in value
+  end;
   .return = fn value => value;
 };
 

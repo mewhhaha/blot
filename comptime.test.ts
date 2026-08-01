@@ -68,3 +68,10 @@ Deno.test("comptime integer addition remains arbitrary precision", async () => {
   );
   assertEquals(value, { tag: "int", value: 13835058042397261827n });
 });
+
+Deno.test("an unused pure binding is not evaluated", async () => {
+  assertEquals(
+    await evaluate('let unused = @panic "unused";\nreturn 42;'),
+    { tag: "int", value: 42n },
+  );
+});
