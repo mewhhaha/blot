@@ -252,6 +252,32 @@ const Float = {
     end;
 };
 
+// --- single precision -------------------------------------------------------
+//
+// The narrower float, reached by conversion rather than by a literal: there is
+// one float token in the grammar and `F32.of_float` is what makes the loss of
+// precision a step the program takes. It is also the lane type a four-wide
+// vector wants, which is the other reason to have it at all.
+
+const Float32 = {
+  .add = left => (right => @f32.add left right);
+  .sub = left => (right => @f32.sub left right);
+  .mul = left => (right => @f32.mul left right);
+  .div = left => (right => @f32.div left right);
+  .negate = value => @f32.neg value;
+  .cmp = left => (right => @f32.cmp left right);
+  .is_nan = value => @f32.is_nan value;
+  .of_float = value => @f32.of_float value;
+  .of_int = value => @f32.of_float (@float.of_int value);
+  .widen = value => @float.of_f32 value;
+  .truncate = value => @int.of_float (@float.of_f32 value);
+  .abs = value =>
+    if is_less (@f32.cmp value (@f32.of_float 0.0))
+    then @f32.neg value
+    else value
+    end;
+};
+
 // --- option and result ------------------------------------------------------
 
 const Option = value => #None | #Some value;
@@ -396,6 +422,7 @@ const Int = @type.int;
 const Str = @type.text;
 
 const F64 = @type.float;
+const F32 = @type.float32;
 const I32 = range (-2147483648, 2147483647);
 const I64 = range (@int.neg (pow2 63), @int.sub (pow2 63) 1);
 const U8 = range (0, 255);
@@ -742,6 +769,7 @@ return {
   .Eq = Eq;
   .Num = Num;
   .Float = Float;
+  .Float32 = Float32;
   .Text = Text;
   .Semigroup = Semigroup;
 
@@ -791,6 +819,7 @@ return {
   .aligned = aligned;
   .sort_by = sort_by;
   .F64 = F64;
+  .F32 = F32;
   .I32 = I32;
   .I64 = I64;
   .U8 = U8;

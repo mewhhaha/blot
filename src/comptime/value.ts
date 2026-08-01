@@ -20,6 +20,12 @@ export type Value =
    * type: `1.5` inhabits `Float` and nothing narrower (see `Domain`).
    */
   | { readonly tag: "float"; readonly value: number }
+  /**
+   * A single-precision float. `value` is always already rounded to f32, so the
+   * interpreter holds exactly what the emitted `f32` holds and the two cannot
+   * drift apart between operations.
+   */
+  | { readonly tag: "float32"; readonly value: number }
   | { readonly tag: "text"; readonly value: string }
   | { readonly tag: "unit" }
   /** Records and tuples. Tuples use `"0"`, `"1"`, … as labels. */
@@ -69,7 +75,7 @@ export type Value =
     readonly tag: "range";
     readonly low: Value;
     readonly high: Value;
-    readonly domain?: "int" | "text" | "float";
+    readonly domain?: "int" | "text" | "float" | "float32";
   }
   | { readonly tag: "union"; readonly members: readonly Value[] }
   | { readonly tag: "unbounded" }
@@ -185,6 +191,12 @@ export function lookup(env: Env, name: string): Value | undefined {
 
 export function show(value: Value): string {
   if (value.tag === "int") return value.value.toString();
+  if (value.tag === "float32") {
+    const shown = Number.isInteger(value.value)
+      ? `${value.value}.0`
+      : String(value.value);
+    return `${shown}f`;
+  }
   if (value.tag === "float") {
     // A float always prints with a point, so `2` and `2.0` stay distinguishable
     // in a diagnostic and in a recorded example's expected output.
@@ -226,6 +238,7 @@ export function show(value: Value): string {
     if (open && shut) {
       if (domain === "text") return "Str";
       if (domain === "float") return "F64";
+      if (domain === "float32") return "F32";
       return "Int";
     }
     if (
@@ -264,7 +277,7 @@ export function show(value: Value): string {
 /** Which ordered domain a range lives in: its own label, else its bounds. */
 export function rangeDomainOf(
   value: Value & { tag: "range" },
-): "int" | "text" | "float" {
+): "int" | "text" | "float" | "float32" {
   if (value.domain !== undefined) return value.domain;
   if (value.low.tag === "text" || value.high.tag === "text") return "text";
   return "int";
@@ -277,6 +290,9 @@ export function equal(left: Value, right: Value): boolean {
   if (left.tag !== right.tag) return false;
   if (left.tag === "int" && right.tag === "int") {
     return left.value === right.value;
+  }
+  if (left.tag === "float32" && right.tag === "float32") {
+    return Object.is(left.value, right.value);
   }
   if (left.tag === "float" && right.tag === "float") {
     // Bit equality, so `equal` stays an equivalence: `NaN` is the same value as

@@ -380,6 +380,7 @@ export function showRange(
   if (low === null && high === null) {
     if (domain === "int") return "Int";
     if (domain === "float") return "F64";
+    if (domain === "float32") return "F32";
     return "Str";
   }
   // `""` is the bottom of the lexicographic order, so `""..` is every text.

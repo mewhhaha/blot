@@ -91,8 +91,14 @@ than an equality that answers `#False` to a question the format says has no
 answer. `Float.is_nan` is how a program asks first, and it is a primitive
 because comparing is precisely what refuses.
 
-There is no implicit conversion between the two numeric types, and no operator
-serves both. An operator resolves to one binding by name (§4.6), so a `+` over
+`F32` is the narrower float, and a distinct type rather than a precision `F64`
+sometimes has. There is no f32 literal — the grammar has one float token, and
+`Float32.of_float` is what makes the narrowing a step the program takes rather
+than one performed on it. `Float32.widen` goes back, exactly, because every
+`F32` is an `F64`.
+
+There is no implicit conversion between the numeric types, and no operator
+serves more than one. An operator resolves to one binding by name (§4.6), so a `+` over
 both would have to dispatch on a value's type at run time. `Float.of_int` and
 `Float.truncate` cross explicitly; `truncate` rounds toward zero.
 
@@ -907,7 +913,7 @@ const Meter = seal ("Meter", I32);
 The principal inferred forms are:
 
 - integer and text ranges, including singleton literals;
-- `F64`, the float type;
+- `F64` and `F32`, the float types;
 - unit;
 - functions with effect rows;
 - structural records and tuples;
@@ -974,8 +980,8 @@ inference.
 
 ### 10.2 Type-value primitives
 
-The primitive type values are `@type.int`, `@type.float`, `@type.text`,
-`@type.unit`, and `@type.unbounded`.
+The primitive type values are `@type.int`, `@type.float`, `@type.float32`,
+`@type.text`, `@type.unit`, and `@type.unbounded`.
 
 The type algebra includes:
 
@@ -1186,6 +1192,15 @@ Everything not listed here belongs in source, normally the prelude.
 | `@float.neg`     | negation                                             |
 | `@float.cmp`     | order two floats, refusing NaN                       |
 | `@float.is_nan`  | test for the value no ordering accepts               |
+| `@f32.add`       | single-precision addition                            |
+| `@f32.sub`       | single-precision subtraction                         |
+| `@f32.mul`       | single-precision multiplication                      |
+| `@f32.div`       | single-precision division                            |
+| `@f32.neg`       | single-precision negation                            |
+| `@f32.cmp`       | order two `F32`, refusing NaN                        |
+| `@f32.is_nan`    | test an `F32` for NaN                                |
+| `@f32.of_float`  | narrow an `F64`, which may lose the value            |
+| `@float.of_f32`  | widen an `F32`, which never does                     |
 | `@float.of_int`  | widen an integer to a float                          |
 | `@int.of_float`  | truncate a float toward zero                         |
 | `@text.concat`   | concatenate text                                     |
@@ -1294,7 +1309,8 @@ and both of these forms name the array twice — once to measure and once to rea
 | `@type.unbounded` | open range bound                            |
 | `@type.int`       | unbounded integer domain                    |
 | `@type.text`      | unbounded text domain                       |
-| `@type.float`     | the float domain, which has no bounds       |
+| `@type.float`     | the double domain, which has no bounds      |
+| `@type.float32`   | the single-precision domain                 |
 | `@type.unit`      | unit type/value                             |
 | `@type.range`     | inclusive range                             |
 | `@type.union`     | flattened duplicate-free union              |

@@ -56,7 +56,7 @@ The flat core types are:
 | variant    | `i32` discriminant followed by the joined payload |
 | seal       | its carrier                                       |
 
-`F64` is absent, and that is a limit rather than an omission. gpufuck's
+`F64` and `F32` are absent, and that is a limit rather than an omission. gpufuck's
 canonical ABI has no float case, so there is no stable layout to publish one
 under, even though the Component Model's own canonical ABI has `float64` and
 Core computes with doubles internally. A float is therefore a program's own

@@ -488,6 +488,10 @@ const BINARY: ReadonlyMap<string, BinaryOperator> = new Map([
   ["@float.mul", BinaryOperator.MultiplyFloat64],
   ["@float.div", BinaryOperator.DivideFloat64],
   ["@float.rem", BinaryOperator.RemainderFloat64],
+  ["@f32.add", BinaryOperator.AddFloat32],
+  ["@f32.sub", BinaryOperator.SubtractFloat32],
+  ["@f32.mul", BinaryOperator.MultiplyFloat32],
+  ["@f32.div", BinaryOperator.DivideFloat32],
 ]);
 
 export function lowerModule(
@@ -708,6 +712,7 @@ function exportSchema(
     case "range":
       if (type.domain === "int") return { kind: "signed-integer-64" };
       if (type.domain === "float") return { kind: "float-64" };
+      if (type.domain === "float32") return { kind: "float-32" };
       return HostTypes.text;
     case "fun":
       return {
@@ -780,6 +785,7 @@ function exportSchema(
         if (ranges.every((range) => range.domain === domain)) {
           if (domain === "int") return { kind: "signed-integer-64" };
           if (domain === "float") return { kind: "float-64" };
+          if (domain === "float32") return { kind: "float-32" };
           return HostTypes.text;
         }
       }
@@ -860,6 +866,8 @@ function bridgeRuntimeValue(value: Value): SimpleType | null {
       };
     case "float":
       return { tag: "range", domain: "float", low: null, high: null };
+    case "float32":
+      return { tag: "range", domain: "float32", low: null, high: null };
     case "text":
       return {
         tag: "range",
@@ -2483,6 +2491,8 @@ function lowerValue(
       return at.signedInteger64(value.value);
     case "float":
       return at.float64(value.value);
+    case "float32":
+      return at.float32(value.value);
     case "text":
       return at.text(value.value);
     case "unit":
@@ -2919,6 +2929,78 @@ function lowerApply(
             ),
           ),
         ),
+      );
+    }
+    if (spine.callee.name === "@f32.is_nan" && spine.args.length === 1) {
+      const value = lowering.fresh("value");
+      return surface.let(
+        value,
+        lower(spine.args[0], scope, lowering),
+        at.binary(
+          BinaryOperator.NotEqualFloat32,
+          at.name(value),
+          at.name(value),
+        ),
+      );
+    }
+    // The same four-way shape `@float.cmp` takes, so the unordered branch is
+    // reachable only by NaN and refuses there too.
+    if (spine.callee.name === "@f32.cmp" && spine.args.length === 2) {
+      const sum = lowering.sum([
+        { name: "Less", payload: false },
+        { name: "Equal", payload: false },
+        { name: "Greater", payload: false },
+      ]);
+      const left = lowering.fresh("left");
+      const right = lowering.fresh("right");
+      const tag = (name: string): SurfaceExpression =>
+        at.name(constructorName(sum, name));
+      return surface.let(
+        left,
+        lower(spine.args[0], scope, lowering),
+        surface.let(
+          right,
+          lower(spine.args[1], scope, lowering),
+          at.if(
+            at.binary(BinaryOperator.LessFloat32, at.name(left), at.name(right)),
+            tag("Less"),
+            at.if(
+              at.binary(
+                BinaryOperator.EqualFloat32,
+                at.name(left),
+                at.name(right),
+              ),
+              tag("Equal"),
+              at.if(
+                at.binary(
+                  BinaryOperator.GreaterFloat32,
+                  at.name(left),
+                  at.name(right),
+                ),
+                tag("Greater"),
+                at.runtimeFault("float comparison against NaN"),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    if (spine.callee.name === "@f32.neg" && spine.args.length === 1) {
+      return at.unary(
+        UnaryOperator.NegateFloat32,
+        lower(spine.args[0], scope, lowering),
+      );
+    }
+    if (spine.callee.name === "@f32.of_float" && spine.args.length === 1) {
+      return at.convert(
+        NumericConversion.Float64ToFloat32,
+        lower(spine.args[0], scope, lowering),
+      );
+    }
+    if (spine.callee.name === "@float.of_f32" && spine.args.length === 1) {
+      return at.convert(
+        NumericConversion.Float32ToFloat64,
+        lower(spine.args[0], scope, lowering),
       );
     }
     if (spine.callee.name === "@float.neg" && spine.args.length === 1) {

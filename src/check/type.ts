@@ -90,14 +90,14 @@ export interface RigidVariable {
 /**
  * The ordered domains a range lives in.
  *
- * `float` ranges are always open at both ends. A float bound would have to be
+ * `float` and `float32` ranges are always open at both ends. A float bound would have to be
  * a real number, and the operations this lattice performs on bounds — adjacency
  * in `difference`, enumeration in coverage — have no meaning there: there is no
  * next float after 1.5 that a program could name, and equality is not something
  * to narrow on when NaN and rounding exist. So `1.5` is a `Float` rather than a
  * singleton, and the machinery that would need a real number is never reached.
  */
-export type Domain = "int" | "text" | "float";
+export type Domain = "int" | "text" | "float" | "float32";
 
 export type SimpleType =
   | Variable
@@ -208,6 +208,17 @@ export const TEXT: SimpleType = {
 export const FLOAT: SimpleType = {
   tag: "range",
   domain: "float",
+  low: null,
+  high: null,
+};
+/**
+ * Single precision. A separate type rather than a precision `F64` sometimes
+ * has, because rounding to it is a step a program takes rather than one that
+ * happens to it — and because it is the lane type a four-wide vector needs.
+ */
+export const FLOAT32: SimpleType = {
+  tag: "range",
+  domain: "float32",
   low: null,
   high: null,
 };

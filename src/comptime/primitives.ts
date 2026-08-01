@@ -60,6 +60,28 @@ function floatOf(value: Value, span: Span, what: string): number {
   return value.value;
 }
 
+/**
+ * Rounds on the way in and on the way out, so an `f32` value in the
+ * interpreter is bit-for-bit the one the emitted module holds. Doing it once
+ * at construction is what keeps a sequence of operations from drifting: every
+ * intermediate is a real f32 rather than a double that happens to have started
+ * as one.
+ */
+function float32(value: number): Value {
+  return { tag: "float32", value: Math.fround(value) };
+}
+
+function float32Of(value: Value, span: Span, what: string): number {
+  if (value.tag !== "float32") {
+    fail(
+      "BLOT_TYPE",
+      `${what} expects an F32, found ${show(value)}.`,
+      span,
+    );
+  }
+  return value.value;
+}
+
 function textOf(value: Value, span: Span, what: string): string {
   if (value.tag !== "text") {
     fail("BLOT_TYPE", `${what} expects text, found ${show(value)}.`, span);
@@ -223,7 +245,9 @@ function without(member: Value, other: Value, span: Span): Value[] {
  * second primitive to ask.
  */
 /** Which ordered domain a range lives in: its own label, else its bounds. */
-function rangeDomain(value: Value & { tag: "range" }): "int" | "text" | "float" {
+function rangeDomain(
+  value: Value & { tag: "range" },
+): "int" | "text" | "float" | "float32" {
   if (value.domain !== undefined) return value.domain;
   if (value.low.tag === "text" || value.high.tag === "text") return "text";
   return "int";
@@ -418,6 +442,12 @@ export const PRIMITIVE_VALUES: ReadonlyMap<string, Value> = new Map<
   // Always open at both ends. A float bound would have to be a real number and
   // nothing in the lattice could use one, so `Float` is the only float type
   // there is.
+  ["@type.float32", {
+    tag: "range",
+    low: { tag: "unbounded" },
+    high: { tag: "unbounded" },
+    domain: "float32",
+  }],
   ["@type.float", {
     tag: "range",
     low: { tag: "unbounded" },
@@ -873,6 +903,71 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
       return integerResult(BigInt(Math.trunc(number)), s, "@int.of_float", phase);
     },
   }],
+  // --- single precision -----------------------------------------------------
+  //
+  // The same operations as `@float.*`, rounded to f32 after each one. There is
+  // no f32 literal: `@f32.of_float` is the only way to make one, which keeps
+  // the grammar at one float token and makes the loss of precision a step the
+  // program takes rather than one the lexer performs on it.
+
+  ["@f32.add", {
+    arity: 2,
+    run: ([l, r], s) =>
+      float32(float32Of(l, s, "@f32.add") + float32Of(r, s, "@f32.add")),
+  }],
+  ["@f32.sub", {
+    arity: 2,
+    run: ([l, r], s) =>
+      float32(float32Of(l, s, "@f32.sub") - float32Of(r, s, "@f32.sub")),
+  }],
+  ["@f32.mul", {
+    arity: 2,
+    run: ([l, r], s) =>
+      float32(float32Of(l, s, "@f32.mul") * float32Of(r, s, "@f32.mul")),
+  }],
+  ["@f32.div", {
+    arity: 2,
+    run: ([l, r], s) =>
+      float32(float32Of(l, s, "@f32.div") / float32Of(r, s, "@f32.div")),
+  }],
+  ["@f32.neg", {
+    arity: 1,
+    run: ([value], s) => float32(-float32Of(value, s, "@f32.neg")),
+  }],
+  ["@f32.is_nan", {
+    arity: 1,
+    run: ([value], s) => bool(Number.isNaN(float32Of(value, s, "@f32.is_nan"))),
+  }],
+  ["@f32.cmp", {
+    arity: 2,
+    run: ([l, r], s) => {
+      const left = float32Of(l, s, "@f32.cmp");
+      const right = float32Of(r, s, "@f32.cmp");
+      if (Number.isNaN(left) || Number.isNaN(right)) {
+        fail(
+          "BLOT_UNORDERED",
+          "@f32.cmp cannot order NaN. Test for it before comparing.",
+          s,
+        );
+      }
+      if (left < right) return ordering(-1);
+      if (left > right) return ordering(1);
+      return ordering(0);
+    },
+  }],
+  // Narrowing, so it can lose the value: a double too large for the format
+  // becomes an infinity, which is what `f64.demote_f32` does.
+  ["@f32.of_float", {
+    arity: 1,
+    run: ([value], s) => float32(floatOf(value, s, "@f32.of_float")),
+  }],
+  // Widening, and exact — every f32 is an f64.
+  ["@float.of_f32", {
+    arity: 1,
+    run: ([value], s) =>
+      ({ tag: "float", value: float32Of(value, s, "@float.of_f32") }),
+  }],
+
   ["@panic", {
     arity: 1,
     run: ([message], span) =>

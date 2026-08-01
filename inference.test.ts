@@ -75,6 +75,20 @@ check(
 );
 
 check(
+  "single precision is its own type",
+  'open {} = (@import "blot:prelude") ();\n' +
+    "return Float32.mul (Float32.of_int 2) (Float32.of_float 1.5);",
+  "F32",
+);
+
+rejects(
+  "the two float precisions do not mix",
+  'open {} = (@import "blot:prelude") ();\n' +
+    "return Float.add 1.5 (Float32.of_int 1);",
+  "BLOT_TYPE_ERROR",
+);
+
+check(
   "crossing between the numeric types is explicit and exact",
   'open {} = (@import "blot:prelude") ();\n' +
     "return { .up = Float.of_int 7; .down = Float.truncate 3.75; };",

@@ -80,6 +80,38 @@ let ordinary_is_not = Float.is_nan 1.0;
 sig root = Int;
 let root = Float.truncate (Float.mul (Float.sqrt 2.0) 1000.0);
 
+// --- the narrower one -------------------------------------------------------
+//
+// `F32` is a distinct type reached by conversion. There is no f32 literal: the
+// grammar has one float token, and `Float32.of_float` is what makes the loss of
+// precision a step the program takes rather than one performed on it.
+//
+// It is a separate type rather than a precision `F64` sometimes has, so mixing
+// them is an error rather than a rounding nobody wrote down — and because it is
+// the lane type a four-wide vector needs.
+
+sig third_64 = Int;
+let third_64 = Float.truncate (Float.mul (Float.div 1.0 3.0) 1000000000.0);
+
+// The same division, in single precision, widened back to compare. The digits
+// stop earlier, which is the whole difference between the two types.
+sig third_32 = Int;
+let third_32 = Float.truncate (Float.mul
+  (Float32.widen (Float32.div (Float32.of_int 1) (Float32.of_int 3)))
+  1000000000.0);
+
+// A double that is exact in f32 survives the round trip; one that is not does
+// not. This is the pair that shows the narrowing is real rather than a label.
+sig exact_round_trip = Bool;
+let exact_round_trip = is_equal (Float.cmp
+  (Float32.widen (Float32.of_float 0.5))
+  0.5);
+
+sig lossy_round_trip = Bool;
+let lossy_round_trip = is_equal (Float.cmp
+  (Float32.widen (Float32.of_float 0.1))
+  0.1);
+
 // --- the boundary -----------------------------------------------------------
 //
 // Every export here is an `Int` or a `Bool`. A float cannot cross the module
@@ -103,4 +135,9 @@ return {
   .ordinary_is_not = ordinary_is_not;
 
   .root = root;
+
+  .third_64 = third_64;
+  .third_32 = third_32;
+  .exact_round_trip = exact_round_trip;
+  .lossy_round_trip = lossy_round_trip;
 };
