@@ -31,6 +31,7 @@ const REJECTIONS: Record<
   string,
   { code: string; stage: "check" | "run" | "build" }
 > = {
+  "does_not_satisfy": { code: "BLOT_DOES_NOT_SATISFY", stage: "check" },
   "misplaced_rec": { code: "BLOT_MISPLACED_REC", stage: "run" },
   "missing_result": { code: "BLOT_MISSING_RESULT", stage: "check" },
   "out_of_range": { code: "BLOT_TYPE_ERROR", stage: "check" },

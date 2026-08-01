@@ -12,8 +12,9 @@
 // silently widening to "anything" would turn a missing case into a passing
 // check.
 
-import { show, type Value } from "../comptime/value.ts";
+import { equal, show, type Value } from "../comptime/value.ts";
 import {
+  type Bound,
   type Domain,
   effects as effectRow,
   freshRigid,
@@ -223,3 +224,125 @@ function domainOf(value: Value): Domain | null {
 }
 
 export { INT, TEXT };
+
+/**
+ * The reverse of `bridge`: an inferred type, as a compile-time value.
+ *
+ * `bridge` exists because a program writes types as values and inference needs
+ * them as lattice elements. This goes the other way, and it exists for one
+ * reason: `@type.satisfies` hands a predicate the type of an expression, and
+ * the type of an expression that is not itself compile-time lives only in the
+ * lattice. Without this there is nothing to hand over — `@type.of` cannot do
+ * it, because it answers the type of a *value* and so has to evaluate one.
+ *
+ * Partial on purpose. An inference variable has no compile-time reading, and
+ * neither does an effect row or a bound this cannot name, so those answer
+ * `null` and the caller reports which type it could not reify. Inventing a
+ * value for them is the mistake that made an unconstrained variable mean
+ * "satisfies anything" everywhere else in this checker.
+ */
+export function reify(type: SimpleType): Value | null {
+  switch (type.tag) {
+    case "unit":
+      // `UNIT` in this file is the lattice's; the value domain has its own.
+      return { tag: "unit" };
+    case "top":
+      return { tag: "unbounded" };
+
+    case "range": {
+      const low = type.low === null
+        ? { tag: "unbounded" as const }
+        : reifyBound(type.low, type.domain);
+      const high = type.high === null
+        ? { tag: "unbounded" as const }
+        : reifyBound(type.high, type.domain);
+      if (low === null || high === null) return null;
+      // A singleton is the literal, not a range from a value to itself. That
+      // is how a program writes it, and a predicate compares what it was given
+      // against what its caller wrote — `Is { .value = 12; }` against a range
+      // of twelve to twelve is a mismatch nobody could see.
+      if (low.tag !== "unbounded" && equal(low, high)) return low;
+      return { tag: "range", low, high, domain: type.domain };
+    }
+
+    case "record": {
+      const fields = new Map<string, Value>();
+      for (const [name, member] of type.fields) {
+        const reified = reify(member);
+        if (reified === null) return null;
+        fields.set(name, reified);
+      }
+      return { tag: "shape", fields };
+    }
+
+    case "array": {
+      const element = reify(type.element);
+      if (element === null) return null;
+      return { tag: "array", elements: [element] };
+    }
+
+    case "variant": {
+      // An open variant is "these constructors and possibly others", which no
+      // union of tags can say. Refusing is what keeps a predicate from reading
+      // a partial set as the whole one.
+      if (type.open) return null;
+      const members: Value[] = [];
+      for (const [name, payload] of type.cases) {
+        const reified = reify(payload);
+        if (reified === null) return null;
+        members.push({
+          tag: "tag",
+          name,
+          payload: reified.tag === "unit" ? null : reified,
+        });
+      }
+      return { tag: "union", members };
+    }
+
+    case "fun": {
+      const domain = reify(type.param);
+      const codomain = reify(type.result);
+      if (domain === null || codomain === null) return null;
+      // The row is dropped, and that is a real loss rather than a rounding: a
+      // predicate cannot ask what a function performs. Saying so here is
+      // better than answering an arrow that claims purity.
+      return { tag: "arrow", domain, codomain, effects: [] };
+    }
+
+    case "union": {
+      const members: Value[] = [];
+      for (const member of type.members) {
+        const reified = reify(member);
+        if (reified === null) return null;
+        members.push(reified);
+      }
+      return { tag: "union", members };
+    }
+
+    case "var": {
+      // A binding's type is a variable whose lower bounds are what flowed into
+      // it, so one bound is the type the value has. Several would be a join
+      // this cannot name, and none means nothing has flowed in yet — both are
+      // refusals rather than guesses, because a predicate given the wrong type
+      // answers confidently about a program that does not exist.
+      if (type.lower.length !== 1) return null;
+      return reify(type.lower[0]);
+    }
+
+    // A rigid, a `forall`, an effect row, an opaque, and bottom. None of them
+    // is a value a program could have written, so none is a value a predicate
+    // can be handed.
+    default:
+      return null;
+  }
+}
+
+function reifyBound(bound: Bound, domain: Domain): Value | null {
+  if (typeof bound === "bigint") return { tag: "int", value: bound };
+  if (typeof bound === "string") return { tag: "text", value: bound };
+  // A length bound names an array a program cannot name back, and a float
+  // range is open at both ends by construction, so a closed one is a bug
+  // rather than something to translate.
+  void domain;
+  return null;
+}

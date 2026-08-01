@@ -27,6 +27,7 @@ import { BlotError, expect, fail } from "../diagnostic.ts";
 import type { Env as ValueEnv } from "../comptime/value.ts";
 import { childEnv, show, type Value } from "../comptime/value.ts";
 import {
+  apply,
   bind,
   evaluate,
   evaluationRuntime,
@@ -34,7 +35,7 @@ import {
   resolveOpenBindings,
   run,
 } from "../comptime/eval.ts";
-import { bridge, effectLabel } from "./bridge.ts";
+import { bridge, effectLabel, reify } from "./bridge.ts";
 import {
   showLiterals,
   uncovered,
@@ -976,15 +977,83 @@ function inferSpecial(
     return handledResult;
   }
 
+  // Does this expression's *inferred* type satisfy a compile-time predicate?
+  //
+  // Distinct from `@satisfies`, which asks whether a compile-time value
+  // inhabits a type. This asks a question about the type itself — has it an
+  // `.a`, is it a record at all — and the type of an expression that is not
+  // itself compile-time lives only in the lattice, so it has to be reified
+  // before a predicate can be handed it. `@type.of` cannot stand in: it answers
+  // the type of a *value*, so it evaluates one, and on a runtime expression
+  // that is an unhandled effect rather than a type.
+  // Takes a tuple rather than being curried, for the reason `@handle` does:
+  // the checker has to see the whole call to type it at all, and a partially
+  // applied one would be a closure whose parameter is not a compile-time value.
+  if (
+    callee.name === "@type.satisfies" && head.args.length === 1 &&
+    head.args[0].tag === "tuple" && head.args[0].elements.length === 2
+  ) {
+    const [subjectExpr, predicateExpr] = head.args[0].elements;
+    const valueType = infer(subjectExpr, context, level, row);
+    const subject = reify(valueType);
+    if (subject === null) {
+      fail(
+        "BLOT_TYPE_NOT_REIFIABLE",
+        `\`${
+          showType(valueType)
+        }\` has no compile-time reading, so a predicate cannot be given it. An inference variable, an effect row, and an open variant are the usual reasons.`,
+        subjectExpr.span,
+      );
+    }
+    const predicate = comptime(predicateExpr, context);
+    if (predicate === null) {
+      fail(
+        "BLOT_SIG_NOT_COMPTIME",
+        "The second argument to `@type.satisfies` must be a compile-time function from a type to a `Bool`.",
+        predicateExpr.span,
+      );
+    }
+    const answer = comptimeApply(
+      predicate,
+      subject,
+      context,
+      predicateExpr.span,
+    );
+    if (answer === null || answer.tag !== "tag") {
+      fail(
+        "BLOT_TYPE_ERROR",
+        "The predicate given to `@type.satisfies` must answer `#True` or `#False`.",
+        predicateExpr.span,
+      );
+    }
+    if (answer.name !== "True") {
+      fail(
+        "BLOT_DOES_NOT_SATISFY",
+        `\`${showType(valueType)}\` does not satisfy the predicate.`,
+        expr.span,
+      );
+    }
+    return valueType;
+  }
+
   if (callee.name === "@satisfies" && head.args.length === 2) {
     const valueType = infer(head.args[0], context, level, row);
+    // A type this pass cannot evaluate is deferred, not refused: `struct`'s
+    // `.new` names the field's type through a loop variable that only
+    // specialization binds, and refusing here would refuse `struct` itself.
     const typeValue = comptime(head.args[1], context);
     if (typeValue === null) return null;
+    // But one that evaluates to something which is not a type is refused. It
+    // used to fall through to the ordinary scheme, which checks nothing — so
+    // handing this a predicate rather than a type passed silently, and the
+    // program went on believing it had been checked.
     const expected = bridge(typeValue);
     if (expected === null) {
       fail(
         "BLOT_TYPE_ERROR",
-        "The second argument to `@satisfies` must evaluate to a type.",
+        `The second argument to \`@satisfies\` must be a type; this is ${
+          show(typeValue)
+        }. To ask a question *about* a type rather than to check a value against one, use \`@type.satisfies\`.`,
         head.args[1].span,
       );
     }
@@ -993,6 +1062,29 @@ function inferSpecial(
   }
 
   return null;
+}
+
+/** Applies a compile-time function to a value the checker built. */
+function comptimeApply(
+  fn: Value,
+  argument: Value,
+  context: Context,
+  span: Span,
+): Value | null {
+  try {
+    return run(
+      apply(fn, argument, span, evaluationRuntime(context.imports, "comptime")),
+    );
+  } catch (error) {
+    // A refusal is the program asking to fail and must reach the user. Anything
+    // else means the predicate could not be run, which the caller reports.
+    if (
+      error instanceof BlotError && error.diagnostic.code === "BLOT_REFUSED"
+    ) {
+      throw error;
+    }
+    return null;
+  }
 }
 
 /** The shape primitives whose result no fixed scheme can describe. */

@@ -1645,16 +1645,17 @@ Everything not listed here belongs in source, normally the prelude.
 
 ### 13.1 Control, modules, and effects
 
-| primitive      | meaning                                                 |
-| -------------- | ------------------------------------------------------- |
-| `@import`      | resolve a text module specifier and return its function |
-| `@effect`      | create a fresh source effect from operation types       |
-| `@effect.host` | create a fresh host effect                              |
-| `@handle`      | discharge one effect from a nullary computation         |
-| `@forall`      | evaluate a type function with a fresh rigid variable    |
-| `@satisfies`   | return a value after proving it inhabits a type         |
-| `@fail`        | refuse compile-time evaluation with a diagnostic        |
-| `@panic`       | trap with a text message                                |
+| primitive         | meaning                                                       |
+| ----------------- | ------------------------------------------------------------- |
+| `@import`         | resolve a text module specifier and return its function       |
+| `@effect`         | create a fresh source effect from operation types             |
+| `@effect.host`    | create a fresh host effect                                    |
+| `@handle`         | discharge one effect from a nullary computation               |
+| `@forall`         | evaluate a type function with a fresh rigid variable          |
+| `@satisfies`      | return a value after proving it inhabits a type               |
+| `@type.satisfies` | return a value after proving its _type_ satisfies a predicate |
+| `@fail`           | refuse compile-time evaluation with a diagnostic              |
+| `@panic`          | trap with a text message                                      |
 
 ### 13.2 Numeric and text operations
 
@@ -1821,31 +1822,66 @@ and both of these forms name the array twice — once to measure and once to rea
 `let !xs = [1, 2, 3]; let n = @array.len xs; let v = @array.get xs 0;` is
 `BLOT_LINEAR_CONSUMED_TWICE`, and this rule does not change that.
 
+### 13.3.1 Asking about a type
+
+`@satisfies (value, type)` proves that a compile-time _value_ inhabits a type.
+`@type.satisfies (value, predicate)` asks a different question: whether the
+_type_ of an expression satisfies a compile-time predicate.
+
+```blot
+let reading = { .value = Source.read (); .label = "depth"; };
+let checked = @type.satisfies (reading, Has { .value = Int; });
+```
+
+The predicate is an ordinary compile-time function from a type value to a
+`Bool`, so it may ask anything `reflect` and `refines` can answer. The value
+passes through unchanged; this asserts, it does not coerce. A predicate that
+answers `#False` is `BLOT_DOES_NOT_SATISFY` while compiling.
+
+It takes its two arguments as one tuple rather than curried, for the reason
+`@handle` does: the checker has to see the whole call to type it, and a
+partially applied one would be a closure whose parameter is not a compile-time
+value.
+
+`@type.of` cannot stand in for this. It answers the type of a _value_, so it
+evaluates one — on an expression whose value only exists at run time that is an
+unhandled effect rather than a type. The type of such an expression lives only
+in the lattice, and reaching it is the whole reason this primitive exists.
+
+The type must have a compile-time reading. An inference variable with no single
+lower bound, an effect row, and an open variant do not, and each is
+`BLOT_TYPE_NOT_REIFIABLE` naming the type rather than a silently permissive
+answer.
+
+The prelude supplies the two predicates that would otherwise be written inline:
+`Is` for an exact type and `Has` for a subset of fields. Both are one line over
+`refines` and neither is machinery.
+
 ### 13.4 Type values
 
-| primitive          | meaning                                     |
-| ------------------ | ------------------------------------------- |
-| `@type.unbounded`  | open range bound                            |
-| `@type.int`        | unbounded integer domain                    |
-| `@type.text`       | unbounded text domain                       |
-| `@type.float`      | the double domain, which has no bounds      |
-| `@type.float32`    | the single-precision domain                 |
-| `@type.f32x4`      | four single-precision lanes, an opaque type |
-| `@type.f32x4_mask` | four comparison lanes, an opaque type       |
-| `@type.unit`       | unit type/value                             |
-| `@type.range`      | inclusive range                             |
-| `@type.union`      | flattened duplicate-free union              |
-| `@type.intersect`  | intersection of union members               |
-| `@type.diff`       | difference of union members                 |
-| `@type.arrow`      | function type value                         |
-| `@type.performs`   | attach an effect row to a function type     |
-| `@type.of`         | structural singleton type of a value        |
-| `@type.seal`       | nominally seal a carrier under a text name  |
-| `@type.open`       | recover a sealed carrier                    |
-| `@type.attach`     | attach one namespace member to a type value |
-| `@type.members`    | recover attached namespace members          |
-| `@type.reflect`    | inspect the representation of a type value  |
-| `@type.union_of`   | union a non-empty array of type values      |
+| primitive          | meaning                                           |
+| ------------------ | ------------------------------------------------- |
+| `@type.unbounded`  | open range bound                                  |
+| `@type.int`        | unbounded integer domain                          |
+| `@type.text`       | unbounded text domain                             |
+| `@type.float`      | the double domain, which has no bounds            |
+| `@type.float32`    | the single-precision domain                       |
+| `@type.f32x4`      | four single-precision lanes, an opaque type       |
+| `@type.f32x4_mask` | four comparison lanes, an opaque type             |
+| `@type.unit`       | unit type/value                                   |
+| `@type.range`      | inclusive range                                   |
+| `@type.union`      | flattened duplicate-free union                    |
+| `@type.intersect`  | intersection of union members                     |
+| `@type.diff`       | difference of union members                       |
+| `@type.arrow`      | function type value                               |
+| `@type.performs`   | attach an effect row to a function type           |
+| `@type.of`         | structural singleton type of a compile-time value |
+| `@type.seal`       | nominally seal a carrier under a text name        |
+| `@type.open`       | recover a sealed carrier                          |
+| `@type.attach`     | attach one namespace member to a type value       |
+| `@type.members`    | recover attached namespace members                |
+| `@type.reflect`    | inspect the representation of a type value        |
+| `@type.union_of`   | union a non-empty array of type values            |
 
 An empty intersection or difference, and `@type.union_of []`, are errors; Blot
 has no value representing an empty compile-time union.

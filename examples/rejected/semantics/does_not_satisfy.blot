@@ -1,0 +1,14 @@
+// A predicate that answers `#False`.
+//
+// The type is `{ .value = Int; }` and the predicate asks for a `.missing`, so
+// the answer is no and the program is refused while compiling. That is the
+// difference from a check written as an `if` over `refines`: this one cannot
+// be reached at run time, because there is no run time in which it is true.
+
+open {} = (@import "blot:prelude") ();
+
+const Source = @effect.host { .read = Unit -> Int; };
+
+let reading = { .value = Source.read (); };
+
+return @type.satisfies (reading, Has { .missing = Int; });

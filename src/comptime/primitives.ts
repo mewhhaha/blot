@@ -716,6 +716,24 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     },
   }],
 
+  // Checked entirely by the checker, which is the only place the subject's
+  // type exists. By the time the evaluator sees this the question has been
+  // answered, so the value passes through — the same shape `@satisfies` has,
+  // for the same reason.
+  ["@type.satisfies", {
+    arity: 1,
+    run: ([pair], span) => {
+      const parts = asTuple(pair, 2);
+      if (parts === null) {
+        fail(
+          "BLOT_TYPE",
+          "@type.satisfies takes a value and a predicate as one tuple.",
+          span,
+        );
+      }
+      return parts[0];
+    },
+  }],
   ["@satisfies", {
     arity: 2,
     run: ([value, type], span) => {

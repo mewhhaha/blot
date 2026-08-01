@@ -284,6 +284,19 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   // `@satisfies` returns its value unchanged; the check is against a comptime
   // type, so it constrains nothing here.
   [
+    // Typed at its application site by `inferSpecial`: the answer is the
+    // subject's own type, and the predicate decides whether there is one.
+    "@type.satisfies",
+    poly((fresh) => {
+      const subject = fresh();
+      return fun(
+        record([["0", subject], ["1", fresh()]]),
+        effects([]),
+        subject,
+      );
+    }),
+  ],
+  [
     "@satisfies",
     poly((fresh) => {
       const value = fresh();
