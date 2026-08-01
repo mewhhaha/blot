@@ -82,11 +82,23 @@ statement =
   | conditional_statement | result ;
 
 binding = (
+  tags:declaration_tag*
   kind:("let" | "const" | "sig")
   pattern:binding_pattern
   "="
   value:value
   ";"
+) ;
+
+// A declaration tag is a compile-time descriptor whose transformer wraps the
+// binding value during CST lowering. `@[` is disjoint from INTRINSIC: an
+// intrinsic always continues with a lower-case name, while a tag continues
+// with `[`. That keeps terminal identity fixed for the GPU profile.
+declaration_tag = (
+  "@"
+  "["
+  descriptor:value
+  "]"
 ) ;
 
 // Rebinding a name. Two arrows, one rule: `:=` shadows an existing binding with

@@ -73,7 +73,7 @@ return get_x { .x = n; .y = 0; };
 ```
 
 It compiled to `F2102: expected Shape0['a], received Shape2[I64, I64]` and now
-builds: a projection reads the record that *flowed* to it, across the
+builds: a projection reads the record that _flowed_ to it, across the
 instantiation each caller made. `examples/projected.blot` is that program with a
 runtime source, and it is in `just wasm`, so the corpus is now evidence rather
 than an avoidance. Two records reaching one projection is
@@ -85,13 +85,13 @@ boundaries" in `docs/backend.md`: a spread whose member type is still a variable
 (M3a deliberately dropped that step), a parameter destructured in place, and a
 projector reached across `@import` (M3c).
 
-**Three places blot disagrees with itself.** Each verified by running `check` and
-`eval` on the same file.
+**Three places blot disagrees with itself.** Each verified by running `check`
+and `eval` on the same file.
 
-| program | `blot check` | `blot eval` |
-| --- | --- | --- |
-| `let f = fn c => case c of #Some v => v, _ => 0 end; f (#Some "hi")` | `0` | `"hi"` |
-| `if let #Some v = c else do return 999; end; return v;` | `999` | `3` |
+| program                                                                                   | `blot check`       | `blot eval`                                      |
+| ----------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------ |
+| `let f = fn c => case c of #Some v => v, _ => 0 end; f (#Some "hi")`                      | `0`                | `"hi"`                                           |
+| `if let #Some v = c else do return 999; end; return v;`                                   | `999`              | `3`                                              |
 | `if let #Some v = c else do return "none"; end; in Text.append v "!"` applied to `Some 3` | `(Text \| "none")` | `BLOT_TYPE: @text.concat expects text, found 3.` |
 
 The third is the important one: the checker accepts a program the evaluator
@@ -117,35 +117,34 @@ nothing in the compiler says so.
 
 **Runs but cannot compile.** A `const` that closes over a `let` checks (`Int`)
 and evaluates (`2`), and only `build` refuses it. The refusal now names the
-phase error — `BLOT_CONST_CAPTURES_RUNTIME` at the capture, naming both
-bindings — rather than claiming the captured name is unbound. Refusing in the
-checker instead, so `check` and `eval` agree with `build`, is still open
-(item 1d).
+phase error — `BLOT_CONST_CAPTURES_RUNTIME` at the capture, naming both bindings
+— rather than claiming the captured name is unbound. Refusing in the checker
+instead, so `check` and `eval` agree with `build`, is still open (item 1d).
 
 **Diagnostics.** A type error now prints `file:line:col:` like a parse error on
 the same path does. The checker always had the span; what was missing was the
 file that span indexes into, which the diagnostic now carries — so an error
-inside an imported module names *that* module, not the entry file. `describe`
+inside an imported module names _that_ module, not the entry file. `describe`
 renders a range through the printer, so `sig n = Nat; let n = -1;` names the
 bound the value fell outside of (`0..`) rather than the word "an integer", which
 was true of every range at once. The printer spells the unbounded text range
 `Str`, the name a `sig` accepts; it used to print `Text`, which is the prelude's
-*namespace record*, so copying the compiler's own output into a `sig` failed
+_namespace record_, so copying the compiler's own output into a `sig` failed
 with `BLOT_SIG_NOT_A_TYPE`. Still open: one error per run, the file-wide span
-fallback, no `blot fmt` (``unknown command `fmt` ``), and 26 `unsupported()`
+fallback, no `blot fmt` (`` unknown command `fmt` ``), and 26 `unsupported()`
 sites with no user-readable list.
 
 **The standard library ends early.** The complete text surface is
 `@text.concat`, `@text.len`, `@text.cmp`, `@text.contains`, `@text.of_int` —
 verified by enumerating `src/comptime/primitives.ts`. There is no way to index,
 slice, split, or find an offset in text. `Array.find`, `Iter.map`, `Option.map`
-all fail with `no field`. `"a" == "a"` fails with ``"a" is not an integer``,
-while the evaluator's message for the same mistake is much better. Every loop
+all fail with `no field`. `"a" == "a"` fails with `"a" is not an integer`, while
+the evaluator's message for the same mistake is much better. Every loop
 accumulator displays as `(Int | 0)` unless you write a `sig`.
 
 **The build is broken and it is not blot's fault.**
-`../gpufuck/src/functional/wasm_codegen.ts:6577` reads `.weakHeadNormalForms` off
-`WasmCoreIndex`, which does not exist. `just test` fails to type-check;
+`../gpufuck/src/functional/wasm_codegen.ts:6577` reads `.weakHeadNormalForms`
+off `WasmCoreIndex`, which does not exist. `just test` fails to type-check;
 `deno test --no-check` gives 246 passed / 6 failed, all six the same gpufuck bug
 in `backend.test.ts`. `just build` and `just wasm` are unavailable.
 `validateLowering` — gpufuck's CPU oracle, no device, no codegen — works, and it
@@ -157,8 +156,8 @@ is the gate every milestone below uses.
 
 Ordered by what unblocks the most. M0 is not blot's code and M1 is not a
 feature, and both come before the interesting work for the same reason: you
-cannot measure a change against a compiler that lies or a test suite that
-cannot run.
+cannot measure a change against a compiler that lies or a test suite that cannot
+run.
 
 ---
 
@@ -172,9 +171,8 @@ with the minimal reproduction (any `blot build`; `WasmCompiler.expressionIsWhnf`
 reads `.weakHeadNormalForms` off `WasmCoreIndex`, which is undefined at run time
 and absent from the type). Do not fix it here; do not pin an older gpufuck — the
 pinned copy at `scratchpad/gpufuck-head` is stale against APIs blot now uses.
-Add a `just lower` recipe wrapping `validateLowering` so blot has a
-device-free, codegen-free backend gate that does not depend on gpufuck's
-codegen at all.
+Add a `just lower` recipe wrapping `validateLowering` so blot has a device-free,
+codegen-free backend gate that does not depend on gpufuck's codegen at all.
 
 **Corpus.** None start compiling; 31 stop being unverifiable end-to-end.
 
@@ -193,28 +191,32 @@ top of a compiler that does this.
 
 **1a. Refutable patterns must constrain even when another arm is irrefutable.**
 `mergeAccepted` (`src/check/infer.ts:743`) returns `null` the moment one arm's
-type is a variable, so `constrain(target, covered)` never runs and *no* arm's
+type is a variable, so `constrain(target, covered)` never runs and _no_ arm's
 binders are connected to the scrutinee. Since `if let` desugars to a `case` with
 a `#Some v` arm and a `_` arm, every guard in the language is untyped. Fix: give
 `variant` and `record` in `src/check/type.ts` a `permissive` flag meaning
 "constrain the members you name, do not error on the ones you do not", build one
 from the refutable arms when `mergeAccepted` gives up, and constrain the target
-into it. Literal arms must stay non-constraining (`case c of 1 => "one", _ =>
-"other" end` applied to text is correct today). This is a monotone upper bound —
-no backtracking, no new join, no occurs check; the lattice stays polynomial.
+into it. Literal arms must stay non-constraining
+(`case c of 1 => "one", _ =>
+"other" end` applied to text is correct today).
+This is a monotone upper bound — no backtracking, no new join, no occurs check;
+the lattice stays polynomial.
 
 **1b. `:=` in a nested statement scope must be refused.** Add a scan in
 `src/syntax/lower.ts` over the loop body's nested statement scopes for a `:=`
 naming something not in `carried` and not `let`-bound in that scope; report
-`BLOT_REBINDING_NOT_CARRIED` with the fix (`n := if cond then n + 1 else n
-end;`). Same check at module and block level. Refuse rather than extend
-`carriedNames`: carrying a conditional rebinding out of a branch is a real
-language design question and this milestone is not the place to answer it.
+`BLOT_REBINDING_NOT_CARRIED` with the fix
+(`n := if cond then n + 1 else n
+end;`). Same check at module and block level.
+Refuse rather than extend `carriedNames`: carrying a conditional rebinding out
+of a branch is a real language design question and this milestone is not the
+place to answer it.
 
-**1c. The `if let` success path must reach the result type.** `check` says
-`999` where `eval` says `3` when the guard-bound name is returned directly;
+**1c. The `if let` success path must reach the result type.** `check` says `999`
+where `eval` says `3` when the guard-bound name is returned directly;
 `return v + 0;` is correct, so the join is losing exactly the case where the
-continuation *is* the bound name. Root-cause in the desugaring
+continuation _is_ the bound name. Root-cause in the desugaring
 (`src/syntax/lower.ts`) or in the source-function boundary join
 (`src/check/infer.ts`); add an inference test pinning `(Int | 999)`.
 
@@ -260,11 +262,13 @@ who tried to write real programs in blot.
 
 **Work, in dependency order.**
 
-1. **Print the span.** `src/cli.ts:124` does ``console.error(`${path}: ${error.message}`)``
-   and drops the diagnostic. `render(path, source,
-   diagnostic)` already exists at `src/diagnostic.ts:55` and is already used for
-   parse errors at `src/cli.ts:45`. ~25 lines. Do this first; it is the reason
-   the rest is worth doing.
+1. **Print the span.** `src/cli.ts:124` does
+   ``console.error(`${path}: ${error.message}`)`` and drops the diagnostic.
+   `render(path, source,
+   diagnostic)` already exists at
+   `src/diagnostic.ts:55` and is already used for parse errors at
+   `src/cli.ts:45`. ~25 lines. Do this first; it is the reason the rest is worth
+   doing.
 2. **Stop the file-wide fallback.** `src/check/mod.ts` re-wraps an escaped
    `TypeError_` with `loaded.module.span`. Give `TypeError_`
    (`src/check/constrain.ts:27`) an optional span so the raising site attaches
@@ -276,12 +280,12 @@ who tried to write real programs in blot.
    failures against it stay silent, per "a check that cannot infer a type stays
    silent rather than cascading".
 4. **Name both sides.** `describe` (`src/check/constrain.ts:52`) collapses every
-   non-singleton range to "an integer", giving ``-1 is outside an integer``.
-   Route it through `src/check/print.ts`'s renderer: ``-1 is outside 0..``. Same
-   for the `fun`/`array` arms that produce "a function is not a function".
+   non-singleton range to "an integer", giving `-1 is outside an integer`. Route
+   it through `src/check/print.ts`'s renderer: `-1 is outside 0..`. Same for the
+   `fun`/`array` arms that produce "a function is not a function".
 5. **Print the name that works.** `src/check/print.ts:364,366` prints `Text`;
    the prelude and `LANGUAGE.md` §10.1 both say `Str`, and `Text` is the
-   *namespace record*, so copying the compiler's own output into a `sig` fails
+   _namespace record_, so copying the compiler's own output into a `sig` fails
    with `BLOT_SIG_NOT_A_TYPE`. Print `Str`, and make that diagnostic say what
    the expression did evaluate to.
 6. **The refusal table.** Give `unsupported()` a second parameter — the
@@ -316,29 +320,31 @@ data into a record and passes it to a helper is refused, and the refusal is
 **The decision, and where the judges split.** Three designs were built and
 judged three ways.
 
-*Design 2, coercion insertion at the instantiation edge, is rejected outright.*
+_Design 2, coercion insertion at the instantiation edge, is rejected outright._
 All three judges ranked it last and one demonstrated a silent miscompile: for
-`let orDefault = fn v => if v.x > 0 then v else { .x = 0; } end;` applied to `{.x=5;
-.y=6;}`, the design's own `coreLabels` collapses to `{x}` on both sides of the
-instantiation edge, so its `BLOT_UNCOERCIBLE_SHAPE` refusal cannot fire, the
-narrowing is emitted, and the Wasm returns `{.x=5}` where the interpreter
+`let orDefault = fn v => if v.x > 0 then v else { .x = 0; } end;` applied to
+`{.x=5;
+.y=6;}`, the design's own `coreLabels` collapses to `{x}` on both sides
+of the instantiation edge, so its `BLOT_UNCOERCIBLE_SHAPE` refusal cannot fire,
+the narrowing is emitted, and the Wasm returns `{.x=5}` where the interpreter
 returns `{.x=5;.y=6;}`. Its stated central theorem ("every provider of a
 component contains every demanded label") was falsified by a four-line program.
 It also has no implementation — the scratch tree it claims differs from the repo
-in one file, and every byte figure in it came from hand-written gpufuck Core.
-A design that rewrites values at run time is the only one of the three that can
+in one file, and every byte figure in it came from hand-written gpufuck Core. A
+design that rewrites values at run time is the only one of the three that can
 break "the three executions agree", and it does.
 
-*Designs 1 and 3 split 2–1 for design 3.* The correctness judge and the cost
+_Designs 1 and 3 split 2–1 for design 3._ The correctness judge and the cost
 judge both picked design 3 (widest-flow shapes: inference decides one nominal
 per value, the backend synthesizes nothing). The invariants judge picked design
 1 (clone one Core definition per (binding, shape assignment)) and was right
 about the two things that make design 3 unshippable as prototyped:
 
 - Design 3's STEP 3 makes `blot check` stack-overflow on a well-typed program
-  (`let bump = fn r => { ...r; .x = r.x + 1; };` reached through `twice`), because
-  `flowsIn` resets its cycle guard at every spread hop. Two judges reproduced
-  it independently. It takes down the formatter and language-server path.
+  (`let bump = fn r => { ...r; .x = r.x + 1; };` reached through `twice`),
+  because `flowsIn` resets its cycle guard at every spread hop. Two judges
+  reproduced it independently. It takes down the formatter and language-server
+  path.
 - Design 3's instantiation registry is a module-level global, so a file's
   inferred nominals depend on which files were checked before it in the same
   process — a direct hit on the reason `load` keeps one cache per process.
@@ -347,7 +353,7 @@ And the invariants judge was right that design 3 alone forecloses "monomorphize
 before gpufuck" rather than satisfying it: one projector at two shapes stays
 refused.
 
-Design 1's own verified fatal problem is that cloning a *binding* duplicates its
+Design 1's own verified fatal problem is that cloning a _binding_ duplicates its
 effects and its linear consumption. A binding whose value is a block performing
 `Console.write "built"` and returning a projecting lambda, called at two shapes,
 prints `built` three times from the Wasm and once from the interpreter, and a
@@ -365,11 +371,12 @@ by the clones — `checkLinearity` runs inside `checkFile`, before the
   flowed in — and it follows the copies. Two disagreeing flowed sets are carried
   in the fact itself, so the backend refuses with `BLOT_SHAPE_DISAGREEMENT`
   naming both. STEP 3 (the spread-source registration) was dropped as planned;
-  it is the verified crash and it costs only the `{ ...r; .x = r.x + 1; }` shape.
+  it is the verified crash and it costs only the `{ ...r; .x = r.x + 1; }`
+  shape.
 
   The polarity split was the strongest signal in the whole set: all three
   designs reached it independently, and its regression guard held —
-  `examples/modules.blot`'s `.base`/`.bonus` contribute two one-field *upper*
+  `examples/modules.blot`'s `.base`/`.bonus` contribute two one-field _upper_
   bounds and still union. The whole corpus emits byte-identical Wasm.
 
 - **M3b — design 1, seeded from M3a's refusals.** A `src/specialize/` pass in
@@ -382,7 +389,7 @@ by the clones — `checkLinearity` runs inside `checkFile`, before the
   - refuse to clone anything but a syntactic lambda or `rec`, which is what
     closes the effect-duplication and linearity-duplication miscompiles;
   - compute the composed per-use field sets inside checking's `pending` closures
-    and hand the specializer *label sets*, never live `Variable`s plus an
+    and hand the specializer _label sets_, never live `Variable`s plus an
     exported `fieldsOf`. Walking the constraint graph in a pass outside
     `src/check/` is the second type checker "Inference feeds the backend"
     forbids.
@@ -400,7 +407,7 @@ winner states: coercion and nominal construction must map by **label**, never by
 position, or `pair.1` silently becomes `pair.0` (`nominal()` keeps `fields` in
 first-seen order while keying canonically, so the sorted-set discipline is
 load-bearing and needs a test with a tuple projected `.1` before `.0`); and
-`lowerHandle` reads its computation and handler as *syntax* through
+`lowerHandle` reads its computation and handler as _syntax_ through
 `Scope.literals` (`src/backend/lower.ts:283`, `:727`), so the specializer needs
 an explicit `@handle` carve-out and an example with a handler over a
 width-subtyped function.
@@ -411,7 +418,7 @@ runtime source so staging cannot fold it, the bare case, a chain through a
 non-projecting caller, a destructuring rather than a projection, and a second
 agreeing call site. Its rejection is
 `examples/rejected/semantics/shape_disagreement.blot`, asserting the blot-side
-code and *not* `BLOT_LOWERING_BUG`. Higher-order through `map` and a returned
+code and _not_ `BLOT_LOWERING_BUG`. Higher-order through `map` and a returned
 record asserting the dropped field survives are still worth adding; a spread of
 a width-subtyped parameter waits on the dropped STEP 3.
 
@@ -433,7 +440,7 @@ and shipping before M3b starts.
 **What it unlocks.** The first wall a real program hits, and a hard one. The
 grep case study is only possible because the host hands blot one whole line at a
 time. With the current primitives there is no word counter, no tokenizer, no CSV
-reader, no argument parser, no template renderer, and no JSON *parser*.
+reader, no argument parser, no template renderer, and no JSON _parser_.
 
 **Work.** Two primitives, and everything else is prelude source:
 
@@ -453,7 +460,7 @@ prelude is proud of has no combinators over it. `Iter.map` over the
 `{ .state; .step; }` shape stays one closure total.
 
 Also here, because they are the same class of "the language does not do the
-obvious thing": `"a" == "a"` fails with ``"a" is not an integer`` while the
+obvious thing": `"a" == "a"` fails with `"a" is not an integer` while the
 evaluator's message for the identical mistake names `Text.cmp` and is much
 better. Minimum viable is to make the checker's message match the evaluator's.
 The full answer — one comparison entry point that reflects on its argument's
@@ -483,42 +490,48 @@ is too strict to write the obvious loop.
 **5a. Subsume and head-merge a variable's bounds when printed.** At least 45
 displayed unions across `examples/` and `case-studies/` are redundant —
 `examples/loops.blot` shows `.counted = (Int | 0)`, `.joined = (Text | "")`,
-`.doubled = ([Int] | ['a])`; `case-studies/grep/main.blot` infers `(Int | 0) ~ {
-Arguments, Console, File }` for a program that returns a count. Verified that
-the lattice already agrees: adding `sig total = Int;` makes the same program
-print `Int`. `src/check/print.ts:94` dedupes by rendered string, so `0` and
-`Int` both survive. Add range subsumption (but never lub disjoint ranges — `(0 |
-10)` in `examples/linear.blot` must stay) and head merging for `array` and
-`variant` bounds. Then delete the hand-rolled duplicate of this in
+`.doubled = ([Int] | ['a])`; `case-studies/grep/main.blot` infers
+`(Int | 0) ~ {
+Arguments, Console, File }` for a program that returns a count.
+Verified that the lattice already agrees: adding `sig total = Int;` makes the
+same program print `Int`. `src/check/print.ts:94` dedupes by rendered string, so
+`0` and `Int` both survive. Add range subsumption (but never lub disjoint ranges
+— `(0 |
+10)` in `examples/linear.blot` must stay) and head merging for `array`
+and `variant` bounds. Then delete the hand-rolled duplicate of this in
 `src/backend/lower.ts`'s `exportSchema`, which exists only because the checker
 hands the backend an unnormalized bound list. Free — a read-time coalescing
 rule, not a constraint rule. `for` is blot's flagship desugaring and it makes
 every accumulator look untyped.
 
 **5b. Widen constructor singletons on `:=`.** `let f = True; f := False;` is
-refused — ``must preserve #True, found #False`` — and even an explicit `sig f =
-Bool;` does not help, because `#False` is a strict subtype of `#True | #False`.
-A boolean flag is the most common loop accumulator there is. Extend `LANGUAGE.md`
-§4.3's widening from integer and text singletons to constructor sets: widen both
-sides to the union of their case sets before the mutual constraint. The stable-
-type guarantee survives — the accumulator's type is still fixed for the whole
-loop, it is just the union rather than whichever case was written first.
-`examples/rejected/semantics/for_type_drift.blot` stays rejected, because `Int`
-and `Text` are different domains and that is the case the invariant protects.
+refused — `must preserve #True, found #False` — and even an explicit
+`sig f =
+Bool;` does not help, because `#False` is a strict subtype of
+`#True | #False`. A boolean flag is the most common loop accumulator there is.
+Extend `LANGUAGE.md` §4.3's widening from integer and text singletons to
+constructor sets: widen both sides to the union of their case sets before the
+mutual constraint. The stable- type guarantee survives — the accumulator's type
+is still fixed for the whole loop, it is just the union rather than whichever
+case was written first. `examples/rejected/semantics/for_type_drift.blot` stays
+rejected, because `Int` and `Text` are different domains and that is the case
+the invariant protects.
 
-**5c. Give the loop-lowered `:=` failure the good message.** The identical defect
-reads ``#A is not one of #B`` inside a `for` and ``` `s := ...` must preserve #A,
-found #B. Use `let s = ...;` ... ``` outside one, because inside a loop the `:=`
-has already become a record field by the time inference sees it. Carry the
-accumulator field's source name and the `:=` span through the lowering —
-`carriedNames` already produced the name.
+**5c. Give the loop-lowered `:=` failure the good message.** The identical
+defect reads `#A is not one of #B` inside a `for` and
+`` `s := ...` must preserve #A,
+found #B. Use `let s = ...;` ... `` outside one,
+because inside a loop the `:=` has already become a record field by the time
+inference sees it. Carry the accumulator field's source name and the `:=` span
+through the lowering — `carriedNames` already produced the name.
 
 **Corpus.** No new programs; ~45 golden union strings and 6 `inference.test.ts`
 strings move, all in the good direction. `examples/loops.blot` and
 `examples/breaking.blot` gain a boolean accumulator.
 
 **Gate.** `just test` with the updated goldens; the diff on
-`inference.test.ts:123`/`:129` (`"Int -> (Int | 0 | -1)"` and `"Int -> (Int |
+`inference.test.ts:123`/`:129` (`"Int -> (Int | 0 | -1)"` and
+`"Int -> (Int |
 0)"`) is the evidence, so review it rather than regenerating it.
 
 **Size.** ~80 lines in `print.ts` plus a `subsumes` helper, ~40 deleted from
@@ -529,30 +542,33 @@ strings move, all in the good direction. `examples/loops.blot` and
 ## M6 — `struct` is typed, and `@shape.get` learns from a literal
 
 **What it unlocks.** `struct` is the prelude's storage feature, a third of
-`examples/storage.blot`, and it is completely untyped at its use sites. Verified:
+`examples/storage.blot`, and it is completely untyped at its use sites.
+Verified:
 `const P = struct { .x = I32; .y = I32; }; let p = P.new {...}; Text.append (P.x
-p) "oops"` **checks** as `Text` and traps at run time. `examples/storage.blot`
-has eight export fields inferred as bare variables (`.origin = 'a`) while
+p) "oops"`
+**checks** as `Text` and traps at run time. `examples/storage.blot` has eight
+export fields inferred as bare variables (`.origin = 'a`) while
 `.by_position = somewhere.0` — the same slot by ordinary projection — infers a
 range. Two halves, and either alone buys almost nothing:
 
-**6a.** `@shape.get target name` with a compile-time-known `name`. Verified today
-that `@shape.get r "x"` on `{ .x = 10; .y = "hi"; }` infers `'a` while `r.x` on
-the next line infers `10`, and that `@shape.get r "nope"` is accepted by the
-checker. `inferSpecial` (`src/check/infer.ts:432`) already exists for primitives
-whose type depends on their argument, and `comptime(expr, context)` already
-returns `null` when it cannot evaluate. Emit the same record constraint the
-`field` case emits; fall through to today's scheme when `comptime` returns null,
-because the prelude has five genuinely dynamic uses that must keep working.
+**6a.** `@shape.get target name` with a compile-time-known `name`. Verified
+today that `@shape.get r "x"` on `{ .x = 10; .y = "hi"; }` infers `'a` while
+`r.x` on the next line infers `10`, and that `@shape.get r "nope"` is accepted
+by the checker. `inferSpecial` (`src/check/infer.ts:432`) already exists for
+primitives whose type depends on their argument, and `comptime(expr, context)`
+already returns `null` when it cannot evaluate. Emit the same record constraint
+the `field` case emits; fall through to today's scheme when `comptime` returns
+null, because the prelude has five genuinely dynamic uses that must keep
+working.
 
 **6b.** Infer a compile-time closure member from its lambda in its captured
 environment. `src/check/infer.ts:286` gives up because `bridge` returns null for
-every closure — but a comptime closure value already carries `parameter`, `body`,
-and `env` (`src/comptime/value.ts:29`). Build a `Context` from the captured env
-and run the ordinary lambda rule; memoize on the closure with a `WeakMap`, and
-guard re-entry explicitly so a self-referential comptime closure cannot loop the
-checker. With 6a, `Point.x`'s body `@shape.get value (key name)` sees `key name`
-evaluate to `"0"` and infers `{ .0 = 'a; } -> 'a`.
+every closure — but a comptime closure value already carries `parameter`,
+`body`, and `env` (`src/comptime/value.ts:29`). Build a `Context` from the
+captured env and run the ordinary lambda rule; memoize on the closure with a
+`WeakMap`, and guard re-entry explicitly so a self-referential comptime closure
+cannot loop the checker. With 6a, `Point.x`'s body `@shape.get value (key name)`
+sees `key name` evaluate to `"0"` and infers `{ .0 = 'a; } -> 'a`.
 
 **Corpus.** `examples/storage.blot`'s eight variable fields and
 `examples/reflect.blot`'s `.label_at`/`.built` become concrete. Adds
@@ -585,25 +601,29 @@ trivia during `lowerModule`. Every node already carries an exact `span`, so a
 printer can reprint from spans; what it cannot do is find the comments. Then the
 printer. The language server needs nothing else that M2's diagnostic
 accumulation does not already provide: `CheckResult` already carries `opens`,
-`values`, `shapes`, `variants`, and `grants` keyed by AST node identity, which is
-what hover and go-to-definition want, and `blot check` is verified device-free.
+`values`, `shapes`, `variants`, and `grants` keyed by AST node identity, which
+is what hover and go-to-definition want, and `blot check` is verified
+device-free.
 
 Also here, because it is the same complaint from the other end: parse
-diagnostics carry no expectation. Every syntax mistake reports `Unexpected token
-";"`, including the omitted `else` on an expression `if` — the language's most
-emphatic rule. A missing comma between `case` arms reports `BLOT_BAD_BINDER`.
-A missing `;` after `let x = 1` reports `BLOT_MISSING_RESULT` at 1:1 for an error
-on line 2, and the claim is false. Surfacing baba's admissible-token set at the
-failure state is the real fix and a baba question; a table of recovery patterns
-keyed on (failing rule, unexpected token) needs no baba change.
+diagnostics carry no expectation. Every syntax mistake reports
+`Unexpected token
+";"`, including the omitted `else` on an expression `if` — the
+language's most emphatic rule. A missing comma between `case` arms reports
+`BLOT_BAD_BINDER`. A missing `;` after `let x = 1` reports `BLOT_MISSING_RESULT`
+at 1:1 for an error on line 2, and the claim is false. Surfacing baba's
+admissible-token set at the failure state is the real fix and a baba question; a
+table of recovery patterns keyed on (failing rule, unexpected token) needs no
+baba change.
 
 **Corpus.** `deno fmt --check` gains `blot fmt --check` over the whole corpus,
 which is a stronger parity statement than `just parity` alone: reprinting every
-program and reparsing it must give the same AST *and* the same comment
+program and reparsing it must give the same AST _and_ the same comment
 placement.
 
 **Gate.** A round-trip test: `blot fmt` every `.blot` file in the repo, reparse,
-assert the module is structurally identical and no comment was lost. `just
+assert the module is structurally identical and no comment was lost.
+`just
 grammar-check` and `just parity` unchanged, since none of this touches
 `grammar.baba`.
 
@@ -615,20 +635,21 @@ and is out of scope for this repo.
 
 ## M8 — `blot eval` can run a program that reads input
 
-**What it unlocks.** Verified: `src/run.ts:50` is `if (perform.effectName ===
-"Console" && perform.operation === "write")` and everything else returns null.
-Rename a host effect from `Console` to `Output` and the identical program stops
-running. `Terminal.read_line`, `File.line`, `Arguments.pattern`, `Model.complete`
-— every host effect in the three case studies — cannot be run by the CLI at all.
-They run only through `case-studies/run.ts`, 181 lines of bespoke TypeScript.
-There is no way to write a blot program that reads input and run it without
-writing TypeScript, and the refusal blames the user for a missing handler when
-the user did exactly what `LANGUAGE.md` §12.3 prescribes. This directly
-contradicts `docs/backend.md`'s own line that an effect's identity is its own,
-not its spelling.
+**What it unlocks.** Verified: `src/run.ts:50` is
+`if (perform.effectName ===
+"Console" && perform.operation === "write")` and
+everything else returns null. Rename a host effect from `Console` to `Output`
+and the identical program stops running. `Terminal.read_line`, `File.line`,
+`Arguments.pattern`, `Model.complete` — every host effect in the three case
+studies — cannot be run by the CLI at all. They run only through
+`case-studies/run.ts`, 181 lines of bespoke TypeScript. There is no way to write
+a blot program that reads input and run it without writing TypeScript, and the
+refusal blames the user for a missing handler when the user did exactly what
+`LANGUAGE.md` §12.3 prescribes. This directly contradicts `docs/backend.md`'s
+own line that an effect's identity is its own, not its spelling.
 
 **Work.** Bind a small set of well-known operation shapes selected by CLI flag
-rather than by effect *name*: `Unit -> Str` from stdin, `Str -> Unit` to stdout,
+rather than by effect _name_: `Unit -> Str` from stdin, `Str -> Unit` to stdout,
 `Unit -> Int`/`Int -> Str` over a file argument. `checkFile` already returns the
 grants and the module row, so the runner knows what to bind. Until that exists,
 the message must name the mechanism:
@@ -662,11 +683,90 @@ kind of termination argument in the checker.
 
 **Array length in the lattice.** ~250 lines across six files, the largest of the
 inference items and the weakest payoff-to-risk ratio. It closes literal, `push`,
-and spread indices. It does **not** close `@array.get xs i` inside `for i in
-Iter.range (0, @array.len xs)`, which needs `i` linked to *this* array's length
-variable — a dependent relationship the lattice cannot express. Do it after M5
-and M6, or not at all; say so in `LANGUAGE.md` §10.3 rather than implying it is
-coming.
+and spread indices. It does **not** close `@array.get xs i` inside
+`for i in
+Iter.range (0, @array.len xs)`, which needs `i` linked to _this_
+array's length variable — a dependent relationship the lattice cannot express.
+Do it after M5 and M6, or not at all; say so in `LANGUAGE.md` §10.3 rather than
+implying it is coming.
+
+---
+
+# What blot needs from gpufuck
+
+blot files bugs against gpufuck rather than fixing them. This is the other half
+of that arrangement: the things blot cannot supply from its own side, written so
+the next person asks for the right thing.
+
+## An in-place store write
+
+**The gap.** gpufuck's Functional Surface has exactly six store forms —
+`store-empty`, `store-new`, `store-length`, `store-read`, `store-write`,
+`store-grow` — declared at
+`../gpufuck/src/functional/surface_contract.ts:32`–`:63`. None of them writes in
+place. `store-write` looks like the exception and is not: `compileStoreUpdates`
+(`../gpufuck/src/functional/wasm_codegen.ts:5197`) allocates a fresh store and
+copies the source into it (`:5278`, `:5279`) before applying the writes it
+collected. So every `@array.set` blot emits (`src/backend/lower.ts:3844`) is an
+O(n) rebuild, and so is every `@array.push` (`:3859`, through `store-grow`).
+
+**Why that blocks the ownership pass rather than merely costing time.**
+`src/linear/check.ts` proves which bindings are linear and discharged exactly
+once, and `src/check/mod.ts` merges those facts across every module the backend
+inlines. A fact is worth having only when some instruction selection consumes
+it, and here there is no instruction to select: whether or not blot knows `xs`
+is dead after `@array.set xs i v`, the only form it can emit copies. That is why
+the reuse half of linearity and ownership — README calls the whole of it M3 — is
+not finished, and why `blot ownership` prints facts nothing applies. It is not,
+as `src/cli.ts` used to say, that blot has no Core to rewrite; blot has had one
+since M4.
+
+**The ask, in the shape `surface_builder.ts` already takes.** An ownership
+witness on the two updating forms, optional and defaulting to today's copying
+behaviour so that no existing frontend changes:
+
+```ts
+// ../gpufuck/src/functional/surface_builder.ts:1990
+storeWrite(
+  store: SurfaceExpression,
+  index: SurfaceExpression,
+  value: SurfaceExpression,
+  options?: { readonly owned: boolean },
+): SurfaceExpression;
+```
+
+producing `{ kind: "store-write", store, index, value, owned?: boolean }` in
+`surface_contract.ts`, and the same field on `store-grow`. `owned: true` is the
+frontend promising that the value the `store` operand evaluates to is read by
+nothing else on any path once this expression has been evaluated, which is what
+licenses `compileStoreUpdates` to write through the source instead of allocating
+and copying. Absent means false, and then the emitted bytes are what they are
+today.
+
+A new kind — `store-write-owned` — says the same thing and is the worse ask.
+`store-write` is matched in six files besides the contract that declares it
+(`recursive_groups.ts`, `module_linker.ts`, `surface_reachability.ts`,
+`case_defaults.ts`, `compilation_trace.ts`, `surface_builder.ts`) and again by
+Core tag in `wasm_codegen.ts`. A form somebody forgot to handle fails as a
+missing case; a flag somebody forgot to read fails as a slower program.
+
+**What blot still owes, and must not skip if the form arrives.**
+`Ownership.lastUses` is the last read in _traversal_ order. Branches are walked
+one after another from the same incoming state and only the consumed-or-not
+state is restored between them, so a read in the last arm of a `case` overwrites
+a read in the first even though no execution takes both. That is not the claim
+`owned: true` requires: a read the pass stopped recording is not a read proved
+absent, and spending the weaker fact as though it were the stronger is how a
+silent miscompile gets written. The fact that already _is_ a per-path claim is
+the linear one — a binding in `Ownership.linear` was consumed exactly once on
+every path, because `agree` enforces it. So the first honest use of the new form
+is a linear array, not an arbitrary last use, and turning `lastUses` into a real
+liveness result is separate work on blot's side.
+
+**Gate.** None yet; this is an ask, not a milestone. When the form exists the
+gate is `just wasm` on a program that sets an element of a linear array — the
+interpreter, the GPU evaluator, and the emitted Wasm must still agree, and that
+is what catches an `owned` blot had no right to claim.
 
 ---
 
@@ -676,8 +776,8 @@ A roadmap that keeps every option open is not a plan. These are refusals, not
 "not yet".
 
 **No second backend and no CPU parser fallback.** gpufuck owns Core-to-Wasm;
-baba owns lexing and parsing. A gpufuck rejection on a well-typed blot program is
-a lowering bug in blot, and it will keep being reported as one.
+baba owns lexing and parsing. A gpufuck rejection on a well-typed blot program
+is a lowering bug in blot, and it will keep being reported as one.
 
 **No coercion inserted at instantiation edges.** Design 2 is closed, not
 shelved. Narrowing a record's value to fit a nominal is observable whenever the
@@ -690,7 +790,7 @@ as a shortcut.
 
 **No monomorphizing everything.** M3 duplicates only where the alternative is a
 hard compile failure. Core stays polymorphic wherever gpufuck's HM can type it,
-and the unit test for that is a clone *count*, not "it compiles".
+and the unit test for that is a clone _count_, not "it compiles".
 
 **No `Store` element coercion.** Priced at an O(n) copy per call. Refuse it by
 name.
@@ -708,17 +808,18 @@ in the comptime evaluator.
 the first line of every program. A default fixity naming a binding by string is
 the mechanism, and it is not going to be hidden.
 
-**No equi-recursive types in the lattice.** `const Json = #Null | #Num Int |
-#Arr [Json];` will keep being refused. A recursive datatype can be structural
-but never *named*, so it can never appear in a `sig` and — since
-`LANGUAGE.md` §15 requires a concrete first-order type — never be exported.
-State this in `LANGUAGE.md` §10 next to the `const Message = ...` example; do
-not attempt the lattice change.
+**No equi-recursive types in the lattice.**
+`const Json = #Null | #Num Int |
+#Arr [Json];` will keep being refused. A
+recursive datatype can be structural but never _named_, so it can never appear
+in a `sig` and — since `LANGUAGE.md` §15 requires a concrete first-order type —
+never be exported. State this in `LANGUAGE.md` §10 next to the
+`const Message = ...` example; do not attempt the lattice change.
 
 **No mutual recursion without a grammar decision.** `rec` binds one name;
 `const is_even = rec (...); const is_odd = rec (...)` dies on `BLOT_UNBOUND`.
 The minimum is a diagnostic that distinguishes "not in scope" from "not in scope
-*yet*" and names the limit. `rec` over a group is a grammar change and therefore
+_yet_" and names the limit. `rec` over a group is a grammar change and therefore
 a GPU-profile question; price it separately, and remember that AGENTS.md treats
 a profile conflict as a design signal, not a metadata override.
 
@@ -729,7 +830,7 @@ stays that way.
 deliberate limit in `LANGUAGE.md` §10.3. `@array.get` and `@text.slice` trap.
 
 **No language server in this repository.** `checkFile` will expose everything an
-LSP needs — a diagnostic *list* with exact spans, plus the fact maps keyed by
+LSP needs — a diagnostic _list_ with exact spans, plus the fact maps keyed by
 node identity — and the LSP itself is somebody else's project. The invariant
 that matters here is that `blot check` never initializes a device, and that is
 verified to hold today.
@@ -745,7 +846,7 @@ Four documents currently overlap and three carry claims I verified to be false:
 
 - `docs/backend.md`'s "Width subtyping is specialized before Core" section
   describes a corpus failure that no longer reproduces; M3 rewrites it around
-  the *staging* explanation and the runtime-source reproduction.
+  the _staging_ explanation and the runtime-source reproduction.
 - `docs/inference.md`'s rank-N paragraph is now correct — but no example
   exercises it. M3 or M1 adds `examples/rankn.blot` plus the `run2 (fn x => 42)`
   rejection, per the one-program-per-feature catalog rule.
@@ -754,6 +855,11 @@ Four documents currently overlap and three carry claims I verified to be false:
 - `README.md`'s "M4 now lowers every accepted catalog program" is true and
   misleading in the same sentence; M3 qualifies it with what the catalog does
   not contain.
+- `docs/ownership.md:105` and `README.md:57` both say the reuse rewrite is
+  waiting on a Core to rewrite. That reason is false — the real one is above,
+  under "What blot needs from gpufuck" — and `README.md` records the milestone
+  as landed while half of it is not built. Correct both, in the diff that either
+  supplies the missing half or retires the claim.
 
 Merge `docs/inference.md`'s operator table and `docs/backend.md`'s refusal list
 into `LANGUAGE.md` where they are normative, and leave the `docs/` files as

@@ -51,6 +51,10 @@ An intrinsic is one token:
 
 Examples are `@int.add`, `@type.range`, and `@handle`.
 
+`@[` opens a declaration tag rather than an intrinsic. The next character makes
+the terminal identity fixed: an intrinsic continues with a lower-case name and a
+tag continues with `[`. Section 4.2 defines declaration tags.
+
 The reserved words are:
 
 ```text
@@ -80,13 +84,13 @@ no exponent form and no negative literal; negation is the prefix operator.
 
 Floats are IEEE 754 doubles. They do not trap: an operation that overflows
 produces an infinity and one with no defined answer produces a NaN, both of
-which are values a program may go on to use. This is the difference from
-integer arithmetic, where the result would be a number the machine cannot hold.
+which are values a program may go on to use. This is the difference from integer
+arithmetic, where the result would be a number the machine cannot hold.
 
-`Float.cmp` refuses NaN rather than answering, because no ordering accepts it:
-a diagnostic while compiling and a trap while running, the two shapes
-`@int.div` by zero already takes. There is no float equality. Exact comparison
-is `is_equal (Float.cmp a b)` — the same test with the NaN case left in, rather
+`Float.cmp` refuses NaN rather than answering, because no ordering accepts it: a
+diagnostic while compiling and a trap while running, the two shapes `@int.div`
+by zero already takes. There is no float equality. Exact comparison is
+`is_equal (Float.cmp a b)` — the same test with the NaN case left in, rather
 than an equality that answers `#False` to a question the format says has no
 answer. `Float.is_nan` is how a program asks first, and it is a primitive
 because comparing is precisely what refuses.
@@ -118,9 +122,10 @@ the one-vector spelling. Lane selectors are integers in `0..7` for shuffle and
 instruction immediate.
 
 There is no implicit conversion between the numeric types, and no operator
-serves more than one. An operator resolves to one binding by name (§4.6), so a `+` over
-both would have to dispatch on a value's type at run time. `Float.of_int` and
-`Float.truncate` cross explicitly; `truncate` rounds toward zero.
+serves more than one. An operator resolves to one binding by name (§4.7), so a
+`+` over both would have to dispatch on a value's type at run time.
+`Float.of_int` and `Float.truncate` cross explicitly; `truncate` rounds toward
+zero.
 
 A text literal is delimited by `"`. The defined escapes are:
 
@@ -234,7 +239,66 @@ let value = 1;
 let value = "now text";
 ```
 
-### 4.2 Signatures
+### 4.2 Declaration tags
+
+One or more compile-time descriptors may transform a `let` or `const` value:
+
+```blot
+@[derive(add_accessors)]
+const Point = struct { .x = I32; .y = I32; };
+
+@[test]
+let point_origin = fn () => expect (True, "origin");
+```
+
+A descriptor is a compile-time shape with these members:
+
+```blot
+{
+  .name = "tool-name";
+  .metadata = compile_time_value;
+  .transform = fn value => replacement;
+}
+```
+
+`.name` must be non-empty text, `.metadata` may be any compile-time value, and
+`.transform` must be callable. Other fields are permitted. The prelude's
+`tag (name, metadata, transform)` constructs this shape. `derive transform`
+constructs one named `"derive"`, and `test` is one named `"test"` whose
+transform is `identity`.
+
+Descriptors are evaluated in source order before the declaration value and in
+the scope preceding the declaration; they cannot refer to the name being bound.
+Transforms apply from the nearest tag outward:
+
+```blot
+@[outer]
+@[inner]
+let value = source;
+```
+
+binds `outer.transform (inner.transform source)`. The replacement is the value
+matched by the binding pattern and may have a different type. An adjacent `sig`
+constrains that final value. A `let` transform runs in the binding's runtime
+phase and contributes its ordinary effects; a `const` transform runs at compile
+time. Tags are not admitted on `sig` because a signature binds no value.
+
+Tags lower to ordinary descriptor bindings, function application, and a block. A
+tagged `rec` is first bound directly under its source name inside that block,
+then transformed, so recursion gains no second evaluator, typing, ownership, or
+backend rule.
+
+Resolved tag names and metadata are available to compiler tools but are not part
+of the runtime value or the Wasm ABI. `blot test` selects the semantic name
+`"test"`, including aliases and descriptors built without the prelude. Each test
+must be a named top-level binding usable as a pure `Unit -> Unit` function. Test
+files have no explicit module parameter or ambient initializer effects. Every
+test runs against a fresh evaluation of the declarations through its own
+binding, failures do not stop later tests, imported modules contribute tests
+only when passed directly to the command, and a run finding no tests fails.
+Normal checking, evaluation, and building never execute tests.
+
+### 4.3 Signatures
 
 ```blot
 sig name = type_value;
@@ -251,7 +315,7 @@ A signature:
 The binding's inferred type must be a subtype of the signature. A signature
 constrains a binding; it does not introduce a name or evaluate at runtime.
 
-### 4.3 Stable rebinding
+### 4.4 Stable rebinding
 
 ```blot
 name := value;
@@ -269,7 +333,7 @@ defines one of that loop's accumulator fields, including one written inside a
 statement conditional in that body. A `:=` inside a nested `for` defines a field
 of the inner loop instead.
 
-### 4.4 Nullary computation binding
+### 4.5 Nullary computation binding
 
 ```blot
 name <- computation;
@@ -289,7 +353,7 @@ The left-hand binding in a `try` handler step is a separate bounded surface
 form. Section 12.2 specifies how it binds the newly handled computation without
 executing it.
 
-### 4.5 Opening a record
+### 4.6 Opening a record
 
 ```blot
 open {} = record;
@@ -308,7 +372,7 @@ lexical bindings and can shadow bindings from an outer scope.
 
 The canonical empty mask is `{}`.
 
-### 4.6 Return
+### 4.7 Return
 
 ```blot
 return value;
@@ -397,11 +461,11 @@ Shape fields and spreads are applied from left to right. A later spread or field
 replaces an earlier field with the same name. Writing the same explicit field
 more than once is rejected.
 
-A spread contributes the fields its operand is *known* to have. Where the
+A spread contributes the fields its operand is _known_ to have. Where the
 operand is a shape written nearby, that is all of them. Where it is a parameter,
 it is none of them: `fn r => { ...r; .tag = 1; }` returns a shape with `.tag`
 and nothing else, and reading any other field off the result is an error. Width
-subtyping says what a function may *read* from a record it is handed; it does
+subtyping says what a function may _read_ from a record it is handed; it does
 not carry the unread fields through a spread, which would need a row variable
 this lattice does not have. Naming the fields at the spread avoids the limit
 entirely.
@@ -679,12 +743,12 @@ end;
 ```
 
 `@panic` takes a text and returns the empty type, so it may stand where any
-value is expected. It is not a caught failure: reaching it stops the program.
-It survives to WebAssembly as an explicit fault carrying that text, which is
-what distinguishes it from the arms the compiler proves unreachable: coverage
-is checked, so a `case` with no matching arm is a path the checker ruled out,
-and the emitted module marks it as unreachable rather than as a fault a program
-can hit.
+value is expected. It is not a caught failure: reaching it stops the program. It
+survives to WebAssembly as an explicit fault carrying that text, which is what
+distinguishes it from the arms the compiler proves unreachable: coverage is
+checked, so a `case` with no matching arm is a path the checker ruled out, and
+the emitted module marks it as unreachable rather than as a fault a program can
+hit.
 
 A target whose type inference has not pinned carries no coverage requirement,
 since there is nothing to enumerate. Literal arms therefore still constrain
@@ -728,18 +792,46 @@ next _arm_, not to the next column, and an arm that matches binds every name in
 it. A column is an ordinary pattern, so it may be a constructor, a literal, a
 name, a wildcard, or another tuple.
 
-Coverage does not read the columns:
+Coverage reads the columns. The arms taken together must cover the
+cross-product: a combination of columns no arm accepts is
+`BLOT_INCOMPLETE_CASE`, exactly as a constructor no arm names is for a single
+target. So
 
 ```blot
 case (left, right) of
-  (#Some a, #Some b) => a + b
+  (#Some a, #Some b) => a + b,
+  (#Some a, #None) => a,
+  (#None, #Some b) => b,
+  (#None, #None) => 0
 end
 ```
 
-is accepted with no irrefutable arm, and reaching it with `(#Some 1, #None)`
-traps as an unreachable path rather than being the checked error the same
-omission is for a single target. Until coverage reads them, an irrefutable arm
-is what makes a tuple `case` total.
+is total with no irrefutable arm at all, and dropping its last arm is refused
+with `` No arm covers `(#None, #None)` ``.
+
+Each column is covered on its own terms. A column whose type is a constructor
+set must have every constructor named in it, and — as for a single target — the
+arms are what close a column no `sig` declared: a column naming `#Some` and
+`#None` makes the scrutinee's column that union, so a target declared wider is
+refused there. A column whose type has more values than arms can list — `Int`,
+`F64`, an opaque type, a shape — can only be covered by an irrefutable pattern
+in that column, so
+
+```blot
+sig pick = (Int, Option Int) -> Int;
+let pick = fn pair => case pair of
+  (1, #Some a) => a,
+  (_, #None) => 0
+end;
+```
+
+is refused with `` No arm covers `(_, #Some)` ``: the first arm cannot help with
+an integer other than `1`, and the arm that can does not name `#Some`.
+
+Nested tuples and constructor payloads are columns like any other, and are read
+the same way when a `sig` says what they hold. Where nothing does, an inner
+column carries no requirement — only a column of the scrutinee's own tuple is
+closed by its arms.
 
 Like expression `if`, `case` is a value boundary: `return` and `break` cannot
 escape from an arm.
@@ -837,13 +929,13 @@ the branch failing to cover a set the condition would have shrunk.
   through to an outer one. This is what makes shadowing safe: the checker never
   reasons about a function the program does not call, and an operator record
   supplied by the _caller_ could never be reasoned about at all.
-- **The other half of a junction.** `if a && b` proves what *both* halves prove
+- **The other half of a junction.** `if a && b` proves what _both_ halves prove
   about one name, and the branch it does not take proves nothing: failing a
   conjunction can mean failing either half. `||` is the mirror — its untaken
   branch proves both, its taken branch proves nothing. A junction is recognised
   by its truth table, tabulated over the four boolean inputs, so a shadowed
   `Logic.and` that is not conjunction proves nothing rather than being mistaken
-  for one. Two halves that speak about *different* names also prove nothing: a
+  for one. Two halves that speak about _different_ names also prove nothing: a
   proof narrows one name.
 - **A length reached by anything but a name.** `@array.len box.values`,
   `@array.len (f ())`, and the prelude's `Array.length xs` name no binding
@@ -875,7 +967,7 @@ the branch failing to cover a set the condition would have shrunk.
   one; reporting unreachability is not yet a diagnostic.
 
 A proof is a shadow of the name, so it lasts as long as the name does. Rebinding
-the name inside the branch with `:=` replaces it under the ordinary rule (§4.3)
+the name inside the branch with `:=` replaces it under the ordinary rule (§4.4)
 — the stable type, not the proved one — and the proof does not survive.
 
 ## 9. Iteration
@@ -916,16 +1008,16 @@ accumulator record:
 - a `let` inside the body is local to that iteration.
 
 A `let` is local whether or not the name is taken outside. `let n = …` in the
-body introduces a binding that ends with the body, so the outer `n` is
-untouched and the local is free to hold a different type — only `:=` carries a
-value out. Where a `let` shadows a name, every `:=` after it in that block
-rebinds the local and therefore escapes nothing.
+body introduces a binding that ends with the body, so the outer `n` is untouched
+and the local is free to hold a different type — only `:=` carries a value out.
+Where a `let` shadows a name, every `:=` after it in that block rebinds the
+local and therefore escapes nothing.
 
 Rebinding a name with `:=` and then shadowing it with a `let` in the same block
-is an error. The carried value is read where the block ends, which is inside
-the shadow, so the local would leave under the accumulator's name; the two
-readings of such a block are equally defensible and neither is chosen. Rename
-the local, or write the `let` above the first `:=`.
+is an error. The carried value is read where the block ends, which is inside the
+shadow, so the local would leave under the accumulator's name; the two readings
+of such a block are equally defensible and neither is chosen. Rename the local,
+or write the `let` above the first `:=`.
 
 This is a fold, not assignment. During CST lowering, `for` becomes ordinary
 `rec`/`case` recursion. No loop node reaches inference, ownership, evaluation,
@@ -1084,8 +1176,8 @@ The implemented checker does not currently prove:
   it;
 - an index bound that came from anywhere but a comparison against a literal or
   against `@array.len` applied to a name (§8.5, §13.3);
-- precise results of value-named `@shape.get`, `@shape.set`, and
-  `@shape.remove`;
+- the result of `@shape.get`, `@shape.set`, or `@shape.remove` whose field name
+  is a runtime value (§13.3);
 - anything about a namespace member that is a function, or about a call to one
   whose arguments are not compile-time values (§10.2); or
 - impredicative instantiation.
@@ -1316,6 +1408,30 @@ signed 64-bit range trap.
 
 Array indexing is zero-based and bounds-checked.
 
+#### A field named by a value
+
+`@shape.get`, `@shape.set` and `@shape.remove` name their field with a text
+value rather than with a literal, so no signature can state what they produce.
+They are typed at the call site instead, by the name:
+
+- when the whole projection can be evaluated at compile time, what it produced
+  is the result's type;
+- otherwise, when the name alone can be, the call is an ordinary field
+  projection and is typed as one. `@shape.get r "a"` has the type of `r.a` and
+  is refused when `r` has no `.a`; `@shape.set` and `@shape.remove` answer with
+  the target's fields, with that one added, replaced, or dropped.
+
+```blot
+let r = { .a = 7; };
+sig z = 0;
+let z = @shape.get r "a";
+// BLOT_TYPE_ERROR: `7` is outside `0`.
+```
+
+A name that is only known at run time — `@shape.get value name` inside a fold
+over `@shape.names` — leaves the result unconstrained, and a `sig` written over
+one of those is believed rather than checked.
+
 #### A read that cannot succeed
 
 `@array.get` and `@array.set` are rejected at check time with
@@ -1449,6 +1565,7 @@ The standard prelude is ordinary Blot source at `blot:prelude`. Its public
 record currently exports:
 
 - function tools: `Fn`, `identity`, `always`, `compose`, `flip`;
+- declaration-tag tools: `tag`, `derive`, and `test`;
 - booleans: `Bool`, `True`, `False`, `Logic`, `not`, `expect`;
 - ordering and arithmetic: `Ordering`, `is_equal`, `is_less`, `is_greater`,
   `Ord`, `Eq`, `Num`;
@@ -1509,7 +1626,7 @@ seals, and functions over supported values. Types and effects remain
 compile-time manifest entries and have no invented runtime encoding.
 
 A residual structurally polymorphic function must be specialized to a concrete
-record shape before gpufuck. The shape is the one that *flows* to the
+record shape before gpufuck. The shape is the one that _flows_ to the
 projection, not the narrower one the body reads: inference follows what flowed
 into the projected variable, across the instantiation a `let`-bound scheme makes
 for each of its callers, so `let get_x = fn v => v.x;` takes its record from the
@@ -1523,7 +1640,7 @@ is not the one the value was built with — so such a program is refused at
 lowering rather than compiled against the wrong record. Matching the record's
 own option directly is what keeps the wider set.
 
-Two *different* records reaching one projection decide nothing, and that
+Two _different_ records reaching one projection decide nothing, and that
 includes a narrower and a wider one: a value of each is really built, Core
 records are invariant, so the two are distinct nominal types and their union is
 a record neither call site writes. `BLOT_SHAPE_DISAGREEMENT` names both of them

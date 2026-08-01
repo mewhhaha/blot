@@ -22,6 +22,7 @@
 // to remove. A coverage check that silently readmits a value is worse than no
 // coverage check.
 
+import type { Pattern } from "../syntax/ast.ts";
 import { type Domain, isLength, type SimpleType } from "./type.ts";
 import { showRange } from "./print.ts";
 
@@ -158,4 +159,361 @@ export function showLiterals(literals: readonly Literal[]): string {
   return literals
     .map((literal) => showRange(literal.domain, literal.value, literal.value))
     .join(" | ");
+}
+
+// --- tuple arms --------------------------------------------------------------
+//
+// A `case` whose arms are tuple patterns is a pattern matrix: one row per arm,
+// one column per element. It is exhaustive when the rows cover the cross-product
+// of the columns, and neither half of the scalar machinery above can say that —
+// `uncovered` compares a target against arms of the same shape, and a tuple is
+// not a set of literals.
+//
+// So this is Maranget's usefulness check, cut down to the one question `case`
+// asks. A column is decided by a *signature*: the complete set of heads a value
+// in that column can have. When the arms name every head in the signature the
+// matrix splits, one sub-matrix per head; when they do not, the arms that are
+// missing a head can only be reached through a row that is a wildcard there, so
+// the check continues on those rows alone. That second rule is what makes a
+// column of an unlistable type — `Int`, `F64`, a shape — coverable by a
+// wildcard and by nothing else.
+//
+// Where a column has no signature the answer is to refuse. An exhaustive
+// program refused here is a diagnostic its author answers with a `_` arm; a
+// non-exhaustive one accepted is a `BLOT_NO_MATCH` at run time, which is the
+// bug this exists to stop.
+
+/**
+ * A column of the matrix: what a value in it can be, and whether the arms are
+ * allowed to be what closes that.
+ *
+ * `closable` is true only for the columns of the scrutinee's own tuple. Those
+ * are the ones `inferCase` writes a merged constructor set back onto, so an arm
+ * list that names `#Some` and `#None` there really does make the column that
+ * union — the same rule a one-column `case` lives by. Nothing constrains a
+ * column *inside* a payload or a nested tuple, so the arms there prove nothing
+ * about it and only a declared type can say what it holds.
+ */
+interface Column {
+  readonly type: SimpleType | null;
+  readonly closable: boolean;
+}
+
+type Head =
+  | { readonly kind: "any" }
+  | {
+    readonly kind: "constructor";
+    readonly name: string;
+    readonly payload: Pattern | null;
+  }
+  | { readonly kind: "literal"; readonly literal: Literal }
+  | { readonly kind: "tuple"; readonly elements: readonly Pattern[] }
+  // A shape or an array pattern. Refutable, and nothing here knows what set it
+  // would have to be one of, so it can only reach the default matrix — where it
+  // is dropped, because it is not a wildcard.
+  | { readonly kind: "opaque" };
+
+type Signature =
+  | {
+    readonly kind: "constructors";
+    readonly cases: ReadonlyMap<string, Column>;
+  }
+  | { readonly kind: "literals"; readonly values: readonly Literal[] }
+  | { readonly kind: "tuple"; readonly columns: readonly Column[] };
+
+/** Stands in for the columns a wildcard row contributes when a head is split. */
+const ANY: Pattern = { tag: "wildcard", span: { start: 0, end: 0 } };
+
+/**
+ * A combination of columns no arm of a tuple `case` accepts, printed the way the
+ * arms are written, or `null` when the arms leave nothing uncovered.
+ *
+ * `arms` must be the refutable arms' patterns and every one of them a tuple;
+ * `inferCase` is what checks that, because a `case` mixing tuple arms with
+ * anything else is not a matrix and gets no requirement from here.
+ */
+export function uncoveredTuple(
+  target: SimpleType,
+  arms: readonly Pattern[],
+): string | null {
+  const witness = missingRow(
+    arms.map((pattern) => [pattern]),
+    [{ type: target, closable: false }],
+    0,
+  );
+  if (witness === null) return null;
+  return witness[0];
+}
+
+/**
+ * One value per column that no row of `rows` matches, or `null` when the rows
+ * match every combination.
+ *
+ * `depth` is only how the scrutinee's own columns are told apart from the ones
+ * under them; see `Column.closable`.
+ */
+function missingRow(
+  rows: readonly (readonly Pattern[])[],
+  columns: readonly Column[],
+  depth: number,
+): string[] | null {
+  if (columns.length === 0) {
+    if (rows.length > 0) return null;
+    return [];
+  }
+  const rest = columns.slice(1);
+  const heads = rows.map((row) => headOf(row[0]));
+  const signature = signatureOf(columns[0], heads, depth === 0);
+
+  if (signature === null) return defaulted(rows, heads, rest, depth, "_");
+
+  if (signature.kind === "tuple") {
+    const arity = signature.columns.length;
+    const specialized: Pattern[][] = [];
+    for (const [index, row] of rows.entries()) {
+      const head = heads[index];
+      if (head.kind === "any") {
+        specialized.push([...Array(arity).fill(ANY), ...row.slice(1)]);
+        continue;
+      }
+      if (head.kind !== "tuple") continue;
+      specialized.push([...head.elements, ...row.slice(1)]);
+    }
+    const witness = missingRow(
+      specialized,
+      [...signature.columns, ...rest],
+      depth + 1,
+    );
+    if (witness === null) return null;
+    return [
+      `(${witness.slice(0, arity).join(", ")})`,
+      ...witness.slice(arity),
+    ];
+  }
+
+  if (signature.kind === "constructors") {
+    const named = new Set(
+      heads.filter((head) => head.kind === "constructor")
+        .map((head) => head.kind === "constructor" ? head.name : ""),
+    );
+    const missing = [...signature.cases.keys()].filter((name) =>
+      !named.has(name)
+    );
+    // A head the arms never name is only reachable through a row that matches
+    // everything in this column, so what remains to check is those rows.
+    if (missing.length > 0) {
+      return defaulted(rows, heads, rest, depth, `#${missing[0]}`);
+    }
+    for (const [name, payload] of signature.cases) {
+      const specialized: Pattern[][] = [];
+      for (const [index, row] of rows.entries()) {
+        const head = heads[index];
+        if (head.kind === "any") {
+          specialized.push([ANY, ...row.slice(1)]);
+          continue;
+        }
+        if (head.kind !== "constructor" || head.name !== name) continue;
+        specialized.push([head.payload ?? ANY, ...row.slice(1)]);
+      }
+      const witness = missingRow(
+        specialized,
+        [payload, ...rest],
+        depth + 1,
+      );
+      if (witness === null) continue;
+      const carried = witness[0] === "_" ? "" : ` ${witness[0]}`;
+      return [`#${name}${carried}`, ...witness.slice(1)];
+    }
+    return null;
+  }
+
+  const matched = heads.flatMap((head) =>
+    head.kind === "literal" ? [head.literal] : []
+  );
+  const missing = signature.values.filter((value) =>
+    !matched.some((literal) => sameLiteral(literal, value))
+  );
+  if (missing.length > 0) {
+    return defaulted(rows, heads, rest, depth, showLiterals([missing[0]]));
+  }
+  for (const value of signature.values) {
+    const specialized: Pattern[][] = [];
+    for (const [index, row] of rows.entries()) {
+      const head = heads[index];
+      if (head.kind === "any") {
+        specialized.push([...row.slice(1)]);
+        continue;
+      }
+      if (head.kind !== "literal" || !sameLiteral(head.literal, value)) {
+        continue;
+      }
+      specialized.push([...row.slice(1)]);
+    }
+    const witness = missingRow(specialized, rest, depth + 1);
+    if (witness === null) continue;
+    return [showLiterals([value]), ...witness];
+  }
+  return null;
+}
+
+/** The rows that match every value of the first column, with it dropped. */
+function defaulted(
+  rows: readonly (readonly Pattern[])[],
+  heads: readonly Head[],
+  rest: readonly Column[],
+  depth: number,
+  shown: string,
+): string[] | null {
+  const remaining = rows
+    .filter((_, index) => heads[index].kind === "any")
+    .map((row) => row.slice(1));
+  const witness = missingRow(remaining, rest, depth + 1);
+  if (witness === null) return null;
+  return [shown, ...witness];
+}
+
+function headOf(pattern: Pattern): Head {
+  switch (pattern.tag) {
+    // A `unit` pattern is refutable in spelling only: `()` is the one value of
+    // its type, so an arm carrying it can never be the one that fails.
+    case "name":
+    case "wildcard":
+    case "unit":
+      return { kind: "any" };
+    case "constructor":
+      return {
+        kind: "constructor",
+        name: pattern.name,
+        payload: pattern.payload,
+      };
+    case "int":
+      return {
+        kind: "literal",
+        literal: { domain: "int", value: pattern.value },
+      };
+    case "text":
+      return {
+        kind: "literal",
+        literal: { domain: "text", value: pattern.value },
+      };
+    case "tuple":
+      return { kind: "tuple", elements: pattern.elements };
+    // A float pattern names one float and its type holds every float, so it can
+    // never close a column. `opaque` is what says that: it reaches the default
+    // matrix and is dropped there.
+    default:
+      return { kind: "opaque" };
+  }
+}
+
+/**
+ * The complete set of heads a value of `column` can have, or `null` when it has
+ * none this can state.
+ */
+function signatureOf(
+  column: Column,
+  heads: readonly Head[],
+  scrutinee: boolean,
+): Signature | null {
+  const present = heads.filter((head) => head.kind !== "any");
+  if (present.length === 0) return null;
+
+  // A tuple is the only head its type has, so the arms settle it: there is
+  // nothing else a value in that column could be.
+  if (present.every((head) => head.kind === "tuple")) {
+    const arity = present[0].kind === "tuple" ? present[0].elements.length : 0;
+    const sized = present.every((head) =>
+      head.kind === "tuple" && head.elements.length === arity
+    );
+    if (!sized) return null;
+    // `scrutinee` says this column *is* the target of the `case`, so the
+    // columns being split out of it are the ones `inferCase` constrains — the
+    // only ones an arm list is allowed to close.
+    return {
+      kind: "tuple",
+      columns: tupleColumns(column.type, arity, scrutinee),
+    };
+  }
+
+  const declared = declaredSignature(column.type, new Set());
+  if (declared !== null) return declared;
+
+  // Nothing declared this column, so the arms are what close it — but only
+  // where `inferCase` turns that into a constraint on the scrutinee, and only
+  // for constructors, because a literal set is covered by membership and stays
+  // non-constraining.
+  if (!column.closable) return null;
+  if (!present.every((head) => head.kind === "constructor")) return null;
+  const cases = new Map<string, Column>();
+  for (const head of present) {
+    if (head.kind !== "constructor") continue;
+    cases.set(head.name, { type: null, closable: false });
+  }
+  return { kind: "constructors", cases };
+}
+
+/** The columns of a tuple type, when one reached this position. */
+function tupleColumns(
+  type: SimpleType | null,
+  arity: number,
+  closable: boolean,
+): readonly Column[] {
+  const declared = declaredSignature(type, new Set());
+  if (
+    declared !== null && declared.kind === "tuple" &&
+    declared.columns.length === arity
+  ) {
+    return declared.columns.map((each) => ({ ...each, closable }));
+  }
+  return Array.from({ length: arity }, () => ({ type: null, closable }));
+}
+
+/**
+ * What a *type* says a column holds.
+ *
+ * A variable is followed through its upper bounds: they are what the program
+ * demanded of the scrutinee, and a value is a member of every one of them, so
+ * reading one can only name heads the arms may have to cover. Lower bounds are
+ * the other direction — what happened to flow in so far — and a column believed
+ * to be only that would let an arm list look complete for want of a call site.
+ */
+function declaredSignature(
+  type: SimpleType | null,
+  seen: Set<number>,
+): Signature | null {
+  if (type === null) return null;
+  if (type.tag === "variant") {
+    // An open variant is "these, and possibly others", which is no complete set.
+    if (type.open) return null;
+    const cases = new Map<string, Column>();
+    for (const [name, payload] of type.cases) {
+      cases.set(name, { type: payload, closable: false });
+    }
+    return { kind: "constructors", cases };
+  }
+  if (type.tag === "range" || type.tag === "union") {
+    const values = enumerate(type);
+    if (values === null) return null;
+    return { kind: "literals", values };
+  }
+  if (type.tag === "record") {
+    const columns: Column[] = [];
+    for (let index = 0; index < type.fields.size; index += 1) {
+      const found = type.fields.get(String(index));
+      // A record whose names are not `0..n-1` is a shape rather than a tuple,
+      // and a shape has no positional columns to split.
+      if (found === undefined) return null;
+      columns.push({ type: found, closable: false });
+    }
+    if (columns.length === 0) return null;
+    return { kind: "tuple", columns };
+  }
+  if (type.tag === "var" && !seen.has(type.id)) {
+    seen.add(type.id);
+    for (const bound of type.upper) {
+      const found = declaredSignature(bound, seen);
+      if (found !== null) return found;
+    }
+  }
+  return null;
 }

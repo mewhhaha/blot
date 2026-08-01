@@ -133,6 +133,9 @@ export type LiteralKind =
   | "let"
   | "const"
   | "sig"
+  | "@"
+  | "["
+  | "]"
   | ":="
   | "<-"
   | "for"
@@ -145,8 +148,6 @@ export type LiteralKind =
   | "."
   | ":"
   | "return"
-  | "["
-  | "]"
   | "#"
   | "comptime"
   | "rec"
@@ -224,6 +225,7 @@ export type RuleName =
   | "declaration"
   | "statement"
   | "binding"
+  | "declaration_tag"
   | "rebinding"
   | "iteration"
   | "iteration_source"
@@ -349,7 +351,14 @@ export interface StatementCursor extends RuleCursorBase<"statement"> {
 export interface BindingCursor extends RuleCursorBase<"binding"> {
   field(name: "kind"): TokenCursor<"literal", "const"> | TokenCursor<"literal", "let"> | TokenCursor<"literal", "sig">;
   field(name: "pattern"): BindingPatternCursor;
+  field(name: "tags"): ReadonlyArray<DeclarationTagCursor>;
   field(name: "value"): ValueCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface DeclarationTagCursor extends RuleCursorBase<"declaration_tag"> {
+  field(name: "descriptor"): ValueCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -700,6 +709,7 @@ export type AnyRuleCursor =
   | DeclarationCursor
   | StatementCursor
   | BindingCursor
+  | DeclarationTagCursor
   | RebindingCursor
   | IterationCursor
   | IterationSourceCursor

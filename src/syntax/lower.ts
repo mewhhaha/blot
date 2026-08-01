@@ -14,6 +14,7 @@ import type {
   Associativity,
   Branch,
   Decl,
+  DeclarationTag,
   Expr,
   Fixity,
   Module,
@@ -643,6 +644,7 @@ function lowerControlOutcome(
         declarations: [{
           tag: "binding",
           kind: "let",
+          tags: [],
           pattern: loop.pattern,
           value: {
             tag: "var",
@@ -926,6 +928,7 @@ function desugarLoop(
     declarations.push({
       tag: "binding",
       kind: "let",
+      tags: [],
       pattern: statePattern,
       value: name(carriedIn),
       span,
@@ -940,6 +943,7 @@ function desugarLoop(
     declarations.push({
       tag: "binding",
       kind: "let",
+      tags: [],
       pattern: binder,
       value: element,
       span,
@@ -1112,6 +1116,7 @@ function desugarLoop(
         {
           tag: "binding",
           kind: "let",
+          tags: [],
           pattern: { tag: "name", name: iterIn, qualifier: "none", span },
           value: source,
           span,
@@ -1119,6 +1124,7 @@ function desugarLoop(
         {
           tag: "binding",
           kind: "let",
+          tags: [],
           pattern: { tag: "name", name: goIn, qualifier: "none", span },
           value: go,
           span,
@@ -1304,11 +1310,35 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       kind === "let" || kind === "const" || kind === "sig",
       `unknown binding kind ${kind}`,
     );
+    const tags = fieldList(rule, "tags").map((cursor) => {
+      const tag = asRule(cursor, "declaration_tag");
+      return {
+        descriptor: lowerValue(
+          asRule(required(tag, "descriptor"), "value"),
+          context,
+        ),
+        span: tag.span,
+      };
+    });
+    if (kind === "sig" && tags.length > 0) {
+      fail(
+        "BLOT_TAGGED_SIG",
+        "A declaration tag transforms a value, but a `sig` has no value to bind.",
+        tags[0].span,
+      );
+    }
+    const pattern = lowerPattern(asRule(field(rule, "pattern"), "pattern"));
+    let value = lowerValue(asRule(field(rule, "value"), "value"), context);
+    if (tags.length > 0) {
+      expect(kind !== "sig", "a tagged signature reached value lowering");
+      value = lowerTaggedValue(kind, pattern, value, tags, rule.span);
+    }
     return {
       tag: "binding",
       kind,
-      pattern: lowerPattern(asRule(field(rule, "pattern"), "pattern")),
-      value: lowerValue(asRule(field(rule, "value"), "value"), context),
+      tags,
+      pattern,
+      value,
       span: rule.span,
     };
   }
@@ -1320,6 +1350,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       return {
         tag: "binding",
         kind: "let",
+        tags: [],
         pattern: loop.pattern,
         value: {
           tag: "case",
@@ -1372,6 +1403,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     return {
       tag: "binding",
       kind: "let",
+      tags: [],
       pattern: loop.pattern,
       value: loop.value,
       span: rule.span,
@@ -1461,6 +1493,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     return {
       tag: "binding",
       kind: "let",
+      tags: [],
       pattern: loopPattern(rebound, rule.span),
       value: {
         tag: "if",
@@ -1523,6 +1556,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     return {
       tag: "binding",
       kind: "let",
+      tags: [],
       pattern: { tag: "name", name, qualifier: "none", span: rule.span },
       value: {
         tag: "apply",
@@ -1538,6 +1572,73 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     `Unknown declaration \`${rule.name}\`.`,
     rule.span,
   );
+}
+
+/**
+ * Evaluates tag descriptors before the raw value, then applies the nearest tag
+ * first. The raw binding keeps `rec` directly under its source name, which is
+ * the condition that gives recursive binding its existing meaning.
+ */
+function lowerTaggedValue(
+  kind: "let" | "const",
+  pattern: Pattern,
+  value: Expr,
+  tags: readonly DeclarationTag[],
+  span: Span,
+): Expr {
+  const declarations: Decl[] = tags.map((tag, index) => ({
+    tag: "binding",
+    kind: "const",
+    tags: [],
+    pattern: {
+      tag: "name",
+      name: `tag$${index}`,
+      qualifier: "none",
+      span: tag.span,
+    },
+    value: tag.descriptor,
+    span: tag.span,
+  }));
+
+  const recursive = value.tag === "rec" && pattern.tag === "name";
+  let rawName = "tag$value$";
+  if (recursive && pattern.tag === "name") rawName = pattern.name;
+  declarations.push({
+    tag: "binding",
+    kind,
+    tags: [],
+    pattern: {
+      tag: "name",
+      name: rawName,
+      qualifier: "none",
+      span: value.span,
+    },
+    value,
+    span: value.span,
+  });
+
+  let transformed: Expr = { tag: "var", name: rawName, span: value.span };
+  for (let index = tags.length - 1; index >= 0; index -= 1) {
+    const descriptor: Expr = {
+      tag: "var",
+      name: `tag$${index}`,
+      span: tags[index].span,
+    };
+    const transformer: Expr = {
+      tag: "field",
+      target: descriptor,
+      name: "transform",
+      span: tags[index].span,
+    };
+    transformed = {
+      tag: "apply",
+      fn: transformer,
+      arg: transformed,
+      span: { start: tags[index].span.start, end: transformed.span.end },
+    };
+  }
+
+  return { tag: "block", declarations, result: transformed, span };
 }
 
 // --- patterns ---------------------------------------------------------------
@@ -2059,6 +2160,7 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
       declarations.push({
         tag: "binding",
         kind: "let",
+        tags: [],
         pattern: {
           tag: "name",
           name,

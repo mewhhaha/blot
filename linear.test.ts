@@ -4,7 +4,7 @@
 // a value twice and never spending it at all. The second is the one a weaker
 // rule would let through, and it is the leak the marker exists to catch.
 
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { checkFile } from "./src/check/mod.ts";
 import { BlotError } from "./src/diagnostic.ts";
 
@@ -18,7 +18,11 @@ const PRELUDE = 'open {} = (@import "blot:prelude") ();\n';
 async function analyze(source: string) {
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
   await Deno.writeTextFile(path, PRELUDE + source);
-  return await checkFile(path);
+  const checked = await checkFile(path);
+  // The facts cover every module the backend would inline, the prelude
+  // included, so a test about this snippet has to say which file it means.
+  const own = [...checked.ownership].filter(([, fact]) => fact.path === path);
+  return { checked, path, own };
 }
 
 function accepts(name: string, source: string): void {
@@ -150,20 +154,54 @@ accepts(
   "let some = fn ?r => if 1 < 2 then r 1 else 0 end;\nreturn some (fn x => x);",
 );
 
-// The facts the backend will consume. Nothing applies them yet — an in-place
-// rewrite needs a Core to rewrite — so they are asserted directly instead.
-// Both the parameter and the binding: `fn !value => ...` is as linear as
-// `let !token`, and the pass proves each of them spent exactly once.
+// The facts the backend will consume. Nothing applies them yet — gpufuck's
+// Functional Surface has no in-place write for them to select — so they are
+// asserted directly instead. Both the parameter and the binding:
+// `fn !value => ...` is as linear as `let !token`, and the pass proves each of
+// them spent exactly once.
 Deno.test("every linear binding proved spent is recorded", async () => {
-  const checked = await analyze(
+  const { own } = await analyze(
     `${CONSUME}let !token = 41;\nreturn consume (!token);`,
   );
-  assertEquals([...checked.ownership.linear].sort(), ["token", "value"]);
+  const spent = own
+    .filter(([, fact]) => fact.spent)
+    .map(([pattern]) => pattern.name);
+  assertEquals(spent.sort(), ["token", "value"]);
 });
 
 Deno.test("the last use of each binding is recorded", async () => {
-  const checked = await analyze(
+  const { own } = await analyze(
     "let a = 1;\nlet b = @int.add a 2;\nreturn @int.add b 3;",
   );
-  assertEquals([...checked.ownership.lastUses.keys()].sort(), ["a", "b"]);
+  const read = own
+    .filter(([, fact]) => fact.lastUse !== null)
+    .map(([pattern]) => pattern.name);
+  assertEquals(read.sort(), ["a", "b"]);
+});
+
+// A name is not an identity. Keyed by name, the lambda's `x` and the module's
+// `x` are one entry and the surviving span belongs to whichever was walked
+// last — a fact about one binding reported for the other. Keyed by the pattern
+// that bound each, they stay apart, and that is what a consumer needs before it
+// can act on either.
+Deno.test("two bindings sharing a name keep separate facts", async () => {
+  const { own } = await analyze(
+    "let x = 1;\nlet f = fn x => @int.add x 1;\nreturn @int.add x (f 2);",
+  );
+  const read = own
+    .filter(([, fact]) => fact.lastUse !== null)
+    .map(([pattern]) => pattern.name);
+  assertEquals(read.sort(), ["f", "x", "x"]);
+});
+
+// The backend inlines an imported module into its importer, so an importer
+// whose facts stopped at its own file would have none about most of the code it
+// emits. Every fixture opens the prelude, so the prelude is the evidence.
+Deno.test("ownership facts cover every module that contributed code", async () => {
+  const { checked, path } = await analyze("let a = 1;\nreturn a;");
+  const paths = new Set(
+    [...checked.ownership.values()].map((fact) => fact.path),
+  );
+  assert(paths.has(path));
+  assert(paths.size > 1);
 });

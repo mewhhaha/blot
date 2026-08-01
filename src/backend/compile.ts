@@ -194,7 +194,7 @@ export class BlotCompilerSession {
   async compileModule(
     module: Parameters<GpuCompiler["compileModule"]>[0],
     options: CompilationOptions = {},
-  ) {
+  ): Promise<Awaited<ReturnType<GpuCompiler["compileModule"]>>> {
     this.#requireActive();
     return await this.#compiler.compileModule(module, options);
   }
@@ -202,7 +202,7 @@ export class BlotCompilerSession {
   async evaluate(
     module: Parameters<GpuEvaluator["evaluate"]>[0],
     options: Parameters<GpuEvaluator["evaluate"]>[1],
-  ) {
+  ): Promise<Awaited<ReturnType<GpuEvaluator["evaluate"]>>> {
     this.#requireActive();
     this.#evaluator ??= GpuEvaluator.create(this.#device);
     return await (await this.#evaluator).evaluate(module, options);

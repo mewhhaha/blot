@@ -19,13 +19,13 @@ in a benchmark months later.
 
 | counter                    |              blot | gpu-duck | note                                               |
 | -------------------------- | ----------------: | -------: | -------------------------------------------------- |
-| `lexerStates`              |               117 |      175 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`              |               118 |      175 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity` |                 5 |        9 | worst-case island candidates allocated per token   |
 | `islandCount`              |                20 |       24 |                                                    |
-| `islandStates`             |               618 |        — |                                                    |
+| `islandStates`             |               628 |        — |                                                    |
 | `contractionRounds`        |                33 |        — | fixed dispatch bound                               |
-| `denseTransitionBytes`     |           519,120 |        — | immutable device table                             |
-| `packedBytes`              |           645,289 |        — | version-3 runtime section                          |
+| `denseTransitionBytes`     |           535,056 |        — | immutable device table                             |
+| `packedBytes`              |           658,072 |        — | version-3 runtime section                          |
 | `rootLoopIsland`           | 3 (`declaration`) |        — | strict root loop proven                            |
 
 blot beats the gpu-duck reference on both counters that matter most for
@@ -38,6 +38,15 @@ and byte parity still holds across all 39 corpus programs.
 
 Updating baba from 7.3.0 to 7.9.0 increased `packedBytes` by 448 bytes for the
 new runtime metadata. The grammar-dependent counters did not change.
+
+Declaration tags use `@[descriptor]`: `@[` is disjoint from an intrinsic's
+`@name`, so it costs one lexer state and ten island states while leaving
+candidate multiplicity, contraction rounds, and both scratch factors at 5. Using
+`#[descriptor]` was rejected after measurement because `#` also opens a
+constructor and raised candidate multiplicity and the scratch factors to 6. The
+tag field in the binding semantic recipe raises `maxConstraintsPerNode` from 3
+to 4; dense transitions grow by 15,936 bytes and the packed plan by 12,783 bytes
+in total.
 
 `<-` cost two more lexer states and two island states. Splitting it into its own
 declaration alternative was a shift/reduce conflict on IDENT against `:=`, and

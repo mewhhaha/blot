@@ -335,6 +335,7 @@ function runtimeBinding(name: string, value: Expr): Decl {
   return {
     tag: "binding",
     kind: "let",
+    tags: [],
     pattern: {
       tag: "name",
       name,

@@ -141,6 +141,11 @@ export type Expr =
 
 export type DeclKind = "let" | "const" | "sig";
 
+export interface DeclarationTag {
+  readonly descriptor: Expr;
+  readonly span: Span;
+}
+
 export interface OpenMapping {
   readonly source: string;
   /** `null` suppresses the source field instead of binding it. */
@@ -152,6 +157,7 @@ export type Decl =
   | {
     readonly tag: "binding";
     readonly kind: DeclKind;
+    readonly tags: readonly DeclarationTag[];
     readonly pattern: Pattern;
     readonly value: Expr;
     readonly span: Span;

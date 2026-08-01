@@ -1,0 +1,19 @@
+// The arms of a `case` must cover the target, and a tuple target is covered by
+// the cross-product of its columns. Three of the four combinations of two
+// options are written here, so `(#None, #None)` reaches runtime with nothing to
+// match.
+//
+// The sibling `missing_case.blot` is the same rule over one constructor set and
+// `missing_literal_case.blot` over one literal set. This one has its own code
+// because neither of those can state it: no single column is missing anything,
+// and it is the combination the arms never reach.
+
+open {} = (@import "blot:prelude") ();
+
+sig join = (Option Int, Option Int) -> Int;
+let join = fn pair => case pair of
+  (#Some a, #Some b) => a + b,
+  (#Some a, #None) => a,
+  (#None, #Some b) => b
+end;
+return join (None, None);

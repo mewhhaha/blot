@@ -151,6 +151,53 @@ check(
   "'a -> 'a",
 );
 
+// --- declaration tags ------------------------------------------------------
+
+check(
+  "a declaration tag may replace the binding value and its type",
+  'const text = tag ("text", (), (fn _ => "changed"));\n' +
+    "@[text] let value = 1;\nreturn value;",
+  '"changed"',
+);
+
+check(
+  "stacked declaration tags apply nearest-first",
+  'const add = fn n => tag ("add", n, (fn value => value + n));\n' +
+    "@[add(1)] @[add(2)] let value = 3;\nreturn value;",
+  "Int",
+);
+
+check(
+  "a declaration tag transforms before its binding pattern matches",
+  'const pair = tag ("pair", (), (fn _ => (1, "two")));\n' +
+    "@[pair] let (number, text) = ();\n" +
+    "return { .number = number; .text = text; };",
+  '{ .number = 1; .text = "two"; }',
+);
+
+rejects(
+  "a declaration tag descriptor must be a shape",
+  "@[1] let value = 2;\nreturn value;",
+  "BLOT_BAD_DECLARATION_TAG",
+);
+
+rejects(
+  "a declaration tag descriptor transform must be callable",
+  '@[{ .name = "broken"; .metadata = (); .transform = 1; }]\n' +
+    "let value = 2;\nreturn value;",
+  "BLOT_BAD_DECLARATION_TAG",
+);
+
+rejects(
+  "a declaration tag descriptor must be known before a local binding",
+  "let tagged = fn descriptor => do\n" +
+    "  @[descriptor] let value = 1;\n" +
+    "  in value\n" +
+    "end;\n" +
+    "return tagged test;",
+  "BLOT_NOT_COMPTIME",
+);
+
 check(
   "one binding instantiates independently per use",
   'let identity = fn x => x;\nreturn { .a = identity 1; .b = identity "two"; };',
@@ -1068,4 +1115,193 @@ check(
   `const Money = #Money I32 <+ { .zero = #Money 0; };
 return Money.zero;`,
   "#Money 0",
+);
+
+// --- a tuple target is covered by the cross-product of its columns ----------
+//
+// Arms of a tuple `case` are a pattern matrix: one row per arm, one column per
+// element. Each column is covered on its own terms — a constructor set by the
+// constructors named in it, a set no arm list can exhaust only by an
+// irrefutable pattern — and what the arms owe together is every combination of
+// them. Reading one column at a time is what let `(#Some a, #Some b)` alone
+// stand for a pair of options and trap at run time.
+
+check(
+  "arms that cover the cross-product need no wildcard",
+  `sig join = (Option Int, Option Int) -> Int;
+let join = fn pair => case pair of
+  (#Some a, #Some b) => a + b,
+  (#Some a, #None) => a,
+  (#None, #Some b) => b,
+  (#None, #None) => 0
+end;
+return join (Some 1, None);`,
+  "Int",
+);
+
+rejects(
+  "a combination no arm reaches is rejected",
+  `sig join = (Option Int, Option Int) -> Int;
+let join = fn pair => case pair of
+  (#Some a, #Some b) => a + b,
+  (#Some a, #None) => a,
+  (#None, #Some b) => b
+end;
+return join (None, None);`,
+  "No arm covers `(#None, #None)`",
+);
+
+rejects(
+  "a column the target declares wider than the arms is rejected",
+  `sig join = (Option Int, Option Int) -> Int;
+let join = fn pair => case pair of
+  (#Some a, #Some b) => a + b
+end;
+return join (None, None);`,
+  "No arm covers `(#None, _)`",
+);
+
+// The arms are what close a column no `sig` declared, exactly as they are for a
+// single target: naming `#Some` and `#None` makes the column that union, and a
+// caller outside it is refused there rather than at the `case`.
+rejects(
+  "arms close an undeclared column",
+  `let join = fn pair => case pair of
+  (#Some a, #Some b) => a + b
+end;
+return join (None, None);`,
+  "`#None` is not one of #Some",
+);
+
+rejects(
+  "a column with more values than arms can list needs an irrefutable pattern",
+  `sig pick = (Int, Option Int) -> Int;
+let pick = fn pair => case pair of
+  (1, #Some a) => a,
+  (_, #None) => 0
+end;
+return pick (2, Some 1);`,
+  "No arm covers `(_, #Some)`",
+);
+
+check(
+  "an irrefutable pattern is what covers such a column",
+  `sig pick = (Int, Option Int) -> Int;
+let pick = fn pair => case pair of
+  (1, #Some a) => a,
+  (_, _) => 0
+end;
+return pick (2, Some 1);`,
+  "Int",
+);
+
+// A float pattern names one float and its type holds every float, so a float
+// column is unlistable for the same reason `Int` is.
+rejects(
+  "a float column is unlistable too",
+  `sig pick = (F64, Option Int) -> Int;
+let pick = fn pair => case pair of
+  (1.0, #Some a) => a,
+  (_, #None) => 0
+end;
+return pick (1.0, Some 1);`,
+  "No arm covers `(_, #Some)`",
+);
+
+check(
+  "three columns are covered the same way",
+  `sig triple = (Bool, Bool, Bool) -> Int;
+let triple = fn t => case t of
+  (#True, #True, #True) => 1,
+  (#True, #True, #False) => 2,
+  (#True, #False, _) => 3,
+  (#False, _, _) => 4
+end;
+return triple (True, False, True);`,
+  "Int",
+);
+
+rejects(
+  "a missing combination of three columns is named in full",
+  `sig triple = (Bool, Bool, Bool) -> Int;
+let triple = fn t => case t of
+  (#True, #True, #True) => 1,
+  (#True, #False, _) => 3,
+  (#False, _, _) => 4
+end;
+return triple (True, True, False);`,
+  "No arm covers `(#True, #True, #False)`",
+);
+
+check(
+  "a nested tuple is a column like any other",
+  `sig nested = ((Option Int, Bool), Option Int) -> Int;
+let nested = fn v => case v of
+  ((#Some a, #True), #None) => a,
+  ((#Some a, #True), #Some c) => a + c,
+  ((#Some a, #False), _) => a,
+  ((#None, _), #Some c) => c,
+  ((#None, _), #None) => 0
+end;
+return nested ((Some 1, True), None);`,
+  "Int",
+);
+
+rejects(
+  "a gap inside a nested tuple is named where it is",
+  `sig nested = ((Option Int, Bool), Option Int) -> Int;
+let nested = fn v => case v of
+  ((#Some a, #True), #None) => a,
+  ((#Some a, #False), _) => a,
+  ((#None, _), #Some c) => c,
+  ((#None, _), #None) => 0
+end;
+return nested ((Some 1, True), Some 2);`,
+  "No arm covers `((#Some, #True), #Some)`",
+);
+
+// --- a field named by a value ------------------------------------------------
+//
+// `@shape.get`, `@shape.set` and `@shape.remove` cannot be given a scheme,
+// because the field is chosen by a value. The name is still a compile-time
+// value, so the call site is where they get their type — and what they used to
+// get instead was an unconstrained variable, which is the most permissive claim
+// in the lattice rather than the absence of one.
+
+check(
+  "a field named by a literal has that field's type",
+  'let r = { .a = 7; .b = "x"; };\nreturn @shape.get r "a";',
+  "7",
+);
+
+rejects(
+  "a sig is not believed for a field named by a literal",
+  'let r = { .a = 7; };\nsig z = 0;\nlet z = @shape.get r "a";\nreturn z;',
+  "`7` is outside `0`",
+);
+
+rejects(
+  "a field the shape does not have is refused rather than trapped",
+  'let r = { .a = 7; };\nreturn @shape.get r "c";',
+  "no field `.c`",
+);
+
+check(
+  "setting a field named by a literal answers with the whole shape",
+  'let r = { .a = 7; };\nreturn @shape.set r "b" "x";',
+  '{ .a = 7; .b = "x"; }',
+);
+
+check(
+  "removing a field named by a literal answers with the rest",
+  'let r = { .a = 7; .b = 1; };\nreturn @shape.remove r "b";',
+  "{ .a = 7; }",
+);
+
+// The name decides, so a projection whose shape is only known at run time is
+// still an ordinary field demand on it.
+check(
+  "a literal name types a projection off a parameter",
+  'return fn shape => @shape.get shape "a";',
+  "{ .a = 'a; } -> 'a",
 );

@@ -157,6 +157,7 @@
         "binding": {
           "opcode": "binding",
           "fields": {
+            "tags": "value",
             "pattern": "pattern",
             "value": "value"
           }

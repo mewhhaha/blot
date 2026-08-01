@@ -53,6 +53,15 @@ const REJECTIONS: Record<
   // A constructor set is covered by subtyping and reports through `constrain`;
   // a literal set is covered by membership and has its own code.
   "missing_literal_case": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
+  // Tuple arms are covered by the cross-product of their columns. Neither of
+  // the two above can state what these are missing: every column is complete on
+  // its own, and it is a combination no arm reaches.
+  "missing_tuple_case": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
+  "unlisted_tuple_column": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
+  // A field named by a value is still named at compile time, and a rule that
+  // answered with a type variable would have this `sig` believed rather than
+  // checked — the mistake `member_sig_unchecked` is the other half of.
+  "shape_get_sig_unchecked": { code: "BLOT_TYPE_ERROR", stage: "check" },
   // Both of these would be *accepted* by an `if` rule that narrowed on the
   // spelling of `==` or on the witness's type rather than its value, and both
   // trap at run time. They report through coverage because a refused narrowing
@@ -101,6 +110,15 @@ const REJECTIONS: Record<
   "rebinding_type_change": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "rebinding_unbound": { code: "BLOT_UNBOUND", stage: "check" },
   "generic_refused": { code: "BLOT_REFUSED", stage: "check" },
+  "bad_declaration_tag": {
+    code: "BLOT_BAD_DECLARATION_TAG",
+    stage: "check",
+  },
+  "declaration_tag_not_comptime": {
+    code: "BLOT_NOT_COMPTIME",
+    stage: "check",
+  },
+  "transformed_sig": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "spread_of_a_parameter": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "shadowed_accumulator": { code: "BLOT_SHADOWED_ACCUMULATOR", stage: "check" },
   "float_unordered": { code: "BLOT_UNORDERED", stage: "run" },

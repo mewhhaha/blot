@@ -18,9 +18,16 @@
 //     passed it.
 //
 // Alongside the check, the pass records the last use of every binding. Nothing
-// consumes those facts yet: rewriting a rebuild into an in-place write needs a
-// Core to rewrite, which arrives with the backend. They are computed and
+// consumes those facts yet: gpufuck's Functional Surface has no in-place write
+// for them to select, so there is no instruction to emit — see
+// `docs/roadmap.md`'s "What blot needs from gpufuck". They are computed and
 // exposed rather than deferred, so the analysis can be tested on its own.
+//
+// Every fact is keyed by the `name` pattern that introduced the binding, never
+// by the binding's name. A name is not an identity: two scopes may bind the
+// same one, and the backend inlines an imported module into its importer, so a
+// name-keyed fact reports one binding for another as soon as anything merges
+// two modules' facts together.
 
 import type {
   Decl,
@@ -32,10 +39,21 @@ import type {
 } from "../syntax/ast.ts";
 import type { Diagnostic } from "../diagnostic.ts";
 
+/** The only pattern that introduces a binding, and therefore the fact key. */
+export type NamePattern = Extract<Pattern, { readonly tag: "name" }>;
+
 interface Binding {
-  readonly name: string;
+  /**
+   * The pattern this binding came from. Its node identity keys every fact, and
+   * it is where the name and the declaration span are read from — a copy of
+   * either would be a second answer waiting to disagree with this one.
+   */
+  readonly pattern: NamePattern;
+  /**
+   * Not always `pattern.qualifier`: a binding whose value captured a linear
+   * value is linear whether or not anyone wrote `!` on it.
+   */
   readonly qualifier: Qualifier;
-  readonly span: Span;
   /** Where the binding was consumed, if it has been. */
   moved: Span | null;
   /** How many times it was read without being consumed. */
@@ -53,10 +71,26 @@ interface Scope {
 }
 
 export interface Ownership {
-  /** Bindings whose final read is their last use, keyed by name. */
-  readonly lastUses: ReadonlyMap<string, Span>;
-  /** Linear bindings proved to be consumed exactly once. */
-  readonly linear: readonly string[];
+  /**
+   * The last read of each binding *in traversal order*, keyed by the pattern
+   * that bound it.
+   *
+   * That is weaker than it sounds and the difference decides what may be built
+   * on it. Branches are walked one after another from the same incoming state,
+   * and only the consumed-or-not state is restored between them, so a read in
+   * the last arm overwrites a read in the first even though no execution takes
+   * both. This says where the analysis stopped seeing the name, not that the
+   * binding is dead everywhere after that point. A reuse rewrite needs the
+   * stronger claim and must establish it rather than reading it off here.
+   */
+  readonly lastUses: ReadonlyMap<NamePattern, Span>;
+  /**
+   * The bindings whose linear or affine obligation was proved discharged.
+   *
+   * This one *is* a per-path claim: a linear binding is here only when every
+   * path consumed it exactly once, which is what `agree` enforces.
+   */
+  readonly linear: ReadonlySet<NamePattern>;
 }
 
 export interface LinearResult {
@@ -66,8 +100,8 @@ export interface LinearResult {
 
 class Analysis {
   readonly diagnostics: Diagnostic[] = [];
-  readonly lastUses = new Map<string, Span>();
-  readonly linear: string[] = [];
+  readonly lastUses = new Map<NamePattern, Span>();
+  readonly linear = new Set<NamePattern>();
 
   report(code: string, message: string, span: Span): void {
     this.diagnostics.push({ code, message, span });
@@ -127,14 +161,12 @@ export function checkLinearity(module: Module): LinearResult {
   walk(module.result, scope, analysis, "move");
   closeScope(scope, analysis);
 
+  // A captured value is shadowed inside the closure that took it, so it is
+  // proved twice — once in each scope. That is bookkeeping, not two values, and
+  // the shadow carries the same pattern, so keying by identity records one.
   return {
     diagnostics: analysis.diagnostics,
-    ownership: {
-      lastUses: analysis.lastUses,
-      // A captured value is shadowed inside the closure that took it, so it is
-      // proved twice — once in each scope. That is bookkeeping, not two values.
-      linear: [...new Set(analysis.linear)],
-    },
+    ownership: { lastUses: analysis.lastUses, linear: analysis.linear },
   };
 }
 
@@ -144,18 +176,18 @@ function closeScope(scope: Scope, analysis: Analysis): void {
     if (!spendable(binding.qualifier)) continue;
     // Affine owes nothing: not resuming is an abort, not a leak.
     if (binding.qualifier === "affine") {
-      if (binding.moved !== null) analysis.linear.push(binding.name);
+      if (binding.moved !== null) analysis.linear.add(binding.pattern);
       continue;
     }
     if (binding.moved === null) {
       analysis.report(
         "BLOT_LINEAR_NOT_CONSUMED",
-        `\`${binding.name}\` is linear and is never consumed. A linear value must be used exactly once; drop the \`!\` if it need not be.`,
-        binding.span,
+        `\`${binding.pattern.name}\` is linear and is never consumed. A linear value must be used exactly once; drop the \`!\` if it need not be.`,
+        binding.pattern.span,
       );
       continue;
     }
-    analysis.linear.push(binding.name);
+    analysis.linear.add(binding.pattern);
   }
 }
 
@@ -163,9 +195,8 @@ function declare(pattern: Pattern, scope: Scope, analysis: Analysis): void {
   switch (pattern.tag) {
     case "name":
       scope.bindings.set(pattern.name, {
-        name: pattern.name,
+        pattern,
         qualifier: pattern.qualifier,
-        span: pattern.span,
         moved: null,
         borrows: 0,
         lastUse: null,
@@ -212,7 +243,7 @@ function use(
   if (found === null) return;
   const { binding, capturedBy } = found;
 
-  analysis.lastUses.set(name, span);
+  analysis.lastUses.set(binding.pattern, span);
   binding.lastUse = span;
 
   if (binding.qualifier === "borrow" && kind === "move") {
@@ -236,9 +267,8 @@ function use(
   if (capturedBy !== null) {
     capturedBy.captures.add(binding);
     capturedBy.bindings.set(name, {
-      name,
+      pattern: binding.pattern,
       qualifier: binding.qualifier,
-      span: binding.span,
       moved: null,
       borrows: 0,
       lastUse: null,
@@ -441,7 +471,7 @@ function consume(binding: Binding, span: Span, analysis: Analysis): void {
   if (binding.moved !== null) {
     analysis.report(
       "BLOT_LINEAR_CONSUMED_TWICE",
-      `\`${binding.name}\` is ${
+      `\`${binding.pattern.name}\` is ${
         binding.qualifier === "affine" ? "at-most-once" : "linear"
       } and was already consumed.`,
       span,
@@ -486,7 +516,7 @@ function agree(
     if (some && !every && binding.qualifier === "linear") {
       analysis.report(
         "BLOT_LINEAR_BRANCH_DISAGREEMENT",
-        `\`${binding.name}\` is linear and is consumed on some branches but not others.`,
+        `\`${binding.pattern.name}\` is linear and is consumed on some branches but not others.`,
         span,
       );
     }

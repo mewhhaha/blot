@@ -46,6 +46,20 @@ const Fn = {
   .flip = flip;
 };
 
+// --- declaration tags ------------------------------------------------------
+
+// The compiler reads this ordinary shape at compile time. The transform stays
+// ordinary blot code: a `let` runs it at run time, while a `const` runs it at
+// compile time with the value it enriches.
+const tag = fn (name, metadata, transform) => {
+  .name = name;
+  .metadata = metadata;
+  .transform = transform;
+};
+
+const derive = fn transform => tag ("derive", (), transform);
+const test = tag ("test", (), identity);
+
 // --- booleans ---------------------------------------------------------------
 //
 // `#True` and `#False` are ordinary constructors. `if` accepts one of them and
@@ -819,6 +833,9 @@ return {
   .always = always;
   .compose = compose;
   .flip = flip;
+  .tag = tag;
+  .derive = derive;
+  .test = test;
 
   .Bool = Bool;
   .True = True;

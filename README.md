@@ -8,6 +8,16 @@ Executable application studies live in [case-studies/](case-studies/): a
 grep-like file search, an interactive terminal program, and an agent-style
 conversation loop.
 
+The TypeScript frontend is published as `@mewhhaha/blot`:
+
+```ts
+import { parse } from "@mewhhaha/blot";
+
+const result = await parse("return 42;");
+```
+
+Run `deno task publish:dry-run` to verify the package before publishing.
+
 `../binned` is the maximal version of this idea — 124k lines of TypeScript and a
 language reference of 80k characters. `../baba/examples/gpu-duck` is the
 opposite pressure: a grammar cut down until baba's WebGPU frontend can prove it

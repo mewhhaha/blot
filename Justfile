@@ -69,7 +69,7 @@ grammar-check:
   deno run --allow-read --allow-run=tree-sitter scripts/check_grammar.ts
 
 check:
-  deno check scripts/*.ts case-studies/*.ts src/cli.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts
+  deno check mod.ts scripts/*.ts case-studies/*.ts src/cli.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts
   deno fmt --check
   deno lint
 

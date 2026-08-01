@@ -12,6 +12,11 @@ open {} = (@import "blot:prelude") ();
 
 // The join that motivates the form: two options, one arm for the case where
 // both are present.
+//
+// Four arms and no wildcard, because coverage reads the columns: the arms have
+// to cover the cross-product, and these four are it. Dropping any one of them
+// is `BLOT_INCOMPLETE_CASE` naming the combination that is left —
+// `examples/rejected/semantics/missing_tuple_case.blot`.
 let combine = fn (left, right) => case (left, right) of
   (#Some a, #Some b) => a + b,
   (#Some a, #None) => a,
@@ -26,7 +31,8 @@ let difference = fn pair => case pair of
 end;
 
 // Overlapping arms, so their order is what decides. `(0, 0)` matches the first
-// two arms and the third; only the first runs.
+// two arms and the third; only the first runs. The columns are integers, which
+// no arm list exhausts, so the last arm is what covers them.
 let quadrant = fn point => case point of
   (0, 0) => 1,
   (0, _) => 2,

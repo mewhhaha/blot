@@ -4,13 +4,20 @@
 // `struct`, `fold` — is prelude source and gets inferred like any other blot
 // code.
 //
-// Three of these are deliberately imprecise, and it is worth saying which and
-// why. `@shape.get`, `@shape.set`, and `@shape.remove` project a field named by
-// a value, not by a literal. Their result genuinely is not determined until the
-// name is known, which happens during comptime specialization. Their result
-// type is therefore an unconstrained variable: inference learns nothing and
-// rejects nothing. That is the honest answer, and it is different from `⊤`,
-// which would claim the result is safe to use anywhere.
+// `@shape.get`, `@shape.set` and `@shape.remove` are the three whose result no
+// entry here can state, because they name their field with a value rather than
+// with a literal. The schemes below are what a *partial* application of one of
+// them has; a saturated call is typed at its call site by `inferShapeProjection`
+// in `infer.ts`, which runs the projection at compile time.
+//
+// This file used to defend the unconstrained variable in those results as "the
+// honest answer", on the grounds that the field is not determined until the name
+// is known. The second half is true and the first does not follow. A variable is
+// not the absence of a claim: every constraint on one is satisfiable, so it is
+// the most permissive element the lattice has, and a `sig` written over one is
+// believed rather than checked. `sig z = 0; let z = @shape.get r "a";` checked
+// as `0` and evaluated to `7`. The name is known by the time it matters, so the
+// call site is where these get their type.
 
 import {
   BOTTOM,
@@ -44,12 +51,17 @@ const TYPE: SimpleType = { tag: "opaque", name: "Type" };
 /**
  * What `@type.reflect` answers with.
  *
- * Every type-valued payload is a *fresh variable*, not the opaque `Type`, and
- * that is deliberate in the same way `@shape.get`'s result is. Types are
- * values, so a record of types is a type and so is `42`; there is no type
- * smaller than "any value" that reflection could honestly promise about a
- * payload. Inference therefore learns which case it has — enough to check the
- * `case` arms — and learns nothing about what is inside, which is the truth.
+ * Every type-valued payload is a *fresh variable*, not the opaque `Type`. Types
+ * are values, so a record of types is a type and so is `42`; there is no type
+ * smaller than "any value" that reflection could promise about a payload.
+ * Inference therefore learns which case it has — enough to check the `case`
+ * arms — and learns nothing about what is inside.
+ *
+ * A variable is a permission and not an absence, which is the lesson the shape
+ * projections above were rewritten for, so these payloads are the same door left
+ * open: a `sig` over one is believed. Closing it means giving reflection a
+ * call-site rule the way `inferShapeProjection` gives the projections one, and
+ * that is a change to `@type.reflect` rather than a wording fix here.
  */
 function reflection(fresh: () => SimpleType): SimpleType {
   return variant([
@@ -209,8 +221,8 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
 
   // --- shapes ---
   //
-  // The field name is a value, so the result is not determined until
-  // specialization. An unconstrained variable says exactly that.
+  // The three projections are typed at their call sites; these schemes are only
+  // what a partial application of one has. See the note at the top of the file.
   ["@shape.empty", mono(record([]))],
   ["@shape.get", poly((fresh) => curried([fresh(), TEXT], fresh()))],
   ["@shape.set", poly((fresh) => curried([fresh(), TEXT, fresh()], fresh()))],

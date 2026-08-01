@@ -3,12 +3,15 @@
 // `check` and `eval` both stay off WebGPU: parsing has baba's CPU path and the
 // evaluator is plain TypeScript. Only `just parity` needs an adapter.
 
+import { resolve } from "@std/path";
 import { BlotError, locate, render } from "./diagnostic.ts";
 import { parse } from "./syntax/parse.ts";
 import { show } from "./comptime/value.ts";
 import { evaluateFile as run } from "./run.ts";
 import { LoadError } from "./load.ts";
-import { checkFile } from "./check/mod.ts";
+import { checkFile, type OwnedBinding } from "./check/mod.ts";
+import type { NamePattern } from "./linear/check.ts";
+import { testFile, type TestOutcome } from "./test.ts";
 
 const [command, ...rest] = Deno.args;
 
@@ -37,11 +40,17 @@ if (command === "build") {
 }
 
 let failures = 0;
+let tests = 0;
+let failedTests = 0;
 
 for (const path of paths) {
   try {
     if (command === "check") await check(path);
-    else if (command === "ownership") await ownership(path);
+    else if (command === "test") {
+      const outcomes = await testFile(path);
+      tests += outcomes.length;
+      failedTests += reportTestOutcomes(outcomes);
+    } else if (command === "ownership") await ownership(path);
     else if (command === "build") {
       await buildFile(path, { mode: buildMode, serviceUrl });
     } else if (command === "eval") await evaluateFile(path);
@@ -56,7 +65,17 @@ for (const path of paths) {
   }
 }
 
-Deno.exit(failures === 0 ? 0 : 1);
+if (command === "test") {
+  if (tests === 0 && failures === 0) {
+    console.error("no tests found");
+    failures += 1;
+  }
+  console.log(`${tests - failedTests} passed; ${failedTests} failed`);
+}
+
+let exitCode = 0;
+if (failures > 0 || failedTests > 0) exitCode = 1;
+Deno.exit(exitCode);
 
 type BuildMode = "direct" | "service";
 
@@ -115,9 +134,24 @@ async function serveCompiler(arguments_: readonly string[]): Promise<void> {
 }
 
 function printUsage(): void {
-  console.error("usage: blot <check|eval|ast|ownership> <file.blot>...");
+  console.error("usage: blot <check|test|eval|ast|ownership> <file.blot>...");
   console.error("       blot build [--mode=direct|service] <file.blot>...");
   console.error("       blot serve [--port=4765]");
+}
+
+function reportTestOutcomes(outcomes: readonly TestOutcome[]): number {
+  let failures = 0;
+  for (const outcome of outcomes) {
+    if (outcome.status === "passed") {
+      console.log(`PASS ${outcome.path}:${outcome.name}`);
+      continue;
+    }
+    failures += 1;
+    console.error(
+      `FAIL ${outcome.path}:${outcome.name}: ${outcome.diagnostic.message}`,
+    );
+  }
+  return failures;
 }
 
 async function check(path: string): Promise<void> {
@@ -142,24 +176,58 @@ async function evaluateFile(path: string): Promise<void> {
 /**
  * The ownership facts the backend will consume.
  *
- * Nothing applies them yet: rewriting a rebuild into an in-place write needs a
- * Core to rewrite. Printing them keeps the analysis testable on its own rather
- * than deferred until something can act on it.
+ * Nothing applies them yet, and the obstacle is not blot's. gpufuck's
+ * Functional Surface has exactly six store forms — `store-empty`, `store-new`,
+ * `store-length`, `store-read`, `store-write` and `store-grow`, at
+ * `../gpufuck/src/functional/surface_contract.ts:32` — and none of them writes
+ * in place: `store-write` allocates a fresh store and copies the source into it
+ * before applying the update. So a binding proved dead at its last use has no
+ * instruction for that fact to select, and rewriting a rebuild into a mutation
+ * is not something blot can do alone. `docs/roadmap.md` states what the target
+ * would have to offer. Printing the facts keeps the analysis testable on its
+ * own rather than deferred until something can act on it.
+ *
+ * They are printed per contributing module, because the backend inlines an
+ * imported module into its importer and a dependency's spans index the
+ * dependency's source.
  */
 async function ownership(path: string): Promise<void> {
   const checked = await checkFile(path);
-  const source = await Deno.readTextFile(path);
-  console.log(`${path}:`);
-  if (checked.ownership.linear.length > 0) {
-    console.log(
-      `  linear, consumed exactly once: ${checked.ownership.linear.join(", ")}`,
-    );
+  // A fact carries the path the loader resolved, so the argument has to be
+  // resolved the same way before the two can be compared.
+  const entry = resolve(path);
+  const byPath = new Map<string, [NamePattern, OwnedBinding][]>();
+  for (const fact of checked.ownership) {
+    const existing = byPath.get(fact[1].path);
+    if (existing === undefined) byPath.set(fact[1].path, [fact]);
+    else existing.push(fact);
   }
-  const uses = [...checked.ownership.lastUses]
-    .sort((left, right) => left[1].start - right[1].start);
-  for (const [name, span] of uses) {
-    const { line, column } = locate(source, span.start);
-    console.log(`  last use of \`${name}\` at ${line}:${column}`);
+  // The file asked about comes first; the rest are what it pulled in.
+  const paths = [...byPath.keys()].sort((left, right) => {
+    if (left === entry) return -1;
+    if (right === entry) return 1;
+    return left.localeCompare(right);
+  });
+  for (const contributor of paths) {
+    const facts = byPath.get(contributor);
+    if (facts === undefined) throw new Error("a grouped path lost its facts");
+    const source = await Deno.readTextFile(contributor);
+    console.log(`${contributor}:`);
+    const spent = facts
+      .filter(([, fact]) => fact.spent)
+      .map(([pattern]) => pattern.name);
+    if (spent.length > 0) {
+      console.log(`  linear, consumed exactly once: ${spent.join(", ")}`);
+    }
+    const uses = facts.flatMap(([pattern, fact]) => {
+      if (fact.lastUse === null) return [];
+      return [{ name: pattern.name, at: fact.lastUse }];
+    });
+    uses.sort((left, right) => left.at.start - right.at.start);
+    for (const use of uses) {
+      const { line, column } = locate(source, use.at.start);
+      console.log(`  last use of \`${use.name}\` at ${line}:${column}`);
+    }
   }
 }
 

@@ -16,6 +16,7 @@
 "<-" @operator
 "=" @operator
 "=>" @operator
+"@" @operator
 "[" @punctuation.bracket
 "]" @punctuation.bracket
 "{" @punctuation.bracket

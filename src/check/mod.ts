@@ -18,14 +18,40 @@ import {
   checkModule,
   type GrantSignature,
   type Shape,
+  type TaggedDeclaration,
   type VariantCase,
 } from "./infer.ts";
-import type { Expr, Pattern } from "../syntax/ast.ts";
+import type { Decl, Expr, Pattern, Span } from "../syntax/ast.ts";
 import { freshVar, type SimpleType } from "./type.ts";
 import { show, showModuleRow as showRow } from "./print.ts";
 import { isHostEffect } from "./bridge.ts";
 import { TypeError_ } from "./constrain.ts";
-import { checkLinearity, type Ownership } from "../linear/check.ts";
+import {
+  checkLinearity,
+  type NamePattern,
+  type Ownership,
+} from "../linear/check.ts";
+
+/**
+ * What the linearity pass proved about one binding, once it has left its module.
+ *
+ * The path is part of the fact rather than of the result, for the same reason a
+ * diagnostic carries its origin: a dependency's spans index the dependency's
+ * source, and an importer that resolved them against its own file would name
+ * the wrong line. Anything turning one of these into a location has to read the
+ * file the fact came from.
+ */
+export interface OwnedBinding {
+  readonly path: string;
+  /**
+   * Where the binding was last read, or null when nothing read it. Traversal
+   * order, not a deadness proof — see `Ownership.lastUses` for why the
+   * distinction matters to anything that would act on it.
+   */
+  readonly lastUse: Span | null;
+  /** Its linear or affine obligation was proved discharged exactly once. */
+  readonly spent: boolean;
+}
 
 export interface CheckResult {
   readonly type: string;
@@ -34,7 +60,13 @@ export interface CheckResult {
   readonly moduleType: SimpleType;
   /** Inferred module row retained for the emitted ABI manifest. */
   readonly moduleEffects: SimpleType;
-  readonly ownership: Ownership;
+  /**
+   * Ownership facts for every module that contributed code, keyed by the `name`
+   * pattern that bound each binding. The backend inlines an imported module
+   * into its importer, so an importer's facts have to cover the dependency's
+   * bindings too — the same reason `shapes` and `variants` merge.
+   */
+  readonly ownership: ReadonlyMap<NamePattern, OwnedBinding>;
   /** What each `open` brought into scope; see `Checked`. */
   readonly opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
   /** Compile-time declaration values; see `Checked`. */
@@ -44,6 +76,8 @@ export interface CheckResult {
   readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
   readonly patternShapes: ReadonlyMap<Pattern, Shape>;
   readonly grants: ReadonlyMap<Expr, GrantSignature>;
+  /** Resolved declaration tags, keyed by the tagged binding's AST identity. */
+  readonly declarationTags: ReadonlyMap<Decl, TaggedDeclaration>;
   /** Checked dependencies keyed by each literal import site. */
   readonly modules: ReadonlyMap<
     Expr,
@@ -106,6 +140,7 @@ function checkLoaded(
     shapes: ReadonlyMap<Expr, Shape>;
     variants: ReadonlyMap<Expr, readonly VariantCase[]>;
     patternShapes: ReadonlyMap<Pattern, Shape>;
+    declarationTags: ReadonlyMap<Decl, TaggedDeclaration>;
   }[] = [];
   for (const [specifier, dependency] of loaded.dependencies) {
     const dependencyChecked = checkLoaded(dependency, cache);
@@ -183,7 +218,12 @@ function checkLoaded(
       effects: row,
       moduleType: checked.type,
       moduleEffects: checked.effects,
-      ownership: linear.ownership,
+      ownership: mergeAll([
+        ...[...dependencies.values()].map((dependency) =>
+          dependency.result.ownership
+        ),
+        own(loaded.path, linear.ownership),
+      ]),
       opens: mergeAll([
         ...dependencyFacts.map((facts) => facts.opens),
         checked.opens,
@@ -203,6 +243,10 @@ function checkLoaded(
       patternShapes: mergeAll([
         ...dependencyFacts.map((facts) => facts.patternShapes),
         checked.patternShapes,
+      ]),
+      declarationTags: mergeAll([
+        ...dependencyFacts.map((facts) => facts.declarationTags),
+        checked.declarationTags,
       ]),
       grants: checked.grants,
       modules: resolvedModules,
@@ -254,6 +298,29 @@ function rowLabels(type: SimpleType, seen: Set<number>): string[] {
   if (type.tag !== "var" || seen.has(type.id)) return [];
   seen.add(type.id);
   return type.lower.flatMap((bound) => rowLabels(bound, seen));
+}
+
+/**
+ * Stamps one module's ownership facts with the file its spans index.
+ *
+ * A binding appears if the pass said anything about it: a linear one it proved
+ * discharged is worth recording even where the surrounding expression never
+ * read it back, and a plain one that was read is worth recording even though it
+ * owes nothing.
+ */
+function own(
+  path: string,
+  ownership: Ownership,
+): ReadonlyMap<NamePattern, OwnedBinding> {
+  const facts = new Map<NamePattern, OwnedBinding>();
+  for (const [pattern, lastUse] of ownership.lastUses) {
+    facts.set(pattern, { path, lastUse, spent: ownership.linear.has(pattern) });
+  }
+  for (const pattern of ownership.linear) {
+    if (facts.has(pattern)) continue;
+    facts.set(pattern, { path, lastUse: null, spent: true });
+  }
+  return facts;
 }
 
 /** Facts from every module that contributed code; keys are node identities. */

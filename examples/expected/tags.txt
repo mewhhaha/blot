@@ -1,0 +1,1 @@
+{ .ordered = 7; .label = "enriched"; .factorial = 120; }

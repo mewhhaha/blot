@@ -27,7 +27,12 @@ import {
   run,
 } from "../comptime/eval.ts";
 import { bridge, effectLabel } from "./bridge.ts";
-import { showLiterals, uncovered, unlistable } from "./coverage.ts";
+import {
+  showLiterals,
+  uncovered,
+  uncoveredTuple,
+  unlistable,
+} from "./coverage.ts";
 import {
   complement,
   type Junction,
@@ -329,6 +334,7 @@ interface Context {
   /** Checked types of imported modules, keyed by the specifier as written. */
   readonly modules: ReadonlyMap<string, SimpleType>;
   readonly opens: Map<Expr, ReadonlyMap<string, Value>>;
+  readonly declarationTags: Map<Decl, TaggedDeclaration>;
 }
 
 function located<T>(span: Span, work: () => T): T {
@@ -740,6 +746,17 @@ function inferSpecial(
     reportImpossibleRead(expr, head.args[0], head.args[1], context.types);
   }
 
+  if (SHAPE_PROJECTIONS.get(callee.name) === head.args.length) {
+    return inferShapeProjection(
+      expr,
+      callee.name,
+      head.args,
+      context,
+      level,
+      row,
+    );
+  }
+
   if (callee.name === "@handle" && head.args.length === 1) {
     const parts = head.args[0];
     if (parts.tag !== "tuple" || parts.elements.length !== 3) {
@@ -878,6 +895,101 @@ function inferSpecial(
     return valueType;
   }
 
+  return null;
+}
+
+/** The shape primitives whose result no fixed scheme can describe. */
+const SHAPE_PROJECTIONS: ReadonlyMap<string, number> = new Map([
+  ["@shape.get", 2],
+  ["@shape.set", 3],
+  ["@shape.remove", 2],
+]);
+
+/**
+ * `@shape.get`, `@shape.set` and `@shape.remove`, typed at their call site.
+ *
+ * These name their field with a value rather than with a literal, so the scheme
+ * in `primitives.ts` cannot say what they produce and used to answer with an
+ * unconstrained variable. That is not "the checker knows nothing" — every
+ * constraint on a variable holds, so it is the most permissive claim the lattice
+ * has, and `sig z = 0; let z = @shape.get r "a";` was believed for an `r` whose
+ * `.a` is `7`.
+ *
+ * The name is what decides, and it is a compile-time value. Two rules read it,
+ * in the order a call gets more specific:
+ *
+ *   * when the whole projection runs at compile time, what it produced is the
+ *     type — the rule a member call already lives by, and sound for the same
+ *     reason: the evaluator answering here is the one that will run the program;
+ *   * otherwise, when the name alone is known, the call *is* an ordinary field
+ *     projection and is typed as one, so the result is that field's type and a
+ *     `sig` on it lands on the shape.
+ *
+ * What is left is a name that is genuinely a runtime value — `@shape.get value
+ * name` inside a `fold` over `@shape.names`, which is what generic shape
+ * programming looks like. There the result is one of the shape's fields and
+ * nothing here knows which, and the shape's field *set* is not known either
+ * because records are width-subtyped: a value typed `{ .a = Int; }` may carry a
+ * `.b` this call is reading. Neither the union of the known fields nor `⊤` is
+ * true of that, so the variable stays — and with it the one door this rule does
+ * not close.
+ */
+function inferShapeProjection(
+  expr: Expr & { tag: "apply" },
+  callee: string,
+  args: readonly Expr[],
+  context: Context,
+  level: Level,
+  row: SimpleType,
+): SimpleType {
+  // The arguments are checked whether or not the projection can be decided.
+  // They are ordinary expressions, and the field sets the backend reads are
+  // recorded while inferring them.
+  const argTypes = args.map((argument) => infer(argument, context, level, row));
+
+  const value = comptime(expr, context, foldedEnv(context));
+  if (value !== null) {
+    const bridged = bridge(value);
+    if (bridged !== null) return bridged;
+  }
+
+  const name = comptime(args[1], context, foldedEnv(context));
+  if (name !== null && name.tag === "text") {
+    if (callee === "@shape.get") {
+      const result = freshVar(level);
+      located(expr.span, () => {
+        constrain(argTypes[0], record([[name.value, result]]));
+      });
+      return result;
+    }
+    // `@shape.set` and `@shape.remove` answer with a whole shape rather than
+    // with one field, so they need the fields the target has. A demand cannot
+    // supply those — asking for one field says nothing about the rest — so this
+    // rule speaks only when a record reached the argument.
+    const fields = recordFields(argTypes[0], new Set());
+    if (fields !== null) {
+      const rebuilt = new Map(fields);
+      if (callee === "@shape.remove") rebuilt.delete(name.value);
+      else rebuilt.set(name.value, argTypes[2]);
+      return record(rebuilt);
+    }
+  }
+
+  return freshVar(level);
+}
+
+/** The record that reached a type, following what flowed into a variable. */
+function recordFields(
+  type: SimpleType,
+  seen: Set<number>,
+): ReadonlyMap<string, SimpleType> | null {
+  if (type.tag === "record") return type.fields;
+  if (type.tag !== "var" || seen.has(type.id)) return null;
+  seen.add(type.id);
+  for (const bound of type.lower) {
+    const found = recordFields(bound, seen);
+    if (found !== null) return found;
+  }
   return null;
 }
 
@@ -1387,11 +1499,30 @@ function inferCase(
     located(arm.body.span, () => constrain(body, result));
   }
 
+  // Tuple arms are a pattern matrix, and one is exhaustive when the rows cover
+  // the cross-product of the columns rather than any one column. Checked before
+  // the constraint below, because that constraint is what closes an undeclared
+  // column and a column closed by the arms is trivially covered by them.
+  if (!open) {
+    const patterns = accepted.map((arm) => arm.pattern);
+    if (patterns.length > 0 && patterns.every((p) => p.tag === "tuple")) {
+      const gap = uncoveredTuple(target, patterns);
+      if (gap !== null) {
+        fail(
+          "BLOT_INCOMPLETE_CASE",
+          `No arm covers \`${gap}\`.`,
+          expr.target.span,
+        );
+      }
+    }
+  }
+
   // The scrutinee must be covered by the arms taken together. A variant with a
   // case no arm mentions is caught here rather than at runtime. When an arm is
   // irrefutable the requirement is open instead of absent — dropping it is what
   // left `case c of #Some v => v, _ => 0 end` with `v` unrelated to `c`.
-  const covered = mergeAccepted(accepted, open);
+  let covered = mergeAccepted(accepted, open);
+  if (covered === null && !open) covered = mergeColumns(accepted);
   if (covered !== null) {
     located(expr.target.span, () => constrain(target, covered));
   }
@@ -1675,6 +1806,50 @@ function mergeAccepted(
   return variant(cases);
 }
 
+/**
+ * Tuple arms, merged one column at a time.
+ *
+ * `mergeAccepted` gives up on a tuple because a tuple is not a union, but each
+ * *column* of one is exactly what it already knows how to merge. Column by
+ * column rather than row by row loses the correlation between columns, and that
+ * is the right thing to lose here: what the scrutinee owes is only that each of
+ * its columns is one of the ones some arm names, and which combinations of them
+ * an arm actually reaches is what `uncoveredTuple` decides.
+ *
+ * A column some arm matches irrefutably says nothing, so it is left out — and a
+ * merge that leaves out every column says nothing at all.
+ */
+function mergeColumns(accepted: readonly AcceptedArm[]): SimpleType | null {
+  if (accepted.length === 0) return null;
+  const first = accepted[0].pattern;
+  if (first.tag !== "tuple") return null;
+  const arity = first.elements.length;
+
+  const columns: [string, SimpleType][] = [];
+  for (let index = 0; index < arity; index += 1) {
+    const column: AcceptedArm[] = [];
+    for (const arm of accepted) {
+      if (arm.pattern.tag !== "tuple") return null;
+      if (arm.pattern.elements.length !== arity) return null;
+      if (arm.accepted.tag !== "record") return null;
+      const pattern = arm.pattern.elements[index];
+      const at = arm.accepted.fields.get(String(index));
+      if (at === undefined) return null;
+      if (irrefutable(pattern)) {
+        column.length = 0;
+        break;
+      }
+      column.push({ pattern, accepted: at });
+    }
+    if (column.length === 0) continue;
+    const merged = mergeAccepted(column, false);
+    if (merged === null) continue;
+    columns.push([String(index), merged]);
+  }
+  if (columns.length === 0) return null;
+  return record(columns);
+}
+
 /** Does this pattern match every value of the type it is written against? */
 function totalPattern(pattern: Pattern): boolean {
   switch (pattern.tag) {
@@ -1901,6 +2076,8 @@ function inferDeclarations(
       continue;
     }
 
+    const resolvedTags = resolveDeclarationTags(declaration, context);
+
     if (declaration.kind === "sig") {
       if (declaration.pattern.tag !== "name") {
         fail("BLOT_BAD_SIG", "`sig` names a single binding.", declaration.span);
@@ -2010,6 +2187,12 @@ function inferDeclarations(
     }
 
     bindDeclaration(declaration.pattern, type, context, level);
+    if (resolvedTags.length > 0) {
+      context.declarationTags.set(declaration, {
+        tags: resolvedTags,
+        type: instantiate(type, level, context.instances),
+      });
+    }
     if (bound !== null && declaration.pattern.tag === "name") {
       recordComptimeBinding(context.types, declaration.pattern.name, bound);
     }
@@ -2052,6 +2235,63 @@ function inferDeclarations(
       pendingSig.span,
     );
   }
+}
+
+function resolveDeclarationTags(
+  declaration: Decl & { tag: "binding" },
+  context: Context,
+): readonly ResolvedDeclarationTag[] {
+  return declaration.tags.map((tag) => {
+    const descriptor = requireComptime(
+      tag.descriptor,
+      context,
+      "A declaration tag descriptor",
+    );
+    if (descriptor.tag !== "shape") {
+      fail(
+        "BLOT_BAD_DECLARATION_TAG",
+        `A declaration tag descriptor must be a shape, found ${
+          show(descriptor)
+        }.`,
+        tag.span,
+      );
+    }
+    const name = descriptor.fields.get("name");
+    if (name === undefined || name.tag !== "text" || name.value.length === 0) {
+      fail(
+        "BLOT_BAD_DECLARATION_TAG",
+        `A declaration tag descriptor needs a non-empty text member \`.name\`, found ${
+          show(descriptor)
+        }.`,
+        tag.span,
+      );
+    }
+    const metadata = descriptor.fields.get("metadata");
+    if (metadata === undefined) {
+      fail(
+        "BLOT_BAD_DECLARATION_TAG",
+        `Declaration tag \`${name.value}\` has no \`.metadata\` member.`,
+        tag.span,
+      );
+    }
+    const transform = descriptor.fields.get("transform");
+    if (transform === undefined || !callable(transform)) {
+      let found = "nothing";
+      if (transform !== undefined) found = show(transform);
+      fail(
+        "BLOT_BAD_DECLARATION_TAG",
+        `Declaration tag \`${name.value}\` needs a callable \`.transform\`, found ${found}.`,
+        tag.span,
+      );
+    }
+    return { name: name.value, metadata, span: tag.span };
+  });
+}
+
+function callable(value: Value): boolean {
+  return value.tag === "closure" || value.tag === "primitive" ||
+    value.tag === "native" || value.tag === "tag" ||
+    value.tag === "operation" || value.tag === "continuation";
 }
 
 /** Widens singleton literals so rebinding preserves their domain. */
@@ -2320,6 +2560,19 @@ export interface Checked {
    * what knows its signature.
    */
   readonly grants: ReadonlyMap<Expr, GrantSignature>;
+  /** Resolved compile-time tag metadata and each transformed binding's type. */
+  readonly declarationTags: ReadonlyMap<Decl, TaggedDeclaration>;
+}
+
+export interface ResolvedDeclarationTag {
+  readonly name: string;
+  readonly metadata: Value;
+  readonly span: Span;
+}
+
+export interface TaggedDeclaration {
+  readonly tags: readonly ResolvedDeclarationTag[];
+  readonly type: SimpleType;
 }
 
 /** A granted capability's shape, as the boundary needs it. */
@@ -2356,6 +2609,7 @@ export function checkModule(
   const opens = new Map<Expr, ReadonlyMap<string, Value>>();
   const comptimeValues = new Map<Expr, Value>();
   const memberValues = new Map<Expr, Value>();
+  const declarationTags = new Map<Decl, TaggedDeclaration>();
   const pending: (() => void)[] = [];
   // Bounded by this call: the map dies with the check that built it, so the
   // process-global primitive schemes accumulate nothing across files.
@@ -2377,6 +2631,7 @@ export function checkModule(
     values,
     imports,
     modules,
+    declarationTags,
   };
   const level = 0;
   const row = freshVar(level);
@@ -2402,6 +2657,7 @@ export function checkModule(
     variants,
     patternShapes,
     grants,
+    declarationTags,
   };
 }
 
