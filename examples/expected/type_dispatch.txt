@@ -1,1 +1,1 @@
-{ .text_length = 5; .int_itself = 41; .added = 42; }
+{ .text_length = 5; .int_itself = 41; .added = 42; .counted = 4; .ignored = 0; }

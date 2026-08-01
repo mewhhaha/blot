@@ -50,8 +50,28 @@ end;
 
 const add = adding Int;
 
+// A recursive function is still a function. Its body names the binding being
+// defined, which is not a capture and cannot come from the environment — so it
+// is bound to a placeholder and the body constrained against it, the knot a
+// recursive group ties around several names at once. A `const` that *is* a
+// group is still typed with its group; this is for one that arrived as a value,
+// selected here by a compile-time conditional.
+const counting = fn T => do
+  const down = rec (fn n => if n <= 0 then 0 else 1 + down (n - 1) end);
+  in if refines (T, Int) then down else fn _ => 0 end
+end;
+
+const count = counting Int;
+
+// The branch that loses captures `down` too, as an ordinary sibling binding. A
+// captured function has no type to bridge to either, so it is typed the same
+// way — otherwise one helper in scope would sink the whole attempt.
+const ignoring = counting Str;
+
 return {
   .text_length = text_length;
   .int_itself = int_itself;
   .added = add (20, 22);
+  .counted = count 4;
+  .ignored = ignoring 4;
 };

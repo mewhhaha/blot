@@ -266,8 +266,15 @@ const measure_text = measuring Str;   // Str -> Int, not joined with the other a
 ```
 
 This applies to a `const` whose value is a function written in the same module.
-A function that arrived from an import is typed from the import, and a `rec`
-binding is typed with the group it belongs to.
+A function that arrived from an import is typed from the import.
+
+A recursive function is typed the same way. Its body names the binding being
+defined, which is not a capture: the name is bound to a placeholder and the body
+constrained against it. A `const` that *is* a recursive group is still typed with
+its group, whose names enter scope together; what this covers is a recursive
+function that arrived as a value, selected by a compile-time conditional or
+returned from a compile-time function. Functions captured alongside it are typed
+the same way, so a local helper in scope does not prevent it.
 
 A `const` may not capture a `let`. Specializing a compile-time closure emits it
 as a definition of its own, and a definition has no enclosing frame to read a

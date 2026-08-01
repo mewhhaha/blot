@@ -2557,7 +2557,6 @@ function inferDeclarations(
         bound = value;
         const bridged = bridge(value);
         if (bridged !== null) type = bridged;
-        else type = typeClosure(value, context, level);
       }
     }
 
@@ -2571,6 +2570,15 @@ function inferDeclarations(
       const member = groupTypes.get(declaration);
       expect(member !== undefined, "recursive group missed one of its members");
       type = member;
+    }
+    // After the group, because a declaration that *is* a recursive group is
+    // typed with the rest of it: its names enter scope together, and a knot tied
+    // around one of them cannot say what a mutual pair means. What reaches here
+    // is a closure that arrived as a value — selected by a compile-time
+    // conditional, returned from a compile-time function — where there is no
+    // group to belong to.
+    if (type === null && bound !== null) {
+      type = typeClosure(bound, context, level);
     }
     if (type === null) {
       if (signature !== null && declaration.value.tag === "lambda") {
@@ -2914,23 +2922,27 @@ function typeClosure(
   value: Value,
   context: Context,
   level: Level,
+  seen: ReadonlySet<Value> = new Set(),
 ): Typing | null {
   if (value.tag !== "closure" || value.source === undefined) return null;
-  // A `rec` closure's body names the binding being defined, which no scope
-  // built from what it captured can hold — the name is not a capture, it is the
-  // declaration in progress. `inferRecursiveGroup` already types those, and it
-  // types them together, which is the part that matters.
-  if (value.self !== null) return null;
-  const scope = capturedScope(value.env, context);
+  const scope = capturedScope(value.env, context, level, value, seen);
   if (scope === null) return null;
+  const inner: Context = { ...context, types: scope };
   // A lambda performs nothing when it is evaluated, so its own row is internal
   // to the arrow and a fresh one keeps the binding site's row out of it.
-  return generalize(
-    value.source,
-    { ...context, types: scope },
-    level,
-    freshVar(level + 1),
-  );
+  const row = freshVar(level + 1);
+  if (value.self === null) return generalize(value.source, inner, level, row);
+  // A `rec` closure is an ordinary function whose body names itself. The name
+  // is not a capture — it is the declaration in progress — so it cannot come
+  // from the environment and is bound to a placeholder the body is then
+  // constrained against, the knot `inferRecursiveGroup` ties for a group of
+  // them.
+  const placeholder = freshVar(level + 1);
+  scope.names.set(value.self, placeholder);
+  recordBinding(scope, value.self);
+  const inferred = infer(value.source, inner, level + 1, row);
+  located(value.source.span, () => constrain(inferred, placeholder));
+  return scheme(inferred, level);
 }
 
 /**
@@ -2949,7 +2961,13 @@ function typeClosure(
  * here, before inferring, is what keeps a genuine type error in the selected
  * lambda from being swallowed as "could not specialize".
  */
-function capturedScope(env: ValueEnv, context: Context): TypeEnv | null {
+function capturedScope(
+  env: ValueEnv,
+  context: Context,
+  level: Level,
+  self: Value,
+  seen: ReadonlySet<Value>,
+): TypeEnv | null {
   const alreadyTyped = new Set<ValueEnv>();
   for (
     let scope: ValueEnv | null = context.values;
@@ -2980,9 +2998,31 @@ function capturedScope(env: ValueEnv, context: Context): TypeEnv | null {
   // Outermost first, so a name bound twice ends up meaning the inner one.
   for (const scope of inner.reverse()) {
     for (const [name, captured] of scope.names) {
+      // A recursive closure is in the environment it captured, under the name
+      // its body calls. That is not a capture to bridge — it is the binding
+      // being typed, and `typeClosure` binds it to a placeholder — so skipping
+      // it here is what keeps `rec` from bailing on itself.
+      if (captured === self) continue;
       const bridged = bridge(captured);
-      if (bridged === null) return null;
-      built.names.set(name, bridged);
+      if (bridged !== null) {
+        built.names.set(name, bridged);
+        recordBinding(built, name);
+        continue;
+      }
+      // A captured function has no type to bridge to, so it is typed the same
+      // way this one is. A helper bound beside the closure is the ordinary case;
+      // without this, one local function in scope would sink the whole attempt.
+      // `seen` stops a cycle of closures that capture each other, which no
+      // single knot can tie.
+      if (seen.has(captured)) return null;
+      const captive = typeClosure(
+        captured,
+        context,
+        level,
+        new Set([...seen, captured]),
+      );
+      if (captive === null) return null;
+      built.names.set(name, captive);
       recordBinding(built, name);
     }
   }
