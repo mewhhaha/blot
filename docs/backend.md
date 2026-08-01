@@ -151,11 +151,15 @@ record crosses the boundary as a constructor, and the field names the backend
 synthesized are what turn it back into something comparable. Comparing only
 scalars would quietly stop checking every program that returns a record.
 
-Arrays are Core's `Store`. A write returns a _new_ store, so an array literal
-threads each element through its own binding — the first version rewrote the
-binder in the finished body instead, which quietly dropped every write but the
-last. Both backends agreed on the wrong answer; only the interpreter disagreed,
-which is the entire argument for checking three executions rather than two.
+Arrays are Core's `Store`. A write produces a logically new store, so an array
+literal threads each element through its own binding — the first version rewrote
+the binder in the finished body instead, which quietly dropped every write but
+the last. When ownership proves a linear array is consumed by its final
+`@array.set` or `@array.push`, the emitted Store update carries an ownership
+witness and gpufuck may reuse the source allocation. Updates without that
+witness copy, preserving immutable source semantics for shared arrays. The
+interpreter cannot expose this representation choice; three-execution parity
+keeps its observable result identical.
 
 ## Remaining backend boundaries
 

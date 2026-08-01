@@ -58,7 +58,9 @@ Linearity and ownership (M3) landed too: `!` is checked exactly-once on every
 path, `?` at most once — which is what makes `resume` one-shot statically rather
 than by runtime check — `&` may be read but never moved, and a closure inherits
 the strongest obligation it captured. `blot ownership` prints the last-use facts
-the backend will consume. See [docs/ownership.md](docs/ownership.md).
+the backend consumes. A final `@array.set` or `@array.push` on a proved linear
+array reuses its Store allocation; ordinary shared arrays remain persistent. See
+[docs/ownership.md](docs/ownership.md).
 
 The gpufuck backend (M4) now lowers every accepted catalog program. `blot build`
 emits stable Core WebAssembly plus a JSON ABI manifest without executing the

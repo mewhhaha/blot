@@ -1,0 +1,32 @@
+// A parent-indexed layout table: each node reads its parent's resolved frame,
+// then appends its own. `frames` is linear, so every append hands the backing
+// Store to the next recursive step instead of rebuilding the whole prefix.
+
+open {} = (@import "blot:prelude") ();
+
+let nodes = [
+  { .parent = -1; .offset = 10; .width = 100; },
+  { .parent = 0; .offset = 20; .width = 40; },
+  { .parent = 1; .offset = 5; .width = 10; }
+];
+
+let layout = rec (fn (index, !frames) => do
+  return if index == @array.len nodes
+    then frames
+    else do
+      let node = @array.get nodes index;
+      let parent_x = if node.parent < 0
+        then 0
+        else (@array.get (&frames) node.parent).x
+      end;
+      let frame = {
+        .x = parent_x + node.offset;
+        .width = node.width;
+      };
+      in layout (index + 1, @array.push frames frame)
+    end
+  end;
+end);
+
+let frames = layout (0, []);
+return (@array.get frames 2).x + (@array.get frames 2).width;

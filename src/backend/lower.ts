@@ -56,6 +56,8 @@ import {
   type Shape,
   type VariantCase,
 } from "../check/infer.ts";
+import type { OwnedBinding } from "../check/mod.ts";
+import type { NamePattern } from "../linear/check.ts";
 import {
   type Domain,
   F32X4,
@@ -78,6 +80,8 @@ import {
  * type checker.
  */
 export interface Facts {
+  /** Binding-level ownership proofs produced after inference. */
+  readonly ownership: ReadonlyMap<NamePattern, OwnedBinding>;
   /** What each `open` brought into scope, so an inlined module keeps its own. */
   readonly opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
   /** Compile-time declaration values that remain inside residual blocks. */
@@ -416,6 +420,8 @@ class Lowering {
 
 interface Scope {
   readonly names: Map<string, string>;
+  /** Source binding identities behind names in this lexical scope. */
+  readonly patterns: Map<string, NamePattern>;
   /** Source-unspellable control constructors lowered as typed forward jumps. */
   readonly exits: Map<string, string>;
   /**
@@ -462,6 +468,7 @@ function childScope(parent: Scope | null, values?: ValueEnv): Scope {
     : childEnv(values);
   return {
     names: new Map(),
+    patterns: new Map(),
     exits: new Map(),
     literals: new Map(),
     parent,
@@ -505,6 +512,28 @@ function resolve(scope: Scope, name: string): string | null {
       return found;
     }
     if (current.capture !== undefined) crossed.push(current.capture);
+    current = current.parent;
+  }
+  return null;
+}
+
+function bindName(
+  pattern: NamePattern,
+  name: string,
+  scope: Scope,
+): void {
+  scope.names.set(pattern.name, name);
+  scope.patterns.set(pattern.name, pattern);
+}
+
+function resolvePattern(scope: Scope, name: string): NamePattern | null {
+  let current: Scope | null = scope;
+  while (current !== null) {
+    if (current.names.has(name)) {
+      const pattern = current.patterns.get(name);
+      if (pattern === undefined) return null;
+      return pattern;
+    }
     current = current.parent;
   }
   return null;
@@ -1516,7 +1545,9 @@ function lowerBlock(
       if (compileTimeOnly(known)) continue;
       const value = lower(declaration.value, inner, lowering);
       const name = lowering.fresh(declaration.name);
+      const pattern = resolvePattern(inner, declaration.name);
       inner.names.set(declaration.name, name);
+      if (pattern !== null) inner.patterns.set(declaration.name, pattern);
       wrappers.push((body) => surface.let(name, value, body));
       continue;
     }
@@ -1556,7 +1587,7 @@ function lowerBlock(
     ) {
       wrappers.push(
         recursiveBinding(
-          declaration.pattern.name,
+          declaration.pattern,
           declaration.value.lambda,
           inner,
           lowering,
@@ -1577,7 +1608,7 @@ function lowerBlock(
     // one rather than a local holding a function.
     const definition = lowering.lifted.get(declaration.value);
     if (definition !== undefined && declaration.pattern.tag === "name") {
-      inner.names.set(declaration.pattern.name, definition);
+      bindName(declaration.pattern, definition, inner);
       continue;
     }
     wrappers.push(bind(declaration.pattern, value, inner, lowering));
@@ -1608,7 +1639,7 @@ function bind(
 
   if (pattern.tag === "name") {
     const name = lowering.fresh(pattern.name);
-    scope.names.set(pattern.name, name);
+    bindName(pattern, name, scope);
     return (body) => surface.let(name, value, body);
   }
 
@@ -1671,7 +1702,7 @@ function bind(
       if (part.element.tag === "wildcard") return lowering.fresh("_");
       const bound = lowering.fresh("part");
       if (part.element.tag === "name") {
-        scope.names.set(part.element.name, bound);
+        bindName(part.element, bound, scope);
       } else {
         nested.push(
           bind(part.element, at.name(bound), scope, lowering),
@@ -1782,13 +1813,13 @@ function destructuredFields(
  * literal.
  */
 function recursiveBinding(
-  name: string,
+  pattern: NamePattern,
   lambda: Expr & { tag: "lambda" },
   scope: Scope,
   lowering: Lowering,
 ): (body: SurfaceExpression) => SurfaceExpression {
-  const binding = lowering.fresh(name);
-  scope.names.set(name, binding);
+  const binding = lowering.fresh(pattern.name);
+  bindName(pattern, binding, scope);
   const inner = childScope(scope);
   const parameter = lowering.fresh("arg");
   const wrap = bindParameter(
@@ -2380,7 +2411,7 @@ function lowerCase(
         const binder = lowering.fresh("payload");
         binders.push(binder);
         if (payload.tag === "name") {
-          inner.names.set(payload.name, binder);
+          bindName(payload, binder, inner);
         } else if (payload.tag !== "wildcard") {
           wrap = bind(payload, at.name(binder), inner, lowering);
         }
@@ -2422,7 +2453,7 @@ function lowerCase(
     if (arm.pattern.tag === "wildcard" || arm.pattern.tag === "name") {
       if (arm.pattern.tag === "name") {
         const binder = lowering.fresh(arm.pattern.name);
-        inner.names.set(arm.pattern.name, binder);
+        bindName(arm.pattern, binder, inner);
         // The default binds the scrutinee, which Core spells with its own
         // binder rather than reusing the arm's.
         fallback = surface.let(
@@ -2610,7 +2641,7 @@ function lowerTupleCase(
     const inner = childScope(scope);
     if (arm.pattern.tag === "wildcard" || arm.pattern.tag === "name") {
       if (arm.pattern.tag === "name") {
-        inner.names.set(arm.pattern.name, subject);
+        bindName(arm.pattern, subject, inner);
       }
       // An arm that cannot fail ends the matrix. Every arm after it is
       // unreachable, and emitting one would put a test in front of the arm
@@ -2693,7 +2724,7 @@ function matchElement(
 
   if (pattern.tag === "name") {
     const name = lowering.fresh(pattern.name);
-    scope.names.set(pattern.name, name);
+    bindName(pattern, name, scope);
     return (body) => surface.let(name, value, body);
   }
 
@@ -2811,7 +2842,7 @@ function lowerLiteralCase(
     }
     if (arm.pattern.tag === "wildcard" || arm.pattern.tag === "name") {
       if (arm.pattern.tag === "name") {
-        inner.names.set(arm.pattern.name, scrutinee);
+        bindName(arm.pattern, scrutinee, inner);
       }
       fallback = fallback ?? lower(arm.body, inner, lowering);
       continue;
@@ -3325,6 +3356,25 @@ function etaExpandedPrimitive(
   );
   if (!passthrough) return null;
   return { primitive: spine.callee.name, args: passed };
+}
+
+function storeUpdateOptions(
+  source: Expr,
+  scope: Scope,
+  lowering: Lowering,
+): { readonly owned: boolean } | undefined {
+  if (source.tag !== "var") return undefined;
+  const pattern = resolvePattern(scope, source.name);
+  if (pattern === null || pattern.qualifier !== "linear") {
+    return undefined;
+  }
+  const ownership = lowering.facts.ownership.get(pattern);
+  if (!ownership?.spent || ownership.lastUse === null) return undefined;
+  if (
+    ownership.lastUse.start !== source.span.start ||
+    ownership.lastUse.end !== source.span.end
+  ) return undefined;
+  return { owned: true };
 }
 
 function lowerApply(
@@ -3848,11 +3898,13 @@ function lowerApply(
           lower(spine.args[1], scope, lowering),
         ),
         lower(spine.args[2], scope, lowering),
+        storeUpdateOptions(spine.args[0], scope, lowering),
       );
     }
     // Growing by one and filling the new slot with the value is an append.
     if (spine.callee.name === "@array.push" && spine.args.length === 2) {
       const store = lowering.fresh("store");
+      const options = storeUpdateOptions(spine.args[0], scope, lowering);
       return surface.let(
         store,
         lower(spine.args[0], scope, lowering),
@@ -3864,6 +3916,7 @@ function lowerApply(
             at.integer(1),
           ),
           lower(spine.args[1], scope, lowering),
+          options,
         ),
       );
     }

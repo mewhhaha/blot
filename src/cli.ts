@@ -176,16 +176,10 @@ async function evaluateFile(path: string): Promise<void> {
 /**
  * The ownership facts the backend will consume.
  *
- * Nothing applies them yet, and the obstacle is not blot's. gpufuck's
- * Functional Surface has exactly six store forms — `store-empty`, `store-new`,
- * `store-length`, `store-read`, `store-write` and `store-grow`, at
- * `../gpufuck/src/functional/surface_contract.ts:32` — and none of them writes
- * in place: `store-write` allocates a fresh store and copies the source into it
- * before applying the update. So a binding proved dead at its last use has no
- * instruction for that fact to select, and rewriting a rebuild into a mutation
- * is not something blot can do alone. `docs/roadmap.md` states what the target
- * would have to offer. Printing the facts keeps the analysis testable on its
- * own rather than deferred until something can act on it.
+ * A proved linear consumption at `@array.set` or `@array.push` becomes an owned
+ * gpufuck Store update. Traversal-order last uses are still printed but do not
+ * license reuse by themselves, because branch traversal order is not a
+ * per-path deadness proof.
  *
  * They are printed per contributing module, because the backend inlines an
  * imported module into its importer and a dependency's spans index the
