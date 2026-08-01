@@ -19,23 +19,23 @@
 
 import {
   BinaryOperator,
+  defineEffectOperation,
+  effectSet,
   f32x4,
   F32X4_TYPE_NAME,
   FIXED_VECTOR_DEFINITIONS,
   FIXED_VECTOR_TYPE_DECLARATIONS,
-  defineEffectOperation,
-  effectSet,
   type HostCapabilityDeclaration,
   type HostDefinitionBinding,
   HostTypes,
   NumericConversion,
-  UnaryOperator,
   storeType,
   surface,
   type SurfaceDefinition,
   type SurfaceExpression,
   type SurfaceTypeDeclaration,
   type TypeSchema,
+  UnaryOperator,
   UNIT_CONSTRUCTOR_NAME,
   WasmIntrinsic,
 } from "gpufuck";
@@ -55,10 +55,11 @@ import {
   type Shape,
   type VariantCase,
 } from "../check/infer.ts";
-import type { Domain, SimpleType } from "../check/type.ts";
+import { type Domain, F32X4, type SimpleType } from "../check/type.ts";
 import {
   childEnv,
   type Env as ValueEnv,
+  F32X4_NAME,
   lookup as lookupValue,
   type Value,
 } from "../comptime/value.ts";
@@ -454,7 +455,8 @@ function compileTimeOnly(value: Value | undefined): boolean {
   // the time anything reaches here, so the binding itself never runs.
   return value.tag === "effect" || value.tag === "range" ||
     value.tag === "union" || value.tag === "arrow" ||
-    value.tag === "unbounded" || value.tag === "extended";
+    value.tag === "unbounded" || value.tag === "extended" ||
+    value.tag === "opaque-type";
 }
 
 function resolveLiteral(scope: Scope, name: string): Expr | null {
@@ -504,14 +506,29 @@ const VECTOR_SCHEMA: TypeSchema = {
 };
 
 /**
+ * What an opaque type says at the module boundary.
+ *
+ * `F32x4` is the only opaque the backend knows a layout for, and saying it here
+ * is what lets `compile.ts` refuse a vector export as a fact about the boundary
+ * rather than as a lowering it could not perform. Every other opaque is a name
+ * the checker was handed and nothing more — a host capability, a seal the
+ * caller cannot see through — so there is no layout to publish and `null` says
+ * so rather than a schema that guesses.
+ */
+function opaqueSchema(name: string): TypeSchema | null {
+  if (name === F32X4_NAME) return VECTOR_SCHEMA;
+  return null;
+}
+
+/**
  * What a range says at the module boundary.
  *
  * One function rather than the four copies this used to be. Each copy ended in
- * `return HostTypes.text`, so every domain added since — `float32`, then
- * `f32x4` — silently became `Text` in whichever copies were missed, and the
- * diagnostic arrived as a type mismatch inside gpufuck rather than as a fact
- * about the program. A `switch` the compiler checks for exhaustiveness cannot
- * miss the next one.
+ * `return HostTypes.text`, so every domain added since — `float32`, and the
+ * vector that was briefly a domain of its own — silently became `Text` in
+ * whichever copies were missed, and the diagnostic arrived as a type mismatch
+ * inside gpufuck rather than as a fact about the program. A `switch` the
+ * compiler checks for exhaustiveness cannot miss the next one.
  */
 function rangeSchema(domain: Domain): TypeSchema {
   switch (domain) {
@@ -521,8 +538,6 @@ function rangeSchema(domain: Domain): TypeSchema {
       return { kind: "float-64" };
     case "float32":
       return { kind: "float-32" };
-    case "f32x4":
-      return VECTOR_SCHEMA;
     case "text":
       return HostTypes.text;
   }
@@ -771,6 +786,15 @@ function exportSchema(
       return { kind: "unit" };
     case "range":
       return rangeSchema(type.domain);
+    case "opaque": {
+      // Before `F32x4` was opaque this fell to `unsupportedExport`, which was
+      // right for every opaque there was. It is not right for a type the
+      // backend has a layout for: the boundary is what refuses a vector, and it
+      // can only do that if it is shown one.
+      const opaque = opaqueSchema(type.name);
+      if (opaque === null) return unsupportedExport(name, span);
+      return opaque;
+    }
     case "fun":
       return {
         kind: "function",
@@ -923,7 +947,12 @@ function bridgeRuntimeValue(value: Value): SimpleType | null {
     case "float32":
       return { tag: "range", domain: "float32", low: null, high: null };
     case "vector":
-      return { tag: "range", domain: "f32x4", low: null, high: null };
+      return F32X4;
+    // Deliberately absent: `opaque-type`. This maps a runtime value to its
+    // type, and a type value has none to give — saying `F32x4` here would
+    // claim the type of the type `F32x4` is `F32x4`. Every other type-shaped
+    // value falls through to `null`, which becomes
+    // BLOT_EXPORT_NOT_FIRST_ORDER, and this one belongs with them.
     case "text":
       return {
         tag: "range",
@@ -1133,6 +1162,10 @@ function schemaOf(
   if (type.tag === "unit") return { kind: "unit" };
   if (type.tag === "range") {
     return rangeSchema(type.domain);
+  }
+  if (type.tag === "opaque") {
+    const opaque = opaqueSchema(type.name);
+    if (opaque !== null) return opaque;
   }
   if (type.tag === "variant") {
     const names = [...type.cases.keys()].sort();
@@ -2648,6 +2681,7 @@ function lowerValue(
     // representation at all. Saying "not lowered yet" would suggest it is
     // coming; it is not, because there is nothing to lower it to.
     case "range":
+    case "opaque-type":
     case "union":
     case "arrow":
     case "unbounded":
@@ -2968,7 +3002,11 @@ function lowerApply(
           right,
           lower(spine.args[1], scope, lowering),
           at.if(
-            at.binary(BinaryOperator.LessFloat64, at.name(left), at.name(right)),
+            at.binary(
+              BinaryOperator.LessFloat64,
+              at.name(left),
+              at.name(right),
+            ),
             tag("Less"),
             at.if(
               at.binary(
@@ -3074,7 +3112,11 @@ function lowerApply(
           right,
           lower(spine.args[1], scope, lowering),
           at.if(
-            at.binary(BinaryOperator.LessFloat32, at.name(left), at.name(right)),
+            at.binary(
+              BinaryOperator.LessFloat32,
+              at.name(left),
+              at.name(right),
+            ),
             tag("Less"),
             at.if(
               at.binary(

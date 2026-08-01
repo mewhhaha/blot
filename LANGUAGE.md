@@ -103,6 +103,13 @@ compiler could take apart field by field would not be. Lanes are read by name �
 `Vec4.x` through `Vec4.w` — because the target has four extract instructions and
 no way to choose between them at run time.
 
+`F32x4` is opaque rather than ordered. `Int`, `Str`, `F64`, and `F32` are ranges
+over an ordered domain; four lanes are not an interval, so there is no bound to
+narrow against and no literal that names one. The only fact about the type is
+its name: `F32x4` matches `F32x4` and nothing else, `@type.reflect` reports it
+as `#Opaque` (§13.4), and `Reflect.refines` therefore answers `#False` for it,
+having nothing to compare.
+
 There is no implicit conversion between the numeric types, and no operator
 serves more than one. An operator resolves to one binding by name (§4.6), so a `+` over
 both would have to dispatch on a value's type at run time. `Float.of_int` and
@@ -920,7 +927,7 @@ The principal inferred forms are:
 
 - integer and text ranges, including singleton literals;
 - `F64` and `F32`, the float types;
-- `F32x4`, four `F32` lanes as one value;
+- `F32x4`, four `F32` lanes as one value, opaque and matched by name;
 - unit;
 - functions with effect rows;
 - structural records and tuples;
@@ -1326,7 +1333,7 @@ and both of these forms name the array twice — once to measure and once to rea
 | `@type.text`      | unbounded text domain                       |
 | `@type.float`     | the double domain, which has no bounds      |
 | `@type.float32`   | the single-precision domain                 |
-| `@type.f32x4`     | four single-precision lanes                 |
+| `@type.f32x4`     | four single-precision lanes, an opaque type |
 | `@type.unit`      | unit type/value                             |
 | `@type.range`     | inclusive range                             |
 | `@type.union`     | flattened duplicate-free union              |
@@ -1360,6 +1367,9 @@ has no value representing an empty compile-time union.
 #Sealed { .name; .inner; }
 #Opaque
 ```
+
+`#Opaque` is everything with no parts to report: a closure, a primitive, a host
+function, an effect, and `F32x4`, whose whole content is its name.
 
 ### 13.5 Ownership markers
 

@@ -1163,7 +1163,10 @@ function desugarLoop(
  */
 function reboundNames(statements: readonly Cursor[]): readonly string[] {
   const rebound: string[] = [];
-  const visit = (cursors: readonly Cursor[], outer: ReadonlySet<string>): void => {
+  const visit = (
+    cursors: readonly Cursor[],
+    outer: ReadonlySet<string>,
+  ): void => {
     const shadowed = new Set(outer);
     for (const cursor of cursors) {
       const declaration = statementRule(cursor);
@@ -1187,7 +1190,9 @@ function reboundNames(statements: readonly Cursor[]): readonly string[] {
       if (declaration.name !== "binding") continue;
       const kind = tokenOf(required(declaration, "kind")).text;
       if (kind !== "let" && kind !== "const") continue;
-      const pattern = lowerPattern(asRule(field(declaration, "pattern"), "pattern"));
+      const pattern = lowerPattern(
+        asRule(field(declaration, "pattern"), "pattern"),
+      );
       for (const name of patternNames(pattern)) {
         // Shadowing a name this stream already handed outward. The escaping
         // value is read where the stream ends, which is inside the shadow, so

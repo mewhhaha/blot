@@ -1,0 +1,75 @@
+// Four lanes, in the artifact.
+//
+// `examples/vectors.blot` says what four lanes *mean*, and it says it with
+// literals — so the comptime evaluator answers every question that program
+// asks and the module it compiles to contains no vector instruction at all. It
+// proves the semantics and nothing about the emission.
+//
+// This is the other half. Every vector below descends from a block the
+// compiler cannot run, so nothing may fold it away and the whole chain has to
+// survive to `f32x4.add`, `f32x4.sub`, `f32x4.mul`, `f32x4.div`, the extracts,
+// and the horizontal sum. `backend.test.ts` compiles this file and reads those
+// opcodes back out of the bytes, which is the only thing that distinguishes an
+// emitted instruction from an answer the evaluator already knew.
+
+open {} = (@import "blot:prelude") ();
+
+const Console = @effect.host {
+  .write = Str -> Unit;
+};
+
+// The write is what makes this resist folding. Its answer belongs to the host,
+// so the comptime evaluator has to stop at the block rather than run it, and
+// the four lanes it gathers become a value the running program builds. The
+// same `Vec4.of` written at the top level would be a constant vector before
+// the backend saw a lane, and so would everything computed from it.
+sig sample = F32x4;
+let sample = do
+  let _ = Console.write "sampling";
+  in Vec4.of (
+    Float32.of_int 1,
+    Float32.of_int 2,
+    Float32.of_int 3,
+    Float32.of_int 4
+  )
+end;
+
+sig gain = F32x4;
+let gain = Vec4.splat (Float32.of_int 10);
+
+// Four lane-wise operations, chained. Each one consumes the register the last
+// one produced, so a vector is never rebuilt in between — that is the property
+// the opcode assertions are really about, and a chain is the only way to state
+// it in a program.
+
+sig biased = F32x4;
+let biased = Vec4.add sample gain;
+
+sig scaled = F32x4;
+let scaled = Vec4.mul biased gain;
+
+sig centered = F32x4;
+let centered = Vec4.sub scaled gain;
+
+sig normalized = F32x4;
+let normalized = Vec4.div centered (Vec4.splat (Float32.of_int 2));
+
+// Every intermediate lane is a whole number a single-precision float holds
+// exactly, so the interpreter, the GPU evaluator, and the emitted Wasm agree on
+// the truncations below without rounding entering into it. A disagreement here
+// is a lowering bug and never a last-bit one.
+//
+// The results are `Int` because a float cannot cross the module boundary:
+// gpufuck's canonical ABI has no float case, and an export that named `F32` or
+// `F32x4` would be refused with `BLOT_FLOAT_AT_BOUNDARY`. Converting at the
+// edge is what an export of vector arithmetic looks like.
+return {
+  .first = Float32.truncate (Vec4.x normalized);
+  .second = Float32.truncate (Vec4.y normalized);
+  .last = Float32.truncate (Vec4.w normalized);
+  // A horizontal sum is one instruction sequence over the register rather than
+  // the four extracts and three adds a program would have to write, which is
+  // why `sum` is a primitive where `dot` is prelude source over it.
+  .total = Float32.truncate (Vec4.sum normalized);
+  .energy = Float32.truncate (Vec4.dot normalized gain);
+};

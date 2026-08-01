@@ -542,9 +542,22 @@ const refines_literal = (narrow, value) => case reflect narrow of
   _ => False
 end;
 
+// Four domains, and every pair answered rather than defaulted. A `_` arm here
+// would have hidden the next domain the way the two-armed version hid `F64`
+// and `F32`, which reflected as `#Int` and made `refines (F64, Int)` true.
 const same_domain = (left, right) => case left of
-  #Int => case right of #Int => True, #Text => False end,
-  #Text => case right of #Text => True, #Int => False end
+  #Int => case right of
+    #Int => True, #F64 => False, #F32 => False, #Text => False
+  end,
+  #F64 => case right of
+    #F64 => True, #Int => False, #F32 => False, #Text => False
+  end,
+  #F32 => case right of
+    #F32 => True, #Int => False, #F64 => False, #Text => False
+  end,
+  #Text => case right of
+    #Text => True, #Int => False, #F64 => False, #F32 => False
+  end
 end;
 
 // Does every value of `narrow` inhabit `wide`?

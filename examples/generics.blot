@@ -52,6 +52,8 @@ const x_of_3 = projecting Point3;
 const describing = T => case reflect T of
   #Range r => case r.domain of
     #Int => "an integer range",
+    #F64 => "a double",
+    #F32 => "a single",
     #Text => "a text range"
   end,
   #Shape fields => "a record of " <> Text.of_int (@array.len (@shape.names fields)),
@@ -64,6 +66,7 @@ end;
 // behind: `const` forces the reflection to happen while compiling, and what
 // reaches WebAssembly is the `@int.add` it selected.
 const described_int = describing I32;
+const described_double = describing F64;
 const described_text = describing Str;
 const described_record = describing Point2;
 const described_arrow = describing (I32 -> I32);
@@ -76,10 +79,16 @@ return {
 
   .int_is_int = refines (I32, Int);
   .text_is_not_int = refines (Str, Int);
+  // Neither direction. `reflect` reported every non-text domain as `#Int`
+  // until the language had more than one of them, which made these both true.
+  .double_is_not_int = refines (F64, Int);
+  .int_is_not_double = refines (Int, F64);
+  .single_is_not_double = refines (F32, F64);
   .wider_record_fits = refines (Point3, HasX);
   .narrower_does_not = refines (HasX, Point3);
 
   .described_int = described_int;
+  .described_double = described_double;
   .described_text = described_text;
   .described_record = described_record;
   .described_arrow = described_arrow;

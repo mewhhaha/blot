@@ -566,30 +566,15 @@ Deno.test("a reachable @panic traps with the reason the program gave", async () 
   assertEquals(manifest.exports.map((exported) => exported.sourceName), ["ok"]);
 });
 
-Deno.test("four-lane operations become SIMD instructions", async () => {
-  // The scalar bodies gpufuck ships are what the comptime evaluator agrees
-  // with, so a program whose vectors all fold is proof of meaning and not of
-  // instructions — `examples/vectors.blot` is exactly that program. This one
-  // takes a lane from a host effect, so the arithmetic has to survive to the
-  // artifact, and then reads the opcodes back out of it.
-  const directory = await Deno.makeTempDir();
-  const path = join(directory, "lanes.blot");
-  await Deno.writeTextFile(
-    path,
-    [
-      'open {} = (@import "blot:prelude") ();',
-      "const Source = @effect.host { .read = Unit -> Int; };",
-      "let live = Float32.of_int (Source.read ());",
-      "let a = Vec4.of (live, Float32.of_int 2, Float32.of_int 3, Float32.of_int 4);",
-      "let b = Vec4.splat (Float32.of_int 10);",
-      "let c = Vec4.mul (Vec4.add a b) b;",
-      "return { .x = Float32.truncate (Vec4.x c); .dot = Float32.truncate (Vec4.dot c b); };",
-    ].join("\n"),
-  );
-
-  const built = await build(path);
-  const bytes = new Uint8Array(built.wasm);
-  // Every SIMD instruction is the `0xfd` prefix and a LEB128 opcode.
+/**
+ * The SIMD opcodes an artifact contains.
+ *
+ * Every SIMD instruction is the `0xfd` prefix and a LEB128 opcode, so this
+ * reads the emitted bytes rather than any claim the compiler makes about them.
+ * A module whose vectors all folded has no `0xfd` in it at all, which is what
+ * makes the empty answer meaningful.
+ */
+function simdOpcodes(bytes: Uint8Array): Set<number> {
   const opcodes = new Set<number>();
   for (let index = 0; index < bytes.length - 2; index += 1) {
     if (bytes[index] !== 0xfd) continue;
@@ -599,15 +584,60 @@ Deno.test("four-lane operations become SIMD instructions", async () => {
     }
     opcodes.add(opcode);
   }
-  assert(opcodes.has(228), "expected f32x4.add");
-  assert(opcodes.has(230), "expected f32x4.mul");
+  return opcodes;
+}
+
+Deno.test("four-lane operations become SIMD instructions", async () => {
+  // The scalar bodies gpufuck ships are what the comptime evaluator agrees
+  // with, so a program whose vectors all fold is proof of meaning and not of
+  // instructions — `examples/vectors.blot` is exactly that program.
+  // `examples/simd.blot` is the one that cannot fold: its lanes come out of a
+  // block only the host can run, so the whole chain has to reach the artifact.
+  // Compiling a file from the catalog rather than a string literal is the
+  // point — the program these opcodes belong to is one a reader can run.
+  const built = await build(join("examples", "simd.blot"));
+  const opcodes = simdOpcodes(built.wasm);
   assert(opcodes.has(19), "expected f32x4.splat");
+  assert(opcodes.has(228), "expected f32x4.add");
+  assert(opcodes.has(229), "expected f32x4.sub");
+  assert(opcodes.has(230), "expected f32x4.mul");
+  assert(opcodes.has(231), "expected f32x4.div");
   assert(opcodes.has(31), "expected f32x4.extract_lane");
 });
 
+Deno.test("a horizontal sum lowers to gpufuck's reduction", async () => {
+  // The other half of `examples/simd.blot`, and the half no opcode can state:
+  // a horizontal add has no instruction of its own, so `Vec4.sum` is proved by
+  // what blot emitted rather than by what the bytes contain. `ReduceAdd` is
+  // gpufuck's, and taking it is what keeps `dot` from becoming the four
+  // extracts and three adds it would be if blot wrote the reduction itself.
+  const path = join("examples", "simd.blot");
+  const loaded = await load(path);
+  const checked = await checkFile(path);
+  const lowered = lowerModule(loaded.module, checked, checked.values);
+
+  // gpufuck's own bodies are spliced in alongside blot's, and they name
+  // `ReduceAdd` whether or not the program summed anything — so only the
+  // definitions blot lowered from source can answer this.
+  const printable = (_key: string, value: unknown) => {
+    if (typeof value === "bigint") return String(value);
+    return value;
+  };
+  const written = lowered.definitions.filter((definition) =>
+    !definition.name.startsWith("$")
+  );
+  const reduced = written.filter((definition) =>
+    JSON.stringify(definition, printable).includes('"$F32x4ReduceAdd"')
+  );
+  assertEquals(reduced.map((definition) => definition.name.split("$")[0]), [
+    "sum",
+    "dot",
+  ]);
+});
+
 Deno.test("a program with no vectors carries none of their machinery", async () => {
-  // The declarations and the four scalar bodies are emitted only when a module
-  // used them, so this is what keeps them out of every other artifact.
+  // The declarations and the scalar bodies are emitted only when a module used
+  // them, so this is what keeps them out of every other artifact.
   const directory = await Deno.makeTempDir();
   const path = join(directory, "plain.blot");
   await Deno.writeTextFile(
@@ -620,9 +650,14 @@ Deno.test("a program with no vectors carries none of their machinery", async () 
   );
 
   const built = await build(path);
+  // The declarations and the scalar bodies are the thing being kept out, and
+  // their names survive into the artifact as text — so this looks for them
+  // rather than for instructions, which a scalar module would lack anyway and
+  // which would therefore pass without testing the claim.
   const text = new TextDecoder("utf-8", { fatal: false })
     .decode(new Uint8Array(built.wasm));
   assertEquals(text.includes("$FunctionalF32x4"), false);
+  assertEquals([...simdOpcodes(built.wasm)], []);
 });
 
 Deno.test("an F32x4 is refused at the boundary rather than published as text", async () => {
@@ -635,7 +670,9 @@ Deno.test("an F32x4 is refused at the boundary rather than published as text", a
     const path = join(directory, `${name}.blot`);
     await Deno.writeTextFile(
       path,
-      ['open {} = (@import "blot:prelude") ();', `return ${result};`].join("\n"),
+      ['open {} = (@import "blot:prelude") ();', `return ${result};`].join(
+        "\n",
+      ),
     );
     return path;
   };

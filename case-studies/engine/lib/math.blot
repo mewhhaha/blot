@@ -1,14 +1,25 @@
-// Trigonometry, in floats.
+// Trigonometry, in single precision.
 //
 // This file used to be fixed point at 4096, because blot had one numeric type
-// and it was an integer. It does not any more, so angles are radians and the
-// series below is evaluated on the numbers it was derived for rather than on
-// scaled integers that had to avoid overflowing on the way to the answer.
+// and it was an integer, and the series had to avoid overflowing on the way to
+// an answer it could only approach. It has been evaluated on the numbers it was
+// derived for since the language had a float.
 //
-// The table is still built by the comptime evaluator. `const` is what forces
-// that: the series runs while compiling or the program does not compile, so a
-// quarter turn of sines reaches WebAssembly as data and the polynomial that
-// produced it is not in the artifact.
+// The lanes are `F32` because the engine that reads them keeps its geometry in
+// four-lane vectors and a lane is an `F32`. A table in double precision would
+// be narrowed at every lookup, which is the same rounding done in the hottest
+// place rather than once.
+//
+// Once, then: the series is evaluated in double precision and narrowed per
+// entry as the table is built. Rounding the intermediates instead would be a
+// worse table for nothing, because the arithmetic runs in the comptime
+// evaluator, where an `F64` costs the artifact neither a byte nor an
+// instruction.
+//
+// The table is built by the comptime evaluator. `const` is what forces that:
+// the series runs while compiling or the program does not compile, so a quarter
+// turn of sines reaches WebAssembly as data and the polynomial that produced it
+// is not in the artifact.
 
 open {} = (@import "blot:prelude") ();
 
@@ -22,7 +33,9 @@ const HALF_PI = 1.5707963267948966;
 const TURN = 256;
 const QUARTER = 64;
 
-const radians = steps => Float.mul (Float.of_int steps) (Float.div TAU 256.0);
+const STEP_RADIANS = Float32.of_float (Float.div TAU 256.0);
+
+const radians = steps => Float32.mul (Float32.of_int steps) STEP_RADIANS;
 
 // sin over [0, pi/2], seven terms. Odd powers only, and evaluated left to
 // right so each is the previous one times x squared — which keeps the largest
@@ -52,7 +65,7 @@ end;
 const table = fold (
   upto (0, QUARTER + 1),
   @array.empty,
-  ((built, k) => @array.push built (sin_quarter k))
+  ((built, k) => @array.push built (Float32.of_float (sin_quarter k)))
 );
 
 // `steps` is any integer; the quadrant decides which end of the table to read
@@ -63,20 +76,20 @@ const sin_steps = steps => do
   let step = @int.rem a QUARTER;
   in if quadrant == 0 then @array.get table step
   else if quadrant == 1 then @array.get table (QUARTER - step)
-  else if quadrant == 2 then Float.negate (@array.get table step)
-  else Float.negate (@array.get table (QUARTER - step))
+  else if quadrant == 2 then Float32.negate (@array.get table step)
+  else Float32.negate (@array.get table (QUARTER - step))
   end
 end;
 
 const cos_steps = steps => sin_steps (steps + QUARTER);
 
 return {
-  .pi = PI;
-  .tau = TAU;
+  .pi = Float32.of_float PI;
+  .tau = Float32.of_float TAU;
   .turn = TURN;
   .quarter = QUARTER;
   .radians = radians;
   .sin = sin_steps;
   .cos = cos_steps;
-  .sqrt = Float.sqrt;
+  .sqrt = Float32.sqrt;
 };

@@ -60,9 +60,9 @@ an ambient network call.
 ## engine
 
 `engine/main.blot` is a small 3D engine: an entity-component-system, a camera
-with two lenses, fixed-point maths, and hot reload for both the scene and the
-code. It draws to a canvas through four host capabilities and reaches nothing
-else on the page.
+with two lenses, four-lane vector maths, and hot reload for both the scene and
+the code. It draws to a canvas through four host capabilities and reaches
+nothing else on the page.
 
 ### The world is the frame loop
 
@@ -72,7 +72,7 @@ apply — but the layout an ECS arrives at still does: components in parallel
 arrays keyed by entity, each system a function over the arrays it reads.
 
 What the language adds is that the world does not have to be a value. A `for`
-body's `:=` names are its accumulator, so the frame loop *is* the world:
+body's `:=` names are its accumulator, so the frame loop _is_ the world:
 
 ```blot
 for ever do
@@ -92,25 +92,79 @@ for ever do
 end;
 ```
 
-A system that does not rebind a name provably cannot affect it — the property
-an ECS usually arranges with scheduling and declared access. Adding a component
+A system that does not rebind a name provably cannot affect it — the property an
+ECS usually arranges with scheduling and declared access. Adding a component
 means adding a name.
 
-### Floats, and a table the artifact never computes
+### The fourth lane is the one doing the work
 
-The geometry is in `F64`. It was fixed point at 4096 until the language had a
-second numeric type, and porting it changed one thing at the edges and nothing
-in the middle: a float cannot cross the module boundary, so the scene arrives as
-thousandths and the screen leaves as pixels, and everything between is a float.
+The geometry is `F32x4`. It was fixed point at 4096 until the language had a
+second numeric type, then `F64` scalars until it had a fourth, and neither move
+touched the boundary: a float cannot cross a module boundary at all, so the
+scene arrives as thousandths and the screen leaves as pixels, and everything
+between is a lane.
+
+A three-component vector in a four-lane register leaves one lane spare, and the
+whole port turns on spending it. A point carries 1 there and a direction carries
+0, which is what makes a transform a matrix and a matrix row a dot product: the
+row's fourth lane is its translation, and the point's fourth lane decides
+whether that translation applies.
+
+```blot
+const turn_y = (point, rotation) => Vec4.of (
+  Vec4.dot point rotation.to_x,
+  Vec4.y point,
+  Vec4.dot point rotation.to_z,
+  Vec4.w point
+);
+
+const to_view = (point, camera) => Vec4.of (
+  Vec4.dot point camera.right,
+  Vec4.dot point camera.up,
+  Vec4.dot point camera.forward,
+  ONE
+);
+```
+
+A cube corner is an offset from the model's own origin, so it carries 0 and
+scaling and turning it are lane-wise across all four. Adding the entity's
+position — which carries 1 — is the single step that makes it a point, and the
+camera's translation reaches it from there for free. `to_view` was three
+subtractions, eight multiplies, and six more adds and subtracts, over ten reads
+of a field by name; it is three dot products now, and no field is named anywhere
+in it.
+
+The camera orbits the origin, and writing the view transform as rows makes that
+visible rather than incidental: the eye only ever moves along `forward`, so the
+two screen rows translate by nothing at all and the depth row translates by the
+orbit radius. Subtracting the eye per vertex arrives at those same three
+numbers.
+
+Shading was already a dot product and now says so. The face depth is not as
+tidy: the four view depths are one lane each of four different points, so
+averaging them extracts four scalars and gathers them into a fresh vector before
+the horizontal sum. That is a gather to save three adds, which is not obviously
+a trade worth making, and it is written that way because the surrounding code is
+already vectors rather than because it is faster.
+
+Single precision is comfortable here on the arithmetic: `F32` carries about
+seven decimal digits, the scene is a few units across, and the screen is a few
+hundred pixels. That is a reason to expect it to hold rather than a measurement
+that it does — what has been checked is that the ported engine renders, that its
+exports are unchanged, and that all three executions agree on them.
 
 `lib/math.blot` needs sine and cosine and gets them from a Taylor series that
-runs in the *comptime evaluator*: `const` forces the series to be evaluated
+runs in the _comptime evaluator_: `const` forces the series to be evaluated
 while compiling, so a quarter turn of sines reaches WebAssembly as data and the
 polynomial that produced it is not in the artifact. Seven terms now rather than
-four — the fixed-point version could not afford the intermediates.
+four — the fixed-point version could not afford the intermediates. The series is
+still evaluated in double precision and narrowed per entry as the table is
+built, because an `F64` in the comptime evaluator costs the artifact nothing.
 
-`sin 45°` is `0.707` and `sqrt 2.0` is `1.414`, which is what you would want and
-what the fixed-point version could only approach.
+`sin 45°` is `0.707`, which is what you would want and what the fixed-point
+version could only approach. The module's square root takes an `F32` now, so
+`sqrt 2.0` is a type error and `sqrt (Float32.of_float 2.0)` is how it is asked
+— a lane cannot be written, only converted.
 
 ### 2D is the same renderer with the lens switched
 
@@ -119,16 +173,20 @@ The camera carries a lens, and `to_screen` is the only place it matters:
 ```blot
 const to_screen = (view, camera) =>
   if camera.lens == 0
-  then { .x = CX + view.x * FOCAL / view.z; .y = CY - view.y * FOCAL / view.z; }
-  else { .x = CX + M.mul (view.x, camera.zoom); .y = CY - M.mul (view.y, camera.zoom); }
+  then Vec4.add
+    SCREEN_CENTRE
+    (Vec4.div (Vec4.mul view FOCAL_AXES) (Vec4.splat (Vec4.z view)))
+  else Vec4.add SCREEN_CENTRE (Vec4.mul view camera.zoom_axes)
   end;
 ```
 
-A perspective divide, or no divide. Sprites follow the same rule: a 2D texture's
-size divides by depth under one lens and does not under the other, so it is a
-billboard in 3D and a plain sprite in 2D without a second code path. Press `L`
-in the browser to switch mid-flight; the guest reads the lens every frame, so
-nothing reloads.
+A perspective divide, or no divide — the lenses differ only in what the view
+point is measured against. A screen's y counts down and a world's counts up, so
+that flip rides in the axis vectors rather than in a subtraction only one of the
+two lanes wants. Sprites follow the same rule: a 2D texture's size divides by
+depth under one lens and does not under the other, so it is a billboard in 3D
+and a plain sprite in 2D without a second code path. Press `L` in the browser to
+switch mid-flight; the guest reads the lens every frame, so nothing reloads.
 
 ### Hot reload, two kinds
 
@@ -173,7 +231,7 @@ The guest projects geometry and hands over triangles with a view depth; sorting
 them is the host's job. That is the same split a depth buffer makes, and it is
 why the guest never needs one.
 
-Record parameters flatten in *canonical* field order, which is alphabetical and
+Record parameters flatten in _canonical_ field order, which is alphabetical and
 not the order the program wrote them — `Canvas.tri` arrives as
 `ax, ay, bx, by, colour, cx, cy, depth, shade`. `docs/abi.md` is the authority;
 getting it wrong silently transposes the geometry.
@@ -204,8 +262,8 @@ remove the worker.
 
 - **A two-component join wants a tuple pattern.**
   `case (at (l, id), at (r, id)) of (#Some a, #Some b) => …` is how this should
-  read, and it does not lower — *"a tuple pattern over a literal is not lowered
-  to Wasm yet"*. The join helpers nest their `case`s instead, once, so the
+  read, and it does not lower — _"a tuple pattern over a literal is not lowered
+  to Wasm yet"_. The join helpers nest their `case`s instead, once, so the
   systems stay one expression each.
 - **An effect row cannot be written.** `render` is the one binding here with no
   `sig`: an effectful arrow's type includes its row, and a row is printed but
@@ -214,6 +272,23 @@ remove the worker.
   no float case, so `Assets.entry` carries thousandths and `Canvas.tri` carries
   pixels. One conversion at each edge, which is where a renderer wants one
   anyway — but it is a gap in the target rather than a choice here.
-- **Still no SIMD.** gpufuck's SIMD is f32x4; this is f64, and it would also
-  need a four-lane vector *value* type. Floats were necessary and are not
-  sufficient.
+- **A lane cannot be written, only converted.** There is one float token in the
+  grammar and it reads as an `F64`, so every single-precision constant in the
+  engine is a `Float32.of_float` the program wrote down. That is the right
+  default — narrowing should be visible — but a file whose every constant is
+  single precision pays for it on every line.
+- **No lane-wise comparison, and no shuffle.** The near test is four `Vec4.z`
+  extracts and four scalar compares, because `Vec4` has no compare — although
+  gpufuck's fixed-vector contract does, in `$F32x4Less` and `$F32x4Select` over
+  a mask type the prelude never names. The absent shuffle is the target's
+  though, which is why a matrix-vector product here is one dot per row rather
+  than a transpose and three multiplies.
+- **A vector is four boxed lanes.** `F32x4` reaches Core as a one-constructor
+  type with four `F32` fields, so a `Vec4` operation emits one real `f32x4`
+  instruction with eight lane loads in front of it and five allocations behind
+  it. The instructions are in the artifact and this is the program that put them
+  there, as does `examples/simd.blot`, which takes a lane from a host effect so
+  that it cannot fold the way `examples/vectors.blot` does. Keeping a register
+  live across `Vec4.dot (Vec4.add a b) c` is a change to how the target
+  represents the value, not to anything writable here — and until it lands, this
+  port is a demonstration that the path works rather than one that it is faster.

@@ -75,6 +75,28 @@ check(
 );
 
 check(
+  "a four-lane vector is an opaque type, not a range",
+  'open {} = (@import "blot:prelude") ();\n' +
+    "return Vec4.splat (Float32.of_int 1);",
+  "F32x4",
+);
+
+check(
+  "a lane read leaves the vector for the scalar type",
+  'open {} = (@import "blot:prelude") ();\n' +
+    "return Vec4.x (Vec4.splat (Float32.of_int 1));",
+  "F32",
+);
+
+rejects(
+  "literal arms cannot cover a vector",
+  'open {} = (@import "blot:prelude") ();\n' +
+    "sig f = F32x4 -> Int;\nlet f = v => case v of 1 => 1 end;\n" +
+    "return f (Vec4.splat (Float32.of_int 1));",
+  "BLOT_INCOMPLETE_CASE",
+);
+
+check(
   "single precision is its own type",
   'open {} = (@import "blot:prelude") ();\n' +
     "return Float32.mul (Float32.of_int 2) (Float32.of_float 1.5);",
@@ -682,7 +704,7 @@ check(
 // so `&&` narrows — and an index range is still not `1 | 2`.
 check(
   "`&&` proves both halves, so a bounded range is covered",
-  'sig f = Int -> Str;\n' +
+  "sig f = Int -> Str;\n" +
     'let f = i => if i > 0 && i < 3 then case i of 1 => "a", 2 => "b" end else "out" end;\n' +
     "return f;",
   "Int -> Str",

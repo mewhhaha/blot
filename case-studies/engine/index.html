@@ -4,42 +4,55 @@
     <meta charset="utf-8" />
     <title>blot — engine case study</title>
     <style>
-      :root { color-scheme: dark; }
-      body {
-        background: #0e1013;
-        color: #e6e6e6;
-        font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 0.9rem;
-        padding: 1.6rem 1rem;
-        margin: 0;
-      }
-      canvas {
-        background: #08090b;
-        border: 1px solid #23272e;
-        border-radius: 3px;
-        width: 960px;
-        height: 600px;
-        max-width: 100%;
-        cursor: grab;
-        touch-action: none;
-      }
-      canvas:active { cursor: grabbing; }
-      .row { display: flex; gap: 1.4rem; flex-wrap: wrap; justify-content: center; }
-      .k { color: #8b949e; }
-      .v { color: #e6e6e6; }
-      #failure {
-        display: none;
-        max-width: 960px;
-        white-space: pre-wrap;
-        color: #ff8b84;
-        background: #1c1113;
-        border: 1px solid #4a2327;
-        border-radius: 3px;
-        padding: 0.7rem 0.9rem;
-      }
+    :root {
+      color-scheme: dark;
+    }
+    body {
+      background: #0e1013;
+      color: #e6e6e6;
+      font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.9rem;
+      padding: 1.6rem 1rem;
+      margin: 0;
+    }
+    canvas {
+      background: #08090b;
+      border: 1px solid #23272e;
+      border-radius: 3px;
+      width: 960px;
+      height: 600px;
+      max-width: 100%;
+      cursor: grab;
+      touch-action: none;
+    }
+    canvas:active {
+      cursor: grabbing;
+    }
+    .row {
+      display: flex;
+      gap: 1.4rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .k {
+      color: #8b949e;
+    }
+    .v {
+      color: #e6e6e6;
+    }
+    #failure {
+      display: none;
+      max-width: 960px;
+      white-space: pre-wrap;
+      color: #ff8b84;
+      background: #1c1113;
+      border: 1px solid #4a2327;
+      border-radius: 3px;
+      padding: 0.7rem 0.9rem;
+    }
     </style>
   </head>
   <body>
@@ -55,221 +68,227 @@
     <pre id="failure"></pre>
 
     <script type="module">
-      // The page owns the canvas, the pointer, the wheel, and the clock. The
-      // program owns everything else and reaches none of them except through
-      // the capabilities it declared.
+    // The page owns the canvas, the pointer, the wheel, and the clock. The
+    // program owns everything else and reaches none of them except through
+    // the capabilities it declared.
 
-      const screen = document.getElementById("screen");
-      const context = screen.getContext("2d");
-      const ui = {
-        lens: document.getElementById("lens"),
-        revision: document.getElementById("revision"),
-        generation: document.getElementById("generation"),
-        fps: document.getElementById("fps"),
-        failure: document.getElementById("failure"),
-      };
+    const screen = document.getElementById("screen");
+    const context = screen.getContext("2d");
+    const ui = {
+      lens: document.getElementById("lens"),
+      revision: document.getElementById("revision"),
+      generation: document.getElementById("generation"),
+      fps: document.getElementById("fps"),
+      failure: document.getElementById("failure"),
+    };
 
-      const TICK = 0, RUNNING = 1, YAW = 2, PITCH = 3, DISTANCE = 4;
-      const LENS = 5, GENERATION = 6;
-      // Thousandths, matching the wire the guest reads its scene from.
-      const ONE = 1000;
+    const TICK = 0, RUNNING = 1, YAW = 2, PITCH = 3, DISTANCE = 4;
+    const LENS = 5, GENERATION = 6;
+    // Thousandths, matching the wire the guest reads its scene from.
+    const ONE = 1000;
 
-      // The camera lives here, not in the guest. That is the whole reason a
-      // code reload does not throw your viewpoint away.
-      const shared = new Int32Array(new SharedArrayBuffer(28));
-      Atomics.store(shared, RUNNING, 1);
-      Atomics.store(shared, YAW, 34);
-      Atomics.store(shared, PITCH, 18);
-      Atomics.store(shared, DISTANCE, 9 * ONE);
+    // The camera lives here, not in the guest. That is the whole reason a
+    // code reload does not throw your viewpoint away.
+    const shared = new Int32Array(new SharedArrayBuffer(28));
+    Atomics.store(shared, RUNNING, 1);
+    Atomics.store(shared, YAW, 34);
+    Atomics.store(shared, PITCH, 18);
+    Atomics.store(shared, DISTANCE, 9 * ONE);
 
-      // --- input ---------------------------------------------------------
-      let dragging = false;
-      let lastX = 0;
-      let lastY = 0;
-      screen.addEventListener("pointerdown", (event) => {
-        dragging = true;
-        lastX = event.clientX;
-        lastY = event.clientY;
-        screen.setPointerCapture(event.pointerId);
-      });
-      screen.addEventListener("pointerup", () => { dragging = false; });
-      screen.addEventListener("pointermove", (event) => {
-        if (!dragging) return;
-        const yaw = Atomics.load(shared, YAW) - Math.round((event.clientX - lastX) * 0.4);
-        let pitch = Atomics.load(shared, PITCH) + Math.round((event.clientY - lastY) * 0.4);
-        pitch = Math.max(-60, Math.min(60, pitch));
-        Atomics.store(shared, YAW, ((yaw % 256) + 256) % 256);
-        Atomics.store(shared, PITCH, pitch);
-        lastX = event.clientX;
-        lastY = event.clientY;
-      });
-      screen.addEventListener("wheel", (event) => {
-        event.preventDefault();
-        const next = Atomics.load(shared, DISTANCE) + Math.round(event.deltaY * 6);
-        Atomics.store(shared, DISTANCE, Math.max(2 * ONE, Math.min(30 * ONE, next)));
-      }, { passive: false });
-      addEventListener("keydown", (event) => {
-        if (event.key === "l" || event.key === "L") {
-          const lens = Atomics.load(shared, LENS) === 0 ? 1 : 0;
-          Atomics.store(shared, LENS, lens);
-          ui.lens.textContent = lens === 0 ? "perspective" : "orthographic";
-        }
-        if (event.key === "Escape") Atomics.store(shared, RUNNING, 0);
-      });
+    // --- input ---------------------------------------------------------
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    screen.addEventListener("pointerdown", (event) => {
+      dragging = true;
+      lastX = event.clientX;
+      lastY = event.clientY;
+      screen.setPointerCapture(event.pointerId);
+    });
+    screen.addEventListener("pointerup", () => {
+      dragging = false;
+    });
+    screen.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+      const yaw = Atomics.load(shared, YAW) -
+        Math.round((event.clientX - lastX) * 0.4);
+      let pitch = Atomics.load(shared, PITCH) +
+        Math.round((event.clientY - lastY) * 0.4);
+      pitch = Math.max(-60, Math.min(60, pitch));
+      Atomics.store(shared, YAW, ((yaw % 256) + 256) % 256);
+      Atomics.store(shared, PITCH, pitch);
+      lastX = event.clientX;
+      lastY = event.clientY;
+    });
+    screen.addEventListener("wheel", (event) => {
+      event.preventDefault();
+      const next = Atomics.load(shared, DISTANCE) + Math.round(event.deltaY * 6);
+      Atomics.store(shared, DISTANCE, Math.max(2 * ONE, Math.min(30 * ONE, next)));
+    }, { passive: false });
+    addEventListener("keydown", (event) => {
+      if (event.key === "l" || event.key === "L") {
+        const lens = Atomics.load(shared, LENS) === 0 ? 1 : 0;
+        Atomics.store(shared, LENS, lens);
+        ui.lens.textContent = lens === 0 ? "perspective" : "orthographic";
+      }
+      if (event.key === "Escape") Atomics.store(shared, RUNNING, 0);
+    });
 
-      // --- textures ------------------------------------------------------
-      //
-      // The "special 2D textures" the sprite path draws. Each is a small
-      // offscreen canvas the host paints once and blits per frame; the guest
-      // only ever names one.
-      const textures = new Map();
-      const texture = (name) => {
-        let made = textures.get(name);
-        if (made !== undefined) return made;
-        made = document.createElement("canvas");
-        made.width = 64;
-        made.height = 64;
-        const paint = made.getContext("2d");
-        if (name === "ring") {
-          paint.strokeStyle = "#7ee0ff";
-          paint.lineWidth = 6;
+    // --- textures ------------------------------------------------------
+    //
+    // The "special 2D textures" the sprite path draws. Each is a small
+    // offscreen canvas the host paints once and blits per frame; the guest
+    // only ever names one.
+    const textures = new Map();
+    const texture = (name) => {
+      let made = textures.get(name);
+      if (made !== undefined) return made;
+      made = document.createElement("canvas");
+      made.width = 64;
+      made.height = 64;
+      const paint = made.getContext("2d");
+      if (name === "ring") {
+        paint.strokeStyle = "#7ee0ff";
+        paint.lineWidth = 6;
+        paint.beginPath();
+        paint.arc(32, 32, 22, 0, Math.PI * 2);
+        paint.stroke();
+      } else if (name === "grid") {
+        paint.strokeStyle = "#b98bff";
+        paint.lineWidth = 3;
+        for (let i = 8; i < 64; i += 16) {
           paint.beginPath();
-          paint.arc(32, 32, 22, 0, Math.PI * 2);
+          paint.moveTo(i, 4);
+          paint.lineTo(i, 60);
+          paint.moveTo(4, i);
+          paint.lineTo(60, i);
           paint.stroke();
-        } else if (name === "grid") {
-          paint.strokeStyle = "#b98bff";
-          paint.lineWidth = 3;
-          for (let i = 8; i < 64; i += 16) {
-            paint.beginPath();
-            paint.moveTo(i, 4); paint.lineTo(i, 60);
-            paint.moveTo(4, i); paint.lineTo(60, i);
-            paint.stroke();
-          }
+        }
+      } else {
+        const glow = paint.createRadialGradient(32, 32, 2, 32, 32, 30);
+        glow.addColorStop(0, "#fff3c4");
+        glow.addColorStop(0.4, "#ffbd2e");
+        glow.addColorStop(1, "rgba(255,189,46,0)");
+        paint.fillStyle = glow;
+        paint.fillRect(0, 0, 64, 64);
+      }
+      textures.set(name, made);
+      return made;
+    };
+
+    // --- rendering -----------------------------------------------------
+    //
+    // The guest hands over projected triangles and sprites with a view
+    // depth. Sorting them is the host's job — the same split a depth buffer
+    // makes, and the reason the guest never needs one.
+    let draws = [];
+    const shade = (colour, amount) => {
+      const n = parseInt(colour.slice(1), 16);
+      const f = Math.max(0, Math.min(255, amount)) / 255;
+      const r = Math.round(((n >> 16) & 255) * f);
+      const g = Math.round(((n >> 8) & 255) * f);
+      const b = Math.round((n & 255) * f);
+      return `rgb(${r},${g},${b})`;
+    };
+
+    const draw = () => {
+      context.fillStyle = "#08090b";
+      context.fillRect(0, 0, screen.width, screen.height);
+      const sorted = draws.slice().sort((a, b) => b.depth - a.depth);
+      for (const item of sorted) {
+        if (item.kind === "tri") {
+          context.fillStyle = shade(item.colour, item.shade);
+          context.beginPath();
+          context.moveTo(item.ax, item.ay);
+          context.lineTo(item.bx, item.by);
+          context.lineTo(item.cx, item.cy);
+          context.closePath();
+          context.fill();
         } else {
-          const glow = paint.createRadialGradient(32, 32, 2, 32, 32, 30);
-          glow.addColorStop(0, "#fff3c4");
-          glow.addColorStop(0.4, "#ffbd2e");
-          glow.addColorStop(1, "rgba(255,189,46,0)");
-          paint.fillStyle = glow;
-          paint.fillRect(0, 0, 64, 64);
+          const size = Math.max(2, item.size);
+          context.drawImage(
+            texture(item.texture),
+            item.x - size / 2,
+            item.y - size / 2,
+            size,
+            size,
+          );
         }
-        textures.set(name, made);
-        return made;
+      }
+    };
+
+    // --- the worker ----------------------------------------------------
+    let worker = null;
+    let state = await (await fetch("./state.json")).json();
+    Atomics.store(shared, GENERATION, state.generation);
+
+    const startWorker = async () => {
+      if (worker !== null) worker.terminate();
+      const wasm = await (await fetch("./main.wasm")).arrayBuffer();
+      worker = new Worker("./worker.js", { type: "module" });
+      worker.onmessage = (event) => {
+        const message = event.data;
+        if (message.kind === "frame") draws = message.draws;
       };
+      worker.postMessage(
+        {
+          kind: "start",
+          wasm,
+          shared: shared.buffer,
+          export: state.export,
+          scene: state.scene,
+        },
+        [wasm],
+      );
+      ui.revision.textContent = `r${state.revision}`;
+    };
 
-      // --- rendering -----------------------------------------------------
-      //
-      // The guest hands over projected triangles and sprites with a view
-      // depth. Sorting them is the host's job — the same split a depth buffer
-      // makes, and the reason the guest never needs one.
-      let draws = [];
-      const shade = (colour, amount) => {
-        const n = parseInt(colour.slice(1), 16);
-        const f = Math.max(0, Math.min(255, amount)) / 255;
-        const r = Math.round(((n >> 16) & 255) * f);
-        const g = Math.round(((n >> 8) & 255) * f);
-        const b = Math.round((n & 255) * f);
-        return `rgb(${r},${g},${b})`;
-      };
+    const showFailure = (message) => {
+      ui.failure.style.display = message === null ? "none" : "block";
+      ui.failure.textContent = message ?? "";
+    };
 
-      const draw = () => {
-        context.fillStyle = "#08090b";
-        context.fillRect(0, 0, screen.width, screen.height);
-        const sorted = draws.slice().sort((a, b) => b.depth - a.depth);
-        for (const item of sorted) {
-          if (item.kind === "tri") {
-            context.fillStyle = shade(item.colour, item.shade);
-            context.beginPath();
-            context.moveTo(item.ax, item.ay);
-            context.lineTo(item.bx, item.by);
-            context.lineTo(item.cx, item.cy);
-            context.closePath();
-            context.fill();
-          } else {
-            const size = Math.max(2, item.size);
-            context.drawImage(
-              texture(item.texture),
-              item.x - size / 2,
-              item.y - size / 2,
-              size,
-              size,
-            );
-          }
-        }
-      };
+    showFailure(state.failure);
+    await startWorker();
 
-      // --- the worker ----------------------------------------------------
-      let worker = null;
-      let state = await (await fetch("./state.json")).json();
-      Atomics.store(shared, GENERATION, state.generation);
-
-      const startWorker = async () => {
-        if (worker !== null) worker.terminate();
-        const wasm = await (await fetch("./main.wasm")).arrayBuffer();
-        worker = new Worker("./worker.js", { type: "module" });
-        worker.onmessage = (event) => {
-          const message = event.data;
-          if (message.kind === "frame") draws = message.draws;
-        };
-        worker.postMessage(
-          {
-            kind: "start",
-            wasm,
-            shared: shared.buffer,
-            export: state.export,
-            scene: state.scene,
-          },
-          [wasm],
-        );
-        ui.revision.textContent = `r${state.revision}`;
-      };
-
-      const showFailure = (message) => {
-        ui.failure.style.display = message === null ? "none" : "block";
-        ui.failure.textContent = message ?? "";
-      };
-
+    // --- reload --------------------------------------------------------
+    const events = new EventSource("./watch");
+    events.onmessage = async (event) => {
+      state = await (await fetch("./state.json")).json();
       showFailure(state.failure);
-      await startWorker();
 
-      // --- reload --------------------------------------------------------
-      const events = new EventSource("./watch");
-      events.onmessage = async (event) => {
-        state = await (await fetch("./state.json")).json();
-        showFailure(state.failure);
+      if (event.data === "assets") {
+        // No compile and no restart: hand the guest the new scene and bump
+        // the generation it is watching.
+        worker.postMessage({ kind: "scene", scene: state.scene });
+        Atomics.store(shared, GENERATION, state.generation);
+        ui.generation.textContent = `g${state.generation}`;
+        return;
+      }
+      if (event.data === "code") {
+        // A new module, and the same camera: it was never in the guest.
+        await startWorker();
+      }
+    };
 
-        if (event.data === "assets") {
-          // No compile and no restart: hand the guest the new scene and bump
-          // the generation it is watching.
-          worker.postMessage({ kind: "scene", scene: state.scene });
-          Atomics.store(shared, GENERATION, state.generation);
-          ui.generation.textContent = `g${state.generation}`;
-          return;
-        }
-        if (event.data === "code") {
-          // A new module, and the same camera: it was never in the guest.
-          await startWorker();
-        }
-      };
-
-      // --- the clock -----------------------------------------------------
-      let frames = 0;
-      let since = performance.now();
-      const tick = () => {
-        draw();
-        frames += 1;
-        const now = performance.now();
-        if (now - since > 500) {
-          ui.fps.textContent = Math.round((frames * 1000) / (now - since));
-          frames = 0;
-          since = now;
-        }
-        // Release the guest for the next frame, then wake it.
-        Atomics.add(shared, TICK, 1);
-        Atomics.notify(shared, TICK);
-        requestAnimationFrame(tick);
-      };
+    // --- the clock -----------------------------------------------------
+    let frames = 0;
+    let since = performance.now();
+    const tick = () => {
+      draw();
+      frames += 1;
+      const now = performance.now();
+      if (now - since > 500) {
+        ui.fps.textContent = Math.round((frames * 1000) / (now - since));
+        frames = 0;
+        since = now;
+      }
+      // Release the guest for the next frame, then wake it.
+      Atomics.add(shared, TICK, 1);
+      Atomics.notify(shared, TICK);
       requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
     </script>
   </body>
 </html>

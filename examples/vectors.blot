@@ -27,9 +27,15 @@ let ten = Vec4.splat (lane 10);
 
 // --- arithmetic -------------------------------------------------------------
 //
-// Lane-wise, and one instruction each. A chain stays in the register: gpufuck
-// checks that both arguments are provably vectors before it replaces a call,
-// so `mul (add a b) b` never rebuilds the value in between.
+// Lane-wise, and one instruction each — but only the arithmetic is one
+// instruction. gpufuck represents `F32x4` as a one-constructor type with four
+// `F32` fields, so a chain does *not* stay in a register: `mul (add a b) b`
+// tears the sum into lanes and builds a fresh vector before the multiply.
+// Measured on `examples/simd.blot`, five arithmetic instructions arrive with
+// eleven splats, twenty-four extracts, and thirty lane replacements around
+// them. The instructions are real and the value is boxed, and closing that gap
+// is a change to how the target holds the value rather than to anything
+// writable here.
 
 sig scaled = F32x4;
 let scaled = Vec4.mul (Vec4.add axis ten) ten;

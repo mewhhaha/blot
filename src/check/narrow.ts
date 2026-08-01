@@ -422,7 +422,11 @@ function deriveJunction(value: Value): Junction | null {
   return null;
 }
 
-function probeBool(value: Value, left: boolean, right: boolean): boolean | null {
+function probeBool(
+  value: Value,
+  left: boolean,
+  right: boolean,
+): boolean | null {
   const asTag = (flag: boolean): Value => {
     if (flag) return { tag: "tag", name: "True", payload: null };
     return { tag: "tag", name: "False", payload: null };

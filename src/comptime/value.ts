@@ -31,6 +31,17 @@ export type Value =
    * to f32, so the interpreter holds what one SIMD register holds.
    */
   | { readonly tag: "vector"; readonly lanes: readonly number[] }
+  /**
+   * A type with no parts to take apart. `F32x4` is the only one.
+   *
+   * It is not a range, because a vector is not an interval: a range answers
+   * questions about bounds, and `<1.0 2.0 3.0 4.0>` sits between nothing. It
+   * passed as one only because every float-ish range is open at both ends, so
+   * nothing ever asked. The checker's lattice spells the same thing `opaque`
+   * and identity is the name in both, so `equal` compares names and the bridge
+   * carries the name across unchanged.
+   */
+  | { readonly tag: "opaque-type"; readonly name: string }
   | { readonly tag: "text"; readonly value: string }
   | { readonly tag: "unit" }
   /** Records and tuples. Tuples use `"0"`, `"1"`, … as labels. */
@@ -80,7 +91,7 @@ export type Value =
     readonly tag: "range";
     readonly low: Value;
     readonly high: Value;
-    readonly domain?: "int" | "text" | "float" | "float32" | "f32x4";
+    readonly domain?: "int" | "text" | "float" | "float32";
   }
   | { readonly tag: "union"; readonly members: readonly Value[] }
   | { readonly tag: "unbounded" }
@@ -149,6 +160,15 @@ export type Value =
     readonly resume: (value: Value) => unknown;
     readonly state: { used: boolean };
   };
+
+/**
+ * The name of the four-lane vector type, spelled once.
+ *
+ * The evaluator mints the type value, `show` prints it, the bridge hands it to
+ * the lattice, and the backend matches on it to pick the vector layout. Four
+ * readers is how a name drifts, so there is one string.
+ */
+export const F32X4_NAME = "F32x4";
 
 export const UNIT: Value = { tag: "unit" };
 export const TRUE: Value = { tag: "tag", name: "True", payload: null };
@@ -219,6 +239,7 @@ export function show(value: Value): string {
   if (value.tag === "text") return JSON.stringify(value.value);
   if (value.tag === "unit") return "()";
   if (value.tag === "unbounded") return "@type.unbounded";
+  if (value.tag === "opaque-type") return value.name;
   if (value.tag === "type-variable") return `'t${value.id}`;
   if (value.tag === "forall") {
     return `forall 't${value.variable}. ${show(value.body)}`;
@@ -250,7 +271,6 @@ export function show(value: Value): string {
       if (domain === "text") return "Str";
       if (domain === "float") return "F64";
       if (domain === "float32") return "F32";
-      if (domain === "f32x4") return "F32x4";
       return "Int";
     }
     if (
@@ -289,7 +309,7 @@ export function show(value: Value): string {
 /** Which ordered domain a range lives in: its own label, else its bounds. */
 export function rangeDomainOf(
   value: Value & { tag: "range" },
-): "int" | "text" | "float" | "float32" | "f32x4" {
+): "int" | "text" | "float" | "float32" {
   if (value.domain !== undefined) return value.domain;
   if (value.low.tag === "text" || value.high.tag === "text") return "text";
   return "int";
@@ -363,6 +383,9 @@ export function equal(left: Value, right: Value): boolean {
       left.members.every((member) =>
         right.members.some((other) => equal(member, other))
       );
+  }
+  if (left.tag === "opaque-type" && right.tag === "opaque-type") {
+    return left.name === right.name;
   }
   if (left.tag === "sealed" && right.tag === "sealed") {
     return left.name === right.name && equal(left.inner, right.inner);

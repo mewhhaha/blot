@@ -186,6 +186,11 @@ function bridgeValue(
       return { tag: "forall", variables: [variable.id], body };
     }
 
+    // Opaque on both sides, and the name is the whole of the identity — which
+    // is why `F32x4` bridges without the lattice learning anything about lanes.
+    case "opaque-type":
+      return { tag: "opaque", name: value.name };
+
     case "sealed":
       // A sealed type is identified by its name and its carrier, so the
       // opaque name has to carry both — otherwise `List I32` and `List Str`

@@ -18,6 +18,7 @@
 // keeping ownership and linearity out of the lattice entirely.
 
 import { expect } from "../diagnostic.ts";
+import { F32X4_NAME } from "../comptime/value.ts";
 
 export type Level = number;
 
@@ -97,7 +98,7 @@ export interface RigidVariable {
  * to narrow on when NaN and rounding exist. So `1.5` is a `Float` rather than a
  * singleton, and the machinery that would need a real number is never reached.
  */
-export type Domain = "int" | "text" | "float" | "float32" | "f32x4";
+export type Domain = "int" | "text" | "float" | "float32";
 
 export type SimpleType =
   | Variable
@@ -229,13 +230,16 @@ export const FLOAT32: SimpleType = {
  * register and a tuple is four fields: the point of naming it is that the
  * operations over it are single instructions, and a shape blot could take
  * apart field by field would not be.
+ *
+ * Opaque rather than a range, because a vector is not an interval. A range's
+ * whole content is its two bounds, and there is no value a vector sits above or
+ * below; it read as one only because every float-ish range is open at both ends
+ * and so `setops` and coverage never put a bound question to it. `opaque` is
+ * what the lattice already has for a type whose only fact is its name, and
+ * matching by name is the relation four lanes need: an `F32x4` is an `F32x4`
+ * and nothing else.
  */
-export const F32X4: SimpleType = {
-  tag: "range",
-  domain: "f32x4",
-  low: null,
-  high: null,
-};
+export const F32X4: SimpleType = { tag: "opaque", name: F32X4_NAME };
 
 export function fun(
   param: SimpleType,

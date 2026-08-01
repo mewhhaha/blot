@@ -9,8 +9,17 @@
 // where the ergonomics belong.
 
 import type { Span } from "../syntax/ast.ts";
-import { fail } from "../diagnostic.ts";
-import { asTuple, bool, equal, show, UNIT, type Value } from "./value.ts";
+import type { Domain } from "../check/type.ts";
+import { expect, fail } from "../diagnostic.ts";
+import {
+  asTuple,
+  bool,
+  equal,
+  F32X4_NAME,
+  show,
+  UNIT,
+  type Value,
+} from "./value.ts";
 
 export interface Primitive {
   readonly arity: number;
@@ -272,9 +281,17 @@ function without(member: Value, other: Value, span: Span): Value[] {
  * second primitive to ask.
  */
 /** Which ordered domain a range lives in: its own label, else its bounds. */
+/** What `reflect` calls each domain. One tag per domain, and no default. */
+const DOMAIN_TAGS: Readonly<Record<Domain, string>> = {
+  int: "Int",
+  float: "F64",
+  float32: "F32",
+  text: "Text",
+};
+
 function rangeDomain(
   value: Value & { tag: "range" },
-): "int" | "text" | "float" | "float32" | "f32x4" {
+): "int" | "text" | "float" | "float32" {
   if (value.domain !== undefined) return value.domain;
   if (value.low.tag === "text" || value.high.tag === "text") return "text";
   return "int";
@@ -323,7 +340,12 @@ function reflect(value: Value): Value {
         record({
           low: value.low,
           high: value.high,
-          domain: bare(domain === "text" ? "Text" : "Int"),
+          // Every domain names itself. Mapping the four onto two made
+          // `refines (F64, Int)` and `refines (Int, F64)` both answer `#True`,
+          // because a float and an integer reflected to the same value — the
+          // same lie the `domain` field was added to stop `Str` and `Int`
+          // telling.
+          domain: bare(DOMAIN_TAGS[domain]),
         }),
       );
     }
@@ -347,9 +369,9 @@ function reflect(value: Value): Value {
         }),
       );
     default:
-      // Closures, primitives, host functions, effects. A program can call these
-      // but has no business taking them apart, and saying so is more honest
-      // than inventing a case per callable kind.
+      // Closures, primitives, host functions, effects, and `F32x4`. A program
+      // can call or compute with these but has no business taking them apart,
+      // and saying so is more honest than inventing a case per callable kind.
       return bare("Opaque");
   }
 }
@@ -417,6 +439,16 @@ export function inhabits(value: Value, type: Value): boolean {
   if (type.tag === "union") {
     return type.members.some((member) => inhabits(value, member));
   }
+  if (type.tag === "opaque-type") {
+    // Nothing to compare: an opaque type is a name, so which values are in it
+    // is a fact the evaluator holds rather than one it computes. `F32x4` is the
+    // only one there is, and a vector is the only thing in it.
+    expect(
+      type.name === F32X4_NAME,
+      `the opaque type ${type.name} has no inhabitants the evaluator knows`,
+    );
+    return value.tag === "vector";
+  }
   if (type.tag === "range") {
     const aboveLow = type.low.tag === "unbounded" ||
       compare(value, type.low, { start: 0, end: 0 }, "@type.range") >= 0;
@@ -466,15 +498,12 @@ export const PRIMITIVE_VALUES: ReadonlyMap<string, Value> = new Map<
     high: { tag: "unbounded" },
     domain: "text",
   }],
+  // Four lanes are not an interval, so this is the one type value with no parts
+  // rather than a range that would never be asked about its bounds.
+  ["@type.f32x4", { tag: "opaque-type", name: F32X4_NAME }],
   // Always open at both ends. A float bound would have to be a real number and
   // nothing in the lattice could use one, so `Float` is the only float type
   // there is.
-  ["@type.f32x4", {
-    tag: "range",
-    low: { tag: "unbounded" },
-    high: { tag: "unbounded" },
-    domain: "f32x4",
-  }],
   ["@type.float32", {
     tag: "range",
     low: { tag: "unbounded" },
@@ -845,50 +874,48 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
 
   ["@float.add", {
     arity: 2,
-    run: ([l, r], s) =>
-      ({
-        tag: "float",
-        value: floatOf(l, s, "@float.add") + floatOf(r, s, "@float.add"),
-      }),
+    run: ([l, r], s) => ({
+      tag: "float",
+      value: floatOf(l, s, "@float.add") + floatOf(r, s, "@float.add"),
+    }),
   }],
   ["@float.sub", {
     arity: 2,
-    run: ([l, r], s) =>
-      ({
-        tag: "float",
-        value: floatOf(l, s, "@float.sub") - floatOf(r, s, "@float.sub"),
-      }),
+    run: ([l, r], s) => ({
+      tag: "float",
+      value: floatOf(l, s, "@float.sub") - floatOf(r, s, "@float.sub"),
+    }),
   }],
   ["@float.mul", {
     arity: 2,
-    run: ([l, r], s) =>
-      ({
-        tag: "float",
-        value: floatOf(l, s, "@float.mul") * floatOf(r, s, "@float.mul"),
-      }),
+    run: ([l, r], s) => ({
+      tag: "float",
+      value: floatOf(l, s, "@float.mul") * floatOf(r, s, "@float.mul"),
+    }),
   }],
   // Division by zero is an infinity rather than a diagnostic, unlike
   // `@int.div`. The three executions have to agree, and WebAssembly's `f64.div`
   // does not trap.
   ["@float.div", {
     arity: 2,
-    run: ([l, r], s) =>
-      ({
-        tag: "float",
-        value: floatOf(l, s, "@float.div") / floatOf(r, s, "@float.div"),
-      }),
+    run: ([l, r], s) => ({
+      tag: "float",
+      value: floatOf(l, s, "@float.div") / floatOf(r, s, "@float.div"),
+    }),
   }],
   ["@float.rem", {
     arity: 2,
-    run: ([l, r], s) =>
-      ({
-        tag: "float",
-        value: floatOf(l, s, "@float.rem") % floatOf(r, s, "@float.rem"),
-      }),
+    run: ([l, r], s) => ({
+      tag: "float",
+      value: floatOf(l, s, "@float.rem") % floatOf(r, s, "@float.rem"),
+    }),
   }],
   ["@float.neg", {
     arity: 1,
-    run: ([value], s) => ({ tag: "float", value: -floatOf(value, s, "@float.neg") }),
+    run: ([value], s) => ({
+      tag: "float",
+      value: -floatOf(value, s, "@float.neg"),
+    }),
   }],
   // NaN is unordered against everything including itself, and there is no
   // fourth answer to give. Refusing is the only option that does not claim a
@@ -933,7 +960,12 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     run: ([value], s, phase) => {
       const number = floatOf(value, s, "@int.of_float");
       if (!Number.isFinite(number)) return { tag: "int", value: 0n };
-      return integerResult(BigInt(Math.trunc(number)), s, "@int.of_float", phase);
+      return integerResult(
+        BigInt(Math.trunc(number)),
+        s,
+        "@int.of_float",
+        phase,
+      );
     },
   }],
   // --- single precision -----------------------------------------------------
@@ -997,8 +1029,10 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
   // Widening, and exact — every f32 is an f64.
   ["@float.of_f32", {
     arity: 1,
-    run: ([value], s) =>
-      ({ tag: "float", value: float32Of(value, s, "@float.of_f32") }),
+    run: ([value], s) => ({
+      tag: "float",
+      value: float32Of(value, s, "@float.of_f32"),
+    }),
   }],
 
   // --- four lanes -----------------------------------------------------------
@@ -1079,23 +1113,19 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
   }],
   ["@f32x4.x", {
     arity: 1,
-    run: ([v], s) =>
-      ({ tag: "float32", value: vectorOf(v, s, "@f32x4.x")[0] }),
+    run: ([v], s) => ({ tag: "float32", value: vectorOf(v, s, "@f32x4.x")[0] }),
   }],
   ["@f32x4.y", {
     arity: 1,
-    run: ([v], s) =>
-      ({ tag: "float32", value: vectorOf(v, s, "@f32x4.y")[1] }),
+    run: ([v], s) => ({ tag: "float32", value: vectorOf(v, s, "@f32x4.y")[1] }),
   }],
   ["@f32x4.z", {
     arity: 1,
-    run: ([v], s) =>
-      ({ tag: "float32", value: vectorOf(v, s, "@f32x4.z")[2] }),
+    run: ([v], s) => ({ tag: "float32", value: vectorOf(v, s, "@f32x4.z")[2] }),
   }],
   ["@f32x4.w", {
     arity: 1,
-    run: ([v], s) =>
-      ({ tag: "float32", value: vectorOf(v, s, "@f32x4.w")[3] }),
+    run: ([v], s) => ({ tag: "float32", value: vectorOf(v, s, "@f32x4.w")[3] }),
   }],
 
   ["@panic", {

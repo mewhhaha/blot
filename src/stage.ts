@@ -258,6 +258,11 @@ function stageExpression(
 
 function compileTimeOnly(value: Value): boolean {
   switch (value.tag) {
+    // An opaque type is a type, so it is erased with the rest of them. It
+    // reached the `default` below when it was added, and a module field bound
+    // to `F32x4` staged as a runtime export — which the boundary would then
+    // refuse, for a value that was never meant to be there.
+    case "opaque-type":
     case "range":
     case "union":
     case "unbounded":

@@ -117,7 +117,7 @@ export function uncovered(
 }
 
 /**
- * Whether a scalar domain is too large for literal arms to cover.
+ * Whether a scalar type is too large for literal arms to cover.
  *
  * A range with an open end holds infinitely many values, so no finite set of
  * literal arms can be exhaustive over it and `uncovered` has nothing to list.
@@ -127,6 +127,11 @@ export function uncovered(
  * with `@panic` why reaching it is impossible.
  */
 export function unlistable(type: SimpleType): boolean {
+  // No literal names an inhabitant of an opaque type, so no finite list of arms
+  // exhausts one. `F32x4` answered this as a range with two open ends until it
+  // stopped being a range; the answer is the same and the reason is now the
+  // type itself rather than its bounds.
+  if (type.tag === "opaque") return true;
   if (type.tag === "range") {
     // Only a set no finite arm list could exhaust. A bounded integer range is
     // finite and `enumerate` lists it, so it is not unlistable — saying it was

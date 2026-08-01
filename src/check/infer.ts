@@ -56,9 +56,9 @@ import { show as showType, showRange } from "./print.ts";
 import {
   type ClosedBound,
   effects,
+  FLOAT,
   freshVar,
   INT,
-  FLOAT,
   intLiteral,
   lengthBound,
   type Level,
@@ -1503,6 +1503,11 @@ function scalarArms(arms: readonly SimpleType[]): boolean {
 /** The scrutinee as a scalar set, through a variable's bounds if need be. */
 function groundScalar(type: SimpleType): SimpleType | null {
   if (type.tag === "range") return type;
+  // An opaque type is ground in the sense this asks about: it is a set of
+  // values with nothing to enumerate, so literal arms over one can never
+  // cover it. Without this the `unlistable` gate never fires for `F32x4` and
+  // `case v of 1 => …` is accepted, then fails to match at run time.
+  if (type.tag === "opaque") return type;
   if (type.tag === "union") {
     if (type.members.every((member) => member.tag === "range")) return type;
     return null;

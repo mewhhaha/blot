@@ -68,7 +68,12 @@ function describe(type: SimpleType): string {
     case "effects":
       return `<${[...type.labels].join(", ")}>`;
     case "opaque":
-      return type.name;
+      // `F32x4` is a name the reader can write; a seal's is not — it bridges
+      // to `${name}#${carrier}` (see `bridge.ts`), which is a compiler-local
+      // identity. Quoting only the ones without a `#` keeps the backticks
+      // meaning "you can write this".
+      if (type.name.includes("#")) return type.name;
+      return `\`${type.name}\``;
     case "union":
       return type.members.map(describe).join(" | ");
     case "top":
