@@ -18,11 +18,12 @@ parse file:
 parity:
     WGPU_BACKENDS=vulkan WGPU_POWER_PREF=high \
       deno run --unstable-webgpu --allow-read --allow-env scripts/parity.ts \
-      examples/*.blot examples/lib/*.blot case-studies/*/*.blot src/prelude/*.blot
+      examples/*.blot examples/lib/*.blot case-studies/*/*.blot \
+      case-studies/*/lib/*.blot src/prelude/*.blot
 
 # The same corpus through the CPU oracle only.
 parity-cpu:
-  deno run --allow-read scripts/parity.ts --cpu examples/*.blot examples/lib/*.blot case-studies/*/*.blot src/prelude/*.blot
+  deno run --allow-read scripts/parity.ts --cpu examples/*.blot examples/lib/*.blot case-studies/*/*.blot case-studies/*/lib/*.blot src/prelude/*.blot
 
 # Parse and evaluate one program.
 run file:

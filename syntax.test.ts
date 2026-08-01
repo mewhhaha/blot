@@ -33,8 +33,16 @@ Deno.test("the generated plan carries a strict version-3 GPU frontend", () => {
 
 // The prelude is blot source too, so it is held to the same profile. That is
 // what caught the signed-i32 literal bound: a prelude parsed only by the CPU
-// path would have hidden it.
-const CORPUS = ["examples", "examples/lib", "src/prelude"];
+// path would have hidden it. A case study's libraries are held to it for the
+// same reason — they are the largest blot source outside the prelude, and the
+// `just parity` glob had missed them entirely until the engine grew a second
+// one.
+const CORPUS = [
+  "examples",
+  "examples/lib",
+  "src/prelude",
+  "case-studies/engine/lib",
+];
 
 for (const directory of CORPUS) {
   for await (const entry of Deno.readDir(directory)) {

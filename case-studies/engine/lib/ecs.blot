@@ -1,0 +1,79 @@
+// An entity-component-system: components in parallel arrays keyed by entity.
+//
+// An ECS normally exists because game state is a large mutable graph and every
+// system wants a different slice. Blot has no mutation, so that framing does
+// not apply — but the layout still does, and it is the layout that is reusable.
+// Nothing here knows what a component is, so a store holds whatever the
+// application decided its entities have.
+//
+// This module needs no authority. A store is an array and a system is a
+// function over arrays, so the module argument is unit and the importer's
+// effect row is unchanged by using it.
+
+open {} = (@import "blot:prelude") ();
+
+// One slot per entity. The slot is an `Option` because a join has to answer
+// what happens where a component is absent, and `#None` is that answer — but
+// nothing here hands one out: `attach` is the only way to grow a store, and it
+// always fills. A store becomes sparse when something detaches, which this
+// library does not do yet, or when two stores are grown to different lengths.
+//
+// An entity id indexes every store alike, which is what makes a join an index
+// walk rather than a search.
+const Store = component => [Option component];
+
+const attach = (store, value) => @array.push store (Some value);
+const at = (store, id) => @array.get store id;
+const count = store => @array.len store;
+
+// A system over one component: rebuild the store from the entities that have
+// it. The entities that do not are carried through untouched, so a system is a
+// total function over the world even when it reads a slice of it.
+const each_1 = (store, step) => fold (
+  upto (0, count store),
+  store,
+  ((state, id) => case at (store, id) of
+    #Some value => @array.set state id (Some (step value)),
+    #None => state
+  end)
+);
+
+// The join a two-component system wants: rebuild the left store for entities
+// that have both components and skip the rest.
+//
+// The nesting is not a preference. `case (at (l, id), at (r, id)) of` with a
+// tuple pattern says this in one arm, and that shape does not lower yet.
+const each_2 = (left, right, step) => fold (
+  upto (0, count left),
+  left,
+  ((state, id) => case at (left, id) of
+    #Some a => case at (right, id) of
+      #Some b => @array.set state id (Some (step (a, b))),
+      #None => state
+    end,
+    #None => state
+  end)
+);
+
+// The same join for a system that produces effects rather than components,
+// which is what a renderer is.
+const visit_2 = (left, right, visit) => each (
+  upto (0, count left),
+  (id => case at (left, id) of
+    #Some a => case at (right, id) of
+      #Some b => visit (a, b),
+      #None => ()
+    end,
+    #None => ()
+  end)
+);
+
+return {
+  .Store = Store;
+  .attach = attach;
+  .at = at;
+  .count = count;
+  .each_1 = each_1;
+  .each_2 = each_2;
+  .visit_2 = visit_2;
+};

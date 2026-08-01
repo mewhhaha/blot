@@ -59,10 +59,46 @@ an ambient network call.
 
 ## engine
 
-`engine/main.blot` is a small 3D engine: an entity-component-system, a camera
-with two lenses, four-lane vector maths, and hot reload for both the scene and
-the code. It draws to a canvas through four host capabilities and reaches
-nothing else on the page.
+`engine/` is a small 3D engine: an entity-component-system, a camera with two
+lenses, four-lane vector maths, and hot reload for both the scene and the code.
+It draws to a canvas through four host capabilities and reaches nothing else on
+the page.
+
+### Four modules, and what each of them owns
+
+```text
+main.blot        the game: its components, its systems, its scene, its loop
+lib/ecs.blot     stores and joins over entities, and no authority at all
+lib/render.blot  the camera, the projection, the cube, and the two draw calls
+lib/math.blot    sine and cosine, indexed by step
+```
+
+`main.blot` declares `Assets` and `Host` because the scene format is this game's
+and the frame clock is this game's loop. It does _not_ declare `Canvas` or
+`View`: those belong to the renderer and are declared inside it, because an
+effect's identity is its declaration site. A library that draws must own what it
+draws through — two modules that each wrote `@effect.host` for a canvas would be
+two capabilities and two host imports, and a capability cannot be passed in as a
+module argument because a compile-time value has no runtime representation to
+pass. So importing `lib/render.blot` _is_ how this program acquires the
+authority to draw, and its inferred type says so:
+
+```text
+case-studies/engine/main.blot: (Int | 0) ~ { Assets, Canvas, Host, View }
+```
+
+The same reason keeps `Canvas` out of the renderer's exports: a module's
+returned record is a runtime value and an effect cannot be a field of one. The
+renderer exports a `frame` instead, which clears, reads the camera, hands the
+application two brushes, and presents.
+
+That is also what keeps the projection lowering. A camera is one record inside
+`lib/render.blot` and a different field subset at each of the four places that
+reads one, and those shapes only agree because inference watches the record
+reach them — which it can only do while the record stays inside one module.
+Records that _do_ cross carry their whole field set, which is why a brush takes
+a position, an angle, a scale, and a colour rather than a `Transform`: the
+renderer has no business knowing that this game's transform also has a spin.
 
 ### The world is the frame loop
 
@@ -86,9 +122,8 @@ for ever do
     generation := current;
   end;
 
-  let camera = camera_of (View.yaw (), View.pitch (), View.distance (), View.lens ());
   transforms := advance transforms;
-  let _ = render (transforms, models, camera);
+  let _ = render (transforms, models);
 end;
 ```
 
@@ -153,13 +188,15 @@ hundred pixels. That is a reason to expect it to hold rather than a measurement
 that it does — what has been checked is that the ported engine renders, that its
 exports are unchanged, and that all three executions agree on them.
 
-`lib/math.blot` needs sine and cosine and gets them from a Taylor series that
-runs in the _comptime evaluator_: `const` forces the series to be evaluated
-while compiling, so a quarter turn of sines reaches WebAssembly as data and the
-polynomial that produced it is not in the artifact. Seven terms now rather than
-four — the fixed-point version could not afford the intermediates. The series is
-still evaluated in double precision and narrowed per entry as the table is
-built, because an `F64` in the comptime evaluator costs the artifact nothing.
+`lib/render.blot` needs sine and cosine, and `main.blot` needs the size of a
+turn to step a spin by; both come from `lib/math.blot`, which builds them from a
+Taylor series that runs in the _comptime evaluator_: `const` forces the series
+to be evaluated while compiling, so a quarter turn of sines reaches WebAssembly
+as data and the polynomial that produced it is not in the artifact. Seven terms
+now rather than four — the fixed-point version could not afford the
+intermediates. The series is still evaluated in double precision and narrowed
+per entry as the table is built, because an `F64` in the comptime evaluator
+costs the artifact nothing.
 
 `sin 45°` is `0.707`, which is what you would want and what the fixed-point
 version could only approach. The module's square root takes an `F32` now, so
@@ -206,11 +243,11 @@ stores from the new scene. No compiler runs and the module is untouched — the
 reload path is the same fold as the first load, so there is no second path to
 keep correct.
 
-**Code.** Edit `main.blot` or `lib/math.blot` and the server rebuilds the module
-and the page swaps in a new worker. The camera survives, because the camera was
-never in the guest: `View` is a host capability backed by the page's pointer and
-wheel. A rebuild that fails leaves the last good module running and shows the
-diagnostic on the page.
+**Code.** Edit `main.blot` or anything under `lib/` and the server rebuilds the
+module and the page swaps in a new worker. The camera survives, because the
+camera was never in the guest: `View` is a host capability backed by the page's
+pointer and wheel. A rebuild that fails leaves the last good module running and
+shows the diagnostic on the page.
 
 One `BlotCompilerSession` is held for the life of the server, so a rebuild is a
 compile and not a device acquisition.
@@ -263,11 +300,22 @@ remove the worker.
 - **A two-component join wants a tuple pattern.**
   `case (at (l, id), at (r, id)) of (#Some a, #Some b) => …` is how this should
   read, and it does not lower — _"a tuple pattern over a literal is not lowered
-  to Wasm yet"_. The join helpers nest their `case`s instead, once, so the
-  systems stay one expression each.
-- **An effect row cannot be written.** `render` is the one binding here with no
-  `sig`: an effectful arrow's type includes its row, and a row is printed but
-  never written.
+  to Wasm yet"_. `lib/ecs.blot` nests its `case`s instead, once, so the systems
+  stay one expression each.
+- **An effect row cannot be written.** Not one effectful binding in the engine
+  carries a `sig` — not `render`, not the two loaders, not the renderer's
+  `frame` — because an effectful arrow's type includes its row, and a row is
+  printed but never written. `advance` has one only because it is the one system
+  that touches no capability.
+- **A record crossing a module boundary carries its whole field set.** Inference
+  records the field set at each projection and the backend turns it into a
+  nominal, so a library that reads `.colour` off a record builds a one-field
+  shape and an application that passes it a two-field one is a lowering
+  mismatch. Inside a module inference reconciles the two, because it watches the
+  value reach the projection; across one it cannot. So the renderer's brushes
+  take a position, an angle, a scale, and a colour, and the camera never leaves
+  the module that builds it. That is a fine boundary to have arrived at, but it
+  was arrived at by the backend rather than chosen.
 - **A float cannot cross the module boundary.** gpufuck's `CanonicalAbiType` has
   no float case, so `Assets.entry` carries thousandths and `Canvas.tri` carries
   pixels. One conversion at each edge, which is where a renderer wants one

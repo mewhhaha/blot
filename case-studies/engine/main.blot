@@ -1,5 +1,16 @@
 // A small 3D engine, in a language with no assignment.
 //
+// This file is the game: the components it chose, the systems over them, the
+// scene it loads, and the frame loop. The engine underneath it is three
+// modules — `lib/ecs.blot` owns entities and needs no authority at all,
+// `lib/render.blot` owns pixels and declares the authority it needs for them,
+// and `lib/math.blot` owns the trigonometry the renderer indexes by step.
+//
+// None of them knows what a component means. The renderer rotates about one
+// axis and takes the angle from its caller, so the boxes spin because this
+// file gives them a `spin` and steps it, not because anything below knows the
+// word.
+//
 // The world is a set of parallel arrays keyed by entity, and each system is a
 // function over the arrays it reads — the layout an ECS arrives at. What the
 // language adds is that the world does not have to be a value: a `for` body's
@@ -7,21 +18,12 @@
 // world. A system that does not rebind a name cannot affect it, which is the
 // property an ECS normally arranges with scheduling and declared access.
 //
-// The geometry is four-lane vectors. A point is an `F32x4` whose fourth lane is
-// 1 and a direction is one whose fourth lane is 0, which is the convention that
-// turns a transform into a matrix and a matrix row into a dot product: the
-// row's fourth lane is its translation and the point's decides whether that
-// translation applies. So a model rotation, a camera, and a light are the same
-// pair of operations over different rows — a lane-wise multiply and a
-// horizontal sum — and a three-component vector rides in a four-lane register
-// with the spare lane doing the work a fourth component would otherwise be.
-//
-// The geometry was fixed point at 4096 before the language had a second numeric
-// type, and `F64` scalars before it had a fourth. Neither move changed the
-// boundary: a float cannot cross a module boundary at all, so the scene arrives
-// as thousandths and the screen leaves as pixels, and everything between them
-// is a lane. `lib/math.blot` still builds its trig table with the comptime
-// evaluator, so the series that produced it is not in the artifact.
+// The two capabilities this file declares are the ones the game owns: the scene
+// it reads and the clock it runs on. `Canvas` and `View` belong to the renderer
+// and are declared there, because an effect's identity is its declaration site
+// and a library that draws must own what it draws through. Importing that
+// library is therefore how this program acquires the authority to draw, and the
+// row on the frame loop says so.
 //
 // The scene comes from the host and is rebuilt whenever the host says its
 // generation changed, so editing `assets/scene.json` restocks the world without
@@ -37,60 +39,17 @@ operators {
 
 open {} = (@import "blot:prelude") ();
 
+const E = (@import "./lib/ecs.blot") ();
 const M = (@import "./lib/math.blot") ();
+const R = (@import "./lib/render.blot") ();
 
-// There is one float token in the grammar and it reads as an `F64`, so every
-// single-precision constant below is a narrowing the program wrote down.
-const lane = Float32.of_float;
-
-const ZERO = lane 0.0;
-const ONE = lane 1.0;
-
-// The scene is whole units in the file and thousandths on the wire, because
-// `Assets.entry` is a module import and a float has no layout to cross one in.
-// One conversion at load, and nothing downstream knows.
-const unit = value => Float32.div (Float32.of_int value) (lane 1000.0);
+const Store = E.Store;
 
 // --- the host boundary ------------------------------------------------------
 //
-// Four capabilities and nothing else. There is no canvas handle, no file
-// handle, and no clock; this program cannot reach the page except through them.
-
-const Canvas = @effect.host {
-  .clear = Unit -> Unit;
-  // A projected triangle. `depth` is the view distance the host sorts by — the
-  // guest owns geometry and the host owns rasterization order, which is the
-  // same split a depth buffer makes.
-  .tri = {
-    .ax = Int; .ay = Int;
-    .bx = Int; .by = Int;
-    .cx = Int; .cy = Int;
-    .depth = Int;
-    .shade = Int;
-    .colour = Str;
-  } -> Unit;
-  // A 2D texture, always square to the screen. Under an orthographic lens this
-  // is a plain sprite; under a perspective one it is a billboard, and the only
-  // difference is what scaled its size.
-  .sprite = {
-    .x = Int; .y = Int;
-    .size = Int;
-    .depth = Int;
-    .texture = Str;
-  } -> Unit;
-  .present = Unit -> Unit;
-};
-
-// The camera lives in the host because the host owns the input device. Keeping
-// it there is what lets the code hot-reload without losing the view.
-const View = @effect.host {
-  .yaw = Unit -> Int;
-  .pitch = Unit -> Int;
-  .distance = Unit -> Int;
-  // `0` is a perspective lens and `1` is orthographic. A 2D scene is this
-  // engine with the lens switched, not a second renderer.
-  .lens = Unit -> Int;
-};
+// The scene format is this game's and the frame clock is this game's loop, so
+// both stay here. Together with the renderer's two, that is four capabilities
+// and nothing else: this program cannot reach the page except through them.
 
 const Assets = @effect.host {
   .generation = Unit -> Int;
@@ -108,24 +67,9 @@ const Host = @effect.host {
   .frame = Unit -> Int;
 };
 
-// --- the screen -------------------------------------------------------------
-
-const WIDTH = 480;
-const HEIGHT = 300;
-const CX = lane 240.0;
-const CY = lane 150.0;
-
-// Pixels across one unit at one unit of depth, and how close a vertex may come
-// before its face is dropped.
-const FOCAL = lane 420.0;
-const NEAR = lane 0.25;
-
-// The screen centre, and the axes a view point is measured along to reach it. A
-// screen's y counts down and a world's counts up, so the flip rides in the axis
-// vector rather than in a subtraction that only one of the two lanes wants.
-const SCREEN_CENTRE = Vec4.of (CX, CY, ZERO, ZERO);
-const FOCAL_AXES = Vec4.of (FOCAL, Float32.negate FOCAL, ZERO, ZERO);
-
+// The scene file says a box or a texture, and the renderer offers a call for
+// each. Which integer means which is the scene format's business, so the
+// dispatch is here rather than inside the renderer.
 const KIND_MESH = 0;
 
 // --- components -------------------------------------------------------------
@@ -142,322 +86,54 @@ const Transform = {
 };
 const Model = { .kind = Int; .colour = Str; };
 
-const Store = component => [Option component];
-
-const attach = (store, value) => @array.push store (Some value);
-const at = (store, id) => @array.get store id;
-const count = store => @array.len store;
-
-// The join every system here wants: rebuild the left store for entities that
-// have both components and skip the rest. Written once, so the systems stay one
-// expression each.
-//
-// The nesting is not a preference. `case (at (l, id), at (r, id)) of` with a
-// tuple pattern says this in one arm, and that shape does not lower yet.
-const each_2 = (left, right, step) => fold (
-  upto (0, count left),
-  left,
-  ((state, id) => case at (left, id) of
-    #Some a => case at (right, id) of
-      #Some b => @array.set state id (Some (step (a, b))),
-      #None => state
-    end,
-    #None => state
-  end)
-);
-
-const visit_2 = (left, right, visit) => each (
-  upto (0, count left),
-  (id => case at (left, id) of
-    #Some a => case at (right, id) of
-      #Some b => visit (a, b),
-      #None => ()
-    end,
-    #None => ()
-  end)
-);
-
-// --- geometry ---------------------------------------------------------------
-//
-// A unit cube, as six faces with a normal each. Corners are named by index, so
-// a face is four numbers rather than four points and its winding stays visible.
-//
-// A corner and a normal are both directions — a corner is an offset from the
-// model's own origin — so both carry 0 in the fourth lane. Scaling and turning
-// them is then lane-wise across all four, and adding the entity's position,
-// whose fourth lane is 1, is the step that makes a corner a point.
-
-const HALF = lane 0.5;
-const NEG_HALF = Float32.negate HALF;
-const NEG_ONE = Float32.negate ONE;
-
-const corners = [
-  Vec4.of (NEG_HALF, NEG_HALF, NEG_HALF, ZERO),
-  Vec4.of (HALF, NEG_HALF, NEG_HALF, ZERO),
-  Vec4.of (HALF, HALF, NEG_HALF, ZERO),
-  Vec4.of (NEG_HALF, HALF, NEG_HALF, ZERO),
-  Vec4.of (NEG_HALF, NEG_HALF, HALF, ZERO),
-  Vec4.of (HALF, NEG_HALF, HALF, ZERO),
-  Vec4.of (HALF, HALF, HALF, ZERO),
-  Vec4.of (NEG_HALF, HALF, HALF, ZERO)
-];
-
-const faces = [
-  { .a = 1; .b = 0; .c = 3; .d = 2; .n = Vec4.of (ZERO, ZERO, NEG_ONE, ZERO); },
-  { .a = 4; .b = 5; .c = 6; .d = 7; .n = Vec4.of (ZERO, ZERO, ONE, ZERO); },
-  { .a = 0; .b = 4; .c = 7; .d = 3; .n = Vec4.of (NEG_ONE, ZERO, ZERO, ZERO); },
-  { .a = 5; .b = 1; .c = 2; .d = 6; .n = Vec4.of (ONE, ZERO, ZERO, ZERO); },
-  { .a = 3; .b = 7; .c = 6; .d = 2; .n = Vec4.of (ZERO, ONE, ZERO, ZERO); },
-  { .a = 0; .b = 1; .c = 5; .d = 4; .n = Vec4.of (ZERO, NEG_ONE, ZERO, ZERO); }
-];
-
-// A fixed light, normalized in advance so shading stays one dot product. A
-// direction, so its fourth lane is 0 and a normal's fourth lane never reaches
-// the sum whatever it holds.
-const LIGHT = Vec4.of (lane 0.53, lane 0.76, lane 0.38, ZERO);
-
-// --- transforms -------------------------------------------------------------
-
-// Rotation about Y, the only model rotation this engine has: a scene of
-// spinning boxes needs one axis, and a second would be more code and no more
-// to look at.
-//
-// Two rows rather than three, because the y row is (0, 1, 0, 0) and reading a
-// lane is cheaper than dotting against it. Neither row translates, so the
-// fourth lane passes through and a direction stays a direction.
-const rotation_of = angle => do
-  let s = M.sin angle;
-  let c = M.cos angle;
-  in {
-    .to_x = Vec4.of (c, ZERO, s, ZERO);
-    .to_z = Vec4.of (Float32.negate s, ZERO, c, ZERO);
-  }
-end;
-
-const turn_y = (point, rotation) => Vec4.of (
-  Vec4.dot point rotation.to_x,
-  Vec4.y point,
-  Vec4.dot point rotation.to_z,
-  Vec4.w point
-);
-
-// World to view: one dot per view coordinate, against the camera's own axes.
-const to_view = (point, camera) => Vec4.of (
-  Vec4.dot point camera.right,
-  Vec4.dot point camera.up,
-  Vec4.dot point camera.forward,
-  ONE
-);
-
-// View to screen. The two lenses differ in what the view point is measured
-// against: focal axes over its own depth, or zoom axes and no divide at all.
-// That is the whole of "2D is an orthographic camera".
-const to_screen = (view, camera) =>
-  if camera.lens == 0
-  then Vec4.add
-    SCREEN_CENTRE
-    (Vec4.div (Vec4.mul view FOCAL_AXES) (Vec4.splat (Vec4.z view)))
-  else Vec4.add SCREEN_CENTRE (Vec4.mul view camera.zoom_axes)
-  end;
-
-// Where the camera sits, and the three rows that take a world point to it.
-// Built once a frame rather than per vertex, because every vertex wants the
-// same four sines.
-const camera_of = (yaw, pitch, distance, lens) => do
-  let sin_yaw = M.sin yaw;
-  let cos_yaw = M.cos yaw;
-  let sin_pitch = M.sin pitch;
-  let cos_pitch = M.cos pitch;
-  // Pixels across one world unit, which is what the perspective divide works
-  // out to at the camera's own distance — so switching lenses holds the scene
-  // at roughly the size it already was, and pulling back still zooms out.
-  let zoom = Float32.div FOCAL distance;
-  in {
-    .eye = Vec4.of (
-      Float32.mul distance (Float32.mul cos_pitch sin_yaw),
-      Float32.mul distance sin_pitch,
-      Float32.mul distance (Float32.mul cos_pitch cos_yaw),
-      ONE
-    );
-    // `right` and `up` span the screen and `forward` grows away from the eye,
-    // which is the sign the divide, the near test, and the host's sort all
-    // want — so it is settled here rather than three times downstream.
-    .right = Vec4.of (cos_yaw, ZERO, Float32.negate sin_yaw, ZERO);
-    .up = Vec4.of (
-      Float32.negate (Float32.mul sin_pitch sin_yaw),
-      cos_pitch,
-      Float32.negate (Float32.mul sin_pitch cos_yaw),
-      ZERO
-    );
-    // A row's fourth lane is its translation, and the eye is the whole of it.
-    // Because the camera orbits the origin, that translation collapses: the eye
-    // only ever moves along `forward`, so the two screen rows translate by
-    // nothing and the depth row translates by the orbit radius. Subtracting the
-    // eye per vertex would arrive at these same three numbers.
-    .forward = Vec4.of (
-      Float32.negate (Float32.mul cos_pitch sin_yaw),
-      Float32.negate sin_pitch,
-      Float32.negate (Float32.mul cos_pitch cos_yaw),
-      distance
-    );
-    .lens = lens;
-    .zoom = zoom;
-    .zoom_axes = Vec4.of (zoom, Float32.negate zoom, ZERO, ZERO);
-  }
-end;
-
 // --- systems ----------------------------------------------------------------
 
 sig advance = Store Transform -> Store Transform;
-let advance = ts => fold (
-  upto (0, count ts),
-  ts,
-  ((state, id) => case at (ts, id) of
-    #Some t => @array.set state id (Some {
-      .position = t.position;
-      .angle = @int.rem (t.angle + t.spin) M.turn;
-      .spin = t.spin;
-      .scale = t.scale;
-    }),
-    #None => state
-  end)
-);
+let advance = ts => E.each_1 (ts, (t => {
+  .position = t.position;
+  .angle = @int.rem (t.angle + t.spin) M.turn;
+  .spin = t.spin;
+  .scale = t.scale;
+}));
 
-// How lit a face is: its world normal against the light, clamped, widened to
-// the 0..255 the host multiplies the colour by. The dot product is what the
-// four lanes are for — one multiply and one horizontal sum.
-const shade_of = normal => do
-  let dot = Vec4.dot normal LIGHT;
-  let lit = if is_less (Float32.cmp dot ZERO) then ZERO else dot end;
-  in 60 + Float32.truncate (Float32.mul lit (lane 195.0))
-end;
-
-// One face of one box: place its corners, project them, and hand the host two
-// triangles. A face pointing away, or crossing the near plane, is dropped
-// before either triangle is built.
-const draw_face = (transform, model, camera, face) => do
-  // Every corner of a box turns by the same angle, so the rows are built once
-  // here rather than once per corner.
-  let rotation = rotation_of transform.angle;
-
-  // Scale, turn, place, and view — four steps and no field ever named. The add
-  // is where the fourth lane changes from 0 to 1, and so where an offset from
-  // the model's origin becomes a point the camera can translate.
-  let corner = index => do
-    let local = @array.get corners index;
-    let spun = turn_y (Vec4.scale (local, transform.scale), rotation);
-    in to_view (Vec4.add spun transform.position, camera)
-  end;
-
-  let a = corner face.a;
-  let b = corner face.b;
-  let c = corner face.c;
-  let d = corner face.d;
-
-  let normal = turn_y (face.n, rotation);
-
-  // Backface culling: a face is visible when its normal leans towards the
-  // camera. Comparing against the box's centre rather than the face's own is
-  // exact enough for convex geometry and costs one subtract and one dot.
-  let outward = Vec4.dot normal (Vec4.sub transform.position camera.eye);
-
-  // The four view depths, read once. There is no lane-wise comparison, so the
-  // near test wants them as scalars — and having them as scalars is what lets
-  // the depth below be one more vector rather than three adds.
-  let za = Vec4.z a;
-  let zb = Vec4.z b;
-  let zc = Vec4.z c;
-  let zd = Vec4.z d;
-  let near = z => is_less (Float32.cmp z NEAR);
-  let behind = near za || near zb || near zc || near zd;
-  let hidden = is_greater (Float32.cmp outward ZERO);
-
-  in if behind || hidden then ()
-  else do
-    // Pixels, and the last place a float exists in this function. `Canvas` is
-    // a module import, so its record is the boundary a float cannot cross.
-    let pixel = point => {
-      .x = Float32.truncate (Vec4.x point);
-      .y = Float32.truncate (Vec4.y point);
-    };
-    let pa = pixel (to_screen (a, camera));
-    let pb = pixel (to_screen (b, camera));
-    let pc = pixel (to_screen (c, camera));
-    let pd = pixel (to_screen (d, camera));
-    // Millimetres of depth, so the host's sort keeps its resolution across an
-    // integer boundary. The mean of four and the millimetre scale are one
-    // constant — a quarter of a thousand — after the horizontal sum.
-    let depth = Float32.truncate
-      (Float32.mul (Vec4.sum (Vec4.of (za, zb, zc, zd))) (lane 250.0));
-    let shade = shade_of normal;
-    let _ = Canvas.tri {
-      .ax = pa.x; .ay = pa.y;
-      .bx = pb.x; .by = pb.y;
-      .cx = pc.x; .cy = pc.y;
-      .depth = depth; .shade = shade; .colour = model.colour;
-    };
-    in Canvas.tri {
-      .ax = pa.x; .ay = pa.y;
-      .bx = pc.x; .by = pc.y;
-      .cx = pd.x; .cy = pd.y;
-      .depth = depth; .shade = shade; .colour = model.colour;
-    }
-  end
-  end
-end;
-
-// A 2D texture placed in the 3D world. Its size divides by depth under a
-// perspective lens and does not under an orthographic one — the same one-line
-// difference `to_screen` makes.
-const draw_sprite = (transform, model, camera) => do
-  let view = to_view (transform.position, camera);
-  let depth = Vec4.z view;
-  in if is_less (Float32.cmp depth NEAR) then ()
-  else do
-    let point = to_screen (view, camera);
-    let size = if camera.lens == 0
-      then Float32.div (Float32.mul transform.scale FOCAL) depth
-      else Float32.mul transform.scale camera.zoom
-      end;
-    in Canvas.sprite {
-      .x = Float32.truncate (Vec4.x point);
-      .y = Float32.truncate (Vec4.y point);
-      .size = Float32.truncate size;
-      .depth = Float32.truncate (Float32.mul depth (lane 1000.0));
-      .texture = model.colour;
-    }
-  end
-  end
-end;
-
-// `render` is the one binding here with no `sig`: an effectful arrow's type
-// includes its row, and a row is printed but never written.
-let render = (transforms, models, camera) => do
-  let _ = Canvas.clear ();
-  let _2 = visit_2 (transforms, models, ((transform, model) =>
+// `render` carries no `sig`, and neither do the two loaders below: an effectful
+// arrow's type includes its row, and a row is printed but never written.
+// `advance` above can have one because it touches no capability.
+//
+// The renderer opens the frame and hands back the two brushes it has; which
+// entity gets which is the scene format's question, so it is answered here. A
+// brush takes placement and a colour rather than a component, because a record
+// carries its whole field set across a module boundary and the renderer has no
+// business knowing that a transform of this game's also has a spin.
+let render = (transforms, models) => R.frame (draw =>
+  E.visit_2 (transforms, models, ((transform, model) =>
     if model.kind == KIND_MESH
-    then each (faces, (face => draw_face (transform, model, camera, face)))
-    else draw_sprite (transform, model, camera)
-    end));
-  in Canvas.present ()
-end;
+    then draw.mesh (
+      transform.position, transform.angle, transform.scale, model.colour
+    )
+    else draw.sprite (transform.position, transform.scale, model.colour)
+    end)));
 
 // --- loading ----------------------------------------------------------------
 //
 // The scene is the host's. Reading it is a fold over `Assets.count`, so a
 // reload runs the same code as the first load and there is no second path to
-// keep correct.
+// keep correct. A float cannot cross the *host* boundary — `Assets.entry` is a
+// module import, and gpufuck's canonical ABI has no float layout — so the
+// entries arrive as thousandths and `R.point` and `R.unit` turn them into
+// lanes. Those two return floats across a blot module boundary, which is a
+// different edge and costs nothing: the modules are inlined into one artifact.
 
 let load_transforms = () => fold (
   upto (0, Assets.count ()),
   @array.empty,
   ((store, id) => do
     let entry = Assets.entry id;
-    in attach (store, {
-      .position = Vec4.of (unit entry.x, unit entry.y, unit entry.z, ONE);
+    in E.attach (store, {
+      .position = R.point (entry.x, entry.y, entry.z);
       .angle = 0;
       .spin = entry.spin;
-      .scale = unit entry.scale;
+      .scale = R.unit entry.scale;
     })
   end)
 );
@@ -467,7 +143,7 @@ let load_models = () => fold (
   @array.empty,
   ((store, id) => do
     let entry = Assets.entry id;
-    in attach (store, { .kind = entry.kind; .colour = entry.colour; })
+    in E.attach (store, { .kind = entry.kind; .colour = entry.colour; })
   end)
 );
 
@@ -496,15 +172,8 @@ for ever do
     generation := current;
   end;
 
-  let camera = camera_of (
-    View.yaw (),
-    View.pitch (),
-    unit (View.distance ()),
-    View.lens ()
-  );
-
   transforms := advance transforms;
-  let _ = render (transforms, models, camera);
+  let _ = render (transforms, models);
 
   frames := frames + 1;
 end;
