@@ -629,10 +629,41 @@ Deno.test("a horizontal sum lowers to gpufuck's reduction", async () => {
   const reduced = written.filter((definition) =>
     JSON.stringify(definition, printable).includes('"$F32x4ReduceAdd"')
   );
+  // `Vec4.sum` is an eta-expansion of the primitive, so it is no longer a
+  // definition at all — it is emitted at the use site, which is what lets the
+  // vector reaching it stay in a register. `dot` is a composition rather than
+  // a wrapper, so it is still compiled once and called.
   assertEquals(reduced.map((definition) => definition.name.split("$")[0]), [
-    "sum",
     "dot",
+    "blot",
   ]);
+});
+
+Deno.test("a prelude wrapper over a primitive is not a definition", async () => {
+  // The prelude spells its operations as closures because a primitive is not a
+  // value a record can hold. A closure that only passes its arguments along in
+  // order is that primitive, and hoisting it into a definition costs a call —
+  // and, for a vector, costs the register, because gpufuck decides what can
+  // stay native from the shape of the Core it is handed.
+  const path = join("examples", "simd.blot");
+  const loaded = await load(path);
+  const checked = await checkFile(path);
+  const lowered = lowerModule(loaded.module, checked, checked.values);
+
+  const names = lowered.definitions
+    .filter((definition) => !definition.name.startsWith("$"))
+    .map((definition) => definition.name.split("$")[0]);
+
+  for (const wrapper of ["add", "mul", "sub", "splat", "of", "sum", "x"]) {
+    assertEquals(
+      names.includes(wrapper),
+      false,
+      `${wrapper} is an eta-expansion and should have been emitted inline`,
+    );
+  }
+  // A composition still earns its definition: `dot` is a multiply and a sum,
+  // not a pass-through.
+  assertEquals(names.includes("dot"), true);
 });
 
 Deno.test("a program with no vectors carries none of their machinery", async () => {

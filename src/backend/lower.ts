@@ -2870,6 +2870,83 @@ function lowerIntegerBinary(
   );
 }
 
+/**
+ * The primitive a compile-time closure is an eta-expansion of, if it is one.
+ *
+ * The prelude spells its operations as closures over primitives —
+ * `Vec4.add = left => (right => @f32x4.add left right)` — because a primitive
+ * is not a value a module can put in a record. Lowering hoists such a closure
+ * into a definition and calls it, which is right for a closure that does
+ * something, and pure overhead for one that does nothing but pass its
+ * arguments along in order.
+ *
+ * It is not only overhead. gpufuck decides whether a four-lane vector can live
+ * in a register by looking at the *shape* of the Core it is given: an inline
+ * `$F32x4Splat` is a vector it can keep, and a call to a definition that
+ * happens to return one is not. So a chain written with `Vec4` boxed every
+ * intermediate into a heap record while the identical chain written with
+ * `@f32x4` stayed native — seven splats, thirteen extracts and twenty-one lane
+ * replacements against one, one and three.
+ *
+ * Recognising the eta-expansion costs nothing and terminates by construction:
+ * the body must be one primitive application whose arguments are exactly the
+ * parameters, in order, so there is no recursion to chase and no code to
+ * duplicate. This is what makes "every operator is prelude source" true of the
+ * emitted module and not only of the grammar.
+ */
+function etaExpandedPrimitive(
+  value: Value,
+  args: readonly Expr[],
+): { readonly primitive: string; readonly args: readonly Expr[] } | null {
+  if (value.tag !== "closure" || value.self !== null) return null;
+
+  // A wrapper over a primitive of more than one argument takes them as one
+  // tuple, because that is how the prelude spells every such function. The
+  // call site has to spell it the same way for the arguments to be recoverable
+  // one by one, which a tuple literal does and a name holding a tuple does not.
+  let parameters: string[];
+  let passed: readonly Expr[];
+  if (value.parameter.tag === "tuple") {
+    if (args.length !== 1 || args[0].tag !== "tuple") return null;
+    if (value.parameter.elements.length !== args[0].elements.length) {
+      return null;
+    }
+    if (!value.parameter.elements.every((element) => element.tag === "name")) {
+      return null;
+    }
+    parameters = value.parameter.elements.map((element) =>
+      (element as Pattern & { tag: "name" }).name
+    );
+    passed = args[0].elements;
+  } else if (value.parameter.tag === "name") {
+    parameters = [value.parameter.name];
+    passed = args;
+  } else {
+    return null;
+  }
+
+  let body: Expr = value.body;
+  while (parameters.length < passed.length) {
+    if (body.tag !== "lambda" || body.parameter.tag !== "name") return null;
+    parameters.push(body.parameter.name);
+    body = body.body;
+  }
+  if (parameters.length !== passed.length) return null;
+
+  if (body.tag !== "apply") return null;
+  const spine = flatten(body);
+  if (spine.callee.tag !== "intrinsic") return null;
+  // Exactly the parameters, in order. A closure that reorders, drops, or
+  // repeats one is doing something, and doing something is what a hoisted
+  // definition is for.
+  if (spine.args.length !== parameters.length) return null;
+  const passthrough = spine.args.every((argument, index) =>
+    argument.tag === "var" && argument.name === parameters[index]
+  );
+  if (!passthrough) return null;
+  return { primitive: spine.callee.name, args: passed };
+}
+
 function lowerApply(
   expr: Expr & { tag: "apply" },
   scope: Scope,
@@ -2880,6 +2957,38 @@ function lowerApply(
   // `@int.add a b` is `a + b`, not an application of a function that does not
   // exist at this level.
   const spine = flatten(expr);
+
+  // A prelude wrapper that only passes its arguments to a primitive is that
+  // primitive. Resolved before anything else looks at the callee, because the
+  // point is for the rest of this function to see `@f32x4.add a b` exactly as
+  // if the program had written it.
+  if (spine.callee.tag === "field") {
+    const member = comptimeShapeMember(spine.callee, scope);
+    if (member !== null) {
+      const expanded = etaExpandedPrimitive(member, spine.args);
+      if (expanded !== null) {
+        let rebuilt: Expr = {
+          tag: "intrinsic",
+          name: expanded.primitive,
+          span: spine.callee.span,
+        };
+        for (const argument of expanded.args) {
+          rebuilt = {
+            tag: "apply",
+            fn: rebuilt,
+            arg: argument,
+            span: expr.span,
+          };
+        }
+        return lowerApply(
+          rebuilt as Expr & { tag: "apply" },
+          scope,
+          lowering,
+          at,
+        );
+      }
+    }
+  }
 
   // `#Busy 41` builds a value; typing it through application would make the
   // constructor a function it is not.
