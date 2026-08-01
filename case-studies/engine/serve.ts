@@ -31,8 +31,12 @@ interface Entity {
   readonly colour: string;
 }
 
-/** The guest's fixed-point scale. Whole units in the file, 12 bits here. */
-const ONE = 4096;
+/**
+ * Thousandths. The guest's geometry is in floats, but a float cannot cross the
+ * module boundary — so the wire carries whole units times a thousand and the
+ * guest divides once at load.
+ */
+const ONE = 1000;
 const fixed = (value: unknown): number => {
   if (typeof value !== "number") return 0;
   return Math.round(value * ONE);

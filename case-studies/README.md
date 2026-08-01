@@ -96,17 +96,21 @@ A system that does not rebind a name provably cannot affect it — the property
 an ECS usually arranges with scheduling and declared access. Adding a component
 means adding a name.
 
-### Fixed point, and a table the artifact never computes
+### Floats, and a table the artifact never computes
 
-Blot has one numeric type and it is an integer, so this is a fixed-point engine
-at `ONE = 4096`. `lib/math.blot` needs sine and cosine, and gets them from a
-Taylor series that runs in the *comptime evaluator*: `const` forces the series
-to be evaluated while compiling, so the table reaches WebAssembly as data and
-the series that produced it is not in the artifact. The checker even knows the
-exact set of values a lookup can return — it prints as a union of 65 singletons.
+The geometry is in `F64`. It was fixed point at 4096 until the language had a
+second numeric type, and porting it changed one thing at the edges and nothing
+in the middle: a float cannot cross the module boundary, so the scene arrives as
+thousandths and the screen leaves as pixels, and everything between is a float.
 
-Accuracy is what you would want: `sin 32` is `2897` against an exact 2896.3, and
-`sin 64` is `4096` to the last bit.
+`lib/math.blot` needs sine and cosine and gets them from a Taylor series that
+runs in the *comptime evaluator*: `const` forces the series to be evaluated
+while compiling, so a quarter turn of sines reaches WebAssembly as data and the
+polynomial that produced it is not in the artifact. Seven terms now rather than
+four — the fixed-point version could not afford the intermediates.
+
+`sin 45°` is `0.707` and `sqrt 2.0` is `1.414`, which is what you would want and
+what the fixed-point version could only approach.
 
 ### 2D is the same renderer with the lens switched
 
@@ -206,8 +210,10 @@ remove the worker.
 - **An effect row cannot be written.** `render` is the one binding here with no
   `sig`: an effectful arrow's type includes its row, and a row is printed but
   never written.
-- **No SIMD, because no floats.** gpufuck's SIMD is f32x4 and blot has no
-  floating-point type at all — no `@float.*` primitives, no float row in the
-  ABI. That is why the maths here is fixed point. Reaching f32x4 would mean
-  giving blot floats first, in the value domain, the lattice, the ABI, and the
-  comptime evaluator, so that all three executions still agree.
+- **A float cannot cross the module boundary.** gpufuck's `CanonicalAbiType` has
+  no float case, so `Assets.entry` carries thousandths and `Canvas.tri` carries
+  pixels. One conversion at each edge, which is where a renderer wants one
+  anyway — but it is a gap in the target rather than a choice here.
+- **Still no SIMD.** gpufuck's SIMD is f32x4; this is f64, and it would also
+  need a four-lane vector *value* type. Floats were necessary and are not
+  sufficient.

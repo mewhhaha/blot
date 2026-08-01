@@ -71,7 +71,8 @@
 
       const TICK = 0, RUNNING = 1, YAW = 2, PITCH = 3, DISTANCE = 4;
       const LENS = 5, GENERATION = 6;
-      const ONE = 4096;
+      // Thousandths, matching the wire the guest reads its scene from.
+      const ONE = 1000;
 
       // The camera lives here, not in the guest. That is the whole reason a
       // code reload does not throw your viewpoint away.
@@ -185,7 +186,7 @@
             context.closePath();
             context.fill();
           } else {
-            const size = Math.max(2, item.size / ONE * 64);
+            const size = Math.max(2, item.size);
             context.drawImage(
               texture(item.texture),
               item.x - size / 2,

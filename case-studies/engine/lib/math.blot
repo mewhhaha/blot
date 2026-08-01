@@ -1,42 +1,52 @@
-// Fixed-point arithmetic and trigonometry.
+// Trigonometry, in floats.
 //
-// Blot has one numeric type and it is an integer, so a 3D engine here is a
-// fixed-point engine. `ONE` is the scale: a value of `4096` means 1.0, and the
-// twelve fractional bits are enough for a scene measured in units and drawn to
-// a few hundred pixels.
+// This file used to be fixed point at 4096, because blot had one numeric type
+// and it was an integer. It does not any more, so angles are radians and the
+// series below is evaluated on the numbers it was derived for rather than on
+// scaled integers that had to avoid overflowing on the way to the answer.
 //
-// The trig table is not shipped with this file and not built at startup — it
-// is computed by the comptime evaluator, from the Taylor series below, and
-// reaches WebAssembly as data. `const` is what forces that: the series runs
-// while compiling or the program does not compile.
+// The table is still built by the comptime evaluator. `const` is what forces
+// that: the series runs while compiling or the program does not compile, so a
+// quarter turn of sines reaches WebAssembly as data and the polynomial that
+// produced it is not in the artifact.
 
 open {} = (@import "blot:prelude") ();
 
-const ONE = 4096;
+const PI = 3.141592653589793;
+const TAU = 6.283185307179586;
+const HALF_PI = 1.5707963267948966;
 
-// A turn is 256 units, so an angle fits a byte and wraps by masking. The table
-// covers one quarter turn inclusive, and the other three are reflections.
+// A turn is 256 steps, which is what the host sends and what a spin counts in.
+// Keeping the table indexed by step rather than by radians is what lets a
+// lookup be an array read instead of a range reduction.
 const TURN = 256;
 const QUARTER = 64;
 
-// pi/2 in fixed point, which is the widest argument the series is asked for.
-const HALF_PI = 6434;
+const radians = steps => Float.mul (Float.of_int steps) (Float.div TAU 256.0);
 
-const mul = (a, b) => a * b / ONE;
-
-// `b` is a fixed-point value, so the numerator is scaled first to keep the
-// result in the same units.
-const ratio = (a, b) => a * ONE / b;
-
-// sin over [0, pi/2], four terms. Odd powers only, which is why the error at
-// the endpoint is zero to the last bit: `sin_quarter QUARTER` is `ONE`.
+// sin over [0, pi/2], seven terms. Odd powers only, and evaluated left to
+// right so each is the previous one times x squared — which keeps the largest
+// intermediate at x to the thirteenth rather than a factorial.
 const sin_quarter = k => do
-  let x = HALF_PI * k / QUARTER;
-  let x2 = x * x / ONE;
-  let x3 = x2 * x / ONE;
-  let x5 = x3 * x2 / ONE;
-  let x7 = x5 * x2 / ONE;
-  in x - x3 / 6 + x5 / 120 - x7 / 5040
+  let x = Float.mul (Float.of_int k) (Float.div HALF_PI (Float.of_int QUARTER));
+  let x2 = Float.mul x x;
+  let x3 = Float.mul x2 x;
+  let x5 = Float.mul x3 x2;
+  let x7 = Float.mul x5 x2;
+  let x9 = Float.mul x7 x2;
+  let x11 = Float.mul x9 x2;
+  let x13 = Float.mul x11 x2;
+  in Float.add
+    (Float.sub
+      (Float.add
+        (Float.sub
+          (Float.add
+            (Float.sub x (Float.div x3 6.0))
+            (Float.div x5 120.0))
+          (Float.div x7 5040.0))
+        (Float.div x9 362880.0))
+      (Float.div x11 39916800.0))
+    (Float.div x13 6227020800.0)
 end;
 
 const table = fold (
@@ -45,40 +55,28 @@ const table = fold (
   ((built, k) => @array.push built (sin_quarter k))
 );
 
-// `angle` is any integer; the quadrant decides which end of the table to read
+// `steps` is any integer; the quadrant decides which end of the table to read
 // and which sign to give it.
-const sin = angle => do
-  let a = @int.rem (@int.rem angle TURN + TURN) TURN;
+const sin_steps = steps => do
+  let a = @int.rem (@int.rem steps TURN + TURN) TURN;
   let quadrant = a / QUARTER;
   let step = @int.rem a QUARTER;
   in if quadrant == 0 then @array.get table step
   else if quadrant == 1 then @array.get table (QUARTER - step)
-  else if quadrant == 2 then 0 - @array.get table step
-  else 0 - @array.get table (QUARTER - step)
+  else if quadrant == 2 then Float.negate (@array.get table step)
+  else Float.negate (@array.get table (QUARTER - step))
   end
 end;
 
-const cos = angle => sin (angle + QUARTER);
-
-// Newton's method on integers, for a fixed-point square root. Twelve rounds
-// converge for every magnitude this engine produces, and a fixed count is what
-// keeps it a plain expression rather than a loop with a termination argument.
-const sqrt = value =>
-  if value <= 0 then 0
-  else fold (
-    upto (0, 12),
-    value,
-    ((guess, _) => (guess + value * ONE / guess) / 2)
-  )
-  end;
+const cos_steps = steps => sin_steps (steps + QUARTER);
 
 return {
-  .one = ONE;
+  .pi = PI;
+  .tau = TAU;
   .turn = TURN;
   .quarter = QUARTER;
-  .mul = mul;
-  .ratio = ratio;
-  .sin = sin;
-  .cos = cos;
-  .sqrt = sqrt;
+  .radians = radians;
+  .sin = sin_steps;
+  .cos = cos_steps;
+  .sqrt = Float.sqrt;
 };

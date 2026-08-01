@@ -1,4 +1,4 @@
-// A small 3D engine, in a language with no assignment and no floating point.
+// A small 3D engine, in a language with no assignment.
 //
 // The world is a set of parallel arrays keyed by entity, and each system is a
 // function over the arrays it reads — the layout an ECS arrives at. What the
@@ -7,9 +7,13 @@
 // world. A system that does not rebind a name cannot affect it, which is the
 // property an ECS normally arranges with scheduling and declared access.
 //
-// Everything is fixed point at `ONE = 4096`, because blot has one numeric type
-// and it is an integer. `lib/math.blot` builds its trig table with the comptime
-// evaluator, so the series that produced it is not in the artifact.
+// The geometry is in floats. It was fixed point at 4096 until the language had
+// a second numeric type, and the only thing that changed at the boundary is
+// where the conversion sits: a float cannot cross the module boundary, so the
+// scene arrives as thousandths and the screen leaves as pixels, and everything
+// between them is an `F64`. `lib/math.blot` still builds its trig table with
+// the comptime evaluator, so the series that produced it is not in the
+// artifact.
 //
 // The scene comes from the host and is rebuilt whenever the host says its
 // generation changed, so editing `assets/scene.json` restocks the world without
@@ -26,7 +30,11 @@ operators {
 open {} = (@import "blot:prelude") ();
 
 const M = (@import "./lib/math.blot") ();
-const ONE = M.one;
+
+// The scene is whole units in the file and thousandths on the wire, because
+// `Assets.entry` is a module import and a float has no layout to cross one in.
+// One conversion at load, and nothing downstream knows.
+const unit = value => Float.div (Float.of_int value) 1000.0;
 
 // --- the host boundary ------------------------------------------------------
 //
@@ -89,20 +97,22 @@ const Host = @effect.host {
 
 const WIDTH = 480;
 const HEIGHT = 300;
-const CX = WIDTH / 2;
-const CY = HEIGHT / 2;
+const CX = 240.0;
+const CY = 150.0;
 
 // Pixels across one unit at one unit of depth, and how close a vertex may come
 // before its face is dropped.
-const FOCAL = 420;
-const NEAR = ONE / 4;
+const FOCAL = 420.0;
+const NEAR = 0.25;
 
 const KIND_MESH = 0;
 
 // --- components -------------------------------------------------------------
 
-const Vec3 = { .x = Int; .y = Int; .z = Int; };
-const Transform = { .position = Vec3; .angle = Int; .spin = Int; .scale = Int; };
+const Vec3 = { .x = F64; .y = F64; .z = F64; };
+// `angle` and `spin` stay integers: an angle is a step of a 256-part turn,
+// which is what indexes the trig table and what the scene file counts in.
+const Transform = { .position = Vec3; .angle = Int; .spin = Int; .scale = F64; };
 const Model = { .kind = Int; .colour = Str; };
 
 const Store = component => [Option component];
@@ -145,30 +155,34 @@ const visit_2 = (left, right, visit) => each (
 // A unit cube, as six faces with a normal each. Corners are named by index, so
 // a face is four numbers rather than four points and its winding stays visible.
 
-const HALF = ONE / 2;
+const HALF = 0.5;
+const NHALF = Float.negate 0.5;
+const ONE_F = 1.0;
+const NONE_F = Float.negate 1.0;
+const ZERO = 0.0;
 
 const corners = [
-  { .x = 0 - HALF; .y = 0 - HALF; .z = 0 - HALF; },
-  { .x = HALF; .y = 0 - HALF; .z = 0 - HALF; },
-  { .x = HALF; .y = HALF; .z = 0 - HALF; },
-  { .x = 0 - HALF; .y = HALF; .z = 0 - HALF; },
-  { .x = 0 - HALF; .y = 0 - HALF; .z = HALF; },
-  { .x = HALF; .y = 0 - HALF; .z = HALF; },
+  { .x = NHALF; .y = NHALF; .z = NHALF; },
+  { .x = HALF; .y = NHALF; .z = NHALF; },
+  { .x = HALF; .y = HALF; .z = NHALF; },
+  { .x = NHALF; .y = HALF; .z = NHALF; },
+  { .x = NHALF; .y = NHALF; .z = HALF; },
+  { .x = HALF; .y = NHALF; .z = HALF; },
   { .x = HALF; .y = HALF; .z = HALF; },
-  { .x = 0 - HALF; .y = HALF; .z = HALF; }
+  { .x = NHALF; .y = HALF; .z = HALF; }
 ];
 
 const faces = [
-  { .a = 1; .b = 0; .c = 3; .d = 2; .nx = 0; .ny = 0; .nz = 0 - ONE; },
-  { .a = 4; .b = 5; .c = 6; .d = 7; .nx = 0; .ny = 0; .nz = ONE; },
-  { .a = 0; .b = 4; .c = 7; .d = 3; .nx = 0 - ONE; .ny = 0; .nz = 0; },
-  { .a = 5; .b = 1; .c = 2; .d = 6; .nx = ONE; .ny = 0; .nz = 0; },
-  { .a = 3; .b = 7; .c = 6; .d = 2; .nx = 0; .ny = ONE; .nz = 0; },
-  { .a = 0; .b = 1; .c = 5; .d = 4; .nx = 0; .ny = 0 - ONE; .nz = 0; }
+  { .a = 1; .b = 0; .c = 3; .d = 2; .nx = ZERO; .ny = ZERO; .nz = NONE_F; },
+  { .a = 4; .b = 5; .c = 6; .d = 7; .nx = ZERO; .ny = ZERO; .nz = ONE_F; },
+  { .a = 0; .b = 4; .c = 7; .d = 3; .nx = NONE_F; .ny = ZERO; .nz = ZERO; },
+  { .a = 5; .b = 1; .c = 2; .d = 6; .nx = ONE_F; .ny = ZERO; .nz = ZERO; },
+  { .a = 3; .b = 7; .c = 6; .d = 2; .nx = ZERO; .ny = ONE_F; .nz = ZERO; },
+  { .a = 0; .b = 1; .c = 5; .d = 4; .nx = ZERO; .ny = NONE_F; .nz = ZERO; }
 ];
 
 // A fixed light, normalized in advance so shading stays one dot product.
-const LIGHT = { .x = 2260; .y = 3277; .z = 1638; };
+const LIGHT = { .x = 0.53; .y = 0.76; .z = 0.38; };
 
 // --- transforms -------------------------------------------------------------
 
@@ -179,28 +193,32 @@ const turn_y = (point, angle) => do
   let s = M.sin angle;
   let c = M.cos angle;
   in {
-    .x = M.mul (point.x, c) + M.mul (point.z, s);
+    .x = Float.add (Float.mul point.x c) (Float.mul point.z s);
     .y = point.y;
-    .z = M.mul (point.z, c) - M.mul (point.x, s);
+    .z = Float.sub (Float.mul point.z c) (Float.mul point.x s);
   }
 end;
 
 // World to view. The camera orbits the origin, so its rotation is the inverse
 // of the yaw and pitch that placed it.
 const to_view = (point, camera) => do
-  let dx = point.x - camera.eye.x;
-  let dy = point.y - camera.eye.y;
-  let dz = point.z - camera.eye.z;
-  let x1 = M.mul (dx, camera.cos_yaw) - M.mul (dz, camera.sin_yaw);
-  let z1 = M.mul (dx, camera.sin_yaw) + M.mul (dz, camera.cos_yaw);
+  let dx = Float.sub point.x camera.eye.x;
+  let dy = Float.sub point.y camera.eye.y;
+  let dz = Float.sub point.z camera.eye.z;
+  let x1 = Float.sub (Float.mul dx camera.cos_yaw) (Float.mul dz camera.sin_yaw);
+  let z1 = Float.add (Float.mul dx camera.sin_yaw) (Float.mul dz camera.cos_yaw);
   in {
     .x = x1;
-    .y = M.mul (dy, camera.cos_pitch) - M.mul (z1, camera.sin_pitch);
+    .y = Float.sub
+      (Float.mul dy camera.cos_pitch)
+      (Float.mul z1 camera.sin_pitch);
     // Negated because the rotations above put the forward axis at -z, the
     // convention a projection matrix expects. Everything downstream wants a
     // depth that grows away from the eye, so the sign is fixed here rather
     // than in the divide, the near test, and the sort.
-    .z = 0 - (M.mul (dy, camera.sin_pitch) + M.mul (z1, camera.cos_pitch));
+    .z = Float.negate (Float.add
+      (Float.mul dy camera.sin_pitch)
+      (Float.mul z1 camera.cos_pitch));
   }
 end;
 
@@ -209,12 +227,12 @@ end;
 const to_screen = (view, camera) =>
   if camera.lens == 0
   then {
-    .x = CX + view.x * FOCAL / view.z;
-    .y = CY - view.y * FOCAL / view.z;
+    .x = Float.add CX (Float.div (Float.mul view.x FOCAL) view.z);
+    .y = Float.sub CY (Float.div (Float.mul view.y FOCAL) view.z);
   }
   else {
-    .x = CX + M.mul (view.x, camera.zoom);
-    .y = CY - M.mul (view.y, camera.zoom);
+    .x = Float.add CX (Float.mul view.x camera.zoom);
+    .y = Float.sub CY (Float.mul view.y camera.zoom);
   }
   end;
 
@@ -225,9 +243,9 @@ const camera_of = (yaw, pitch, distance, lens) => do
   let flat = M.cos pitch;
   in {
     .eye = {
-      .x = M.mul (distance, M.mul (flat, M.sin yaw));
-      .y = M.mul (distance, M.sin pitch);
-      .z = M.mul (distance, M.mul (flat, M.cos yaw));
+      .x = Float.mul distance (Float.mul flat (M.sin yaw));
+      .y = Float.mul distance (M.sin pitch);
+      .z = Float.mul distance (Float.mul flat (M.cos yaw));
     };
     .sin_yaw = M.sin yaw;
     .cos_yaw = M.cos yaw;
@@ -237,9 +255,7 @@ const camera_of = (yaw, pitch, distance, lens) => do
     // Pixels across one world unit, which is what the perspective divide works
     // out to at the camera's own distance — so switching lenses holds the scene
     // at roughly the size it already was, and pulling back still zooms out.
-    // Plain pixels, not fixed point: `to_screen` divides by `ONE` once, and
-    // that divide is already spending the units `view.x` carries.
-    .zoom = ONE * FOCAL / distance;
+    .zoom = Float.div FOCAL distance;
   }
 end;
 
@@ -263,10 +279,11 @@ let advance = ts => fold (
 // How lit a face is: its world normal against the light, clamped, widened to
 // the 0..255 the host multiplies the colour by.
 const shade_of = normal => do
-  let dot = M.mul (normal.x, LIGHT.x) + M.mul (normal.y, LIGHT.y) +
-    M.mul (normal.z, LIGHT.z);
-  let lit = if dot < 0 then 0 else dot end;
-  in 60 + lit * 195 / ONE
+  let dot = Float.add
+    (Float.add (Float.mul normal.x LIGHT.x) (Float.mul normal.y LIGHT.y))
+    (Float.mul normal.z LIGHT.z);
+  let lit = if is_less (Float.cmp dot 0.0) then 0.0 else dot end;
+  in 60 + Float.truncate (Float.mul lit 195.0)
 end;
 
 // One face of one box: place its corners, project them, and hand the host two
@@ -276,14 +293,14 @@ const draw_face = (transform, model, camera, face) => do
   let corner = index => do
     let local = @array.get corners index;
     let spun = turn_y ({
-      .x = M.mul (local.x, transform.scale);
-      .y = M.mul (local.y, transform.scale);
-      .z = M.mul (local.z, transform.scale);
+      .x = Float.mul local.x transform.scale;
+      .y = Float.mul local.y transform.scale;
+      .z = Float.mul local.z transform.scale;
     }, transform.angle);
     in to_view ({
-      .x = spun.x + transform.position.x;
-      .y = spun.y + transform.position.y;
-      .z = spun.z + transform.position.z;
+      .x = Float.add spun.x transform.position.x;
+      .y = Float.add spun.y transform.position.y;
+      .z = Float.add spun.z transform.position.z;
     }, camera)
   end;
 
@@ -300,20 +317,33 @@ const draw_face = (transform, model, camera, face) => do
   // Backface culling: a face is visible when its normal leans towards the
   // camera. Comparing against the box's centre rather than the face's own is
   // exact enough for convex geometry and costs one vector.
-  let outward = M.mul (normal.x, transform.position.x - camera.eye.x) +
-    M.mul (normal.y, transform.position.y - camera.eye.y) +
-    M.mul (normal.z, transform.position.z - camera.eye.z);
+  let outward = Float.add
+    (Float.add
+      (Float.mul normal.x (Float.sub transform.position.x camera.eye.x))
+      (Float.mul normal.y (Float.sub transform.position.y camera.eye.y)))
+    (Float.mul normal.z (Float.sub transform.position.z camera.eye.z));
 
-  let behind = a.z < NEAR || b.z < NEAR || c.z < NEAR || d.z < NEAR;
-  let hidden = outward > 0;
+  let near = point => is_less (Float.cmp point.z NEAR);
+  let behind = near a || near b || near c || near d;
+  let hidden = is_greater (Float.cmp outward 0.0);
 
   in if behind || hidden then ()
   else do
-    let pa = to_screen (a, camera);
-    let pb = to_screen (b, camera);
-    let pc = to_screen (c, camera);
-    let pd = to_screen (d, camera);
-    let depth = (a.z + b.z + c.z + d.z) / 4;
+    // Pixels, and the last place a float exists in this function. `Canvas` is
+    // a module import, so its record is the boundary a float cannot cross.
+    let pixel = point => {
+      .x = Float.truncate point.x;
+      .y = Float.truncate point.y;
+    };
+    let pa = pixel (to_screen (a, camera));
+    let pb = pixel (to_screen (b, camera));
+    let pc = pixel (to_screen (c, camera));
+    let pd = pixel (to_screen (d, camera));
+    // Millimetres of depth, so the host's sort keeps its resolution across an
+    // integer boundary.
+    let depth = Float.truncate (Float.mul
+      (Float.div (Float.add (Float.add a.z b.z) (Float.add c.z d.z)) 4.0)
+      1000.0);
     let shade = shade_of normal;
     let _ = Canvas.tri {
       .ax = pa.x; .ay = pa.y;
@@ -336,17 +366,18 @@ end;
 // difference `to_screen` makes.
 const draw_sprite = (transform, model, camera) => do
   let view = to_view (transform.position, camera);
-  in if view.z < NEAR then ()
+  in if is_less (Float.cmp view.z NEAR) then ()
   else do
     let point = to_screen (view, camera);
     let size = if camera.lens == 0
-      then transform.scale * FOCAL / view.z
-      else M.mul (transform.scale, camera.zoom)
+      then Float.div (Float.mul transform.scale FOCAL) view.z
+      else Float.mul transform.scale camera.zoom
       end;
     in Canvas.sprite {
-      .x = point.x; .y = point.y;
-      .size = size;
-      .depth = view.z;
+      .x = Float.truncate point.x;
+      .y = Float.truncate point.y;
+      .size = Float.truncate size;
+      .depth = Float.truncate (Float.mul view.z 1000.0);
       .texture = model.colour;
     }
   end
@@ -377,10 +408,10 @@ let load_transforms = () => fold (
   ((store, id) => do
     let entry = Assets.entry id;
     in attach (store, {
-      .position = { .x = entry.x; .y = entry.y; .z = entry.z; };
+      .position = { .x = unit entry.x; .y = unit entry.y; .z = unit entry.z; };
       .angle = 0;
       .spin = entry.spin;
-      .scale = entry.scale;
+      .scale = unit entry.scale;
     })
   end)
 );
@@ -422,7 +453,7 @@ for ever do
   let camera = camera_of (
     View.yaw (),
     View.pitch (),
-    View.distance (),
+    unit (View.distance ()),
     View.lens ()
   );
 

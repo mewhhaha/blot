@@ -167,7 +167,8 @@ if (study.kind === "grep") {
   // grants exactly the capabilities the browser host does, against a scene
   // read from the same file — which is what makes this a check of the engine
   // rather than of a second engine that happens to agree.
-  const ONE = 4096;
+  // Thousandths on the wire; the guest's own geometry is in floats.
+  const ONE = 1000;
   const columns = 78;
   const rows = 30;
   const scaleX = 480 / columns;
@@ -284,7 +285,7 @@ if (study.kind === "grep") {
         x: bigint,
         y: bigint,
       ) {
-        const half = Number(size) / ONE * 32;
+        const half = Number(size) / 2;
         batch.push({
           kind: "sprite",
           points: [[Number(x) - half, Number(y) - half], [
