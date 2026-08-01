@@ -692,6 +692,32 @@ implying it is coming.
 
 ---
 
+## Linearity does not see a recursive group
+
+A recursive group's members are in scope in each other's bodies, and the linear
+pass walks a declaration's value before declaring its pattern. So a member named
+by a sibling that the block has not reached yet contributes no use at all.
+
+    let !once = 42;
+    let user = rec (fn n => holder n + holder n);
+    let holder = rec (fn n => if n == 0 then once else user (n - 1) end);
+
+reports `holder` is never consumed, for a value it consumes twice. The rejection
+is right by accident and the reason is wrong, which is the shape that becomes an
+acceptance as soon as another use balances the count.
+
+Pre-declaring the group's names before walking any body does not fix it, and it
+is worth writing down why so the cheap fix is not tried twice: a member's
+linearity is not written on its pattern. It is _discovered_ from its body — a
+closure that captured a linear value is linear itself, decided after the walk —
+so declaring the name early declares it with the qualifier it was written with,
+which is not `!`, and the sibling's uses are counted against the wrong binding.
+
+Getting it right needs the pass to reach a fixpoint, or to run twice: once to
+learn which members are linear, once to count uses against that. Both are more
+than the surrounding code assumes, which is that one walk in declaration order
+sees everything.
+
 # What blot needs from gpufuck
 
 blot files bugs against gpufuck rather than fixing them. This is the other half
@@ -825,9 +851,10 @@ types are an override of unknown presence and a concatenation of two unknown
 rows; neither has a principal solution without presence variables and a ternary
 flag relation, and `constrain(lhs, rhs)` records unary bounds — a ternary
 constraint has no home in biunification, which is where "biunification stays
-polynomial" would actually be spent. Both forms would have to become new
-refusals. Third, the cost lands in the one structure every other pass depends
-on: `rest` has to be threaded through `extrude`, `levelBelow`, `freshenAbove`,
+polynomial" would actually be spent. The first is refused today; the second
+answers `{}`, which is sound and useless, and would have to start being refused
+too. Third, the cost lands in the one structure every other pass depends on:
+`rest` has to be threaded through `extrude`, `levelBelow`, `freshenAbove`,
 `substituteRigid`, `levelOf`, `collect`, `merge`, and `show`, and a single
 missed site is a variable that escapes its level, which is the "unconstrained
 variable is a licence" family this repository keeps closing. Fourth,
@@ -842,8 +869,9 @@ so `fn r => { .tag = 1; ...r; }` applied to `{ .tag = "hi"; }` type-checked
 against `sig t = 1;` and evaluated to `"hi"` — the checker and the evaluator
 disagreeing, verified with `blot check` and `blot eval` on the same file. Such a
 shape is now refused with `BLOT_SPREAD_MAY_OVERWRITE`
-(`examples/rejected/semantics/spread_after_a_field.blot`). No principal type
-moved; `inference.test.ts` is unchanged.
+(`examples/rejected/semantics/spread_after_a_field.blot`). The rule only ever
+refuses more, so no principal type moved and no assertion in `inference.test.ts`
+changed.
 
 **No mutual recursion without a grammar decision.** `rec` binds one name;
 `const is_even = rec (...); const is_odd = rec (...)` dies on `BLOT_UNBOUND`.
