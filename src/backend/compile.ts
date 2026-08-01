@@ -357,11 +357,19 @@ export async function runLoweringExport(
     throw loweringBug(compilation.diagnostics, prepared.loaded.module.span);
   }
   try {
+    // A value export is compiled as a function of unit — its body reads the
+    // module result, and evaluating that cannot be a memoized global thunk
+    // while the canonical ABI reclaims its arena between calls. Callers still
+    // ask for a value and pass nothing, so the unit is supplied here rather
+    // than pushed onto every one of them.
+    const applied = exported.type.kind === "function"
+      ? arguments_
+      : [{ kind: "unit" } as WasmValue, ...arguments_];
     const execution = await runWasmExport(
       compilation.module,
       exported.wasmName,
       {
-        arguments: arguments_,
+        arguments: applied,
         init,
       },
     );
@@ -790,15 +798,23 @@ function canonicalInterface(
     version: 1,
     exports: manifest.exports.flatMap((exported) => {
       if (exported.name === null || exported.function === null) return [];
+      // A value export is compiled as a function of unit, because the module
+      // body it reads from is one — evaluating it cannot be a memoized global
+      // thunk while the canonical ABI reclaims its private arena between calls.
+      // The descriptor has to say so, since gpufuck checks it against the
+      // definition it compiled. Nothing reaches the caller: unit flattens to no
+      // parameters, so the published manifest and the exported signature are
+      // both what they were.
+      const compiled: CanonicalAbiFunction =
+        exported.function.parameters.length === 0
+          ? { parameters: [{ kind: "unit" }], result: exported.function.result }
+          : exported.function;
       if (exported.postReturn === null) {
-        return [{
-          name: exported.name,
-          function: exported.function,
-        }];
+        return [{ name: exported.name, function: compiled }];
       }
       return [{
         name: exported.name,
-        function: exported.function,
+        function: compiled,
         postReturn: exported.postReturn,
       }];
     }),

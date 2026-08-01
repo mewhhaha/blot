@@ -612,9 +612,12 @@ export function lowerModule(
   }
 
   const body = lowerBlock(module.declarations, module.result, scope, lowering);
+  // Canonical calls reclaim their private arena, so module evaluation cannot be a memoized global
+  // thunk. The unit parameter also lets every export share this body without copying it.
+  const moduleArgument = lowering.fresh("module");
   lowering.definitions.push({
     name: MODULE_RESULT,
-    parameters: [],
+    parameters: [moduleArgument],
     annotation: null,
     body,
   });
@@ -631,7 +634,7 @@ export function lowerModule(
       annotation: { kind: "unit" },
       body: surface.let(
         initialized,
-        surface.name(MODULE_RESULT),
+        moduleResultCall(),
         surface.name(UNIT_CONSTRUCTOR_NAME),
       ),
     });
@@ -640,7 +643,7 @@ export function lowerModule(
       name: ENTRY,
       parameters: [],
       annotation: null,
-      body: surface.name(MODULE_RESULT),
+      body: moduleResultCall(),
     });
   }
 
@@ -719,6 +722,13 @@ export function lowerModule(
   };
 }
 
+function moduleResultCall(): SurfaceExpression {
+  return surface.apply(
+    surface.name(MODULE_RESULT),
+    surface.name(UNIT_CONSTRUCTOR_NAME),
+  );
+}
+
 function lowerExports(
   result: Expr,
   exports: readonly RuntimeExport[],
@@ -729,7 +739,7 @@ function lowerExports(
   if (exports.length === 1 && first.sourceName === "default") {
     return [lowerExport(
       first,
-      surface.name(MODULE_RESULT),
+      moduleResultCall(),
       0,
       result.span,
       lowering,
@@ -755,7 +765,7 @@ function lowerExports(
         `module result omitted runtime export ${exported.sourceName}`,
       );
     }
-    const body = surface.case(surface.name(MODULE_RESULT), [{
+    const body = surface.case(moduleResultCall(), [{
       constructor: nominal.name,
       binders,
       body: surface.name(binders[field]),
@@ -784,11 +794,32 @@ function lowerExport(
   } else {
     type = exportSchema(exported.type, exported.sourceName, span, lowering);
   }
+  const parameters: string[] = [];
+  let definitionBody = body;
+  let residualType = type;
+  while (residualType.kind === "function") {
+    parameters.push(lowering.fresh("parameter"));
+    residualType = residualType.result;
+  }
+  let compiledType = type;
+  if (parameters.length === 0) {
+    parameters.push(lowering.fresh("export"));
+    compiledType = {
+      kind: "function",
+      parameter: { kind: "unit" },
+      result: type,
+    };
+  } else {
+    definitionBody = surface.apply(
+      definitionBody,
+      ...parameters.map((parameter) => surface.name(parameter)),
+    );
+  }
   lowering.definitions.push({
     name: definition,
-    parameters: [],
-    annotation: type,
-    body,
+    parameters,
+    annotation: compiledType,
+    body: definitionBody,
   });
   return {
     sourceName: exported.sourceName,
