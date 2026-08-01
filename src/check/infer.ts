@@ -433,13 +433,23 @@ function comptime(
     // A refusal is the program asking to fail, not the evaluator failing to
     // reach a value. Swallowing it would make `expect` silent at `blot check`
     // and only speak at `blot run`, which is the wrong half of the compiler.
-    if (refusal(error)) throw error;
+    rethrowRefusal(error, expr.span);
     return null;
   }
 }
 
-function refusal(error: unknown): boolean {
-  return error instanceof BlotError && error.diagnostic.code === "BLOT_REFUSED";
+/**
+ * A refusal is raised where `@fail` runs, which is inside whichever module
+ * defined the predicate — for `expect` that is the prelude. Its span therefore
+ * indexes a file the user did not write, while the module being checked is the
+ * one that claims the origin, so the pair renders as a line that does not
+ * exist. The message belongs to the program and the location belongs to the
+ * caller: re-span to the expression that triggered it.
+ */
+function rethrowRefusal(error: unknown, span: Span): void {
+  if (error instanceof BlotError && error.diagnostic.code === "BLOT_REFUSED") {
+    throw new BlotError({ ...error.diagnostic, span });
+  }
 }
 
 function requireComptime(
@@ -456,7 +466,7 @@ function requireComptime(
       ),
     );
   } catch (error) {
-    if (refusal(error)) throw error;
+    rethrowRefusal(error, expr.span);
     if (
       error instanceof BlotError &&
       (error.diagnostic.code === "BLOT_UNBOUND" ||
@@ -487,7 +497,7 @@ function requireComptimeBinding(
       ),
     );
   } catch (error) {
-    if (refusal(error)) throw error;
+    rethrowRefusal(error, expr.span);
     if (
       error instanceof BlotError &&
       (error.diagnostic.code === "BLOT_UNBOUND" ||
@@ -1091,11 +1101,7 @@ function comptimeApply(
   } catch (error) {
     // A refusal is the program asking to fail and must reach the user. Anything
     // else means the predicate could not be run, which the caller reports.
-    if (
-      error instanceof BlotError && error.diagnostic.code === "BLOT_REFUSED"
-    ) {
-      throw error;
-    }
+    rethrowRefusal(error, span);
     return null;
   }
 }
