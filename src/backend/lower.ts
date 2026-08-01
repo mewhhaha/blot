@@ -201,6 +201,15 @@ class Lowering {
   readonly seals = new Map<string, Sealed>();
   readonly definitions: SurfaceDefinition[] = [];
   /**
+   * Lambdas that became definitions, by the expression that wrote them.
+   *
+   * A binding whose value is one of these aliases the definition's name rather
+   * than binding a local to it, because the difference is visible downstream:
+   * gpufuck reasons about an application of a *definition*, and an application
+   * of a local that happens to hold one is opaque to it.
+   */
+  readonly lifted = new Map<Expr, string>();
+  /**
    * Whether this module used a four-lane vector.
    *
    * The declarations and the scalar bodies are gpufuck's, under names its
@@ -413,6 +422,14 @@ interface Scope {
   readonly literals: Map<string, Expr>;
   readonly parent: Scope | null;
   /**
+   * Set on a lambda's own scope, and flipped when a name resolves past it.
+   *
+   * A lambda that reaches nothing outside itself is a function; one that does
+   * is a closure, and only the first can become a top-level definition without
+   * carrying an environment along with it.
+   */
+  capture?: { escaped: boolean };
+  /**
    * The compile-time bindings visible here — the prelude, and whatever a
    * closure captured. A name that is not a local is looked up here and
    * specialized, which is how `+` reaches Wasm at all: `Num.add` is a prelude
@@ -470,10 +487,17 @@ function resolveLiteral(scope: Scope, name: string): Expr | null {
 }
 
 function resolve(scope: Scope, name: string): string | null {
+  // Every lambda boundary walked past before the name was found is a lambda
+  // that captured it.
+  const crossed: { escaped: boolean }[] = [];
   let current: Scope | null = scope;
   while (current !== null) {
     const found = current.names.get(name);
-    if (found !== undefined) return found;
+    if (found !== undefined) {
+      for (const boundary of crossed) boundary.escaped = true;
+      return found;
+    }
+    if (current.capture !== undefined) crossed.push(current.capture);
     current = current.parent;
   }
   return null;
@@ -1502,6 +1526,13 @@ function lowerBlock(
       inner.literals.set(declaration.pattern.name, declaration.value);
     }
     const value = lower(declaration.value, inner, lowering);
+    // A lifted lambda is already a definition, so the binding is a name for
+    // one rather than a local holding a function.
+    const definition = lowering.lifted.get(declaration.value);
+    if (definition !== undefined && declaration.pattern.tag === "name") {
+      inner.names.set(declaration.pattern.name, definition);
+      continue;
+    }
     wrappers.push(bind(declaration.pattern, value, inner, lowering));
   }
 
@@ -1782,6 +1813,7 @@ function lower(
 
     case "lambda": {
       const inner = childScope(scope);
+      inner.capture = { escaped: false };
       const parameter = lowering.fresh("arg");
       const body = bindParameter(
         expr.parameter,
@@ -1789,7 +1821,26 @@ function lower(
         inner,
         lowering,
       );
-      return at.lambda([parameter], body(expr.body));
+      const lowered = body(expr.body);
+      // A lambda that captured nothing is a function, and saying so is worth
+      // more than it looks. gpufuck decides whether a four-lane vector can stay
+      // in a register per *definition parameter*, so the same arithmetic behind
+      // a local lambda boxes every operand where behind a definition it does
+      // not — five splats, nine extracts and fifteen lane replacements against
+      // one, one and three. A closure still has to be a closure: hoisting one
+      // would mean carrying its environment, which is a different change.
+      if (!inner.capture.escaped) {
+        const name = lowering.fresh("fn");
+        lowering.definitions.push({
+          name,
+          parameters: [parameter],
+          annotation: null,
+          body: lowered,
+        });
+        lowering.lifted.set(expr, name);
+        return at.name(name);
+      }
+      return at.lambda([parameter], lowered);
     }
 
     case "apply":
