@@ -1744,6 +1744,17 @@ function lowerPattern(rule: Rule): Pattern {
     ? "none"
     : readQualifier(qualifierText, rule.span);
 
+  if (core.type === "rule" && core.name === "pinned_pattern") {
+    if (qualifierText !== null) {
+      fail(
+        "BLOT_BAD_PATTERN_QUALIFIER",
+        "A pinned pattern binds no name, so it cannot carry an ownership qualifier.",
+        rule.span,
+      );
+    }
+    return lowerPinnedPattern(core, rule.span);
+  }
+
   if (core.type === "token") {
     if (core.kind === "IDENT" || core.kind === "TYPE_IDENT") {
       // `_` is a name the grammar cannot distinguish from any other, so the
@@ -1819,6 +1830,15 @@ function lowerPattern(rule: Rule): Pattern {
   }
 
   fail("BLOT_BAD_PATTERN", `\`${core.name}\` is not a pattern.`, rule.span);
+}
+
+function lowerPinnedPattern(rule: Rule, span = rule.span): Pattern {
+  expect(rule.name === "pinned_pattern", `expected a pin, got ${rule.name}`);
+  return {
+    tag: "pin",
+    name: tokenOf(required(rule, "name")).text,
+    span,
+  };
 }
 
 /**

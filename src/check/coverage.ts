@@ -389,6 +389,8 @@ function headOf(pattern: Pattern): Head {
     case "wildcard":
     case "unit":
       return { kind: "any" };
+    case "pin":
+      return { kind: "opaque" };
     case "constructor":
       return {
         kind: "constructor",

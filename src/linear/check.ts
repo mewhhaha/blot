@@ -234,6 +234,9 @@ function declare(pattern: Pattern, scope: Scope, analysis: Analysis): void {
         lastUse: null,
       });
       return;
+    case "pin":
+      use(pattern.name, pattern.span, scope, analysis, "project");
+      return;
     case "tuple":
     case "array":
       for (const inner of pattern.elements) declare(inner, scope, analysis);

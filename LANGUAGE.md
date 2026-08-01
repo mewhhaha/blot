@@ -422,16 +422,17 @@ or `case`.
 Patterns occur in bindings, lambda parameters, case arms, `for` binders, module
 parameters, and `if let` guards.
 
-| pattern                    | meaning                               |
-| -------------------------- | ------------------------------------- |
-| `name`                     | bind any value                        |
-| `_`                        | match any value without binding       |
-| `42`, `-1`, `"text"`, `()` | match that literal                    |
-| `(left, right)`            | match a tuple of exactly that arity   |
-| `[first, second]`          | match an array of exactly that length |
-| `#Ready`                   | match a constructor without a payload |
-| `#Some value`              | match a constructor and its payload   |
-| `{ .x; .y = renamed; }`    | match required fields of a record     |
+| pattern                    | meaning                                       |
+| -------------------------- | --------------------------------------------- |
+| `name`                     | bind any value                                |
+| `_`                        | match any value without binding               |
+| `#(name)`                  | match the scalar value of an existing binding |
+| `42`, `-1`, `"text"`, `()` | match that literal                            |
+| `(left, right)`            | match a tuple of exactly that arity           |
+| `[first, second]`          | match an array of exactly that length         |
+| `#Ready`                   | match a constructor without a payload         |
+| `#Some value`              | match a constructor and its payload           |
+| `{ .x; .y = renamed; }`    | match required fields of a record             |
 
 A shape pattern is width-subtyping: additional fields in the value are
 permitted. `.x;` is shorthand for `.x = x;`. Tuple and array patterns require
@@ -439,6 +440,25 @@ exact arity or length.
 
 `_` lexes as an ordinary lower-case identifier and is reclassified as a wildcard
 during lowering.
+
+`#(name)` is a pinned-value pattern. It reads the binding already in lexical
+scope, compares the matched value with it, and binds nothing; in particular, it
+does not shadow `name`. Pins currently admit bindings known to be `Int` or `Str`
+at the pattern, the two scalar domains with exact equality in every execution. A
+structural value still needs a structural pattern. A pin is refutable and never
+contributes to exhaustiveness, even when the binding was initialized from a
+literal, so a case normally needs another arm:
+
+```blot
+let wanted = 1;
+let label = case actual of
+  #(wanted) => "wanted",
+  _ => "other"
+end;
+```
+
+A direct `for` binder is the one exception: it is parsed as an expression and
+reclassified after `in`, and a pin is not an expression.
 
 ### 5.1 Ownership qualifiers
 
@@ -807,8 +827,9 @@ scope containing its pattern bindings. The first matching arm supplies the case
 value.
 
 When the target's type is known, the union of the arm patterns must cover it. A
-wildcard or name pattern is irrefutable. Reaching runtime without a matching arm
-is an error.
+wildcard or name pattern is irrefutable. A pinned pattern is not: the binding
+names the value to test, not all other values of its type. Reaching runtime
+without a matching arm is an error.
 
 Coverage over a constructor set and coverage over a literal set are the same
 requirement read on the two kinds of set a type can be. A constructor set is

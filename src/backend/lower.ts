@@ -55,6 +55,7 @@ import { recursiveGroups } from "../syntax/ast.ts";
 import { fail } from "../diagnostic.ts";
 import {
   type GrantSignature,
+  type PinnedDomain,
   refuseDisagreement,
   type Shape,
   type VariantCase,
@@ -98,6 +99,8 @@ export interface Facts {
   >;
   /** The field set of the value a shape pattern destructures. */
   readonly patternShapes: ReadonlyMap<Pattern, Shape>;
+  /** Equality domains for pins, recorded by inference rather than re-derived. */
+  readonly pinnedPatterns: ReadonlyMap<Pattern, PinnedDomain>;
   /** Signatures of the capabilities granted through the module parameter. */
   readonly grants: ReadonlyMap<Expr, GrantSignature>;
 }
@@ -1652,6 +1655,15 @@ function bind(
     return (body) => surface.let(lowering.fresh("_"), value, body);
   }
 
+  if (pattern.tag === "pin") {
+    return (body) =>
+      at.if(
+        pinnedCondition(pattern, value, scope, lowering),
+        body,
+        at.runtimeFault(`pinned \`${pattern.name}\` did not match`),
+      );
+  }
+
   if (pattern.tag === "array") {
     const store = lowering.fresh("store");
     const wrappers = pattern.elements.map((element, index) =>
@@ -1782,6 +1794,32 @@ function bind(
 
   pattern satisfies never;
   throw new Error("unhandled pattern in lowering");
+}
+
+function pinnedCondition(
+  pattern: Pattern & { tag: "pin" },
+  value: SurfaceExpression,
+  scope: Scope,
+  lowering: Lowering,
+): SurfaceExpression {
+  const domain = lowering.facts.pinnedPatterns.get(pattern);
+  if (domain === undefined) {
+    throw new Error(
+      `inference omitted the domain of pinned \`${pattern.name}\` at ${pattern.span.start}`,
+    );
+  }
+  const at = surface.at({
+    startByte: pattern.span.start,
+    endByte: pattern.span.end,
+  });
+  const pinned = lower(
+    { tag: "var", name: pattern.name, span: pattern.span },
+    scope,
+    lowering,
+  );
+  let operator: BinaryOperator = BinaryOperator.StructuralEqual;
+  if (domain === "int") operator = BinaryOperator.EqualSignedInteger64;
+  return at.binary(operator, value, pinned);
 }
 
 /**
@@ -2407,13 +2445,16 @@ function lowerCase(
   }[] = [];
   // Literal payloads collected first, because they are guards inside their
   // constructor's arm rather than arms of their own.
-  const guarded: { name: string; literal: Pattern; body: Expr }[] = [];
+  const guarded: { name: string; pattern: Pattern; body: Expr }[] = [];
   for (const arm of expr.arms) {
     if (arm.pattern.tag !== "constructor") continue;
     const payload = arm.pattern.payload;
     if (payload === null) continue;
-    if (payload.tag !== "int" && payload.tag !== "text") continue;
-    guarded.push({ name: arm.pattern.name, literal: payload, body: arm.body });
+    if (
+      payload.tag !== "int" && payload.tag !== "text" &&
+      payload.tag !== "pin"
+    ) continue;
+    guarded.push({ name: arm.pattern.name, pattern: payload, body: arm.body });
   }
   let fallback: SurfaceExpression | null = null;
 
@@ -2431,7 +2472,9 @@ function lowerCase(
       // dispatches on the constructor and nothing else.
       const payload = arm.pattern.payload;
       if (
-        payload !== null && (payload.tag === "int" || payload.tag === "text")
+        payload !== null &&
+        (payload.tag === "int" || payload.tag === "text" ||
+          payload.tag === "pin")
       ) {
         continue;
       }
@@ -2455,14 +2498,22 @@ function lowerCase(
       let body = wrap === null ? armBody : wrap(armBody);
       for (let index = tests.length - 1; index >= 0; index -= 1) {
         const test = tests[index];
-        const literal = test.literal;
+        const pattern = test.pattern;
+        if (pattern.tag === "pin") {
+          body = at.if(
+            pinnedCondition(pattern, at.name(binders[0]), inner, lowering),
+            lower(test.body, inner, lowering),
+            body,
+          );
+          continue;
+        }
         let compared: SurfaceExpression = at.text("");
         let operator: BinaryOperator = BinaryOperator.Equal;
-        if (literal.tag === "int") {
-          compared = at.signedInteger64(literal.value);
+        if (pattern.tag === "int") {
+          compared = at.signedInteger64(pattern.value);
           operator = BinaryOperator.EqualSignedInteger64;
-        } else if (literal.tag === "text") {
-          compared = at.text(literal.value);
+        } else if (pattern.tag === "text") {
+          compared = at.text(pattern.value);
         }
         body = at.if(
           at.binary(
@@ -2760,6 +2811,15 @@ function matchElement(
     return (body) => surface.let(name, value, body);
   }
 
+  if (pattern.tag === "pin") {
+    return (body) =>
+      at.if(
+        pinnedCondition(pattern, value, scope, lowering),
+        body,
+        fail(),
+      );
+  }
+
   if (
     pattern.tag === "int" || pattern.tag === "text" || pattern.tag === "float"
   ) {
@@ -2863,13 +2923,15 @@ function lowerLiteralCase(
 ): SurfaceExpression {
   const scrutinee = lowering.fresh("subject");
   let fallback: SurfaceExpression | null = null;
-  const tests: { literal: Pattern; body: SurfaceExpression }[] = [];
+  const tests: { pattern: Pattern; body: SurfaceExpression }[] = [];
 
   for (const arm of expr.arms) {
     const inner = childScope(scope);
     const pattern = arm.pattern;
-    if (pattern.tag === "int" || pattern.tag === "text") {
-      tests.push({ literal: pattern, body: lower(arm.body, inner, lowering) });
+    if (
+      pattern.tag === "int" || pattern.tag === "text" || pattern.tag === "pin"
+    ) {
+      tests.push({ pattern, body: lower(arm.body, inner, lowering) });
       continue;
     }
     if (arm.pattern.tag === "wildcard" || arm.pattern.tag === "name") {
@@ -2900,7 +2962,15 @@ function lowerLiteralCase(
     at.unreachable("no arm matched");
   for (let index = tests.length - 1; index >= 0; index -= 1) {
     const test = tests[index];
-    const value = test.literal;
+    const value = test.pattern;
+    if (value.tag === "pin") {
+      body = at.if(
+        pinnedCondition(value, at.name(scrutinee), scope, lowering),
+        test.body,
+        body,
+      );
+      continue;
+    }
     let literal = at.text("");
     let operator: BinaryOperator = BinaryOperator.Equal;
     if (value.tag === "int") {

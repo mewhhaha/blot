@@ -24,6 +24,7 @@ export type Pattern =
     readonly span: Span;
   }
   | { readonly tag: "wildcard"; readonly span: Span }
+  | { readonly tag: "pin"; readonly name: string; readonly span: Span }
   | { readonly tag: "int"; readonly value: bigint; readonly span: Span }
   | { readonly tag: "float"; readonly value: number; readonly span: Span }
   | { readonly tag: "text"; readonly value: string; readonly span: Span }
@@ -287,6 +288,7 @@ export function patternNames(pattern: Pattern): readonly string[] {
     case "name":
       return [pattern.name];
     case "wildcard":
+    case "pin":
     case "int":
     case "float":
     case "text":

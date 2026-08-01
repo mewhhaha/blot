@@ -1,4 +1,4 @@
-import type { Decl, Expr } from "./ast.ts";
+import type { Decl, Expr, Pattern } from "./ast.ts";
 import { patternNames, recursiveGroups } from "./ast.ts";
 
 interface Liveness {
@@ -58,6 +58,7 @@ function declarationLiveness(
     if (declaration.kind !== "effect" && !demanded) continue;
     live.add(declaration);
     for (const name of names) dependencies.delete(name);
+    addDependencies(dependencies, pinnedNames(declaration.pattern));
     addDependencies(dependencies, freeNames(declaration.value));
   }
 
@@ -92,6 +93,7 @@ function collectFreeNames(expr: Expr, names: Set<string>): void {
     case "lambda": {
       const body = new Set(freeNames(expr.body));
       for (const name of patternNames(expr.parameter)) body.delete(name);
+      addDependencies(body, pinnedNames(expr.parameter));
       addDependencies(names, body);
       return;
     }
@@ -124,6 +126,7 @@ function collectFreeNames(expr: Expr, names: Set<string>): void {
       for (const arm of expr.arms) {
         const body = new Set(freeNames(arm.body));
         for (const name of patternNames(arm.pattern)) body.delete(name);
+        addDependencies(body, pinnedNames(arm.pattern));
         addDependencies(names, body);
       }
       return;
@@ -138,4 +141,29 @@ function collectFreeNames(expr: Expr, names: Set<string>): void {
     default:
       return;
   }
+}
+
+function pinnedNames(pattern: Pattern): ReadonlySet<string> {
+  const names = new Set<string>();
+  const collect = (current: Pattern): void => {
+    switch (current.tag) {
+      case "pin":
+        names.add(current.name);
+        return;
+      case "tuple":
+      case "array":
+        for (const element of current.elements) collect(element);
+        return;
+      case "constructor":
+        if (current.payload !== null) collect(current.payload);
+        return;
+      case "shape":
+        for (const field of current.fields) collect(field.pattern);
+        return;
+      default:
+        return;
+    }
+  };
+  collect(pattern);
+  return names;
 }

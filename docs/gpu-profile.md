@@ -22,15 +22,24 @@ in a benchmark months later.
 | `lexerStates`              |               118 |      175 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity` |                 5 |        9 | worst-case island candidates allocated per token   |
 | `islandCount`              |                21 |       24 |                                                    |
-| `islandStates`             |               639 |        — |                                                    |
+| `islandStates`             |               644 |        — |                                                    |
 | `contractionRounds`        |                33 |        — | fixed dispatch bound                               |
-| `denseTransitionBytes`     |           552,096 |        — | immutable device table                             |
-| `packedBytes`              |           674,048 |        — | version-3 runtime section                          |
+| `denseTransitionBytes`     |           556,416 |        — | immutable device table                             |
+| `packedBytes`              |           677,727 |        — | version-3 runtime section                          |
 | `rootLoopIsland`           | 3 (`declaration`) |        — | strict root loop proven                            |
 
 blot beats the gpu-duck reference on both counters that matter most for
 occupancy, because it has three declaration forms where gpu-duck has six and no
 type sublanguage at all.
+
+Pinned patterns add five island states, with 4,320 more dense-transition bytes
+and 3,679 more packed bytes. Lexer states, candidate multiplicity, and
+contraction rounds remain unchanged. The pin keeps `#` and `(` as their existing
+tokens. A combined `#(` token would make the GPU delimiter proof see a second
+opener for `)`, while admitting the pattern directly as a `for` head would make
+the portable parser choose between a constructor expression and a pin at `#`.
+Keeping `for`'s existing expression-shaped head avoids both and needs no parser
+resolution.
 
 Updating baba from 7.9.0 to 7.10.0 changed no counter at all — `lexerStates`,
 `islandStates`, `denseTransitionBytes`, and `packedBytes` were byte-identical

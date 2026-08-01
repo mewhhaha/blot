@@ -222,6 +222,59 @@ Deno.test("runtime fields are callable by their blot export names", async () => 
   );
 });
 
+Deno.test("a pinned pattern compares runtime scalar values", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "pinned-pattern.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "sig matches = Int -> Int -> Int;",
+      "let matches = fn expected => fn actual => case actual of",
+      "  #(expected) => 1,",
+      "  _ => 0",
+      "end;",
+      "sig text_matches = Str -> Str -> Int;",
+      "let text_matches = fn expected => fn actual => case actual of",
+      "  #(expected) => 1,",
+      "  _ => 0",
+      "end;",
+      "return { .matches = matches; .text_matches = text_matches; };",
+    ].join("\n"),
+  );
+
+  assertEquals(
+    await runLoweringExport(path, "matches", [{
+      kind: "signed-integer-64",
+      value: 7n,
+    }, {
+      kind: "signed-integer-64",
+      value: 7n,
+    }]),
+    { kind: "signed-integer-64", value: 1n },
+  );
+  assertEquals(
+    await runLoweringExport(path, "matches", [{
+      kind: "signed-integer-64",
+      value: 7n,
+    }, {
+      kind: "signed-integer-64",
+      value: 8n,
+    }]),
+    { kind: "signed-integer-64", value: 0n },
+  );
+  assertEquals(
+    await runLoweringExport(path, "text_matches", [{
+      kind: "text",
+      value: "same",
+    }, {
+      kind: "text",
+      value: "same",
+    }]),
+    { kind: "signed-integer-64", value: 1n },
+  );
+});
+
 Deno.test("a concrete record signature specializes an exported projection", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "record-export.blot");

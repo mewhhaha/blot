@@ -743,6 +743,17 @@ export function match(pattern: Pattern, value: Value, scope: Env): boolean {
     case "name":
       scope.names.set(pattern.name, value);
       return true;
+    case "pin": {
+      const pinned = lookup(scope, pattern.name);
+      if (pinned === undefined) {
+        fail(
+          "BLOT_UNBOUND",
+          `\`${pattern.name}\` is not in scope.`,
+          pattern.span,
+        );
+      }
+      return equal(value, pinned);
+    }
     case "int":
       return value.tag === "int" && value.value === pattern.value;
     // `Object.is`, so a `NaN` pattern matches a `NaN` scrutinee. `==` would

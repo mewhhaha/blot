@@ -158,6 +158,10 @@ const REJECTIONS: Record<
   "shadowed_accumulator": { code: "BLOT_SHADOWED_ACCUMULATOR", stage: "check" },
   "float_unordered": { code: "BLOT_UNORDERED", stage: "run" },
   "unbounded_case": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
+  "pinned_structural_value": {
+    code: "BLOT_UNMATCHABLE_PIN",
+    stage: "check",
+  },
   // A guard may be false, so a guarded arm is dropped from the matrix that
   // decides coverage. With every arm guarded there is no matrix left, and the
   // scrutinee's own set is what reports the rest: a constructor named only

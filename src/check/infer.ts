@@ -64,6 +64,7 @@ import { PRIMITIVE_TYPES } from "./primitives.ts";
 import { show as showType, showRange } from "./print.ts";
 import {
   type ClosedBound,
+  type Domain,
   effects,
   FLOAT,
   freshVar,
@@ -376,6 +377,7 @@ interface Context {
   readonly staging: Staging;
   readonly variants: Map<Expr, readonly VariantCase[]>;
   readonly patternShapes: Map<Pattern, Shape>;
+  readonly pinnedPatterns: Map<Pattern, PinnedDomain>;
   readonly grants: Map<Expr, GrantSignature>;
   /** The entry module's parameter name, when it has one. */
   parameterName: string | null;
@@ -643,7 +645,7 @@ export function infer(
     case "lambda": {
       const scope = childTypeEnv(context.types);
       const inner: Context = { ...context, types: scope };
-      const param = bindPattern(expr.parameter, scope, level);
+      const param = bindPattern(expr.parameter, inner, level);
       // A fresh row per lambda is what makes the inferred effect minimal:
       // nothing becomes effectful because something else nearby was.
       const bodyRow = freshVar(level);
@@ -1703,11 +1705,18 @@ function inferCase(
   for (const arm of expr.arms) {
     const scope = childTypeEnv(context.types);
     const inner: Context = { ...context, types: scope };
-    const armType = bindPattern(arm.pattern, scope, level);
+    const armType = bindPattern(arm.pattern, inner, level);
 
     if (arm.pattern.tag === "name") {
       // An irrefutable name matches every value, so it *is* the scrutinee.
       located(arm.pattern.span, () => constrain(target, armType));
+    }
+    if (patternContainsPin(arm.pattern)) {
+      // Equality is defined within one scalar domain. A requirement made only
+      // from the pins checks those domains without pretending the refutable
+      // pattern covers every value around them.
+      const required = pinnedRequirement(arm.pattern, context, level);
+      located(arm.pattern.span, () => constrain(target, required));
     }
     if (!irrefutable(arm.pattern)) {
       accepted.push({ pattern: arm.pattern, accepted: armType });
@@ -1758,7 +1767,19 @@ function inferCase(
   // and the constraint would pin it to whatever the arms happen to list rather
   // than reporting what they miss. Literal arms stay non-constraining.
   if (!open) {
-    const armTypes = accepted.map((arm) => arm.accepted);
+    const armTypes = accepted
+      .filter((arm) => !patternContainsPin(arm.pattern))
+      .map((arm) => arm.accepted);
+    if (
+      armTypes.length === 0 &&
+      accepted.some((arm) => patternContainsPin(arm.pattern))
+    ) {
+      fail(
+        "BLOT_INCOMPLETE_CASE",
+        "A pinned pattern may not match. Add an arm for the remaining values, usually `_`.",
+        expr.target.span,
+      );
+    }
     const missing = uncovered(target, armTypes);
     if (missing !== null && missing.length > 0) {
       fail(
@@ -2092,12 +2113,87 @@ function irrefutable(pattern: Pattern): boolean {
   return pattern.tag === "wildcard" || pattern.tag === "name";
 }
 
+function patternContainsPin(pattern: Pattern): boolean {
+  switch (pattern.tag) {
+    case "pin":
+      return true;
+    case "tuple":
+    case "array":
+      return pattern.elements.some(patternContainsPin);
+    case "constructor":
+      return pattern.payload !== null && patternContainsPin(pattern.payload);
+    case "shape":
+      return pattern.fields.some((field) => patternContainsPin(field.pattern));
+    default:
+      return false;
+  }
+}
+
+function pinnedRequirement(
+  pattern: Pattern,
+  context: Context,
+  level: Level,
+): SimpleType {
+  switch (pattern.tag) {
+    case "pin": {
+      const domain = context.pinnedPatterns.get(pattern);
+      if (domain === undefined) {
+        throw new Error(
+          `inference omitted the domain of pinned \`${pattern.name}\` at ${pattern.span.start}`,
+        );
+      }
+      if (domain === "int") return INT;
+      return TEXT;
+    }
+    case "tuple":
+      return tupleType(
+        pattern.elements.map((element) => {
+          if (patternContainsPin(element)) {
+            return pinnedRequirement(element, context, level);
+          }
+          return freshVar(level);
+        }),
+      );
+    case "array": {
+      const element = freshVar(level);
+      for (const inner of pattern.elements) {
+        if (!patternContainsPin(inner)) continue;
+        constrain(element, pinnedRequirement(inner, context, level));
+      }
+      return { tag: "array", element };
+    }
+    case "constructor": {
+      if (pattern.payload === null) {
+        throw new Error("a constructor without a payload contains a pin");
+      }
+      return openVariant([[
+        pattern.name,
+        pinnedRequirement(pattern.payload, context, level),
+      ]]);
+    }
+    case "shape":
+      return record(
+        pattern.fields
+          .filter((field) => patternContainsPin(field.pattern))
+          .map((field) =>
+            [
+              field.name,
+              pinnedRequirement(field.pattern, context, level),
+            ] as const
+          ),
+      );
+    default:
+      return freshVar(level);
+  }
+}
+
 /** Types a pattern and binds its names. Returns what the pattern accepts. */
 function bindPattern(
   pattern: Pattern,
-  scope: TypeEnv,
+  context: Context,
   level: Level,
 ): SimpleType {
+  const scope = context.types;
   switch (pattern.tag) {
     case "wildcard":
       return freshVar(level);
@@ -2106,6 +2202,37 @@ function bindPattern(
       scope.names.set(pattern.name, type);
       recordBinding(scope, pattern.name);
       return type;
+    }
+    case "pin": {
+      const found = lookupType(scope, pattern.name);
+      if (found === undefined) {
+        if (context.forward.has(pattern.name)) {
+          fail(
+            "BLOT_FORWARD_REFERENCE",
+            `\`${pattern.name}\` is bound further down, so it is not in scope here. Move the binding above this pattern.`,
+            pattern.span,
+          );
+        }
+        fail(
+          "BLOT_UNBOUND",
+          `\`${pattern.name}\` is not in scope.`,
+          pattern.span,
+        );
+      }
+      const type = instantiate(found, level, context.staging.instances);
+      const domain = pinnedDomain(type);
+      if (domain === null) {
+        fail(
+          "BLOT_UNMATCHABLE_PIN",
+          `Pinned \`${pattern.name}\` must have a known Int or Str type, found ${
+            showType(type)
+          }.`,
+          pattern.span,
+        );
+      }
+      context.pinnedPatterns.set(pattern, domain);
+      if (domain === "int") return INT;
+      return TEXT;
     }
     case "int":
       return intLiteral(pattern.value);
@@ -2121,28 +2248,54 @@ function bindPattern(
       return UNIT;
     case "tuple":
       return tupleType(
-        pattern.elements.map((p) => bindPattern(p, scope, level)),
+        pattern.elements.map((p) => bindPattern(p, context, level)),
       );
     case "array": {
       const element = freshVar(level);
       for (const inner of pattern.elements) {
-        constrain(element, bindPattern(inner, scope, level));
+        constrain(element, bindPattern(inner, context, level));
       }
       return { tag: "array", element };
     }
     case "constructor": {
       const payload = pattern.payload === null
         ? UNIT
-        : bindPattern(pattern.payload, scope, level);
+        : bindPattern(pattern.payload, context, level);
       return variant([[pattern.name, payload]]);
     }
     case "shape":
       return record(
         pattern.fields.map((field) =>
-          [field.name, bindPattern(field.pattern, scope, level)] as const
+          [field.name, bindPattern(field.pattern, context, level)] as const
         ),
       );
   }
+}
+
+export type PinnedDomain = Extract<Domain, "int" | "text">;
+
+function pinnedDomain(type: SimpleType): PinnedDomain | null {
+  const domains = new Set<Domain>();
+  const seen = new Set<number>();
+  const visit = (current: SimpleType): void => {
+    if (current.tag === "range") {
+      domains.add(current.domain);
+      return;
+    }
+    if (current.tag === "union") {
+      for (const member of current.members) visit(member);
+      return;
+    }
+    if (current.tag !== "var" || seen.has(current.id)) return;
+    seen.add(current.id);
+    for (const bound of [...current.lower, ...current.upper]) visit(bound);
+  };
+  visit(type);
+  if (domains.size !== 1) return null;
+  for (const domain of domains) {
+    if (domain === "int" || domain === "text") return domain;
+  }
+  return null;
 }
 
 /**
@@ -2639,7 +2792,7 @@ function checkAgainst(
 
   const scope = childTypeEnv(context.types);
   const inner: Context = { ...context, types: scope };
-  bindPatternAgainst(expr.parameter, expected.param, scope, level + 1);
+  bindPatternAgainst(expr.parameter, expected.param, inner, level + 1);
   const bodyRow = freshVar(level + 1);
   if (expr.body.tag === "block") {
     checkAgainst(
@@ -2678,15 +2831,16 @@ function checkAgainstPure(
 function bindPatternAgainst(
   pattern: Pattern,
   expected: SimpleType,
-  scope: TypeEnv,
+  context: Context,
   level: Level,
 ): void {
+  const scope = context.types;
   if (pattern.tag === "name") {
     scope.names.set(pattern.name, expected);
     recordBinding(scope, pattern.name);
     return;
   }
-  const accepted = bindPattern(pattern, scope, level);
+  const accepted = bindPattern(pattern, context, level);
   located(pattern.span, () => constrain(expected, accepted));
 }
 
@@ -2703,8 +2857,7 @@ function bindDeclaration(
   }
   // A destructuring binding types its parts by constraining the whole against
   // the shape the pattern requires.
-  const scope = context.types;
-  const required = bindPattern(pattern, scope, level);
+  const required = bindPattern(pattern, context, level);
   const whole = instantiate(type, level, context.staging.instances);
   located(pattern.span, () => constrain(whole, required));
   recordPatternShapes(pattern, whole, context);
@@ -2920,6 +3073,8 @@ export interface Checked {
    * arrives.
    */
   readonly patternShapes: ReadonlyMap<Pattern, Shape>;
+  /** Scalar equality domains for pinned-value patterns. */
+  readonly pinnedPatterns: ReadonlyMap<Pattern, PinnedDomain>;
   /**
    * The type of each projection off the entry module's parameter.
    *
@@ -2975,6 +3130,7 @@ export function checkModule(
   const shapes = new Map<Expr, Shape>();
   const variants = new Map<Expr, readonly VariantCase[]>();
   const patternShapes = new Map<Pattern, Shape>();
+  const pinnedPatterns = new Map<Pattern, PinnedDomain>();
   const grants = new Map<Expr, GrantSignature>();
   const opens = new Map<Expr, ReadonlyMap<string, Value>>();
   const comptimeValues = new Map<Expr, Value>();
@@ -2989,6 +3145,7 @@ export function checkModule(
     shapes,
     variants,
     patternShapes,
+    pinnedPatterns,
     grants,
     parameterName: module.parameter !== null && module.parameter.tag === "name"
       ? module.parameter.name
@@ -3011,7 +3168,7 @@ export function checkModule(
   // lets an importer's argument be checked against what the module reads.
   const parameter = module.parameter === null
     ? null
-    : bindPattern(module.parameter, types, level);
+    : bindPattern(module.parameter, context, level);
 
   inferDeclarations(module.declarations, context, level, row);
   let result: SimpleType;
@@ -3037,6 +3194,7 @@ export function checkModule(
     shapes,
     variants,
     patternShapes,
+    pinnedPatterns,
     grants,
     declarationTags,
   };

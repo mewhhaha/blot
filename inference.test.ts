@@ -302,6 +302,42 @@ check(
 );
 
 check(
+  "a pinned pattern keeps the existing binding and joins its arms",
+  'let wanted = 1;\nlet choose = fn actual => case actual of #(wanted) => "yes", _ => "no" end;\nreturn choose;',
+  'Int -> ("yes" | "no")',
+);
+
+rejects(
+  "a pinned pattern does not make a case exhaustive",
+  'let wanted = 1;\nsig choose = Int -> Str;\nlet choose = fn actual => case actual of #(wanted) => "yes" end;\nreturn choose;',
+  "BLOT_INCOMPLETE_CASE",
+);
+
+rejects(
+  "a pinned pattern requires an existing binding",
+  'return case 1 of #(missing) => "yes", _ => "no" end;',
+  "BLOT_UNBOUND",
+);
+
+rejects(
+  "a pinned pattern requires a scalar equality domain",
+  'let wanted = [1];\nreturn case [1] of #(wanted) => "yes", _ => "no" end;',
+  "BLOT_UNMATCHABLE_PIN",
+);
+
+rejects(
+  "a pinned parameter needs a known scalar type",
+  "let matches = fn expected => fn actual => case actual of #(expected) => 1, _ => 0 end;\nreturn matches;",
+  "BLOT_UNMATCHABLE_PIN",
+);
+
+rejects(
+  "a nested pin must share the matched value's scalar domain",
+  'let wanted = "one";\nsig choose = (Int, Int) -> Str;\nlet choose = fn pair => case pair of (#(wanted), _) => "yes", _ => "no" end;\nreturn choose;',
+  "BLOT_TYPE_ERROR",
+);
+
+check(
   "an unmatched branch keeps the parameter open",
   "let f = fn (flag, other) => case flag of #No => #Off, #Yes => other end;\nreturn f;",
   "(#No | #Yes, 'a) -> ('a | #Off)",

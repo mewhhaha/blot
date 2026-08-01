@@ -18,6 +18,7 @@ import {
   checkModule,
   type GrantSignature,
   newStaging,
+  type PinnedDomain,
   settle,
   type Shape,
   type Staging,
@@ -84,6 +85,7 @@ export interface CheckResult {
   readonly shapes: ReadonlyMap<Expr, Shape>;
   readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
   readonly patternShapes: ReadonlyMap<Pattern, Shape>;
+  readonly pinnedPatterns: ReadonlyMap<Pattern, PinnedDomain>;
   readonly grants: ReadonlyMap<Expr, GrantSignature>;
   /** Resolved declaration tags, keyed by the tagged binding's AST identity. */
   readonly declarationTags: ReadonlyMap<Decl, TaggedDeclaration>;
@@ -298,6 +300,10 @@ function assemble(
     patternShapes: mergeAll([
       ...below.map((dependency) => dependency.patternShapes),
       checked.patternShapes,
+    ]),
+    pinnedPatterns: mergeAll([
+      ...below.map((dependency) => dependency.pinnedPatterns),
+      checked.pinnedPatterns,
     ]),
     declarationTags: mergeAll([
       ...below.map((dependency) => dependency.declarationTags),
