@@ -214,6 +214,7 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
         body: expr.body,
         env,
         self: null,
+        source: expr,
       };
 
     case "rec":

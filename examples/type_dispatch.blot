@@ -1,0 +1,57 @@
+// Choosing an implementation by type, at compile time.
+//
+// Types are values, so asking about one is an ordinary call and choosing on the
+// answer is an ordinary `if`. What makes this a dispatch rather than a runtime
+// conditional is `const`: the branch runs while compiling, and the binding
+// holds the function that won.
+//
+// The subtlety is on the checker's side. A `const` takes its type from the
+// value it evaluated to, and until this example a closure had no type to take —
+// `bridge` answers `null` for one, because a closure's type comes from its
+// body. The declaration then fell back to inferring the expression that
+// *produced* the closure, and inferring an `if` over two lambdas joins both
+// arms: `measure_text` came out with the arrow of the branch that lost as well
+// as the one that won, and applying it to text was rejected against `Int`.
+//
+// So the checker asks the evaluator, which already decided, and types the
+// lambda it was handed. The backend needed no part of this — it resolves a
+// `const` name straight to its value and has always emitted the selected
+// closure, which is why the two now agree rather than one following the other.
+
+open {} = (@import "blot:prelude") ();
+
+// One definition, two implementations, and nothing at run time chooses between
+// them: `measuring` is applied while compiling and the loser is never emitted.
+const measuring = fn T => if refines (T, Str)
+  then fn x => Text.length x
+  else fn x => x + 0
+end;
+
+const measure_text = measuring Str;
+const measure_int = measuring Int;
+
+// Each call site is typed against the arrow it actually got. `measure_text 41`
+// would be rejected here, and before this it was `measure_text "hello"` that
+// was rejected — against the branch that did not run.
+sig text_length = Int;
+let text_length = measure_text "hello";
+
+sig int_itself = Int;
+let int_itself = measure_int 41;
+
+// A guard rather than a choice: one lambda, and the type is checked before it
+// is returned. This is the shape `examples/generics.blot` uses, and it kept
+// working throughout — a body with nothing to select between never needed the
+// evaluator's answer.
+const adding = fn T => do
+  let _ = expect (refines (T, Int), "adding is integers only, and this is not one");
+  in fn (a, b) => a + b
+end;
+
+const add = adding Int;
+
+return {
+  .text_length = text_length;
+  .int_itself = int_itself;
+  .added = add (20, 22);
+};

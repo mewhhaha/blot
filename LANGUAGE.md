@@ -250,6 +250,25 @@ and binds the pattern's names.
 running. A `const` must be computable without runtime input. Compile-time
 closures may later be specialized into runtime code when called.
 
+A `const` takes its type from the value it evaluated to, not from the expression
+that produced it. When that value is a function, its type is the type of the
+lambda the evaluator selected. So a compile-time conditional over types is a
+dispatch: each `const` bound from it is typed against the branch that ran, and
+the branch that did not run contributes nothing to it.
+
+```blot
+const measuring = fn T => if refines (T, Str)
+  then fn x => Text.length x
+  else fn x => x + 0
+end;
+
+const measure_text = measuring Str;   // Str -> Int, not joined with the other arm
+```
+
+This applies to a `const` whose value is a function written in the same module.
+A function that arrived from an import is typed from the import, and a `rec`
+binding is typed with the group it belongs to.
+
 A `const` may not capture a `let`. Specializing a compile-time closure emits it
 as a definition of its own, and a definition has no enclosing frame to read a
 runtime binding out of, so a `const` whose body names a `let` is refused at the

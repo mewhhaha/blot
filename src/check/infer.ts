@@ -2557,6 +2557,7 @@ function inferDeclarations(
         bound = value;
         const bridged = bridge(value);
         if (bridged !== null) type = bridged;
+        else type = typeClosure(value, context, level);
       }
     }
 
@@ -2894,6 +2895,100 @@ function recordPatternShapes(
 }
 
 /** `let`-polymorphism: infer one level deeper, then quantify what stayed there. */
+/**
+ * The type of the closure a `const` actually evaluated to.
+ *
+ * `bridge` answers `null` for a closure because a closure's type comes from its
+ * body — but nothing then goes and infers that body, so the declaration falls
+ * back to inferring the expression that *produced* the closure. For
+ * `const on_int = pick Int;` that expression is a `case`/`if` over types, and
+ * inferring it joins every arm: `on_int` ends up with the arrow of the branch
+ * that lost as well as the one that won.
+ *
+ * The evaluator already decided which branch ran, and the backend already emits
+ * that decision — `lower.ts` resolves a `const` name straight to this value. So
+ * the checker asks the evaluator rather than deciding a second time, and types
+ * the lambda it was handed.
+ */
+function typeClosure(
+  value: Value,
+  context: Context,
+  level: Level,
+): Typing | null {
+  if (value.tag !== "closure" || value.source === undefined) return null;
+  // A `rec` closure's body names the binding being defined, which no scope
+  // built from what it captured can hold — the name is not a capture, it is the
+  // declaration in progress. `inferRecursiveGroup` already types those, and it
+  // types them together, which is the part that matters.
+  if (value.self !== null) return null;
+  const scope = capturedScope(value.env, context);
+  if (scope === null) return null;
+  // A lambda performs nothing when it is evaluated, so its own row is internal
+  // to the arrow and a fresh one keeps the binding site's row out of it.
+  return generalize(
+    value.source,
+    { ...context, types: scope },
+    level,
+    freshVar(level + 1),
+  );
+}
+
+/**
+ * A type scope for a closure's body, over the names it captured.
+ *
+ * A closure's environment chains up through the module and the prelude, and
+ * those scopes are already typed at the binding site — walking them again would
+ * mean bridging hundreds of values to rediscover what `context.types` holds.
+ * What the binding site is missing is only what was bound *inside* the function
+ * that produced the closure: a parameter like `T`, a local `let`. Those are the
+ * names that differ per call, and the evaluator has a value for each.
+ *
+ * Answers `null` if any of them is a value with no type — a nested closure, a
+ * native. The caller then keeps the behaviour this function is an improvement
+ * on, rather than inferring a body with a name missing from scope. Deciding it
+ * here, before inferring, is what keeps a genuine type error in the selected
+ * lambda from being swallowed as "could not specialize".
+ */
+function capturedScope(env: ValueEnv, context: Context): TypeEnv | null {
+  const alreadyTyped = new Set<ValueEnv>();
+  for (
+    let scope: ValueEnv | null = context.values;
+    scope !== null;
+    scope = scope.parent
+  ) {
+    alreadyTyped.add(scope);
+  }
+  const inner: ValueEnv[] = [];
+  let reached = false;
+  for (
+    let scope: ValueEnv | null = env;
+    scope !== null;
+    scope = scope.parent
+  ) {
+    if (alreadyTyped.has(scope)) {
+      reached = true;
+      break;
+    }
+    inner.push(scope);
+  }
+  // A closure whose chain never meets this module's was produced somewhere else
+  // — an imported module's own evaluation, most of the prelude. Its body is
+  // written against names this module never had, so there is nothing to extend
+  // and the ordinary path already types it from the import.
+  if (!reached) return null;
+  const built = childTypeEnv(context.types);
+  // Outermost first, so a name bound twice ends up meaning the inner one.
+  for (const scope of inner.reverse()) {
+    for (const [name, captured] of scope.names) {
+      const bridged = bridge(captured);
+      if (bridged === null) return null;
+      built.names.set(name, bridged);
+      recordBinding(built, name);
+    }
+  }
+  return built;
+}
+
 function generalize(
   expr: Expr,
   context: Context,

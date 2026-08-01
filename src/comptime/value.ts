@@ -60,6 +60,16 @@ export type Value =
     readonly env: Env;
     readonly self: string | null;
     /**
+     * The lambda this closure was written as.
+     *
+     * A closure's type comes from its body, and the checker needs the node the
+     * body was written as rather than an equivalent one: facts are keyed by AST
+     * node identity, so a synthesized lambda would key a second set of them.
+     * Absent on a module closure, whose body is assembled from the module's
+     * declarations rather than written as a lambda anywhere.
+     */
+    readonly source?: Expr;
+    /**
      * Set only on a module closure. Two files may write the same relative
      * specifier and mean different targets, so the import table belongs to the
      * module, not to the program.
