@@ -1062,6 +1062,21 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
   }],
   // Four named lane reads rather than one taking an index, because the target
   // has four instructions and no way to pick between them at run time.
+  // A horizontal sum. Every other operation here is lane-wise, so this is the
+  // one that cannot be written over the others without four extracts — which
+  // is what it exists instead of.
+  ["@f32x4.sum", {
+    arity: 1,
+    run: ([v], s) => {
+      const lanes = vectorOf(v, s, "@f32x4.sum");
+      return {
+        tag: "float32",
+        value: Math.fround(
+          Math.fround(Math.fround(lanes[0] + lanes[1]) + lanes[2]) + lanes[3],
+        ),
+      };
+    },
+  }],
   ["@f32x4.x", {
     arity: 1,
     run: ([v], s) =>

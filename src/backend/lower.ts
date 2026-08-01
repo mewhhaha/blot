@@ -20,6 +20,7 @@
 import {
   BinaryOperator,
   f32x4,
+  F32X4_TYPE_NAME,
   FIXED_VECTOR_DEFINITIONS,
   FIXED_VECTOR_TYPE_DECLARATIONS,
   defineEffectOperation,
@@ -54,7 +55,7 @@ import {
   type Shape,
   type VariantCase,
 } from "../check/infer.ts";
-import type { SimpleType } from "../check/type.ts";
+import type { Domain, SimpleType } from "../check/type.ts";
 import {
   childEnv,
   type Env as ValueEnv,
@@ -487,6 +488,46 @@ function resolveExit(scope: Scope, constructor: string): string | null {
 }
 
 /** Primitives with a direct Core operator. Everything else is unsupported. */
+/**
+ * What a four-lane vector says at the module boundary.
+ *
+ * It says the truth, which the boundary then refuses. The domain switches that
+ * produce a boundary type ended in `return HostTypes.text`, so a domain none of
+ * them named was published as `Text` — a vector reached gpufuck claiming to be
+ * a string, and the diagnostic was a type mismatch in the target rather than a
+ * fact about the program.
+ */
+const VECTOR_SCHEMA: TypeSchema = {
+  kind: "named",
+  name: F32X4_TYPE_NAME,
+  arguments: [],
+};
+
+/**
+ * What a range says at the module boundary.
+ *
+ * One function rather than the four copies this used to be. Each copy ended in
+ * `return HostTypes.text`, so every domain added since — `float32`, then
+ * `f32x4` — silently became `Text` in whichever copies were missed, and the
+ * diagnostic arrived as a type mismatch inside gpufuck rather than as a fact
+ * about the program. A `switch` the compiler checks for exhaustiveness cannot
+ * miss the next one.
+ */
+function rangeSchema(domain: Domain): TypeSchema {
+  switch (domain) {
+    case "int":
+      return { kind: "signed-integer-64" };
+    case "float":
+      return { kind: "float-64" };
+    case "float32":
+      return { kind: "float-32" };
+    case "f32x4":
+      return VECTOR_SCHEMA;
+    case "text":
+      return HostTypes.text;
+  }
+}
+
 const BINARY: ReadonlyMap<string, BinaryOperator> = new Map([
   ["@int.add", BinaryOperator.AddSignedInteger64],
   ["@int.sub", BinaryOperator.SubtractSignedInteger64],
@@ -729,10 +770,7 @@ function exportSchema(
     case "unit":
       return { kind: "unit" };
     case "range":
-      if (type.domain === "int") return { kind: "signed-integer-64" };
-      if (type.domain === "float") return { kind: "float-64" };
-      if (type.domain === "float32") return { kind: "float-32" };
-      return HostTypes.text;
+      return rangeSchema(type.domain);
     case "fun":
       return {
         kind: "function",
@@ -802,10 +840,7 @@ function exportSchema(
         const ranges = bounds as (SimpleType & { readonly tag: "range" })[];
         const domain = ranges[0].domain;
         if (ranges.every((range) => range.domain === domain)) {
-          if (domain === "int") return { kind: "signed-integer-64" };
-          if (domain === "float") return { kind: "float-64" };
-          if (domain === "float32") return { kind: "float-32" };
-          return HostTypes.text;
+          return rangeSchema(domain);
         }
       }
       // An open bound names the constructors one `case` read rather than the
@@ -1097,9 +1132,7 @@ function schemaOf(
 ): TypeSchema {
   if (type.tag === "unit") return { kind: "unit" };
   if (type.tag === "range") {
-    if (type.domain === "int") return { kind: "signed-integer-64" };
-    if (type.domain === "float") return { kind: "float-64" };
-    return HostTypes.text;
+    return rangeSchema(type.domain);
   }
   if (type.tag === "variant") {
     const names = [...type.cases.keys()].sort();
@@ -1264,9 +1297,7 @@ function boundaryType(
   if (value.tag === "range") {
     const domain = value.domain ??
       (value.low.tag === "int" || value.high.tag === "int" ? "int" : "text");
-    if (domain === "int") return { kind: "signed-integer-64" };
-    if (domain === "float") return { kind: "float-64" };
-    return HostTypes.text;
+    return rangeSchema(domain);
   }
   if (value.tag === "shape") {
     const nominal = lowering.nominal([...value.fields.keys()]);
@@ -2979,6 +3010,10 @@ function lowerApply(
     if (spine.callee.name === "@f32x4.splat" && spine.args.length === 1) {
       lowering.vectors = true;
       return f32x4.splat(lower(spine.args[0], scope, lowering));
+    }
+    if (spine.callee.name === "@f32x4.sum" && spine.args.length === 1) {
+      lowering.vectors = true;
+      return f32x4.reduceAdd(lower(spine.args[0], scope, lowering));
     }
     const LANES: ReadonlyMap<string, number> = new Map([
       ["@f32x4.x", 0],

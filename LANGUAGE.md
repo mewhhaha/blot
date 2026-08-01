@@ -1214,6 +1214,7 @@ Everything not listed here belongs in source, normally the prelude.
 | `@f32x4.sub`     | lane-wise subtraction                                |
 | `@f32x4.mul`     | lane-wise multiplication                             |
 | `@f32x4.div`     | lane-wise division                                   |
+| `@f32x4.sum`     | add the four lanes together                          |
 | `@f32x4.x`       | read lane zero, and `.y`, `.z`, `.w` for the rest    |
 | `@float.of_int`  | widen an integer to a float                          |
 | `@int.of_float`  | truncate a float toward zero                         |

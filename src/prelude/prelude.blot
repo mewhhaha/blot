@@ -276,6 +276,14 @@ const Float32 = {
     then @f32.neg value
     else value
     end;
+
+  // Core has no f32 remainder and no f32 square root, so both are computed in
+  // double precision and narrowed once at the end. Rounding after every step
+  // instead would be slower and no more accurate — the intermediates are exact
+  // in an f64 either way.
+  .rem = left => (right => @f32.of_float
+    (@float.rem (@float.of_f32 left) (@float.of_f32 right)));
+  .sqrt = value => @f32.of_float (Float.sqrt (@float.of_f32 value));
 };
 
 // --- four lanes -------------------------------------------------------------
@@ -303,12 +311,10 @@ const Vec4 = {
 
   // A dot product is a multiply and three adds of the lanes. Written here
   // rather than as a primitive because it is writable here.
-  .dot = left => (right => do
-    let product = @f32x4.mul left right;
-    in @f32.add
-      (@f32.add (@f32x4.x product) (@f32x4.y product))
-      (@f32.add (@f32x4.z product) (@f32x4.w product))
-  end);
+  // One instruction, where four extracts and three adds would be seven.
+  .sum = value => @f32x4.sum value;
+
+  .dot = left => (right => @f32x4.sum (@f32x4.mul left right));
 
   .scale = (value, factor) => @f32x4.mul value (@f32x4.splat factor);
 };

@@ -12,6 +12,7 @@ import {
   type CanonicalAbiType,
   type CompilationOptions,
   compileModuleToWasm,
+  F32X4_TYPE_NAME,
   CompilerPerformanceTrace,
   WASM_PROVEN_STORE_READS_TRACE_ANNOTATION,
   WASM_STATIC_ANALYSIS_TRACE_STAGE,
@@ -905,7 +906,7 @@ function canonicalType(
     return { kind: "signed-integer-64" };
   }
   if (schema.kind === "boolean") return { kind: "boolean" };
-  if (schema.kind === "float-64") {
+  if (schema.kind === "float-32" || schema.kind === "float-64") {
     // A program's own arithmetic, not its interface. gpufuck's canonical ABI
     // has no float case — `CanonicalAbiType` is unit, integer, boolean, text,
     // array, record, variant, and seal — so a float has no stable layout to
@@ -918,6 +919,15 @@ function canonicalType(
       "A float cannot cross the module boundary: Blot Core Wasm ABI 1 has no " +
         "float layout. Convert with `@int.of_float` at the export, or keep " +
         "the float inside the program.",
+      { start: 0, end: 0 },
+    );
+  }
+  if (schema.kind === "named" && schema.name === F32X4_TYPE_NAME) {
+    fail(
+      "BLOT_FLOAT_AT_BOUNDARY",
+      "An `F32x4` cannot cross the module boundary: Blot Core Wasm ABI 1 has " +
+        "no float layout, and a vector of them has none either. Read the " +
+        "lanes and convert them at the export.",
       { start: 0, end: 0 },
     );
   }

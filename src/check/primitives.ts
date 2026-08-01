@@ -155,6 +155,7 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ["@f32x4.sub", mono(curried([F32X4, F32X4], F32X4))],
   ["@f32x4.mul", mono(curried([F32X4, F32X4], F32X4))],
   ["@f32x4.div", mono(curried([F32X4, F32X4], F32X4))],
+  ["@f32x4.sum", mono(curried([F32X4], FLOAT32))],
   ["@f32x4.x", mono(curried([F32X4], FLOAT32))],
   ["@f32x4.y", mono(curried([F32X4], FLOAT32))],
   ["@f32x4.z", mono(curried([F32X4], FLOAT32))],

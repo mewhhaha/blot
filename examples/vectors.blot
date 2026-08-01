@@ -54,12 +54,18 @@ let last = Float32.truncate (Vec4.w scaled);
 
 // --- what the lanes are for -------------------------------------------------
 //
-// A dot product is a multiply and three adds. It is prelude source rather than
-// a primitive because it is writable in blot — only the four instructions it is
-// written over could not be.
+// A dot product is a lane-wise multiply and a horizontal sum, so it is prelude
+// source: it is writable over the two instructions below it.
 
 sig dot = Int;
 let dot = Float32.truncate (Vec4.dot axis axis);
+
+// `dot` is `sum` over a lane-wise multiply, and `sum` is one instruction where
+// four extracts and three adds would be seven. It is a primitive for the same
+// reason the four arithmetic operations are: the target has an instruction and
+// blot has no way to write one.
+sig total = Int;
+let total = Float32.truncate (Vec4.sum scaled);
 
 // Single precision, still: the lanes round the way `F32` does, and a sum that
 // needs more than 24 bits of mantissa says so here as much as anywhere.
@@ -74,5 +80,6 @@ return {
   .second_of_difference = Float32.truncate (Vec4.y difference);
   .third_of_halved = Float32.truncate (Vec4.z halved);
   .dot = dot;
+  .total = total;
   .thirds = thirds;
 };

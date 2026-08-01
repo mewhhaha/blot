@@ -624,3 +624,32 @@ Deno.test("a program with no vectors carries none of their machinery", async () 
     .decode(new Uint8Array(built.wasm));
   assertEquals(text.includes("$FunctionalF32x4"), false);
 });
+
+Deno.test("an F32x4 is refused at the boundary rather than published as text", async () => {
+  // The domain switches that produce a boundary type used to end in a `text`
+  // fallthrough, so a domain none of them named was published as `Text` and
+  // the diagnostic arrived from inside gpufuck as a type mismatch. Both float
+  // domains and the vector now say what they are, and the boundary refuses.
+  const directory = await Deno.makeTempDir();
+  const write = async (name: string, result: string) => {
+    const path = join(directory, `${name}.blot`);
+    await Deno.writeTextFile(
+      path,
+      ['open {} = (@import "blot:prelude") ();', `return ${result};`].join("\n"),
+    );
+    return path;
+  };
+
+  const vector = await write("vector", "Vec4.splat (Float32.of_int 1)");
+  const single = await write("single", "Float32.of_int 1");
+  await assertRejects(
+    () => validateLowering(vector),
+    Error,
+    "BLOT_FLOAT_AT_BOUNDARY",
+  );
+  await assertRejects(
+    () => validateLowering(single),
+    Error,
+    "BLOT_FLOAT_AT_BOUNDARY",
+  );
+});
