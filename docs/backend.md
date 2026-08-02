@@ -1,29 +1,20 @@
 # The Backend
 
 ```bash
-just build examples/compiled.blot   # gpupaper Rust/Wasm, the default
-blot build --target=gpufuck examples/compiled.blot
-just serve                          # resident gpufuck compiler on loopback
-just build-service examples/compiled.blot
+just build examples/compiled.blot   # baba Wasm -> gpupaper Rust/Wasm
 just wasm                           # interpreter vs GPU evaluator vs Wasm
 ```
 
-The default build exports validated Runtime HIR to gpupaper's Rust/WebAssembly
-emitter. The explicit gpufuck conformance target lowers to gpufuck's Functional
-Surface, which gpufuck resolves and typechecks on the GPU before compiling to
-WebAssembly. Both paths consume facts settled by Blot; neither reconstructs
-source semantics, and there is no WAT route.
+The compiler parses with baba's generated WebAssembly parser, constructs and
+validates Blot Runtime HIR, derives ABI 1 adapters, and lowers the result to
+gpupaper's language-independent Core. Gpupaper validates Core, plans the module,
+and emits that plan through its Rust/WebAssembly emitter. It has no Blot HIR,
+ABI, parser, or target policy of its own.
 
-An explicit direct gpufuck build creates one compiler session and destroys it
-after writing the artifact. The service command sends an absolute source path to
-a loopback-only resident process. That process retains gpufuck's GPU device and
-pipelines as well as Blot's immutable frontend results, while checking known
-source files before each request and invalidating the dependent module closure
-after an edit. Direct and service gpufuck builds share the same
-`BlotCompilerSession`; the transport does not own another lowering or backend.
-`scripts/blot-service-client` uses `curl` to ask the resident process to compile
-and write both artifacts, so a repeated command does not start another Deno
-runtime.
+Neither repository initializes a WebGPU device on the Blot build path or offers
+a GPU build target. The GPU frontend and evaluator remain independent
+conformance checks. `just parity` and `just wasm` exercise them without defining
+a second source-language meaning. There is no WAT route.
 
 ## Three executions, one language
 

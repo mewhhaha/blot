@@ -6,8 +6,8 @@ import {
 import { checkFile } from "../src/check/mod.ts";
 import { evaluateFile } from "../src/run.ts";
 import { show } from "../src/comptime/value.ts";
-import { validateBlotRuntimeModule } from "../../gpupaper/src/blot_runtime_hir.ts";
-import { compileBlotRuntimeModule } from "../../gpupaper/src/blot_runtime_target.ts";
+import { validateBlotRuntimeModule } from "../src/backend/runtime/hir.ts";
+import { compileBlotRuntimeModulesOnRustWasm } from "../src/backend/runtime/target.ts";
 
 for (
   const source of [
@@ -67,8 +67,9 @@ Deno.test("terminal gpupaper Wasm preserves both runtime branches", async () => 
   const hir = validateBlotRuntimeModule(
     await prepareGpupaperHir("case-studies/terminal/main.blot"),
   );
-  const artifact = compileBlotRuntimeModule(hir);
-  if (artifact.wasm === undefined) throw new Error("gpupaper omitted CPU Wasm");
+  const batch = await compileBlotRuntimeModulesOnRustWasm([hir]);
+  const artifact = batch.artifacts[0];
+  if (artifact === undefined) throw new Error("gpupaper omitted Rust/Wasm");
   const compiled = await WebAssembly.compile(artifact.wasm as BufferSource);
   for (const input of ["", "Łucja 🦆"]) {
     const writes: string[] = [];

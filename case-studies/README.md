@@ -2,10 +2,11 @@
 
 These are small programs with real host boundaries, not additions to the
 language's feature catalog. Each program declares every authority it uses as a
-host effect and compiles through gpufuck to the stable Blot Core Wasm ABI.
+host effect and compiles through the GPU conformance backend to the stable Blot
+Core Wasm ABI.
 
-Run them from the repository root. A WebGPU adapter is required because the
-compiler itself runs on the GPU:
+Run them from the repository root. These executable conformance hosts require a
+WebGPU adapter:
 
 ```bash
 WGPU_BACKENDS=vulkan deno task case-study grep "@text.contains" LANGUAGE.md
@@ -252,7 +253,7 @@ camera was never in the guest: `View` is a host capability backed by the page's
 pointer and wheel. A rebuild that fails leaves the last good module running and
 shows the diagnostic on the page.
 
-One `BlotCompilerSession` is held for the life of the server, so a rebuild is a
+One GPU compiler session is held for the life of the server, so a rebuild is a
 compile and not a device acquisition.
 
 ### The host boundary

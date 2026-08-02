@@ -19,8 +19,8 @@ Blot is a strict, expression-oriented functional language with:
 - separate flow analysis for linear, affine, and borrowed bindings;
 - modules represented as unary functions;
 - surface control forms lowered to ordinary recursion and cases; and
-- a default validated Runtime HIR path through gpupaper's Rust/WebAssembly
-  emitter, with gpufuck retained as the explicit conformance target.
+- a validated Runtime HIR path through gpupaper's Rust/WebAssembly emitter, with
+  the GPU pipeline retained only as an explicit conformance check.
 
 There is no separate type language, type namespace, assignment operation,
 exception syntax, implicit prelude, or ambient authority.
@@ -2364,11 +2364,16 @@ specialized.
 
 ### 15.1 Core WebAssembly ABI
 
-`blot build` defaults to gpupaper's checked Rust/WebAssembly emitter.
-`blot build --target=gpufuck` selects the conformance backend. Both emit Blot
-Core Wasm ABI 1.0. Backend-private values and heap objects never cross the
-generated adapters, which expose the synchronous memory32, UTF-8 subset of the
-Component Model Canonical ABI.
+`blot build` validates Blot Runtime HIR, constructs the ABI adapters specified
+here, lowers to gpupaper's language-independent Core, and emits the resulting
+plan through gpupaper's checked Rust/WebAssembly emitter. Gpupaper contributes
+no Blot-specific HIR, ABI rule, or adapter. The compiler parses through baba's
+generated WebAssembly parser and does not initialize WebGPU. The separate
+conformance tools exercise the GPU frontend and evaluator, but they are not
+compiler targets. Generated modules implement Blot Core Wasm ABI 1.0.
+Backend-private values and heap objects never cross the generated adapters,
+which expose the synchronous memory32, UTF-8 subset of the Component Model
+Canonical ABI.
 
 Each runtime field of a record module result is exported as `blot:<field>`. A
 module whose result is not a record has one export, `blot:default`, which is

@@ -1,8 +1,7 @@
 // Parses a blot source file and reports diagnostics.
 //
-// Defaults to baba's CPU path, which is the byte-parity oracle for the GPU
-// frontend and needs no WebGPU adapter. `blot check` will use the same entry
-// point, which is what keeps syntax and semantic tooling off the device.
+// Uses the same generated WebAssembly parser as every compiler command, so
+// syntax and semantic tooling need no WebGPU adapter.
 
 import { createParser } from "../generated/wasm/mod.ts";
 

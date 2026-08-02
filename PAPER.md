@@ -23,8 +23,8 @@ This document uses “sound” in several related but distinct senses:
    resources;
 7. proof-required memory operations cannot be out of bounds;
 8. staging and specialization preserve source behavior; and
-9. the reference evaluator, gpufuck, and emitted WebAssembly refine one source
-   semantics.
+9. the reference evaluator, independent conformance evaluator, and emitted
+   WebAssembly refine one source semantics.
 
 It does not mean that every program terminates, that arithmetic never traps, or
 that malicious host input is accepted. Divergence and specified traps are
@@ -115,7 +115,9 @@ UTF-8 source
   -> coverage and relational proof checking
   -> ownership checking
   -> staging and specialization
-  -> gpufuck Functional Surface
+  -> validated Runtime HIR
+  -> Blot canonical ABI and Core lowering
+  -> gpupaper Core validation and Rust/WebAssembly emission
   -> WebAssembly plus canonical adapters
 ```
 
@@ -129,17 +131,18 @@ s parse-> cst elaborate-> e check-> e_typed
 
 Each arrow has a contract.
 
-| Boundary                   | Required property                                            |
-| -------------------------- | ------------------------------------------------------------ |
-| source to CST              | token identity is fixed and the parse is unique              |
-| CST to core                | scope, control, and evaluation order are preserved           |
-| core to typed core         | inferred terms satisfy the declarative typing relation       |
-| typed core to safe core    | cases cover and proof-required operations have evidence      |
-| safe core to owned core    | linear and affine obligations are discharged on every path   |
-| owned core to runtime core | erased compile-time terms cannot affect residual behavior    |
-| runtime core to gpufuck    | structural uses are specialized and representation is closed |
-| gpufuck to Wasm            | generated code simulates gpufuck evaluation                  |
-| private values to ABI      | lifting and lowering validate and preserve public values     |
+| Boundary                     | Required property                                            |
+| ---------------------------- | ------------------------------------------------------------ |
+| source to CST                | token identity is fixed and the parse is unique              |
+| CST to core                  | scope, control, and evaluation order are preserved           |
+| core to typed core           | inferred terms satisfy the declarative typing relation       |
+| typed core to safe core      | cases cover and proof-required operations have evidence      |
+| safe core to owned core      | linear and affine obligations are discharged on every path   |
+| owned core to runtime core   | erased compile-time terms cannot affect residual behavior    |
+| runtime core to Runtime HIR  | structural uses are specialized and representation is closed |
+| Runtime HIR to gpupaper Core | Blot's representations and ABI policy are closed             |
+| gpupaper Core to Wasm        | validation succeeds and generated code simulates the core    |
+| private values to ABI        | lifting and lowering validate and preserve public values     |
 
 No later stage may reconstruct a fact owned by an earlier stage. Inference
 records field sets, constructor sets, effect identities, and coercions.
@@ -1027,7 +1030,7 @@ unspoken promise about every run-time value of the attached range.
 
 ### 13.1 Abstract source values
 
-The source semantics does not expose gpufuck tags, constructor numbers, Store
+The source semantics does not expose backend tags, constructor numbers, Store
 headers, object addresses, or Wasm words. Arrays are finite sequences; records
 map source field names to values; variants contain a constructor name and
 payload; seals carry nominal identity.
@@ -1037,10 +1040,10 @@ between a source value `v : A` and a target value `w`. For every source step,
 the target may take zero or more administrative steps and reach a related state.
 This forward simulation is the basis of compiler correctness.
 
-### 13.2 Specialization before gpufuck
+### 13.2 Specialization before Runtime HIR
 
-Gpufuck re-checks a Hindley-Milner Functional Surface, while Blot accepts
-algebraic subtyping. Therefore Blot must make every residual use HM-checkable:
+Blot accepts algebraic subtyping while Runtime HIR requires closed physical
+representations. Therefore Blot must make every residual use representable:
 
 - instantiate polymorphism;
 - choose concrete record and variant representations;
@@ -1049,8 +1052,14 @@ algebraic subtyping. Therefore Blot must make every residual use HM-checkable:
 - erase refinement evidence and compile-time values; and
 - make ownership permissions explicit on Store operations.
 
-A gpufuck inference failure for a well-typed closed Blot program is a Blot
+A Runtime HIR validation failure for a well-typed closed Blot program is a Blot
 lowering bug. It is not resolved by weakening the source type claim.
+
+Runtime HIR, its validator, ABI manifests, canonical adapters, and module shell
+are language definitions and therefore live in Blot. The external compiler
+boundary is the language-independent monomorphic `CoreModule`. Gpupaper checks
+that Core and emits its deterministic Wasm plan; it does not infer or recreate
+any Blot representation, effect identity, or ABI rule.
 
 ### 13.3 Public ABI
 
@@ -1128,9 +1137,10 @@ Defensive target checks may remain but are unreachable for proved operations.
 ### 14.6 Compilation agreement
 
 For a closed program and the same sequence of host responses, the reference
-evaluator, gpufuck evaluator, and emitted Wasm produce observationally
-equivalent exports, host operations, specified traps, or divergence. Allocation
-identity and internal administrative steps are not observations.
+evaluator, independent conformance evaluator, and emitted Wasm produce
+observationally equivalent exports, host operations, specified traps, or
+divergence. Allocation identity and internal administrative steps are not
+observations.
 
 ## 15. What the model deliberately leaves open
 
@@ -1177,7 +1187,7 @@ executable checker or lowering test, not only by documentation.
 | seal identity            | equality compares the public name and invariant carrier                                                                                                                         | seals are applicative named types                                      | none                                                                                                 |
 | arithmetic refinements   | public arithmetic types widen normally while `Phi` separately retains supported affine relationships                                                                            | refinement arithmetic is an independent entailment system              | none for the implemented affine fragment                                                             |
 | optimizer correctness    | generated pure programs and an ordered host-effect trace compare typed-Core evaluation with direct evaluation; refinement and ownership certificates have mutation tests        | demand and computation traces define observations                      | extend simulations to handlers, staging, generated ownership paths, and target traces                |
-| default gpupaper target  | target supports only a subset of ABI/runtime HIR                                                                                                                                | target restriction is allowed if it refuses before artifact production | keep target gaps separate from source-language acceptance claims                                     |
+| WebAssembly compiler     | the Rust/Wasm target supports only a subset of ABI/runtime HIR                                                                                                                  | target restriction is allowed if it refuses before artifact production | keep target gaps separate from source-language acceptance claims                                     |
 
 ## 17. Migration plan
 
@@ -1215,10 +1225,9 @@ Elaborate the existing AST into an internal fine-grain core with explicit
 Typed Core now owns residual expression structure, explicit `return`/`bind`,
 dedicated nodes for compiler-known applications, and a settled `TyRep` reference
 on every node. Live host-effect capabilities stay in Core so erasure cannot
-leave their operations unbound. The reference evaluator and experimental
-residual builder consume typed Core directly. The production gpufuck lowerer
-still consumes the shared source schedule while it migrates. Resolved `open`
-bindings are Core facts, so imported scopes require no source-AST replay.
+leave their operations unbound. The reference evaluator and Runtime HIR builder
+consume typed Core directly. Resolved `open` bindings are Core facts, so
+imported scopes require no source-AST replay.
 
 ### M2: Make compile-time representations typed — inference boundary complete
 
@@ -1428,7 +1437,7 @@ Blot is a capability-safe, staged functional language in which:
 - effects are generative capabilities handled by affine continuations;
 - ownership is a separate structural usage judgment;
 - immutable values may be updated destructively only under a uniqueness proof;
-- specialization closes every representation before gpufuck; and
+- specialization closes every representation before Runtime HIR validation; and
 - WebAssembly exposes only the versioned canonical ABI, never private compiler
   values.
 

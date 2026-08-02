@@ -1,7 +1,9 @@
-# blot
+# Blot
 
-A functional language whose syntax is designed against a parallel GPU parser
-from the start, rather than retrofitted to one.
+Blot is a functional language built as one coherent system: generated
+WebAssembly parsing, comptime evaluation, algebraic subtyping, typed effects,
+ownership, specialization, and WebAssembly compilation all shape the source
+language.
 
 See [LANGUAGE.md](LANGUAGE.md) for the complete language specification.
 Executable application studies live in [case-studies/](case-studies/): a
@@ -18,22 +20,16 @@ const result = await parse("return 42;");
 
 Run `deno task publish:dry-run` to verify the package before publishing.
 
-`../binned` is the maximal version of this idea — 124k lines of TypeScript and a
-language reference of 80k characters. `../baba/examples/gpu-duck` is the
-opposite pressure: a grammar cut down until baba's WebGPU frontend can prove it
-parallel-parseable. blot takes the second as the starting constraint and keeps
-only what survives it.
-
-The profile turns out to be a good editor. Almost everything it forbids —
-contextual lexing, recursive precedence grammar, unbounded regions — is also
-what made the reference language large.
+The strict parser profile is a design tool, not an implementation afterthought.
+It rules out contextual lexing, recursive precedence grammar, and unbounded
+regions, keeping both the grammar and the language small enough to understand.
 
 ## Status
 
 It runs. M0 (the GPU-parseable grammar) and M1 (elaboration, the comptime
 evaluator, and the prelude) are done. Every example in `examples/` evaluates to
 a recorded value, and every program in the corpus — the prelude included — holds
-byte parity between baba's CPU oracle and the WebGPU frontend.
+byte parity between the CPU parser oracle and the WebGPU frontend.
 
 Type inference (M2) landed too: `blot check` infers principal types with no
 annotations anywhere, enforces `sig` by subsumption, and rejects unhandled
@@ -65,15 +61,15 @@ backend consumes. A final `@array.set` or `@array.push` on a proved linear array
 reuses its Store allocation; ordinary shared arrays remain persistent. See
 [docs/ownership.md](docs/ownership.md).
 
-The gpufuck conformance backend (M4) lowers every accepted catalog program.
-`blot build` defaults to gpupaper's Rust/WebAssembly emitter and emits stable
-Core WebAssembly plus a JSON ABI manifest without executing the program. The
-identical manifest is embedded in the `blot:abi` custom section. See
-[docs/abi.md](docs/abi.md). `just wasm` checks the interpreter, gpufuck's GPU
-evaluator, and emitted Wasm against the same staged runtime result. The CPU test
-suite sends the entire catalog through gpufuck as well, so backend coverage does
-not require a WebGPU adapter. Compile-time-only result fields are erased,
-runtime fields become named Wasm exports, host effects become typed imports, and
+The compiler (M4) lowers every accepted catalog program. `blot build` uses the
+checked Rust/WebAssembly emitter and produces stable Core WebAssembly plus a
+JSON ABI manifest without executing the program. The identical manifest is
+embedded in the `blot:abi` custom section. See [docs/abi.md](docs/abi.md).
+`just wasm` checks the interpreter, the independent conformance evaluator, and
+emitted Wasm against the same staged runtime result. The CPU test suite sends
+the entire catalog through lowering as well, so backend coverage does not
+require a WebGPU adapter. Compile-time-only result fields are erased, runtime
+fields become named Wasm exports, host effects become typed imports, and
 one-shot handlers are specialized through non-tail resume and abort. See
 [docs/backend.md](docs/backend.md).
 
@@ -82,8 +78,6 @@ just run examples/tour.blot   # evaluate a program
 just check-file examples/tour.blot  # infer its type and check ownership
 just ownership examples/tour.blot   # last-use and linearity facts
 just build examples/compiled.blot   # compile to WebAssembly
-just serve                          # keep the GPU compiler resident
-just build-service examples/compiled.blot
 just wasm                           # interpreter vs GPU evaluator vs Wasm
 just test                     # corpus goldens, rejections, profile gate
 just parity                   # CPU oracle vs WebGPU frontend, needs an adapter
@@ -92,7 +86,7 @@ just inspect                  # the counters recorded in docs/gpu-profile.md
 just install                  # Helix: grammar, queries, `.blot` association
 ```
 
-The default build target is the experimental adjacent gpupaper checkout:
+Compile one or several modules with the default Rust/WebAssembly backend:
 
 ```bash
 deno run --allow-read --allow-write \
@@ -100,24 +94,17 @@ deno run --allow-read --allow-write \
   examples/minimal.blot examples/arithmetic.blot
 ```
 
-Blot still owns parsing, checking, staging, specialization, and Runtime HIR
-production. Gpupaper validates that HIR and emits each cache-miss plan through
-its checked-in Rust/WebAssembly emitter. The target therefore requires no GPU.
-It is intentionally local-checkout-only for now and does not support
-compiler-service mode. Multiple paths are prepared independently and cache
-misses retain stable input order. A source failure remains local to its path; an
-emitter failure rejects every admitted miss rather than returning partially
-trusted artifacts. Successful outcomes identify `wasmEmitter` as `rust-wasm`.
+Blot owns parsing, checking, staging, specialization, Runtime HIR validation,
+canonical ABI adapters, and target orchestration. Those Blot-specific layers
+live in `src/backend/runtime/`. The sibling gpupaper checkout exposes only its
+language-independent Core, Wasm planner, and Rust/WebAssembly plan emitter. The
+compiler uses generated WebAssembly for both parsing and final code emission. No
+compiler command initializes WebGPU. Multiple paths are prepared independently
+and cache misses retain stable input order. A source failure remains local to
+its path; an emitter failure rejects every admitted miss rather than returning
+partially trusted artifacts.
 
-`just build` invokes gpupaper directly and does not initialize WebGPU. The
-gpufuck target remains available as `blot build --target=gpufuck`; its repeated
-local-build path is `just serve` in one terminal and `just build-service file`
-from another. The service binds loopback only, retains the parser, checked
-module graph, lowered Surface, GPU device, compiler pipelines, and Wasm caches,
-and invalidates an edited module together with its importers. `build-service` is
-a small `curl` client: it does not start Deno or load either compiler.
-
-`just install` builds the Tree-sitter grammar from the same `grammar.baba` as
+`just install` builds the Tree-sitter grammar from the same grammar source as
 the GPU parser, installs highlight, indent, textobject, tag, and rainbow
 queries, and registers `.blot` in a managed block in
 `~/.config/helix/languages.toml`. Re-running replaces that block rather than
@@ -276,8 +263,8 @@ an ordinary iterator whose step always produces another unit. That is why
 `for ever do` needs the prelude opened and no special grammar. A new kind of
 sequence is a value someone writes. A state and a step rather than a closure
 returning the next closure: both express the protocol, but the closure form
-allocates one per element and leaves gpufuck resolving a lambda set that grows
-with the loop.
+allocates one per element and leaves the compiler resolving a lambda set that
+grows with the loop.
 
 Nothing is in scope that the module did not ask for. The prelude is an ordinary
 module with no privilege, so every file begins by opening it:
@@ -306,8 +293,8 @@ the boundary in both directions, and such a record lowers, because the field
 sets are settled once the whole program has been checked rather than as each
 file finishes.
 
-That is the whole of it. `type`, `interface`, `effect`, and `duck` do not exist
-as declaration forms, because types are ordinary compile-time values:
+Types and effects do not need separate declaration forms because they are
+ordinary compile-time values:
 
 ```blot
 const I32 = I 32;
@@ -490,10 +477,11 @@ they fail at parse or during evaluation.
 - **Algebraic subtyping.** Biunification over a polar lattice, as in
   [1subml](https://github.com/Storyyeller/1subml). Effect rows are a lattice
   element like any other, so effect inference is not a separate pass. Structural
-  width subtyping means `duck` contracts and typeclasses are unnecessary. A
-  literal is a range whose bounds coincide, so `identity 42` infers `42`.
+  width subtyping makes record compatibility direct rather than mediated by a
+  nominal conformance table. A literal is a range whose bounds coincide, so
+  `identity 42` infers `42`.
 - **One parameter per function.** Juxtaposition is the only application form,
-  which matches gpufuck's unary Core exactly.
+  keeping application and specialization uniform.
 - **Higher-kinded abstraction is comptime.** Type constructors are comptime
   functions, so the inference lattice never needs kinds. Explicit predicative
   Rank-N types use `@forall`; quantified arguments are skolemized and quantified

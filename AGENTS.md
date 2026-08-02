@@ -2,22 +2,22 @@
 
 ## Goal
 
-The simplest language that keeps the reference feature set and fits baba's
-WebGPU frontend profile.
+The simplest language that keeps the reference feature set, fits baba's WebGPU
+frontend profile, and compiles without requiring WebGPU.
 
 ```txt
-source -> baba GPU frontend -> CST -> fixity fold -> AST
+source -> baba generated-Wasm frontend -> CST -> fixity fold -> AST
        -> comptime evaluation -> biunification -> linearity/ownership
-       -> specialize -> gpufuck Functional Surface -> Wasm
-                     -> gpupaper Runtime HIR -> Rust/WebAssembly emission (default)
+       -> specialize -> Blot Runtime HIR -> gpupaper Core -> Rust/WebAssembly emission
 ```
 
 blot owns source elaboration, inference, comptime, and ownership. baba owns
-lexing and parsing; do not hand-write a lexer or parser. The default
-local-checkout gpupaper target exports validated Runtime HIR and uses gpupaper's
-Rust/WebAssembly emitter; do not reconstruct Blot source semantics in that
-target. gpufuck remains the explicit conformance target and owns its
-Functional-Surface-to-Wasm path.
+lexing and parsing; do not hand-write a lexer or parser. Compiler commands use
+baba's generated WebAssembly parser. The local-checkout gpupaper target exports
+validated Core and uses gpupaper's Rust/WebAssembly emitter. Blot owns Runtime
+HIR, ABI policy, the module shell, and the Runtime-HIR-to-Core adapter; do not
+move those language semantics into gpupaper. The GPU paths remain explicit
+conformance tools, not compiler targets.
 
 ## Invariants
 
@@ -133,9 +133,10 @@ still contain a local compile-time binding. Do not re-derive them in the
 backend — that is a second type checker and, for effects, would mint a different
 identity. This is why `load` keeps one cache per process.
 
-**`blot check` must not touch WebGPU.** Parsing has baba's `CpuFrontend`
-oracle and inference is plain TypeScript. Keep the split structural so the
-formatter and language server never initialize a device.
+**Compiler commands must not touch WebGPU.** Parsing uses baba's generated
+WebAssembly parser, inference is plain TypeScript, and building uses gpupaper's
+Rust/WebAssembly emitter. Keep the split structural so ordinary compiler,
+formatter, and language-server processes never initialize a device.
 
 ## Style
 

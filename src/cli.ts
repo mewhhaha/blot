@@ -1,7 +1,8 @@
 // blot's command line.
 //
-// `check` and `eval` both stay off WebGPU: parsing has baba's CPU path and the
-// evaluator is plain TypeScript. Only `just parity` needs an adapter.
+// Every command parses through baba's generated WebAssembly parser. `build`
+// emits through gpupaper's Rust/WebAssembly emitter. WebGPU belongs only to
+// explicit conformance tools such as `just parity` and `just wasm`.
 
 import { resolve } from "@std/path";
 import { BlotError, locate, render } from "./diagnostic.ts";
@@ -12,48 +13,22 @@ import { LoadError } from "./load.ts";
 import { checkFile, type OwnedBinding } from "./check/mod.ts";
 import type { NamePattern } from "./linear/check.ts";
 import { testFile, type TestOutcome } from "./test.ts";
-import {
-  type BuildMode,
-  type BuildTarget,
-  parseBuildArguments,
-} from "./build_arguments.ts";
 
 const [command, ...rest] = Deno.args;
-
-if (command === "serve") {
-  await serveCompiler(rest);
-  Deno.exit(0);
-}
 
 if (command === undefined || rest.length === 0) {
   printUsage();
   Deno.exit(2);
 }
 
-let paths: readonly string[] = rest;
-let buildMode: BuildMode = "direct";
-let buildTarget: BuildTarget = "gpupaper";
-let serviceUrl: string | undefined;
-if (command === "build") {
-  const buildArguments = parseBuildArguments(rest);
-  paths = buildArguments.paths;
-  buildMode = buildArguments.mode;
-  buildTarget = buildArguments.target;
-  serviceUrl = buildArguments.serviceUrl;
-  if (paths.length === 0) {
-    printUsage();
-    Deno.exit(2);
-  }
-}
-
 let failures = 0;
 let tests = 0;
 let failedTests = 0;
 
-if (command === "build" && buildTarget === "gpupaper") {
-  failures += await buildGpupaperFiles(paths);
+if (command === "build") {
+  failures += await buildFiles(rest);
 } else {
-  for (const path of paths) {
+  for (const path of rest) {
     try {
       if (command === "check") await check(path);
       else if (command === "test") {
@@ -61,12 +36,7 @@ if (command === "build" && buildTarget === "gpupaper") {
         tests += outcomes.length;
         failedTests += reportTestOutcomes(outcomes);
       } else if (command === "ownership") await ownership(path);
-      else if (command === "build") {
-        await buildGpufuckFile(path, {
-          mode: buildMode,
-          serviceUrl,
-        });
-      } else if (command === "eval") await evaluateFile(path);
+      else if (command === "eval") await evaluateFile(path);
       else if (command === "ast") await dumpAst(path);
       else {
         console.error(`unknown command \`${command}\``);
@@ -91,38 +61,15 @@ let exitCode = 0;
 if (failures > 0 || failedTests > 0) exitCode = 1;
 Deno.exit(exitCode);
 
-interface GpufuckBuildOptions {
-  readonly mode: BuildMode;
-  readonly serviceUrl: string | undefined;
-}
-
 type BuiltFileArtifact = {
   readonly wasm: Uint8Array;
   readonly manifestBytes: Uint8Array;
   readonly capabilities: readonly string[];
 };
 
-async function serveCompiler(arguments_: readonly string[]): Promise<void> {
-  let port = 4765;
-  for (const argument of arguments_) {
-    if (!argument.startsWith("--port=")) {
-      throw new Error(`unknown serve option ${JSON.stringify(argument)}`);
-    }
-    port = Number(argument.slice("--port=".length));
-  }
-  const { startCompilerServer } = await import("./compiler_service.ts");
-  const server = await startCompilerServer({ port });
-  console.log(`Blot compiler service listening at ${server.url}`);
-  await server.finished;
-}
-
 function printUsage(): void {
   console.error("usage: blot <check|test|eval|ast|ownership> <file.blot>...");
-  console.error(
-    "       blot build [--target=gpupaper|gpufuck] [--mode=direct|service] <file.blot>...",
-  );
-  console.error("       build target defaults to gpupaper (Rust/WebAssembly)");
-  console.error("       blot serve [--port=4765]");
+  console.error("       blot build <file.blot>...");
 }
 
 function reportTestOutcomes(outcomes: readonly TestOutcome[]): number {
@@ -163,7 +110,7 @@ async function evaluateFile(path: string): Promise<void> {
  * The ownership facts the backend will consume.
  *
  * A proved linear consumption at `@array.set` or `@array.push` becomes an owned
- * gpufuck Store update. Traversal-order last uses are still printed but do not
+ * backend Store update. Traversal-order last uses are still printed but do not
  * license reuse by themselves, because branch traversal order is not a
  * per-path deadness proof.
  *
@@ -211,7 +158,7 @@ async function ownership(path: string): Promise<void> {
   }
 }
 
-async function buildGpupaperFiles(paths: readonly string[]): Promise<number> {
+async function buildFiles(paths: readonly string[]): Promise<number> {
   const backend = await import("./backend/gpupaper.ts");
   const outcomes = await backend.buildGpupaperBatch(paths);
   let failures = 0;
@@ -224,21 +171,6 @@ async function buildGpupaperFiles(paths: readonly string[]): Promise<number> {
     await writeBuiltFile(outcome.path, outcome);
   }
   return failures;
-}
-
-async function buildGpufuckFile(
-  path: string,
-  options: GpufuckBuildOptions,
-): Promise<void> {
-  let built: BuiltFileArtifact;
-  if (options.mode === "service") {
-    const { buildWithCompilerService } = await import("./compiler_service.ts");
-    built = await buildWithCompilerService(path, options.serviceUrl);
-  } else {
-    const backend = await import("./backend/compile.ts");
-    built = await backend.build(path);
-  }
-  await writeBuiltFile(path, built);
 }
 
 async function writeBuiltFile(

@@ -3,7 +3,7 @@ import type {
   BlotRuntimeModule,
   BlotRuntimeOperation,
   BlotRuntimeType,
-} from "../../../gpupaper/src/blot_runtime_hir.ts";
+} from "./runtime/hir.ts";
 import {
   F32X4_TYPE_NAME,
   MASK32X4_TYPE_NAME,

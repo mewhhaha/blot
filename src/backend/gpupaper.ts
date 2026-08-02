@@ -1,11 +1,9 @@
-import {
-  compileBlotRuntimeModulesOnRustWasm,
-} from "../../../gpupaper/src/blot_runtime_target.ts";
+import { compileBlotRuntimeModulesOnRustWasm } from "./runtime/target.ts";
 import {
   type BlotRuntimeModule,
   validateBlotRuntimeModule,
   type ValidatedBlotRuntimeModule,
-} from "../../../gpupaper/src/blot_runtime_hir.ts";
+} from "./runtime/hir.ts";
 import { prepareGpupaperHir } from "./compile.ts";
 import { refreshLoadedModules } from "../load.ts";
 

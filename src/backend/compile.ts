@@ -60,7 +60,7 @@ import {
   type ResidualRuntimeExport,
 } from "./gpupaper_hir.ts";
 import { exportResidualRuntimeHir } from "./gpupaper_residual.ts";
-import type { BlotRuntimeModule } from "../../../gpupaper/src/blot_runtime_hir.ts";
+import type { BlotRuntimeModule } from "./runtime/hir.ts";
 import type { Expr } from "../syntax/ast.ts";
 
 export interface WasmManifest {

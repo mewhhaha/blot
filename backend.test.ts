@@ -21,6 +21,7 @@ import {
   runLoweringExport,
   validateLowering,
 } from "./src/backend/compile.ts";
+import { buildGpupaperBatch } from "./src/backend/gpupaper.ts";
 import { lowerModule } from "./src/backend/lower.ts";
 import { checkFile } from "./src/check/mod.ts";
 import { BlotError } from "./src/diagnostic.ts";
@@ -947,6 +948,33 @@ Deno.test("host effects publish structural first-order imports", async () => {
   assertEquals(imported?.name, "swap");
   assertEquals(imported?.function.parameters[0]?.kind, "record");
   assertEquals(imported?.function.result.kind, "record");
+});
+
+Deno.test("residual Wasm lowers integer control and structural host effects", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "residual-host-records.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "const Host = @effect.host {",
+      "  .read = Unit -> { .kind = Int; .target = Int; };",
+      "  .write = { .active = Bool; .kind = Int; .label = Str; } -> Unit;",
+      "};",
+      "const ready = 1;",
+      "event <- Host.read ();",
+      "_ <- case event.kind of",
+      "  #(ready) => Host.write { .active = True; .kind = event.kind + 1; .label = @text.of_int event.target; },",
+      '  _ => Host.write { .active = False; .kind = 0; .label = "idle"; }',
+      "end;",
+      "return ();",
+    ].join("\n"),
+  );
+
+  const [outcome] = await buildGpupaperBatch([path]);
+  if (outcome.status === "failed") throw outcome.cause;
+  assertEquals(WebAssembly.validate(Uint8Array.from(outcome.wasm)), true);
+  assertEquals(outcome.capabilities, ["Host"]);
 });
 
 Deno.test("module-result spreads preserve last-wins export staging", async () => {

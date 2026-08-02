@@ -41,16 +41,6 @@ ownership file:
 build file:
   deno run --allow-read --allow-write src/cli.ts build {{file}}
 
-# Keep gpufuck's GPU device and compiler pipelines resident for local builds.
-serve:
-  WGPU_BACKENDS=vulkan deno task serve
-
-build-service file:
-  ./scripts/blot-service-client {{file}}
-
-bench-service:
-  WGPU_BACKENDS=vulkan deno task bench:service
-
 # Do the interpreter, the GPU evaluator, and the emitted Wasm agree?
 wasm:
   WGPU_BACKENDS=vulkan deno run --unstable-webgpu --allow-read --allow-write --allow-env scripts/wasm.ts
