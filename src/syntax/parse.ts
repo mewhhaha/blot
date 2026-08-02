@@ -1,7 +1,5 @@
-// The parse entry point. Deliberately never touches WebGPU: `blot check`, the
-// formatter, and the language server all come through here, and none of them
-// should initialize a device. The GPU frontend is a throughput path for large
-// inputs, not the definition of the syntax.
+// The parse entry point. Every compiler command uses baba's generated
+// WebAssembly parser, so parsing never depends on a WebGPU adapter.
 
 import { createParser, type ParserInstance } from "../../generated/wasm/mod.ts";
 import type { Diagnostic } from "../diagnostic.ts";

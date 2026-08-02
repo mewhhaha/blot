@@ -202,24 +202,29 @@ administrative steps:
 evaluate_surface(s) = observe(evaluate_core(elaborate(s)))
 ```
 
-### 3.3 Elements are effectful function application
+### 3.3 Elements are ordinary component applications
 
 An element has no built-in DOM, renderer, node type, or text operation.
 
 ```blot
-<Button .label="Save">
+_ <- <Button .label="Save">
   _ <- text "ready";
 </Button>;
 ```
 
-elaborates to an ordinary component call whose second argument is a nullary
-child computation:
+The element expression itself elaborates to an ordinary component call whose
+second argument is a nullary child computation:
 
 ```blot
-_ <- Button { .label = "Save"; } (fn () => do
+Button { .label = "Save"; } (fn () => do
   _ <- text "ready";
-end);
+end)
 ```
+
+The surrounding `_ <-` is what sequences and discards that application. A named
+bind retains the component's result, and a tail element returns it as the tail
+of the enclosing computation. Element syntax therefore changes neither the
+component's result nor its effect row.
 
 The component decides whether and how often to execute its children, subject to
 the child's ownership contract. An unrestricted child may be called repeatedly;
@@ -357,6 +362,17 @@ bind request <- elaborate(Runtime.request ()) in ...
 
 `let x = c` is rejected when `c` has a non-empty effect row. It creates neither
 an implicit bind nor an effect thunk.
+
+An explicit block result is a tail computation rather than an intermediate
+definition. It contributes its effects and result directly to the enclosing
+function, so no redundant bind is required around the final computation:
+
+```blot
+fn () => do
+  _ <- first_effect ();
+  in final_effect ()
+end
+```
 
 A conditional can select a computation branch without sequencing it into the
 surrounding scope. Thus the clean form for effectful branching is:

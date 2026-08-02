@@ -266,7 +266,7 @@ export type RuleName =
   | "parenthesized_or_tuple"
   | "array"
   | "array_element"
-  | "element_statement"
+  | "element_expression"
   | "element_name"
   | "element_property"
   | "element_property_value"
@@ -578,7 +578,7 @@ export interface ArrayElementCursor extends RuleCursorBase<"array_element"> {
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
-export interface ElementStatementCursor extends RuleCursorBase<"element_statement"> {
+export interface ElementExpressionCursor extends RuleCursorBase<"element_expression"> {
   field(name: "ending"): ElementBodyCursor | ElementSelfCloseCursor;
   field(name: "name"): ElementNameCursor;
   field(name: "properties"): ReadonlyArray<ElementPropertyCursor>;
@@ -821,7 +821,7 @@ export type AnyRuleCursor =
   | ParenthesizedOrTupleCursor
   | ArrayCursor
   | ArrayElementCursor
-  | ElementStatementCursor
+  | ElementExpressionCursor
   | ElementNameCursor
   | ElementPropertyCursor
   | ElementPropertyValueCursor

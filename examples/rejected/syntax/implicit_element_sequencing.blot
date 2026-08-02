@@ -1,8 +1,7 @@
 let div = fn _ => fn _ => ();
 
 let view = fn () => do
-  _ <- <div>
-  </span>;
+  <div></div>;
 end;
 
 return view;

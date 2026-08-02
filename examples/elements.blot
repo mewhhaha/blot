@@ -8,6 +8,7 @@ let element = fn name => fn _properties => fn children => do
   _ <- Draw.write ("<" <> name <> ">");
   _ <- children ();
   _ <- Draw.write ("</" <> name <> ">");
+  in name
 end;
 
 let Render = {
@@ -44,12 +45,13 @@ let Button = fn properties => fn children => do
 end;
 
 let view = fn () => do
-  <div .class="counter" .hidden=False>
+  root <- <div .class="counter" .hidden=False>
     _ <- text "Count: ";
-    <Button .label="Save" />;
-    <Button .label="Delete" .disabled=True .order=2 />;
-    <icon />;
+    _ <- <Button .label="Save" />;
+    _ <- <Button .label="Delete" .disabled=True .order=2 />;
+    _ <- <icon />;
   </div>;
+  in root
 end;
 
 let collecting = {

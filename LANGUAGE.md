@@ -428,24 +428,27 @@ does not insert a unit argument, so a nullary operation is explicit:
 request <- Runtime.request ();
 ```
 
-`let`, `const`, `:=`, `open`, block results, function results written without a
-block, and module results are pure value positions. Pure `let` bindings may be
-reordered, inlined, or discarded when their values are not demanded; sequencing
-an effect therefore requires `<-` even when its result is ignored.
+`let`, `const`, `:=`, `open`, function results written without a block, and
+module results are pure value positions. An explicit `in` expression is the tail
+computation of its block and may contribute effects to the enclosing function.
+Pure `let` bindings may be reordered, inlined, or discarded when their values
+are not demanded; sequencing an effect before the tail therefore requires `<-`
+even when its result is ignored.
 
 The left-hand binding in a `try` handler step is a separate bounded surface
 form. Section 12.2 specifies how it binds the newly handled computation without
 executing it.
 
-### 4.6 Element statements
+### 4.6 Element expressions
 
-An element statement applies an ordinary component binding to a property record
-and a child computation, then sequences the resulting effectful expression:
+An element expression applies an ordinary component binding to a property record
+and a child computation. It does not sequence or discard the resulting
+expression:
 
 ```blot
-<div .class="counter" .hidden={hidden}>
+_ <- <div .class="counter" .hidden={hidden}>
   _ <- text "Count: ";
-  <Button .disabled=True />;
+  _ <- <Button .disabled=True />;
 </div>;
 ```
 
@@ -453,7 +456,7 @@ The tag is a lexical binding with exactly the name written. Lower-case and
 capitalized tags have the same semantics: `<div>` reaches `div`, and `<Button>`
 reaches `Button`. Nothing named `Render`, `text`, or `children` is implicitly in
 scope. A renderer may expose bindings directly, or a function may bind fields
-projected from a renderer before using element statements.
+projected from a renderer before using element expressions.
 
 Properties are fields of one record:
 
@@ -501,11 +504,24 @@ inferred row variable propagates exactly the effects performed by its child.
 Projecting fields or attaching a signature constrains `'a` to a record;
 performing renderer operations adds their effects to the outer row.
 
+The component's result type is unchanged by element syntax. A component that
+returns `DivRef` may be sequenced and bound as `reference <- <div />`. An
+underscore bind explicitly discards that result. In tail position the element
+becomes the block's tail computation:
+
+```blot
+let draw_twice = fn () => do
+  _ <- <div />;
+  in <div />
+end;
+```
+
 The statements between paired tags become one `fn () => do ... end` child
 computation. A self-closing element receives a function that returns `()`.
 Control inside the child computation has that new lambda as its boundary, and
-effects run only if the component sequences `children ()`. The full lowering is
-equivalent to:
+effects run only if the component sequences `children ()`. Nested element
+computations are sequenced explicitly like every other child statement. The full
+lowering of the first example is equivalent to:
 
 ```blot
 _ <- div { .class = "counter"; .hidden = hidden; } (fn () => do
@@ -514,13 +530,14 @@ _ <- div { .class = "counter"; .hidden = hidden; } (fn () => do
 end);
 ```
 
-The source form lowers completely during CST lowering. There is no element AST
-node, element type, renderer primitive, implicit effect, or backend path.
-Opening and closing names must match exactly. `</` and `/>` are reserved element
-delimiters; exact `<` and `>` remain available as fixity operators, while longer
-operator spellings continue to lex as operators. The exact brackets are infix
-operators only; using `<` as a prefix would be indistinguishable from opening an
-element statement.
+Without the written `_ <-`, the same element lowers to the application on the
+right unchanged. The source form lowers completely during CST lowering. There is
+no element AST node, element type, renderer primitive, implicit effect, or
+backend path. Opening and closing names must match exactly. `</` and `/>` are
+reserved element delimiters; exact `<` and `>` remain available as fixity
+operators, while longer operator spellings continue to lex as operators. The
+exact brackets are infix operators only; using `<` as a prefix would be
+indistinguishable from opening an element expression.
 
 ### 4.7 Opening a record
 

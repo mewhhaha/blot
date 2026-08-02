@@ -4,7 +4,7 @@ sig Button = { .label = Str; } -> (Unit -> Unit) -> Unit;
 let Button = fn _ => fn _ => ();
 
 let view = fn () => do
-  <Button />;
+  _ <- <Button />;
 end;
 
 return view;

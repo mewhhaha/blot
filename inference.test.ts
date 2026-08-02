@@ -1156,6 +1156,21 @@ return { .greet = greet; };`,
 );
 
 check(
+  "an element expression preserves its component result in tail position",
+  `const Draw = @effect { .create = Unit -> Int; };
+let div = fn _ => fn children => do
+  _ <- children ();
+  in Draw.create ()
+end;
+let view = fn () => do
+  _ <- <div></div>;
+  in <div></div>
+end;
+return { .view = view; };`,
+  "{ .view = () -> Int ~ { Draw }; }",
+);
+
+check(
   "effect binding sequences the expression without inserting a call",
   `const Clock = @effect { .now = Unit -> Int; };
 let operation = fn () => do

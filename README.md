@@ -183,23 +183,25 @@ from its value by `in`; without `in`, its value is `()`. The marker is required
 by the strict GPU grammar because a bare trailing name and the start of
 `name := ...;` have the same one-token prefix.
 
-Element statements are ordinary effectful component calls with property records
-and a nullary child computation:
+Element expressions are ordinary component calls with property records and a
+nullary child computation:
 
 ```blot
-<div .class="counter" .hidden={hidden}>
+_ <- <div .class="counter" .hidden={hidden}>
   _ <- text "Count: ";
-  <Button .disabled=True />;
+  _ <- <Button .disabled=True />;
 </div>;
 ```
 
-This lowers to `div { .class = "counter"; .hidden = hidden; } children` under
-`<-`. Both `div` and `Button` are ordinary lexical bindings; the syntax supplies
-no implicit renderer or text operation. The body contains ordinary statements,
-so effect order stays explicit, and a component renders its children by
-sequencing `children ()`. A component's expected record makes ordinary fields
-required. Writing `.field? = T` in that record means `.field = T | ()`, so the
-field may be omitted and receives `()` at the call.
+The element lowers only to
+`div { .class = "counter"; .hidden = hidden; } children`; the written `<-`
+sequences it. Both `div` and `Button` are ordinary lexical bindings, and their
+result types are preserved. The syntax supplies no implicit renderer or text
+operation. The body contains ordinary statements, so effect order stays
+explicit, and a component renders its children by sequencing `children ()`. A
+component's expected record makes ordinary fields required. Writing
+`.field? = T` in that record means `.field = T | ()`, so the field may be
+omitted and receives `()` at the call.
 
 `for` is a declaration rather than an expression because what it produces is an
 effect on the enclosing scope: the names its body rebinds with `:=` are the

@@ -46,6 +46,12 @@
         }
       },
       {
+        "rule": "element_expression",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
         "rule": "binding_pattern",
         "boundary": {
           "kind": "root"

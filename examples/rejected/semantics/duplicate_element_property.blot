@@ -1,7 +1,7 @@
 let div = fn _ => fn _ => ();
 
 let view = fn () => do
-  <div .class="first" .class="second" />;
+  _ <- <div .class="first" .class="second" />;
 end;
 
 return view;
