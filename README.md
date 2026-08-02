@@ -65,17 +65,17 @@ backend consumes. A final `@array.set` or `@array.push` on a proved linear array
 reuses its Store allocation; ordinary shared arrays remain persistent. See
 [docs/ownership.md](docs/ownership.md).
 
-The gpufuck backend (M4) now lowers every accepted catalog program. `blot build`
-emits stable Core WebAssembly plus a JSON ABI manifest without executing the
-program. The identical manifest is embedded in the `blot:abi` custom section,
-and generated adapters keep gpufuck's private heap representation out of the
-caller contract. See [docs/abi.md](docs/abi.md). `just wasm` checks the
-interpreter, gpufuck's GPU evaluator, and emitted Wasm against the same staged
-runtime result. The CPU test suite sends the entire catalog through gpufuck as
-well, so backend coverage does not require a WebGPU adapter. Compile-time-only
-result fields are erased, runtime fields become named Wasm exports, host effects
-become typed imports, and one-shot handlers are specialized through non-tail
-resume and abort. See [docs/backend.md](docs/backend.md).
+The gpufuck conformance backend (M4) lowers every accepted catalog program.
+`blot build` defaults to gpupaper's Rust/WebAssembly emitter and emits stable
+Core WebAssembly plus a JSON ABI manifest without executing the program. The
+identical manifest is embedded in the `blot:abi` custom section. See
+[docs/abi.md](docs/abi.md). `just wasm` checks the interpreter, gpufuck's GPU
+evaluator, and emitted Wasm against the same staged runtime result. The CPU test
+suite sends the entire catalog through gpufuck as well, so backend coverage does
+not require a WebGPU adapter. Compile-time-only result fields are erased,
+runtime fields become named Wasm exports, host effects become typed imports, and
+one-shot handlers are specialized through non-tail resume and abort. See
+[docs/backend.md](docs/backend.md).
 
 ```bash
 just run examples/tour.blot   # evaluate a program
@@ -92,11 +92,11 @@ just inspect                  # the counters recorded in docs/gpu-profile.md
 just install                  # Helix: grammar, queries, `.blot` association
 ```
 
-An adjacent gpupaper checkout is an explicit experimental target:
+The default build target is the experimental adjacent gpupaper checkout:
 
 ```bash
 deno run --allow-read --allow-write \
-  src/cli.ts build --target=gpupaper \
+  src/cli.ts build \
   examples/minimal.blot examples/arithmetic.blot
 ```
 
@@ -109,14 +109,13 @@ misses retain stable input order. A source failure remains local to its path; an
 emitter failure rejects every admitted miss rather than returning partially
 trusted artifacts. Successful outcomes identify `wasmEmitter` as `rust-wasm`.
 
-`just build` is an isolated direct build and releases its GPU device on exit.
-For repeated local builds, run `just serve` in one terminal and use
-`just build-service file.blot` from another. The service binds loopback only,
-retains the parser, checked module graph, lowered Surface, GPU device, compiler
-pipelines, and Wasm caches, and invalidates an edited module together with its
-importers. `build-service` is a small `curl` client: it does not start Deno or
-load either compiler. Both modes call the same compiler session and emit
-identical Wasm and manifest bytes.
+`just build` invokes gpupaper directly and does not initialize WebGPU. The
+gpufuck target remains available as `blot build --target=gpufuck`; its repeated
+local-build path is `just serve` in one terminal and `just build-service file`
+from another. The service binds loopback only, retains the parser, checked
+module graph, lowered Surface, GPU device, compiler pipelines, and Wasm caches,
+and invalidates an edited module together with its importers. `build-service` is
+a small `curl` client: it does not start Deno or load either compiler.
 
 `just install` builds the Tree-sitter grammar from the same `grammar.baba` as
 the GPU parser, installs highlight, indent, textobject, tag, and rainbow

@@ -37,9 +37,9 @@ check-file file:
 ownership file:
   deno run --allow-read src/cli.ts ownership {{file}}
 
-# Compile one program to WebAssembly through gpufuck. Needs an adapter.
+# Compile one program through gpupaper's Rust/WebAssembly emitter.
 build file:
-  WGPU_BACKENDS=vulkan deno run --unstable-webgpu --allow-read --allow-write --allow-env src/cli.ts build {{file}}
+  deno run --allow-read --allow-write src/cli.ts build {{file}}
 
 # Keep gpufuck's GPU device and compiler pipelines resident for local builds.
 serve:

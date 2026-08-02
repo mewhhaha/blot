@@ -12,6 +12,11 @@ import { LoadError } from "./load.ts";
 import { checkFile, type OwnedBinding } from "./check/mod.ts";
 import type { NamePattern } from "./linear/check.ts";
 import { testFile, type TestOutcome } from "./test.ts";
+import {
+  type BuildMode,
+  type BuildTarget,
+  parseBuildArguments,
+} from "./build_arguments.ts";
 
 const [command, ...rest] = Deno.args;
 
@@ -27,7 +32,7 @@ if (command === undefined || rest.length === 0) {
 
 let paths: readonly string[] = rest;
 let buildMode: BuildMode = "direct";
-let buildTarget: BuildTarget = "gpufuck";
+let buildTarget: BuildTarget = "gpupaper";
 let serviceUrl: string | undefined;
 if (command === "build") {
   const buildArguments = parseBuildArguments(rest);
@@ -86,69 +91,16 @@ let exitCode = 0;
 if (failures > 0 || failedTests > 0) exitCode = 1;
 Deno.exit(exitCode);
 
-type BuildMode = "direct" | "service";
-type BuildTarget = "gpufuck" | "gpupaper";
-
-interface BuildOptions {
+interface GpufuckBuildOptions {
   readonly mode: BuildMode;
-  readonly target: BuildTarget;
   readonly serviceUrl: string | undefined;
 }
-
-type GpufuckBuildOptions = Omit<BuildOptions, "target">;
 
 type BuiltFileArtifact = {
   readonly wasm: Uint8Array;
   readonly manifestBytes: Uint8Array;
   readonly capabilities: readonly string[];
 };
-
-interface BuildArguments extends BuildOptions {
-  readonly paths: readonly string[];
-}
-
-function parseBuildArguments(arguments_: readonly string[]): BuildArguments {
-  let mode: BuildMode = "direct";
-  let target: BuildTarget = "gpufuck";
-  let serviceUrl: string | undefined;
-  const paths: string[] = [];
-  for (const argument of arguments_) {
-    if (argument === "--mode=direct") {
-      mode = "direct";
-      continue;
-    }
-    if (argument === "--mode=service") {
-      mode = "service";
-      continue;
-    }
-    if (argument === "--target=gpufuck") {
-      target = "gpufuck";
-      continue;
-    }
-    if (argument === "--target=gpupaper") {
-      target = "gpupaper";
-      continue;
-    }
-    if (argument.startsWith("--service-url=")) {
-      serviceUrl = argument.slice("--service-url=".length);
-      if (serviceUrl.length === 0) {
-        throw new Error("--service-url requires an HTTP URL");
-      }
-      continue;
-    }
-    if (argument.startsWith("--")) {
-      throw new Error(`unknown build option ${JSON.stringify(argument)}`);
-    }
-    paths.push(argument);
-  }
-  if (serviceUrl !== undefined && mode !== "service") {
-    throw new Error("--service-url requires --mode=service");
-  }
-  if (target === "gpupaper" && mode === "service") {
-    throw new Error("--target=gpupaper does not support --mode=service");
-  }
-  return { mode, target, paths, serviceUrl };
-}
 
 async function serveCompiler(arguments_: readonly string[]): Promise<void> {
   let port = 4765;
@@ -167,8 +119,9 @@ async function serveCompiler(arguments_: readonly string[]): Promise<void> {
 function printUsage(): void {
   console.error("usage: blot <check|test|eval|ast|ownership> <file.blot>...");
   console.error(
-    "       blot build [--target=gpufuck|gpupaper] [--mode=direct|service] <file.blot>...",
+    "       blot build [--target=gpupaper|gpufuck] [--mode=direct|service] <file.blot>...",
   );
+  console.error("       build target defaults to gpupaper (Rust/WebAssembly)");
   console.error("       blot serve [--port=4765]");
 }
 

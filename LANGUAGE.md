@@ -2,7 +2,7 @@
 
 This document specifies the implemented Blot language. It describes source
 syntax, evaluation, inference, ownership, modules, effects, the primitive
-namespace, and the boundary to gpufuck and WebAssembly.
+namespace, and the compilation boundaries to WebAssembly.
 
 `grammar.baba` is the authority for concrete parse acceptance. This document is
 the authority for what accepted source means. A disagreement between either one
@@ -19,7 +19,8 @@ Blot is a strict, expression-oriented functional language with:
 - separate flow analysis for linear, affine, and borrowed bindings;
 - modules represented as unary functions;
 - surface control forms lowered to ordinary recursion and cases; and
-- one backend path through gpufuck's Functional Surface to WebAssembly.
+- a default validated Runtime HIR path through gpupaper's Rust/WebAssembly
+  emitter, with gpufuck retained as the explicit conformance target.
 
 There is no separate type language, type namespace, assignment operation,
 exception syntax, implicit prelude, or ambient authority.
@@ -2274,7 +2275,7 @@ update this specification.
 
 The reference evaluator gives runtime and compile-time code the same semantics,
 apart from integer representation and phase restrictions. A valid compiled
-program must agree across:
+program accepted by the conformance target must agree across:
 
 1. the reference evaluator;
 2. gpufuck's GPU evaluator; and
@@ -2346,9 +2347,11 @@ specialized.
 
 ### 15.1 Core WebAssembly ABI
 
-`blot build` emits Blot Core Wasm ABI 1.0. gpufuck's tagged words and heap
-objects are private implementation details; generated adapters expose the
-synchronous memory32, UTF-8 subset of the Component Model Canonical ABI.
+`blot build` defaults to gpupaper's checked Rust/WebAssembly emitter.
+`blot build --target=gpufuck` selects the conformance backend. Both emit Blot
+Core Wasm ABI 1.0. Backend-private values and heap objects never cross the
+generated adapters, which expose the synchronous memory32, UTF-8 subset of the
+Component Model Canonical ABI.
 
 Each runtime field of a record module result is exported as `blot:<field>`. A
 module whose result is not a record has one export, `blot:default`, which is

@@ -146,19 +146,20 @@ private constructor numbers.
 
 ## Gpupaper target status
 
-`blot build --target=gpupaper` uses a sibling `../gpupaper` checkout. Blot owns
-the checked and staged Runtime HIR; gpupaper validates it and emits cache-miss
-plans through its Rust/WebAssembly emitter. The current target implements
-dynamic direct scalar parameters and results, direct scalar host imports, closed
-composite results, and the canonical dynamic `Text` calculus used by the
-terminal case study. A `Text` host result uses an indirect result header, is
-range- and UTF-8-validated before observation, and may flow through comparison,
-concatenation, control, and later `Text -> Unit` host calls. Generated
-unit-payload control sums remain internal. Direct-result calls restore their
-allocation checkpoint before returning. Closed composite calls permit one
-outstanding result: the matching `cabi_post_*` restores the call's allocation
-checkpoint in constant time. Reentry, a wrong root pointer, a post-return for
-another export, and double post-return trap.
+`blot build` defaults to a sibling `../gpupaper` checkout. Blot owns the checked
+and staged Runtime HIR; gpupaper validates it and emits cache-miss plans through
+its Rust/WebAssembly emitter. `--target=gpufuck` selects the conformance backend
+explicitly. The current gpupaper target implements dynamic direct scalar
+parameters and results, direct scalar host imports, closed composite results,
+and the canonical dynamic `Text` calculus used by the terminal case study. A
+`Text` host result uses an indirect result header, is range- and UTF-8-validated
+before observation, and may flow through comparison, concatenation, control, and
+later `Text -> Unit` host calls. Generated unit-payload control sums remain
+internal. Direct-result calls restore their allocation checkpoint before
+returning. Closed composite calls permit one outstanding result: the matching
+`cabi_post_*` restores the call's allocation checkpoint in constant time.
+Reentry, a wrong root pointer, a post-return for another export, and double
+post-return trap.
 
 Multiple input paths are prepared independently and their admitted Runtime HIR
 modules form one stable target batch. Gpupaper emits cache misses sequentially

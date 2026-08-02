@@ -9,14 +9,15 @@ WebGPU frontend profile.
 source -> baba GPU frontend -> CST -> fixity fold -> AST
        -> comptime evaluation -> biunification -> linearity/ownership
        -> specialize -> gpufuck Functional Surface -> Wasm
-                     -> gpupaper Runtime HIR -> Rust/WebAssembly emission
+                     -> gpupaper Runtime HIR -> Rust/WebAssembly emission (default)
 ```
 
 blot owns source elaboration, inference, comptime, and ownership. baba owns
-lexing and parsing; do not hand-write a lexer or parser. gpufuck owns the
-default Core-to-Wasm path. The explicit local-checkout gpupaper target exports
-validated Runtime HIR and uses gpupaper's Rust/WebAssembly emitter; do not
-reconstruct Blot source semantics in that target.
+lexing and parsing; do not hand-write a lexer or parser. The default
+local-checkout gpupaper target exports validated Runtime HIR and uses gpupaper's
+Rust/WebAssembly emitter; do not reconstruct Blot source semantics in that
+target. gpufuck remains the explicit conformance target and owns its
+Functional-Surface-to-Wasm path.
 
 ## Invariants
 
