@@ -187,35 +187,27 @@ that `n` equals this `m`.
 Stated plainly, because a checker that quietly admits these is worse than one
 that says so.
 
-**Range arithmetic.** `@int.add` returns the unbounded integer domain, because
+**Range arithmetic.** `@int.add` returns the full signed integer domain, because
 it does not prove its result fits a width. So `sig f = I32 -> I32` over
 arithmetic is a real proof obligation blot does not discharge, and `Int` is the
 honest signature. Range-refining arithmetic — `(a..b) + (c..d) : (a+c)..(b+d)` —
 is what would close it, and it is the same machinery that would turn
 `if i < len` into a proof that an index is in bounds.
 
-**Comptime-built shapes named at run time.** `@shape.get`, `@shape.set`, and
+**Structural fields named by values.** `@shape.get`, `@shape.set`, and
 `@shape.remove` project a field named by a _value_. Where the name alone is a
 compile-time text the call is an ordinary field projection and is typed as one —
 `@shape.get r "a"` has the type of `r.a` and is refused when `r` has no `.a` —
 and where the whole projection evaluates, what it produced is the type. A name
-that is only known at run time, as in a fold over `@shape.names`, leaves the
-result unconstrained, and a `sig` written over one of those is believed rather
-than checked. That last case is what a struct's accessors used to cost across
-the board; it now costs only the reflective fold.
+known only at run time is rejected as `BLOT_DYNAMIC_SHAPE_FIELD`; heterogeneous
+records have no honest dynamic element type. Dynamic keys require a homogeneous
+dictionary abstraction instead.
 
-**Literal coverage over a target nothing pinned.** A `case` over a declared
-literal union is checked by listing the union's members and subtracting the
-arms, so `1 | 2 | 3` with only a `1` arm is refused, and a target with an open
-end — `Int`, `Str`, any unbounded range — is refused outright as
-`BLOT_INCOMPLETE_CASE`, since no finite list of literal arms can exhaust it.
-What carries no requirement is a target inference has not pinned at all: literal
-arms constrain nothing on their own, so without a `sig` or a call site the
-`case` owes no coverage. Refining a target rather than refusing it would need a
-difference operation on the lattice (`Int \ 1`), which is a real design question
-— an intersection lives in negative position and a complement in neither, so
-adding both is what would turn the lattice into a boolean algebra and cost the
-polynomial bound.
+**Literal coverage is fail-closed.** A `case` over a declared literal union is
+checked by listing the union's members and subtracting the arms, so `1 | 2 | 3`
+with only a `1` arm is refused. `Int`, `Str`, ranges with an open end, and a
+target inference has not pinned all require an irrefutable arm. Inference
+uncertainty is not permission to leave a latent no-match trap.
 
 **Narrowing stops at integers, and at one comparison per name.** A condition
 proves something only when it applies a recognised comparison to a name whose
@@ -232,13 +224,10 @@ order is dense, so splitting `Str` at `"m"` gives `.."m" | "m"..` and readmits
 `"m"`. And a branch whose narrowed type is empty is unreachable; that is not yet
 a diagnostic, so the branch simply keeps the wider type.
 
-**A tuple target's cross-product, where nothing declared its columns.** Coverage
-of a tuple `case` enumerates each column from the type declared for it. Where no
-`sig` or call site declares one, the arms close each column of the sub-matrix
-they are read in rather than the column as a whole, so four arms over two
-`Option` columns minus the `(#None, #None)` row are accepted and reach
-`BLOT_NO_MATCH` at run time. `LANGUAGE.md` §8.4 says so at the rule; declaring
-the scrutinee is what makes the check exact.
+**Tuple coverage uses the complete cross-product.** Every column and nested
+tuple contributes to one coverage matrix. An unknown column requires an
+irrefutable pattern, so a checked tuple case cannot retain a latent missing
+combination.
 
 **Higher-kinded types** are not inference's problem by design: type constructors
 are comptime functions that are specialized away, so the lattice never needs

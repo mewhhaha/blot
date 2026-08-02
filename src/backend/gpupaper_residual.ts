@@ -12,7 +12,11 @@ import {
   type Value,
 } from "../comptime/value.ts";
 import type { CheckResult } from "../check/mod.ts";
-import { liveDeclarations } from "../syntax/live.ts";
+import {
+  coreResultExpression,
+  type CoreStep,
+  elaborateComputation,
+} from "../core/computation.ts";
 import type { Decl, Expr, Pattern, Span } from "../syntax/ast.ts";
 import type { StagedExport } from "../stage.ts";
 import type { Lowered } from "./lower.ts";
@@ -69,7 +73,11 @@ type MutableBlock = {
 
 export function exportResidualRuntimeHir(
   source: string,
-  module: { readonly declarations: readonly Decl[]; readonly result: Expr },
+  module: {
+    readonly declarations: readonly Decl[];
+    readonly result: Expr;
+    readonly resultEffects: "pure" | "ambient";
+  },
   checked: CheckResult,
   stagedExports: readonly StagedExport[],
   lowered: Lowered,
@@ -145,17 +153,27 @@ class ResidualHirBuilder {
   }
 
   build(
-    module: { readonly declarations: readonly Decl[]; readonly result: Expr },
+    module: {
+      readonly declarations: readonly Decl[];
+      readonly result: Expr;
+      readonly resultEffects: "pure" | "ambient";
+    },
     wasmName: string,
   ): BlotRuntimeFunction {
     this.block();
     const environment = this.environment(null, this.#checked.values);
-    this.declarations(
+    const computation = elaborateComputation(
       module.declarations,
-      liveDeclarations(module.declarations, module.result),
+      module.result,
+      module.resultEffects,
+    );
+    this.declarations(
+      computation.steps,
       environment,
     );
-    const result = this.dynamic(this.evaluate(module.result, environment));
+    const result = this.dynamic(
+      this.evaluate(coreResultExpression(computation.result), environment),
+    );
     const resultType = this.types[result.type];
     if (resultType.kind !== "unit") {
       throw new TypeError(
@@ -293,12 +311,16 @@ class ResidualHirBuilder {
     }
     if (expr.tag === "block") {
       const scope = this.environment(environment, null);
-      this.declarations(
+      const computation = elaborateComputation(
         expr.declarations,
-        liveDeclarations(expr.declarations, expr.result),
+        expr.result,
+        expr.resultEffects,
+      );
+      this.declarations(
+        computation.steps,
         scope,
       );
-      return this.evaluate(expr.result, scope);
+      return this.evaluate(coreResultExpression(computation.result), scope);
     }
     if (expr.tag === "if") return this.conditional(expr, environment);
     if (expr.tag === "case") return this.caseExpression(expr, environment);
@@ -306,12 +328,11 @@ class ResidualHirBuilder {
   }
 
   private declarations(
-    declarations: readonly Decl[],
-    live: ReadonlySet<Decl>,
+    steps: readonly CoreStep[],
     environment: ResidualEnvironment,
   ): void {
-    for (const declaration of declarations) {
-      if (!live.has(declaration)) continue;
+    for (const step of steps) {
+      const declaration = step.declaration;
       if (declaration.tag === "open") {
         const opened = this.#checked.opens.get(declaration.value);
         if (opened === undefined) {

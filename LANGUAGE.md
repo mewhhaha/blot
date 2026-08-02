@@ -94,7 +94,10 @@ Each constructor attaches its positive `bits` argument as transparent
 lattice. Because type construction runs with arbitrary-precision compile-time
 integers, a range such as `U64` can describe storage bounds above the largest
 runtime `Int`; that fact does not make those values representable by runtime
-integer operations.
+integer operations. A runtime signature containing such inhabitants is
+`BLOT_UNREPRESENTABLE_INTEGER`. `U64` is therefore a valid storage descriptor,
+not a signed-`Int` runtime type; a full-width unsigned runtime value would need
+a distinct word domain and operations.
 
 A float literal is decimal digits, a point, and decimal digits — both sides are
 required. That is what keeps `1.5` a float while `pair.0` stays a projection:
@@ -289,11 +292,12 @@ A function that arrived from an import is typed from the import.
 
 A recursive function is typed the same way. Its body names the binding being
 defined, which is not a capture: the name is bound to a placeholder and the body
-constrained against it. A `const` that *is* a recursive group is still typed with
-its group, whose names enter scope together; what this covers is a recursive
-function that arrived as a value, selected by a compile-time conditional or
-returned from a compile-time function. Functions captured alongside it are typed
-the same way, so a local helper in scope does not prevent it.
+constrained against it. A `const` that _is_ a recursive group is still typed
+with its group, whose names enter scope together; what this covers is a
+recursive function that arrived as a value, selected by a compile-time
+conditional or returned from a compile-time function. Functions captured
+alongside it are typed the same way, so a local helper in scope does not prevent
+it.
 
 A `const` may not capture a `let`. Specializing a compile-time closure emits it
 as a definition of its own, and a definition has no enclosing frame to read a
@@ -607,8 +611,12 @@ patterns.
 
 Demanded expressions are evaluated strictly and left-to-right. Function position
 is evaluated before its argument; collection and record members are evaluated in
-source order. An unused pure `let` definition is not demanded and does not
-evaluate. `<-` declarations are always demanded and retain source order.
+source order. Before a block runs, lexical liveness removes unused pure
+definitions. Every remaining pure declaration evaluates exactly once in source
+order before the block result; Blot does not force it at first use and does not
+allocate a run-time thunk. `<-` declarations are always live and retain source
+order. Reordering a live definition is valid only when its trap and divergence
+behavior is proved unchanged.
 
 ### 6.1 Unit, arrays, tuples, and shapes
 
@@ -992,9 +1000,9 @@ end;
 is refused: `3` is a member of the target's type that no arm covers. Adding a
 `3` arm, or any irrefutable arm, accepts it.
 
-A target whose type has an _open end_ — `Int`, `Str`, any unbounded range —
-holds infinitely many values, so no finite list of literal arms can exhaust it.
-Such a `case` is refused rather than accepted in silence:
+A target whose type is not an explicitly enumerable set — `Int`, `Str`, or any
+range with an open end — cannot be exhausted by listed literal arms. Such a
+`case` is refused rather than accepted in silence:
 
 ```blot
 sig describe = Int -> Str;
@@ -1021,10 +1029,10 @@ checked, so a `case` with no matching arm is a path the checker ruled out, and
 the emitted module marks it as unreachable rather than as a fault a program can
 hit.
 
-A target whose type inference has not pinned carries no coverage requirement,
-since there is nothing to enumerate. Literal arms therefore still constrain
-nothing on their own: without the `sig` above, `rank` accepts any argument and
-owes no coverage at all.
+A target whose type inference has not pinned cannot prove coverage. Literal arms
+do not narrow an unconstrained parameter to the literals they happen to name;
+instead, the `case` requires an irrefutable arm or a finite declared target
+type.
 
 An arm's pattern types the names the arm binds: what the target carries for a
 constructor flows into that arm's payload pattern. An irrefutable arm leaves the
@@ -1081,12 +1089,9 @@ end;
 is total with no irrefutable arm at all, and dropping its last arm is refused
 with `` No arm covers `(#None, #None)` ``.
 
-The `sig` is load-bearing there, and this is the one place a tuple target is
-weaker than a single one. A column is enumerated from the type declared for it,
-and where nothing declares one the arms close each column of the sub-matrix they
-are read in rather than the column as a whole — so the same four arms without
-the `sig`, minus the last, are accepted and reach `BLOT_NO_MATCH` at run time.
-Declare the scrutinee to get the cross-product checked.
+The `sig` supplies the finite domains there. Without it, a column the checker
+cannot enumerate must be covered by an irrefutable pattern. No checked closed
+`case` retains a path to `BLOT_NO_MATCH`.
 
 Each column is covered on its own terms. A column whose type is a constructor
 set must have every constructor named in it, and the arms are what close a
@@ -1594,9 +1599,18 @@ A closure inherits the strongest obligation it captures:
 The marker need not be repeated on the closure binding. Captures may propagate
 through nested closures.
 
-Linear closures cannot currently be stored in arrays, tuples, or shapes, because
-linear structures are not tracked. The compiler rejects such an escape. Last-use
-and proved-consumption facts are recorded for the backend.
+Ownership propagates through arrays, tuples, variants, and shapes. Destructuring
+transfers each known component obligation to the corresponding binding. Moving
+an aggregate consumes it; projecting one field is rejected when that would
+silently discard another owned field. A direct array read cannot copy a known
+owned element, and replacement cannot discard one.
+
+A known function parameter is an ownership contract. Passing an owned closure to
+an ordinary or affine parameter is rejected; a `!parameter` promises one
+invocation and may accept it. This usage summary remains separate from the type
+lattice. A module result may not retain an ownership obligation because the ABI
+has no implicit ownership contract. Last-use and proved-consumption facts are
+recorded for the backend.
 
 ### 11.1 A recursive group
 
@@ -1692,13 +1706,16 @@ let logging = {
 - `effect` is the specific compile-time effect being discharged;
 - `computation` is a nullary function;
 - `handler` is a statically known shape;
-- each operation clause takes `(operation_argument, ?resume)`; and
+- each operation clause takes `(operation_argument, ?resume)` normally, or
+  `(operation_argument, !resume)` when its suspended continuation owns a linear
+  resource; and
 - an optional `.return` clause transforms the computation's normal result.
 
-`resume` is an affine one-shot continuation. Calling it continues the suspended
-computation with the supplied operation result. Not calling it aborts the rest
-of the computation. Calling it twice is rejected statically and also guarded
-during evaluation.
+`resume` is one-shot. It is affine when aborting the rest of the computation
+discards no linear obligation. If the suspended computation captures one, every
+operation clause binds `!resume` and must resume exactly once; an aborting
+clause is `BLOT_LINEAR_HANDLER_MAY_ABORT`. Calling either form twice is rejected
+statically and also guarded during evaluation.
 
 Effects not named by the handler remain in the inferred row. Handler
 specialization is lexical: the effect, computation, and clause shape must be
@@ -1929,9 +1946,12 @@ let z = @shape.get r "a";
 // BLOT_TYPE_ERROR: `7` is outside `0`.
 ```
 
-A name that is only known at run time — `@shape.get value name` inside a fold
-over `@shape.names` — leaves the result unconstrained, and a `sig` written over
-one of those is believed rather than checked.
+A name known only at run time has no structural result type: a heterogeneous
+record has no one element type, and width subtyping hides its complete field
+set. Runtime `@shape.get`, `@shape.set`, or `@shape.remove` with such a name is
+`BLOT_DYNAMIC_SHAPE_FIELD`. Compile-time shape folds may use dynamic names while
+evaluating; their unevidenced result variables cannot prove a `sig`. Runtime
+dynamic keys belong in a homogeneous dictionary with an `Option` result.
 
 #### Safe indexed access
 
@@ -1960,9 +1980,11 @@ let at = fn xs => fn n =>
 
 The second needs no concrete length. The conjunction proves `n : 0..len xs - 1`
 (§8.5), and the read names the same immutable array value. The primitive still
-lowers to a Store read. gpufuck's range pass may remove its runtime check when
-the residual Core makes the same proof visible; the checked Store remains the
-safety net when it cannot.
+records an erasable `array-index` certificate containing the array length symbol
+and proved index set. Lowering requires that certificate rather than
+reconstructing source relationships. It emits a Store read, whose checked form
+remains the safety net; gpufuck's range pass removes the runtime check for the
+certified residual comparison.
 
 The relationship survives ordinary immutable bindings:
 
@@ -2028,7 +2050,7 @@ The prelude supplies the two predicates that would otherwise be written inline:
 | primitive          | meaning                                           |
 | ------------------ | ------------------------------------------------- |
 | `@type.unbounded`  | open range bound                                  |
-| `@type.int`        | unbounded integer domain                          |
+| `@type.int`        | signed 64-bit runtime integer domain              |
 | `@type.text`       | unbounded text domain                             |
 | `@type.float`      | the double domain, which has no bounds            |
 | `@type.float32`    | the single-precision domain                       |
@@ -2068,6 +2090,12 @@ has no value representing an empty compile-time union.
 #Sealed { .name; .inner; }
 #Opaque
 ```
+
+A saturated reflection that evaluates at compile time receives the exact type of
+this result. A generic payload which cannot yet be related to the reflected
+input is marked unevidenced: compile-time generic code may manipulate it, but it
+cannot discharge a runtime `sig`. A fresh inference variable is therefore never
+permission to claim an arbitrary reflection payload type.
 
 `#Opaque` is everything with no parts to report: a closure, a primitive, a host
 function, an effect, and `F32x4`, whose whole content is its name.
@@ -2139,6 +2167,8 @@ program must agree across:
 Before gpufuck lowering, Blot:
 
 - evaluates and erases compile-time-only values;
+- elaborates live block declarations into explicit Core `define` and `bind`
+  steps with `return` or effectful tail results;
 - specializes algebraic-subtyping results into concrete Core uses;
 - lowers shapes and tuples to nominal records;
 - lowers constructor sets to nominal variants;
@@ -2153,13 +2183,13 @@ include integers, text, unit, booleans, concrete records, arrays, variants,
 seals, and functions over supported values. Types and effects remain
 compile-time manifest entries and have no invented runtime encoding.
 
-A residual structurally polymorphic function must be specialized to a concrete
-record shape before gpufuck. The shape is the one that _flows_ to the
-projection, not the narrower one the body reads: inference follows what flowed
-into the projected variable, across the instantiation a `let`-bound scheme makes
-for each of its callers, so `let get_x = fn v => v.x;` takes its record from the
-call sites. When nothing flows in — a parameter whose caller is outside the
-program — the fields the body demands decide instead, and they are unioned.
+A residual structurally polymorphic function is specialized to a concrete record
+shape before gpufuck. The shape is the one that _flows_ to the projection, not
+the narrower one the body reads: inference follows what flowed into the
+projected variable, across the instantiation a `let`-bound scheme makes for each
+of its callers, so `let get_x = fn v => v.x;` takes its record from the call
+sites. When nothing flows in — a parameter whose caller is outside the program —
+the fields the body demands decide instead, and they are unioned.
 
 Those call sites may be in another module. A record crosses into a module
 carrying more fields than that module reads and lowers there (§3), because the
@@ -2174,21 +2204,12 @@ is not the one the value was built with — so such a program is refused at
 lowering rather than compiled against the wrong record. Matching the record's
 own option directly is what keeps the wider set.
 
-Two _different_ records reaching one projection decide nothing, and that
-includes a narrower and a wider one: a value of each is really built, Core
-records are invariant, so the two are distinct nominal types and their union is
-a record neither call site writes. `BLOT_SHAPE_DISAGREEMENT` names both of them
-at that projection rather than inventing a third. This is a lowering refusal and
-not a type error: the program is well typed under width subtyping, and
-`blot check` still accepts it and reports its principal type. Exporting an
-unconstrained structural function is rejected rather than assigned an arbitrary
-nominal ABI.
-
-The same value read at one place from two modules is now the common way to reach
-this. Two importers passing differently-shaped records to one library projection
-are `BLOT_SHAPE_DISAGREEMENT` naming both field sets — previously unreachable
-across a boundary, because neither caller's record arrived at the projection at
-all.
+Two different records reaching one runtime `let` lambda produce one specialized
+body per call shape. Each clone projects from the nominal actually passed at
+that call; the compiler neither merges the field sets nor invents a wider
+record. A structurally polymorphic function crossing the external ABI still
+needs a concrete signature, because an unknown caller cannot be whole-program
+specialized.
 
 ### 15.1 Core WebAssembly ABI
 

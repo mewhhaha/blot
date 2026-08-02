@@ -102,7 +102,15 @@ const REJECTIONS: Record<
     stage: "check",
   },
   "linear_closure_escapes": {
-    code: "BLOT_LINEAR_CLOSURE_ESCAPES",
+    code: "BLOT_LINEAR_RESULT_ESCAPES",
+    stage: "check",
+  },
+  "higher_order_owned_argument": {
+    code: "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
+    stage: "check",
+  },
+  "linear_handler_abort": {
+    code: "BLOT_LINEAR_HANDLER_MAY_ABORT",
     stage: "check",
   },
   "recursive_group_consumed_twice": {
@@ -170,6 +178,22 @@ const REJECTIONS: Record<
   "shadowed_accumulator": { code: "BLOT_SHADOWED_ACCUMULATOR", stage: "check" },
   "float_unordered": { code: "BLOT_UNORDERED", stage: "run" },
   "unbounded_case": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
+  "unconstrained_case": {
+    code: "BLOT_INCOMPLETE_CASE",
+    stage: "check",
+  },
+  "dynamic_shape_field": {
+    code: "BLOT_DYNAMIC_SHAPE_FIELD",
+    stage: "check",
+  },
+  "reflection_not_indexed": {
+    code: "BLOT_REFLECTION_NOT_INDEXED",
+    stage: "check",
+  },
+  "unrepresentable_integer": {
+    code: "BLOT_UNREPRESENTABLE_INTEGER",
+    stage: "check",
+  },
   "pinned_structural_value": {
     code: "BLOT_UNMATCHABLE_PIN",
     stage: "check",
@@ -231,13 +255,6 @@ const REJECTIONS: Record<
   // not exist. `backend.test.ts` asserts the code.
   "const_captures_let": {
     code: "BLOT_CONST_CAPTURES_RUNTIME",
-    stage: "build",
-  },
-  // Also not a type error: width subtyping accepts two records at one
-  // projection, and it is Core's nominal records that have no type for both.
-  // `backend.test.ts` asserts the code and that the message names both shapes.
-  "shape_disagreement": {
-    code: "BLOT_SHAPE_DISAGREEMENT",
     stage: "build",
   },
 };

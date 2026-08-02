@@ -26,6 +26,7 @@ import {
   type TaggedDeclaration,
   type VariantCase,
 } from "./infer.ts";
+import type { ArrayIndexProof } from "../core/proof.ts";
 import type { Decl, Expr, Pattern, Span } from "../syntax/ast.ts";
 import type { SimpleType } from "./type.ts";
 import { show, showModuleRow as showRow } from "./print.ts";
@@ -73,6 +74,8 @@ export interface CheckResult {
   readonly moduleEffects: SimpleType;
   /** Settled expression types from inference, including inlined dependencies. */
   readonly expressionTypes: ReadonlyMap<Expr, SimpleType>;
+  /** Bounds proofs keyed by the direct access expression they certify. */
+  readonly arrayProofs: ReadonlyMap<Expr, ArrayIndexProof>;
   /**
    * Ownership facts for every module that contributed code, keyed by the `name`
    * pattern that bound each binding. The backend inlines an imported module
@@ -285,6 +288,10 @@ function assemble(
     expressionTypes: mergeAll([
       ...below.map((dependency) => dependency.expressionTypes),
       checked.expressionTypes,
+    ]),
+    arrayProofs: mergeAll([
+      ...below.map((dependency) => dependency.arrayProofs),
+      checked.arrayProofs,
     ]),
     ownership: mergeAll([
       ...below.map((dependency) => dependency.ownership),

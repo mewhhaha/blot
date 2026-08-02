@@ -75,3 +75,17 @@ Deno.test("an unused pure binding is not evaluated", async () => {
     { tag: "int", value: 42n },
   );
 });
+
+Deno.test("live pure bindings evaluate once in source order", async () => {
+  const error = await assertRejects(
+    async () => {
+      await evaluate(
+        'let first = @panic "first";\n' +
+          'let second = @panic "second";\n' +
+          "return @int.add second first;",
+      );
+    },
+    BlotError,
+  );
+  assertEquals(error.diagnostic.message, "first");
+});

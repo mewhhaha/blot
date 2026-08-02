@@ -72,7 +72,7 @@ function addDependencies(
   for (const name of names) target.add(name);
 }
 
-function freeNames(expr: Expr): ReadonlySet<string> {
+export function freeNames(expr: Expr): ReadonlySet<string> {
   const names = new Set<string>();
   collectFreeNames(expr, names);
   return names;

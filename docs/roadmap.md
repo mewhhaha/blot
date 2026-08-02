@@ -85,7 +85,7 @@ The refutation case works, which is what proves it is not the `@type.unbounded`
 approximation. There is no `examples/rankn.blot`; `grep -rn "@forall" examples`
 is empty. The catalog rule says there should be one.
 
-**Width subtyping lowers as of M3a; two shape cases remain.** The program below
+**Width subtyping lowers; two residual shape cases remain.** The program below
 was the reproduction, and staging was hiding it: `stageModule` (`src/stage.ts`)
 constant-folds every `let` it can before lowering, and the corpus was almost
 entirely foldable.
@@ -102,14 +102,12 @@ It compiled to `F2102: expected Shape0['a], received Shape2[I64, I64]` and now
 builds: a projection reads the record that _flowed_ to it, across the
 instantiation each caller made. `examples/projected.blot` is that program with a
 runtime source, and it is in `just wasm`, so the corpus is now evidence rather
-than an avoidance. Two records reaching one projection is
-`BLOT_SHAPE_DISAGREEMENT`, named at the span, with
-`examples/rejected/semantics/shape_disagreement.blot` as the catalog entry.
+than an avoidance. Runtime `let` lambdas are now specialized once per concrete
+call shape; `examples/shape_specialization.blot` is the catalog entry.
 
 What still reports `BLOT_LOWERING_BUG` is listed under "Remaining backend
 boundaries" in `docs/backend.md`: a spread whose member type is still a variable
-(M3a deliberately dropped that step), a parameter destructured in place, and a
-projector reached across `@import` (M3c).
+(M3a deliberately dropped that step), and a parameter destructured in place.
 
 **Three places blot disagrees with itself.** Each verified by running `check`
 and `eval` on the same file.
@@ -395,10 +393,9 @@ by the clones — `checkLinearity` runs inside `checkFile`, before the
   `Variable`. `fieldsOf` became `shapeOf` (`src/check/infer.ts`), split by
   polarity — what flowed in decides, demands speak and union only when nothing
   flowed in — and it follows the copies. Two disagreeing flowed sets are carried
-  in the fact itself, so the backend refuses with `BLOT_SHAPE_DISAGREEMENT`
-  naming both. STEP 3 (the spread-source registration) was dropped as planned;
-  it is the verified crash and it costs only the `{ ...r; .x = r.x + 1; }`
-  shape.
+  in the fact itself; the later call specializer consumes those sets to clone
+  the body. STEP 3 (the spread-source registration) was dropped as planned; it
+  is the verified crash and it costs only the `{ ...r; .x = r.x + 1; }` shape.
 
   The polarity split was the strongest signal in the whole set: all three
   designs reached it independently, and its regression guard held —
@@ -577,15 +574,10 @@ export fields inferred as bare variables (`.origin = 'a`) while
 `.by_position = somewhere.0` — the same slot by ordinary projection — infers a
 range. Two halves, and either alone buys almost nothing:
 
-**6a.** `@shape.get target name` with a compile-time-known `name`. Verified
-today that `@shape.get r "x"` on `{ .x = 10; .y = "hi"; }` infers `'a` while
-`r.x` on the next line infers `10`, and that `@shape.get r "nope"` is accepted
-by the checker. `inferSpecial` (`src/check/infer.ts:432`) already exists for
-primitives whose type depends on their argument, and `comptime(expr, context)`
-already returns `null` when it cannot evaluate. Emit the same record constraint
-the `field` case emits; fall through to today's scheme when `comptime` returns
-null, because the prelude has five genuinely dynamic uses that must keep
-working.
+**6a.** `@shape.get target name` with a compile-time-known `name`. This
+milestone landed: a literal name receives the same constraint as field
+projection, a missing field is refused, and a run-time name reports
+`BLOT_DYNAMIC_SHAPE_FIELD`. Compile-time structural folds remain legal.
 
 **6b.** Infer a compile-time closure member from its lambda in its captured
 environment. `src/check/infer.ts:286` gives up because `bridge` returns null for
@@ -850,14 +842,13 @@ decide the nominals of the file checked second, which is the same contamination
 `load`'s one-cache-per-process rule exists to prevent. Solve that before writing
 the sixty lines.
 
-_It does not close `@shape.get` over a runtime name._ A row variable stands for
-a remainder; it does not enumerate the remainder's labels. Typing
+_It does not make `@shape.get` over a runtime name structural._ A row variable
+stands for a remainder; it does not enumerate the remainder's labels. Typing
 `@shape.get value name` needs the join of the field types over a field set known
 to be complete, and under width subtyping no record type is complete — a value
 typed `{ .a = Int; }` may carry a `.b` the call is reading, with or without a
-row in the type. Closing this one means making record types exact, which is
-deleting width subtyping, which is deleting what `duck` became. It stays a
-listed limit in `LANGUAGE.md` §10.3.
+row in the type. The checker rejects this use as `BLOT_DYNAMIC_SHAPE_FIELD`; a
+homogeneous dictionary is the separate abstraction for dynamic keys.
 
 _It would close the spread, and the backend is already waiting for it._ For
 `let tagging = fn r => { ...r; .tag = 1; };` applied once, `shapeOf` already
@@ -872,26 +863,24 @@ rule never constructs a new record object, so `constrain`'s identity cache still
 catches cycles and the algorithm stays polynomial.
 
 _And it is still refused, for four reasons._ First, the payoff is bounded by
-monomorphization, not by the lattice: one call site resolves, two different
-shapes are `BLOT_SHAPE_DISAGREEMENT`, and an exported projector is a lowering
-refusal — so the programs it actually unblocks are the ones M3b unblocks anyway,
-and it buys the type without buying the program. Second, the language would get
-smaller in the same diff the lattice got bigger. Shape members apply left to
-right, so `{ .tag = 1; ...r; }` and `{ ...a; ...b; }` are legal source whose
-types are an override of unknown presence and a concatenation of two unknown
-rows; neither has a principal solution without presence variables and a ternary
-flag relation, and `constrain(lhs, rhs)` records unary bounds — a ternary
-constraint has no home in biunification, which is where "biunification stays
-polynomial" would actually be spent. The first is refused today; the second
-answers `{}`, which is sound and useless, and would have to start being refused
-too. Third, the cost lands in the one structure every other pass depends on:
-`rest` has to be threaded through `extrude`, `levelBelow`, `freshenAbove`,
-`substituteRigid`, `levelOf`, `collect`, `merge`, and `show`, and a single
-missed site is a variable that escapes its level, which is the "unconstrained
-variable is a licence" family this repository keeps closing. Fourth,
-`LANGUAGE.md` §6 already documents the workaround — name the fields at the
-spread — and the two record spreads in the whole corpus are both over records
-written beside them.
+monomorphization, not by the lattice: call sites specialize independently, while
+an exported projector still needs a concrete ABI — so it buys the type without
+closing every representation boundary. Second, the language would get smaller in
+the same diff the lattice got bigger. Shape members apply left to right, so
+`{ .tag = 1; ...r; }` and `{ ...a; ...b; }` are legal source whose types are an
+override of unknown presence and a concatenation of two unknown rows; neither
+has a principal solution without presence variables and a ternary flag relation,
+and `constrain(lhs, rhs)` records unary bounds — a ternary constraint has no
+home in biunification, which is where "biunification stays polynomial" would
+actually be spent. The first is refused today; the second answers `{}`, which is
+sound and useless, and would have to start being refused too. Third, the cost
+lands in the one structure every other pass depends on: `rest` has to be
+threaded through `extrude`, `levelBelow`, `freshenAbove`, `substituteRigid`,
+`levelOf`, `collect`, `merge`, and `show`, and a single missed site is a
+variable that escapes its level, which is the "unconstrained variable is a
+licence" family this repository keeps closing. Fourth, `LANGUAGE.md` §6 already
+documents the workaround — name the fields at the spread — and the two record
+spreads in the whole corpus are both over records written beside them.
 
 The smaller thing that would help, and did: the spread rule was not merely
 incomplete, it was unsound in the other direction. A spread whose fields are

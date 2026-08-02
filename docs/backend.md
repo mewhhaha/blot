@@ -119,8 +119,9 @@ and stays polynomial; the shape walk follows it, and that is what lets
 when those call sites are in another file.
 
 Two _different_ records flowing to one node is not a wider record, it is two
-shapes, and the fact says so rather than unioning them. The backend refuses with
-`BLOT_SHAPE_DISAGREEMENT`, naming both.
+shapes, and the fact says so rather than unioning them. Lowering specializes a
+runtime `let` lambda once per concrete call shape, including through an imported
+module, so each call receives the nominal record it actually constructed.
 
 ## `const` compiles to nothing
 
@@ -202,10 +203,10 @@ representation:
   representation that gpufuck intentionally does not have.
 - A residual structurally polymorphic function must have a concrete record shape
   before it reaches gpufuck. It gets one from the call sites that instantiated
-  it, so a `let`-bound projection whose callers agree compiles; callers that
-  pass different records are refused by name. Compile-time generic functions are
-  specialized at their blot call sites; an unconstrained runtime export is
-  rejected instead of being assigned an arbitrary nominal ABI.
+  it. A runtime `let` lambda is cloned at each distinct concrete call shape;
+  compile-time generic functions are specialized at their Blot call sites. An
+  unconstrained runtime export is rejected instead of being assigned an
+  arbitrary nominal ABI.
 
 Two shape cases still reach gpufuck's own type checker rather than a blot
 refusal, and each reports `BLOT_LOWERING_BUG` with an `F2102` from gpufuck:
@@ -225,9 +226,8 @@ A projecting function reached across `@import` used to be a third. It is not one
 now: the reads are held until every module has been checked and settled once, so
 a projection inside a dependency is answered by the record an importer built.
 `examples/widened.blot` and `examples/lib/camera.blot` are the catalog entry,
-and two importers building differently-shaped records for one library projection
-reach `BLOT_SHAPE_DISAGREEMENT` — the ordinary refusal, now reachable across a
-boundary because the records arrive at all.
+and two differently shaped calls into one imported projection now lower as
+separate specializations.
 
 ## The module parameter is the module's imports
 

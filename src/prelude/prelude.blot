@@ -516,9 +516,9 @@ const attach = fn target => fn members => fold (@shape.names members, target,
 // same language, so this costs nothing at runtime.
 const pow2 = rec (fn n => if is_less (@int.cmp n 1) then 1 else @int.mul 2 (pow2 (@int.sub n 1)) end);
 
-// The unbounded domains. Arithmetic returns these: `@int.add` does not prove
-// its result fits a width, so a `sig` narrowing to `I32` is a real obligation
-// rather than a formality.
+// The arithmetic domains. Integer operations return signed-i64 `Int` without
+// proving a narrower storage width, so a `sig` narrowing to `I32` is a real
+// obligation rather than a formality.
 const Int = @type.int;
 const Str = @type.text;
 
@@ -557,7 +557,7 @@ const U8 = U 8;
 const U16 = U 16;
 const U32 = U 32;
 const U64 = U 64;
-const Nat = range (0, @type.unbounded);
+const Nat = range (0, @int.sub (pow2 63) 1);
 const Unit = @type.unit;
 
 // Byte offsets and widths in declaration order, with no padding at all. This

@@ -59,6 +59,19 @@ Deno.test("checking retains expression types for backend lowering", async () => 
   }
 });
 
+Deno.test("direct array access carries an explicit proof certificate", async () => {
+  const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
+  await Deno.writeTextFile(
+    path,
+    `${PRELUDE}let [only] = [42];\nreturn only;`,
+  );
+  const checked = await checkFile(path);
+  assertEquals(checked.arrayProofs.size > 0, true);
+  for (const proof of checked.arrayProofs.values()) {
+    assertEquals(proof.tag, "array-index");
+  }
+});
+
 // --- literals are singleton types -------------------------------------------
 
 check(
@@ -438,10 +451,10 @@ check(
   "1 | 2 | 3 -> Str",
 );
 
-check(
-  "literal arms still constrain nothing on their own",
+rejects(
+  "literal arms over an unconstrained target require a fallback",
   'let f = fn n => case n of 1 => "one", 2 => "two" end;\nreturn f;',
-  '\'a -> ("one" | "two")',
+  "not known well enough",
 );
 
 rejects(
@@ -863,7 +876,7 @@ check(
   "a proved index escaping into a published type is spelled, not hidden",
   "sig n = Int;\nlet n = 5;\n" +
     "let g = fn xs => if n < @array.len xs then n else 0 end;\nreturn g;",
-  "['a] -> (..len xs - 1 | 0)",
+  "['a] -> (-9223372036854775808..len xs - 1 | 0)",
 );
 
 // A junction is recognised by its truth table, so the prelude's `&&` narrows —
@@ -904,7 +917,7 @@ rejects(
   "sig at = [Int] -> Int -> Int;\n" +
     "let at = fn xs => fn n => if n >= @array.len xs then @array.get xs n else 0 end;\n" +
     "return at;",
-  "Index len xs.. is outside an array of len xs",
+  "Index len xs..9223372036854775807 is outside an array of len xs",
 );
 
 rejects(
@@ -920,7 +933,7 @@ rejects(
   "sig put = [Int] -> Int -> [Int];\n" +
     "let put = fn xs => fn n => if n >= @array.len xs then @array.set xs n 0 else xs end;\n" +
     "return put;",
-  "Index len xs.. is outside an array of len xs",
+  "Index len xs..9223372036854775807 is outside an array of len xs",
 );
 
 // Each refusal is a length the comparison and the read do not agree about.
@@ -943,7 +956,7 @@ rejects(
     "  in if n >= @array.len xs then @array.get ys n else 0 end\n" +
     "end;\n" +
     "return at;",
-  "Index len xs.. is outside an array of len xs",
+  "Index len xs..9223372036854775807 is outside an array of len xs",
 );
 
 rejects(
@@ -962,7 +975,7 @@ rejects(
   "an inferred integer is checked once a comparison grounds it",
   "let at = fn xs => fn n => if n >= @array.len xs then @array.get xs n else 0 end;\n" +
     "return at;",
-  "Index len xs.. is outside an array of len xs",
+  "Index len xs..9223372036854775807 is outside an array of len xs",
 );
 
 rejects(
@@ -1188,6 +1201,18 @@ check(
 );
 
 rejects(
+  "a full unsigned storage width is not a runtime integer type",
+  "sig word = U64;\nlet word = 0;\nreturn word;",
+  "BLOT_UNREPRESENTABLE_INTEGER",
+);
+
+rejects(
+  "a runtime literal must fit signed i64",
+  "return 9223372036854775808;",
+  "BLOT_RUNTIME_INTEGER_RANGE",
+);
+
+rejects(
   "a parameterized signed range excludes its positive boundary",
   "sig small = I 2;\nlet small = 2;\nreturn small;",
   "`2` is outside `-2..1`",
@@ -1204,7 +1229,7 @@ rejects(
 rejects(
   "a range names the bound the value fell outside of",
   "sig n = Nat;\nlet n = -1;\nreturn n;",
-  "`-1` is outside `0..`",
+  "`-1` is outside `0..9223372036854775807`",
 );
 
 // A span reaches the reader. The checker has always had one; until the
@@ -1571,6 +1596,32 @@ check(
   "a literal name types a projection off a parameter",
   'return fn shape => @shape.get shape "a";',
   "{ .a = 'a; } -> 'a",
+);
+
+rejects(
+  "a runtime field name cannot invent a structural result type",
+  "let get = fn (shape, name) => @shape.get shape name;\n" +
+    'return get ({ .a = 1; }, "a");',
+  "BLOT_DYNAMIC_SHAPE_FIELD",
+);
+
+rejects(
+  "a generic reflection payload cannot prove a signature",
+  "sig reflected = Int -> 0;\n" +
+    "let reflected = fn value => case @type.reflect value of\n" +
+    "  #Shape payload => payload,\n" +
+    "  _ => 0\n" +
+    "end;\nreturn reflected;",
+  "BLOT_REFLECTION_NOT_INDEXED",
+);
+
+rejects(
+  "a generic reflection payload cannot drive a runtime operation",
+  "let reflected = fn value => case @type.reflect value of\n" +
+    "  #Shape payload => payload,\n" +
+    "  _ => 0\n" +
+    "end;\nreturn @int.add (reflected 1) 1;",
+  "BLOT_REFLECTION_NOT_INDEXED",
 );
 
 // --- recursive groups --------------------------------------------------------

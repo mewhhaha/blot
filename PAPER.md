@@ -45,7 +45,7 @@ constraints that are usually considered separately:
   a separate ownership proof.
 
 The proposed foundation is a two-phase, fine-grain call-by-value calculus with
-demand-driven pure bindings. Surface expressions elaborate into a small core
+liveness-erased pure bindings. Surface expressions elaborate into a small core
 that distinguishes values from computations. `let` introduces a shareable pure
 definition and does not itself establish evaluation order. `x <- c` is the
 sequencing operation for a computation `c`; it does not insert an application
@@ -301,16 +301,16 @@ first-class delayed computation is represented by the ordinary value
 `lambda (). c`, matching Blot's nullary-function convention rather than adding a
 second thunk type to source.
 
-### 4.3 Demand-driven pure bindings
+### 4.3 Liveness-erased pure bindings
 
-`let x = p; body` is a non-strict, shareable pure definition. It allocates a
-thunk for `p`. The first demand for `x` evaluates the thunk and memoizes its
-result; no demand means no evaluation. Once an application is demanded, its
-function and argument are evaluated according to ordinary call-by-value rules.
+`let x = p; body` is strict if the binding is live and absent if it is not.
+Before evaluation, a lexical liveness pass removes a pure declaration whose
+binding cannot be reached from the block result or another live declaration. The
+remaining declarations evaluate exactly once in source order before the block
+result. There is no run-time thunk and no first-use forcing rule.
 
-This is narrower than calling Blot a lazy language. Function calls are eager
-when executed, effect sequencing is strict, and only a pure definition delays
-its right-hand side.
+This is not laziness. It is dead-definition elimination made part of the source
+semantics, followed by ordinary call-by-value evaluation.
 
 Once demanded, a pure expression evaluates deterministically: the function
 position precedes its argument, and tuple, array, record, and constructor
@@ -321,27 +321,17 @@ evaluation order.
 The distinction makes three existing design goals compatible:
 
 - an unused pure binding can be erased;
-- pure bindings can be reordered when their lexical dependencies permit; and
+- total pure bindings can be reordered when their lexical dependencies permit;
 - traps or divergence in an unused definition do not occur.
 
-The operational state includes a heap of thunks:
+An optimizer may erase an unreferenced `let` or inline a single-use `let` when
+doing so preserves the source-order trap and divergence observations. It may
+reorder only expressions proved total. It may not move a demanded computation
+across `<-`, a handler, or a branch that changes whether it is live.
 
-```text
-H(x) = suspended(p, rho) | evaluating | value(v)
-```
-
-Demand changes `suspended` to `evaluating`, evaluates once, then stores
-`value(v)`. Re-entering an `evaluating` thunk is divergence or a specified
-recursive-black-hole trap; it is never an arbitrary stuck state.
-
-An optimizer may erase an unreferenced `let`, inline a single-use `let`, or
-reorder independent `let`s because these transformations preserve demand. It may
-not move a demanded computation across `<-`, a handler, or a branch that changes
-whether it is demanded.
-
-`const` is the phase-1 analogue. The compiler evaluates a demanded `const` to a
-compile-time value and erases it from residual code. Compile-time divergence is
-a build that does not terminate unless bounded by the implementation's fuel
+`const` is the phase-1 analogue. The compiler evaluates a live `const` once in
+source order and erases it from residual code. Compile-time divergence is a
+build that does not terminate unless bounded by the implementation's fuel
 policy; fuel exhaustion is a compiler diagnostic, not a source value.
 
 `x := p` is another pure definition that shadows `x`; it neither mutates nor
@@ -497,7 +487,7 @@ every value of that type.
 ### 6.2 Inference and principal types
 
 Simple-sub-style variables carry lower and upper bounds. Biunification
-propagates `A <: B` constraints and generalizes pure demand bindings. The
+propagates `A <: B` constraints and generalizes live pure bindings. The
 algorithmic claim should be stated narrowly:
 
 > For the rank-1 algebraic core, after compile-time expressions required for
@@ -839,7 +829,8 @@ never reinfers its ordinary type.
 
 Branches begin with the same `Omega`. Their output states must agree for linear
 obligations; affine outputs join conservatively and may be unused. A handler
-continuation is affine by construction.
+continuation is affine when aborting is ownership-safe and linear when its
+captured continuation owns a linear obligation.
 
 Every function also has an ownership summary, inferred or checked separately
 from its ordinary arrow:
@@ -886,9 +877,9 @@ rest. Such an array needs a consuming `take`/`split` operation that returns both
 the selected element and a remainder carrying every other obligation. Until
 those operations exist, the checker conservatively rejects the extraction.
 
-This rule closes the current “linear closure cannot be stored” gap. Refusing all
-such structures is conservative but incomplete; accepting one without
-propagating the obligation is unsound.
+This closes the “linear closure cannot be stored” gap for known aggregate
+structure. Consuming array extraction remains conservative until a split
+operation can return every remaining obligation.
 
 ### 10.3 Borrows are lexical views
 
@@ -1063,8 +1054,8 @@ second affine continuation use, or out-of-bounds proved access.
 
 If `Gamma; Phi |- c : A ! epsilon` and `c -> c'`, then there exist updated
 environments consistent with allocation and demand such that
-`Gamma'; Phi' |- c' : A ! epsilon`. Evaluation may reveal a thunk or allocate an
-immutable identity, but cannot change the promised result or introduce an
+`Gamma'; Phi' |- c' : A ! epsilon`. Evaluation may enter a binding or allocate
+an immutable identity, but cannot change the promised result or introduce an
 unaccounted effect.
 
 ### 14.3 Phase safety
@@ -1114,38 +1105,41 @@ representation coercions, staged erasure, and target simulation.
 
 ## 16. Coherence audit of the current language
 
-This section is intentionally direct. “Gap” does not mean the implementation is
-useless; it means the current behavior does not yet establish the theorem named
-in this paper.
+This section is intentionally direct. “Remaining gap” does not mean the
+implementation is useless; it names the part of the model that the current
+compiler still does not establish. A row with no remaining gap is backed by an
+executable checker or lowering test, not only by documentation.
 
-| Area                         | Current tension                                                                                                   | Model decision                                                         | Required change                                                                              |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| pure binding                 | documentation says strict, while unused pure bindings are erased and not evaluated                                | `let` is demand-driven and memoized                                    | align evaluator, staging, optimizer, and `LANGUAGE.md` with demand semantics                 |
-| effect sequencing            | the AST carries ambient effects through expressions, making tail and nested execution easy to blur                | only `<-` binds a computation into scope                               | introduce a value/computation core and reject unsequenced effectful expressions consistently |
-| coverage                     | some unconstrained and tuple cases can survive checking and fail with no matching arm                             | accepted closed `case` is exhaustive or has an irrefutable arm         | make uncertainty require `_`; remove latent match failure from accepted source               |
-| type reflection              | unconstrained payload variables can satisfy signatures without evidence                                           | reflection payloads are indexed or typed at saturated call sites       | close all “fresh variable means unknown” holes                                               |
-| dynamic shape operations     | a run-time field name can leave a result unconstrained                                                            | structural fields require compile-time names                           | reject the call or use a homogeneous dictionary returning `Option`                           |
-| optional fields              | omission is synthesized during record application but described as ordinary width subtyping                       | completion is an explicit type-directed coercion visible to reflection | require one expected record and record the inserted fields in typed core                     |
-| width subtyping              | a well-typed function can reach two record shapes and later be refused by nominal lowering                        | specialization closes representation for every call                    | clone/dictionary-specialize rather than reject ordinary well-typed uses                      |
-| integer domains              | lattice `Int`, `Nat`, and `U64` can describe values the signed-i64 runtime cannot represent                       | run-time `Int` is bounded; storage width is separate                   | bound run-time ranges, reject unrepresentable bridges, or add a real word domain             |
-| array proofs                 | local length bounds are embedded partly in ordinary range machinery and backend optimization must rediscover them | proofs live in `Phi` and reach lowering explicitly                     | emit proof annotations/unchecked Store operations; keep total access separate                |
-| indexed loops                | yielding `(index,value)` avoids a second lookup but does not generally export an index proof for updates          | iterator yields an erased relational package                           | add proof-producing iterator protocol independent of lexical names                           |
-| ownership of structures      | linear closures cannot be stored because containers do not inherit obligations                                    | ownership propagates structurally                                      | track aggregate obligations or keep refusing until it does                                   |
-| higher-order ownership       | a local capture obligation is insufficient when a callee may invoke its parameter several times                   | functions carry separate usage summaries                               | infer summaries and check each argument against the callee's use of its parameter            |
-| recursion and ownership      | traversal counts conservatively approximate recursive call behavior                                               | recursive closures capture only unrestricted values initially          | state the restriction declaratively; later relax with a stronger proof system                |
-| borrow scope                 | `&` is checked as a use mode without a complete first-class lifetime story                                        | borrows are lexical non-escaping views                                 | reject storage, return, host passage, and escaping capture uniformly                         |
-| handler abort                | an affine `resume` may discard a continuation that still owns a linear value                                      | a continuation owning linear resources has a linear `resume`           | derive continuation usage from its captures or require an explicit cancellation protocol     |
-| effect identity              | several passes may evaluate compile-time values                                                                   | generative atoms are allocated once and recorded                       | make identity provenance explicit and assert reuse in every downstream pass                  |
-| arithmetic refinements       | most arithmetic widens to `Int`, with a small special case for affine length bounds                               | refinement arithmetic is an independent entailment system              | move relationship reasoning out of ad hoc type-bound cases                                   |
-| optimizer correctness        | bounds and dead-code metrics test useful cases but do not define contextual equivalence                           | demand and computation traces define observations                      | test and eventually prove each rewrite against those observations                            |
-| experimental gpupaper target | target supports only a subset of ABI/runtime HIR                                                                  | target restriction is allowed if it refuses before artifact production | keep target gaps separate from source-language acceptance claims                             |
+| Area                         | Current implementation                                                                                                            | Model decision                                                         | Remaining gap                                                                                         |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| pure binding                 | liveness erases unused definitions; every remaining definition evaluates once in source order                                     | liveness erasure followed by strict evaluation                         | none                                                                                                  |
+| effect sequencing            | one shared Core elaboration classifies live declarations as `define` or `bind`, and results as `return` or `tail`                 | only `<-` binds a computation into scope                               | type and lower fine-grain Core rather than retaining surface expressions inside Core steps            |
+| coverage                     | uncertainty and every unlistable domain require an irrefutable arm; tuple coverage checks the complete cross-product              | accepted closed `case` is exhaustive or has an irrefutable arm         | none for the implemented pattern language                                                             |
+| type reflection              | saturated reflection has its exact bridged type; generic payload variables cannot discharge a signature or determine runtime work | reflection payloads are indexed or typed at saturated call sites       | replace origin tracking with an explicit indexed `TyRep` in typed Core                                |
+| dynamic shape operations     | a run-time field name is rejected; compile-time structural folds remain available                                                 | structural fields require compile-time names                           | add a separate homogeneous dictionary abstraction when dynamic keys are needed                        |
+| optional fields              | omission is synthesized during record application but described as ordinary width subtyping                                       | completion is an explicit type-directed coercion visible to reflection | require one expected record and record the inserted fields in typed Core                              |
+| width subtyping              | direct calls of runtime `let` lambdas specialize the body to each concrete argument shape, including across imports               | specialization closes representation for every call                    | specialize escaping and other residual structural functions through the same representation pass      |
+| integer domains              | run-time `Int` and `Nat` are signed-i64-bounded; wider `U64` is storage metadata and is rejected in runtime signatures            | run-time `Int` is bounded; storage width is separate                   | add a distinct word domain only if full-width run-time words become necessary                         |
+| array proofs                 | inference records an `ArrayIndexProof` on every admitted direct access and lowering requires that certificate                     | proofs live in `Phi` and reach lowering explicitly                     | move all relation solving out of range terms and add a native unchecked target operation if available |
+| indexed loops                | `Iter.indexed` yields values with their indices, while branch refinements certify reuse of the index                              | iterator yields an erased relational package                           | make iterator-produced proof packages explicit and independent of the iterator's implementation       |
+| ownership of structures      | records, tuples, arrays, constructors, and closures propagate obligations; destructuring transfers them                           | ownership propagates structurally                                      | add consuming array `take`/`split` operations for ergonomic extraction                                |
+| higher-order ownership       | `!parameter` and `?parameter` are checked call contracts; an owned closure cannot pass to a duplicating ordinary parameter        | functions carry separate usage summaries                               | infer contracts for unannotated parameters instead of requiring the ownership promise at the boundary |
+| recursion and ownership      | recursive closures with spendable captures are conservatively rejected                                                            | recursive closures capture only unrestricted values initially          | later relax only with a semantic call-count proof                                                     |
+| borrow scope                 | `&` is checked as a use mode without a complete first-class lifetime story                                                        | borrows are lexical non-escaping views                                 | reject storage, return, host passage, and escaping capture uniformly                                  |
+| handler abort                | a continuation that owns a linear capture requires `!resume`, which every clause must consume exactly once                        | a continuation owning linear resources has a linear `resume`           | add an explicit cancellation protocol before permitting such a continuation to abort                  |
+| effect identity              | several passes may evaluate compile-time values                                                                                   | generative atoms are allocated once and recorded                       | make identity provenance explicit and assert reuse in every downstream pass                           |
+| arithmetic refinements       | most arithmetic widens to `Int`, with a small special case for affine length bounds                                               | refinement arithmetic is an independent entailment system              | move relationship reasoning out of ad hoc type-bound cases                                            |
+| optimizer correctness        | bounds and dead-code metrics test useful cases but do not define contextual equivalence                                           | demand and computation traces define observations                      | test and eventually prove each rewrite against those observations                                     |
+| experimental gpupaper target | target supports only a subset of ABI/runtime HIR                                                                                  | target restriction is allowed if it refuses before artifact production | keep target gaps separate from source-language acceptance claims                                      |
 
 ## 17. Migration plan
 
-The migration should proceed by establishing one trustworthy boundary at a time.
-Compatibility with accidental behavior is not a goal.
+The migration proceeds by establishing one trustworthy boundary at a time.
+Compatibility with accidental behavior is not a goal. M0 and M3 are complete;
+M1, M2, M4, M5, M6, and M7 now have executable first boundaries, with their
+remaining work stated explicitly below.
 
-### M0: Freeze the observation model
+### M0: Freeze the observation model — complete
 
 Write executable tests for demand, effect order, specified traps, host traces,
 and divergence boundaries.
@@ -1156,13 +1150,13 @@ and divergence boundaries.
 - Moving a pure definition does not move a computation.
 - Case and element child computations execute only when selected/called.
 
-Update `LANGUAGE.md` to say that pure bindings are demand-driven. This resolves
-the largest semantic contradiction before changing IR.
+Update `LANGUAGE.md` to state liveness erasure and strict source order. This
+resolves the largest semantic contradiction before changing IR.
 
-### M1: Introduce a value/computation core
+### M1: Introduce a value/computation core — first boundary complete
 
 Elaborate the existing AST into an internal fine-grain core with explicit
-`return`, `bind`, operations, and thunks. Keep surface grammar unchanged.
+`return`, `bind`, and operations. Keep surface grammar unchanged.
 
 - Require every effectful surface use to be under `<-` or inside a computation
   value.
@@ -1171,10 +1165,10 @@ Elaborate the existing AST into an internal fine-grain core with explicit
 - Lower handlers, statement control, and effects from this Core rather than
   pattern-matching ambient AST contexts.
 
-Success means the reference evaluator and backend consume the same explicit
-evaluation order.
+The reference evaluator and both backends now consume the same shallow Core
+ordering. Fine-grain Core expressions and direct Core typing remain.
 
-### M2: Make compile-time representations typed
+### M2: Make compile-time representations typed — inference boundary complete
 
 Define the internal `TyRep`, effect descriptor, seal descriptor, and reflection
 result types.
@@ -1186,10 +1180,11 @@ result types.
 - Reject a run-time dependency in every compile-time context with one phase
   diagnostic.
 
-Success means bridging is a checked total function over the accepted `TyRep`
-subset and never returns an inference permission for an unknown payload.
+Saturated reflection is exact and unevidenced generic inspection cannot prove a
+signature or determine a runtime operation. Replacing the origin marker with an
+explicit indexed `TyRep` remains.
 
-### M3: Make matching total
+### M3: Make matching total — complete
 
 Replace permissive unknown coverage with conservative coverage.
 
@@ -1200,7 +1195,7 @@ Replace permissive unknown coverage with conservative coverage.
 
 Success means `BLOT_NO_MATCH` is unreachable for checked source programs.
 
-### M4: Add a refinement proof IR
+### M4: Add a refinement proof IR — access certificates complete
 
 Move array identity and length relations into `Phi`.
 
@@ -1211,10 +1206,10 @@ Move array identity and length relations into `Phi`.
 - Lower proved operations without asking gpufuck to reverse-engineer source
   facts from typed machine comparisons.
 
-Success means the compiler can count total versus proved accesses directly: one
-check for total, zero for proved.
+Inference now attaches a certificate to each direct access and lowering refuses
+to emit one without it. A general `Phi` and iterator-produced packages remain.
 
-### M5: Close structural specialization
+### M5: Close structural specialization — direct calls complete
 
 Record explicit coercions and specialize every residual structural use.
 
@@ -1223,10 +1218,10 @@ Record explicit coercions and specialize every residual structural use.
 - Preserve the full shape when polymorphic identity or spread requires it.
 - Ensure gpufuck HM-checks every program accepted by the closed source core.
 
-Success means `BLOT_SHAPE_DISAGREEMENT` is no longer a backend response to an
-ordinary closed, well-typed call graph.
+Direct calls of runtime `let` lambdas are cloned per concrete record shape.
+Escaping and other residual structural functions still need the same treatment.
 
-### M6: Propagate ownership structurally
+### M6: Propagate ownership structurally — aggregate propagation complete
 
 Replace the closure-only escape restriction with obligations on aggregates.
 
@@ -1241,10 +1236,10 @@ Replace the closure-only escape restriction with obligations on aggregates.
 - Continue using linear consumption, not syntactic last use, as Store-reuse
   evidence.
 
-Success means every residual resource has one ownership derivation, including
-when nested in another value.
+Known aggregates now carry one structural obligation derivation. Inferred
+unannotated function contracts and ergonomic consuming array extraction remain.
 
-### M7: Separate numeric values from storage descriptions
+### M7: Separate numeric values from storage descriptions — complete
 
 Constrain run-time integer ranges to signed `Int` and keep arbitrary bit widths
 in layout metadata. Decide later whether distinct word types are worthwhile.
@@ -1268,7 +1263,7 @@ Build the proof/testing ladder from the small core outward.
 - mechanize the smallest core once its rules stop changing.
 
 The first mechanized artifact should omit modules, reflection, SIMD, and the
-ABI. It should include demand bindings, functions, variants, effects, handlers,
+ABI. It should include live bindings, functions, variants, effects, handlers,
 and affine continuations, because those choices determine the rest.
 
 ## 18. Validation strategy
@@ -1304,7 +1299,7 @@ association.
 - Levy's
   [call-by-push-value](https://link.springer.com/book/10.1007/978-94-007-0954-6)
   motivates making the value/computation boundary explicit, although Blot's
-  demand-driven pure declaration is its own surface choice.
+  liveness-erased pure declaration is its own surface choice.
 - Bauer and Pretnar's
   [Programming with Algebraic Effects and
   Handlers](https://arxiv.org/abs/1203.1539) and
@@ -1335,7 +1330,7 @@ boundary consumes.
 Blot is a capability-safe, staged functional language in which:
 
 - syntax is parsed deterministically under a strict GPU grammar profile;
-- pure declarations are demand-driven definitions;
+- dead pure declarations are absent and live ones evaluate once in source order;
 - computations are sequenced explicitly with `<-`;
 - types, effects, and layout descriptors are compile-time values with checked
   representations;

@@ -1,7 +1,5 @@
-// Literal arms cannot cover an unbounded domain. `Int` holds infinitely many
-// values, so no finite set of arms exhausts it — the choice is to narrow the
-// type, add the arms, or write the `_` arm and say with `@panic` why reaching
-// it is impossible.
+// Literal arms cannot cover a domain the checker does not enumerate. The
+// choice is to narrow the type or write an irrefutable arm.
 open {} = (@import "blot:prelude") ();
 
 sig describe = Int -> Str;

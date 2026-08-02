@@ -11,7 +11,7 @@ blot ownership examples/tour.blot    # the facts the backend will consume
 let !token = 41;                        // linear when demanded: exactly once
 let consume = fn !value => value + 1;   // takes ownership
 let peek = fn &p => p.x + p.y;          // borrows; the caller keeps its value
-let handler = fn (message, ?resume) => …; // affine: at most once
+let handler = fn (message, ?resume) => …; // affine when aborting is safe
 
 consume (!token)
 ```
@@ -29,8 +29,7 @@ consume (!token)
   moved, so a borrowing function is one you can call without losing what you
   passed it.
 
-`resume` is the reason `?` exists. One-shot handlers used to be a runtime check
-and a promise in a comment; they are now a static one:
+`resume` is the reason `?` exists. One-shot handlers are checked statically:
 
 ```blot
 let collecting = {
@@ -41,6 +40,9 @@ let collecting = {
   .return = fn value => value;
 };
 ```
+
+When the captured continuation owns a linear resource, aborting would leak that
+resource. Its clause must instead bind `!resume` and call it exactly once.
 
 ## Not in the type lattice
 
@@ -97,6 +99,25 @@ defining scope and then by the inner one from the outer, so both closures come
 out linear — which is the right answer, and it falls out of resolving one link
 at a time rather than being a special case.
 
+An owned closure may cross a higher-order call only when the callee promises an
+appropriate parameter use. `fn !f => f ()` promises exactly one invocation; an
+ordinary parameter may be duplicated and therefore cannot accept that closure.
+
+## Aggregates carry obligations
+
+Records, tuples, arrays, and constructor payloads inherit the obligations of
+their contents. Destructuring transfers each component to the matching binding:
+
+```blot
+let !ticket = 7;
+let holder = { .go = fn () => consume (!ticket); };
+let { .go; } = holder;
+return go ();
+```
+
+Projecting one field is rejected when another owned field would be discarded. A
+direct array read is likewise rejected when it would copy an owned element.
+
 ## A recursive group is one scope
 
 A recursive group's names are in scope in every member's body, and the pass sees
@@ -147,11 +168,10 @@ shapes, as `recursive_linear_capture.blot` and
 
 ## What is not proven
 
-**A linear closure cannot be stored in a structure.** Putting one in a shape
-would make that shape linear, and blot does not track linear structures yet.
-Binding it to a name works, and so does calling it where it was built; anything
-else reports `BLOT_LINEAR_CLOSURE_ESCAPES` rather than losing the obligation
-quietly.
+**Owned arrays do not yet have consuming random access.** Ordinary array reads
+would copy an owned element, while replacement could discard it. Those cases
+remain rejected until a `take` or `split` operation can return the selected
+element together with a remainder carrying every other obligation.
 
 **Reuse requires the stronger proof.** The pass records both traversal-order
 last uses and the linear bindings proved consumed exactly once on every path.

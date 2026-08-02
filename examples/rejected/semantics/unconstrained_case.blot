@@ -1,0 +1,5 @@
+let describe = fn value => case value of
+  1 => "one",
+  2 => "two"
+end;
+return describe;

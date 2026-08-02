@@ -109,10 +109,54 @@ return go ();`,
 );
 
 rejects(
-  "storing a linear closure in a shape is reported, not lost",
+  "an owned aggregate cannot escape the module boundary",
   `${CONSUME}let !token = 41;
 return { .go = fn () => consume (!token); };`,
-  "BLOT_LINEAR_CLOSURE_ESCAPES",
+  "BLOT_LINEAR_RESULT_ESCAPES",
+);
+
+accepts(
+  "an aggregate carries a captured obligation into destructuring",
+  `${CONSUME}let !token = 41;
+let holder = { .go = fn () => consume (!token); };
+let { .go; } = holder;
+return go ();`,
+);
+
+accepts(
+  "a constructor carries a captured obligation into matching",
+  `${CONSUME}let !token = 41;
+let holder = #Held (fn () => consume (!token));
+return case holder of #Held go => go () end;`,
+);
+
+rejects(
+  "projecting one field cannot discard another owned field",
+  `${CONSUME}let !left = 40;
+let !right = 41;
+let holder = {
+  .first = fn () => consume (!left);
+  .second = fn () => consume (!right);
+};
+return holder.first ();`,
+  "BLOT_LINEAR_PARTIAL_MOVE",
+);
+
+rejects(
+  "a higher-order function cannot duplicate an owned closure",
+  `${CONSUME}let twice = fn f => @int.add (f ()) (f ());
+let !token = 41;
+let go = fn () => consume (!token);
+return twice go;`,
+  "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
+);
+
+accepts(
+  "a linear function parameter promises one invocation",
+  `${CONSUME}let once = fn !f => f ();
+let !token = 41;
+let go = fn () => consume (!token);
+return once go;`,
 );
 
 // A borrow reads without spending, which is the whole reason to have one.
@@ -149,6 +193,31 @@ rejects(
 accepts(
   "affine branches need not agree, because either way it is at most once",
   "let some = fn ?r => if 1 < 2 then r 1 else 0 end;\nreturn some (fn x => x);",
+);
+
+rejects(
+  "an aborting handler cannot discard a continuation that owns a resource",
+  `${CONSUME}const Ask = @effect { .ask = Unit -> Unit; };
+let !token = 41;
+let work = fn () => do
+  _ <- Ask.ask ();
+  in consume (!token)
+end;
+let aborting = { .ask = fn (_, ?resume) => 0; };
+return @handle (Ask, work, aborting);`,
+  "BLOT_LINEAR_HANDLER_MAY_ABORT",
+);
+
+accepts(
+  "a handler resumes exactly once when its continuation owns a resource",
+  `${CONSUME}const Ask = @effect { .ask = Unit -> Unit; };
+let !token = 41;
+let work = fn () => do
+  _ <- Ask.ask ();
+  in consume (!token)
+end;
+let resuming = { .ask = fn (_, !resume) => resume (); };
+return @handle (Ask, work, resuming);`,
 );
 
 // A recursive group's names are in scope in every member's body, so the block
@@ -270,10 +339,8 @@ let peek = rec (fn n => case Array.get ((&cells), n) of
   #None => 0
 end);
 let write = rec (fn n => @array.set cells 0 n);
-return @int.add (case Array.get (write 1, 0) of
-  #Some value => value,
-  #None => 0
-end) (peek 0);`,
+let [first, _, _] = write 1;
+return @int.add first (peek 0);`,
   );
   const cells = own.find(([pattern]) => pattern.name === "cells");
   assert(cells !== undefined);

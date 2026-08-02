@@ -184,7 +184,7 @@ Deno.test("a field set found two modules down reaches the root's facts", async (
   assertEquals(zoomShapes(await checkFile(root)), ["angle zoom"]);
 });
 
-Deno.test("two records reaching one library's projection disagree rather than pick", async () => {
+Deno.test("two records reaching one library retain both representation facts", async () => {
   const directory = await Deno.makeTempDir();
   await writeModule(directory, "lib", READS_ONE_FIELD);
   await writeModule(
@@ -211,9 +211,9 @@ Deno.test("two records reaching one library's projection disagree rather than pi
   );
 
   // Well typed under width subtyping, and Core has no nominal that is both. The
-  // honest answer is the two sets, so lowering can refuse by name; picking the
-  // one that happened to be checked first is the bug this whole staging exists
-  // to prevent.
+  // honest inference fact is the two sets; call specialization consumes that
+  // evidence to emit one nominal per call instead of picking whichever module
+  // happened to be checked first.
   const checked = await checkFile(root);
   const disagreements = [...checked.shapes.values()].filter((shape) =>
     shape.tag === "disagreement"

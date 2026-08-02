@@ -62,6 +62,7 @@ import {
 } from "./constrain.ts";
 import { PRIMITIVE_TYPES } from "./primitives.ts";
 import { show as showType, showRange } from "./print.ts";
+import type { ArrayIndexProof } from "../core/proof.ts";
 import {
   admitsOmission,
   type ClosedBound,
@@ -69,6 +70,8 @@ import {
   effects,
   FLOAT,
   freshVar,
+  I64_HIGH,
+  I64_LOW,
   INT,
   intLiteral,
   lengthBound,
@@ -403,8 +406,12 @@ export function settle(staging: Staging): void {
 }
 
 interface Context {
+  /** The phase whose expressions are currently being inferred. */
+  readonly phase: "runtime" | "comptime";
   /** Settled type terms produced by this inference run, keyed by expression identity. */
   readonly expressionTypes: Map<Expr, SimpleType>;
+  /** Erasable evidence for direct array accesses proved in bounds. */
+  readonly arrayProofs: Map<Expr, ArrayIndexProof>;
   /** Field sets and constructor sets, recorded for the backend. */
   readonly shapes: Map<Expr, Shape>;
   readonly recordAdaptations: Map<Expr, RecordAdaptation>;
@@ -601,6 +608,16 @@ function inferUnrecorded(
 ): SimpleType {
   switch (expr.tag) {
     case "int":
+      if (
+        context.phase === "runtime" &&
+        (expr.value < I64_LOW || expr.value > I64_HIGH)
+      ) {
+        fail(
+          "BLOT_RUNTIME_INTEGER_RANGE",
+          `Runtime integer ${expr.value} is outside signed i64 ${I64_LOW}..${I64_HIGH}. Keep it in a \`const\` storage descriptor, or add a distinct word type before using it at run time.`,
+          expr.span,
+        );
+      }
       return intLiteral(expr.value);
     case "float":
       return FLOAT;
@@ -663,6 +680,7 @@ function inferUnrecorded(
 
       const fnType = infer(expr.fn, context, level, row);
       const argType = infer(expr.arg, context, level, row);
+      requireEvidencedRuntimeType(argType, expr.arg, context);
       const result = freshVar(level);
       located(expr.span, () => {
         constrain(fnType, { tag: "fun", param: argType, effects: row, result });
@@ -693,6 +711,7 @@ function inferUnrecorded(
         return TOP;
       }
       const target = infer(expr.target, context, level, row);
+      requireEvidencedRuntimeType(target, expr.target, context);
       const result = freshVar(level);
       located(expr.span, () => {
         constrain(target, record([[expr.name, result]]));
@@ -895,6 +914,19 @@ function inferSpecial(
   const callee = head.callee;
   if (callee.tag !== "intrinsic") return null;
 
+  const comptimeIntegerArity = COMPTIME_INTEGER_ARITIES.get(callee.name);
+  if (
+    context.phase === "comptime" &&
+    comptimeIntegerArity === head.args.length
+  ) {
+    for (const argument of head.args) infer(argument, context, level, row);
+    const value = comptime(expr, context, foldedEnv(context));
+    if (value !== null) {
+      const exact = bridge(value);
+      if (exact !== null) return exact;
+    }
+  }
+
   if (
     (callee.name === "@effect" || callee.name === "@effect.host") &&
     head.args.length === 1
@@ -945,7 +977,25 @@ function inferSpecial(
     (callee.name === "@array.get" || callee.name === "@array.set") &&
     head.args.length >= 2
   ) {
-    requireProvenIndex(expr, head.args[0], head.args[1], context.types);
+    const proof = requireProvenIndex(
+      expr,
+      head.args[0],
+      head.args[1],
+      context.types,
+    );
+    context.arrayProofs.set(expr, proof);
+  }
+
+  if (callee.name === "@type.reflect" && head.args.length === 1) {
+    infer(head.args[0], context, level, row);
+    const reflected = comptime(expr, context, foldedEnv(context));
+    if (reflected !== null) {
+      const exact = bridge(reflected);
+      if (exact === null) {
+        throw new Error("a reflected compile-time value has no inferred type");
+      }
+      return exact;
+    }
   }
 
   if (SHAPE_PROJECTIONS.get(callee.name) === head.args.length) {
@@ -1004,11 +1054,11 @@ function inferSpecial(
       }
       if (
         resume === undefined || resume.tag !== "name" ||
-        resume.qualifier !== "affine"
+        (resume.qualifier !== "affine" && resume.qualifier !== "linear")
       ) {
         fail(
           "BLOT_HANDLER_RESUME_NOT_AFFINE",
-          `Handler clause \`.${member.name}\` must bind its continuation as \`?resume\`.`,
+          `Handler clause \`.${member.name}\` must bind its continuation as \`?resume\`, or as \`!resume\` when aborting would discard a linear resource.`,
           clause.span,
         );
       }
@@ -1204,6 +1254,17 @@ const SHAPE_PROJECTIONS: ReadonlyMap<string, number> = new Map([
   ["@shape.remove", 2],
 ]);
 
+const COMPTIME_INTEGER_ARITIES: ReadonlyMap<string, number> = new Map([
+  ["@int.add", 2],
+  ["@int.sub", 2],
+  ["@int.mul", 2],
+  ["@int.div", 2],
+  ["@int.rem", 2],
+  ["@int.neg", 1],
+  ["@int.cmp", 2],
+  ["@text.of_int", 1],
+]);
+
 /**
  * `@shape.get`, `@shape.set` and `@shape.remove`, typed at their call site.
  *
@@ -1224,14 +1285,10 @@ const SHAPE_PROJECTIONS: ReadonlyMap<string, number> = new Map([
  *     projection and is typed as one, so the result is that field's type and a
  *     `sig` on it lands on the shape.
  *
- * What is left is a name that is genuinely a runtime value — `@shape.get value
- * name` inside a `fold` over `@shape.names`, which is what generic shape
- * programming looks like. There the result is one of the shape's fields and
- * nothing here knows which, and the shape's field *set* is not known either
- * because records are width-subtyped: a value typed `{ .a = Int; }` may carry a
- * `.b` this call is reading. Neither the union of the known fields nor `⊤` is
- * true of that, so the variable stays — and with it the one door this rule does
- * not close.
+ * A genuinely run-time name has no structural result type: heterogeneous
+ * records do not have one element type, and width subtyping means even the full
+ * field set is unknown. Such a lookup belongs on a homogeneous dictionary with
+ * an `Option` result, not on a structural record, so it is rejected here.
  */
 function inferShapeProjection(
   expr: Expr & { tag: "apply" },
@@ -1274,7 +1331,14 @@ function inferShapeProjection(
     }
   }
 
-  return freshVar(level);
+  if (context.phase === "comptime") {
+    return freshVar(level, "dynamic-shape");
+  }
+  fail(
+    "BLOT_DYNAMIC_SHAPE_FIELD",
+    `\`${callee}\` requires a field name known at compile time. Use a structural projection with a literal name, or represent dynamic keys with a homogeneous dictionary.`,
+    args[1].span,
+  );
 }
 
 /** The record that reached a type, following what flowed into a variable. */
@@ -1730,7 +1794,7 @@ function requireProvenIndex(
   array: Expr,
   index: Expr,
   scope: TypeEnv,
-): void {
+): ArrayIndexProof {
   const length = arrayLength(array, scope);
   const indices = indexSet(index, scope);
   if (length === null || indices === null) {
@@ -1756,7 +1820,9 @@ function requireProvenIndex(
       expr.span,
     );
   }
-  if (both.tag === "type" && sameGround(both.type, indices)) return;
+  if (both.tag === "type" && sameGround(both.type, indices)) {
+    return { tag: "array-index", length, indices };
+  }
   fail(
     "BLOT_UNPROVEN_INDEX",
     `Index ${showType(indices)} is not proved inside 0..${
@@ -1825,6 +1891,7 @@ function inferCase(
   row: SimpleType,
 ): SimpleType {
   const target = infer(expr.target, context, level, row);
+  requireEvidencedRuntimeType(target, expr.target, context);
   const result = freshVar(level);
   const accepted: AcceptedArm[] = [];
   let unitExcluded = false;
@@ -1935,12 +2002,19 @@ function inferCase(
         expr.target.span,
       );
     }
-    // A scrutinee with an open end holds infinitely many values, so literal
-    // arms can never exhaust it. `uncovered` returns nothing to list, and
-    // reading that as "covered" is what let this trap at run time instead.
+    // An unlistable scrutinee cannot be proved exhaustive from literal arms.
+    // `uncovered` returns nothing to list, and reading that as "covered" is
+    // what let this trap at run time instead.
     if (missing === null && armTypes.length > 0 && scalarArms(armTypes)) {
       const scrutinee = groundScalar(target);
-      if (scrutinee !== null && unlistable(scrutinee)) {
+      if (scrutinee === null) {
+        fail(
+          "BLOT_INCOMPLETE_CASE",
+          "The scrutinee's values are not known well enough to prove these arms exhaustive. Add a `_` arm, or give the scrutinee a finite declared type.",
+          expr.target.span,
+        );
+      }
+      if (unlistable(scrutinee)) {
         fail(
           "BLOT_INCOMPLETE_CASE",
           `\`${
@@ -2079,12 +2153,13 @@ export interface Disagreement {
 }
 
 /**
- * Refuse a node that two different records reach, naming both.
+ * Refuse an unspecialized residual node that two different records reach.
  *
  * This is a lowering refusal and not a type error: the program is well typed
- * under width subtyping, and `blot check` still accepts it and reports its
- * principal type. What has no answer is the Core nominal, and the two shapes
- * are the whole explanation, so they are what the message carries.
+ * under width subtyping, and `blot check` still accepts it. Direct runtime
+ * calls specialize before reaching this fallback; a residual position that
+ * cannot be cloned has no single Core nominal, and the two shapes are the
+ * whole explanation.
  */
 export function refuseDisagreement(
   disagreement: Disagreement,
@@ -2094,10 +2169,10 @@ export function refuseDisagreement(
     "BLOT_SHAPE_DISAGREEMENT",
     `${shownShape(disagreement.left)} and ${
       shownShape(disagreement.right)
-    } both reach this. Blot's shapes are width-subtyped and Core's are ` +
-      "nominal, so no one record type is both, and lowering will not pick " +
-      "one. Give the two values the same fields, or read the field at each " +
-      "of them rather than through one binding that sees both.",
+    } both reach this unspecialized position. Blot's shapes are width-subtyped ` +
+      "and Core's are nominal, so no one record type is both. Give the two " +
+      "values the same fields, or keep the use at call sites the compiler " +
+      "can specialize.",
     span,
   );
 }
@@ -2772,6 +2847,16 @@ function inferDeclarations(
           declaration.span,
         );
       }
+      const unrepresentable = unrepresentableInteger(bridged);
+      if (unrepresentable !== null) {
+        fail(
+          "BLOT_UNREPRESENTABLE_INTEGER",
+          `Runtime signature \`${declaration.pattern.name}\` contains ${
+            showType(unrepresentable)
+          }, which has inhabitants outside signed i64 ${I64_LOW}..${I64_HIGH}. Storage widths are compile-time descriptors; they are not wider runtime integers.`,
+          declaration.span,
+        );
+      }
       pendingSig = {
         name: declaration.pattern.name,
         type: bridged,
@@ -2816,12 +2901,23 @@ function inferDeclarations(
       }
     }
 
+    let declarationContext = context;
+    if (declaration.kind === "const") {
+      declarationContext = { ...context, phase: "comptime" };
+    }
+
     const group = groups.get(declaration);
     if (type === null && group !== undefined) {
       // Typed once, at the first member: the group's names have to be in scope
       // together, and one pass over the whole run is the only way to do that.
       if (!groupTypes.has(declaration)) {
-        inferRecursiveGroup(group, context, level, row, groupTypes);
+        inferRecursiveGroup(
+          group,
+          declarationContext,
+          level,
+          row,
+          groupTypes,
+        );
       }
       const member = groupTypes.get(declaration);
       expect(member !== undefined, "recursive group missed one of its members");
@@ -2834,7 +2930,7 @@ function inferDeclarations(
     // conditional, returned from a compile-time function — where there is no
     // group to belong to.
     if (type === null && bound !== null) {
-      type = typeClosure(bound, context, level);
+      type = typeClosure(bound, declarationContext, level);
     }
     if (type === null) {
       if (signature !== null && declaration.value.tag === "lambda") {
@@ -2850,7 +2946,7 @@ function inferDeclarations(
           type = checkAgainstPure(
             declaration.value,
             signature,
-            context,
+            declarationContext,
             level,
             "A `let` value",
           );
@@ -2862,7 +2958,7 @@ function inferDeclarations(
         if (declaration.kind === "const") description = "A `const` value";
         type = generalizePure(
           declaration.value,
-          context,
+          declarationContext,
           level,
           description,
         );
@@ -2874,6 +2970,16 @@ function inferDeclarations(
       pendingSig.name === declaration.pattern.name
     ) {
       const expected = pendingSig.type;
+      if (
+        containsUnevidencedType(type as Typing) ||
+        expressionUsesUnevidencedType(declaration.value, context)
+      ) {
+        fail(
+          "BLOT_REFLECTION_NOT_INDEXED",
+          `The inferred value for \`${pendingSig.name}\` depends on a generic compile-time inspection result. Reflection and structural inspection can prove a signature only after their inputs are known at compile time.`,
+          declaration.span,
+        );
+      }
       located(declaration.span, () => {
         constrain(
           instantiate(type as Typing, level, context.staging.instances),
@@ -2944,6 +3050,127 @@ function inferDeclarations(
       pendingSig.span,
     );
   }
+}
+
+function expressionUsesUnevidencedType(
+  expression: Expr,
+  context: Context,
+): boolean {
+  for (const [candidate, type] of context.expressionTypes) {
+    if (
+      candidate.span.start < expression.span.start ||
+      candidate.span.end > expression.span.end
+    ) continue;
+    if (containsUnevidencedType(type)) return true;
+  }
+  return false;
+}
+
+function unrepresentableInteger(
+  type: SimpleType,
+  seen = new Set<number>(),
+): SimpleType | null {
+  if (type.tag === "range") {
+    if (type.domain !== "int") return null;
+    if (typeof type.low === "bigint" && type.low < I64_LOW) return type;
+    if (typeof type.high === "bigint" && type.high > I64_HIGH) return type;
+    return null;
+  }
+  if (type.tag === "var") {
+    if (seen.has(type.id)) return null;
+    seen.add(type.id);
+    for (const bound of [...type.lower, ...type.upper]) {
+      const found = unrepresentableInteger(bound, seen);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+  if (type.tag === "forall") return unrepresentableInteger(type.body, seen);
+  if (type.tag === "fun") {
+    const parameter = unrepresentableInteger(type.param, seen);
+    if (parameter !== null) return parameter;
+    return unrepresentableInteger(type.result, seen);
+  }
+  if (type.tag === "record") {
+    for (const field of type.fields.values()) {
+      const found = unrepresentableInteger(field, seen);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+  if (type.tag === "array") {
+    return unrepresentableInteger(type.element, seen);
+  }
+  if (type.tag === "variant") {
+    for (const payload of type.cases.values()) {
+      const found = unrepresentableInteger(payload, seen);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+  if (type.tag === "union") {
+    for (const member of type.members) {
+      const found = unrepresentableInteger(member, seen);
+      if (found !== null) return found;
+    }
+  }
+  return null;
+}
+
+function containsUnevidencedType(
+  typing: Typing,
+  seen = new Set<number>(),
+): boolean {
+  let type: SimpleType;
+  if (typing.tag === "scheme") type = typing.body;
+  else type = typing;
+  if (type.tag === "var") {
+    if (type.origin !== undefined) return true;
+    if (seen.has(type.id)) return false;
+    seen.add(type.id);
+    return [...type.lower, ...type.upper].some((bound) =>
+      containsUnevidencedType(bound, seen)
+    );
+  }
+  if (type.tag === "forall") {
+    return containsUnevidencedType(type.body, seen);
+  }
+  if (type.tag === "fun") {
+    return containsUnevidencedType(type.param, seen) ||
+      containsUnevidencedType(type.effects, seen) ||
+      containsUnevidencedType(type.result, seen);
+  }
+  if (type.tag === "record") {
+    return [...type.fields.values()].some((field) =>
+      containsUnevidencedType(field, seen)
+    );
+  }
+  if (type.tag === "array") {
+    return containsUnevidencedType(type.element, seen);
+  }
+  if (type.tag === "variant") {
+    return [...type.cases.values()].some((payload) =>
+      containsUnevidencedType(payload, seen)
+    );
+  }
+  if (type.tag === "union") {
+    return type.members.some((member) => containsUnevidencedType(member, seen));
+  }
+  return false;
+}
+
+function requireEvidencedRuntimeType(
+  type: Typing,
+  expression: Expr,
+  context: Context,
+): void {
+  if (context.phase !== "runtime" || !containsUnevidencedType(type)) return;
+  if (comptime(expression, context, foldedEnv(context)) !== null) return;
+  fail(
+    "BLOT_REFLECTION_NOT_INDEXED",
+    "A generic compile-time inspection result cannot determine a runtime operation. Make the inspected value known at compile time so reflection has an exact result type.",
+    expression.span,
+  );
 }
 
 function resolveDeclarationTags(
@@ -3443,6 +3670,8 @@ export interface Checked {
   readonly effects: SimpleType;
   /** The existing inference result for each expression; backends must not re-infer it. */
   readonly expressionTypes: ReadonlyMap<Expr, SimpleType>;
+  /** Independently consumable evidence for every admitted direct array access. */
+  readonly arrayProofs: ReadonlyMap<Expr, ArrayIndexProof>;
   /**
    * What each `open` brought into scope.
    *
@@ -3538,6 +3767,7 @@ export function checkModule(
   const recordAdaptations = new Map<Expr, RecordAdaptation>();
   const optionalCases = new Set<Expr>();
   const expressionTypes = new Map<Expr, SimpleType>();
+  const arrayProofs = new Map<Expr, ArrayIndexProof>();
   const variants = new Map<Expr, readonly VariantCase[]>();
   const patternShapes = new Map<Pattern, Shape>();
   const pinnedPatterns = new Map<Pattern, PinnedDomain>();
@@ -3548,7 +3778,9 @@ export function checkModule(
   const declarationTags = new Map<Decl, TaggedDeclaration>();
   const pending: (() => void)[] = [];
   const context: Context = {
+    phase: "runtime",
     expressionTypes,
+    arrayProofs,
     opens,
     comptimeValues,
     memberValues,
@@ -3603,6 +3835,7 @@ export function checkModule(
     parameter,
     effects: row,
     expressionTypes,
+    arrayProofs,
     opens,
     comptimeValues,
     shapes,

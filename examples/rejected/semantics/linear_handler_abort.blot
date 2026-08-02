@@ -1,0 +1,11 @@
+open {} = (@import "blot:prelude") ();
+
+const Ask = @effect { .ask = Unit -> Unit; };
+let consume = fn !value => @int.add value 1;
+let !token = 41;
+let work = fn () => do
+  _ <- Ask.ask ();
+  in consume (!token)
+end;
+let aborting = { .ask = fn (_, ?resume) => 0; };
+return @handle (Ask, work, aborting);

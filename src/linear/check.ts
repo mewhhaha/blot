@@ -58,6 +58,14 @@ interface Binding {
    * value is linear whether or not anyone wrote `!` on it.
    */
   readonly qualifier: Qualifier;
+  /** Obligations carried inside this value, including inside aggregates. */
+  readonly owned: Produced;
+  /** The ownership contract of this function's parameter, when statically known. */
+  parameter: Qualifier | null;
+  /** Obligations returned by one call, when this binding is a known function. */
+  result: Produced;
+  /** Source value retained for handler and usage-summary specialization. */
+  value: Expr | null;
   /** Where the binding was consumed, if it has been. */
   moved: Span | null;
   /** How many times it was read without being consumed. */
@@ -122,6 +130,7 @@ class Analysis {
   readonly reads = new Map<NamePattern, Set<number>>();
   /** The bindings some closure reached from outside its own body. */
   readonly crossed = new Set<NamePattern>();
+  readonly functionResults = new Map<Expr, Produced>();
 
   report(code: string, message: string, span: Span): void {
     this.diagnostics.push({ code, message, span });
@@ -178,7 +187,14 @@ export function checkLinearity(module: Module): LinearResult {
     declare(module.parameter, scope, analysis);
   }
   walkDeclarations(module.declarations, module.result, scope, analysis);
-  walk(module.result, scope, analysis, "move");
+  const result = walk(module.result, scope, analysis, "move");
+  if (obligation(result) !== "none") {
+    analysis.report(
+      "BLOT_LINEAR_RESULT_ESCAPES",
+      "The module result still owns a resource, but the module boundary has no ownership contract. Consume it before returning.",
+      module.result.span,
+    );
+  }
   closeScope(scope, analysis);
 
   const reentrant = new Set<NamePattern>();
@@ -224,11 +240,25 @@ function closeScope(scope: Scope, analysis: Analysis): void {
 }
 
 function declare(pattern: Pattern, scope: Scope, analysis: Analysis): void {
+  declareProduced(pattern, NONE, scope, analysis);
+}
+
+function declareProduced(
+  pattern: Pattern,
+  produced: Produced,
+  scope: Scope,
+  analysis: Analysis,
+): void {
   switch (pattern.tag) {
     case "name":
+      const owned = combine(writtenObligation(pattern.qualifier), produced);
       scope.bindings.set(pattern.name, {
         pattern,
-        qualifier: pattern.qualifier,
+        qualifier: inherited(pattern.qualifier, owned),
+        owned,
+        parameter: null,
+        result: NONE,
+        value: null,
         moved: null,
         borrows: 0,
         lastUse: null,
@@ -238,17 +268,39 @@ function declare(pattern: Pattern, scope: Scope, analysis: Analysis): void {
       use(pattern.name, pattern.span, scope, analysis, "project");
       return;
     case "tuple":
-    case "array":
-      for (const inner of pattern.elements) declare(inner, scope, analysis);
-      return;
-    case "constructor":
-      if (pattern.payload !== null) declare(pattern.payload, scope, analysis);
-      return;
-    case "shape":
-      for (const field of pattern.fields) {
-        declare(field.pattern, scope, analysis);
+    case "array": {
+      let elements: readonly Produced[] = [];
+      if (produced.tag === "sequence") elements = produced.elements;
+      for (const [index, inner] of pattern.elements.entries()) {
+        let element = NONE;
+        if (elements[index] !== undefined) element = elements[index];
+        declareProduced(inner, element, scope, analysis);
       }
       return;
+    }
+    case "constructor":
+      if (pattern.payload !== null) {
+        let payload = NONE;
+        if (produced.tag === "variant") payload = produced.payload;
+        declareProduced(pattern.payload, payload, scope, analysis);
+      }
+      return;
+    case "shape": {
+      let fields: ReadonlyMap<string, Produced> = new Map();
+      if (produced.tag === "shape") fields = produced.fields;
+      for (const field of pattern.fields) {
+        let fieldValue = NONE;
+        const found = fields.get(field.name);
+        if (found !== undefined) fieldValue = found;
+        declareProduced(
+          field.pattern,
+          fieldValue,
+          scope,
+          analysis,
+        );
+      }
+      return;
+    }
     default:
       return;
   }
@@ -273,9 +325,9 @@ function use(
   scope: Scope,
   analysis: Analysis,
   kind: Use,
-): void {
+): Produced {
   const found = analysis.lookup(scope, name);
-  if (found === null) return;
+  if (found === null) return NONE;
   const { binding, capturedBy } = found;
 
   analysis.lastUses.set(binding.pattern, span);
@@ -297,12 +349,12 @@ function use(
       `\`${name}\` is borrowed and cannot be moved. A borrowing function is one its caller can still use afterwards.`,
       span,
     );
-    return;
+    return NONE;
   }
 
   if (!spendable(binding.qualifier) || kind === "borrow") {
     binding.borrows += 1;
-    return;
+    return NONE;
   }
 
   // Capturing a linear value does not refuse it and does not spend it here.
@@ -314,15 +366,19 @@ function use(
     capturedBy.bindings.set(name, {
       pattern: binding.pattern,
       qualifier: binding.qualifier,
+      owned: binding.owned,
+      parameter: binding.parameter,
+      result: binding.result,
+      value: binding.value,
       moved: null,
       borrows: 0,
       lastUse: null,
     });
-    use(name, span, scope, analysis, kind);
-    return;
+    return use(name, span, scope, analysis, kind);
   }
 
   consume(binding, span, analysis);
+  return binding.owned;
 }
 
 /** Linear and affine both spend; they differ only in whether spending is owed. */
@@ -344,13 +400,17 @@ function walkDeclarations(
     // hold a linear value — there is no run time for it to be consumed in. So
     // the expression is walked for what *it* consumes and nothing is declared.
     if (declaration.tag === "open") {
-      if (walk(declaration.value, scope, analysis, "move") !== "none") {
+      if (
+        obligation(walk(declaration.value, scope, analysis, "move")) !== "none"
+      ) {
         escapes(declaration.span, analysis);
       }
       continue;
     }
     if (declaration.tag === "shadow") {
-      if (walk(declaration.value, scope, analysis, "move") !== "none") {
+      if (
+        obligation(walk(declaration.value, scope, analysis, "move")) !== "none"
+      ) {
         escapes(declaration.span, analysis);
       }
       continue;
@@ -367,14 +427,13 @@ function walkDeclarations(
       continue;
     }
     const produced = walk(declaration.value, scope, analysis, "move");
-    declare(declaration.pattern, scope, analysis);
-    if (produced !== "none" && declaration.pattern.tag === "name") {
+    declareProduced(declaration.pattern, produced, scope, analysis);
+    if (declaration.pattern.tag === "name") {
       const binding = scope.bindings.get(declaration.pattern.name);
       if (binding !== undefined) {
-        scope.bindings.set(declaration.pattern.name, {
-          ...binding,
-          qualifier: inherited(binding.qualifier, produced),
-        });
+        binding.parameter = parameterQualifier(declaration.value, scope);
+        binding.result = functionResult(declaration.value, scope, analysis);
+        binding.value = declaration.value;
       }
     }
   }
@@ -389,8 +448,9 @@ function walkDeclarations(
  * written marker that describes a weaker obligation than the one being held.
  */
 function inherited(written: Qualifier, produced: Produced): Qualifier {
-  if (produced === "none") return written;
-  return produced;
+  const carried = obligation(produced);
+  if (carried === "none") return written;
+  return carried;
 }
 
 /**
@@ -424,6 +484,12 @@ function walkRecursiveGroup(
   declareGroup(members, settled, scope);
   for (const [index, member] of members.entries()) {
     const produced = walk(member.declaration.value, scope, analysis, "move");
+    const binding = scope.bindings.get(member.name);
+    if (binding !== undefined) {
+      const result = analysis.functionResults.get(member.lambda);
+      if (result === undefined) binding.result = NONE;
+      else binding.result = result;
+    }
     if (inherited(settled[index], produced) !== settled[index]) {
       throw new Error(
         `recursive group member \`${member.name}\` produced a ${produced} obligation the settled qualifiers did not carry`,
@@ -481,6 +547,10 @@ function declareGroup(
     scope.bindings.set(member.name, {
       pattern: member.pattern,
       qualifier: settled[index],
+      owned: writtenObligation(settled[index]),
+      parameter: patternQualifier(member.lambda.parameter),
+      result: NONE,
+      value: member.declaration.value,
       moved: null,
       borrows: 0,
       lastUse: null,
@@ -550,7 +620,193 @@ function rewind(undo: readonly Undo[]): void {
  * a linear value owes exactly one call; one that captured only affine values
  * owes at most one.
  */
-type Produced = "none" | "affine" | "linear";
+type Produced =
+  | { readonly tag: "none" }
+  | {
+    readonly tag: "leaf";
+    readonly qualifier: "affine" | "linear";
+    readonly kind: "value" | "closure";
+  }
+  | { readonly tag: "sequence"; readonly elements: readonly Produced[] }
+  | { readonly tag: "shape"; readonly fields: ReadonlyMap<string, Produced> }
+  | { readonly tag: "variant"; readonly payload: Produced };
+
+const NONE: Produced = { tag: "none" };
+
+function writtenObligation(qualifier: Qualifier): Produced {
+  if (qualifier === "linear" || qualifier === "affine") {
+    return { tag: "leaf", qualifier, kind: "value" };
+  }
+  return NONE;
+}
+
+function obligation(produced: Produced): "none" | "affine" | "linear" {
+  if (produced.tag === "none") return "none";
+  if (produced.tag === "leaf") return produced.qualifier;
+  if (produced.tag === "variant") return obligation(produced.payload);
+  let members: readonly Produced[] = [];
+  if (produced.tag === "sequence") members = produced.elements;
+  if (produced.tag === "shape") members = [...produced.fields.values()];
+  let result: "none" | "affine" | "linear" = "none";
+  for (const member of members) {
+    const inner = obligation(member);
+    if (inner === "linear") return "linear";
+    if (inner === "affine") result = "affine";
+  }
+  return result;
+}
+
+function combine(left: Produced, right: Produced): Produced {
+  const leftQualifier = obligation(left);
+  const rightQualifier = obligation(right);
+  if (leftQualifier === "none") return right;
+  if (rightQualifier === "none") return left;
+  let kind: "value" | "closure" = "value";
+  if (containsClosure(left) || containsClosure(right)) kind = "closure";
+  if (leftQualifier === "linear" || rightQualifier === "linear") {
+    return {
+      tag: "leaf",
+      qualifier: "linear",
+      kind,
+    };
+  }
+  return {
+    tag: "leaf",
+    qualifier: "affine",
+    kind,
+  };
+}
+
+function containsClosure(produced: Produced): boolean {
+  if (produced.tag === "none") return false;
+  if (produced.tag === "leaf") return produced.kind === "closure";
+  if (produced.tag === "variant") return containsClosure(produced.payload);
+  let members: readonly Produced[] = [];
+  if (produced.tag === "sequence") members = produced.elements;
+  if (produced.tag === "shape") members = [...produced.fields.values()];
+  return members.some(containsClosure);
+}
+
+function joinProduced(values: readonly Produced[]): Produced {
+  let result: Produced = NONE;
+  for (const value of values) result = combine(result, value);
+  return result;
+}
+
+function patternQualifier(pattern: Pattern): Qualifier | null {
+  if (pattern.tag !== "name") return null;
+  return pattern.qualifier;
+}
+
+function parameterQualifier(expr: Expr, scope: Scope): Qualifier | null {
+  if (expr.tag === "lambda") return patternQualifier(expr.parameter);
+  if (expr.tag === "rec" && expr.lambda.tag === "lambda") {
+    return patternQualifier(expr.lambda.parameter);
+  }
+  if (expr.tag !== "var") return null;
+  const binding = analysisBinding(scope, expr.name);
+  if (binding === null) return null;
+  return binding.parameter;
+}
+
+function functionResult(
+  expr: Expr,
+  scope: Scope,
+  analysis: Analysis,
+): Produced {
+  if (expr.tag === "lambda") {
+    const result = analysis.functionResults.get(expr);
+    if (result !== undefined) return result;
+    return NONE;
+  }
+  if (expr.tag === "rec" && expr.lambda.tag === "lambda") {
+    const result = analysis.functionResults.get(expr.lambda);
+    if (result !== undefined) return result;
+    return NONE;
+  }
+  if (expr.tag !== "var") return NONE;
+  const binding = analysisBinding(scope, expr.name);
+  if (binding === null) return NONE;
+  return binding.result;
+}
+
+function analysisBinding(scope: Scope, name: string): Binding | null {
+  let current: Scope | null = scope;
+  while (current !== null) {
+    const binding = current.bindings.get(name);
+    if (binding !== undefined) return binding;
+    current = current.parent;
+  }
+  return null;
+}
+
+function staticExpression(expr: Expr, scope: Scope): Expr {
+  if (expr.tag !== "var") return expr;
+  const binding = analysisBinding(scope, expr.name);
+  if (binding === null || binding.value === null) return expr;
+  return binding.value;
+}
+
+interface ApplicationSpine {
+  readonly callee: Expr;
+  readonly args: readonly Expr[];
+}
+
+function applicationSpine(expr: Expr): ApplicationSpine {
+  const args: Expr[] = [];
+  let callee = expr;
+  while (callee.tag === "apply") {
+    args.unshift(callee.arg);
+    callee = callee.fn;
+  }
+  return { callee, args };
+}
+
+function handleArguments(args: readonly Expr[]): readonly [Expr, Expr, Expr] | null {
+  if (args.length === 3) return [args[0], args[1], args[2]];
+  if (
+    args.length === 1 && args[0].tag === "tuple" &&
+    args[0].elements.length === 3
+  ) {
+    return [args[0].elements[0], args[0].elements[1], args[0].elements[2]];
+  }
+  return null;
+}
+
+function requireContinuationOwnership(
+  handler: Expr,
+  computation: "none" | "affine" | "linear",
+  analysis: Analysis,
+): void {
+  if (computation !== "linear") return;
+  if (handler.tag !== "shape") {
+    analysis.report(
+      "BLOT_LINEAR_HANDLER_UNKNOWN",
+      "This handled computation owns a linear resource, so its handler clauses must be statically known and resume exactly once.",
+      handler.span,
+    );
+    return;
+  }
+  for (const member of handler.members) {
+    if (member.tag !== "field" || member.name === "return") continue;
+    const clause = member.value;
+    let resume: Pattern | null = null;
+    if (clause.tag === "lambda" && clause.parameter.tag === "tuple") {
+      if (clause.parameter.elements[1] !== undefined) {
+        resume = clause.parameter.elements[1];
+      }
+    }
+    if (
+      resume !== null && resume.tag === "name" &&
+      resume.qualifier === "linear"
+    ) continue;
+    analysis.report(
+      "BLOT_LINEAR_HANDLER_MAY_ABORT",
+      `Handler clause \`.${member.name}\` may abort a continuation that owns a linear resource. Bind it as \`!resume\` and resume exactly once.`,
+      clause.span,
+    );
+  }
+}
 
 function walk(
   expr: Expr,
@@ -560,44 +816,146 @@ function walk(
 ): Produced {
   switch (expr.tag) {
     case "var":
-      use(expr.name, expr.span, scope, analysis, kind);
-      return "none";
+      return use(expr.name, expr.span, scope, analysis, kind);
 
     case "apply": {
       // `&x` and `!x` reach here as prefix-operator applications, and they are
       // the two places the intent is written down rather than inferred.
       if (expr.fn.tag === "intrinsic" && expr.fn.name === "@linear.borrow") {
         walk(expr.arg, scope, analysis, "borrow");
-        return "none";
+        return NONE;
       }
       if (expr.fn.tag === "intrinsic" && expr.fn.name === "@linear.own") {
         return walk(expr.arg, scope, analysis, "move");
       }
+      if (expr.fn.tag === "tag") {
+        return {
+          tag: "variant",
+          payload: walk(expr.arg, scope, analysis, "move"),
+        };
+      }
+
+      const application = applicationSpine(expr);
+      if (
+        application.callee.tag === "intrinsic" &&
+        application.callee.name === "@handle"
+      ) {
+        const arguments_ = handleArguments(application.args);
+        if (arguments_ !== null) {
+          walk(arguments_[0], scope, analysis, "move");
+          const computation = walk(arguments_[1], scope, analysis, "move");
+          requireContinuationOwnership(
+            staticExpression(arguments_[2], scope),
+            obligation(computation),
+            analysis,
+          );
+          const handler = walk(arguments_[2], scope, analysis, "move");
+          if (obligation(handler) !== "none") {
+            analysis.report(
+              "BLOT_LINEAR_HANDLER_CAPTURE",
+              "A handler clause captures an owned value. Its operation may run zero or many times, so move that resource through the handled computation instead.",
+              arguments_[2].span,
+            );
+          }
+          return NONE;
+        }
+      }
+
+      if (application.callee.tag === "intrinsic") {
+        const name = application.callee.name;
+        if (name === "@array.get" && application.args.length === 2) {
+          const array = walk(application.args[0], scope, analysis, "project");
+          walk(application.args[1], scope, analysis, "move");
+          if (
+            array.tag === "sequence" && obligation(array) !== "none"
+          ) {
+            analysis.report(
+              "BLOT_LINEAR_ARRAY_READ",
+              "Reading an array element would copy an owned value. Destructure the array to consume its elements, or borrow an element through a borrowing operation.",
+              expr.span,
+            );
+          }
+          return NONE;
+        }
+        if (name === "@array.set" && application.args.length === 3) {
+          const array = walk(application.args[0], scope, analysis, "move");
+          walk(application.args[1], scope, analysis, "move");
+          const value = walk(application.args[2], scope, analysis, "move");
+          if (
+            array.tag === "sequence" && obligation(array) !== "none"
+          ) {
+            analysis.report(
+              "BLOT_LINEAR_ARRAY_REPLACE",
+              "Replacing an element in an owned array could discard the previous obligation. Destructure it before replacing an owned element.",
+              expr.span,
+            );
+          }
+          return combine(array, value);
+        }
+        if (name === "@array.push" && application.args.length === 2) {
+          const array = walk(application.args[0], scope, analysis, "move");
+          const value = walk(application.args[1], scope, analysis, "move");
+          return combine(array, value);
+        }
+      }
+
       // Applying a linear closure right where it was built discharges it: the
       // one call it owed is this one.
       walk(expr.fn, scope, analysis, "project");
       // An argument is moved into the call unless it was explicitly borrowed.
       const argument = walk(expr.arg, scope, analysis, "move");
-      if (argument !== "none") escapes(expr.arg.span, analysis);
-      return "none";
+      const argumentOwnership = obligation(argument);
+      if (argumentOwnership !== "none" && containsClosure(argument)) {
+        const parameter = parameterQualifier(expr.fn, scope);
+        const intrinsic = applicationSpine(expr.fn).callee.tag === "intrinsic";
+        const accepted = intrinsic || parameter === "linear" ||
+          (parameter === "affine" && argumentOwnership === "affine");
+        if (!accepted) {
+          analysis.report(
+            "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
+            "This argument owns a resource, but the called function does not promise to consume its parameter exactly once. Bind that parameter with `!`, or pass a borrow instead.",
+            expr.arg.span,
+          );
+        }
+      }
+      return functionResult(expr.fn, scope, analysis);
     }
 
-    case "field":
-      walk(expr.target, scope, analysis, "project");
-      return "none";
+    case "field": {
+      const target = walk(expr.target, scope, analysis, "project");
+      if (target.tag !== "shape") return target;
+      let selected = NONE;
+      const found = target.fields.get(expr.name);
+      if (found !== undefined) selected = found;
+      const remaining = [...target.fields]
+        .filter(([name]) => name !== expr.name)
+        .map(([, value]) => value);
+      if (obligation(joinProduced(remaining)) !== "none") {
+        analysis.report(
+          "BLOT_LINEAR_PARTIAL_MOVE",
+          `Projecting \`.${expr.name}\` would discard another owned field. Destructure the record so every owned field is consumed.`,
+          expr.span,
+        );
+      }
+      return selected;
+    }
 
     case "lambda": {
       const inner = childScope(scope, true);
       declare(expr.parameter, inner, analysis);
-      walk(expr.body, inner, analysis, "move");
+      const result = walk(expr.body, inner, analysis, "move");
+      analysis.functionResults.set(expr, result);
       closeScope(inner, analysis);
       // Each captured value is spent once, here, into the closure. What the
       // closure owes from now on is one call.
-      let produced: Produced = "none";
+      let produced: Produced = NONE;
       for (const captured of inner.captures) {
         consume(captured, expr.span, analysis);
-        if (captured.qualifier === "linear") produced = "linear";
-        else if (produced === "none") produced = "affine";
+        produced = combine(produced, captured.owned);
+      }
+      const qualifier = obligation(produced);
+      if (qualifier !== "none") {
+        return { tag: "leaf", qualifier, kind: "closure" };
       }
       return produced;
     }
@@ -609,28 +967,35 @@ function walk(
       return walk(expr.body, scope, analysis, kind);
 
     case "tuple":
-      for (const element of expr.elements) {
-        if (walk(element, scope, analysis, "move") !== "none") {
-          escapes(element.span, analysis);
-        }
-      }
-      return "none";
+      return {
+        tag: "sequence",
+        elements: expr.elements.map((element) =>
+          walk(element, scope, analysis, "move")
+        ),
+      };
 
     case "array":
-      for (const element of expr.elements) {
-        if (walk(element.value, scope, analysis, "move") !== "none") {
-          escapes(element.value.span, analysis);
-        }
-      }
-      return "none";
+      return {
+        tag: "sequence",
+        elements: expr.elements.map((element) =>
+          walk(element.value, scope, analysis, "move")
+        ),
+      };
 
-    case "shape":
+    case "shape": {
+      const fields = new Map<string, Produced>();
+      let spread: Produced = NONE;
       for (const member of expr.members) {
-        if (walk(member.value, scope, analysis, "move") !== "none") {
-          escapes(member.value.span, analysis);
-        }
+        const produced = walk(member.value, scope, analysis, "move");
+        if (member.tag === "field") fields.set(member.name, produced);
+        else spread = combine(spread, produced);
       }
-      return "none";
+      if (obligation(spread) !== "none") return combine(spread, {
+        tag: "shape",
+        fields,
+      });
+      return { tag: "shape", fields };
+    }
 
     case "if": {
       // Every branch starts from the same state and must end in the same one:
@@ -638,37 +1003,39 @@ function walk(
       // exactly once nor never.
       const before = snapshot(scope);
       const outcomes: Map<Binding, Span | null>[] = [];
+      const produced: Produced[] = [];
       for (const branch of expr.branches) {
         walk(branch.condition, scope, analysis, "project");
       }
       for (const branch of expr.branches) {
         restore(before);
-        walk(branch.consequence, scope, analysis, kind);
+        produced.push(walk(branch.consequence, scope, analysis, kind));
         outcomes.push(snapshot(scope));
       }
       if (expr.fallback !== null) {
         restore(before);
-        walk(expr.fallback, scope, analysis, kind);
+        produced.push(walk(expr.fallback, scope, analysis, kind));
         outcomes.push(snapshot(scope));
       }
       agree(outcomes, before, expr.span, analysis);
-      return "none";
+      return joinProduced(produced);
     }
 
     case "case": {
-      walk(expr.target, scope, analysis, "project");
+      const target = walk(expr.target, scope, analysis, "project");
       const before = snapshot(scope);
       const outcomes: Map<Binding, Span | null>[] = [];
+      const produced: Produced[] = [];
       for (const arm of expr.arms) {
         restore(before);
         const inner = childScope(scope);
-        declare(arm.pattern, inner, analysis);
-        walk(arm.body, inner, analysis, kind);
+        declareProduced(arm.pattern, target, inner, analysis);
+        produced.push(walk(arm.body, inner, analysis, kind));
         closeScope(inner, analysis);
         outcomes.push(snapshot(scope));
       }
       agree(outcomes, before, expr.span, analysis);
-      return "none";
+      return joinProduced(produced);
     }
 
     case "block": {
@@ -680,7 +1047,7 @@ function walk(
     }
 
     default:
-      return "none";
+      return NONE;
   }
 }
 
@@ -699,18 +1066,11 @@ function consume(binding: Binding, span: Span, analysis: Analysis): void {
   binding.moved = span;
 }
 
-/**
- * A linear closure put somewhere blot cannot follow.
- *
- * Binding it to a name works — the binding becomes linear and is checked. So
- * does calling it immediately. Storing it in a shape or an array would make
- * that structure linear, and blot does not track linear structures yet, so it
- * says so rather than losing the obligation quietly.
- */
+/** An owned value entered a declaration form that cannot bind its obligation. */
 function escapes(span: Span, analysis: Analysis): void {
   analysis.report(
     "BLOT_LINEAR_CLOSURE_ESCAPES",
-    "This closure captured a linear value, so it is linear itself. blot does not yet track a structure that owns one — bind it to a name or call it here.",
+    "This declaration form cannot retain an owned runtime value. Bind it with a pattern that carries the obligation, or consume it before this boundary.",
     span,
   );
 }

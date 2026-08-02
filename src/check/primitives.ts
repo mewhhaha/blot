@@ -265,7 +265,19 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ["@type.open", poly((fresh) => curried([fresh()], fresh()))],
   // `@fail` never returns, so its result is whatever the context needs.
   ["@fail", poly((fresh) => curried([TEXT], fresh()))],
-  ["@type.reflect", poly((fresh) => curried([fresh()], reflection(fresh)))],
+  [
+    "@type.reflect",
+    (() => {
+      const input = freshVar(1);
+      return scheme(
+        curried(
+          [input],
+          reflection(() => freshVar(1, "reflection")),
+        ),
+        0,
+      );
+    })(),
+  ],
   // Attaching a member returns the same type value. Inference sees straight
   // through the namespace, so the result is the target unchanged.
   ["@type.attach", poly((fresh) => curried([fresh(), TEXT, fresh()], TYPE))],

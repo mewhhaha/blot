@@ -50,7 +50,11 @@ import type {
   ShapeMember,
   Span,
 } from "../syntax/ast.ts";
-import { liveDeclarations } from "../syntax/live.ts";
+import {
+  coreResultExpression,
+  elaborateComputation,
+} from "../core/computation.ts";
+import { freeNames } from "../syntax/live.ts";
 import { recursiveGroups } from "../syntax/ast.ts";
 import { fail } from "../diagnostic.ts";
 import {
@@ -61,6 +65,7 @@ import {
   type Shape,
   type VariantCase,
 } from "../check/infer.ts";
+import type { ArrayIndexProof } from "../core/proof.ts";
 import type { OwnedBinding } from "../check/mod.ts";
 import type { NamePattern } from "../linear/check.ts";
 import {
@@ -87,6 +92,10 @@ import {
 export interface Facts {
   /** Binding-level ownership proofs produced after inference. */
   readonly ownership: ReadonlyMap<NamePattern, OwnedBinding>;
+  /** Bounds certificates for direct Store accesses. */
+  readonly arrayProofs: ReadonlyMap<Expr, ArrayIndexProof>;
+  /** Settled source types used only to select closed specializations. */
+  readonly expressionTypes: ReadonlyMap<Expr, SimpleType>;
   /** What each `open` brought into scope, so an inlined module keeps its own. */
   readonly opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
   /** Compile-time declaration values that remain inside residual blocks. */
@@ -429,6 +438,11 @@ class Lowering {
   }
 }
 
+interface RuntimeLambda {
+  readonly expression: Expr & { readonly tag: "lambda" };
+  readonly environment: Scope;
+}
+
 interface Scope {
   readonly names: Map<string, string>;
   /** Source binding identities behind names in this lexical scope. */
@@ -444,6 +458,10 @@ interface Scope {
    * build, so the expression is what is remembered.
    */
   readonly literals: Map<string, Expr>;
+  /** Runtime lambdas elaborated at each call site's concrete representation. */
+  readonly runtimeLambdas: Map<string, RuntimeLambda>;
+  /** Concrete record representation selected for a specialized binding. */
+  readonly recordShapes: Map<string, readonly string[]>;
   readonly parent: Scope | null;
   /**
    * Set on a lambda's own scope, and flipped when a name resolves past it.
@@ -482,10 +500,38 @@ function childScope(parent: Scope | null, values?: ValueEnv): Scope {
     patterns: new Map(),
     exits: new Map(),
     literals: new Map(),
+    runtimeLambdas: new Map(),
+    recordShapes: new Map(),
     parent,
     values: visibleValues,
     granted: parent?.granted,
     hoisting: parent?.hoisting,
+  };
+}
+
+function snapshotValueEnv(environment: ValueEnv): ValueEnv {
+  let parent: ValueEnv | null = null;
+  if (environment.parent !== null) {
+    parent = snapshotValueEnv(environment.parent);
+  }
+  return { names: new Map(environment.names), parent };
+}
+
+function snapshotScope(scope: Scope): Scope {
+  let parent: Scope | null = null;
+  if (scope.parent !== null) parent = snapshotScope(scope.parent);
+  return {
+    names: new Map(scope.names),
+    patterns: new Map(scope.patterns),
+    exits: new Map(scope.exits),
+    literals: new Map(scope.literals),
+    runtimeLambdas: new Map(scope.runtimeLambdas),
+    recordShapes: new Map(scope.recordShapes),
+    parent,
+    capture: scope.capture,
+    values: snapshotValueEnv(scope.values),
+    granted: scope.granted,
+    hoisting: scope.hoisting,
   };
 }
 
@@ -508,6 +554,70 @@ function resolveLiteral(scope: Scope, name: string): Expr | null {
     if (found !== undefined) return found;
     current = current.parent;
   }
+  return null;
+}
+
+function resolveRuntimeLambda(
+  scope: Scope,
+  name: string,
+): RuntimeLambda | null {
+  let current: Scope | null = scope;
+  while (current !== null) {
+    const found = current.runtimeLambdas.get(name);
+    if (found !== undefined) return found;
+    if (current.names.has(name)) return null;
+    current = current.parent;
+  }
+  return null;
+}
+
+function capturesRuntimeBinding(lambda: Expr, scope: Scope): boolean {
+  for (const name of freeNames(lambda)) {
+    let current: Scope | null = scope;
+    while (current !== null) {
+      if (current.names.has(name)) return true;
+      if (current.runtimeLambdas.has(name)) break;
+      current = current.parent;
+    }
+  }
+  return false;
+}
+
+function resolveRecordShape(
+  scope: Scope,
+  name: string,
+): readonly string[] | null {
+  let current: Scope | null = scope;
+  while (current !== null) {
+    const fields = current.recordShapes.get(name);
+    if (fields !== undefined) return fields;
+    if (current.names.has(name)) return null;
+    current = current.parent;
+  }
+  return null;
+}
+
+function concreteRecordShape(
+  expr: Expr,
+  lowering: Lowering,
+): readonly string[] | null {
+  const type = lowering.facts.expressionTypes.get(expr);
+  if (type === undefined) return null;
+  const shapes = new Map<string, readonly string[]>();
+  const seen = new Set<number>();
+  const visit = (current: SimpleType): void => {
+    if (current.tag === "record") {
+      const fields = [...current.fields.keys()];
+      shapes.set([...fields].sort().join("\u0000"), fields);
+      return;
+    }
+    if (current.tag !== "var" || seen.has(current.id)) return;
+    seen.add(current.id);
+    for (const bound of current.lower) visit(bound);
+  };
+  visit(type);
+  if (shapes.size !== 1) return null;
+  for (const fields of shapes.values()) return fields;
   return null;
 }
 
@@ -665,7 +775,13 @@ export function lowerModule(
     );
   }
 
-  const body = lowerBlock(module.declarations, module.result, scope, lowering);
+  const body = lowerBlock(
+    module.declarations,
+    module.result,
+    module.resultEffects,
+    scope,
+    lowering,
+  );
   // Canonical calls reclaim their private arena, so module evaluation cannot be a memoized global
   // thunk. The unit parameter also lets every export share this body without copying it.
   const moduleArgument = lowering.fresh("module");
@@ -1524,16 +1640,21 @@ function boundaryType(
 function lowerBlock(
   declarations: Module["declarations"],
   result: Expr,
+  resultEffects: "pure" | "ambient",
   scope: Scope,
   lowering: Lowering,
 ): SurfaceExpression {
   const inner = childScope(scope);
   const wrappers: ((body: SurfaceExpression) => SurfaceExpression)[] = [];
   const groups = recursiveGroups(declarations);
-  const live = liveDeclarations(declarations, result);
+  const computation = elaborateComputation(
+    declarations,
+    result,
+    resultEffects,
+  );
 
-  for (const declaration of declarations) {
-    if (!live.has(declaration)) continue;
+  for (const step of computation.steps) {
+    const declaration = step.declaration;
     // `open` emits nothing — a use of a name it brought in specializes to the
     // compile-time value, exactly as a `const` does — but the names still have
     // to be *in* this scope. An imported module is inlined into the importer's
@@ -1610,6 +1731,21 @@ function lowerBlock(
     if (declaration.kind === "sig") continue;
 
     if (
+      declaration.value.tag === "lambda" &&
+      declaration.pattern.tag === "name" &&
+      !capturesRuntimeBinding(declaration.value, inner)
+    ) {
+      inner.runtimeLambdas.set(
+        declaration.pattern.name,
+        {
+          expression: declaration.value,
+          environment: snapshotScope(inner),
+        },
+      );
+      continue;
+    }
+
+    if (
       (declaration.value.tag === "shape" ||
         declaration.value.tag === "lambda") &&
       declaration.pattern.tag === "name"
@@ -1627,7 +1763,7 @@ function lowerBlock(
     wrappers.push(bind(declaration.pattern, value, inner, lowering));
   }
 
-  let body = lower(result, inner, lowering);
+  let body = lower(coreResultExpression(computation.result), inner, lowering);
   for (let index = wrappers.length - 1; index >= 0; index -= 1) {
     body = wrappers[index](body);
   }
@@ -1945,6 +2081,14 @@ function lower(
     case "var": {
       const name = resolve(scope, expr.name);
       if (name !== null) return at.name(name);
+      const runtimeLambda = resolveRuntimeLambda(scope, expr.name);
+      if (runtimeLambda !== null) {
+        return lower(
+          runtimeLambda.expression,
+          runtimeLambda.environment,
+          lowering,
+        );
+      }
       // Not a local, so it is a compile-time binding: specialize it.
       const value = lookupValue(scope.values, expr.name);
       if (value === undefined) {
@@ -2146,7 +2290,14 @@ function lower(
       const target = lower(expr.target, scope, lowering);
       // The whole field set comes from inference. A projection alone does not
       // say what else the record holds, and the nominal needs all of it.
-      const shape = lowering.facts.shapes.get(expr);
+      let specializedShape: readonly string[] | null = null;
+      if (expr.target.tag === "var") {
+        specializedShape = resolveRecordShape(scope, expr.target.name);
+      }
+      let shape = lowering.facts.shapes.get(expr);
+      if (specializedShape !== null) {
+        shape = { tag: "fields", fields: specializedShape };
+      }
       if (shape === undefined) {
         return unsupported(
           `projecting \`.${expr.name}\` from a value whose shape inference could not pin down`,
@@ -2268,7 +2419,13 @@ function lower(
       return lowerCase(expr, scope, lowering, at);
 
     case "block":
-      return lowerBlock(expr.declarations, expr.result, scope, lowering);
+      return lowerBlock(
+        expr.declarations,
+        expr.result,
+        expr.resultEffects,
+        scope,
+        lowering,
+      );
 
     case "comptime":
       return lower(expr.body, scope, lowering);
@@ -3624,6 +3781,35 @@ function lowerApply(
   lowering: Lowering,
   at: typeof surface,
 ): SurfaceExpression {
+  let specialized: RuntimeLambda | null = null;
+  if (expr.fn.tag === "lambda") {
+    specialized = { expression: expr.fn, environment: scope };
+  }
+  if (expr.fn.tag === "var") {
+    specialized = resolveRuntimeLambda(scope, expr.fn.name);
+  }
+  if (specialized !== null) {
+    const inner = childScope(specialized.environment);
+    const parameter = lowering.fresh("specialized");
+    const body = bindParameter(
+      specialized.expression.parameter,
+      parameter,
+      inner,
+      lowering,
+    );
+    if (specialized.expression.parameter.tag === "name") {
+      const fields = concreteRecordShape(expr.arg, lowering);
+      if (fields !== null) {
+        inner.recordShapes.set(specialized.expression.parameter.name, fields);
+      }
+    }
+    return surface.let(
+      parameter,
+      lower(expr.arg, scope, lowering),
+      body(specialized.expression.body),
+    );
+  }
+
   // A primitive with a Core operator becomes that operator rather than a call:
   // `@int.add a b` is `a + b`, not an application of a function that does not
   // exist at this level.
@@ -4123,6 +4309,9 @@ function lowerApply(
       );
     }
     if (spine.callee.name === "@array.get" && spine.args.length === 2) {
+      if (!lowering.facts.arrayProofs.has(expr)) {
+        throw new Error("checked direct array read omitted its bounds proof");
+      }
       return at.storeRead(
         lower(spine.args[0], scope, lowering),
         at.convert(
@@ -4132,6 +4321,9 @@ function lowerApply(
       );
     }
     if (spine.callee.name === "@array.set" && spine.args.length === 3) {
+      if (!lowering.facts.arrayProofs.has(expr)) {
+        throw new Error("checked direct array write omitted its bounds proof");
+      }
       return at.storeWrite(
         lower(spine.args[0], scope, lowering),
         at.convert(
@@ -4490,6 +4682,7 @@ function lowerImport(
   const body = lowerBlock(
     dependency.module.declarations,
     dependency.module.result,
+    dependency.module.resultEffects,
     inner,
     lowering,
   );

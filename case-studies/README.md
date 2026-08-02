@@ -335,9 +335,8 @@ been rewritten to take them:
 - **A record may cross a module boundary carrying more fields than the module
   reads** (`LANGUAGE.md` §3). The renderer's brushes take a position, an angle,
   a scale, and a colour because a boundary that names what it reads is a good
-  boundary, not because a `Transform` would fail to lower. Two importers handing
-  the same projection differently-shaped records is still
-  `BLOT_SHAPE_DISAGREEMENT`.
+  boundary, not because a `Transform` would fail to lower. Differently shaped
+  calls, including calls from separate importers, now specialize independently.
 - **A float crosses the module boundary.** `F32` and `F64` are canonical `f32`
   and `f64` at the ABI (`docs/abi.md`), so `Assets.entry` carries thousandths
   and `Canvas.tri` carries pixels by history rather than by necessity.

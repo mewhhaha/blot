@@ -77,7 +77,10 @@ Deno.test("intersection is subsumption, not member equality", () => {
 
 Deno.test("an integer domain is discrete, so a value can be cut out of it", () => {
   // `@type.diff Int 1` answers `Int`, silently readmitting the excluded value.
-  assertEquals(got(difference(INT, intLiteral(1n))), "..0 | 2..");
+  assertEquals(
+    got(difference(INT, intLiteral(1n))),
+    "-9223372036854775808..0 | 2..9223372036854775807",
+  );
   assertEquals(got(difference(range(null, 9), intLiteral(5n))), "..4 | 6..9");
   assertEquals(got(difference(range(1, 5), range(3, 9))), "1..2");
   assertEquals(got(difference(range(1, 5), range(0, 2))), "3..5");
@@ -145,7 +148,7 @@ Deno.test("a constructor payload is itself a set", () => {
   const some = variant([["Some", INT], ["None", UNIT]]);
   assertEquals(
     got(difference(some, variant([["Some", intLiteral(1n)]]))),
-    "#Some ..0 | 2.. | #None",
+    "#Some -9223372036854775808..0 | 2..9223372036854775807 | #None",
   );
   assertEquals(
     got(intersect(some, variant([["Some", intLiteral(1n)]]))),
@@ -230,7 +233,7 @@ Deno.test("nested differences stay linear in the number of cuts", () => {
   }
   assertEquals(
     show(current),
-    "..9 | 11..19 | 21..29 | 31..39 | 41..49 | 51..59 | 61..",
+    "-9223372036854775808..9 | 11..19 | 21..29 | 31..39 | 41..49 | 51..59 | 61..9223372036854775807",
   );
 });
 

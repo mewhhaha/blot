@@ -81,6 +81,8 @@ export interface Variable {
   readonly lower: SimpleType[];
   /** Types this variable must flow into. Its obligations when read negatively. */
   readonly upper: SimpleType[];
+  /** Why this variable exists when it is not ordinary inference evidence. */
+  readonly origin?: "reflection" | "dynamic-shape";
 }
 
 export interface RigidVariable {
@@ -166,9 +168,12 @@ export type Typing = SimpleType | Scheme;
 let nextId = 0;
 let nextRigidId = 0;
 
-export function freshVar(level: Level): Variable {
+export function freshVar(
+  level: Level,
+  origin?: Variable["origin"],
+): Variable {
   nextId += 1;
-  return { tag: "var", id: nextId, level, lower: [], upper: [] };
+  return { tag: "var", id: nextId, level, lower: [], upper: [], origin };
 }
 
 export function freshRigid(): RigidVariable {
@@ -180,6 +185,8 @@ export const UNIT: SimpleType = { tag: "unit" };
 export const TOP: SimpleType = { tag: "top" };
 export const BOTTOM: SimpleType = { tag: "bottom" };
 export const PURE: SimpleType = { tag: "effects", labels: new Set() };
+export const I64_LOW = -0x8000000000000000n;
+export const I64_HIGH = 0x7fffffffffffffffn;
 
 export function intLiteral(value: bigint): SimpleType {
   return { tag: "range", domain: "int", low: value, high: value };
@@ -192,8 +199,8 @@ export function textLiteral(value: string): SimpleType {
 export const INT: SimpleType = {
   tag: "range",
   domain: "int",
-  low: null,
-  high: null,
+  low: I64_LOW,
+  high: I64_HIGH,
 };
 export const TEXT: SimpleType = {
   tag: "range",

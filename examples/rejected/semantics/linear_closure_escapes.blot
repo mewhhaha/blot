@@ -1,5 +1,5 @@
-// Storing a linear closure would make the shape linear, and blot does not track
-// linear structures yet. Saying so beats losing the obligation quietly.
+// A module cannot return an owned aggregate without an explicit ABI ownership
+// contract.
 
 open {} = (@import "blot:prelude") ();
 

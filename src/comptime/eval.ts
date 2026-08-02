@@ -19,7 +19,11 @@ import type {
   Span,
 } from "../syntax/ast.ts";
 import type { RecordAdaptation } from "../check/infer.ts";
-import { liveDeclarations } from "../syntax/live.ts";
+import {
+  coreResultExpression,
+  type CoreStep,
+  elaborateComputation,
+} from "../core/computation.ts";
 import { expect, fail } from "../diagnostic.ts";
 import {
   asTuple,
@@ -335,9 +339,17 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
 
     case "block": {
       const scope = childEnv(env);
-      const live = liveDeclarations(expr.declarations, expr.result);
-      yield* runDeclarations(expr.declarations, live, scope, runtime);
-      return yield* evaluate(expr.result, scope, runtime);
+      const computation = elaborateComputation(
+        expr.declarations,
+        expr.result,
+        expr.resultEffects,
+      );
+      yield* runDeclarations(computation.steps, scope, runtime);
+      return yield* evaluate(
+        coreResultExpression(computation.result),
+        scope,
+        runtime,
+      );
     }
   }
   expect(false, `unhandled expression ${(expr as Expr).tag}`);
@@ -356,13 +368,12 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
  * which the bodies happen to be forced.
  */
 function* runDeclarations(
-  declarations: readonly Decl[],
-  live: ReadonlySet<Decl>,
+  steps: readonly CoreStep[],
   scope: Env,
   runtime: Runtime,
 ): Generator<Perform, void, Value> {
-  for (const declaration of declarations) {
-    if (!live.has(declaration)) continue;
+  for (const step of steps) {
+    const declaration = step.declaration;
     if (declaration.tag === "open") {
       const value = yield* evaluate(declaration.value, scope, runtime);
       if (value.tag !== "shape") {

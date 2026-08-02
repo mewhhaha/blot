@@ -578,8 +578,8 @@ export const PRIMITIVE_VALUES: ReadonlyMap<string, Value> = new Map<
   // it means, so these name it.
   ["@type.int", {
     tag: "range",
-    low: { tag: "unbounded" },
-    high: { tag: "unbounded" },
+    low: { tag: "int", value: I64_LOW },
+    high: { tag: "int", value: I64_HIGH },
     domain: "int",
   }],
   ["@type.text", {

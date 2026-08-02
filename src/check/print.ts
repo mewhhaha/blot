@@ -20,6 +20,8 @@
 import {
   type Bound,
   type Domain,
+  I64_HIGH,
+  I64_LOW,
   isLength,
   type LengthBound,
   lengthSubject,
@@ -375,6 +377,7 @@ export function showRange(
     if (isLength(low)) return showLength(low, high);
     return domain === "text" ? JSON.stringify(low) : String(low);
   }
+  if (domain === "int" && low === I64_LOW && high === I64_HIGH) return "Int";
   // `Str`, not `Text`: `Text` is the prelude's namespace record, so the name
   // this printer gives a type has to be the name a `sig` accepts.
   if (low === null && high === null) {
