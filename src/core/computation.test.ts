@@ -60,6 +60,9 @@ Deno.test("typed core contains settled types and independent expression structur
   if (step === undefined) {
     throw new Error("typed Core omitted its live definition");
   }
+  if (step.definition.tag !== "binding") {
+    throw new Error("typed Core changed a binding into another definition");
+  }
   assertEquals(step.definition.value.tag, "unit");
   assertEquals(step.definition.value.type, UNIT);
   assertEquals(

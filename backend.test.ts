@@ -549,6 +549,36 @@ Deno.test("a generalized projection keeps its shape after escaping through ident
   );
 });
 
+Deno.test("a runtime function choice specializes once per concrete shape", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "runtime-function-choice.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "sig run = Int -> Int;",
+      "let run = fn flag => do",
+      "  let selected = if flag > 0 then fn value => value.x",
+      "    else fn value => value.x end;",
+      "  let left = selected { .x = 20; .y = 1; };",
+      "  let right = selected { .x = 22; .z = 2; };",
+      "  in left + right",
+      "end;",
+      "return { .run = run; };",
+    ].join("\n"),
+  );
+
+  for (const flag of [0n, 1n]) {
+    assertEquals(
+      await runLoweringExport(path, "run", [{
+        kind: "signed-integer-64",
+        value: flag,
+      }]),
+      { kind: "signed-integer-64", value: 42n },
+    );
+  }
+});
+
 // A `let`-bound function that destructures rather than projects reads the same
 // fact through the pattern, so it has to follow the copies too.
 Deno.test("a generalized destructuring takes its shape from the call site", async () => {

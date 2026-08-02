@@ -81,9 +81,19 @@ export interface Variable {
   readonly lower: SimpleType[];
   /** Types this variable must flow into. Its obligations when read negatively. */
   readonly upper: SimpleType[];
-  /** Why this variable exists when it is not ordinary inference evidence. */
-  readonly origin?: "reflection" | "dynamic-shape";
 }
+
+/**
+ * Evidence about why an inference variable cannot authorize residual work.
+ *
+ * This is deliberately not a field of `Variable`: availability is a phase
+ * judgment, not a member of the algebraic-subtyping lattice. Copies retain the
+ * evidence explicitly through `freshVar`, while ordinary constraints continue
+ * to see an ordinary inference variable.
+ */
+export type VariableEvidence = "reflection" | "dynamic-shape";
+
+const variableEvidence = new WeakMap<Variable, VariableEvidence>();
 
 export interface RigidVariable {
   readonly tag: "rigid";
@@ -170,10 +180,24 @@ let nextRigidId = 0;
 
 export function freshVar(
   level: Level,
-  origin?: Variable["origin"],
+  evidence?: VariableEvidence,
 ): Variable {
   nextId += 1;
-  return { tag: "var", id: nextId, level, lower: [], upper: [], origin };
+  const variable: Variable = {
+    tag: "var",
+    id: nextId,
+    level,
+    lower: [],
+    upper: [],
+  };
+  if (evidence !== undefined) variableEvidence.set(variable, evidence);
+  return variable;
+}
+
+export function evidenceOf(variable: Variable): VariableEvidence | null {
+  const evidence = variableEvidence.get(variable);
+  if (evidence === undefined) return null;
+  return evidence;
 }
 
 export function freshRigid(): RigidVariable {

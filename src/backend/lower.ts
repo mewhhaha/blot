@@ -72,6 +72,11 @@ import {
 import type { OwnedBinding } from "../check/mod.ts";
 import type { NamePattern } from "../linear/check.ts";
 import {
+  type OwnershipCertificate,
+  ownershipIdentity,
+  verifyOwnershipCertificate,
+} from "../linear/certificate.ts";
+import {
   type Domain,
   F32X4,
   F32X4_MASK,
@@ -95,6 +100,7 @@ import {
 export interface Facts {
   /** Binding-level ownership proofs produced after inference. */
   readonly ownership: ReadonlyMap<NamePattern, OwnedBinding>;
+  readonly ownershipCertificate: OwnershipCertificate;
   /** Bounds certificates for direct Store accesses. */
   readonly arrayProofs: ReadonlyMap<Expr, ArrayIndexProof>;
   /** Settled source types used only to select closed specializations. */
@@ -275,9 +281,15 @@ class Lowering {
    * definition per instantiation.
    */
   readonly declared: readonly (readonly VariantCase[])[];
+  readonly reusableOwnership: ReadonlySet<string>;
 
   constructor(readonly facts: Facts, values: ValueEnv) {
     this.declared = declaredUnions(values);
+    const verified = verifyOwnershipCertificate(facts.ownershipCertificate);
+    if (verified === null) {
+      throw new Error("lowering received an invalid ownership certificate");
+    }
+    this.reusableOwnership = verified.reusable;
   }
 
   /**
@@ -446,6 +458,12 @@ interface RuntimeLambda {
   readonly environment: Scope;
 }
 
+interface RuntimeLambdaChoice {
+  readonly selector: string;
+  readonly consequent: RuntimeLambda;
+  readonly alternate: RuntimeLambda;
+}
+
 interface Scope {
   readonly names: Map<string, string>;
   /** Source binding identities behind names in this lexical scope. */
@@ -463,6 +481,8 @@ interface Scope {
   readonly literals: Map<string, Expr>;
   /** Runtime lambdas elaborated at each call site's concrete representation. */
   readonly runtimeLambdas: Map<string, RuntimeLambda>;
+  /** A runtime choice of lambdas, retained until each concrete application. */
+  readonly runtimeLambdaChoices: Map<string, RuntimeLambdaChoice>;
   /** Concrete record representation selected for a specialized binding. */
   readonly recordShapes: Map<string, readonly string[]>;
   /** Concrete record representation selected for a specialized parameter. */
@@ -508,6 +528,7 @@ function childScope(parent: Scope | null, values?: ValueEnv): Scope {
     exits: new Map(),
     literals: new Map(),
     runtimeLambdas: new Map(),
+    runtimeLambdaChoices: new Map(),
     recordShapes: new Map(),
     parameterShapes: new Map(),
     specializedTypes: new Map(),
@@ -535,6 +556,7 @@ function snapshotScope(scope: Scope): Scope {
     exits: new Map(scope.exits),
     literals: new Map(scope.literals),
     runtimeLambdas: new Map(scope.runtimeLambdas),
+    runtimeLambdaChoices: new Map(scope.runtimeLambdaChoices),
     recordShapes: new Map(scope.recordShapes),
     parameterShapes: new Map(scope.parameterShapes),
     specializedTypes: new Map(scope.specializedTypes),
@@ -580,6 +602,44 @@ function resolveRuntimeLambda(
     current = current.parent;
   }
   return null;
+}
+
+function resolveRuntimeLambdaChoice(
+  scope: Scope,
+  name: string,
+): RuntimeLambdaChoice | null {
+  let current: Scope | null = scope;
+  while (current !== null) {
+    const found = current.runtimeLambdaChoices.get(name);
+    if (found !== undefined) return found;
+    if (current.names.has(name)) return null;
+    current = current.parent;
+  }
+  return null;
+}
+
+function runtimeLambdaChoice(
+  expr: Expr,
+  scope: Scope,
+): {
+  readonly condition: Expr;
+  readonly consequent: RuntimeLambda;
+  readonly alternate: RuntimeLambda;
+} | null {
+  if (
+    expr.tag !== "if" || expr.branches.length !== 1 || expr.fallback === null
+  ) return null;
+  const consequent = specializableLambda(
+    expr.branches[0].consequence,
+    scope,
+  );
+  const alternate = specializableLambda(expr.fallback, scope);
+  if (consequent === null || alternate === null) return null;
+  return {
+    condition: expr.branches[0].condition,
+    consequent,
+    alternate,
+  };
 }
 
 function specializableLambda(expr: Expr, scope: Scope): RuntimeLambda | null {
@@ -1815,6 +1875,25 @@ function lowerBlock(
     if (declaration.kind === "sig") continue;
 
     if (declaration.pattern.tag === "name") {
+      const choice = runtimeLambdaChoice(declaration.value, inner);
+      if (choice !== null) {
+        const selector = lowering.fresh(`${declaration.pattern.name}$choice`);
+        inner.runtimeLambdaChoices.set(declaration.pattern.name, {
+          selector,
+          consequent: {
+            expression: choice.consequent.expression,
+            environment: snapshotScope(choice.consequent.environment),
+          },
+          alternate: {
+            expression: choice.alternate.expression,
+            environment: snapshotScope(choice.alternate.environment),
+          },
+        });
+        wrappers.push((body) =>
+          surface.let(selector, lower(choice.condition, inner, lowering), body)
+        );
+        continue;
+      }
       const aliased = specializableLambda(declaration.value, inner);
       if (
         aliased !== null && declaration.value.tag !== "lambda" &&
@@ -3810,6 +3889,11 @@ function storeUpdateOptions(
   }
   const ownership = lowering.facts.ownership.get(pattern);
   if (!ownership?.spent || ownership.lastUse === null) return undefined;
+  const identity = ownershipIdentity({
+    path: ownership.path,
+    bindingId: ownership.bindingId,
+  });
+  if (!lowering.reusableOwnership.has(identity)) return undefined;
   // A read some closure makes across its own boundary happens when that closure
   // is called, and a recursive group's members call each other in an order the
   // block does not write down. Where the pass says so, the recorded last use is
@@ -3890,34 +3974,39 @@ function lowerApply(
   lowering: Lowering,
   at: typeof surface,
 ): SurfaceExpression {
+  if (expr.fn.tag === "var") {
+    const choice = resolveRuntimeLambdaChoice(scope, expr.fn.name);
+    if (choice !== null) {
+      const argument = lowering.fresh("specialized$argument");
+      return surface.let(
+        argument,
+        lower(expr.arg, scope, lowering),
+        at.if(
+          at.name(choice.selector),
+          lowerSpecializedApplication(
+            choice.consequent,
+            expr.arg,
+            at.name(argument),
+            lowering,
+          ),
+          lowerSpecializedApplication(
+            choice.alternate,
+            expr.arg,
+            at.name(argument),
+            lowering,
+          ),
+        ),
+      );
+    }
+  }
+
   const specialized = specializableLambda(expr.fn, scope);
   if (specialized !== null) {
-    const inner = childScope(specialized.environment);
-    const parameter = lowering.fresh("specialized");
-    const fields = concreteRecordShape(expr.arg, lowering);
-    if (fields !== null) {
-      if (specialized.expression.parameter.tag === "name") {
-        inner.recordShapes.set(specialized.expression.parameter.name, fields);
-      } else if (specialized.expression.parameter.tag === "shape") {
-        inner.parameterShapes.set(specialized.expression.parameter, fields);
-      }
-    }
-    if (specialized.expression.parameter.tag === "name") {
-      const type = lowering.facts.expressionTypes.get(expr.arg);
-      if (type !== undefined) {
-        inner.specializedTypes.set(specialized.expression.parameter.name, type);
-      }
-    }
-    const body = bindParameter(
-      specialized.expression.parameter,
-      parameter,
-      inner,
-      lowering,
-    );
-    return surface.let(
-      parameter,
+    return lowerSpecializedApplication(
+      specialized,
+      expr.arg,
       lower(expr.arg, scope, lowering),
-      body(specialized.expression.body),
+      lowering,
     );
   }
 
@@ -4559,6 +4648,41 @@ function lowerApply(
     ...spine.args.map((argument) =>
       lowerRecordArgument(argument, scope, lowering, at)
     ),
+  );
+}
+
+function lowerSpecializedApplication(
+  specialized: RuntimeLambda,
+  argument: Expr,
+  value: SurfaceExpression,
+  lowering: Lowering,
+): SurfaceExpression {
+  const inner = childScope(specialized.environment);
+  const parameter = lowering.fresh("specialized");
+  const fields = concreteRecordShape(argument, lowering);
+  if (fields !== null) {
+    if (specialized.expression.parameter.tag === "name") {
+      inner.recordShapes.set(specialized.expression.parameter.name, fields);
+    } else if (specialized.expression.parameter.tag === "shape") {
+      inner.parameterShapes.set(specialized.expression.parameter, fields);
+    }
+  }
+  if (specialized.expression.parameter.tag === "name") {
+    const type = lowering.facts.expressionTypes.get(argument);
+    if (type !== undefined) {
+      inner.specializedTypes.set(specialized.expression.parameter.name, type);
+    }
+  }
+  const body = bindParameter(
+    specialized.expression.parameter,
+    parameter,
+    inner,
+    lowering,
+  );
+  return surface.let(
+    parameter,
+    value,
+    body(specialized.expression.body),
   );
 }
 

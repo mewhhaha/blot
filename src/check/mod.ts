@@ -27,10 +27,7 @@ import {
   type VariantCase,
 } from "./infer.ts";
 import type { ArrayIndexProof } from "../core/proof.ts";
-import {
-  elaborateModule,
-  type TypedCoreModule,
-} from "../core/computation.ts";
+import { elaborateModule, type TypedCoreModule } from "../core/computation.ts";
 import type { Decl, Expr, Pattern, Span } from "../syntax/ast.ts";
 import type { SimpleType } from "./type.ts";
 import { show, showModuleRow as showRow } from "./print.ts";
@@ -41,6 +38,11 @@ import {
   type NamePattern,
   type Ownership,
 } from "../linear/check.ts";
+import {
+  type OwnershipCertificate,
+  ownershipCertificate,
+  verifyOwnershipCertificate,
+} from "../linear/certificate.ts";
 
 /**
  * What the linearity pass proved about one binding, once it has left its module.
@@ -53,6 +55,8 @@ import {
  */
 export interface OwnedBinding {
   readonly path: string;
+  /** Stable within `path`; source spans are locations, not node identities. */
+  readonly bindingId: number;
   /**
    * Where the binding was last read, or null when nothing read it. Traversal
    * order, not a deadness proof — see `Ownership.lastUses` for why the
@@ -89,6 +93,8 @@ export interface CheckResult {
    * bindings too — the same reason `shapes` and `variants` merge.
    */
   readonly ownership: ReadonlyMap<NamePattern, OwnedBinding>;
+  /** Independently replayed permissions published by the ownership pass. */
+  readonly ownershipCertificate: OwnershipCertificate;
   /** What each `open` brought into scope; see `Checked`. */
   readonly opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
   /** Compile-time declaration values; see `Checked`. */
@@ -294,6 +300,20 @@ function assemble(
     ...below.map((dependency) => dependency.comptimeValues),
     checked.comptimeValues,
   ]);
+  const ownership = mergeAll([
+    ...below.map((dependency) => dependency.ownership),
+    file.ownership,
+  ]);
+  const ownershipProof = ownershipCertificate(ownership);
+  if (verifyOwnershipCertificate(ownershipProof) === null) {
+    throw new Error(
+      `ownership analysis emitted an invalid certificate for ${loaded.path}`,
+    );
+  }
+  const opens = mergeAll([
+    ...below.map((dependency) => dependency.opens),
+    checked.opens,
+  ]);
   const result: CheckResult = {
     type: show(checked.type),
     effects: file.effects,
@@ -304,20 +324,16 @@ function assemble(
       expressionTypes,
       checked.type,
       comptimeValues,
+      opens,
     ),
     expressionTypes,
     arrayProofs: mergeAll([
       ...below.map((dependency) => dependency.arrayProofs),
       checked.arrayProofs,
     ]),
-    ownership: mergeAll([
-      ...below.map((dependency) => dependency.ownership),
-      file.ownership,
-    ]),
-    opens: mergeAll([
-      ...below.map((dependency) => dependency.opens),
-      checked.opens,
-    ]),
+    ownership,
+    ownershipCertificate: ownershipProof,
+    opens,
     comptimeValues,
     shapes: mergeAll([
       ...below.map((dependency) => dependency.shapes),
@@ -414,9 +430,20 @@ function own(
   ownership: Ownership,
 ): ReadonlyMap<NamePattern, OwnedBinding> {
   const facts = new Map<NamePattern, OwnedBinding>();
+  const bindingIds = new Map<NamePattern, number>();
+  let nextBindingId = 0;
+  const bindingId = (pattern: NamePattern): number => {
+    const found = bindingIds.get(pattern);
+    if (found !== undefined) return found;
+    const allocated = nextBindingId;
+    nextBindingId += 1;
+    bindingIds.set(pattern, allocated);
+    return allocated;
+  };
   for (const [pattern, lastUse] of ownership.lastUses) {
     facts.set(pattern, {
       path,
+      bindingId: bindingId(pattern),
       lastUse,
       spent: ownership.linear.has(pattern),
       reentrant: ownership.reentrant.has(pattern),
@@ -425,7 +452,13 @@ function own(
   for (const pattern of ownership.linear) {
     if (facts.has(pattern)) continue;
     // Nothing read it, so there is no read to be wrong about when it happened.
-    facts.set(pattern, { path, lastUse: null, spent: true, reentrant: false });
+    facts.set(pattern, {
+      path,
+      bindingId: bindingId(pattern),
+      lastUse: null,
+      spent: true,
+      reentrant: false,
+    });
   }
   return facts;
 }

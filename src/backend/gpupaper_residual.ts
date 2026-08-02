@@ -14,15 +14,26 @@ import {
 import type { CheckResult } from "../check/mod.ts";
 import {
   type ComputationSchedule,
+  type CoreComputation,
+  type CoreExpression,
+  coreResultExpression,
+  type CoreStep,
   scheduleComputation,
   scheduledResultExpression,
 } from "../core/computation.ts";
-import type { Decl, Expr, Pattern, Span } from "../syntax/ast.ts";
+import type { Expr, Pattern, Span } from "../syntax/ast.ts";
 import type { StagedExport } from "../stage.ts";
 import type { Lowered } from "./lower.ts";
 
 type TypeId = number;
 type ValueId = number;
+type ResidualExpression = Expr | CoreExpression;
+type ResidualIf =
+  | Extract<Expr, { readonly tag: "if" }>
+  | Extract<CoreExpression, { readonly tag: "if" }>;
+type ResidualCase =
+  | Extract<Expr, { readonly tag: "case" }>
+  | Extract<CoreExpression, { readonly tag: "case" }>;
 
 type ResidualValue =
   | { readonly kind: "static"; readonly value: Value }
@@ -47,7 +58,7 @@ type ResidualValue =
   | {
     readonly kind: "closure";
     readonly parameter: Pattern;
-    readonly body: Expr;
+    readonly body: ResidualExpression;
     readonly environment: ResidualEnvironment;
     readonly self: string | null;
   }
@@ -73,11 +84,6 @@ type MutableBlock = {
 
 export function exportResidualRuntimeHir(
   source: string,
-  module: {
-    readonly declarations: readonly Decl[];
-    readonly result: Expr;
-    readonly resultEffects: "pure" | "ambient";
-  },
   checked: CheckResult,
   stagedExports: readonly StagedExport[],
   lowered: Lowered,
@@ -100,7 +106,7 @@ export function exportResidualRuntimeHir(
   }
 
   const builder = new ResidualHirBuilder(source, checked);
-  const function_ = builder.build(module, loweredExport.wasmName);
+  const function_ = builder.build(checked.core, loweredExport.wasmName);
   return {
     format: "blot-runtime-hir",
     schemaVersion: 1,
@@ -153,26 +159,15 @@ class ResidualHirBuilder {
   }
 
   build(
-    module: {
-      readonly declarations: readonly Decl[];
-      readonly result: Expr;
-      readonly resultEffects: "pure" | "ambient";
-    },
+    computation: CoreComputation,
     wasmName: string,
   ): BlotRuntimeFunction {
     this.block();
     const environment = this.environment(null, this.#checked.values);
-    const computation = scheduleComputation(
-      module.declarations,
-      module.result,
-      module.resultEffects,
-    );
-    this.declarations(
-      computation.steps,
-      environment,
-    );
+    this.coreDeclarations(computation.steps, environment);
+    const resultExpression = coreResultExpression(computation.result);
     const result = this.dynamic(
-      this.evaluate(scheduledResultExpression(computation.result), environment),
+      this.evaluate(resultExpression, environment),
     );
     const resultType = this.types[result.type];
     if (resultType.kind !== "unit") {
@@ -183,7 +178,7 @@ class ResidualHirBuilder {
     this.terminate({
       kind: "return",
       value: result.value,
-      span: this.span(module.result.span),
+      span: this.span(resultExpression.span),
     });
     const effects = [...this.#capabilityOperations.keys()].sort();
     const signature = this.signatures.length;
@@ -206,7 +201,7 @@ class ResidualHirBuilder {
           terminator: block.terminator,
         };
       }),
-      span: this.span(module.result.span),
+      span: this.span(resultExpression.span),
     };
   }
 
@@ -221,7 +216,7 @@ class ResidualHirBuilder {
   }
 
   private evaluate(
-    expr: Expr,
+    expr: ResidualExpression,
     environment: ResidualEnvironment,
   ): ResidualValue {
     if (expr.tag === "int") {
@@ -241,6 +236,9 @@ class ResidualHirBuilder {
         kind: "static",
         value: { tag: "tag", name: expr.name, payload: null },
       };
+    }
+    if (expr.tag === "constant") {
+      return { kind: "static", value: expr.value };
     }
     if (expr.tag === "var") {
       const value = this.lookup(environment, expr.name);
@@ -270,6 +268,34 @@ class ResidualHirBuilder {
       const argument = this.evaluate(expr.arg, environment);
       return this.apply(fn, argument, expr.span);
     }
+    if (expr.tag === "intrinsic-apply") {
+      const primitive = PRIMITIVES.get(expr.name);
+      if (primitive === undefined) {
+        throw this.outside(expr.span, `intrinsic ${expr.name}`);
+      }
+      let value: ResidualValue = {
+        kind: "primitive",
+        name: expr.name,
+        arity: primitive.arity,
+        applied: [],
+      };
+      for (const argument of expr.args) {
+        value = this.apply(
+          value,
+          this.evaluate(argument, environment),
+          expr.span,
+        );
+      }
+      return value;
+    }
+    if (expr.tag === "constructor") {
+      return {
+        kind: "tag",
+        name: expr.name,
+        payload: this.evaluate(expr.payload, environment),
+      };
+    }
+    if (expr.tag === "checked") return this.evaluate(expr.value, environment);
     if (expr.tag === "field") {
       return this.project(
         this.evaluate(expr.target, environment),
@@ -311,23 +337,48 @@ class ResidualHirBuilder {
     }
     if (expr.tag === "block") {
       const scope = this.environment(environment, null);
-      const computation = scheduleComputation(
+      if ("computation" in expr) {
+        this.coreDeclarations(expr.computation.steps, scope);
+        return this.evaluate(
+          coreResultExpression(expr.computation.result),
+          scope,
+        );
+      }
+      const scheduled = scheduleComputation(
         expr.declarations,
         expr.result,
         expr.resultEffects,
       );
-      this.declarations(
-        computation.steps,
-        scope,
-      );
-      return this.evaluate(
-        scheduledResultExpression(computation.result),
-        scope,
-      );
+      this.declarations(scheduled.steps, scope);
+      return this.evaluate(scheduledResultExpression(scheduled.result), scope);
     }
     if (expr.tag === "if") return this.conditional(expr, environment);
     if (expr.tag === "case") return this.caseExpression(expr, environment);
     throw this.outside(expr.span, expr.tag);
+  }
+
+  private coreDeclarations(
+    steps: readonly CoreStep[],
+    environment: ResidualEnvironment,
+  ): void {
+    for (const step of steps) {
+      const definition = step.definition;
+      if (definition.tag === "shadow") {
+        environment.names.set(
+          definition.name,
+          this.evaluate(definition.value, environment),
+        );
+        continue;
+      }
+      if (definition.tag === "open") {
+        for (const [name, value] of definition.bindings) {
+          environment.names.set(name, { kind: "static", value });
+        }
+        continue;
+      }
+      const value = this.evaluate(definition.value, environment);
+      this.bind(definition.pattern, value, environment, definition.span);
+    }
   }
 
   private declarations(
@@ -463,7 +514,7 @@ class ResidualHirBuilder {
   }
 
   private conditional(
-    expr: Extract<Expr, { readonly tag: "if" }>,
+    expr: ResidualIf,
     environment: ResidualEnvironment,
   ): ResidualValue {
     if (expr.branches.length !== 1 || expr.fallback === null) {
@@ -548,7 +599,7 @@ class ResidualHirBuilder {
   }
 
   private caseExpression(
-    expr: Extract<Expr, { readonly tag: "case" }>,
+    expr: ResidualCase,
     environment: ResidualEnvironment,
   ): ResidualValue {
     const target = this.evaluate(expr.target, environment);
@@ -638,7 +689,7 @@ class ResidualHirBuilder {
   }
 
   private sumCase(
-    expr: Extract<Expr, { readonly tag: "case" }>,
+    expr: ResidualCase,
     target: Extract<ResidualValue, { kind: "dynamic" }>,
     cases: readonly string[],
     environment: ResidualEnvironment,

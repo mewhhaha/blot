@@ -652,7 +652,6 @@ export async function prepareGpupaperHir(
     ) throw error;
     hir = exportResidualRuntimeHir(
       prepared.loaded.path,
-      prepared.loaded.module,
       prepared.checked,
       prepared.exports,
       prepared.lowered,

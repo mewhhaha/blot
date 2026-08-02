@@ -189,6 +189,14 @@ return consume (!returned);`,
 );
 
 accepts(
+  "an unannotated identity infers ownership transfer",
+  `${CONSUME}let identity = fn value => value;
+let !token = 41;
+let returned = identity (!token);
+return consume (!returned);`,
+);
+
+accepts(
   "a destructured parameter transfers its linear component",
   `${CONSUME}let first = fn (!value, _) => value;
 let !token = 41;
@@ -558,15 +566,31 @@ return @int.add (start 1) (hold 2);`,
   "BLOT_LINEAR_CONSUMED_TWICE",
 );
 
-// A function's own name is in scope in its body for the same reason a group's
-// are, so the same rule reaches it: recursion is a second call, and a closure
-// holding a linear value cannot promise the one call it owes.
-rejects(
-  "a recursive function cannot hold a linear value and call itself",
+// A recursive edge can transfer a capture without consuming it locally when
+// every recursive occurrence is in ownership-tail position. The base path is
+// still checked by the ordinary exactly-once branch rules.
+accepts(
+  "an ownership-tail recursive function transfers its linear capture",
   `${CONSUME}let !token = 41;
 let go = rec (fn n => if n < 1 then consume (!token) else go (@int.sub n 1) end);
 return go 3;`,
-  "BLOT_LINEAR_CONSUMED_TWICE",
+);
+
+accepts(
+  "mutual ownership-tail recursion shares one captured obligation",
+  `${CONSUME}let !token = 41;
+let even = rec (fn n => if n < 1 then consume (!token) else odd (@int.sub n 1) end);
+let odd = rec (fn n => even (@int.sub n 1));
+return even 4;`,
+);
+
+rejects(
+  "a recursive call nested inside another operation has no ownership proof",
+  `${CONSUME}let !token = 41;
+let go = rec (fn n => if n < 1 then consume (!token)
+  else @int.add (go (@int.sub n 1)) 0 end);
+return go 3;`,
+  "BLOT_RECURSIVE_OWNERSHIP_UNPROVED",
 );
 
 // Settling the qualifiers is a search, and a group with nothing spendable in

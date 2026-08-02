@@ -1,3 +1,4 @@
 tree-sitter-blot/
 *.wasm
 *.wasm.json
+formal/lean/.lake/

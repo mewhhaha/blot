@@ -15,6 +15,7 @@ import {
   admitsOmission,
   boundAbove,
   boundBelow,
+  evidenceOf,
   freshRigid,
   freshVar,
   type Level,
@@ -264,7 +265,8 @@ function extrude(
     case "var": {
       const existing = seen.get(type);
       if (existing !== undefined) return existing;
-      const copy = freshVar(level, type.origin);
+      const evidence = evidenceOf(type);
+      const copy = freshVar(level, evidence === null ? undefined : evidence);
       seen.set(type, copy);
       if (polarity) {
         type.upper.push(copy);
@@ -392,7 +394,8 @@ function freshenAbove(
     case "var": {
       const existing = seen.get(type);
       if (existing !== undefined) return existing;
-      const copy = freshVar(level, type.origin);
+      const evidence = evidenceOf(type);
+      const copy = freshVar(level, evidence === null ? undefined : evidence);
       seen.set(type, copy);
       // Not a bound. The copy is where this use's constraints land, and the
       // edge is what lets a fact read at the definition find them again.

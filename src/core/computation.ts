@@ -152,7 +152,7 @@ export type CoreDefinition =
   | {
     readonly tag: "open";
     readonly mappings: readonly OpenMapping[];
-    readonly value: CoreExpression;
+    readonly bindings: ReadonlyMap<string, Value>;
     readonly span: Span;
     readonly origin: Decl;
   };
@@ -202,8 +202,9 @@ export function elaborateComputation(
   resultEffects: "pure" | "ambient",
   expressionTypes: ReadonlyMap<Expr, SimpleType>,
   comptimeValues: ReadonlyMap<Expr, Value> = new Map(),
+  opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>> = new Map(),
 ): CoreComputation {
-  const elaborator = new Elaborator(expressionTypes, comptimeValues);
+  const elaborator = new Elaborator(expressionTypes, comptimeValues, opens);
   return elaborator.computation(declarations, result, resultEffects);
 }
 
@@ -245,8 +246,9 @@ export function elaborateModule(
   expressionTypes: ReadonlyMap<Expr, SimpleType>,
   resultType: SimpleType,
   comptimeValues: ReadonlyMap<Expr, Value> = new Map(),
+  opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>> = new Map(),
 ): TypedCoreModule {
-  const elaborator = new Elaborator(expressionTypes, comptimeValues);
+  const elaborator = new Elaborator(expressionTypes, comptimeValues, opens);
   const computation = elaborator.computation(
     module.declarations,
     module.result,
@@ -263,15 +265,18 @@ export function elaborateModule(
 class Elaborator {
   readonly #expressionTypes: ReadonlyMap<Expr, SimpleType>;
   readonly #comptimeValues: ReadonlyMap<Expr, Value>;
+  readonly #opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
   readonly #typeRepresentations = new TyRepBuilder();
   #nextNode = 0;
 
   constructor(
     expressionTypes: ReadonlyMap<Expr, SimpleType>,
     comptimeValues: ReadonlyMap<Expr, Value>,
+    opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>,
   ) {
     this.#expressionTypes = expressionTypes;
     this.#comptimeValues = comptimeValues;
+    this.#opens = opens;
   }
 
   typeRepresentations(): TyRepTable {
@@ -283,11 +288,10 @@ class Elaborator {
     result: Expr,
     resultEffects: "pure" | "ambient",
   ): CoreComputation {
-    const schedule = scheduleComputation(declarations, result, resultEffects);
+    const live = liveDeclarations(declarations, result);
     const steps: CoreStep[] = [];
-    for (const step of schedule.steps) {
-      const declaration = step.declaration;
-      if (declaration.tag === "open") continue;
+    for (const declaration of declarations) {
+      if (!live.has(declaration)) continue;
       if (declaration.tag === "binding" && declaration.kind === "sig") continue;
       if (declaration.tag === "shadow") {
         const value = this.#comptimeValues.get(declaration.value);
@@ -296,12 +300,19 @@ class Elaborator {
       if (
         declaration.tag === "binding" && declaration.kind === "const" &&
         this.#comptimeValues.has(declaration.value)
-      ) continue;
+      ) {
+        const value = this.#comptimeValues.get(declaration.value);
+        if (value !== undefined && value.tag !== "effect") continue;
+      }
       const definition = this.definition(declaration);
-      steps.push({ tag: step.tag, definition });
+      let tag: CoreStep["tag"] = "define";
+      if (declaration.tag === "binding" && declaration.kind === "effect") {
+        tag = "bind";
+      }
+      steps.push({ tag, definition });
     }
     const expression = this.expression(result);
-    if (schedule.result.tag === "return") {
+    if (resultEffects === "pure") {
       return { steps, result: { tag: "return", value: expression } };
     }
     return { steps, result: { tag: "tail", computation: expression } };
@@ -328,10 +339,16 @@ class Elaborator {
         origin: declaration,
       };
     }
+    const bindings = this.#opens.get(declaration.value);
+    if (bindings === undefined) {
+      throw new Error(
+        `typed Core is missing open bindings at ${declaration.span.start}..${declaration.span.end}`,
+      );
+    }
     return {
       tag: "open",
       mappings: declaration.mappings,
-      value: this.expression(declaration.value),
+      bindings,
       span: declaration.span,
       origin: declaration,
     };
@@ -595,7 +612,7 @@ function erasedComptimeValue(value: Value): boolean {
     value.tag === "unbounded" || value.tag === "arrow" ||
     value.tag === "sealed" || value.tag === "extended" ||
     value.tag === "opaque-type" || value.tag === "type-variable" ||
-    value.tag === "effect";
+    value.tag === "effect" || value.tag === "forall";
 }
 
 function applicationSpine(

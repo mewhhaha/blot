@@ -39,8 +39,8 @@ import type {
   RecursiveMember,
   Span,
 } from "../syntax/ast.ts";
-import { liveDeclarations } from "../syntax/live.ts";
-import { recursiveGroups } from "../syntax/ast.ts";
+import { freeNames, liveDeclarations } from "../syntax/live.ts";
+import { patternNames, recursiveGroups } from "../syntax/ast.ts";
 import type { Diagnostic } from "../diagnostic.ts";
 
 /** The only pattern that introduces a binding, and therefore the fact key. */
@@ -135,6 +135,14 @@ class Analysis {
   /** The bindings some closure reached from outside its own body. */
   readonly crossed = new Set<NamePattern>();
   readonly functionResults = new Map<Expr, Produced>();
+  /** Certified recursive callees and the captures transferred by their call. */
+  readonly recursiveTransfers = new Map<NamePattern, readonly string[]>();
+  /** One closure in a recursive SCC takes ownership of each shared capture. */
+  readonly recursiveCaptureClaims = new Set<NamePattern>();
+  /** A certified SCC is one owned knot; calling an entry consumes the knot. */
+  readonly recursiveGroupBindings = new Map<NamePattern, readonly Binding[]>();
+  /** Usage summaries inferred for unannotated, ownership-transparent lambdas. */
+  readonly inferredParameters = new Map<Pattern, Qualifier>();
 
   report(code: string, message: string, span: Span): void {
     this.diagnostics.push({ code, message, span });
@@ -410,6 +418,20 @@ function use(
   // recorded on the way in and the offset set absorbs the second visit.
   if (capturedBy !== null) analysis.crossed.add(binding.pattern);
 
+  const recursiveTransfer = analysis.recursiveTransfers.get(binding.pattern);
+  if (recursiveTransfer !== undefined) {
+    for (const capture of recursiveTransfer) {
+      use(capture, span, scope, analysis, "move");
+    }
+    return binding.owned;
+  }
+
+  const recursiveGroup = analysis.recursiveGroupBindings.get(binding.pattern);
+  if (recursiveGroup !== undefined) {
+    for (const member of recursiveGroup) consume(member, span, analysis);
+    return binding.owned;
+  }
+
   if (binding.qualifier === "borrow" && kind === "move") {
     analysis.report(
       "BLOT_BORROW_MOVED",
@@ -616,7 +638,39 @@ function walkRecursiveGroup(
     settleQualifiers(members, settled, scope);
   }
 
+  const recursiveMembers = recursiveCycleNames(members);
+  const recursiveCaptures = certifiedRecursiveCaptures(
+    members,
+    recursiveMembers,
+    scope,
+  );
+  if (recursiveCaptures === null) {
+    analysis.report(
+      "BLOT_RECURSIVE_OWNERSHIP_UNPROVED",
+      `Recursive group \`${
+        members.map((member) => member.name).join("`, `")
+      }\` captures a spendable value but does not transfer it through exactly one ownership-tail recursive call on each recursive path.`,
+      members[0].lambda.span,
+    );
+  }
+
   declareGroup(members, settled, scope);
+  if (recursiveCaptures !== null && recursiveCaptures.length > 0) {
+    const bindings = members.filter((member) =>
+      recursiveMembers.has(member.name)
+    ).map((member) => {
+      const binding = scope.bindings.get(member.name);
+      if (binding === undefined) {
+        throw new Error(`recursive group omitted binding \`${member.name}\``);
+      }
+      return binding;
+    });
+    for (const member of members) {
+      if (!recursiveMembers.has(member.name)) continue;
+      analysis.recursiveTransfers.set(member.pattern, recursiveCaptures);
+      analysis.recursiveGroupBindings.set(member.pattern, bindings);
+    }
+  }
   for (const [index, member] of members.entries()) {
     const produced = walk(member.declaration.value, scope, analysis, "move");
     const binding = scope.bindings.get(member.name);
@@ -631,6 +685,162 @@ function walkRecursiveGroup(
       );
     }
   }
+  for (const member of members) {
+    analysis.recursiveTransfers.delete(member.pattern);
+  }
+}
+
+/**
+ * The first recursive ownership proof is intentionally narrow: a recursive
+ * edge must be in ownership-tail position, and every reference to an SCC
+ * member must be such an edge. The ordinary branch checker then proves that a
+ * base path consumes each linear capture while an edge transfers it.
+ */
+function certifiedRecursiveCaptures(
+  members: readonly RecursiveMember[],
+  recursiveMembers: ReadonlySet<string>,
+  scope: Scope,
+): readonly string[] | null {
+  if (recursiveMembers.size === 0) return [];
+  const captures = new Set<string>();
+  for (const member of members) {
+    if (!recursiveMembers.has(member.name)) continue;
+    for (const name of freeNames(member.lambda)) {
+      if (recursiveMembers.has(name)) continue;
+      const binding = analysisBinding(scope, name);
+      if (binding !== null && spendable(binding.qualifier)) captures.add(name);
+    }
+  }
+  if (captures.size === 0) return [];
+  for (const member of members) {
+    if (!recursiveMembers.has(member.name)) continue;
+    if (
+      !recursiveCallsAreOwnershipTail(
+        member.lambda.body,
+        recursiveMembers,
+        true,
+      )
+    ) {
+      return null;
+    }
+  }
+  return [...captures];
+}
+
+function recursiveCycleNames(
+  members: readonly RecursiveMember[],
+): ReadonlySet<string> {
+  const names = new Set(members.map((member) => member.name));
+  const edges = new Map<string, readonly string[]>();
+  for (const member of members) {
+    edges.set(
+      member.name,
+      [...freeNames(member.lambda)].filter((name) => names.has(name)),
+    );
+  }
+  const recursive = new Set<string>();
+  for (const member of members) {
+    const pending = [...(edges.get(member.name) ?? [])];
+    const visited = new Set<string>();
+    while (pending.length > 0) {
+      const next = pending.pop();
+      if (next === undefined || visited.has(next)) continue;
+      if (next === member.name) {
+        recursive.add(member.name);
+        break;
+      }
+      visited.add(next);
+      pending.push(...(edges.get(next) ?? []));
+    }
+  }
+  return recursive;
+}
+
+function recursiveCallsAreOwnershipTail(
+  expr: Expr,
+  groupNames: ReadonlySet<string>,
+  tail: boolean,
+): boolean {
+  if (expr.tag === "var") return !groupNames.has(expr.name);
+  if (
+    expr.tag === "int" || expr.tag === "float" || expr.tag === "text" ||
+    expr.tag === "unit" || expr.tag === "intrinsic" || expr.tag === "tag"
+  ) return true;
+  if (expr.tag === "apply") {
+    const application = appliedExpression(expr);
+    if (
+      application.callee.tag === "var" &&
+      groupNames.has(application.callee.name)
+    ) {
+      if (!tail) return false;
+      return application.args.every((argument) =>
+        recursiveCallsAreOwnershipTail(argument, groupNames, false)
+      );
+    }
+    return recursiveCallsAreOwnershipTail(expr.fn, groupNames, false) &&
+      recursiveCallsAreOwnershipTail(expr.arg, groupNames, false);
+  }
+  if (expr.tag === "field") {
+    return recursiveCallsAreOwnershipTail(expr.target, groupNames, false);
+  }
+  if (expr.tag === "lambda") {
+    return recursiveCallsAreOwnershipTail(expr.body, groupNames, false);
+  }
+  if (expr.tag === "rec") {
+    return recursiveCallsAreOwnershipTail(expr.lambda, groupNames, false);
+  }
+  if (expr.tag === "comptime") {
+    return recursiveCallsAreOwnershipTail(expr.body, groupNames, false);
+  }
+  if (expr.tag === "tuple") {
+    return expr.elements.every((element) =>
+      recursiveCallsAreOwnershipTail(element, groupNames, false)
+    );
+  }
+  if (expr.tag === "array") {
+    return expr.elements.every((element) =>
+      recursiveCallsAreOwnershipTail(element.value, groupNames, false)
+    );
+  }
+  if (expr.tag === "shape") {
+    return expr.members.every((member) =>
+      recursiveCallsAreOwnershipTail(member.value, groupNames, false)
+    );
+  }
+  if (expr.tag === "if") {
+    if (
+      !expr.branches.every((branch) =>
+        recursiveCallsAreOwnershipTail(branch.condition, groupNames, false) &&
+        recursiveCallsAreOwnershipTail(branch.consequence, groupNames, tail)
+      )
+    ) return false;
+    if (expr.fallback === null) return true;
+    return recursiveCallsAreOwnershipTail(expr.fallback, groupNames, tail);
+  }
+  if (expr.tag === "case") {
+    return recursiveCallsAreOwnershipTail(expr.target, groupNames, false) &&
+      expr.arms.every((arm) =>
+        recursiveCallsAreOwnershipTail(arm.body, groupNames, tail)
+      );
+  }
+  for (const declaration of expr.declarations) {
+    if (!recursiveCallsAreOwnershipTail(declaration.value, groupNames, false)) {
+      return false;
+    }
+  }
+  return recursiveCallsAreOwnershipTail(expr.result, groupNames, tail);
+}
+
+function appliedExpression(
+  expr: Expr & { readonly tag: "apply" },
+): { readonly callee: Expr; readonly args: readonly Expr[] } {
+  const args: Expr[] = [];
+  let callee: Expr = expr;
+  while (callee.tag === "apply") {
+    args.unshift(callee.arg);
+    callee = callee.fn;
+  }
+  return { callee, args };
 }
 
 /**
@@ -1141,7 +1351,7 @@ function functionContract(
 ): FunctionContract {
   if (produced.tag === "closure") {
     return {
-      parameter: patternQualifier(produced.parameter),
+      parameter: inferredParameterQualifier(produced.parameter, analysis),
       pattern: produced.parameter,
       result: produced.result,
     };
@@ -1151,7 +1361,7 @@ function functionContract(
     let knownResult = NONE;
     if (result !== undefined) knownResult = result;
     return {
-      parameter: patternQualifier(expr.parameter),
+      parameter: inferredParameterQualifier(expr.parameter, analysis),
       pattern: expr.parameter,
       result: knownResult,
     };
@@ -1161,7 +1371,7 @@ function functionContract(
     let knownResult = NONE;
     if (result !== undefined) knownResult = result;
     return {
-      parameter: patternQualifier(expr.lambda.parameter),
+      parameter: inferredParameterQualifier(expr.lambda.parameter, analysis),
       pattern: expr.lambda.parameter,
       result: knownResult,
     };
@@ -1174,6 +1384,85 @@ function functionContract(
     pattern: binding.parameterPattern,
     result: binding.result,
   };
+}
+
+function inferredParameterQualifier(
+  pattern: Pattern,
+  analysis: Analysis,
+): Qualifier | null {
+  const written = patternQualifier(pattern);
+  if (written !== null && written !== "none") return written;
+  const inferred = analysis.inferredParameters.get(pattern);
+  if (inferred === undefined) return null;
+  return inferred;
+}
+
+/**
+ * A deliberately small inference class whose result structurally carries its
+ * parameter exactly once. Calls and projections are excluded because proving
+ * either safe needs another function's summary or omitted-field obligations.
+ */
+function ownershipTransparent(expr: Expr, parameter: string): boolean {
+  if (expr.tag === "var") return expr.name === parameter;
+  if (
+    expr.tag === "int" || expr.tag === "float" || expr.tag === "text" ||
+    expr.tag === "unit" || expr.tag === "intrinsic" || expr.tag === "tag" ||
+    expr.tag === "field"
+  ) return false;
+  if (expr.tag === "apply") {
+    return expr.fn.tag === "tag" &&
+      ownershipTransparent(expr.arg, parameter);
+  }
+  if (expr.tag === "lambda") {
+    if (patternNames(expr.parameter).includes(parameter)) return false;
+    return ownershipTransparent(expr.body, parameter);
+  }
+  if (expr.tag === "rec" || expr.tag === "comptime") return false;
+  if (expr.tag === "tuple") {
+    return oneTransparent(expr.elements, parameter);
+  }
+  if (expr.tag === "array") {
+    return oneTransparent(
+      expr.elements.map((element) => element.value),
+      parameter,
+    );
+  }
+  if (expr.tag === "shape") {
+    return oneTransparent(
+      expr.members.map((member) => member.value),
+      parameter,
+    );
+  }
+  if (expr.tag === "if") {
+    if (
+      expr.branches.some((branch) => freeNames(branch.condition).has(parameter))
+    ) return false;
+    if (
+      !expr.branches.every((branch) =>
+        ownershipTransparent(branch.consequence, parameter)
+      )
+    ) return false;
+    return expr.fallback !== null &&
+      ownershipTransparent(expr.fallback, parameter);
+  }
+  if (expr.tag === "case") return false;
+  if (expr.declarations.length > 0) return false;
+  return ownershipTransparent(expr.result, parameter);
+}
+
+function oneTransparent(
+  expressions: readonly Expr[],
+  parameter: string,
+): boolean {
+  let carrying = 0;
+  for (const expression of expressions) {
+    if (ownershipTransparent(expression, parameter)) {
+      carrying += 1;
+      continue;
+    }
+    if (freeNames(expression).has(parameter)) return false;
+  }
+  return carrying === 1;
 }
 
 function substituteParameter(
@@ -1284,13 +1573,16 @@ function substituteParameters(
 function parameterAcceptsOwnership(
   parameter: Pattern | null,
   argument: Produced,
+  inferred: Qualifier | null = null,
 ): boolean {
   const ownership = obligation(argument);
   if (ownership === "none") return true;
   if (parameter === null) return false;
   if (parameter.tag === "name") {
-    if (parameter.qualifier === "linear") return true;
-    return parameter.qualifier === "affine" && ownership === "affine";
+    let qualifier = parameter.qualifier;
+    if (qualifier === "none" && inferred !== null) qualifier = inferred;
+    if (qualifier === "linear") return true;
+    return qualifier === "affine" && ownership === "affine";
   }
   if (
     (parameter.tag === "tuple" || parameter.tag === "array") &&
@@ -1673,6 +1965,7 @@ function walk(
         const accepted = parameterAcceptsOwnership(
           contract.pattern,
           argument,
+          contract.parameter,
         ) || trustedScalarOperation(expr.fn, argument, scope);
         if (!accepted) {
           analysis.report(
@@ -1716,7 +2009,31 @@ function walk(
 
     case "lambda": {
       const inner = childScope(scope, true);
-      declareProduced(expr.parameter, NONE, inner, analysis, true);
+      let parameterOwnership = NONE;
+      if (
+        expr.parameter.tag === "name" && expr.parameter.qualifier === "none" &&
+        ownershipTransparent(expr.body, expr.parameter.name)
+      ) {
+        analysis.inferredParameters.set(expr.parameter, "linear");
+        parameterOwnership = {
+          tag: "leaf",
+          qualifier: "linear",
+          source: expr.parameter,
+        };
+      }
+      declareProduced(
+        expr.parameter,
+        parameterOwnership,
+        inner,
+        analysis,
+        true,
+      );
+      const recursiveCaptures = new Set(
+        [...analysis.recursiveTransfers.values()].flatMap((names) => names),
+      );
+      for (const capture of recursiveCaptures) {
+        installRecursiveCapture(capture, inner, analysis);
+      }
       const result = walk(expr.body, inner, analysis, "move");
       if (containsBorrow(result)) {
         analysis.report(
@@ -1865,6 +2182,32 @@ function walk(
     default:
       return NONE;
   }
+}
+
+function installRecursiveCapture(
+  name: string,
+  scope: Scope,
+  analysis: Analysis,
+): void {
+  const found = analysis.lookup(scope, name);
+  if (found === null || found.capturedBy !== scope) return;
+  const binding = found.binding;
+  if (!analysis.recursiveCaptureClaims.has(binding.pattern)) {
+    analysis.recursiveCaptureClaims.add(binding.pattern);
+    scope.captures.add(binding);
+  }
+  scope.bindings.set(name, {
+    pattern: binding.pattern,
+    qualifier: binding.qualifier,
+    owned: binding.owned,
+    parameter: binding.parameter,
+    parameterPattern: binding.parameterPattern,
+    result: binding.result,
+    value: binding.value,
+    moved: null,
+    borrows: 0,
+    lastUse: null,
+  });
 }
 
 function extractionParts(

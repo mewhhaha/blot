@@ -618,6 +618,10 @@ allocate a run-time thunk. `<-` declarations are always live and retain source
 order. Reordering a live definition is valid only when its trap and divergence
 behavior is proved unchanged.
 
+Typed Core retains a live host-effect capability when runtime code refers to it.
+Other compile-time constants are specialized at their uses; Core never leaves an
+ordinary variable for a host capability whose definition it removed.
+
 ### 6.1 Unit, arrays, tuples, and shapes
 
 `()` is the unit value.
@@ -1620,11 +1624,16 @@ to an array with known elements preserves the appended component's obligation.
 An array or record spread is rejected when an owned component would lose the
 position or field identity needed for later consuming extraction.
 
-A known function parameter is an ownership contract. Passing any owned value to
-an ordinary parameter is rejected; a `!parameter` promises one consumption and
+A known function parameter is an ownership contract. An unannotated name
+parameter whose result structurally carries that parameter exactly once infers a
+consuming contract. This includes direct identity, a single position in a tuple,
+array, record, or constructor, and branches whose every result carries the
+parameter. Calls, projections, and destructuring do not guess: without a proved
+summary they remain ordinary parameters. Passing any owned value to an ordinary
+parameter is rejected; a `!parameter` explicitly promises one consumption and
 may accept it. An affine parameter may accept an affine value but cannot accept
 a linear one because it may discard the argument. Ownership returned from a
-linear or affine parameter is instantiated with the caller's actual obligation,
+consuming parameter is instantiated with the caller's actual obligation,
 including through a returned closure; passing an unrestricted value therefore
 does not invent ownership. This usage summary remains separate from the type
 lattice. A module result may not retain an ownership obligation because the ABI
@@ -1644,9 +1653,11 @@ turn: the obligation is relocated, not restated. That is the rule an ordinary
 binding already had (above), applied to the whole group at once because the
 group's names are bound at once.
 
-**A closure holding a spendable value may not be called from inside its own
-recursive group, including from its own body.** A recursive call is a second
-call, and a closure owing exactly one call cannot promise it:
+**A closure holding a spendable value may call its recursive group only through
+an ownership-tail edge.** Every occurrence of a group member must be the final
+ownership action of its branch. The call transfers the group's shared capture to
+the next invocation; a base branch must consume a linear capture exactly once
+under the ordinary branch rules:
 
 ```blot
 let go = rec (fn n =>
@@ -1654,17 +1665,21 @@ let go = rec (fn n =>
 return go 3;
 ```
 
-is `BLOT_LINEAR_CONSUMED_TWICE`, naming `go`. This refuses a program that may in
-fact spend the value once — the pass counts uses and cannot count calls — and
-refusing is the conservative side. An affine member is refused the same way for
-the same reason, because a second call is a second consumption there too; what
-differs is that leaving the group's closures uncalled is a leak for neither, so
-an affine member no caller reaches is accepted where a linear one is only
-accepted because its own recursive call is counted as the consumption it owed.
+is accepted. The same certificate covers mutual recursion: the SCC is one owned
+knot, so calling one external entry consumes the knot and its internal edges
+transfer rather than duplicate it.
 
-`examples/rejected/semantics/recursive_linear_capture.blot` is a group of one
-and `examples/rejected/semantics/recursive_group_consumed_twice.blot` is a group
-of two.
+A recursive call nested in another operation, stored, returned, passed to an
+unknown function, used in a condition, or accompanied by another recursive edge
+on the same path is `BLOT_RECURSIVE_OWNERSHIP_UNPROVED`. The compiler does not
+guess a call count outside this class. Calling two external entries of the same
+owned SCC is still an ordinary second consumption.
+
+`examples/recursive_ownership.blot` is an accepted mutual transfer.
+`examples/rejected/semantics/recursive_linear_capture.blot` puts work after the
+recursive call, and
+`examples/rejected/semantics/recursive_group_consumed_twice.blot` consumes an
+owned group twice.
 
 ### 11.2 Facts recorded for the backend
 
@@ -1679,9 +1694,12 @@ proof is about.
 
 When the proved consumption of a linear binding is the array operand of
 `@array.set` or `@array.push`, the backend may reuse that array's Store. This is
-an implementation permission, not mutation in the language: the source binding
-is unavailable after the consuming use, and updates of ordinary shared arrays
-remain persistent with the immutable behavior specified in §6.1.
+an implementation permission published in an ownership certificate. A separate
+checker rejects duplicate binding identities, invalid spans, reentrant reads, or
+a reuse flag without proved consumption before lowering consults it. This is not
+mutation in the language: the source binding is unavailable after the consuming
+use, and updates of ordinary shared arrays remain persistent with the immutable
+behavior specified in §6.1.
 
 ## 12. Effects and handlers
 
@@ -2047,13 +2065,15 @@ let at = fn xs => fn n =>
   if n >= 0 && n < @array.len xs then @array.get xs n else 0 end;
 ```
 
-The second needs no concrete length. The conjunction proves `n : 0..len xs - 1`
-(§8.5), and the read names the same immutable array value. The primitive still
-records an erasable `array-index` certificate containing the array length symbol
-and proved index set. Lowering requires that certificate rather than
-reconstructing source relationships. It emits a Store read, whose checked form
-remains the safety net; gpufuck's range pass removes the runtime check for the
-certified residual comparison.
+The second needs no concrete length. The conjunction adds `0 <= n` and
+`n < len xs` to the branch's refinement context (§8.5), and the read names the
+same immutable array value. The primitive records an erasable `array-index`
+certificate containing normalized literal-or-identity terms and the affine
+assumptions used to prove the interval. The certificate contains no inference
+type, and a separate difference-constraint checker must replay it before
+lowering may emit the Store read. The Store's checked form remains the safety
+net; gpufuck's range pass removes the runtime check for the certified residual
+comparison.
 
 The relationship survives ordinary immutable bindings:
 
@@ -2269,8 +2289,10 @@ the fields the body demands decide instead, and they are unioned.
 An immutable alias or an application of a statically known identity function
 does not hide the lambda being specialized. The compiler follows the original
 lambda through either form and still clones it at each concrete call shape. A
-general higher-order result is not assumed to be an identity and remains a
-residual representation boundary.
+run-time conditional whose alternatives are statically known lambdas retains a
+single evaluated selector and specializes both alternatives at each concrete
+call shape. A general higher-order result is not assumed to be an identity and
+remains a residual representation boundary.
 
 A shape parameter destructured in place is specialized by the same rule. For
 example, separate calls to `fn { .x = value; } => value` with `{ .x; .y; }` and

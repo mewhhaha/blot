@@ -62,18 +62,29 @@ import {
 } from "./constrain.ts";
 import { PRIMITIVE_TYPES } from "./primitives.ts";
 import { show as showType, showRange } from "./print.ts";
-import type { ArrayIndexProof } from "../core/proof.ts";
+import type {
+  ArrayIndexProof,
+  RefinementInterval,
+  RefinementTerm,
+} from "../core/proof.ts";
+import {
+  RefinementContext,
+  type RefinementProposition,
+  type RefinementVariable,
+} from "../core/refinement.ts";
 import {
   admitsOmission,
   type ClosedBound,
   type Domain,
   effects,
+  evidenceOf,
   FLOAT,
   freshVar,
   I64_HIGH,
   I64_LOW,
   INT,
   intLiteral,
+  type LengthBound,
   lengthBound,
   type Level,
   openVariant,
@@ -93,6 +104,8 @@ import {
 interface TypeEnv {
   readonly names: Map<string, Typing>;
   readonly literals: Map<string, Expr>;
+  /** Value relationships proved in this lexical and control-flow scope. */
+  readonly refinements: RefinementContext;
   /**
    * The compile-time value a binding installed *alongside* the type it put in
    * `names`, together with that exact `Typing` object.
@@ -168,9 +181,12 @@ interface TypeEnv {
 }
 
 function childTypeEnv(parent: TypeEnv | null): TypeEnv {
+  let refinements = new RefinementContext();
+  if (parent !== null) refinements = parent.refinements.clone();
   return {
     names: new Map(),
     literals: new Map(),
+    refinements,
     comptime: new Map(),
     arrayLengths: new Map(),
     integerValues: new Map(),
@@ -238,6 +254,28 @@ function recordIntegerValue(
   const typing = scope.names.get(name);
   if (typing === undefined) return;
   scope.integerValues.set(name, { value, typing });
+  const identity = lookupBinding(scope, name);
+  if (identity === null || typeof value === "string") return;
+  if (!assumeBound(scope.refinements, identity, value)) {
+    throw new Error(`integer relationship for \`${name}\` is inconsistent`);
+  }
+}
+
+function assumeBound(
+  refinements: RefinementContext,
+  variable: RefinementVariable,
+  bound: bigint | LengthBound,
+): boolean {
+  if (typeof bound === "bigint") {
+    return refinements.assume({ tag: "at-least", variable, value: bound }) &&
+      refinements.assume({ tag: "at-most", variable, value: bound });
+  }
+  return refinements.assume({
+    tag: "equal-offset",
+    left: variable,
+    right: bound.binding,
+    offset: bound.offset,
+  });
 }
 
 /** The immutable value identity an alias keeps. */
@@ -1597,6 +1635,8 @@ interface Narrowing {
   readonly before: SimpleType;
   readonly taken: SimpleType;
   readonly untaken: SimpleType;
+  readonly takenRefinements: readonly RefinementProposition[];
+  readonly untakenRefinements: readonly RefinementProposition[];
 }
 
 /**
@@ -1662,7 +1702,11 @@ function narrowing(condition: Expr, scope: TypeEnv): Narrowing | null {
 }
 
 function proves(
-  subject: { readonly name: string; readonly type: SimpleType },
+  subject: {
+    readonly name: string;
+    readonly type: SimpleType;
+    readonly identity: RefinementVariable;
+  },
   answers: ReadonlySet<Ordering>,
   against: ClosedBound,
 ): Narrowing | null {
@@ -1677,7 +1721,94 @@ function proves(
     before: subject.type,
     taken: taken.type,
     untaken: untaken.type,
+    takenRefinements: comparisonRefinements(
+      subject.identity,
+      answers,
+      against,
+    ),
+    untakenRefinements: comparisonRefinements(
+      subject.identity,
+      complement(answers),
+      against,
+    ),
   };
+}
+
+function comparisonRefinements(
+  subject: RefinementVariable,
+  answers: ReadonlySet<Ordering>,
+  against: ClosedBound,
+): readonly RefinementProposition[] {
+  if (typeof against === "string") return [];
+  const less = answers.has("less");
+  const equal = answers.has("equal");
+  const greater = answers.has("greater");
+  if (less && equal && greater) return [];
+  if (less && greater) return [];
+
+  if (typeof against === "bigint") {
+    if (less && equal) {
+      return [{ tag: "at-most", variable: subject, value: against }];
+    }
+    if (equal && greater) {
+      return [{ tag: "at-least", variable: subject, value: against }];
+    }
+    if (less) {
+      return [{ tag: "at-most", variable: subject, value: against - 1n }];
+    }
+    if (greater) {
+      return [{ tag: "at-least", variable: subject, value: against + 1n }];
+    }
+    if (equal) {
+      return [
+        { tag: "at-least", variable: subject, value: against },
+        { tag: "at-most", variable: subject, value: against },
+      ];
+    }
+    return [];
+  }
+
+  if (less && equal) {
+    return [{
+      tag: "difference-at-most",
+      left: subject,
+      right: against.binding,
+      offset: against.offset,
+    }];
+  }
+  if (equal && greater) {
+    return [{
+      tag: "difference-at-most",
+      left: against.binding,
+      right: subject,
+      offset: -against.offset,
+    }];
+  }
+  if (less) {
+    return [{
+      tag: "difference-at-most",
+      left: subject,
+      right: against.binding,
+      offset: against.offset - 1n,
+    }];
+  }
+  if (greater) {
+    return [{
+      tag: "difference-at-most",
+      left: against.binding,
+      right: subject,
+      offset: -against.offset - 1n,
+    }];
+  }
+  if (equal) {
+    return [{
+      tag: "equal-offset",
+      left: subject,
+      right: against.binding,
+      offset: against.offset,
+    }];
+  }
+  return [];
 }
 
 /**
@@ -1708,6 +1839,11 @@ function combined(
       before: left.before,
       taken: taken.type,
       untaken: left.before,
+      takenRefinements: [
+        ...left.takenRefinements,
+        ...right.takenRefinements,
+      ],
+      untakenRefinements: [],
     };
   }
   const untaken = intersect(left.untaken, right.untaken);
@@ -1717,6 +1853,11 @@ function combined(
     before: left.before,
     taken: left.before,
     untaken: untaken.type,
+    takenRefinements: [],
+    untakenRefinements: [
+      ...left.untakenRefinements,
+      ...right.untakenRefinements,
+    ],
   };
 }
 
@@ -1728,7 +1869,9 @@ function proven(
 ): TypeEnv {
   if (proof === null) return scope;
   let narrowed = proof.taken;
+  let refinements = proof.takenRefinements;
   if (side === "untaken") narrowed = proof.untaken;
+  if (side === "untaken") refinements = proof.untakenRefinements;
   // An empty intersection means the branch cannot be reached. Reporting that is
   // a separate diagnostic; installing `⊥` here would instead make every use of
   // the name inside it check against nothing.
@@ -1736,9 +1879,22 @@ function proven(
   // Built once per branch, and only when it says something new: `constrain`
   // memoises on object identity, so a fresh copy of an unchanged type would
   // quietly defeat the cache.
-  if (sameGround(narrowed, proof.before)) return scope;
+  if (sameGround(narrowed, proof.before) && refinements.length === 0) {
+    return scope;
+  }
   const inner = childTypeEnv(scope);
-  inner.names.set(proof.name, narrowed);
+  if (!sameGround(narrowed, proof.before)) {
+    const identity = lookupBinding(scope, proof.name);
+    inner.names.set(proof.name, narrowed);
+    if (identity !== null) recordBinding(inner, proof.name, identity);
+  }
+  for (const refinement of refinements) {
+    if (!inner.refinements.assume(refinement)) {
+      throw new Error(
+        `branch refinement for \`${proof.name}\` is inconsistent`,
+      );
+    }
+  }
   return inner;
 }
 
@@ -1746,11 +1902,17 @@ function proven(
 function comparedName(
   expr: Expr,
   scope: TypeEnv,
-): { readonly name: string; readonly type: SimpleType } | null {
+): {
+  readonly name: string;
+  readonly type: SimpleType;
+  readonly identity: RefinementVariable;
+} | null {
   if (expr.tag !== "var") return null;
   const type = groundIntType(lookupType(scope, expr.name));
   if (type === null) return null;
-  return { name: expr.name, type };
+  const identity = lookupBinding(scope, expr.name);
+  if (identity === null) return null;
+  return { name: expr.name, type, identity };
 }
 
 function groundIntType(
@@ -1869,6 +2031,17 @@ function arrayLength(expr: Expr, scope: TypeEnv): ClosedBound | null {
   if (expr.tag === "var") {
     const identity = lookupBinding(scope, expr.name);
     if (identity === null) return null;
+    const nonnegative: RefinementProposition = {
+      tag: "at-least",
+      variable: identity,
+      value: 0n,
+    };
+    if (
+      !scope.refinements.entails(nonnegative) &&
+      !scope.refinements.assume(nonnegative)
+    ) {
+      throw new Error(`array length for \`${expr.name}\` is inconsistent`);
+    }
     return lengthBound(identity, 0n, expr.name);
   }
   const head = spine(expr);
@@ -1941,7 +2114,28 @@ function requireProvenIndex(
 ): ArrayIndexProof {
   const length = arrayLength(array, scope);
   const indices = indexSet(index, scope);
-  if (length === null || indices === null) {
+  if (length === null) {
+    fail(
+      "BLOT_UNPROVEN_INDEX",
+      "Direct array access needs an index proved against this array's length. Use `Array.get` or `Array.set` when the index may be out of bounds.",
+      expr.span,
+    );
+  }
+  const indexTerm = refinementExpression(index, scope);
+  const lengthTerm = refinementTerm(length);
+  if (
+    indexTerm !== null &&
+    refinementAtLeastZero(indexTerm, scope.refinements) &&
+    refinementLessThan(indexTerm, lengthTerm, scope.refinements)
+  ) {
+    return {
+      tag: "array-index",
+      assumptions: scope.refinements.assumptions(),
+      length: lengthTerm,
+      intervals: [{ low: indexTerm, high: indexTerm }],
+    };
+  }
+  if (indices === null) {
     fail(
       "BLOT_UNPROVEN_INDEX",
       "Direct array access needs an index proved against this array's length. Use `Array.get` or `Array.set` when the index may be out of bounds.",
@@ -1965,7 +2159,18 @@ function requireProvenIndex(
     );
   }
   if (both.tag === "type" && sameGround(both.type, indices)) {
-    return { tag: "array-index", length, indices };
+    const intervals = refinementIntervals(indices);
+    if (intervals === null) {
+      throw new Error(
+        "a proved integer set did not lower to refinement intervals",
+      );
+    }
+    return {
+      tag: "array-index",
+      assumptions: [],
+      length: refinementTerm(length),
+      intervals,
+    };
   }
   fail(
     "BLOT_UNPROVEN_INDEX",
@@ -1974,6 +2179,96 @@ function requireProvenIndex(
     }. Use \`Array.get\` or \`Array.set\` when the index may be out of bounds.`,
     expr.span,
   );
+}
+
+function refinementIntervals(
+  type: SimpleType,
+): readonly RefinementInterval[] | null {
+  if (type.tag === "range" && type.domain === "int") {
+    if (type.low === null || type.high === null) return null;
+    if (typeof type.low === "string" || typeof type.high === "string") {
+      return null;
+    }
+    return [{
+      low: refinementTerm(type.low),
+      high: refinementTerm(type.high),
+    }];
+  }
+  if (type.tag !== "union") return null;
+  const intervals: RefinementInterval[] = [];
+  for (const member of type.members) {
+    const lowered = refinementIntervals(member);
+    if (lowered === null) return null;
+    intervals.push(...lowered);
+  }
+  return intervals;
+}
+
+function refinementTerm(bound: bigint | string | LengthBound): RefinementTerm {
+  if (typeof bound === "bigint") return { tag: "literal", value: bound };
+  if (typeof bound === "string") {
+    throw new Error("an array length lowered from a text bound");
+  }
+  return {
+    tag: "variable",
+    identity: bound.binding,
+    offset: bound.offset,
+  };
+}
+
+function refinementExpression(
+  expression: Expr,
+  scope: TypeEnv,
+): RefinementTerm | null {
+  const known = witness(expression, scope);
+  if (known !== null && typeof known !== "string") return refinementTerm(known);
+  if (expression.tag !== "var") return null;
+  const identity = lookupBinding(scope, expression.name);
+  if (identity === null) return null;
+  return { tag: "variable", identity, offset: 0n };
+}
+
+function refinementAtLeastZero(
+  term: RefinementTerm,
+  refinements: RefinementContext,
+): boolean {
+  if (term.tag === "literal") return term.value >= 0n;
+  return refinements.entails({
+    tag: "at-least",
+    variable: term.identity,
+    value: -term.offset,
+  });
+}
+
+function refinementLessThan(
+  left: RefinementTerm,
+  right: RefinementTerm,
+  refinements: RefinementContext,
+): boolean {
+  if (left.tag === "literal" && right.tag === "literal") {
+    return left.value < right.value;
+  }
+  if (left.tag === "variable" && right.tag === "literal") {
+    return refinements.entails({
+      tag: "at-most",
+      variable: left.identity,
+      value: right.value - left.offset - 1n,
+    });
+  }
+  if (left.tag === "literal" && right.tag === "variable") {
+    return refinements.entails({
+      tag: "at-least",
+      variable: right.identity,
+      value: left.value - right.offset + 1n,
+    });
+  }
+  if (left.tag === "literal" || right.tag === "literal") return false;
+  return refinements.entails({
+    tag: "difference-at-most",
+    left: left.identity,
+    right: right.identity,
+    offset: right.offset - left.offset - 1n,
+  });
 }
 
 /**
@@ -3274,7 +3569,7 @@ function containsUnevidencedType(
   if (typing.tag === "scheme") type = typing.body;
   else type = typing;
   if (type.tag === "var") {
-    if (type.origin !== undefined) return true;
+    if (evidenceOf(type) !== null) return true;
     if (seen.has(type.id)) return false;
     seen.add(type.id);
     return [...type.lower, ...type.upper].some((bound) =>

@@ -6,7 +6,6 @@ export type TyRepNode =
   | {
     readonly tag: "variable";
     readonly variable: number;
-    readonly evidence: "inferred" | "reflection" | "dynamic-shape";
     readonly lower: readonly TyRepId[];
     readonly upper: readonly TyRepId[];
   }
@@ -67,12 +66,9 @@ export class TyRepBuilder {
   node(type: SimpleType): TyRepNode {
     switch (type.tag) {
       case "var": {
-        let evidence: "inferred" | "reflection" | "dynamic-shape" = "inferred";
-        if (type.origin !== undefined) evidence = type.origin;
         return {
           tag: "variable",
           variable: type.id,
-          evidence,
           lower: type.lower.map((bound) => this.reference(bound)),
           upper: type.upper.map((bound) => this.reference(bound)),
         };

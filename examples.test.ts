@@ -130,7 +130,7 @@ const REJECTIONS: Record<
     stage: "check",
   },
   "recursive_linear_capture": {
-    code: "BLOT_LINEAR_CONSUMED_TWICE",
+    code: "BLOT_RECURSIVE_OWNERSHIP_UNPROVED",
     stage: "check",
   },
   "borrow_moved": { code: "BLOT_BORROW_MOVED", stage: "check" },
