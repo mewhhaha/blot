@@ -147,28 +147,26 @@ private constructor numbers.
 ## Gpupaper target status
 
 `blot build --target=gpupaper` uses a sibling `../gpupaper` checkout. Blot owns
-the checked and staged Runtime HIR; gpupaper validates it and performs GPU Wasm
-emission. The current target implements dynamic direct scalar parameters and
-results, direct scalar host imports, closed composite results, and the canonical
-dynamic `Text` calculus used by the terminal case study. A `Text` host result
-uses an indirect result header, is range- and UTF-8-validated before
-observation, and may flow through comparison, concatenation, control, and later
-`Text -> Unit` host calls. Generated unit-payload control sums remain internal.
-Direct-result calls restore their allocation checkpoint before returning. Closed
-composite calls permit one outstanding result: the matching `cabi_post_*`
-restores the call's allocation checkpoint in constant time. Reentry, a wrong
-root pointer, a post-return for another export, and double post-return trap.
+the checked and staged Runtime HIR; gpupaper validates it and emits cache-miss
+plans through its Rust/WebAssembly emitter. The current target implements
+dynamic direct scalar parameters and results, direct scalar host imports, closed
+composite results, and the canonical dynamic `Text` calculus used by the
+terminal case study. A `Text` host result uses an indirect result header, is
+range- and UTF-8-validated before observation, and may flow through comparison,
+concatenation, control, and later `Text -> Unit` host calls. Generated
+unit-payload control sums remain internal. Direct-result calls restore their
+allocation checkpoint before returning. Closed composite calls permit one
+outstanding result: the matching `cabi_post_*` restores the call's allocation
+checkpoint in constant time. Reentry, a wrong root pointer, a post-return for
+another export, and double post-return trap.
 
-Multiple input paths are prepared independently and the admitted Runtime HIR
-modules are submitted as one stable target batch. Gpupaper packs at most 16
-module plans into one atom graph, rebases only module-local length dependencies,
-and performs one GPU sizing, scan, emission, and boundary readback for that
-physical group. Returned Wasm byte arrays are owned and retain input order. A
-source preparation failure is reported for that path and excluded before GPU
-work. After submission the admitted logical batch is atomic: a physical GPU
-failure discards completed sibling partitions and returns no admitted artifact.
-Batching changes compiler scheduling only and never executes a declared host
-effect.
+Multiple input paths are prepared independently and their admitted Runtime HIR
+modules form one stable target batch. Gpupaper emits cache misses sequentially
+through one shared Rust/WebAssembly instance. Returned Wasm byte arrays are
+owned and retain input order. A source preparation failure is reported for that
+path and excluded before emission. An emitter failure discards completed sibling
+misses and returns no admitted miss artifact. Batching changes compiler
+scheduling only and never executes a declared host effect.
 
 The target does not yet implement dynamic composite export parameters or
 results, indirect host results other than `Text`, malformed caller-memory

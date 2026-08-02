@@ -1,5 +1,5 @@
 import {
-  compileBlotRuntimeModulesOnGpu,
+  compileBlotRuntimeModulesOnRustWasm,
 } from "../../../gpupaper/src/blot_runtime_target.ts";
 import {
   type BlotRuntimeModule,
@@ -17,6 +17,7 @@ export type GpupaperBuildOutcome =
     readonly manifestBytes: Uint8Array;
     readonly capabilities: readonly string[];
     readonly artifactSource: "compiled" | "revision-cache";
+    readonly wasmEmitter: "rust-wasm";
   }
   | {
     readonly status: "failed";
@@ -62,6 +63,7 @@ export async function buildGpupaperBatch(
           manifestBytes: cached.manifestBytes.slice(),
           capabilities: cached.capabilities.slice(),
           artifactSource: "revision-cache",
+          wasmEmitter: "rust-wasm",
         };
         continue;
       }
@@ -77,7 +79,7 @@ export async function buildGpupaperBatch(
   }
   if (prepared.length > 0) {
     try {
-      const batch = await compileBlotRuntimeModulesOnGpu(
+      const batch = await compileBlotRuntimeModulesOnRustWasm(
         prepared.map((entry) => entry.module),
       );
       if (batch.artifacts.length !== prepared.length) {
@@ -112,6 +114,7 @@ export async function buildGpupaperBatch(
           manifestBytes: cached.manifestBytes.slice(),
           capabilities: cached.capabilities.slice(),
           artifactSource: "compiled",
+          wasmEmitter: "rust-wasm",
         };
       }
     } catch (cause) {

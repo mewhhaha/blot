@@ -95,18 +95,19 @@ just install                  # Helix: grammar, queries, `.blot` association
 An adjacent gpupaper checkout is an explicit experimental target:
 
 ```bash
-WGPU_BACKENDS=vulkan deno run --unstable-webgpu --allow-read --allow-write \
+deno run --allow-read --allow-write \
   src/cli.ts build --target=gpupaper \
   examples/minimal.blot examples/arithmetic.blot
 ```
 
 Blot still owns parsing, checking, staging, specialization, and Runtime HIR
-production. Gpupaper validates that HIR and emits Wasm on the GPU. The target is
-intentionally local-checkout-only for now and does not support compiler-service
-mode. Multiple paths are prepared independently, then admitted modules are
-packed in stable input order into GPU emission groups of at most 16. A source
-failure remains local to its path; after submission the admitted batch is atomic
-rather than returning partially trusted artifacts.
+production. Gpupaper validates that HIR and emits each cache-miss plan through
+its checked-in Rust/WebAssembly emitter. The target therefore requires no GPU.
+It is intentionally local-checkout-only for now and does not support
+compiler-service mode. Multiple paths are prepared independently and cache
+misses retain stable input order. A source failure remains local to its path; an
+emitter failure rejects every admitted miss rather than returning partially
+trusted artifacts. Successful outcomes identify `wasmEmitter` as `rust-wasm`.
 
 `just build` is an isolated direct build and releases its GPU device on exit.
 For repeated local builds, run `just serve` in one terminal and use
