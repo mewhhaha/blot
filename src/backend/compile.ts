@@ -531,6 +531,7 @@ interface PreparedModule {
 
 const preparedModules = new WeakMap<Loaded, PreparedModule>();
 const latestPreparedModuleByPath = new Map<string, PreparedModule>();
+const gpupaperHirByLoadedRevision = new WeakMap<Loaded, BlotRuntimeModule>();
 const MAXIMUM_INCREMENTAL_MODULES = 64;
 
 async function prepare(path: string) {
@@ -638,7 +639,10 @@ export async function prepareGpupaperHir(
   path: string,
 ): Promise<BlotRuntimeModule> {
   const prepared = await prepare(path);
+  const cached = gpupaperHirByLoadedRevision.get(prepared.loaded);
+  if (cached !== undefined) return cached;
   let moduleResidual: ResidualRuntimeExport;
+  let hir: BlotRuntimeModule;
   try {
     moduleResidual = residualizeUnitHostModule(prepared);
   } catch (error) {
@@ -646,13 +650,16 @@ export async function prepareGpupaperHir(
       !(error instanceof BlotError) ||
       error.diagnostic.code !== "BLOT_UNHANDLED_EFFECT"
     ) throw error;
-    return exportResidualRuntimeHir(
+    hir = exportResidualRuntimeHir(
       prepared.loaded.path,
       prepared.loaded.module,
       prepared.checked,
       prepared.exports,
       prepared.lowered,
     );
+    const snapshot = freezeSnapshot(hir);
+    gpupaperHirByLoadedRevision.set(prepared.loaded, snapshot);
+    return snapshot;
   }
   const residual = new Map<string, ResidualRuntimeExport>();
   for (const exported of prepared.exports) {
@@ -662,12 +669,31 @@ export async function prepareGpupaperHir(
       hostCalls: moduleResidual.hostCalls,
     });
   }
-  return exportConstantRuntimeHir(
+  hir = exportConstantRuntimeHir(
     prepared.loaded.path,
     prepared.exports,
     prepared.lowered,
     residual,
   );
+  const snapshot = freezeSnapshot(hir);
+  gpupaperHirByLoadedRevision.set(prepared.loaded, snapshot);
+  return snapshot;
+}
+
+function freezeSnapshot<Value>(
+  value: Value,
+  seen: WeakSet<object> = new WeakSet(),
+): Value {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+  if (seen.has(value)) return value;
+  seen.add(value);
+  const object = value as object & Record<PropertyKey, unknown>;
+  for (const property of Reflect.ownKeys(object)) {
+    freezeSnapshot(object[property], seen);
+  }
+  return Object.freeze(value);
 }
 
 function residualizeUnitHostModule(

@@ -33,6 +33,7 @@ import {
   type Scheme,
   type SimpleType,
   TEXT,
+  tupleType,
   UNIT,
   variant,
 } from "./type.ts";
@@ -229,6 +230,34 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
       return curried([array, element], array);
     }),
   ],
+  [
+    "@array.take",
+    poly((fresh) => {
+      const element = fresh();
+      const array: SimpleType = { tag: "array", element };
+      return curried(
+        [array, INT],
+        variant([
+          ["Taken", tupleType([element, array])],
+          ["TakeOutOfBounds", array],
+        ]),
+      );
+    }),
+  ],
+  [
+    "@array.split",
+    poly((fresh) => {
+      const element = fresh();
+      const array: SimpleType = { tag: "array", element };
+      return curried(
+        [array, INT],
+        variant([
+          ["Split", tupleType([array, element, array])],
+          ["SplitOutOfBounds", array],
+        ]),
+      );
+    }),
+  ],
 
   // --- shapes ---
   //
@@ -317,6 +346,10 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ],
 
   // --- ownership; the linearity pass gives these meaning ---
+  [
+    "@continuation.cancel",
+    poly((fresh) => fun(fresh(), UNIT, effects(["@continuation.cancel"]))),
+  ],
   [
     "@linear.own",
     poly((fresh) => {

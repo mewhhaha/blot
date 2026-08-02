@@ -51,8 +51,8 @@ import type {
   Span,
 } from "../syntax/ast.ts";
 import {
-  coreResultExpression,
-  elaborateComputation,
+  scheduleComputation,
+  scheduledResultExpression,
 } from "../core/computation.ts";
 import { freeNames } from "../syntax/live.ts";
 import { recursiveGroups } from "../syntax/ast.ts";
@@ -65,7 +65,10 @@ import {
   type Shape,
   type VariantCase,
 } from "../check/infer.ts";
-import type { ArrayIndexProof } from "../core/proof.ts";
+import {
+  type ArrayIndexProof,
+  verifiesArrayIndexProof,
+} from "../core/proof.ts";
 import type { OwnedBinding } from "../check/mod.ts";
 import type { NamePattern } from "../linear/check.ts";
 import {
@@ -1728,7 +1731,7 @@ function lowerBlock(
   const inner = childScope(scope);
   const wrappers: ((body: SurfaceExpression) => SurfaceExpression)[] = [];
   const groups = recursiveGroups(declarations);
-  const computation = elaborateComputation(
+  const computation = scheduleComputation(
     declarations,
     result,
     resultEffects,
@@ -1858,7 +1861,11 @@ function lowerBlock(
     wrappers.push(bind(declaration.pattern, value, inner, lowering));
   }
 
-  let body = lower(coreResultExpression(computation.result), inner, lowering);
+  let body = lower(
+    scheduledResultExpression(computation.result),
+    inner,
+    lowering,
+  );
   for (let index = wrappers.length - 1; index >= 0; index -= 1) {
     body = wrappers[index](body);
   }
@@ -3926,6 +3933,27 @@ function lowerApply(
   if (spine.callee.tag === "field") {
     const member = comptimeShapeMember(spine.callee, scope);
     if (member !== null) {
+      if (member.tag === "primitive") {
+        let rebuilt: Expr = {
+          tag: "intrinsic",
+          name: member.name,
+          span: spine.callee.span,
+        };
+        for (const argument of spine.args) {
+          rebuilt = {
+            tag: "apply",
+            fn: rebuilt,
+            arg: argument,
+            span: expr.span,
+          };
+        }
+        return lowerApply(
+          rebuilt as Expr & { tag: "apply" },
+          scope,
+          lowering,
+          at,
+        );
+      }
       const expanded = etaExpandedPrimitive(member, spine.args);
       if (expanded !== null) {
         let rebuilt: Expr = {
@@ -3972,6 +4000,12 @@ function lowerApply(
   }
 
   if (spine.callee.tag === "intrinsic") {
+    if (
+      spine.callee.name === "@continuation.cancel" &&
+      spine.args.length === 1
+    ) {
+      return at.name(UNIT_CONSTRUCTOR_NAME);
+    }
     const operator = BINARY.get(spine.callee.name);
     if (operator !== undefined && spine.args.length === 2) {
       return lowerIntegerBinary(
@@ -4413,8 +4447,14 @@ function lowerApply(
       );
     }
     if (spine.callee.name === "@array.get" && spine.args.length === 2) {
-      if (!lowering.facts.arrayProofs.has(expr)) {
+      const proof = lowering.facts.arrayProofs.get(expr);
+      if (proof === undefined) {
         throw new Error("checked direct array read omitted its bounds proof");
+      }
+      if (!verifiesArrayIndexProof(proof)) {
+        throw new Error(
+          "checked direct array read carried an invalid bounds proof",
+        );
       }
       return at.storeRead(
         lower(spine.args[0], scope, lowering),
@@ -4425,8 +4465,14 @@ function lowerApply(
       );
     }
     if (spine.callee.name === "@array.set" && spine.args.length === 3) {
-      if (!lowering.facts.arrayProofs.has(expr)) {
+      const proof = lowering.facts.arrayProofs.get(expr);
+      if (proof === undefined) {
         throw new Error("checked direct array write omitted its bounds proof");
+      }
+      if (!verifiesArrayIndexProof(proof)) {
+        throw new Error(
+          "checked direct array write carried an invalid bounds proof",
+        );
       }
       return at.storeWrite(
         lower(spine.args[0], scope, lowering),
@@ -4455,6 +4501,24 @@ function lowerApply(
           lower(spine.args[1], scope, lowering),
           options,
         ),
+      );
+    }
+    if (spine.callee.name === "@array.take" && spine.args.length === 2) {
+      return lowerArrayTake(
+        spine.args[0],
+        spine.args[1],
+        scope,
+        lowering,
+        at,
+      );
+    }
+    if (spine.callee.name === "@array.split" && spine.args.length === 2) {
+      return lowerArraySplit(
+        spine.args[0],
+        spine.args[1],
+        scope,
+        lowering,
+        at,
       );
     }
     // A refusal that survived compiling is one the program reached at run time,
@@ -4496,6 +4560,272 @@ function lowerApply(
       lowerRecordArgument(argument, scope, lowering, at)
     ),
   );
+}
+
+function lowerArrayTake(
+  array: Expr,
+  index: Expr,
+  scope: Scope,
+  lowering: Lowering,
+  at: typeof surface,
+): SurfaceExpression {
+  const source = lowering.fresh("source");
+  const wideIndex = lowering.fresh("index");
+  const narrowIndex = lowering.fresh("index32");
+  const result = lowering.sum([
+    { name: "Taken", payload: true },
+    { name: "TakeOutOfBounds", payload: true },
+  ]);
+  const failure = at.apply(
+    at.name(constructorName(result, "TakeOutOfBounds")),
+    at.name(source),
+  );
+  const pair = lowering.nominal(["0", "1"]);
+  const selected = at.storeRead(at.name(source), at.name(narrowIndex));
+  const remainder = copyWithoutIndex(source, narrowIndex, lowering, at);
+  const success = at.apply(
+    at.name(constructorName(result, "Taken")),
+    at.apply(at.name(pair.name), selected, remainder),
+  );
+  const length = at.convert(
+    NumericConversion.SignedInteger32ToSignedInteger64,
+    at.storeLength(at.name(source)),
+  );
+  const inBounds = at.if(
+    at.binary(
+      BinaryOperator.LessSignedInteger64,
+      at.name(wideIndex),
+      at.signedInteger64(0n),
+    ),
+    failure,
+    at.if(
+      at.binary(
+        BinaryOperator.LessSignedInteger64,
+        at.name(wideIndex),
+        length,
+      ),
+      surface.let(
+        narrowIndex,
+        at.convert(
+          NumericConversion.SignedInteger64ToSignedInteger32,
+          at.name(wideIndex),
+        ),
+        success,
+      ),
+      failure,
+    ),
+  );
+  return surface.let(
+    source,
+    lower(array, scope, lowering),
+    surface.let(wideIndex, lower(index, scope, lowering), inBounds),
+  );
+}
+
+function lowerArraySplit(
+  array: Expr,
+  index: Expr,
+  scope: Scope,
+  lowering: Lowering,
+  at: typeof surface,
+): SurfaceExpression {
+  const source = lowering.fresh("source");
+  const wideIndex = lowering.fresh("index");
+  const narrowIndex = lowering.fresh("index32");
+  const result = lowering.sum([
+    { name: "Split", payload: true },
+    { name: "SplitOutOfBounds", payload: true },
+  ]);
+  const failure = at.apply(
+    at.name(constructorName(result, "SplitOutOfBounds")),
+    at.name(source),
+  );
+  const parts = copyAroundIndex(source, narrowIndex, lowering, at);
+  const triple = lowering.nominal(["0", "1", "2"]);
+  const binders = [
+    lowering.fresh("before"),
+    lowering.fresh("selected"),
+    lowering.fresh("after"),
+  ];
+  const payload = at.apply(
+    at.name(triple.name),
+    at.name(binders[0]),
+    at.name(binders[1]),
+    at.name(binders[2]),
+  );
+  const built = at.case(parts, [{
+    constructor: triple.name,
+    binders,
+    body: at.apply(at.name(constructorName(result, "Split")), payload),
+  }]);
+  const length = at.convert(
+    NumericConversion.SignedInteger32ToSignedInteger64,
+    at.storeLength(at.name(source)),
+  );
+  const inBounds = at.if(
+    at.binary(
+      BinaryOperator.LessSignedInteger64,
+      at.name(wideIndex),
+      at.signedInteger64(0n),
+    ),
+    failure,
+    at.if(
+      at.binary(
+        BinaryOperator.LessSignedInteger64,
+        at.name(wideIndex),
+        length,
+      ),
+      surface.let(
+        narrowIndex,
+        at.convert(
+          NumericConversion.SignedInteger64ToSignedInteger32,
+          at.name(wideIndex),
+        ),
+        built,
+      ),
+      failure,
+    ),
+  );
+  return surface.let(
+    source,
+    lower(array, scope, lowering),
+    surface.let(wideIndex, lower(index, scope, lowering), inBounds),
+  );
+}
+
+function copyWithoutIndex(
+  source: string,
+  selected: string,
+  lowering: Lowering,
+  at: typeof surface,
+): SurfaceExpression {
+  const pair = lowering.nominal(["0", "1"]);
+  const loop = lowering.fresh("take");
+  const state = lowering.fresh("state");
+  const current = lowering.fresh("current");
+  const remainder = lowering.fresh("remainder");
+  const nextRemainder = at.if(
+    at.binary(BinaryOperator.Equal, at.name(current), at.name(selected)),
+    at.name(remainder),
+    at.storeGrow(
+      at.name(remainder),
+      at.binary(
+        BinaryOperator.Add,
+        at.storeLength(at.name(remainder)),
+        at.integer(1),
+      ),
+      at.storeRead(at.name(source), at.name(current)),
+    ),
+  );
+  const body = at.case(at.name(state), [{
+    constructor: pair.name,
+    binders: [current, remainder],
+    body: at.if(
+      at.binary(
+        BinaryOperator.Less,
+        at.name(current),
+        at.storeLength(at.name(source)),
+      ),
+      at.apply(
+        at.name(loop),
+        at.apply(
+          at.name(pair.name),
+          at.binary(BinaryOperator.Add, at.name(current), at.integer(1)),
+          nextRemainder,
+        ),
+      ),
+      at.name(remainder),
+    ),
+  }]);
+  return {
+    kind: "let-rec-group",
+    bindings: [{ name: loop, parameters: [state], body }],
+    body: at.apply(
+      at.name(loop),
+      at.apply(at.name(pair.name), at.integer(0), at.storeEmpty()),
+    ),
+  };
+}
+
+function copyAroundIndex(
+  source: string,
+  selected: string,
+  lowering: Lowering,
+  at: typeof surface,
+): SurfaceExpression {
+  const stateType = lowering.nominal(["0", "1", "2"]);
+  const resultType = lowering.nominal(["0", "1", "2"]);
+  const loop = lowering.fresh("split");
+  const state = lowering.fresh("state");
+  const current = lowering.fresh("current");
+  const before = lowering.fresh("before");
+  const after = lowering.fresh("after");
+  const element = at.storeRead(at.name(source), at.name(current));
+  const nextBefore = at.if(
+    at.binary(BinaryOperator.Less, at.name(current), at.name(selected)),
+    at.storeGrow(
+      at.name(before),
+      at.binary(
+        BinaryOperator.Add,
+        at.storeLength(at.name(before)),
+        at.integer(1),
+      ),
+      element,
+    ),
+    at.name(before),
+  );
+  const nextAfter = at.if(
+    at.binary(BinaryOperator.Greater, at.name(current), at.name(selected)),
+    at.storeGrow(
+      at.name(after),
+      at.binary(
+        BinaryOperator.Add,
+        at.storeLength(at.name(after)),
+        at.integer(1),
+      ),
+      element,
+    ),
+    at.name(after),
+  );
+  const body = at.case(at.name(state), [{
+    constructor: stateType.name,
+    binders: [current, before, after],
+    body: at.if(
+      at.binary(
+        BinaryOperator.Less,
+        at.name(current),
+        at.storeLength(at.name(source)),
+      ),
+      at.apply(
+        at.name(loop),
+        at.apply(
+          at.name(stateType.name),
+          at.binary(BinaryOperator.Add, at.name(current), at.integer(1)),
+          nextBefore,
+          nextAfter,
+        ),
+      ),
+      at.apply(
+        at.name(resultType.name),
+        at.name(before),
+        at.storeRead(at.name(source), at.name(selected)),
+        at.name(after),
+      ),
+    ),
+  }]);
+  return {
+    kind: "let-rec-group",
+    bindings: [{ name: loop, parameters: [state], body }],
+    body: at.apply(
+      at.name(loop),
+      at.apply(
+        at.name(stateType.name),
+        at.integer(0),
+        at.storeEmpty(),
+        at.storeEmpty(),
+      ),
+    ),
+  };
 }
 
 /** `@handle` becomes selective CPS before anything reaches gpufuck. */

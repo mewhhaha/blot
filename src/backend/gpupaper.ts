@@ -2,10 +2,12 @@ import {
   compileBlotRuntimeModulesOnGpu,
 } from "../../../gpupaper/src/blot_runtime_target.ts";
 import {
+  type BlotRuntimeModule,
   validateBlotRuntimeModule,
   type ValidatedBlotRuntimeModule,
 } from "../../../gpupaper/src/blot_runtime_hir.ts";
 import { prepareGpupaperHir } from "./compile.ts";
+import { refreshLoadedModules } from "../load.ts";
 
 export type GpupaperBuildOutcome =
   | {
@@ -14,6 +16,7 @@ export type GpupaperBuildOutcome =
     readonly wasm: Uint8Array;
     readonly manifestBytes: Uint8Array;
     readonly capabilities: readonly string[];
+    readonly artifactSource: "compiled" | "revision-cache";
   }
   | {
     readonly status: "failed";
@@ -24,22 +27,49 @@ export type GpupaperBuildOutcome =
 type PreparedGpupaperBuild = {
   readonly ordinal: number;
   readonly path: string;
+  readonly hir: BlotRuntimeModule;
   readonly module: ValidatedBlotRuntimeModule;
 };
+
+type CachedGpupaperArtifact = {
+  readonly wasm: Uint8Array;
+  readonly manifestBytes: Uint8Array;
+  readonly capabilities: readonly string[];
+};
+
+const artifactByHirRevision = new WeakMap<
+  BlotRuntimeModule,
+  CachedGpupaperArtifact
+>();
 
 export async function buildGpupaperBatch(
   paths: readonly string[],
 ): Promise<readonly GpupaperBuildOutcome[]> {
+  await refreshLoadedModules();
   const outcomes: Array<GpupaperBuildOutcome | undefined> = Array.from(
     { length: paths.length },
   );
   const prepared: PreparedGpupaperBuild[] = [];
   for (const [ordinal, path] of paths.entries()) {
     try {
+      const hir = await prepareGpupaperHir(path);
+      const cached = artifactByHirRevision.get(hir);
+      if (cached !== undefined) {
+        outcomes[ordinal] = {
+          status: "built",
+          path,
+          wasm: cached.wasm.slice(),
+          manifestBytes: cached.manifestBytes.slice(),
+          capabilities: cached.capabilities.slice(),
+          artifactSource: "revision-cache",
+        };
+        continue;
+      }
       prepared.push({
         ordinal,
         path,
-        module: validateBlotRuntimeModule(await prepareGpupaperHir(path)),
+        hir,
+        module: validateBlotRuntimeModule(hir),
       });
     } catch (cause) {
       outcomes[ordinal] = { status: "failed", path, cause };
@@ -50,29 +80,39 @@ export async function buildGpupaperBatch(
       const batch = await compileBlotRuntimeModulesOnGpu(
         prepared.map((entry) => entry.module),
       );
-      for (const [batchOrdinal, artifact] of batch.artifacts.entries()) {
+      if (batch.artifacts.length !== prepared.length) {
+        throw new Error(
+          `gpupaper emitted ${batch.artifacts.length} artifacts for ${prepared.length} prepared modules`,
+        );
+      }
+      const compiled = batch.artifacts.map((artifact, batchOrdinal) => {
         const entry = prepared[batchOrdinal];
         if (entry === undefined) {
           throw new Error(
             `gpupaper emitted unexpected batch artifact ${batchOrdinal}`,
           );
         }
-        outcomes[entry.ordinal] = {
-          status: "built",
-          path: entry.path,
-          wasm: artifact.wasm,
-          manifestBytes: artifact.manifestBytes,
-          capabilities: [
+        const cached: CachedGpupaperArtifact = {
+          wasm: artifact.wasm.slice(),
+          manifestBytes: artifact.manifestBytes.slice(),
+          capabilities: Object.freeze([
             ...new Set(
               artifact.manifest.imports.map((imported) => imported.capability),
             ),
-          ].sort(),
+          ].sort()),
         };
-      }
-      if (batch.artifacts.length !== prepared.length) {
-        throw new Error(
-          `gpupaper emitted ${batch.artifacts.length} artifacts for ${prepared.length} prepared modules`,
-        );
+        return { entry, cached };
+      });
+      for (const { entry, cached } of compiled) {
+        artifactByHirRevision.set(entry.hir, cached);
+        outcomes[entry.ordinal] = {
+          status: "built",
+          path: entry.path,
+          wasm: cached.wasm.slice(),
+          manifestBytes: cached.manifestBytes.slice(),
+          capabilities: cached.capabilities.slice(),
+          artifactSource: "compiled",
+        };
       }
     } catch (cause) {
       for (const entry of prepared) {

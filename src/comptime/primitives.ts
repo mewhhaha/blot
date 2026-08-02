@@ -18,6 +18,7 @@ import {
   F32X4_MASK_NAME,
   F32X4_NAME,
   show,
+  tupleOf,
   UNIT,
   type Value,
 } from "./value.ts";
@@ -615,6 +616,29 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
   string,
   Primitive
 >([
+  ["@continuation.cancel", {
+    arity: 1,
+    run: ([continuation], span) => {
+      if (continuation.tag !== "continuation") {
+        fail(
+          "BLOT_CANCEL_NOT_CONTINUATION",
+          `Continuation.cancel expects a handler continuation, found ${
+            show(continuation)
+          }.`,
+          span,
+        );
+      }
+      if (continuation.state.used) {
+        fail(
+          "BLOT_RESUME_TWICE",
+          "This continuation has already been resumed or cancelled.",
+          span,
+        );
+      }
+      continuation.state.used = true;
+      return UNIT;
+    },
+  }],
   // --- type algebra ---
   ["@type.range", {
     arity: 2,
@@ -854,6 +878,54 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
       tag: "array",
       elements: [...arrayElements(array, span, "@array.push"), value],
     }),
+  }],
+  ["@array.take", {
+    arity: 2,
+    run: ([array, index], span) => {
+      const elements = arrayElements(array, span, "@array.take");
+      const position = Number(intOf(index, span, "@array.take"));
+      if (position < 0 || position >= elements.length) {
+        return {
+          tag: "tag",
+          name: "TakeOutOfBounds",
+          payload: array,
+        };
+      }
+      return {
+        tag: "tag",
+        name: "Taken",
+        payload: tupleOf([
+          elements[position],
+          {
+            tag: "array",
+            elements: elements.filter((_, candidate) => candidate !== position),
+          },
+        ]),
+      };
+    },
+  }],
+  ["@array.split", {
+    arity: 2,
+    run: ([array, index], span) => {
+      const elements = arrayElements(array, span, "@array.split");
+      const position = Number(intOf(index, span, "@array.split"));
+      if (position < 0 || position >= elements.length) {
+        return {
+          tag: "tag",
+          name: "SplitOutOfBounds",
+          payload: array,
+        };
+      }
+      return {
+        tag: "tag",
+        name: "Split",
+        payload: tupleOf([
+          { tag: "array", elements: elements.slice(0, position) },
+          elements[position],
+          { tag: "array", elements: elements.slice(position + 1) },
+        ]),
+      };
+    },
   }],
 
   // --- integers ---

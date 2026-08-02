@@ -1,0 +1,26 @@
+open {} = (@import "../src/prelude/prelude.blot") ();
+
+let empty = Dict.empty;
+let first = Dict.put (empty, "count", 1);
+let second = Dict.put (first.1, "label", 2);
+let replaced = Dict.put (second.1, "count", 3);
+let removed = Dict.remove (replaced.1, "count");
+
+let option_or = fn (value, fallback) => case value of
+  #Some found => found,
+  #None => fallback
+end;
+
+let bool_int = fn value => case value of
+  #True => 1,
+  #False => 0
+end;
+
+return {
+  .first_previous = option_or (first.0, -1);
+  .replaced_previous = option_or (replaced.0, -1);
+  .visible = option_or (Dict.get (replaced.1, "count"), -1);
+  .has_label = bool_int (Dict.has (removed.1, "label"));
+  .removed = option_or (removed.0, -1);
+  .after_remove = option_or (Dict.get (removed.1, "count"), -1);
+};

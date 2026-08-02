@@ -1,9 +1,9 @@
-import {
-  type BlotRuntimeBlock,
-  type BlotRuntimeFunction,
-  type BlotRuntimeModule,
-  type BlotRuntimeOperation,
-  type BlotRuntimeType,
+import type {
+  BlotRuntimeBlock,
+  BlotRuntimeFunction,
+  BlotRuntimeModule,
+  BlotRuntimeOperation,
+  BlotRuntimeType,
 } from "../../../gpupaper/src/blot_runtime_hir.ts";
 import { PRIMITIVES } from "../comptime/primitives.ts";
 import {
@@ -13,9 +13,9 @@ import {
 } from "../comptime/value.ts";
 import type { CheckResult } from "../check/mod.ts";
 import {
-  coreResultExpression,
-  type CoreStep,
-  elaborateComputation,
+  type ComputationSchedule,
+  scheduleComputation,
+  scheduledResultExpression,
 } from "../core/computation.ts";
 import type { Decl, Expr, Pattern, Span } from "../syntax/ast.ts";
 import type { StagedExport } from "../stage.ts";
@@ -162,7 +162,7 @@ class ResidualHirBuilder {
   ): BlotRuntimeFunction {
     this.block();
     const environment = this.environment(null, this.#checked.values);
-    const computation = elaborateComputation(
+    const computation = scheduleComputation(
       module.declarations,
       module.result,
       module.resultEffects,
@@ -172,7 +172,7 @@ class ResidualHirBuilder {
       environment,
     );
     const result = this.dynamic(
-      this.evaluate(coreResultExpression(computation.result), environment),
+      this.evaluate(scheduledResultExpression(computation.result), environment),
     );
     const resultType = this.types[result.type];
     if (resultType.kind !== "unit") {
@@ -311,7 +311,7 @@ class ResidualHirBuilder {
     }
     if (expr.tag === "block") {
       const scope = this.environment(environment, null);
-      const computation = elaborateComputation(
+      const computation = scheduleComputation(
         expr.declarations,
         expr.result,
         expr.resultEffects,
@@ -320,7 +320,10 @@ class ResidualHirBuilder {
         computation.steps,
         scope,
       );
-      return this.evaluate(coreResultExpression(computation.result), scope);
+      return this.evaluate(
+        scheduledResultExpression(computation.result),
+        scope,
+      );
     }
     if (expr.tag === "if") return this.conditional(expr, environment);
     if (expr.tag === "case") return this.caseExpression(expr, environment);
@@ -328,7 +331,7 @@ class ResidualHirBuilder {
   }
 
   private declarations(
-    steps: readonly CoreStep[],
+    steps: ComputationSchedule["steps"],
     environment: ResidualEnvironment,
   ): void {
     for (const step of steps) {

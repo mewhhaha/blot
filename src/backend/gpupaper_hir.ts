@@ -1,8 +1,8 @@
-import {
-  type BlotRuntimeFunction,
-  type BlotRuntimeModule,
-  type BlotRuntimeOperation,
-  type BlotRuntimeType,
+import type {
+  BlotRuntimeFunction,
+  BlotRuntimeModule,
+  BlotRuntimeOperation,
+  BlotRuntimeType,
 } from "../../../gpupaper/src/blot_runtime_hir.ts";
 import {
   F32X4_TYPE_NAME,

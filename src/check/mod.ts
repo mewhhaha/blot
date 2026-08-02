@@ -27,6 +27,10 @@ import {
   type VariantCase,
 } from "./infer.ts";
 import type { ArrayIndexProof } from "../core/proof.ts";
+import {
+  elaborateModule,
+  type TypedCoreModule,
+} from "../core/computation.ts";
 import type { Decl, Expr, Pattern, Span } from "../syntax/ast.ts";
 import type { SimpleType } from "./type.ts";
 import { show, showModuleRow as showRow } from "./print.ts";
@@ -72,6 +76,8 @@ export interface CheckResult {
   readonly moduleType: SimpleType;
   /** Inferred module row retained for the emitted ABI manifest. */
   readonly moduleEffects: SimpleType;
+  /** Typed runtime Core for this root after inference and liveness erasure. */
+  readonly core: TypedCoreModule;
   /** Settled expression types from inference, including inlined dependencies. */
   readonly expressionTypes: ReadonlyMap<Expr, SimpleType>;
   /** Bounds proofs keyed by the direct access expression they certify. */
@@ -280,15 +286,26 @@ function assemble(
   const below = [...dependencies.values()];
 
   const checked = file.checked;
+  const expressionTypes = mergeAll([
+    ...below.map((dependency) => dependency.expressionTypes),
+    checked.expressionTypes,
+  ]);
+  const comptimeValues = mergeAll([
+    ...below.map((dependency) => dependency.comptimeValues),
+    checked.comptimeValues,
+  ]);
   const result: CheckResult = {
     type: show(checked.type),
     effects: file.effects,
     moduleType: checked.type,
     moduleEffects: checked.effects,
-    expressionTypes: mergeAll([
-      ...below.map((dependency) => dependency.expressionTypes),
-      checked.expressionTypes,
-    ]),
+    core: elaborateModule(
+      loaded.module,
+      expressionTypes,
+      checked.type,
+      comptimeValues,
+    ),
+    expressionTypes,
     arrayProofs: mergeAll([
       ...below.map((dependency) => dependency.arrayProofs),
       checked.arrayProofs,
@@ -301,10 +318,7 @@ function assemble(
       ...below.map((dependency) => dependency.opens),
       checked.opens,
     ]),
-    comptimeValues: mergeAll([
-      ...below.map((dependency) => dependency.comptimeValues),
-      checked.comptimeValues,
-    ]),
+    comptimeValues,
     shapes: mergeAll([
       ...below.map((dependency) => dependency.shapes),
       checked.shapes,

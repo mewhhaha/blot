@@ -1,0 +1,24 @@
+open {} = (@import "../src/prelude/prelude.blot") ();
+
+let taken = Array.take ([10, 20, 30], 1);
+let missed = Array.take ([10, 20, 30], 9);
+let split = Array.split ([10, 20, 30], 1);
+let taken_value = case taken of
+  #Taken (value, _) => value,
+  #TakeOutOfBounds _ => 0
+end;
+let missed_length = case missed of
+  #Taken (_, remainder) => Array.length remainder,
+  #TakeOutOfBounds original => Array.length original
+end;
+let split_lengths = case split of
+  #Split (before, value, after) =>
+    (Array.length before, value, Array.length after),
+  #SplitOutOfBounds _ => (0, 0, 0)
+end;
+
+return {
+  .taken_value = taken_value;
+  .missed_length = missed_length;
+  .split_lengths = split_lengths;
+};

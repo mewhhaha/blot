@@ -8,8 +8,9 @@ import {
 import {
   assert,
   assertEquals,
+  assertNotStrictEquals,
   assertRejects,
-  assertStringIncludes,
+  assertStrictEquals,
   assertThrows,
 } from "@std/assert";
 import { join } from "@std/path";
@@ -23,7 +24,7 @@ import {
 import { lowerModule } from "./src/backend/lower.ts";
 import { checkFile } from "./src/check/mod.ts";
 import { BlotError } from "./src/diagnostic.ts";
-import { load } from "./src/load.ts";
+import { load, refreshLoadedModules } from "./src/load.ts";
 
 async function blotFiles(directory: string): Promise<string[]> {
   const found: string[] = [];
@@ -51,6 +52,56 @@ Deno.test("staged scalar exports retain their checked values in gpupaper HIR", a
   assertEquals(operation.kind, "constant");
   if (operation.kind !== "constant") return;
   assertEquals(operation.value, 5n);
+});
+
+Deno.test("gpupaper HIR cache follows loaded revision identity", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "revision.blot");
+  await Deno.writeTextFile(path, "return 41;");
+
+  const first = await prepareGpupaperHir(path);
+  const repeated = await prepareGpupaperHir(path);
+  assertStrictEquals(repeated, first);
+  assertThrows(
+    () => (first.exports as unknown[]).push({}),
+    TypeError,
+  );
+
+  await Deno.writeTextFile(path, "return 42;");
+  await refreshLoadedModules();
+  const edited = await prepareGpupaperHir(path);
+  assertNotStrictEquals(edited, first);
+  const exported = edited.exports[0];
+  if (exported === undefined || exported.phase !== "runtime") {
+    throw new Error("edited gpupaper HIR omitted its runtime export");
+  }
+  const operation = edited.functions[exported.function].blocks[0].operations[0];
+  assertEquals(operation.kind, "constant");
+  if (operation.kind === "constant") assertEquals(operation.value, 42n);
+});
+
+Deno.test("gpupaper HIR cache invalidates a transitive importer", async () => {
+  const directory = await Deno.makeTempDir();
+  const dependency = join(directory, "dependency.blot");
+  const root = join(directory, "root.blot");
+  await Deno.writeTextFile(dependency, "return 40;");
+  await Deno.writeTextFile(
+    root,
+    'return (@import "./dependency.blot") ();',
+  );
+
+  const first = await prepareGpupaperHir(root);
+  await Deno.writeTextFile(dependency, "return 42;");
+  await refreshLoadedModules();
+  const edited = await prepareGpupaperHir(root);
+  assertNotStrictEquals(edited, first);
+  const exported = edited.exports[0];
+  if (exported === undefined || exported.phase !== "runtime") {
+    throw new Error("edited importer HIR omitted its runtime export");
+  }
+  const operation = edited.functions[exported.function].blocks[0].operations[0];
+  assertEquals(operation.kind, "constant");
+  if (operation.kind === "constant") assertEquals(operation.value, 42n);
 });
 
 Deno.test("gpupaper HIR refuses a function crossing the staged boundary", async () => {

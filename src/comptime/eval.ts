@@ -11,7 +11,6 @@
 // convention.
 
 import type {
-  Decl,
   Expr,
   Module,
   OpenMapping,
@@ -20,9 +19,9 @@ import type {
 } from "../syntax/ast.ts";
 import type { RecordAdaptation } from "../check/infer.ts";
 import {
-  coreResultExpression,
-  type CoreStep,
-  elaborateComputation,
+  type ComputationSchedule,
+  scheduleComputation,
+  scheduledResultExpression,
 } from "../core/computation.ts";
 import { expect, fail } from "../diagnostic.ts";
 import {
@@ -339,14 +338,14 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
 
     case "block": {
       const scope = childEnv(env);
-      const computation = elaborateComputation(
+      const computation = scheduleComputation(
         expr.declarations,
         expr.result,
         expr.resultEffects,
       );
       yield* runDeclarations(computation.steps, scope, runtime);
       return yield* evaluate(
-        coreResultExpression(computation.result),
+        scheduledResultExpression(computation.result),
         scope,
         runtime,
       );
@@ -368,7 +367,7 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
  * which the bodies happen to be forced.
  */
 function* runDeclarations(
-  steps: readonly CoreStep[],
+  steps: ComputationSchedule["steps"],
   scope: Env,
   runtime: Runtime,
 ): Generator<Perform, void, Value> {

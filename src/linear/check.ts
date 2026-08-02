@@ -314,9 +314,18 @@ function declareProduced(
       if (pattern.payload !== null) {
         let payload = NONE;
         if (produced.tag === "variant") payload = produced.payload;
+        if (produced.tag === "choice") {
+          const selected = produced.cases.get(pattern.name);
+          if (selected !== undefined) payload = selected;
+        }
         declareProduced(pattern.payload, payload, scope, analysis, parameter);
       } else if (produced.tag === "variant") {
         reportDiscardedPattern(pattern, produced.payload, analysis);
+      } else if (produced.tag === "choice") {
+        const selected = produced.cases.get(pattern.name);
+        if (selected !== undefined) {
+          reportDiscardedPattern(pattern, selected, analysis);
+        }
       }
       return;
     case "shape": {
@@ -770,7 +779,11 @@ type Produced =
   | { readonly tag: "many"; readonly values: readonly Produced[] }
   | { readonly tag: "sequence"; readonly elements: readonly Produced[] }
   | { readonly tag: "shape"; readonly fields: ReadonlyMap<string, Produced> }
-  | { readonly tag: "variant"; readonly payload: Produced };
+  | { readonly tag: "variant"; readonly payload: Produced }
+  | {
+    readonly tag: "choice";
+    readonly cases: ReadonlyMap<string, Produced>;
+  };
 
 const NONE: Produced = { tag: "none" };
 
@@ -790,6 +803,9 @@ function obligation(produced: Produced): "none" | "affine" | "linear" {
   if (produced.tag === "leaf") return produced.qualifier;
   if (produced.tag === "closure") return obligation(produced.captures);
   if (produced.tag === "variant") return obligation(produced.payload);
+  if (produced.tag === "choice") {
+    return obligation({ tag: "many", values: [...produced.cases.values()] });
+  }
   let members: readonly Produced[] = [];
   if (produced.tag === "many") members = produced.values;
   if (produced.tag === "sequence") members = produced.elements;
@@ -810,6 +826,9 @@ function containsBorrow(produced: Produced): boolean {
     return containsBorrow(produced.captures) || containsBorrow(produced.result);
   }
   if (produced.tag === "variant") return containsBorrow(produced.payload);
+  if (produced.tag === "choice") {
+    return [...produced.cases.values()].some(containsBorrow);
+  }
   if (produced.tag === "many") return produced.values.some(containsBorrow);
   if (produced.tag === "sequence") {
     return produced.elements.some(containsBorrow);
@@ -897,6 +916,24 @@ function joinAlternatives(values: readonly Produced[]): Produced {
         return value.payload;
       })),
     };
+  }
+  if (values.every((value) => value.tag === "choice")) {
+    const names = new Set<string>();
+    for (const value of values) {
+      if (value.tag !== "choice") throw new Error("expected a choice");
+      for (const name of value.cases.keys()) names.add(name);
+    }
+    const cases = new Map<string, Produced>();
+    for (const name of names) {
+      const alternatives: Produced[] = [];
+      for (const value of values) {
+        if (value.tag !== "choice") throw new Error("expected a choice");
+        const payload = value.cases.get(name);
+        if (payload !== undefined) alternatives.push(payload);
+      }
+      cases.set(name, joinAlternatives(alternatives));
+    }
+    return { tag: "choice", cases };
   }
   if (values.every((value) => value.tag === "closure")) {
     const closures = values.map((value) => {
@@ -1062,6 +1099,17 @@ function renameParameter(
       ),
     };
   }
+  if (produced.tag === "choice") {
+    return {
+      tag: "choice",
+      cases: new Map(
+        [...produced.cases].map(([name, payload]) => [
+          name,
+          renameParameter(payload, from, to),
+        ]),
+      ),
+    };
+  }
   return {
     tag: "variant",
     payload: renameParameter(produced.payload, from, to),
@@ -1071,11 +1119,6 @@ function renameParameter(
 function patternQualifier(pattern: Pattern): Qualifier | null {
   if (pattern.tag !== "name") return null;
   return pattern.qualifier;
-}
-
-function namePattern(pattern: Pattern): NamePattern | null {
-  if (pattern.tag !== "name") return null;
-  return pattern;
 }
 
 interface FunctionContract {
@@ -1181,6 +1224,17 @@ function substituteParameter(
         [...produced.fields].map(([name, field]) => [
           name,
           substituteParameter(field, parameter, argument),
+        ]),
+      ),
+    };
+  }
+  if (produced.tag === "choice") {
+    return {
+      tag: "choice",
+      cases: new Map(
+        [...produced.cases].map(([name, payload]) => [
+          name,
+          substituteParameter(payload, parameter, argument),
         ]),
       ),
     };
@@ -1486,8 +1540,64 @@ function walk(
         }
       }
 
+      const cancelsContinuation = application.callee.tag === "intrinsic" &&
+          application.callee.name === "@continuation.cancel" ||
+        application.callee.tag === "field" &&
+          application.callee.target.tag === "var" &&
+          application.callee.target.name === "Continuation" &&
+          application.callee.name === "cancel" &&
+          analysisBinding(scope, "Continuation") === null;
+      if (cancelsContinuation && application.args.length === 1) {
+        walk(application.args[0], scope, analysis, "move");
+        return NONE;
+      }
+
       if (application.callee.tag === "intrinsic") {
         const name = application.callee.name;
+        if (
+          (name === "@array.take" || name === "@array.split") &&
+          application.args.length === 2
+        ) {
+          const array = walk(application.args[0], scope, analysis, "move");
+          walk(application.args[1], scope, analysis, "move");
+          let failure = extractionParts(array, 1)[0];
+          if (array.tag === "sequence") failure = array;
+          if (name === "@array.take") {
+            let selected = extractionParts(array, 2);
+            if (
+              array.tag === "sequence" && application.args[1].tag === "int"
+            ) {
+              const position = Number(application.args[1].value);
+              const found = array.elements[position];
+              if (found !== undefined) {
+                selected = [
+                  found,
+                  {
+                    tag: "sequence",
+                    elements: array.elements.filter((_, index) =>
+                      index !== position
+                    ),
+                  },
+                ];
+              }
+            }
+            return {
+              tag: "choice",
+              cases: new Map([
+                ["Taken", { tag: "sequence", elements: selected }],
+                ["TakeOutOfBounds", failure],
+              ]),
+            };
+          }
+          const separated = extractionParts(array, 3);
+          return {
+            tag: "choice",
+            cases: new Map([
+              ["Split", { tag: "sequence", elements: separated }],
+              ["SplitOutOfBounds", failure],
+            ]),
+          };
+        }
         if (name === "@array.get" && application.args.length === 2) {
           const array = walk(application.args[0], scope, analysis, "project");
           walk(application.args[1], scope, analysis, "move");
@@ -1755,6 +1865,19 @@ function walk(
     default:
       return NONE;
   }
+}
+
+function extractionParts(
+  source: Produced,
+  count: number,
+): Produced[] {
+  const qualifier = obligation(source);
+  if (qualifier === "none") return Array.from({ length: count }, () => NONE);
+  return Array.from({ length: count }, () => ({
+    tag: "leaf" as const,
+    qualifier,
+    source: null,
+  }));
 }
 
 /** Spends a binding once, with the same checks an ordinary use gets. */

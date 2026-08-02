@@ -197,6 +197,12 @@ const Array = {
   .get = array_get;
   .set = array_set;
   .push = fn (values, value) => @array.push values value;
+  .take = fn (values, index) => @array.take values index;
+  .split = fn (values, index) => @array.split values index;
+};
+
+const Continuation = {
+  .cancel = @continuation.cancel;
 };
 
 // Structural recursion, which is all a surface loop becomes before inference.
@@ -464,6 +470,61 @@ const Iter = {
   .indexed = iter_indexed;
   .iterate = iterate;
   .collect = collect;
+};
+
+// --- dictionaries ----------------------------------------------------------
+
+const dict_type = fn value => [(@type.text, value)];
+
+const dict_get = fn (entries, key) => do
+  let go = rec (fn index => case array_get (entries, index) of
+    #Some entry => if text_eq (entry.0, key)
+      then Some entry.1
+      else go (@int.add index 1)
+    end,
+    #None => None
+  end);
+  in go 0
+end;
+
+const dict_put = fn (entries, key, value) => do
+  let replaced = fold (entries, (@array.empty, None, False),
+  (fn (state, entry) =>
+    if state.2
+    then (@array.push state.0 entry, state.1, state.2)
+    else if text_eq (entry.0, key)
+    then (@array.push state.0 (key, value), Some entry.1, True)
+    else (@array.push state.0 entry, state.1, state.2)
+    end));
+  let entries = if replaced.2
+    then replaced.0
+    else @array.push replaced.0 (key, value)
+  end;
+  in (replaced.1, entries)
+end;
+
+const dict_remove = fn (entries, key) => do
+  let removed = fold (entries, (@array.empty, None, False),
+  (fn (state, entry) =>
+    if state.2
+    then (@array.push state.0 entry, state.1, state.2)
+    else if text_eq (entry.0, key)
+    then (state.0, Some entry.1, True)
+    else (@array.push state.0 entry, state.1, state.2)
+    end));
+  in (removed.1, removed.0)
+end;
+
+const Dict = {
+  .of = dict_type;
+  .empty = @array.empty;
+  .get = dict_get;
+  .has = fn (entries, key) => case dict_get (entries, key) of
+    #Some _ => True,
+    #None => False
+  end;
+  .put = dict_put;
+  .remove = dict_remove;
 };
 
 // Stable insertion sort. `before (a, b)` is `#True` when `a` must come first;
@@ -961,6 +1022,7 @@ return {
   .Semigroup = Semigroup;
 
   .Array = Array;
+  .Continuation = Continuation;
   .fold = fold;
   .each = each;
   .map = map;
@@ -971,6 +1033,7 @@ return {
   .Iter = Iter;
   .iterate = iterate;
   .collect = collect;
+  .Dict = Dict;
 
   .Option = Option;
   .None = None;

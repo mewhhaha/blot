@@ -187,14 +187,17 @@ function recordBinding(
   scope: TypeEnv,
   name: string,
   identity: number | null = null,
-): void {
+): number {
   const typing = scope.names.get(name);
-  if (typing === undefined) return;
+  if (typing === undefined) {
+    throw new Error(`cannot record binding \`${name}\` before its type`);
+  }
   if (identity === null) {
     nextBinding += 1;
     identity = nextBinding;
   }
   scope.bindings.set(name, { id: identity, typing });
+  return identity;
 }
 
 function lookupBinding(env: TypeEnv, name: string): number | null {
@@ -437,6 +440,14 @@ interface Context {
   readonly variants: Map<Expr, readonly VariantCase[]>;
   readonly patternShapes: Map<Pattern, Shape>;
   readonly pinnedPatterns: Map<Pattern, PinnedDomain>;
+  /** Stable value identities introduced by source patterns. */
+  readonly patternBindings: Map<Pattern, number>;
+  /** Bindings proved to be handler continuations by a checked `@handle`. */
+  readonly continuationBindings: Set<number>;
+  /** Affine or linear bindings that may later prove to be continuations. */
+  readonly continuationCandidates: Set<number>;
+  /** Direct cancellation sites, validated after every handler is known. */
+  readonly cancelledContinuations: Map<Expr, number>;
   readonly grants: Map<Expr, GrantSignature>;
   /** The entry module's parameter name, when it has one. */
   parameterName: string | null;
@@ -459,6 +470,38 @@ interface Context {
    * name that block reads too early is early for the same reason.
    */
   forward: ReadonlySet<string>;
+}
+
+const CONTINUATION_CANCEL_EFFECT = "@continuation.cancel";
+
+function primitiveName(
+  expr: Expr,
+  context: Context,
+): string | null {
+  if (expr.tag === "intrinsic") return expr.name;
+  if (expr.tag === "var") {
+    const value = lookupComptime(context.types, expr.name);
+    if (value !== null && value.tag === "primitive") return value.name;
+    return null;
+  }
+  if (expr.tag !== "field" || expr.target.tag !== "var") return null;
+  const target = lookupComptime(context.types, expr.target.name);
+  if (target === null) return null;
+  let member: Value | undefined;
+  if (target.tag === "shape") member = target.fields.get(expr.name);
+  if (target.tag === "extended") member = target.members.get(expr.name);
+  if (member === undefined || member.tag !== "primitive") return null;
+  return member.name;
+}
+
+function refuseCancellationValue(expr: Expr, context: Context): void {
+  if (context.phase !== "runtime") return;
+  if (primitiveName(expr, context) !== "@continuation.cancel") return;
+  fail(
+    "BLOT_CANCEL_NOT_DIRECT",
+    "`Continuation.cancel` is an operational form and cannot be stored or passed as a first-class function. Apply it directly to a handler continuation.",
+    expr.span,
+  );
 }
 
 function located<T>(span: Span, work: () => T): T {
@@ -627,6 +670,7 @@ function inferUnrecorded(
       return UNIT;
 
     case "var": {
+      refuseCancellationValue(expr, context);
       const found = lookupType(context.types, expr.name);
       if (found === undefined) {
         if (context.forward.has(expr.name)) {
@@ -642,6 +686,7 @@ function inferUnrecorded(
     }
 
     case "intrinsic": {
+      refuseCancellationValue(expr, context);
       if (expr.name === "@array.get" || expr.name === "@array.set") {
         fail(
           "BLOT_ARRAY_ACCESS_NOT_DIRECT",
@@ -697,6 +742,7 @@ function inferUnrecorded(
     }
 
     case "field": {
+      refuseCancellationValue(expr, context);
       // A type value's namespace is compile-time, and the ordinary field rule
       // does not describe it: `Point` bridges to its storage, so `.new` is not
       // a field of the type and asking for one would be a false error. When
@@ -788,6 +834,7 @@ function inferUnrecorded(
         context,
         "A `comptime` expression",
       );
+      context.comptimeValues.set(expr.body, value);
       const bridged = bridge(value);
       if (bridged !== null) return bridged;
       return infer(expr.body, context, level, row);
@@ -919,6 +966,52 @@ function inferSpecial(
   let head = spine(expr);
   if (head === null) return null;
   const callee = head.callee;
+  let handleTuple: (Expr & { tag: "tuple" }) | null = null;
+  if (
+    primitiveName(callee, context) === "@continuation.cancel" &&
+    head.args.length === 1
+  ) {
+    const primitive = PRIMITIVE_TYPES.get("@continuation.cancel");
+    if (primitive === undefined) {
+      throw new Error("missing continuation cancellation primitive type");
+    }
+    if (callee.tag === "field") {
+      infer(callee.target, context, level, row);
+    }
+    context.expressionTypes.set(
+      callee,
+      instantiate(primitive, level, context.staging.instances),
+    );
+    const continuation = head.args[0];
+    if (continuation.tag !== "var") {
+      fail(
+        "BLOT_CANCEL_NOT_CONTINUATION",
+        "`Continuation.cancel` must consume a named handler continuation.",
+        continuation.span,
+      );
+    }
+    const identity = lookupBinding(context.types, continuation.name);
+    if (identity === null) {
+      fail(
+        "BLOT_CANCEL_NOT_CONTINUATION",
+        `\`${continuation.name}\` does not identify a handler continuation.`,
+        continuation.span,
+      );
+    }
+    if (!context.continuationCandidates.has(identity)) {
+      fail(
+        "BLOT_CANCEL_NOT_CONTINUATION",
+        `\`${continuation.name}\` is not an affine or linear handler continuation.`,
+        continuation.span,
+      );
+    }
+    infer(continuation, context, level, row);
+    located(expr.span, () => {
+      constrain(effects([CONTINUATION_CANCEL_EFFECT]), row);
+    });
+    context.cancelledContinuations.set(expr, identity);
+    return UNIT;
+  }
   if (callee.tag !== "intrinsic") return null;
 
   const comptimeIntegerArity = COMPTIME_INTEGER_ARITIES.get(callee.name);
@@ -1041,6 +1134,7 @@ function inferSpecial(
         expr.span,
       );
     }
+    handleTuple = parts;
     head = { callee: head.callee, args: [...parts.elements] };
   }
 
@@ -1057,6 +1151,7 @@ function inferSpecial(
       );
     }
     const discharged = effectLabel(effect);
+    const effectType = infer(head.args[0], context, level, row);
     let handlerExpression: Expr | undefined = head.args[2];
     if (handlerExpression.tag === "var") {
       handlerExpression = lookupLiteral(context.types, handlerExpression.name);
@@ -1068,6 +1163,7 @@ function inferSpecial(
         head.args[2].span,
       );
     }
+    const resumePatterns: Pattern[] = [];
     for (const member of handlerExpression.members) {
       if (member.tag !== "field" || member.name === "return") continue;
       const clause = member.value;
@@ -1085,11 +1181,20 @@ function inferSpecial(
           clause.span,
         );
       }
+      resumePatterns.push(resume);
     }
 
     const thunkRow = freshVar(level);
+    const handlerRow = freshVar(level);
     const thunk = infer(head.args[1], context, level, row);
     const handler = infer(head.args[2], context, level, row);
+    for (const resume of resumePatterns) {
+      const identity = context.patternBindings.get(resume);
+      if (identity === undefined) {
+        throw new Error("a checked handler resume has no binding identity");
+      }
+      context.continuationBindings.add(identity);
+    }
     const computationResult = freshVar(level);
     const handledResult = freshVar(level);
 
@@ -1114,13 +1219,13 @@ function inferSpecial(
         const continuation = {
           tag: "fun" as const,
           param: bridged.result,
-          effects: row,
+          effects: handlerRow,
           result: handledResult,
         };
         constrain(clause, {
           tag: "fun",
           param: tupleType([bridged.param, continuation]),
-          effects: row,
+          effects: handlerRow,
           result: handledResult,
         });
       }
@@ -1134,7 +1239,7 @@ function inferSpecial(
         constrain(returnClause, {
           tag: "fun",
           param: computationResult,
-          effects: row,
+          effects: handlerRow,
           result: handledResult,
         });
       } else {
@@ -1150,7 +1255,23 @@ function inferSpecial(
       if (remaining.length > 0) {
         located(expr.span, () => constrain(effects(remaining), row));
       }
+      const clauseEffects = rowLabels(handlerRow, new Set()).filter((label) =>
+        label !== CONTINUATION_CANCEL_EFFECT
+      );
+      if (clauseEffects.length > 0) {
+        located(expr.span, () => constrain(effects(clauseEffects), row));
+      }
     });
+    if (handleTuple !== null) {
+      const argumentType = tupleType([effectType, thunk, handler]);
+      context.expressionTypes.set(handleTuple, argumentType);
+      context.expressionTypes.set(callee, {
+        tag: "fun",
+        param: argumentType,
+        effects: row,
+        result: handledResult,
+      });
+    }
     return handledResult;
   }
 
@@ -2542,7 +2663,13 @@ function bindPattern(
     case "name": {
       const type = freshVar(level);
       scope.names.set(pattern.name, type);
-      recordBinding(scope, pattern.name);
+      const identity = recordBinding(scope, pattern.name);
+      context.patternBindings.set(pattern, identity);
+      if (
+        pattern.qualifier === "affine" || pattern.qualifier === "linear"
+      ) {
+        context.continuationCandidates.add(identity);
+      }
       return type;
     }
     case "pin": {
@@ -3337,6 +3464,7 @@ function checkAgainst(
     );
   }
   located(expr.span, () => constrain(bodyRow, expected.effects));
+  context.expressionTypes.set(expr, expected);
   return expected;
 }
 
@@ -3362,7 +3490,11 @@ function bindPatternAgainst(
   const scope = context.types;
   if (pattern.tag === "name") {
     scope.names.set(pattern.name, expected);
-    recordBinding(scope, pattern.name);
+    const identity = recordBinding(scope, pattern.name);
+    context.patternBindings.set(pattern, identity);
+    if (pattern.qualifier === "affine" || pattern.qualifier === "linear") {
+      context.continuationCandidates.add(identity);
+    }
     return;
   }
   const accepted = bindPattern(pattern, context, level);
@@ -3378,7 +3510,11 @@ function bindDeclaration(
 ): void {
   if (pattern.tag === "name") {
     context.types.names.set(pattern.name, type);
-    recordBinding(context.types, pattern.name, identity);
+    const binding = recordBinding(context.types, pattern.name, identity);
+    context.patternBindings.set(pattern, binding);
+    if (pattern.qualifier === "affine" || pattern.qualifier === "linear") {
+      context.continuationCandidates.add(binding);
+    }
     return;
   }
   // A destructuring binding types its parts by constraining the whole against
@@ -3793,6 +3929,10 @@ export function checkModule(
   const variants = new Map<Expr, readonly VariantCase[]>();
   const patternShapes = new Map<Pattern, Shape>();
   const pinnedPatterns = new Map<Pattern, PinnedDomain>();
+  const patternBindings = new Map<Pattern, number>();
+  const continuationBindings = new Set<number>();
+  const continuationCandidates = new Set<number>();
+  const cancelledContinuations = new Map<Expr, number>();
   const grants = new Map<Expr, GrantSignature>();
   const opens = new Map<Expr, ReadonlyMap<string, Value>>();
   const comptimeValues = new Map<Expr, Value>();
@@ -3813,6 +3953,10 @@ export function checkModule(
     variants,
     patternShapes,
     pinnedPatterns,
+    patternBindings,
+    continuationBindings,
+    continuationCandidates,
+    cancelledContinuations,
     grants,
     parameterName: module.parameter !== null && module.parameter.tag === "name"
       ? module.parameter.name
@@ -3848,6 +3992,14 @@ export function checkModule(
     );
   } else {
     result = infer(module.result, context, level, row);
+  }
+  for (const [cancellation, identity] of cancelledContinuations) {
+    if (continuationBindings.has(identity)) continue;
+    fail(
+      "BLOT_CANCEL_NOT_CONTINUATION",
+      "`Continuation.cancel` accepts only the one-shot continuation bound by a statically known handler clause.",
+      cancellation.span,
+    );
   }
   // The module's own body has been inferred, so a constraint it owed can be
   // applied before anything reads its row at the boundary.

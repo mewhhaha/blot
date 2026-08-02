@@ -1733,7 +1733,24 @@ let logging = {
 `resume` is one-shot. It is affine when aborting the rest of the computation
 discards no linear obligation. If the suspended computation captures one, every
 operation clause binds `!resume` and must resume exactly once; an aborting
-clause is `BLOT_LINEAR_HANDLER_MAY_ABORT`. Calling either form twice is rejected
+clause is `BLOT_LINEAR_HANDLER_MAY_ABORT` unless it explicitly cancels that
+continuation:
+
+```blot
+let cancelling = {
+  .write = fn (_, !resume) => do
+    _ <- Continuation.cancel resume;
+    in replacement
+  end;
+};
+```
+
+`Continuation.cancel resume` consumes the one-shot continuation without running
+the suspended computation. It is operational: it must be integrated by `<-`,
+cannot be stored as a first-class function, and accepts only a named affine or
+linear binding proved to be the resume parameter of a statically known handler.
+An alias of that same immutable binding retains the proof. Resuming or
+cancelling a continuation after either operation has consumed it is rejected
 statically and also guarded during evaluation.
 
 Effects not named by the handler remain in the inferred row. Handler
@@ -1927,19 +1944,22 @@ signed 64-bit range trap.
 
 ### 13.3 Arrays and shapes
 
-| primitive       | meaning                                         |
-| --------------- | ----------------------------------------------- |
-| `@array.empty`  | polymorphic empty array                         |
-| `@array.len`    | array length                                    |
-| `@array.get`    | proof-required indexed read                     |
-| `@array.set`    | proof-required immutable indexed replacement    |
-| `@array.push`   | immutable append                                |
-| `@shape.empty`  | empty shape                                     |
-| `@shape.get`    | get a field named by text                       |
-| `@shape.set`    | immutably set a field named by text             |
-| `@shape.remove` | immutably remove a field named by text          |
-| `@shape.names`  | field names in insertion order                  |
-| `@shape.has`    | return `#True` or `#False` for field membership |
+| primitive              | meaning                                            |
+| ---------------------- | -------------------------------------------------- |
+| `@array.empty`         | polymorphic empty array                            |
+| `@array.len`           | array length                                       |
+| `@array.get`           | proof-required indexed read                        |
+| `@array.set`           | proof-required immutable indexed replacement       |
+| `@array.push`          | immutable append                                   |
+| `@array.take`          | consuming extraction with the ordered remainder    |
+| `@array.split`         | consuming prefix, selected value, and suffix       |
+| `@continuation.cancel` | consume a handler continuation without resuming it |
+| `@shape.empty`         | empty shape                                        |
+| `@shape.get`           | get a field named by text                          |
+| `@shape.set`           | immutably set a field named by text                |
+| `@shape.remove`        | immutably remove a field named by text             |
+| `@shape.names`         | field names in insertion order                     |
+| `@shape.has`           | return `#True` or `#False` for field membership    |
 
 Array indexing is zero-based. Direct primitive access is accepted only with a
 static bounds proof; the prelude's total `Array.get` and `Array.set` return an
@@ -1970,7 +1990,22 @@ record has no one element type, and width subtyping hides its complete field
 set. Runtime `@shape.get`, `@shape.set`, or `@shape.remove` with such a name is
 `BLOT_DYNAMIC_SHAPE_FIELD`. Compile-time shape folds may use dynamic names while
 evaluating; their unevidenced result variables cannot prove a `sig`. Runtime
-dynamic keys belong in a homogeneous dictionary with an `Option` result.
+dynamic keys belong in the prelude's homogeneous `Dict` abstraction.
+
+`Dict.of A` is represented by an association array of `(Str, A)` pairs. The
+first matching key is visible. Its operations are ordinary prelude source:
+
+- `Dict.empty` creates an empty dictionary;
+- `Dict.get (entries, key)` and `Dict.has (entries, key)` observe the
+  dictionary;
+- `Dict.put (entries, key, value)` returns `(previous, updated)`; and
+- `Dict.remove (entries, key)` returns `(removed, updated)`.
+
+The previous or removed value is an `Option`. Returning it is significant for
+ownership: replacing or removing an owned value does not silently discard it.
+Starting from `Dict.empty`, these operations keep keys unique. A manually built
+association array with duplicate keys has defined first-match behavior; `put` or
+`remove` affects only that visible entry.
 
 #### Safe indexed access
 
@@ -1979,6 +2014,13 @@ There are two indexed APIs, chosen explicitly.
 `Array.get (xs, index)` and `Array.set (xs, index, value)` are total. They
 return `#Some result` when `index` is in bounds and `#None` otherwise. Their
 guard is ordinary prelude source.
+
+`Array.take (xs, index)` and `Array.split (xs, index)` consume the input while
+preserving every element. `take` returns `#Taken (value, remainder)` or
+`#TakeOutOfBounds xs`. `split` returns `#Split (before, value, after)` or
+`#SplitOutOfBounds xs`. The successful arrays preserve source order; either
+failure returns the original array. These are the extraction operations for an
+array whose elements carry ownership obligations.
 
 `Array.get` and `Array.length` bind their array parameter with `&`: observing an
 array does not consume it. An explicitly borrowed array must be passed in that
@@ -2151,6 +2193,7 @@ record currently exports:
 - text: `Text`, `Semigroup`, `text_eq`;
 - arrays: `Array`, `fold`, `each`, `map`, `filter`, `sum`, `upto`, `any`,
   `every`, and `sort_by`;
+- homogeneous dynamic keys: `Dict`;
 - iterators: `ever`, `Iter`, `iterate`, and `collect`;
 - variants: `Option`, `None`, `Some`, `unwrap_or`, `Result`, `Ok`, `Error`;
 - type tools: `Type`, `Set`, `attach`, `seal`, `unseal`, `Reflect`, `reflect`,
@@ -2196,6 +2239,11 @@ Before gpufuck lowering, Blot:
 - evaluates and erases compile-time-only values;
 - elaborates live block declarations into explicit Core `define` and `bind`
   steps with `return` or effectful tail results;
+- records each residual node's settled type through a graph-form Core `TyRep`
+  table, including recursive inference bounds and effect rows;
+- represents imports, constructors, checked pass-through values, static members,
+  and intrinsic applications directly instead of assigning invented function
+  types to their erased surface syntax;
 - specializes algebraic-subtyping results into concrete Core uses;
 - lowers shapes and tuples to nominal records;
 - lowers constructor sets to nominal variants;

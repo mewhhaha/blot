@@ -268,6 +268,48 @@ return first;`,
   "BLOT_LINEAR_ARRAY_SPREAD",
 );
 
+accepts(
+  "array take transfers a selected obligation and every remainder obligation",
+  `${CONSUME}let !left = 40;
+let !right = 41;
+let values = [fn () => consume (!left), fn () => consume (!right)];
+return case @array.take values 1 of
+  #Taken (selected, remainder) => case remainder of
+    [other] => @int.add (selected ()) (other ())
+  end,
+  #TakeOutOfBounds original => case original of
+    [first, second] => @int.add (first ()) (second ())
+  end
+end;`,
+);
+
+accepts(
+  "array take gives a dynamic partition explicit obligations",
+  `${CONSUME}let !token = 41;
+let values = [fn () => consume (!token)];
+let index = if 1 < 2 then 0 else 1 end;
+return case @array.take values index of
+  #Taken (selected, remainder) => do
+    in case remainder of _ => selected () end
+  end,
+  #TakeOutOfBounds original => do
+    in case original of _ => 0 end
+  end
+end;`,
+);
+
+accepts(
+  "array split makes every dynamic partition component explicit",
+  `${CONSUME}let !token = 41;
+let values = [fn () => consume (!token)];
+let index = if 1 < 2 then 0 else 1 end;
+return case @array.split values index of
+  #Split (before, selected, after) =>
+    case before of _ => case after of _ => selected () end end,
+  #SplitOutOfBounds original => case original of _ => 0 end
+end;`,
+);
+
 rejects(
   "a record spread cannot obscure an owned field",
   `${CONSUME}let !token = 41;
@@ -422,6 +464,62 @@ let work = fn () => do
 end;
 let resuming = { .ask = fn (_, !resume) => resume (); };
 return @handle (Ask, work, resuming);`,
+);
+
+accepts(
+  "a handler explicitly cancels a continuation that owns a resource",
+  `${CONSUME}const Ask = @effect { .ask = Unit -> Unit; };
+let !token = 41;
+let work = fn () => do
+  _ <- Ask.ask ();
+  in consume (!token)
+end;
+let cancelling = { .ask = fn (_, !resume) => do
+  _ <- Continuation.cancel resume;
+  in 0
+end; };
+return @handle (Ask, work, cancelling);`,
+);
+
+rejects(
+  "cancelling a handler continuation twice is rejected",
+  `const Ask = @effect { .ask = Unit -> Unit; };
+let work = fn () => do
+  _ <- Ask.ask ();
+  in ()
+end;
+let cancelling = { .ask = fn (_, !resume) => do
+  _ <- Continuation.cancel resume;
+  _ <- Continuation.cancel resume;
+  in ()
+end; };
+return @handle (Ask, work, cancelling);`,
+  "BLOT_LINEAR_CONSUMED_TWICE",
+);
+
+rejects(
+  "cancellation rejects an ordinary function",
+  `let ordinary = fn value => value;
+return do
+  _ <- Continuation.cancel ordinary;
+  in ()
+end;`,
+  "BLOT_CANCEL_NOT_CONTINUATION",
+);
+
+rejects(
+  "cancellation must be sequenced",
+  `const Ask = @effect { .ask = Unit -> Unit; };
+let work = fn () => do
+  _ <- Ask.ask ();
+  in ()
+end;
+let cancelling = { .ask = fn (_, !resume) => do
+  let cancelled = Continuation.cancel resume;
+  in cancelled
+end; };
+return @handle (Ask, work, cancelling);`,
+  "BLOT_UNSEQUENCED_EFFECT",
 );
 
 // A recursive group's names are in scope in every member's body, so the block
