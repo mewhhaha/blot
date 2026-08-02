@@ -56,6 +56,7 @@ import { fail } from "../diagnostic.ts";
 import {
   type GrantSignature,
   type PinnedDomain,
+  type RecordAdaptation,
   refuseDisagreement,
   type Shape,
   type VariantCase,
@@ -91,6 +92,8 @@ export interface Facts {
   /** Compile-time declaration values that remain inside residual blocks. */
   readonly comptimeValues: ReadonlyMap<Expr, Value>;
   readonly shapes: ReadonlyMap<Expr, Shape>;
+  readonly recordAdaptations: ReadonlyMap<Expr, RecordAdaptation>;
+  readonly optionalCases: ReadonlySet<Expr>;
   readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
   /** Dependencies keyed by literal import site, so relative paths never alias. */
   readonly modules: ReadonlyMap<
@@ -198,6 +201,8 @@ export interface RuntimeConstructor {
 
 const ENTRY = "main";
 const MODULE_RESULT = "blot$module$result";
+const OPTIONAL_ABSENT = "OptionalAbsent$";
+const OPTIONAL_PRESENT = "OptionalPresent$";
 
 export interface RuntimeExport {
   readonly sourceName: string;
@@ -2410,6 +2415,9 @@ function lowerCase(
   at: typeof surface,
 ): SurfaceExpression {
   if (controlCase(expr)) return lowerControlCase(expr, scope, lowering, at);
+  if (lowering.facts.optionalCases.has(expr)) {
+    return lowerOptionalCase(expr, scope, lowering, at);
+  }
   // A tuple scrutinee pins no variant — the tuple is the dispatch, and its
   // elements are what the arms discriminate on — so the arms decide this
   // before anything asks inference for a constructor set.
@@ -2557,6 +2565,70 @@ function lowerCase(
 
   if (fallback === null) return at.case(target, arms);
   return at.case(target, arms, { body: fallback });
+}
+
+function lowerOptionalCase(
+  expr: Expr & { tag: "case" },
+  scope: Scope,
+  lowering: Lowering,
+  at: typeof surface,
+): SurfaceExpression {
+  const optional = lowering.sum([
+    { name: OPTIONAL_ABSENT, payload: false },
+    { name: OPTIONAL_PRESENT, payload: true },
+  ]);
+  const target = lower(expr.target, scope, lowering);
+
+  let absent = at.unreachable("no optional arm matched unit");
+  for (const arm of expr.arms) {
+    if (
+      arm.pattern.tag !== "unit" && arm.pattern.tag !== "wildcard" &&
+      arm.pattern.tag !== "name"
+    ) continue;
+    const inner = childScope(scope);
+    if (arm.pattern.tag === "name") {
+      const binder = lowering.fresh(arm.pattern.name);
+      bindName(arm.pattern, binder, inner);
+      absent = surface.let(
+        binder,
+        at.name(UNIT_CONSTRUCTOR_NAME),
+        lower(arm.body, inner, lowering),
+      );
+    } else {
+      absent = lower(arm.body, inner, lowering);
+    }
+    break;
+  }
+
+  const carried = lowering.fresh("optional");
+  let present = at.unreachable("no optional arm matched a present value");
+  for (let index = expr.arms.length - 1; index >= 0; index -= 1) {
+    const arm = expr.arms[index];
+    if (arm.pattern.tag === "unit") continue;
+    const inner = childScope(scope);
+    const next = present;
+    const matched = matchElement(
+      arm.pattern,
+      at.name(carried),
+      inner,
+      lowering,
+      () => next,
+    );
+    present = matched(lower(arm.body, inner, lowering));
+  }
+
+  return at.case(target, [
+    {
+      constructor: constructorName(optional, OPTIONAL_ABSENT),
+      binders: [],
+      body: absent,
+    },
+    {
+      constructor: constructorName(optional, OPTIONAL_PRESENT),
+      binders: [carried],
+      body: present,
+    },
+  ]);
 }
 
 function controlCase(expr: Expr & { tag: "case" }): boolean {
@@ -3485,6 +3557,67 @@ function storeUpdateOptions(
   return { owned: true };
 }
 
+function lowerRecordArgument(
+  argument: Expr,
+  scope: Scope,
+  lowering: Lowering,
+  at: typeof surface,
+): SurfaceExpression {
+  const adaptation = lowering.facts.recordAdaptations.get(argument);
+  if (adaptation === undefined) return lower(argument, scope, lowering);
+
+  const source = lowering.nominal(adaptation.sourceFields);
+  const target = lowering.nominal(
+    adaptation.fields.map((field) => field.name),
+  );
+  const optional = lowering.sum([
+    { name: OPTIONAL_ABSENT, payload: false },
+    { name: OPTIONAL_PRESENT, payload: true },
+  ]);
+  const value = lowering.fresh("record");
+  const binders = source.fields.map((field) => lowering.fresh(field));
+  const fields = new Map(
+    adaptation.fields.map((field) => [field.name, field]),
+  );
+  const arguments_ = target.fields.map((name) => {
+    const field = fields.get(name);
+    if (field === undefined) {
+      throw new Error(`record adaptation omitted target field .${name}`);
+    }
+    if (field.optional === "absent") {
+      return at.name(constructorName(optional, OPTIONAL_ABSENT));
+    }
+    if (field.optional === "unit") {
+      return at.name(UNIT_CONSTRUCTOR_NAME);
+    }
+    const index = source.fields.indexOf(name);
+    if (index < 0) {
+      throw new Error(`record adaptation omitted source field .${name}`);
+    }
+    const present = at.name(binders[index]);
+    if (field.optional === "present") {
+      return at.apply(
+        at.name(constructorName(optional, OPTIONAL_PRESENT)),
+        present,
+      );
+    }
+    return present;
+  });
+  let rebuilt: SurfaceExpression = at.name(target.name);
+  if (arguments_.length > 0) {
+    rebuilt = at.apply(at.name(target.name), ...arguments_);
+  }
+  return surface.let(
+    value,
+    lower(argument, scope, lowering),
+    at.case(at.name(value), [{
+      constructor: source.name,
+      binders,
+      body: rebuilt,
+    }]),
+  );
+}
+
 function lowerApply(
   expr: Expr & { tag: "apply" },
   scope: Scope,
@@ -4063,7 +4196,9 @@ function lowerApply(
 
   return at.apply(
     lower(spine.callee, scope, lowering),
-    ...spine.args.map((argument) => lower(argument, scope, lowering)),
+    ...spine.args.map((argument) =>
+      lowerRecordArgument(argument, scope, lowering, at)
+    ),
   );
 }
 

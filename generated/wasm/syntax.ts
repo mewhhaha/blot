@@ -97,6 +97,11 @@ export type MainTokenKind =
   | "TEXT"
   | "ELSE_IF"
   | "INTRINSIC"
+  | "ANGLE_LEFT"
+  | "ANGLE_RIGHT"
+  | "ANGLE_CLOSE"
+  | "ANGLE_SELF_CLOSE"
+  | "QUESTION"
   | "OPERATOR";
 
 export type TriviaTokenKind =
@@ -218,6 +223,7 @@ export type Token =
   | EofToken;
 
 export type RuleName =
+  | "operator_token"
   | "program"
   | "module_header"
   | "operator_section"
@@ -260,6 +266,13 @@ export type RuleName =
   | "parenthesized_or_tuple"
   | "array"
   | "array_element"
+  | "element_statement"
+  | "element_name"
+  | "element_property"
+  | "element_property_value"
+  | "element_property_expression"
+  | "element_self_close"
+  | "element_body"
   | "value"
   | "shape"
   | "shape_member"
@@ -316,6 +329,9 @@ export interface RuleCursorBase<N extends RuleName = RuleName> {
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
+export interface OperatorTokenCursor extends RuleCursorBase<"operator_token"> {
+}
+
 export interface ProgramCursor extends RuleCursorBase<"program"> {
   field(name: "declarations"): ReadonlyArray<DeclarationCursor>;
   field(name: "header"): ModuleHeaderCursor | null;
@@ -338,7 +354,7 @@ export interface OperatorSectionCursor extends RuleCursorBase<"operator_section"
 
 export interface FixityDeclarationCursor extends RuleCursorBase<"fixity_declaration"> {
   field(name: "associativity"): TokenCursor<"literal", "infix"> | TokenCursor<"literal", "infixl"> | TokenCursor<"literal", "infixr"> | TokenCursor<"literal", "prefix">;
-  field(name: "operator"): TokenCursor<"named", "OPERATOR">;
+  field(name: "operator"): OperatorTokenCursor;
   field(name: "precedence"): TokenCursor<"named", "INTEGER">;
   field(name: "target"): QualifiedNameCursor;
   field(name: string): CursorFieldValue | undefined;
@@ -418,7 +434,7 @@ export interface ResultCursor extends RuleCursorBase<"result"> {
 }
 
 export interface BindingPatternCursor extends RuleCursorBase<"binding_pattern"> {
-  field(name: "qualifier"): TokenCursor<"named", "OPERATOR"> | null;
+  field(name: "qualifier"): OperatorTokenCursor | null;
   field(name: "value"): PatternCoreCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
@@ -477,7 +493,7 @@ export interface ExpressionCursor extends RuleCursorBase<"expression"> {
 }
 
 export interface InfixOperationCursor extends RuleCursorBase<"infix_operation"> {
-  field(name: "operator"): TokenCursor<"named", "OPERATOR">;
+  field(name: "operator"): OperatorTokenCursor;
   field(name: "right"): OperandCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
@@ -562,6 +578,43 @@ export interface ArrayElementCursor extends RuleCursorBase<"array_element"> {
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
+export interface ElementStatementCursor extends RuleCursorBase<"element_statement"> {
+  field(name: "ending"): ElementBodyCursor | ElementSelfCloseCursor;
+  field(name: "name"): ElementNameCursor;
+  field(name: "properties"): ReadonlyArray<ElementPropertyCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ElementNameCursor extends RuleCursorBase<"element_name"> {
+}
+
+export interface ElementPropertyCursor extends RuleCursorBase<"element_property"> {
+  field(name: "name"): FieldNameCursor;
+  field(name: "value"): ElementPropertyValueCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ElementPropertyValueCursor extends RuleCursorBase<"element_property_value"> {
+}
+
+export interface ElementPropertyExpressionCursor extends RuleCursorBase<"element_property_expression"> {
+  field(name: "value"): ValueCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ElementSelfCloseCursor extends RuleCursorBase<"element_self_close"> {
+}
+
+export interface ElementBodyCursor extends RuleCursorBase<"element_body"> {
+  field(name: "children"): ReadonlyArray<StatementCursor>;
+  field(name: "closing"): ElementNameCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
 export interface ValueCursor extends RuleCursorBase<"value"> {
 }
 
@@ -582,6 +635,7 @@ export interface ShapeSpreadCursor extends RuleCursorBase<"shape_spread"> {
 
 export interface ShapeFieldCursor extends RuleCursorBase<"shape_field"> {
   field(name: "name"): FieldNameCursor;
+  field(name: "optional"): TokenCursor<"named", "QUESTION"> | null;
   field(name: "value"): ValueCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
@@ -724,6 +778,7 @@ export interface QualifiedNamePartCursor extends RuleCursorBase<"qualified_name_
 }
 
 export type AnyRuleCursor =
+  | OperatorTokenCursor
   | ProgramCursor
   | ModuleHeaderCursor
   | OperatorSectionCursor
@@ -766,6 +821,13 @@ export type AnyRuleCursor =
   | ParenthesizedOrTupleCursor
   | ArrayCursor
   | ArrayElementCursor
+  | ElementStatementCursor
+  | ElementNameCursor
+  | ElementPropertyCursor
+  | ElementPropertyValueCursor
+  | ElementPropertyExpressionCursor
+  | ElementSelfCloseCursor
+  | ElementBodyCursor
   | ValueCursor
   | ShapeCursor
   | ShapeMemberCursor

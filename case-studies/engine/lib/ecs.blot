@@ -23,7 +23,14 @@ open {} = (@import "blot:prelude") ();
 const Store = fn component => [Option component];
 
 const attach = fn (store, value) => @array.push store (Some value);
-const at = fn (store, id) => @array.get store id;
+const at = fn (store, id) => case Array.get (store, id) of
+  #Some value => value,
+  #None => None
+end;
+const replace = fn (store, id, value) => case Array.set (store, id, value) of
+  #Some updated => updated,
+  #None => store
+end;
 const count = fn store => @array.len store;
 
 // A system over one component: rebuild the store from the entities that have
@@ -33,7 +40,7 @@ const each_1 = fn (store, step) => fold (
   upto (0, count store),
   store,
   (fn (state, id) => case at (store, id) of
-    #Some value => @array.set state id (Some (step value)),
+    #Some value => replace (state, id, Some (step value)),
     #None => state
   end)
 );
@@ -48,7 +55,7 @@ const each_2 = fn (left, right, step) => fold (
   upto (0, count left),
   left,
   (fn (state, id) => case (at (left, id), at (right, id)) of
-    (#Some a, #Some b) => @array.set state id (Some (step (a, b))),
+    (#Some a, #Some b) => replace (state, id, Some (step (a, b))),
     _ => state
   end)
 );

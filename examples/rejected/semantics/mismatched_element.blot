@@ -1,0 +1,8 @@
+let div = fn _ => fn _ => ();
+
+let view = fn () => do
+  <div>
+  </span>;
+end;
+
+return view;

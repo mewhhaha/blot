@@ -12,6 +12,7 @@
 // scan.
 
 import {
+  admitsOmission,
   boundAbove,
   boundBelow,
   freshRigid,
@@ -142,6 +143,7 @@ export function constrain(
     for (const [name, required] of rhs.fields) {
       const present = lhs.fields.get(name);
       if (present === undefined) {
+        if (admitsOmission(required)) continue;
         throw new TypeError_(
           `no field \`.${name}\` on ${describe(lhs)}`,
         );

@@ -79,6 +79,7 @@ const REJECTIONS: Record<
   // turns out to hold — so the read is decided without the length ever being a
   // number.
   "index_at_or_past_length": { code: "BLOT_OUT_OF_BOUNDS", stage: "check" },
+  "unproven_index": { code: "BLOT_UNPROVEN_INDEX", stage: "check" },
   "wrong_argument": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "missing_field": { code: "BLOT_TYPE_ERROR", stage: "check" },
   // The same rule across a module boundary, and the half that was wrong: an
@@ -138,6 +139,17 @@ const REJECTIONS: Record<
     stage: "check",
   },
   "generic_refused": { code: "BLOT_REFUSED", stage: "check" },
+  "zero_integer_width": { code: "BLOT_REFUSED", stage: "run" },
+  "mismatched_element": {
+    code: "BLOT_MISMATCHED_ELEMENT",
+    stage: "check",
+  },
+  "duplicate_element_property": {
+    code: "BLOT_DUPLICATE_FIELD",
+    stage: "check",
+  },
+  "missing_element_property": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "tagged_sig": { code: "BLOT_TAGGED_SIG", stage: "check" },
   "bad_declaration_tag": {
     code: "BLOT_BAD_DECLARATION_TAG",
     stage: "check",

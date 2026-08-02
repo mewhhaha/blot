@@ -27,11 +27,13 @@ if (command === undefined || rest.length === 0) {
 
 let paths: readonly string[] = rest;
 let buildMode: BuildMode = "direct";
+let buildTarget: BuildTarget = "gpufuck";
 let serviceUrl: string | undefined;
 if (command === "build") {
   const buildArguments = parseBuildArguments(rest);
   paths = buildArguments.paths;
   buildMode = buildArguments.mode;
+  buildTarget = buildArguments.target;
   serviceUrl = buildArguments.serviceUrl;
   if (paths.length === 0) {
     printUsage();
@@ -43,25 +45,32 @@ let failures = 0;
 let tests = 0;
 let failedTests = 0;
 
-for (const path of paths) {
-  try {
-    if (command === "check") await check(path);
-    else if (command === "test") {
-      const outcomes = await testFile(path);
-      tests += outcomes.length;
-      failedTests += reportTestOutcomes(outcomes);
-    } else if (command === "ownership") await ownership(path);
-    else if (command === "build") {
-      await buildFile(path, { mode: buildMode, serviceUrl });
-    } else if (command === "eval") await evaluateFile(path);
-    else if (command === "ast") await dumpAst(path);
-    else {
-      console.error(`unknown command \`${command}\``);
-      Deno.exit(2);
+if (command === "build" && buildTarget === "gpupaper") {
+  failures += await buildGpupaperFiles(paths);
+} else {
+  for (const path of paths) {
+    try {
+      if (command === "check") await check(path);
+      else if (command === "test") {
+        const outcomes = await testFile(path);
+        tests += outcomes.length;
+        failedTests += reportTestOutcomes(outcomes);
+      } else if (command === "ownership") await ownership(path);
+      else if (command === "build") {
+        await buildGpufuckFile(path, {
+          mode: buildMode,
+          serviceUrl,
+        });
+      } else if (command === "eval") await evaluateFile(path);
+      else if (command === "ast") await dumpAst(path);
+      else {
+        console.error(`unknown command \`${command}\``);
+        Deno.exit(2);
+      }
+    } catch (error) {
+      failures += 1;
+      report(path, error);
     }
-  } catch (error) {
-    failures += 1;
-    report(path, error);
   }
 }
 
@@ -78,11 +87,21 @@ if (failures > 0 || failedTests > 0) exitCode = 1;
 Deno.exit(exitCode);
 
 type BuildMode = "direct" | "service";
+type BuildTarget = "gpufuck" | "gpupaper";
 
 interface BuildOptions {
   readonly mode: BuildMode;
+  readonly target: BuildTarget;
   readonly serviceUrl: string | undefined;
 }
+
+type GpufuckBuildOptions = Omit<BuildOptions, "target">;
+
+type BuiltFileArtifact = {
+  readonly wasm: Uint8Array;
+  readonly manifestBytes: Uint8Array;
+  readonly capabilities: readonly string[];
+};
 
 interface BuildArguments extends BuildOptions {
   readonly paths: readonly string[];
@@ -90,6 +109,7 @@ interface BuildArguments extends BuildOptions {
 
 function parseBuildArguments(arguments_: readonly string[]): BuildArguments {
   let mode: BuildMode = "direct";
+  let target: BuildTarget = "gpufuck";
   let serviceUrl: string | undefined;
   const paths: string[] = [];
   for (const argument of arguments_) {
@@ -99,6 +119,14 @@ function parseBuildArguments(arguments_: readonly string[]): BuildArguments {
     }
     if (argument === "--mode=service") {
       mode = "service";
+      continue;
+    }
+    if (argument === "--target=gpufuck") {
+      target = "gpufuck";
+      continue;
+    }
+    if (argument === "--target=gpupaper") {
+      target = "gpupaper";
       continue;
     }
     if (argument.startsWith("--service-url=")) {
@@ -116,7 +144,10 @@ function parseBuildArguments(arguments_: readonly string[]): BuildArguments {
   if (serviceUrl !== undefined && mode !== "service") {
     throw new Error("--service-url requires --mode=service");
   }
-  return { mode, paths, serviceUrl };
+  if (target === "gpupaper" && mode === "service") {
+    throw new Error("--target=gpupaper does not support --mode=service");
+  }
+  return { mode, target, paths, serviceUrl };
 }
 
 async function serveCompiler(arguments_: readonly string[]): Promise<void> {
@@ -135,7 +166,9 @@ async function serveCompiler(arguments_: readonly string[]): Promise<void> {
 
 function printUsage(): void {
   console.error("usage: blot <check|test|eval|ast|ownership> <file.blot>...");
-  console.error("       blot build [--mode=direct|service] <file.blot>...");
+  console.error(
+    "       blot build [--target=gpufuck|gpupaper] [--mode=direct|service] <file.blot>...",
+  );
   console.error("       blot serve [--port=4765]");
 }
 
@@ -225,13 +258,26 @@ async function ownership(path: string): Promise<void> {
   }
 }
 
-/** Lowers to gpufuck's Core, compiles on the GPU, and writes the Wasm binary. */
-async function buildFile(path: string, options: BuildOptions): Promise<void> {
-  let built: {
-    readonly wasm: Uint8Array;
-    readonly manifestBytes: Uint8Array;
-    readonly capabilities: readonly string[];
-  };
+async function buildGpupaperFiles(paths: readonly string[]): Promise<number> {
+  const backend = await import("./backend/gpupaper.ts");
+  const outcomes = await backend.buildGpupaperBatch(paths);
+  let failures = 0;
+  for (const outcome of outcomes) {
+    if (outcome.status === "failed") {
+      failures += 1;
+      report(outcome.path, outcome.cause);
+      continue;
+    }
+    await writeBuiltFile(outcome.path, outcome);
+  }
+  return failures;
+}
+
+async function buildGpufuckFile(
+  path: string,
+  options: GpufuckBuildOptions,
+): Promise<void> {
+  let built: BuiltFileArtifact;
   if (options.mode === "service") {
     const { buildWithCompilerService } = await import("./compiler_service.ts");
     built = await buildWithCompilerService(path, options.serviceUrl);
@@ -239,6 +285,13 @@ async function buildFile(path: string, options: BuildOptions): Promise<void> {
     const backend = await import("./backend/compile.ts");
     built = await backend.build(path);
   }
+  await writeBuiltFile(path, built);
+}
+
+async function writeBuiltFile(
+  path: string,
+  built: BuiltFileArtifact,
+): Promise<void> {
   const output = path.replace(/\.blot$/, ".wasm");
   const manifest = `${output}.json`;
   await Deno.writeFile(output, built.wasm);

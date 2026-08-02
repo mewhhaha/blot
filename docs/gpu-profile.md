@@ -19,18 +19,36 @@ in a benchmark months later.
 
 | counter                    |              blot | gpu-duck | note                                               |
 | -------------------------- | ----------------: | -------: | -------------------------------------------------- |
-| `lexerStates`              |               118 |      175 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`              |               122 |      175 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity` |                 5 |        9 | worst-case island candidates allocated per token   |
 | `islandCount`              |                21 |       24 |                                                    |
-| `islandStates`             |               644 |        — |                                                    |
+| `islandStates`             |               764 |        — |                                                    |
 | `contractionRounds`        |                33 |        — | fixed dispatch bound                               |
-| `denseTransitionBytes`     |           556,416 |        — | immutable device table                             |
-| `packedBytes`              |           677,727 |        — | version-3 runtime section                          |
+| `denseTransitionBytes`     |           705,936 |        — | immutable device table                             |
+| `packedBytes`              |           858,269 |        — | version-3 runtime section                          |
 | `rootLoopIsland`           | 3 (`declaration`) |        — | strict root loop proven                            |
 
 blot beats the gpu-duck reference on both counters that matter most for
 occupancy, because it has three declaration forms where gpu-duck has six and no
 type sublanguage at all.
+
+Element statements add three lexer states and forty-eight island states, with
+74,688 more dense-transition bytes and 92,327 more packed bytes. Candidate
+multiplicity, contraction rounds, both scratch factors, and the island count do
+not move. Exact `<` and `>` have fixed token identities but remain members of
+the infix operator rule; longer comparisons such as `<=` remain ordinary
+operators. `</` and `/>` are excluded from the operator token and close paired
+and self-closing elements. An element body repeats the existing bounded
+`statement` island, so nesting leaves no residual grammar recursion and needs no
+parser resolution or contextual text lexer.
+
+Changing element properties to record-shaped `.field=value` syntax and adding
+the `.field? = T` optional-field marker add one lexer state and seventy-two
+island states over the first element grammar, with 74,832 more dense-transition
+bytes and 88,215 more packed bytes. Candidate multiplicity, contraction rounds,
+and the island count remain unchanged. Exact `?` has a dedicated token but
+remains available to prefix and infix fixities through the shared operator
+rules; longer operators beginning with `?` remain ordinary operator tokens.
 
 Pinned patterns add five island states, with 4,320 more dense-transition bytes
 and 3,679 more packed bytes. Lexer states, candidate multiplicity, and

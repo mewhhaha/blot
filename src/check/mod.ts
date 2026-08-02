@@ -19,6 +19,7 @@ import {
   type GrantSignature,
   newStaging,
   type PinnedDomain,
+  type RecordAdaptation,
   settle,
   type Shape,
   type Staging,
@@ -70,6 +71,8 @@ export interface CheckResult {
   readonly moduleType: SimpleType;
   /** Inferred module row retained for the emitted ABI manifest. */
   readonly moduleEffects: SimpleType;
+  /** Settled expression types from inference, including inlined dependencies. */
+  readonly expressionTypes: ReadonlyMap<Expr, SimpleType>;
   /**
    * Ownership facts for every module that contributed code, keyed by the `name`
    * pattern that bound each binding. The backend inlines an imported module
@@ -83,6 +86,8 @@ export interface CheckResult {
   readonly comptimeValues: ReadonlyMap<Expr, Value>;
   /** Field and constructor sets the backend needs; see `Checked`. */
   readonly shapes: ReadonlyMap<Expr, Shape>;
+  readonly recordAdaptations: ReadonlyMap<Expr, RecordAdaptation>;
+  readonly optionalCases: ReadonlySet<Expr>;
   readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
   readonly patternShapes: ReadonlyMap<Pattern, Shape>;
   readonly pinnedPatterns: ReadonlyMap<Pattern, PinnedDomain>;
@@ -277,6 +282,10 @@ function assemble(
     effects: file.effects,
     moduleType: checked.type,
     moduleEffects: checked.effects,
+    expressionTypes: mergeAll([
+      ...below.map((dependency) => dependency.expressionTypes),
+      checked.expressionTypes,
+    ]),
     ownership: mergeAll([
       ...below.map((dependency) => dependency.ownership),
       file.ownership,
@@ -292,6 +301,14 @@ function assemble(
     shapes: mergeAll([
       ...below.map((dependency) => dependency.shapes),
       checked.shapes,
+    ]),
+    recordAdaptations: mergeAll([
+      ...below.map((dependency) => dependency.recordAdaptations),
+      checked.recordAdaptations,
+    ]),
+    optionalCases: new Set([
+      ...below.flatMap((dependency) => [...dependency.optionalCases]),
+      ...checked.optionalCases,
     ]),
     variants: mergeAll([
       ...below.map((dependency) => dependency.variants),

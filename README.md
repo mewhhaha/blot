@@ -92,6 +92,22 @@ just inspect                  # the counters recorded in docs/gpu-profile.md
 just install                  # Helix: grammar, queries, `.blot` association
 ```
 
+An adjacent gpupaper checkout is an explicit experimental target:
+
+```bash
+WGPU_BACKENDS=vulkan deno run --unstable-webgpu --allow-read --allow-write \
+  src/cli.ts build --target=gpupaper \
+  examples/minimal.blot examples/arithmetic.blot
+```
+
+Blot still owns parsing, checking, staging, specialization, and Runtime HIR
+production. Gpupaper validates that HIR and emits Wasm on the GPU. The target is
+intentionally local-checkout-only for now and does not support compiler-service
+mode. Multiple paths are prepared independently, then admitted modules are
+packed in stable input order into GPU emission groups of at most 16. A source
+failure remains local to its path; after submission the admitted batch is
+atomic rather than returning partially trusted artifacts.
+
 `just build` is an isolated direct build and releases its GPU device on exit.
 For repeated local builds, run `just serve` in one terminal and use
 `just build-service file.blot` from another. The service binds loopback only,
@@ -166,6 +182,24 @@ every name in the pattern is known to exist afterward.
 from its value by `in`; without `in`, its value is `()`. The marker is required
 by the strict GPU grammar because a bare trailing name and the start of
 `name := ...;` have the same one-token prefix.
+
+Element statements are ordinary effectful component calls with property records
+and a nullary child computation:
+
+```blot
+<div .class="counter" .hidden={hidden}>
+  _ <- text "Count: ";
+  <Button .disabled=True />;
+</div>;
+```
+
+This lowers to `div { .class = "counter"; .hidden = hidden; } children` under
+`<-`. Both `div` and `Button` are ordinary lexical bindings; the syntax supplies
+no implicit renderer or text operation. The body contains ordinary statements,
+so effect order stays explicit, and a component renders its children by
+sequencing `children ()`. A component's expected record makes ordinary fields
+required. Writing `.field? = T` in that record means `.field = T | ()`, so the
+field may be omitted and receives `()` at the call.
 
 `for` is a declaration rather than an expression because what it produces is an
 effect on the enclosing scope: the names its body rebinds with `:=` are the
@@ -274,7 +308,7 @@ That is the whole of it. `type`, `interface`, `effect`, and `duck` do not exist
 as declaration forms, because types are ordinary compile-time values:
 
 ```blot
-const I32 = range (-2147483648, 2147483647);
+const I32 = I 32;
 const Message = #Ready | #Progress I32 | #Failed Str;
 const Point = struct { .x = I32; .y = I32; };
 ```
@@ -307,15 +341,20 @@ const Meters = seal ("Meters", I32)
 
 A shape's fields are in declaration order and `reorder` rebuilds one in any
 other, so choosing a placement is an operation on the shape rather than a second
-entry point into `struct`. _Packing_ is a separate question — which bytes a
-field occupies rather than which slot — and stays a separate call:
+entry point into `struct`. _Packing_ is a separate question — which bits a field
+occupies rather than which slot — and stays a separate call:
 
 ```blot
-const Record = { .flag = U8; .id = I32; .code = U8; .name = Str; };
-struct Record                          // (U8, I32, U8, Str) → 24 bytes, 10 padding
-packed (Record, byte_width)            // the order and offsets: 14 bytes, 0
-struct (reorder (Record, tight.order)) // storage arranged that way, if you want it
+const Pixel = { .red = U 8; .green = U 8; .mode = U 2; };
+const bits = packed Pixel;
+// bits.bit_size == 18, bits.byte_size == 3
 ```
+
+`I n` and `U n` are ordinary source functions that construct signed and unsigned
+integer ranges and attach their declared width as transparent metadata. `packed`
+is also prelude source: it reads that metadata and reports each field's bit
+offset, width, and mask. It is a layout description, not another runtime
+representation; `Int` arithmetic and the Core Wasm ABI remain signed 64-bit.
 
 The name-to-slot mapping is compile-time knowledge, so `new` runs at compile
 time and what reaches WebAssembly is the tuple and a projection at a fixed

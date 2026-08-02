@@ -13,6 +13,7 @@ import {
 } from "./comptime/eval.ts";
 import { shapeOf, show, UNIT, type Value } from "./comptime/value.ts";
 import { load } from "./load.ts";
+import { checkFile } from "./check/mod.ts";
 
 export interface Grants {
   /** Where a granted `print` capability writes. */
@@ -60,13 +61,19 @@ export async function evaluateFile(
   path: string,
   grants: Grants,
 ): Promise<Value> {
+  const checked = await checkFile(path);
   const loaded = await load(path);
   return run(
     apply(
       loaded.closure,
       grantsFor(grants),
       loaded.module.span,
-      evaluationRuntime(new Map(), "runtime"),
+      evaluationRuntime(
+        new Map(),
+        "runtime",
+        undefined,
+        checked.recordAdaptations,
+      ),
     ),
     hostFor(grants),
   );

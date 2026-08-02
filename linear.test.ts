@@ -263,10 +263,17 @@ Deno.test("two bindings sharing a name keep separate facts", async () => {
 // has no last read to act on, and the fact says so rather than naming one.
 Deno.test("a binding a closure and a sibling both read has no last read", async () => {
   const { own } = await analyze(
-    `let !cells = [7, 2, 3];
-let peek = rec (fn n => @array.get (&cells) n);
+    `open {} = (@import "blot:prelude") ();
+let !cells = [7, 2, 3];
+let peek = rec (fn n => case Array.get ((&cells), n) of
+  #Some value => value,
+  #None => 0
+end);
 let write = rec (fn n => @array.set cells 0 n);
-return @int.add (@array.get (write 1) 0) (peek 0);`,
+return @int.add (case Array.get (write 1, 0) of
+  #Some value => value,
+  #None => 0
+end) (peek 0);`,
   );
   const cells = own.find(([pattern]) => pattern.name === "cells");
   assert(cells !== undefined);
@@ -279,8 +286,12 @@ return @int.add (@array.get (write 1) 0) (peek 0);`,
 // linear proof is about — so this one keeps a last read the backend can spend.
 Deno.test("a binding read once inside a group keeps its last read", async () => {
   const { own } = await analyze(
-    `let !cells = [7, 2, 3];
-let start = rec (fn n => @array.get (bump n) 0);
+    `open {} = (@import "blot:prelude") ();
+let !cells = [7, 2, 3];
+let start = rec (fn n => case Array.get (bump n, 0) of
+  #Some value => value,
+  #None => 0
+end);
 let bump = rec (fn n => @array.set cells 0 n);
 return start 4;`,
   );

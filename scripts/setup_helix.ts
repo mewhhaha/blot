@@ -184,6 +184,7 @@ const repositoryQueries = join(repository, "queries");
 const highlights = [
   await Deno.readTextFile(join(generatedQueries, "generated-highlights.scm")),
   await Deno.readTextFile(join(repositoryQueries, "keywords.scm")),
+  await Deno.readTextFile(join(repositoryQueries, "elements.scm")),
 ].join("\n");
 
 await Deno.mkdir(generatedQueries, { recursive: true });

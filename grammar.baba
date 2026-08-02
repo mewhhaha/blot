@@ -17,6 +17,11 @@ token FLOAT priority 3 = /[0-9]+\.[0-9]+/ ;
 token TEXT = /"([^"\\]|\\[ntr"\\])*"/ ;
 token ELSE_IF priority 3 = /else[ \t\r\n]+if/ ;
 token INTRINSIC priority 3 = /@[a-z_][A-Za-z0-9_]*(\.[a-z_][A-Za-z0-9_]*)*/ ;
+token ANGLE_LEFT = /</ ;
+token ANGLE_RIGHT = />/ ;
+token ANGLE_CLOSE = /<\// ;
+token ANGLE_SELF_CLOSE = /\/>/ ;
+token QUESTION = /\?/ ;
 
 // One operator class rather than an enumerated set. Custom operators are
 // therefore lexically ordinary; precedence and meaning come from the
@@ -28,7 +33,13 @@ token INTRINSIC priority 3 = /@[a-z_][A-Za-z0-9_]*(\.[a-z_][A-Za-z0-9_]*)*/ ;
 // comment. Spelled out rather than as `[...]+` because the lexer requires
 // disjoint terminal identities, not a longest-match tiebreak.
 token OPERATOR =
-  /[+\-*<>=|&^%!?~$:\\][+\-*\/<>=|&^%!?~$:\\]*|\/[+\-*<>=|&^%!?~$:\\][+\-*\/<>=|&^%!?~$:\\]*|\// ;
+  /[+\-*=|&^%!~$:\\][+\-*\/<>=|&^%!?~$:\\]*|\?[+\-*\/<>=|&^%!?~$:\\]+|<[+\-*<>=|&^%!?~$:\\][+\-*\/<>=|&^%!?~$:\\]*|>[+\-*\/<>=|&^%!?~$:\\][+\-*\/<>=|&^%!?~$:\\]*|\/[+\-*<=|&^%!?~$:\\][+\-*\/<>=|&^%!?~$:\\]*|\// ;
+
+// Exact angle brackets announce elements, while longer operators such as
+// `<=` remain OPERATOR tokens by longest match. The exact brackets remain
+// available to infix chains and the fixity table through this shared rule, so
+// reserving their terminal identity does not remove comparisons.
+operator_token = OPERATOR | ANGLE_LEFT | ANGLE_RIGHT | QUESTION ;
 
 skip WHITESPACE = /[ \t\r\n]+/ ;
 skip COMMENT = /\/\/[^\r\n]*/ ;
@@ -60,7 +71,7 @@ fixity_declaration = (
   associativity:("infixl" | "infixr" | "infix" | "prefix")
   precedence:INTEGER
   "("
-  operator:OPERATOR
+  operator:operator_token
   ")"
   "="
   target:qualified_name
@@ -72,14 +83,14 @@ fixity_declaration = (
 // compile-time values.
 declaration =
   binding | rebinding | opening | iteration | breaking
-  | conditional_statement | result ;
+  | conditional_statement | element_statement | result ;
 
 // `statement` is `declaration` under a second name. The duplication is
 // mechanical and exists only so that `declaration` is not self-nesting, which
 // is what "throughput": "strict" requires of the repeated root island.
 statement =
   binding | rebinding | opening | iteration | breaking
-  | conditional_statement | result ;
+  | conditional_statement | element_statement | result ;
 
 binding = (
   tags:declaration_tag*
@@ -198,7 +209,7 @@ result = (
 // those as literals would shadow them out of the operator class entirely,
 // costing every custom operator that uses those characters.
 binding_pattern = (
-  qualifier:OPERATOR?
+  qualifier:operator_token?
   value:pattern_core
 ) ;
 
@@ -276,7 +287,7 @@ expression = (
 ) ;
 
 infix_operation = (
-  operator:OPERATOR
+  operator:operator_token
   right:operand
 ) ;
 
@@ -288,7 +299,7 @@ operand = (
 // `...` is deliberately absent: spreading is only meaningful in array and
 // shape positions, and having it in both places made the two readings of
 // `[...x]` ambiguous.
-prefix_operator = (OPERATOR | "comptime" | "rec") ;
+prefix_operator = (OPERATOR | QUESTION | "comptime" | "rec") ;
 
 // Unary application by juxtaposition: `f x y` is `(f x) y`. This matches
 // gpufuck's unary Core exactly, so lowering needs no currying pass.
@@ -389,6 +400,47 @@ array_element = (
   value:value
 ) ;
 
+// Elements are effect-sequencing statements. Dot properties become record
+// fields, while the ordinary statements between the tags make one ordered
+// child computation. No contextual JSX lexer mode is needed: every token keeps
+// the identity it has elsewhere.
+element_statement = (
+  ANGLE_LEFT
+  name:element_name
+  properties:element_property*
+  ending:(element_self_close | element_body)
+  ";"
+) ;
+
+element_name = IDENT | TYPE_IDENT ;
+
+element_property = (
+  "."
+  name:field_name
+  "="
+  value:element_property_value
+) ;
+
+element_property_value =
+  IDENT | TYPE_IDENT | TEXT | INTEGER | FLOAT
+  | constructor_expression | unit | element_property_expression ;
+
+element_property_expression = (
+  "{"
+  value:value
+  "}"
+) ;
+
+element_self_close = (ANGLE_SELF_CLOSE) ;
+
+element_body = (
+  ANGLE_RIGHT
+  children:statement*
+  ANGLE_CLOSE
+  closing:element_name
+  ANGLE_RIGHT
+) ;
+
 // A lambda is admissible wherever a value is. The two alternatives are told
 // apart by their first token — `fn` begins one and nothing else — so this is a
 // decision the parser makes without lookahead.
@@ -413,6 +465,7 @@ shape_spread = (
 shape_field = (
   "."
   name:field_name
+  optional:QUESTION?
   "="
   value:value
   ";"

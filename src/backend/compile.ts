@@ -38,7 +38,14 @@ import { resolve } from "@std/path";
 import { BlotError, fail } from "../diagnostic.ts";
 import { load, type Loaded, refreshLoadedModules } from "../load.ts";
 import { checkFile } from "../check/mod.ts";
-import type { Imports } from "../comptime/eval.ts";
+import {
+  evaluate,
+  evaluationRuntime,
+  type Imports,
+  match,
+  run,
+} from "../comptime/eval.ts";
+import { childEnv, shapeOf, UNIT, type Value } from "../comptime/value.ts";
 import { bridge } from "../check/bridge.ts";
 import type { SimpleType } from "../check/type.ts";
 import {
@@ -47,6 +54,14 @@ import {
   type RuntimeTypeDeclaration,
 } from "./lower.ts";
 import { type StagedExport, stageModule } from "../stage.ts";
+import {
+  exportConstantRuntimeHir,
+  type ResidualHostCall,
+  type ResidualRuntimeExport,
+} from "./gpupaper_hir.ts";
+import { exportResidualRuntimeHir } from "./gpupaper_residual.ts";
+import type { BlotRuntimeModule } from "../../../gpupaper/src/blot_runtime_hir.ts";
+import type { Expr } from "../syntax/ast.ts";
 
 export interface WasmManifest {
   readonly format: "blot-core-wasm";
@@ -510,6 +525,8 @@ interface PreparedModule {
   readonly module: ReturnType<typeof buildSurfaceModule>;
   readonly lowered: ReturnType<typeof lowerModule>;
   readonly exports: readonly StagedExport[];
+  readonly checked: Awaited<ReturnType<typeof checkFile>>;
+  readonly imports: Imports;
 }
 
 const preparedModules = new WeakMap<Loaded, PreparedModule>();
@@ -534,6 +551,7 @@ async function prepare(path: string) {
     checked.values,
     imports,
     checked.shapes,
+    checked.recordAdaptations,
   );
   const runtimeExports = staged.exports.flatMap((exported) => {
     if (exported.phase !== "runtime") return [];
@@ -599,6 +617,8 @@ async function prepare(path: string) {
     module,
     lowered,
     exports: staged.exports,
+    checked,
+    imports,
   };
   const previous = latestPreparedModuleByPath.get(loaded.path);
   if (previous !== undefined) {
@@ -612,6 +632,140 @@ async function prepare(path: string) {
     latestPreparedModuleByPath.delete(oldestPath);
   }
   return prepared;
+}
+
+export async function prepareGpupaperHir(
+  path: string,
+): Promise<BlotRuntimeModule> {
+  const prepared = await prepare(path);
+  let moduleResidual: ResidualRuntimeExport;
+  try {
+    moduleResidual = residualizeUnitHostModule(prepared);
+  } catch (error) {
+    if (
+      !(error instanceof BlotError) ||
+      error.diagnostic.code !== "BLOT_UNHANDLED_EFFECT"
+    ) throw error;
+    return exportResidualRuntimeHir(
+      prepared.loaded.path,
+      prepared.loaded.module,
+      prepared.checked,
+      prepared.exports,
+      prepared.lowered,
+    );
+  }
+  const residual = new Map<string, ResidualRuntimeExport>();
+  for (const exported of prepared.exports) {
+    if (exported.phase !== "runtime") continue;
+    residual.set(exported.sourceName, {
+      value: runtimeExportValue(moduleResidual.value, exported.sourceName),
+      hostCalls: moduleResidual.hostCalls,
+    });
+  }
+  return exportConstantRuntimeHir(
+    prepared.loaded.path,
+    prepared.exports,
+    prepared.lowered,
+    residual,
+  );
+}
+
+function residualizeUnitHostModule(
+  prepared: PreparedModule,
+): ResidualRuntimeExport {
+  const body: Expr = {
+    tag: "block",
+    declarations: prepared.loaded.module.declarations,
+    result: prepared.loaded.module.result,
+    resultEffects: prepared.loaded.module.resultEffects,
+    span: prepared.loaded.module.span,
+  };
+  const calls: ResidualHostCall[] = [];
+  const environment = childEnv(prepared.checked.values);
+  const parameter = prepared.loaded.module.parameter;
+  if (parameter !== null) {
+    const grants = new Map<string, Value>();
+    for (const [projection, signature] of prepared.checked.grants) {
+      if (
+        projection.tag !== "field" ||
+        !unitOrUnobservedSimpleType(signature.result, new Set())
+      ) {
+        throw new TypeError(
+          `${prepared.loaded.path}: residual grant does not return unit`,
+        );
+      }
+      grants.set(projection.name, {
+        tag: "native",
+        name: `Init.${projection.name}`,
+        arity: 1,
+        applied: [],
+        run: ([argument]) => {
+          calls.push({
+            capability: "Init",
+            operation: projection.name,
+            argument,
+          });
+          return UNIT;
+        },
+      });
+    }
+    if (!match(parameter, shapeOf([...grants]), environment)) {
+      throw new TypeError(
+        `${prepared.loaded.path}: symbolic grants do not match the module parameter`,
+      );
+    }
+  }
+  const moduleValue = run(
+    evaluate(
+      body,
+      environment,
+      evaluationRuntime(
+        prepared.imports,
+        "runtime",
+        undefined,
+        prepared.checked.recordAdaptations,
+      ),
+    ),
+    (perform) => {
+      if (!perform.host || !unitValueType(perform.resultType)) return null;
+      calls.push({
+        capability: perform.effectName,
+        operation: perform.operation,
+        argument: perform.argument,
+      });
+      return UNIT;
+    },
+  );
+  return { value: moduleValue, hostCalls: calls };
+}
+
+function runtimeExportValue(moduleValue: Value, sourceName: string): Value {
+  if (sourceName === "default") return moduleValue;
+  if (moduleValue.tag !== "shape") {
+    throw new TypeError(`module result is not a shape exporting ${sourceName}`);
+  }
+  const value = moduleValue.fields.get(sourceName);
+  if (value === undefined) {
+    throw new TypeError(`module result omitted direct field ${sourceName}`);
+  }
+  return value;
+}
+
+function unitValueType(value: Value): boolean {
+  if (value.tag === "unit") return true;
+  return value.tag === "extended" && unitValueType(value.inner);
+}
+
+function unitOrUnobservedSimpleType(
+  type: SimpleType,
+  seen: Set<number>,
+): boolean {
+  if (type.tag === "unit") return true;
+  if (type.tag !== "var" || seen.has(type.id)) return false;
+  seen.add(type.id);
+  const bounds = [...type.lower, ...type.upper];
+  return bounds.length === 0 ||
+    bounds.every((bound) => unitOrUnobservedSimpleType(bound, seen));
 }
 
 function exportType(type: SimpleType, sourceName: string): SimpleType {

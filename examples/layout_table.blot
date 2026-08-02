@@ -11,13 +11,16 @@ let nodes = [
 ];
 
 let layout = rec (fn (index, !frames) => do
-  return if index == @array.len nodes
+  return if index < 0 || index >= @array.len nodes
     then frames
     else do
       let node = @array.get nodes index;
       let parent_x = if node.parent < 0
         then 0
-        else (@array.get (&frames) node.parent).x
+        else case Array.get ((&frames), node.parent) of
+          #Some parent => parent.x,
+          #None => 0
+        end
       end;
       let frame = {
         .x = parent_x + node.offset;
@@ -29,4 +32,7 @@ let layout = rec (fn (index, !frames) => do
 end);
 
 let frames = layout (0, []);
-return (@array.get frames 2).x + (@array.get frames 2).width;
+return case Array.get (frames, 2) of
+  #Some frame => frame.x + frame.width,
+  #None => 0
+end;

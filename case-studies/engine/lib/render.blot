@@ -249,7 +249,10 @@ const draw_face = fn (position, angle, scale, colour, camera, face) => do
   // is where the fourth lane changes from 0 to 1, and so where an offset from
   // the model's origin becomes a point the camera can translate.
   let corner = fn index => do
-    let local = @array.get corners index;
+    let local = case Array.get (corners, index) of
+      #Some value => value,
+      #None => Vec4.splat ZERO
+    end;
     let spun = turn_y (Vec4.scale (local, scale), rotation);
     in to_view (Vec4.add spun position, camera)
   end;

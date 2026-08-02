@@ -15,6 +15,7 @@ import {
 import { join } from "@std/path";
 import {
   build,
+  prepareGpupaperHir,
   runLowering,
   runLoweringExport,
   validateLowering,
@@ -37,6 +38,38 @@ for (const name of await blotFiles("examples")) {
     await validateLowering(join("examples", name));
   });
 }
+
+Deno.test("staged scalar exports retain their checked values in gpupaper HIR", async () => {
+  const hir = await prepareGpupaperHir("examples/breaking.blot");
+  const exported = hir.exports.find((candidate) =>
+    candidate.phase === "runtime" && candidate.sourceName === "iterations"
+  );
+  if (exported === undefined || exported.phase !== "runtime") {
+    throw new Error("gpupaper HIR omitted iterations");
+  }
+  const operation = hir.functions[exported.function].blocks[0].operations[0];
+  assertEquals(operation.kind, "constant");
+  if (operation.kind !== "constant") return;
+  assertEquals(operation.value, 5n);
+});
+
+Deno.test("gpupaper HIR refuses a function crossing the staged boundary", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "function-result.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "return fn value => value;",
+    ].join("\n"),
+  );
+
+  await assertRejects(
+    () => prepareGpupaperHir(path),
+    BlotError,
+    "BLOT_EXPORT_NOT_FIRST_ORDER",
+  );
+});
 
 for (const name of ["handler_aborts.blot", "handlers.blot"]) {
   Deno.test(`examples/${name} lowers its handler before staging`, async () => {
@@ -538,9 +571,15 @@ Deno.test("a recursive group member does not own a store its sibling reads", asy
     await fixture("group-shared-array.blot", [
       'open {} = (@import "blot:prelude") ();',
       "let !cells = [7, 2, 3];",
-      "let peek = rec (fn n => @array.get (&cells) n);",
+      "let peek = rec (fn n => case Array.get ((&cells), n) of",
+      "  #Some value => value,",
+      "  #None => 0",
+      "end);",
       "let write = rec (fn n => @array.set cells 0 n);",
-      "return @int.add (@array.get (write 1) 0) (peek 0);",
+      "return @int.add (case Array.get (write 1, 0) of",
+      "  #Some value => value,",
+      "  #None => 0",
+      "end) (peek 0);",
     ]),
   );
   assertEquals(updates.filter((update) => update.owned), []);
@@ -553,12 +592,12 @@ Deno.test("a recursive group member does not own a store its sibling reads", asy
 for (
   const [order, members] of [
     ["a sibling declared before it", [
-      "let start = rec (fn n => @array.get (bump n) 0);",
+      "let start = rec (fn n => case Array.get (bump n, 0) of #Some value => value, #None => 0 end);",
       "let bump = rec (fn n => @array.set cells 0 n);",
     ]],
     ["a sibling declared after it", [
       "let bump = rec (fn n => @array.set cells 0 n);",
-      "let start = rec (fn n => @array.get (bump n) 0);",
+      "let start = rec (fn n => case Array.get (bump n, 0) of #Some value => value, #None => 0 end);",
     ]],
   ] as const
 ) {

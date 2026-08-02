@@ -7,15 +7,8 @@
 // construction that makes `n < 3` prove `..2`, and the array's type still
 // carries no length.
 //
-// The guard is nested rather than written `n >= 0 && n < @array.len xs`. `&&`
-// is `Logic.and`, an ordinary prelude function over two booleans, and nothing
-// recognises it as a conjunction of two comparisons — so the `&&` spelling
-// proves nothing and reads exactly as it did before. Conjunction narrowing is
-// a separate change.
-//
-// What the proof buys is a diagnostic, not a faster read. `@array.get` still
-// emits a checked read, and the sibling under `examples/rejected/semantics/`
-// is the program this arrangement lets the checker reject.
+// `@array.get` is the direct path and requires that proof. When an index is not
+// proved, `Array.get` is total and returns `#Some value | #None`.
 
 open {} = (@import "blot:prelude") ();
 
@@ -36,6 +29,10 @@ let clear = fn xs => fn n =>
   end;
 
 let values = [10, 20, 30];
+let indexed_sum = 0;
+for (index, value) in Iter.indexed values do
+  indexed_sum := indexed_sum + index + value;
+end;
 
 return {
   .inside = at values 1;
@@ -43,4 +40,9 @@ return {
   .negative = at values (0 - 1);
   .cleared = clear values 2;
   .unchanged = clear values 9;
+  .missing = case Array.get (values, 9) of
+    #Some value => value,
+    #None => -1
+  end;
+  .indexed_sum = indexed_sum;
 };

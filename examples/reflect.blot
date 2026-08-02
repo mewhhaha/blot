@@ -32,6 +32,7 @@ end;
 const Ok = { .status = Status; .body = Str; };
 const Failed = { .status = Status; .reason = Str; };
 const HasStatus = { .status = Status; };
+const OptionalCount = { .count? = Int; };
 
 // --- Extract and Exclude ----------------------------------------------------
 //
@@ -70,6 +71,7 @@ return {
 
   .wider_refines_narrower = refines (Ok, HasStatus);
   .narrower_does_not = refines (HasStatus, Ok);
+  .omission_refines_optional = refines ({}, OptionalCount);
   .literal_in_range = refines (200, Status);
   .literal_outside = refines (42, Status);
 

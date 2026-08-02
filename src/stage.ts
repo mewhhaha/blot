@@ -1,5 +1,9 @@
 import { BlotError } from "./diagnostic.ts";
-import { refuseDisagreement, type Shape } from "./check/infer.ts";
+import {
+  type RecordAdaptation,
+  refuseDisagreement,
+  type Shape,
+} from "./check/infer.ts";
 import {
   bind,
   evaluate,
@@ -37,6 +41,7 @@ export function stageModule(
   values: Env,
   imports: Imports,
   inferredShapes: ReadonlyMap<Expr, Shape> = new Map(),
+  recordAdaptations: ReadonlyMap<Expr, RecordAdaptation> = new Map(),
 ): StagedModule {
   const stagingValues = childEnv(values);
   const stagedDeclarations = new Set<Decl>();
@@ -56,7 +61,12 @@ export function stageModule(
           declaration.pattern,
           declaration.value,
           stagingValues,
-          evaluationRuntime(imports, "runtime"),
+          evaluationRuntime(
+            imports,
+            "runtime",
+            undefined,
+            recordAdaptations,
+          ),
         ),
       );
       match(declaration.pattern, value, stagingValues);
@@ -88,7 +98,12 @@ export function stageModule(
   }
 
   if (module.result.tag !== "shape") {
-    const staged = stageExpression(module.result, stagingValues, imports);
+    const staged = stageExpression(
+      module.result,
+      stagingValues,
+      imports,
+      recordAdaptations,
+    );
     if (staged.expression === null) {
       return {
         module: { ...module, result: unit(module.result.span) },
@@ -120,7 +135,12 @@ export function stageModule(
   let nextBinding = 0;
   let fullyStaged = allDeclarationsStaged;
   for (const member of module.result.members) {
-    const staged = stageExpression(member.value, stagingValues, imports);
+    const staged = stageExpression(
+      member.value,
+      stagingValues,
+      imports,
+      recordAdaptations,
+    );
     if (member.tag === "field") {
       let expression = staged.expression;
       if (!staged.folded && expression !== null) {
@@ -241,13 +261,14 @@ function stageExpression(
   expr: Expr,
   values: Env,
   imports: Imports,
+  recordAdaptations: ReadonlyMap<Expr, RecordAdaptation>,
 ): StagedExpression {
   try {
     const value = run(
       evaluate(
         expr,
         values,
-        evaluationRuntime(imports, "runtime"),
+        evaluationRuntime(imports, "runtime", undefined, recordAdaptations),
       ),
     );
     const expression = expressionOf(value, expr.span);

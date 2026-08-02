@@ -51,7 +51,7 @@ import {
   recognise,
   region,
 } from "./narrow.ts";
-import { intersect } from "./setops.ts";
+import { difference, intersect } from "./setops.ts";
 import {
   constrain,
   type Instances,
@@ -63,6 +63,7 @@ import {
 import { PRIMITIVE_TYPES } from "./primitives.ts";
 import { show as showType, showRange } from "./print.ts";
 import {
+  admitsOmission,
   type ClosedBound,
   type Domain,
   effects,
@@ -81,6 +82,7 @@ import {
   TOP,
   tupleType,
   type Typing,
+  union as unionType,
   UNIT,
   variant,
 } from "./type.ts";
@@ -102,29 +104,36 @@ interface TypeEnv {
    */
   readonly comptime: Map<string, { value: Value; typing: Typing }>;
   /**
-   * The element count of the spread-free array literal a binding was written
-   * with, paired with the `Typing` installed beside it.
+   * The known length of the array value a binding holds, paired with the
+   * `Typing` installed beside it.
    *
    * A length is a fact about a value, not about a type: `[a]` carries no
-   * length, and this deliberately does not put one there. It is recorded only
-   * so a read whose index cannot be in range is reported where it is written
-   * instead of trapping, and it is read nowhere else.
+   * length, and this deliberately does not put one there. A literal contributes
+   * a number; an alias, replacement, or append may contribute a relationship to
+   * another immutable array value.
    *
    * The `Typing` pairing is the same discipline `comptime` uses, and it is
    * needed for the same reason: a lambda parameter named `xs` installs a fresh
    * `Typing`, so this answers `null` for it rather than reporting the length of
    * an array the callee never receives.
    */
-  readonly arrayLengths: Map<string, { length: bigint; typing: Typing }>;
+  readonly arrayLengths: Map<
+    string,
+    { length: ClosedBound; typing: Typing }
+  >;
+  /** Exact relational integer values retained by immutable bindings. */
+  readonly integerValues: Map<
+    string,
+    { value: ClosedBound; typing: Typing }
+  >;
   /**
-   * The binding occurrence a name currently denotes, paired with the `Typing`
-   * that occurrence installed.
+   * The immutable value identity a name currently denotes, paired with the
+   * `Typing` that binding installed.
    *
-   * An occurrence is what `len(b)` in a bound is keyed to (type.ts). blot has no
-   * assignment and arrays are immutable, so one occurrence denotes exactly one
-   * value for its whole lifetime — which is the fact that makes a length
-   * symbol mean one integer. A `:=` mints a new occurrence rather than
-   * modifying one.
+   * The identity is what `len(b)` in a bound is keyed to (type.ts). blot has no
+   * assignment and arrays are immutable, so one identity denotes exactly one
+   * value for its whole lifetime. A transparent alias keeps it; a new value
+   * gets another.
    *
    * The `Typing` pairing makes the map fail closed. A scope that shadows a name
    * without minting — a `case` arm narrowing its target, say — installs a
@@ -161,6 +170,7 @@ function childTypeEnv(parent: TypeEnv | null): TypeEnv {
     literals: new Map(),
     comptime: new Map(),
     arrayLengths: new Map(),
+    integerValues: new Map(),
     bindings: new Map(),
     folded: new Map(),
     parent,
@@ -169,12 +179,19 @@ function childTypeEnv(parent: TypeEnv | null): TypeEnv {
 
 let nextBinding = 0;
 
-/** Mints an occurrence for the name `scope` has just bound. */
-function recordBinding(scope: TypeEnv, name: string): void {
+/** Records the immutable value identity the new binding denotes. */
+function recordBinding(
+  scope: TypeEnv,
+  name: string,
+  identity: number | null = null,
+): void {
   const typing = scope.names.get(name);
   if (typing === undefined) return;
-  nextBinding += 1;
-  scope.bindings.set(name, { id: nextBinding, typing });
+  if (identity === null) {
+    nextBinding += 1;
+    identity = nextBinding;
+  }
+  scope.bindings.set(name, { id: identity, typing });
 }
 
 function lookupBinding(env: TypeEnv, name: string): number | null {
@@ -190,6 +207,45 @@ function lookupBinding(env: TypeEnv, name: string): number | null {
     scope = scope.parent;
   }
   return null;
+}
+
+function lookupIntegerValue(env: TypeEnv, name: string): ClosedBound | null {
+  const typing = lookupType(env, name);
+  if (typing === undefined) return null;
+  let scope: TypeEnv | null = env;
+  while (scope !== null) {
+    const found = scope.integerValues.get(name);
+    if (found !== undefined) {
+      if (found.typing !== typing) return null;
+      return found.value;
+    }
+    scope = scope.parent;
+  }
+  return null;
+}
+
+function recordIntegerValue(
+  scope: TypeEnv,
+  name: string,
+  value: ClosedBound,
+): void {
+  const typing = scope.names.get(name);
+  if (typing === undefined) return;
+  scope.integerValues.set(name, { value, typing });
+}
+
+/** The immutable value identity an alias keeps. */
+function aliasedBinding(expr: Expr, scope: TypeEnv): number | null {
+  if (expr.tag === "var") return lookupBinding(scope, expr.name);
+  const head = spine(expr);
+  if (head === null || head.args.length !== 1) return null;
+  if (head.callee.tag !== "intrinsic") return null;
+  if (
+    head.callee.name !== "@linear.own" &&
+    head.callee.name !== "@linear.borrow" &&
+    head.callee.name !== "@linear.maybe"
+  ) return null;
+  return aliasedBinding(head.args[0], scope);
 }
 
 function lookupType(env: TypeEnv, name: string): Typing | undefined {
@@ -271,26 +327,18 @@ function recordComptimeBinding(
   scope.comptime.set(name, { value, typing });
 }
 
-/**
- * Pairs the length of a spread-free array literal with the `Typing` installed
- * beside it. A spread contributes a length this cannot see, so an array written
- * with one records nothing rather than recording the part that is visible.
- */
+/** Pairs a known array length with the binding that keeps that value. */
 function recordArrayLength(
   scope: TypeEnv,
   name: string,
-  value: Expr & { tag: "array" },
+  length: ClosedBound,
 ): void {
-  if (value.elements.some((item) => item.spread)) return;
   const typing = scope.names.get(name);
   if (typing === undefined) return;
-  scope.arrayLengths.set(name, {
-    length: BigInt(value.elements.length),
-    typing,
-  });
+  scope.arrayLengths.set(name, { length, typing });
 }
 
-function lookupArrayLength(env: TypeEnv, name: string): bigint | null {
+function lookupArrayLength(env: TypeEnv, name: string): ClosedBound | null {
   const typing = lookupType(env, name);
   if (typing === undefined) return null;
   let scope: TypeEnv | null = env;
@@ -355,8 +403,12 @@ export function settle(staging: Staging): void {
 }
 
 interface Context {
+  /** Settled type terms produced by this inference run, keyed by expression identity. */
+  readonly expressionTypes: Map<Expr, SimpleType>;
   /** Field sets and constructor sets, recorded for the backend. */
   readonly shapes: Map<Expr, Shape>;
+  readonly recordAdaptations: Map<Expr, RecordAdaptation>;
+  readonly optionalCases: Set<Expr>;
   /** Compile-time declaration values, keyed by their source expression. */
   readonly comptimeValues: Map<Expr, Value>;
   /**
@@ -428,7 +480,12 @@ function comptime(
       evaluate(
         expr,
         values,
-        evaluationRuntime(context.imports, "comptime"),
+        evaluationRuntime(
+          context.imports,
+          "comptime",
+          undefined,
+          context.recordAdaptations,
+        ),
       ),
     );
   } catch (error) {
@@ -464,7 +521,12 @@ function requireComptime(
       evaluate(
         expr,
         context.values,
-        evaluationRuntime(context.imports, "comptime"),
+        evaluationRuntime(
+          context.imports,
+          "comptime",
+          undefined,
+          context.recordAdaptations,
+        ),
       ),
     );
   } catch (error) {
@@ -495,7 +557,12 @@ function requireComptimeBinding(
         pattern,
         expr,
         context.values,
-        evaluationRuntime(context.imports, "comptime"),
+        evaluationRuntime(
+          context.imports,
+          "comptime",
+          undefined,
+          context.recordAdaptations,
+        ),
       ),
     );
   } catch (error) {
@@ -516,6 +583,17 @@ function requireComptimeBinding(
 }
 
 export function infer(
+  expr: Expr,
+  context: Context,
+  level: Level,
+  row: SimpleType,
+): SimpleType {
+  const type = inferUnrecorded(expr, context, level, row);
+  context.expressionTypes.set(expr, type);
+  return type;
+}
+
+function inferUnrecorded(
   expr: Expr,
   context: Context,
   level: Level,
@@ -589,6 +667,7 @@ export function infer(
       located(expr.span, () => {
         constrain(fnType, { tag: "fun", param: argType, effects: row, result });
       });
+      recordApplicationAdaptation(expr.arg, fnType, argType, context);
       return result;
     }
 
@@ -860,13 +939,13 @@ function inferSpecial(
     return result;
   }
 
-  // A read no execution of which could succeed is reported where it is written
-  // rather than trapping.
+  // Direct indexed access is the proof-carrying path. Total access lives in
+  // prelude source and reaches this primitive only inside its successful guard.
   if (
     (callee.name === "@array.get" || callee.name === "@array.set") &&
     head.args.length >= 2
   ) {
-    reportImpossibleRead(expr, head.args[0], head.args[1], context.types);
+    requireProvenIndex(expr, head.args[0], head.args[1], context.types);
   }
 
   if (SHAPE_PROJECTIONS.get(callee.name) === head.args.length) {
@@ -1098,7 +1177,17 @@ function comptimeApply(
 ): Value | null {
   try {
     return run(
-      apply(fn, argument, span, evaluationRuntime(context.imports, "comptime")),
+      apply(
+        fn,
+        argument,
+        span,
+        evaluationRuntime(
+          context.imports,
+          "comptime",
+          undefined,
+          context.recordAdaptations,
+        ),
+      ),
     );
   } catch (error) {
     // A refusal is the program asking to fail and must reach the user. Anything
@@ -1342,7 +1431,7 @@ function narrowing(condition: Expr, scope: TypeEnv): Narrowing | null {
   // from *this* `m`. A whole type is a sound witness for the intersection and an
   // unsound one for the complement, so neither is taken unless the witness is
   // one value. A length is one value for the same reason a `const` is: the
-  // binding occurrence it names holds one array for its whole lifetime.
+  // immutable value identity it names holds one array for its whole lifetime.
   const left = condition.fn.arg;
   const right = condition.arg;
   const leftWitness = witness(left, scope);
@@ -1456,9 +1545,21 @@ function comparedName(
   return { name: expr.name, type };
 }
 
-function groundIntType(typing: Typing | undefined): SimpleType | null {
+function groundIntType(
+  typing: Typing | undefined,
+  seen = new Set<number>(),
+): SimpleType | null {
   if (typing === undefined) return null;
-  if (typing.tag === "scheme") return null;
+  if (typing.tag === "scheme") return groundIntType(typing.body, seen);
+  if (typing.tag === "var") {
+    if (seen.has(typing.id)) return null;
+    seen.add(typing.id);
+    for (const bound of [...typing.lower, ...typing.upper]) {
+      const ground = groundIntType(bound, seen);
+      if (ground !== null) return ground;
+    }
+    return null;
+  }
   if (typing.tag === "range") {
     if (typing.domain !== "int") return null;
     return typing;
@@ -1518,12 +1619,10 @@ function comptimeInt(expr: Expr, scope: TypeEnv): bigint | null {
  * How many elements an array expression has, when that is decided by the source
  * rather than by running the program.
  *
- * Three ways, and no others: the array is written out at the call site, the name
- * denotes a compile-time array value, or the name was bound to a spread-free
- * array literal. `let ys = xs;` is none of them, and neither is any array a
- * function returned, so those answer `null` and nothing is reported about them.
+ * A literal or compile-time array contributes a number. A runtime binding may
+ * instead carry the length relationship recorded when it was initialized.
  */
-function comptimeArrayLength(expr: Expr, scope: TypeEnv): bigint | null {
+function recordedArrayLength(expr: Expr, scope: TypeEnv): ClosedBound | null {
   if (expr.tag === "array") {
     if (expr.elements.some((item) => item.spread)) return null;
     return BigInt(expr.elements.length);
@@ -1534,8 +1633,8 @@ function comptimeArrayLength(expr: Expr, scope: TypeEnv): bigint | null {
   if (value !== null && value.tag === "array") {
     return BigInt(value.elements.length);
   }
-  // A `let` binding records no compile-time value, so a length written into one
-  // is reached through its own record, and only for a plain name.
+  // A runtime binding reaches the relationship recorded beside its type. A
+  // nested path has no stable value identity of its own.
   if (path.length !== 1) return null;
   return lookupArrayLength(scope, path[0]);
 }
@@ -1544,37 +1643,50 @@ function comptimeArrayLength(expr: Expr, scope: TypeEnv): bigint | null {
  * How many elements an array expression holds, as a bound.
  *
  * A number when the source decided it, and otherwise the symbol `len b` for the
- * binding occurrence the name denotes. The symbol names an integer the compiler
- * cannot see, which is exactly enough: an index compared against it and an index
- * used to read the array named the same occurrence, so the two bounds are the
- * same integer whatever it is.
+ * immutable value identity the name denotes. The symbol names an integer the
+ * compiler cannot see, which is exactly enough: an index compared against it
+ * and an index used to read the same array share one bound whatever it is.
  *
  * The number comes first because it says strictly more. `let xs = [1, 2, 3]`
  * gives every comparison against `@array.len xs` the witness `3`, so the
  * ordinary literal machinery decides it and no symbol is minted at all.
  *
- * Only a plain name carries an occurrence. An alias, a field, a call result, and
- * an array expression built in place are refused rather than given a symbol,
- * because a symbol they were given would name a binding that is not the one
- * holding the array.
+ * A plain name carries the identity, and a transparent alias keeps it. Fields
+ * and call results are refused rather than given a symbol because no stable
+ * identity for their value is in scope.
  */
 function arrayLength(expr: Expr, scope: TypeEnv): ClosedBound | null {
-  const decided = comptimeArrayLength(expr, scope);
+  const decided = recordedArrayLength(expr, scope);
   if (decided !== null) return decided;
-  if (expr.tag !== "var") return null;
-  const occurrence = lookupBinding(scope, expr.name);
-  if (occurrence === null) return null;
-  return lengthBound(occurrence, 0n, expr.name);
+  if (expr.tag === "var") {
+    const identity = lookupBinding(scope, expr.name);
+    if (identity === null) return null;
+    return lengthBound(identity, 0n, expr.name);
+  }
+  const head = spine(expr);
+  if (head === null || head.callee.tag !== "intrinsic") return null;
+  if (
+    (head.callee.name === "@linear.own" ||
+      head.callee.name === "@linear.borrow" ||
+      head.callee.name === "@linear.maybe") && head.args.length === 1
+  ) {
+    return arrayLength(head.args[0], scope);
+  }
+  if (head.callee.name === "@array.set" && head.args.length === 3) {
+    return arrayLength(head.args[0], scope);
+  }
+  if (head.callee.name !== "@array.push" || head.args.length !== 2) return null;
+  const previous = arrayLength(head.args[0], scope);
+  if (previous === null) return null;
+  return shiftBound(previous, 1n);
 }
 
 /**
  * The value a comparison narrows against.
  *
- * Two forms, and the second is what lets a bound name a run-time value: a
- * compile-time integer, or the length of an array a name in scope holds. Both
- * are reached without running any user code — `@array.len` is compiler-owned,
- * total and pure, so reading it here calls nothing the program could have
- * shadowed, which is the same property `comptimeInt` needs of a `const`.
+ * A compile-time integer, the length of an array a stable name holds, or a
+ * binding that retained that length or an affine shift of it. All are reached
+ * without running user code — `@array.len` is compiler-owned, total, and pure.
  *
  * A comparison of one length against another has two witnesses and no subject,
  * so `narrowing` refuses it before either is used.
@@ -1582,42 +1694,52 @@ function arrayLength(expr: Expr, scope: TypeEnv): ClosedBound | null {
 function witness(expr: Expr, scope: TypeEnv): ClosedBound | null {
   const literal = comptimeInt(expr, scope);
   if (literal !== null) return literal;
+  if (expr.tag === "var") {
+    const related = lookupIntegerValue(scope, expr.name);
+    if (related !== null) return related;
+  }
   const head = spine(expr);
   if (head === null) return null;
   if (head.callee.tag !== "intrinsic") return null;
-  if (head.callee.name !== "@array.len") return null;
-  if (head.args.length !== 1) return null;
-  return arrayLength(head.args[0], scope);
+  if (head.callee.name === "@array.len" && head.args.length === 1) {
+    return arrayLength(head.args[0], scope);
+  }
+  if (
+    (head.callee.name === "@int.add" || head.callee.name === "@int.sub") &&
+    head.args.length === 2
+  ) {
+    const left = witness(head.args[0], scope);
+    const right = witness(head.args[1], scope);
+    if (
+      left !== null && typeof left === "object" && typeof right === "bigint"
+    ) {
+      const offset = head.callee.name === "@int.add" ? right : -right;
+      return shiftBound(left, offset);
+    }
+    if (
+      head.callee.name === "@int.add" && typeof left === "bigint" &&
+      right !== null && typeof right === "object"
+    ) return shiftBound(right, left);
+  }
+  return null;
 }
 
-/**
- * Reports a read that cannot succeed, and says nothing about any other read.
- *
- * The index's ground type is *read*, never constrained. That is the whole reason
- * this does not disturb inference: constraining the index against `0..len xs -
- * 1` would push a bound into the index variable, publish it, and then reject the
- * ordinary call that passes an unproved integer. Reading leaves
- * `[a] -> Int -> a` exactly as it was.
- *
- * So nothing here proves a read is *in* bounds. It answers one question — is
- * every value this index can take outside the array — and the answer is a
- * diagnostic or silence. `@array.get` still emits a checked read either way.
- *
- * The comparison is `intersect`, which is where the partiality lives: two
- * lengths that cannot be ordered give a range rather than `bottom`, so an
- * undecidable read is silent. A false negative leaves a run-time trap where one
- * already was; a false positive would refuse a program that works.
- */
-function reportImpossibleRead(
+/** Direct access is admitted only when every possible index is in bounds. */
+function requireProvenIndex(
   expr: Expr,
   array: Expr,
   index: Expr,
   scope: TypeEnv,
 ): void {
   const length = arrayLength(array, scope);
-  if (length === null) return;
   const indices = indexSet(index, scope);
-  if (indices === null) return;
+  if (length === null || indices === null) {
+    fail(
+      "BLOT_UNPROVEN_INDEX",
+      "Direct array access needs an index proved against this array's length. Use `Array.get` or `Array.set` when the index may be out of bounds.",
+      expr.span,
+    );
+  }
   const inside: SimpleType = {
     tag: "range",
     domain: "int",
@@ -1625,13 +1747,21 @@ function reportImpossibleRead(
     high: shiftBound(length, -1n),
   };
   const both = intersect(indices, inside);
-  if (both.tag !== "type") return;
-  if (both.type.tag !== "bottom") return;
+  if (both.tag === "type" && both.type.tag === "bottom") {
+    fail(
+      "BLOT_OUT_OF_BOUNDS",
+      `Index ${showType(indices)} is outside an array of ${
+        showRange("int", length, length)
+      }.`,
+      expr.span,
+    );
+  }
+  if (both.tag === "type" && sameGround(both.type, indices)) return;
   fail(
-    "BLOT_OUT_OF_BOUNDS",
-    `Index ${showType(indices)} is outside an array of ${
-      showRange("int", length, length)
-    }.`,
+    "BLOT_UNPROVEN_INDEX",
+    `Index ${showType(indices)} is not proved inside 0..${
+      showRange("int", shiftBound(length, -1n), shiftBound(length, -1n))
+    }. Use \`Array.get\` or \`Array.set\` when the index may be out of bounds.`,
     expr.span,
   );
 }
@@ -1639,17 +1769,31 @@ function reportImpossibleRead(
 /**
  * The integers an index expression can produce, when the source decides them.
  *
- * A compile-time integer, or a name whose type is already a ground set of
- * integers — which is a name a `sig` gave one to, or one a branch narrowed. A
- * `let` generalizes, so a `let`-bound integer has a scheme rather than a ground
- * type and is refused; anything computed is refused too, because inferring it
- * here would infer it twice.
+ * A compile-time integer, an exact retained relationship, or a name whose type
+ * is already a ground set of integers — one a `sig` gave it or a branch proved.
+ * Other computed expressions are refused because inferring them here would
+ * infer them twice.
  */
 function indexSet(expr: Expr, scope: TypeEnv): SimpleType | null {
-  const literal = comptimeInt(expr, scope);
-  if (literal !== null) return intLiteral(literal);
+  const value = witness(expr, scope);
+  if (value !== null) {
+    return { tag: "range", domain: "int", low: value, high: value };
+  }
   if (expr.tag !== "var") return null;
-  return groundIntType(lookupType(scope, expr.name));
+  const typing = lookupType(scope, expr.name);
+  if (typing === undefined) return null;
+  if (typing.tag !== "scheme") return groundIntType(typing);
+  const type = groundIntType(typing.body);
+  if (type === null || !containsLengthBound(type)) return null;
+  return type;
+}
+
+function containsLengthBound(type: SimpleType): boolean {
+  if (type.tag === "range") {
+    return typeof type.low === "object" || typeof type.high === "object";
+  }
+  if (type.tag !== "union") return false;
+  return type.members.some(containsLengthBound);
 }
 
 /**
@@ -1657,7 +1801,7 @@ function indexSet(expr: Expr, scope: TypeEnv): SimpleType | null {
  *
  * `===` on the bounds is exact for every `Bound` there is: two literals are
  * equal when their values are, and a length bound is interned per
- * `(occurrence, offset)` pair, so one object per denotation is what makes
+ * `(identity, offset)` pair, so one object per denotation is what makes
  * `len xs..len xs` recognise itself.
  */
 function sameGround(left: SimpleType, right: SimpleType): boolean {
@@ -1683,6 +1827,7 @@ function inferCase(
   const target = infer(expr.target, context, level, row);
   const result = freshVar(level);
   const accepted: AcceptedArm[] = [];
+  let unitExcluded = false;
 
   // The grammar demands an arm, so an arm-less `case` is one the guard
   // desugaring left behind: every arm the program wrote was guarded, and a
@@ -1709,7 +1854,8 @@ function inferCase(
 
     if (arm.pattern.tag === "name") {
       // An irrefutable name matches every value, so it *is* the scrutinee.
-      located(arm.pattern.span, () => constrain(target, armType));
+      const matched = unitExcluded ? withoutOmission(target) : target;
+      located(arm.pattern.span, () => constrain(matched, armType));
     }
     if (patternContainsPin(arm.pattern)) {
       // Equality is defined within one scalar domain. A requirement made only
@@ -1728,6 +1874,7 @@ function inferCase(
 
     const body = infer(arm.body, inner, level, row);
     located(arm.body.span, () => constrain(body, result));
+    if (arm.pattern.tag === "unit") unitExcluded = true;
   }
 
   // Tuple arms are a pattern matrix, and one is exhaustive when the rows cover
@@ -1810,7 +1957,105 @@ function inferCase(
   // what the arms proved it must be, and before them there is nothing to read.
   const cases = casesOf(target);
   if (cases !== null) context.variants.set(expr, cases);
+  context.staging.reads.push(() => {
+    if (optionalType(target)) context.optionalCases.add(expr);
+  });
   return result;
+}
+
+function withoutOmission(
+  type: SimpleType,
+  seen = new Set<number>(),
+): SimpleType {
+  if (type.tag === "union") {
+    const remaining = difference(type, UNIT);
+    if (remaining.tag === "type" && remaining.type.tag !== "bottom") {
+      return remaining.type;
+    }
+    return type;
+  }
+  if (type.tag === "forall") return withoutOmission(type.body, seen);
+  if (type.tag !== "var" || seen.has(type.id)) return type;
+  seen.add(type.id);
+  if (type.lower.length > 1) {
+    const remaining = difference(unionType(type.lower), UNIT);
+    if (remaining.tag === "type" && remaining.type.tag !== "bottom") {
+      return remaining.type;
+    }
+  }
+  for (const bound of [...type.lower, ...type.upper]) {
+    const remaining = withoutOmission(bound, seen);
+    if (remaining !== bound) return remaining;
+  }
+  return type;
+}
+
+function optionalType(type: SimpleType, seen = new Set<number>()): boolean {
+  if (!admitsOmission(type)) return false;
+  if (type.tag === "union") {
+    return type.members.some((member) => !admitsOmission(member));
+  }
+  if (type.tag === "forall") return optionalType(type.body, seen);
+  if (type.tag !== "var" || seen.has(type.id)) return false;
+  seen.add(type.id);
+  const bounds = [...type.lower, ...type.upper];
+  if (bounds.some((bound) => !admitsOmission(bound))) return true;
+  return bounds.some((bound) => optionalType(bound, seen));
+}
+
+export type OptionalFieldAdaptation =
+  | "absent"
+  | "present"
+  | "preserved"
+  | "unit";
+
+export interface RecordAdaptationField {
+  readonly name: string;
+  readonly optional: OptionalFieldAdaptation | null;
+}
+
+export interface RecordAdaptation {
+  readonly sourceFields: readonly string[];
+  readonly fields: readonly RecordAdaptationField[];
+}
+
+function recordApplicationAdaptation(
+  argument: Expr,
+  fn: SimpleType,
+  source: SimpleType,
+  context: Context,
+): void {
+  if (fn.tag !== "fun" || fn.param.tag !== "record") return;
+  if (source.tag !== "record") return;
+
+  const fields: RecordAdaptationField[] = [];
+  let changed = source.fields.size !== fn.param.fields.size;
+  for (const [name, required] of fn.param.fields) {
+    const present = source.fields.get(name);
+    let optional: OptionalFieldAdaptation | null = null;
+    if (optionalType(required)) {
+      if (present === undefined || present.tag === "unit") {
+        optional = "absent";
+      } else if (admitsOmission(present)) {
+        optional = "preserved";
+      } else {
+        optional = "present";
+      }
+      if (optional !== "preserved") changed = true;
+    } else if (admitsOmission(required) && present === undefined) {
+      optional = "unit";
+      changed = true;
+    } else if (present === undefined) {
+      throw new Error(`record adaptation omitted required field .${name}`);
+    }
+    fields.push({ name, optional });
+    if (!source.fields.has(name)) changed = true;
+  }
+  if (!changed) return;
+  context.recordAdaptations.set(argument, {
+    sourceFields: [...source.fields.keys()],
+    fields,
+  });
 }
 
 /**
@@ -2404,6 +2649,11 @@ function inferDeclarations(
           declaration.span,
         );
       }
+      const integerValue = witness(declaration.value, context.types);
+      const knownArrayLength = arrayLength(
+        declaration.value,
+        context.types,
+      );
       // Same as a binding: evaluate first, name what it produced, and let the
       // *named* value be what gets bridged. Bridging first would mint the
       // effect's label from the placeholder name, and the rename afterwards
@@ -2458,13 +2708,11 @@ function inferDeclarations(
           stableRebindingType(previous),
         );
       }
-      // A rebinding is a new occurrence: the name holds another value, and a
-      // length proved about the old one says nothing about it. Minted
-      // explicitly, and for the reason the two deletes below exist —
+      // A rebinding to another value gets that value's identity or a fresh one.
       // `stableRebindingType` can hand back the very type it was given, so the
-      // `Typing` pairing alone would not always notice a `:=` in the same scope
-      // as the binding it shadows.
-      recordBinding(context.types, declaration.name);
+      // `Typing` pairing alone would not notice a `:=` in the same scope.
+      const identity = aliasedBinding(declaration.value, context.types);
+      recordBinding(context.types, declaration.name, identity);
       // A rebinding whose value is not known at compile time erases the one the
       // name had.
       context.types.comptime.delete(declaration.name);
@@ -2472,6 +2720,7 @@ function inferDeclarations(
       // an array of unknown size, and the literal it was declared with says
       // nothing about it. A rebinding to another literal records that one.
       context.types.arrayLengths.delete(declaration.name);
+      context.types.integerValues.delete(declaration.name);
       // And the computed value, which is a fact about the value the name held
       // rather than about the name.
       context.types.folded.delete(declaration.name);
@@ -2482,8 +2731,15 @@ function inferDeclarations(
       if (named !== null) {
         recordComptimeBinding(context.types, declaration.name, named);
       }
-      if (declaration.value.tag === "array") {
-        recordArrayLength(context.types, declaration.name, declaration.value);
+      if (knownArrayLength !== null) {
+        recordArrayLength(
+          context.types,
+          declaration.name,
+          knownArrayLength,
+        );
+      }
+      if (integerValue !== null && typeof integerValue === "object") {
+        recordIntegerValue(context.types, declaration.name, integerValue);
       }
       continue;
     }
@@ -2628,7 +2884,27 @@ function inferDeclarations(
       pendingSig = null;
     }
 
-    bindDeclaration(declaration.pattern, type, context, level);
+    const identity = aliasedBinding(declaration.value, context.types);
+    const integerValue = witness(declaration.value, context.types);
+    const knownArrayLength = arrayLength(declaration.value, context.types);
+    bindDeclaration(declaration.pattern, type, context, level, identity);
+    if (
+      declaration.pattern.tag === "name" && integerValue !== null &&
+      typeof integerValue === "object"
+    ) {
+      recordIntegerValue(
+        context.types,
+        declaration.pattern.name,
+        integerValue,
+      );
+    }
+    if (declaration.pattern.tag === "name" && knownArrayLength !== null) {
+      recordArrayLength(
+        context.types,
+        declaration.pattern.name,
+        knownArrayLength,
+      );
+    }
     if (resolvedTags.length > 0) {
       context.declarationTags.set(declaration, {
         tags: resolvedTags,
@@ -2655,15 +2931,6 @@ function inferDeclarations(
         declaration.value.tag === "lambda")
     ) {
       context.types.literals.set(
-        declaration.pattern.name,
-        declaration.value,
-      );
-    }
-    if (
-      declaration.pattern.tag === "name" && declaration.value.tag === "array"
-    ) {
-      recordArrayLength(
-        context.types,
         declaration.pattern.name,
         declaration.value,
       );
@@ -2858,10 +3125,11 @@ function bindDeclaration(
   type: Typing,
   context: Context,
   level: Level,
+  identity: number | null,
 ): void {
   if (pattern.tag === "name") {
     context.types.names.set(pattern.name, type);
-    recordBinding(context.types, pattern.name);
+    recordBinding(context.types, pattern.name, identity);
     return;
   }
   // A destructuring binding types its parts by constraining the whole against
@@ -3173,6 +3441,8 @@ export interface Checked {
    */
   readonly parameter: SimpleType | null;
   readonly effects: SimpleType;
+  /** The existing inference result for each expression; backends must not re-infer it. */
+  readonly expressionTypes: ReadonlyMap<Expr, SimpleType>;
   /**
    * What each `open` brought into scope.
    *
@@ -3198,6 +3468,8 @@ export interface Checked {
    * re-derive it. Same for the constructor set behind a `case`.
    */
   readonly shapes: ReadonlyMap<Expr, Shape>;
+  readonly recordAdaptations: ReadonlyMap<Expr, RecordAdaptation>;
+  readonly optionalCases: ReadonlySet<Expr>;
   readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
   /**
    * The field set of the *value* a shape pattern destructures.
@@ -3263,6 +3535,9 @@ export function checkModule(
     for (const [name, type] of prelude) types.names.set(name, scheme(type, -1));
   }
   const shapes = new Map<Expr, Shape>();
+  const recordAdaptations = new Map<Expr, RecordAdaptation>();
+  const optionalCases = new Set<Expr>();
+  const expressionTypes = new Map<Expr, SimpleType>();
   const variants = new Map<Expr, readonly VariantCase[]>();
   const patternShapes = new Map<Pattern, Shape>();
   const pinnedPatterns = new Map<Pattern, PinnedDomain>();
@@ -3273,11 +3548,14 @@ export function checkModule(
   const declarationTags = new Map<Decl, TaggedDeclaration>();
   const pending: (() => void)[] = [];
   const context: Context = {
+    expressionTypes,
     opens,
     comptimeValues,
     memberValues,
     staging,
     shapes,
+    recordAdaptations,
+    optionalCases,
     variants,
     patternShapes,
     pinnedPatterns,
@@ -3324,9 +3602,12 @@ export function checkModule(
     type: result,
     parameter,
     effects: row,
+    expressionTypes,
     opens,
     comptimeValues,
     shapes,
+    recordAdaptations,
+    optionalCases,
     variants,
     patternShapes,
     pinnedPatterns,

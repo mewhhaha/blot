@@ -47,6 +47,18 @@ function rejects(name: string, source: string, fragment: string): void {
   });
 }
 
+Deno.test("checking retains expression types for backend lowering", async () => {
+  const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
+  await Deno.writeTextFile(
+    path,
+    `${PRELUDE}let answer = 40 + 2; return answer;`,
+  );
+  const checked = await checkFile(path);
+  if (checked.expressionTypes.size === 0) {
+    throw new Error("checking omitted every inferred expression type");
+  }
+});
+
 // --- literals are singleton types -------------------------------------------
 
 check(
@@ -291,6 +303,15 @@ rejects(
   "a missing field is an ordinary constraint failure",
   "let area = fn s => @int.mul s.w s.h;\nreturn area { .w = 2; };",
   "no field `.h`",
+);
+
+check(
+  "an optional field supplies unit when it is omitted",
+  "sig count = { .value? = Int; } -> Int;\n" +
+    "let count = fn properties => case properties.value of " +
+    "() => 0, value => value end;\n" +
+    "return count {};",
+  "Int",
 );
 
 // --- variants, unions, and narrowing ----------------------------------------
@@ -728,12 +749,9 @@ check(
 // --- a read the source already decides --------------------------------------
 //
 // An array's type carries no length, so nothing here is proved from a type. The
-// length comes from the array literal a binding was written with, the index from
-// the same compile-time-integer witness a condition needs, and the answer is a
-// diagnostic rather than a fact: the call is still typed by the ordinary scheme.
-//
-// The refusals matter more than the acceptance, and they are asserted as types,
-// because refusing to decide has to leave the program exactly as it was.
+// length comes from the array literal a binding was written with, and the index
+// comes from the same compile-time-integer witness a condition needs. Direct
+// access is accepted only when those facts prove the whole index set safe.
 
 check(
   "an index inside the array is still an ordinary read",
@@ -776,22 +794,22 @@ rejects(
 // so the length is paired with the `Typing` its binding installed, and a fresh
 // `Typing` for the parameter makes the outer record stop matching.
 
-check(
-  "a parameter shadowing an array binding is not measured by it",
+rejects(
+  "a parameter shadowing an array binding needs its own proof",
   "let xs = [1, 2, 3];\nlet read = fn xs => @array.get xs 99;\nreturn read;",
-  "['a] -> 'a",
+  "BLOT_UNPROVEN_INDEX",
 );
 
-check(
-  "an aliased array is not measured by the array it aliases",
+rejects(
+  "an alias retains a literal array's known length",
   "let xs = [1, 2, 3];\nlet ys = xs;\nreturn @array.get ys 99;",
-  "(1 | 2 | 3)",
+  "Index 99 is outside an array of 3",
 );
 
-check(
-  "an array written with a spread has no length here",
+rejects(
+  "an unproved access into an array with a spread is refused",
   "let base = [1, 2, 3];\nlet xs = [0, ...base];\nreturn @array.get xs 99;",
-  "(0 | 1 | 2 | 3)",
+  "BLOT_UNPROVEN_INDEX",
 );
 
 // The index is decided by a compile-time integer or by a ground type — a `sig`
@@ -800,19 +818,18 @@ check(
 // nothing, and anything computed is refused because inferring it here would
 // infer it twice.
 
-check(
-  "an index bound by `let` decides nothing",
+rejects(
+  "an index bound by `let` still needs a proof",
   "let n = 99;\nlet xs = [1, 2, 3];\nreturn @array.get xs n;",
-  "(1 | 2 | 3)",
+  "BLOT_UNPROVEN_INDEX",
 );
 
 // --- an index proved against the array's length -----------------------------
 //
 // `@array.len xs` is a run-time value, and a comparison against it narrows
-// anyway: the bound is the symbol `len xs`, keyed to the binding occurrence, so
-// the index and the read name the same integer without anyone knowing which one
-// it is. The proof is still only a diagnostic — an index is never constrained,
-// so no published type moves and `@array.get` still emits a checked read.
+// anyway: the bound is the symbol `len xs`, keyed to the immutable array value,
+// so the index and the read name the same integer without anyone knowing which
+// one it is. The proof admits the direct access without changing its signature.
 
 const GUARDED = "sig at = [Int] -> Int -> Int;\n" +
   "let at = fn xs => fn n =>\n" +
@@ -849,9 +866,8 @@ check(
   "['a] -> (..len xs - 1 | 0)",
 );
 
-// `&&` proves nothing, so the guard has to nest. This is pinned as the type it
-// leaves rather than as a wish: a junction is recognised by its truth table,
-// so `&&` narrows — and an index range is still not `1 | 2`.
+// A junction is recognised by its truth table, so the prelude's `&&` narrows —
+// and an index range is still not `1 | 2`.
 check(
   "`&&` proves both halves, so a bounded range is covered",
   "sig f = Int -> Str;\n" +
@@ -907,32 +923,31 @@ rejects(
   "Index len xs.. is outside an array of len xs",
 );
 
-// The refusals, asserted as types. Each one is a length the comparison and the
-// read do not agree about, and each is silent: a read nobody could decide is
-// left to trap exactly as it did.
+// Each refusal is a length the comparison and the read do not agree about.
+// Direct access fails closed rather than leaving an unproved runtime trap.
 
-check(
-  "a length proved about one array says nothing about another",
+rejects(
+  "a length proved about one array cannot access another",
   "sig at = [Int] -> [Int] -> Int -> Int;\n" +
     "let at = fn xs => fn ys => fn n =>\n" +
     "  if n >= @array.len xs then @array.get ys n else 0 end;\n" +
     "return at;",
-  "[Int] -> [Int] -> Int -> Int",
+  "BLOT_UNPROVEN_INDEX",
 );
 
-check(
-  "an alias is another occurrence, so a proof does not carry to it",
+rejects(
+  "an alias preserves the array identity used by a proof",
   "sig at = [Int] -> Int -> Int;\n" +
     "let at = fn xs => fn n => do\n" +
     "  let ys = xs;\n" +
     "  in if n >= @array.len xs then @array.get ys n else 0 end\n" +
     "end;\n" +
     "return at;",
-  "[Int] -> Int -> Int",
+  "Index len xs.. is outside an array of len xs",
 );
 
-check(
-  "a rebinding is a new occurrence, so an old proof decides nothing about it",
+rejects(
+  "a rebinding invalidates a proof about the previous value",
   "sig at = [Int] -> [Int] -> Int -> Int;\n" +
     "let at = fn xs => fn ws => fn n =>\n" +
     "  if n >= @array.len xs then do\n" +
@@ -940,23 +955,68 @@ check(
     "    in @array.get xs n\n" +
     "  end else 0 end;\n" +
     "return at;",
-  "[Int] -> [Int] -> Int -> Int",
+  "BLOT_UNPROVEN_INDEX",
 );
 
-check(
-  "an index with no ground type decides nothing",
+rejects(
+  "an inferred integer is checked once a comparison grounds it",
   "let at = fn xs => fn n => if n >= @array.len xs then @array.get xs n else 0 end;\n" +
     "return at;",
-  "(['a] & ['b]) -> Int -> ('b | 0)",
+  "Index len xs.. is outside an array of len xs",
 );
 
-check(
-  "an array reached by anything but a name has no occurrence to name",
+rejects(
+  "a field access with no stable identity cannot prove a direct read",
   "sig at = { .values = [Int]; } -> Int -> Int;\n" +
     "let at = fn box => fn n =>\n" +
     "  if n >= @array.len box.values then @array.get box.values n else 0 end;\n" +
     "return at;",
-  "{ .values = [Int]; } -> Int -> Int",
+  "BLOT_UNPROVEN_INDEX",
+);
+
+check(
+  "a bound length keeps its relationship to the measured array",
+  "sig at = [Int] -> Int -> Int;\n" +
+    "let at = fn xs => fn n => do\n" +
+    "  let length = @array.len xs;\n" +
+    "  in if n >= 0 && n < length then @array.get xs n else 0 end\n" +
+    "end;\nreturn at;",
+  "[Int] -> Int -> Int",
+);
+
+check(
+  "affine arithmetic preserves a bound length relationship",
+  "sig at = [Int] -> Int -> Int;\n" +
+    "let at = fn xs => fn n => do\n" +
+    "  let last = @int.sub (@array.len xs) 1;\n" +
+    "  in if n >= 0 && n <= last then @array.get xs n else 0 end\n" +
+    "end;\nreturn at;",
+  "[Int] -> Int -> Int",
+);
+
+check(
+  "a proof follows an immutable array alias",
+  "sig at = [Int] -> Int -> Int;\n" +
+    "let at = fn xs => fn n => do\n" +
+    "  let ys = xs;\n" +
+    "  in if n >= 0 && n < @array.len xs then @array.get ys n else 0 end\n" +
+    "end;\nreturn at;",
+  "[Int] -> Int -> Int",
+);
+
+check(
+  "total array access returns an option for an unproved index",
+  "sig at = [Int] -> Int -> Option Int;\n" +
+    "let at = fn xs => fn n => Array.get (xs, n);\nreturn at;",
+  "[Int] -> Int -> #None | #Some Int",
+);
+
+check(
+  "total array replacement returns an option for an unproved index",
+  "sig put = [Int] -> Int -> Int -> Option [Int];\n" +
+    "let put = fn xs => fn n => fn value => Array.set (xs, n, value);\n" +
+    "return put;",
+  "[Int] -> Int -> Int -> #None | #Some [Int]",
 );
 
 // --- effects are a lattice element, not a separate pass ---------------------
@@ -1119,6 +1179,18 @@ check(
   "a range accepts what it contains",
   "sig small = range (0, 9);\nlet small = 7;\nreturn small;",
   "0..9",
+);
+
+check(
+  "a parameterized unsigned range includes its largest value",
+  "sig small = U 2;\nlet small = 3;\nreturn small;",
+  "0..3",
+);
+
+rejects(
+  "a parameterized signed range excludes its positive boundary",
+  "sig small = I 2;\nlet small = 2;\nreturn small;",
+  "`2` is outside `-2..1`",
 );
 
 rejects(

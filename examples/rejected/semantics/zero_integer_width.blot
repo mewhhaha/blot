@@ -1,0 +1,5 @@
+open {} = (@import "blot:prelude") ();
+
+const Impossible = U 0;
+
+return Impossible;

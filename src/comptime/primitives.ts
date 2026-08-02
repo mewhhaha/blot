@@ -539,7 +539,11 @@ export function inhabits(value: Value, type: Value): boolean {
     // Width subtyping: a wider value inhabits a narrower shape type.
     for (const [name, member] of type.fields) {
       const found = value.fields.get(name);
-      if (found === undefined || !inhabits(found, member)) return false;
+      if (found === undefined) {
+        if (!admitsOmission(member)) return false;
+        continue;
+      }
+      if (!inhabits(found, member)) return false;
     }
     return true;
   }
@@ -554,6 +558,13 @@ export function inhabits(value: Value, type: Value): boolean {
     return value.payload !== null && inhabits(value.payload, type.payload);
   }
   return equal(value, type);
+}
+
+function admitsOmission(type: Value): boolean {
+  if (type.tag === "extended") return admitsOmission(type.inner);
+  if (type.tag === "unit") return true;
+  if (type.tag !== "union") return false;
+  return type.members.some(admitsOmission);
 }
 
 export const PRIMITIVE_VALUES: ReadonlyMap<string, Value> = new Map<

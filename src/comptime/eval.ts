@@ -18,6 +18,7 @@ import type {
   Pattern,
   Span,
 } from "../syntax/ast.ts";
+import type { RecordAdaptation } from "../check/infer.ts";
 import { liveDeclarations } from "../syntax/live.ts";
 import { expect, fail } from "../diagnostic.ts";
 import {
@@ -38,6 +39,8 @@ export interface Perform {
   readonly effectName: string;
   readonly operation: string;
   readonly argument: Value;
+  /** Declared result type, retained so symbolic hosts only answer inhabited results. */
+  readonly resultType: Value;
   readonly span: Span;
   /** Whether the host implements this effect rather than a blot handler. */
   readonly host: boolean;
@@ -59,6 +62,7 @@ export interface Runtime {
   readonly imports: Imports;
   readonly phase: EvaluationPhase;
   readonly budget: EvaluationBudget;
+  readonly recordAdaptations: ReadonlyMap<Expr, RecordAdaptation>;
 }
 
 const DEFAULT_EVALUATION_FUEL = 1_000_000;
@@ -120,8 +124,14 @@ export function evaluationRuntime(
   imports: Imports,
   phase: EvaluationPhase,
   fuel = DEFAULT_EVALUATION_FUEL,
+  recordAdaptations: ReadonlyMap<Expr, RecordAdaptation> = new Map(),
 ): Runtime {
-  return { imports, phase, budget: { remaining: fuel, limit: fuel } };
+  return {
+    imports,
+    phase,
+    budget: { remaining: fuel, limit: fuel },
+    recordAdaptations,
+  };
 }
 
 export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
@@ -198,7 +208,11 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
 
     case "apply": {
       const fn = yield* evaluate(expr.fn, env, runtime);
-      const argument = yield* evaluate(expr.arg, env, runtime);
+      let argument = yield* evaluate(expr.arg, env, runtime);
+      const adaptation = runtime.recordAdaptations.get(expr.arg);
+      if (adaptation !== undefined) {
+        argument = adaptRecord(argument, adaptation, expr.arg.span);
+      }
       return yield* apply(fn, argument, expr.span, runtime);
     }
 
@@ -233,6 +247,7 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
         imports: runtime.imports,
         phase: "comptime",
         budget: runtime.budget,
+        recordAdaptations: runtime.recordAdaptations,
       };
       return yield* evaluate(expr.body, env, comptimeRuntime);
     }
@@ -395,6 +410,7 @@ function* runDeclarations(
         imports: runtime.imports,
         phase: "comptime",
         budget: runtime.budget,
+        recordAdaptations: runtime.recordAdaptations,
       };
     }
     const value = yield* bind(
@@ -491,6 +507,33 @@ function project(target: Value, name: string, span: Span): Value {
   fail("BLOT_NO_FIELD", `${show(target)} has no fields.`, span);
 }
 
+function adaptRecord(
+  value: Value,
+  adaptation: RecordAdaptation,
+  span: Span,
+): Value {
+  if (value.tag !== "shape") {
+    fail("BLOT_TYPE", `Record adaptation received ${show(value)}.`, span);
+  }
+  const fields = new Map<string, Value>();
+  for (const field of adaptation.fields) {
+    const present = value.fields.get(field.name);
+    if (field.optional === "absent" || field.optional === "unit") {
+      fields.set(field.name, UNIT);
+      continue;
+    }
+    if (present === undefined) {
+      fail(
+        "BLOT_NO_FIELD",
+        `Record adaptation needs field \`.${field.name}\` on ${show(value)}.`,
+        span,
+      );
+    }
+    fields.set(field.name, present);
+  }
+  return { tag: "shape", fields };
+}
+
 export function* apply(
   fn: Value,
   argument: Value,
@@ -513,6 +556,7 @@ export function* apply(
         imports: fn.imports,
         phase: runtime.phase,
         budget: runtime.budget,
+        recordAdaptations: runtime.recordAdaptations,
       };
     }
     return yield* evaluate(fn.body, scope, inner);
@@ -527,11 +571,17 @@ export function* apply(
 
   if (fn.tag === "operation") {
     expect(fn.effect.tag === "effect", "operation without an effect");
+    const signature = fn.effect.operations.get(fn.name);
+    expect(
+      signature !== undefined && signature.tag === "arrow",
+      "operation without an arrow signature",
+    );
     return yield {
       effectId: fn.effect.id,
       effectName: fn.effect.name,
       operation: fn.name,
       argument,
+      resultType: signature.codomain,
       span,
       host: fn.effect.host,
     };

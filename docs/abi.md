@@ -117,7 +117,7 @@ indirect result record. Direct scalar results need no post-return.
 Hosts returning an indirect imported result write into the result pointer
 provided by the module. They allocate nested buffers with the module's
 `cabi_realloc`. The module consumes and releases those buffers before the
-synchronous import call completes.
+enclosing synchronous export call completes.
 
 `cabi_realloc` accepts alignments 1, 2, 4, and 8. A zero new size releases a
 nonzero old pointer and returns zero. Invalid alignment, size, pointer, UTF-8,
@@ -143,6 +143,38 @@ The sidecar and custom-section bytes are identical, including the final newline.
 The canonical type tree contains record field names, variant case names, and
 seal names, so compatibility is structural rather than dependent on gpufuck's
 private constructor numbers.
+
+## Gpupaper target status
+
+`blot build --target=gpupaper` uses a sibling `../gpupaper` checkout. Blot owns
+the checked and staged Runtime HIR; gpupaper validates it and performs GPU Wasm
+emission. The current target implements dynamic direct scalar parameters and
+results, direct scalar host imports, closed composite results, and the canonical
+dynamic `Text` calculus used by the terminal case study. A `Text` host result
+uses an indirect result header, is range- and UTF-8-validated before
+observation, and may flow through comparison, concatenation, control, and later
+`Text -> Unit` host calls. Generated unit-payload control sums remain internal.
+Direct-result calls restore their allocation checkpoint before returning. Closed
+composite calls permit one outstanding result: the matching `cabi_post_*`
+restores the call's allocation checkpoint in constant time. Reentry, a wrong
+root pointer, a post-return for another export, and double post-return trap.
+
+Multiple input paths are prepared independently and the admitted Runtime HIR
+modules are submitted as one stable target batch. Gpupaper packs at most 16
+module plans into one atom graph, rebases only module-local length dependencies,
+and performs one GPU sizing, scan, emission, and boundary readback for that
+physical group. Returned Wasm byte arrays are owned and retain input order. A
+source preparation failure is reported for that path and excluded before GPU
+work. After submission the admitted logical batch is atomic: a physical GPU
+failure discards completed sibling partitions and returns no admitted artifact.
+Batching changes compiler scheduling only and never executes a declared host
+effect.
+
+The target does not yet implement dynamic composite export parameters or
+results, indirect host results other than `Text`, malformed caller-memory
+validation, boolean input validation, multiple outstanding results, or
+asynchronous host calls. These are target restrictions, not changes to ABI 1;
+unsupported Runtime HIR is refused.
 
 ## JavaScript example
 

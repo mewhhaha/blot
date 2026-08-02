@@ -173,11 +173,29 @@ const text_eq = fn (left, right) => is_equal (@text.cmp left right);
 
 // --- arrays -----------------------------------------------------------------
 
+const array_get = fn (values, index) =>
+  if index >= 0
+  then (if index < @array.len values
+    then #Some (@array.get values index)
+    else #None
+  end)
+  else #None
+  end;
+
+const array_set = fn (values, index, value) =>
+  if index >= 0
+  then (if index < @array.len values
+    then #Some (@array.set values index value)
+    else #None
+  end)
+  else #None
+  end;
+
 const Array = {
   .empty = @array.empty;
   .length = fn values => @array.len values;
-  .get = fn (values, index) => @array.get values index;
-  .set = fn (values, index, value) => @array.set values index value;
+  .get = array_get;
+  .set = array_set;
   .push = fn (values, value) => @array.push values value;
 };
 
@@ -185,11 +203,13 @@ const Array = {
 // Rebindings form the accumulator; `for` does not introduce assignment.
 const fold = fn (values, state, step) => do
   let go = rec (fn (index, current) => do
-    result <- if is_less (@int.cmp index (@array.len values)) then do
-      next <- step (current, @array.get values index);
-      continued <- go (@int.add index 1, next);
-      in continued
-    end else current
+    result <- case array_get (values, index) of
+      #Some value => do
+        next <- step (current, value);
+        continued <- go (@int.add index 1, next);
+        in continued
+      end,
+      #None => current
     end;
     in result
   end);
@@ -403,10 +423,17 @@ const iter_range = fn (from, to) => {
 
 const iter_items = fn values => {
   .state = 0;
-  .step = fn index =>
-    if is_less (@int.cmp index (@array.len values))
-    then Some (@array.get values index, @int.add index 1)
-    else None
+  .step = fn index => case array_get (values, index) of
+    #Some value => Some (value, @int.add index 1),
+    #None => None
+    end;
+};
+
+const iter_indexed = fn values => {
+  .state = 0;
+  .step = fn index => case array_get (values, index) of
+    #Some value => Some ((index, value), @int.add index 1),
+    #None => None
     end;
 };
 
@@ -434,6 +461,7 @@ end;
 const Iter = {
   .range = iter_range;
   .items = iter_items;
+  .indexed = iter_indexed;
   .iterate = iterate;
   .collect = collect;
 };
@@ -500,9 +528,35 @@ const F32x4 = @type.f32x4;
 const F32x4Mask = @type.f32x4_mask;
 const likely = fn condition => @branch.likely condition;
 const unlikely = fn condition => @branch.unlikely condition;
-const I32 = range (-2147483648, 2147483647);
-const I64 = range (@int.neg (pow2 63), @int.sub (pow2 63) 1);
-const U8 = range (0, 255);
+
+// Fixed-width integer types are ranges rather than another numeric domain.
+// The width is compile-time information for storage tools; arithmetic still
+// uses `Int` and has to prove a narrower result when a signature asks for one.
+const integer_width = fn bits =>
+  if is_greater (@int.cmp bits 0)
+  then bits
+  else @fail (Text.append "integer bit width must be positive, found " (Text.of_int bits))
+  end;
+
+const U = fn bits => do
+  let width = integer_width bits;
+  in range (0, @int.sub (pow2 width) 1) <+ { .bit_width = width; }
+end;
+
+const I = fn bits => do
+  let width = integer_width bits;
+  let magnitude = pow2 (@int.sub width 1);
+  in range (@int.neg magnitude, @int.sub magnitude 1) <+ { .bit_width = width; }
+end;
+
+const I8 = I 8;
+const I16 = I 16;
+const I32 = I 32;
+const I64 = I 64;
+const U8 = U 8;
+const U16 = U 16;
+const U32 = U 32;
+const U64 = U 64;
 const Nat = range (0, @type.unbounded);
 const Unit = @type.unit;
 
@@ -529,6 +583,11 @@ end;
 // not a different kind of thing to case on.
 
 const reflect = fn t => @type.reflect t;
+
+// Width is part of the source-level namespace attached by `I` and `U`, not a
+// new type-lattice case. A plain range carries no storage promise and therefore
+// has no width to return here.
+const bit_width = fn t => @shape.get (@type.members t) "bit_width";
 
 // A union's members, and any other type as the one-member array. `Extract`,
 // `Exclude`, and exhaustiveness checks are all folds over this.
@@ -595,6 +654,12 @@ const same_domain = fn (left, right) => case left of
   end
 end;
 
+const admits_omission = rec (fn type => case reflect type of
+  #Unit => True,
+  #Union members => any (members, admits_omission),
+  _ => False
+end);
+
 // Does every value of `narrow` inhabit `wide`?
 //
 // This is the comptime mirror of what biunification decides during checking.
@@ -617,7 +682,7 @@ const refines = rec (fn (narrow, wide) => case reflect wide of
     #Shape narrow_fields => every (@shape.names wide_fields, (fn name =>
       if @shape.has narrow_fields name
       then refines (@shape.get narrow_fields name, @shape.get wide_fields name)
-      else False
+      else admits_omission (@shape.get wide_fields name)
       end)),
     _ => False
   end,
@@ -625,7 +690,11 @@ const refines = rec (fn (narrow, wide) => case reflect wide of
     #Array narrow_elements =>
       if Ord.eq (@array.len narrow_elements) (@array.len wide_elements)
       then every (upto (0, @int.sub (@array.len wide_elements) 1), (fn index =>
-        refines (@array.get narrow_elements index, @array.get wide_elements index)))
+        case (array_get (narrow_elements, index), array_get (wide_elements, index)) of
+          (#Some narrow_element, #Some wide_element) =>
+            refines (narrow_element, wide_element),
+          _ => False
+        end))
       else False
       end,
     _ => False
@@ -798,10 +867,9 @@ end;
 // --- packing ----------------------------------------------------------------
 //
 // Deliberately not `struct` with a different order. A placement decides which
-// *slot* a field occupies; packing decides which *bytes* it occupies, and the
-// two answer different questions — a packed record still has to say where each
-// field starts, how wide it is, and how much space the order wasted. Sharing
-// an implementation would force one of them to pretend to be the other.
+// slot a field occupies; packing describes which bits it occupies. `packed`
+// reports that description and does not change the tuple representation that
+// `struct` returns.
 
 // Offsets in a given order, each field aligned to its own width. `.padding` is
 // reported rather than hidden: a placement that wastes space should say so,
@@ -822,21 +890,28 @@ const aligned = fn (shape, order, width_of) => do
   in { .size = offset; .padding = padding; .fields = fields; }
 end;
 
-// Widest field first, which with per-field alignment is the order that needs no
-// padding at all. `packed` reports the byte layout it chose; `struct (reorder
-// (shape, packed (shape, w).order))` is how you get storage arranged that way,
-// and keeping that a separate call is what keeps the two decoupled.
-const packed = fn (shape, width_of) => do
-  let order = sort_by (@shape.names shape, (fn (left, right) =>
-    is_greater (@int.cmp (width_of (@shape.get shape left)) (width_of (@shape.get shape right)))));
-  let bytes = aligned (shape, order, width_of);
+// Fields keep declaration order and occupy consecutive bits. The mask is the
+// unshifted field mask; a consumer combines it with `bit_offset` when loading
+// or storing a containing word. Tail padding is the unused part of the final
+// byte, not space between fields.
+const packed = fn shape => do
+  let order = @shape.names shape;
+  let bits = layout (shape, bit_width);
+  let fields = map (bits.fields, (fn field => {
+    .name = field.name;
+    .bit_offset = field.offset;
+    .bit_width = field.width;
+    .mask = @int.sub (pow2 field.width) 1;
+  }));
+  let byte_size = @int.div (@int.add bits.size 7) 8;
   in {
     .order = order;
-    .size = bytes.size;
-    .padding = bytes.padding;
-    .fields = bytes.fields;
-    .offset = fn name => fold (bytes.fields, None,
-      (fn (found, field) => if text_eq (field.name, name) then Some field.offset else found end));
+    .bit_size = bits.size;
+    .byte_size = byte_size;
+    .trailing_bits = @int.sub (@int.mul byte_size 8) bits.size;
+    .fields = fields;
+    .bit_offset = fn name => fold (fields, None,
+      (fn (found, field) => if text_eq (field.name, name) then Some field.bit_offset else found end));
   }
 end;
 
@@ -926,6 +1001,7 @@ return {
   .every = every;
   .text_eq = text_eq;
   .range = range;
+  .bit_width = bit_width;
   .struct = struct;
   .reorder = reorder;
   .packed = packed;
@@ -936,9 +1012,16 @@ return {
   .F32 = F32;
   .F32x4 = F32x4;
   .F32x4Mask = F32x4Mask;
+  .I = I;
+  .I8 = I8;
+  .I16 = I16;
   .I32 = I32;
   .I64 = I64;
+  .U = U;
   .U8 = U8;
+  .U16 = U16;
+  .U32 = U32;
+  .U64 = U64;
   .Nat = Nat;
   .Int = Int;
   .Str = Str;

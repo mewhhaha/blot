@@ -22,7 +22,10 @@ let program = [1, 0, 4, 5, 0, 6, 7];
 // what proves the index, exactly as in `indexed.blot`.
 sig token = [Int] -> Int -> Int;
 let token = fn source => fn at =>
-  if at < @array.len source then @array.get source at else 0 end;
+  if at >= 0 && at < @array.len source
+  then @array.get source at
+  else 0
+  end;
 
 // Each walker returns the value it read and the position after it, so the
 // caller knows where its next child begins.

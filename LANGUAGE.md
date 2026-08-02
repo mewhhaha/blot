@@ -77,6 +77,25 @@ frontend's signed-32-bit input profile; wider values, including the bounds of
 Runtime integers are signed 64-bit values and trap on overflow. Compile-time
 integer arithmetic is arbitrary precision.
 
+The prelude functions `U bits` and `I bits` construct fixed-width integer ranges
+at compile time. `bits` must be positive:
+
+```text
+U n = 0..(2^n - 1)
+I n = -2^(n - 1)..(2^(n - 1) - 1)
+```
+
+`I8`, `I16`, `I32`, `I64`, `U8`, `U16`, `U32`, and `U64` are aliases for the
+corresponding applications. These are range types, not additional runtime
+numeric domains: arithmetic still uses signed 64-bit `Int`, does not wrap to a
+range's width, and must prove a narrowed result when a signature requires one.
+Each constructor attaches its positive `bits` argument as transparent
+`.bit_width` namespace metadata; it does not add that metadata to the type
+lattice. Because type construction runs with arbitrary-precision compile-time
+integers, a range such as `U64` can describe storage bounds above the largest
+runtime `Int`; that fact does not make those values representable by runtime
+integer operations.
+
 A float literal is decimal digits, a point, and decimal digits — both sides are
 required. That is what keeps `1.5` a float while `pair.0` stays a projection:
 the field after a dot has no digit before it and a float always does. There is
@@ -413,7 +432,92 @@ The left-hand binding in a `try` handler step is a separate bounded surface
 form. Section 12.2 specifies how it binds the newly handled computation without
 executing it.
 
-### 4.6 Opening a record
+### 4.6 Element statements
+
+An element statement applies an ordinary component binding to a property record
+and a child computation, then sequences the resulting effectful expression:
+
+```blot
+<div .class="counter" .hidden={hidden}>
+  _ <- text "Count: ";
+  <Button .disabled=True />;
+</div>;
+```
+
+The tag is a lexical binding with exactly the name written. Lower-case and
+capitalized tags have the same semantics: `<div>` reaches `div`, and `<Button>`
+reaches `Button`. Nothing named `Render`, `text`, or `children` is implicitly in
+scope. A renderer may expose bindings directly, or a function may bind fields
+projected from a renderer before using element statements.
+
+Properties are fields of one record:
+
+| source                 | record field            |
+| ---------------------- | ----------------------- |
+| `.disabled=True`       | `.disabled = True;`     |
+| `.class="counter"`     | `.class = "counter";`   |
+| `.hidden={expression}` | `.hidden = expression;` |
+
+An unbraced payload is a name, constructor, unit, integer, float, or text
+literal. Braces admit any value expression. Every property has an explicit
+value; boolean-like properties use ordinary values such as `True`. Writing one
+property twice is the same duplicate explicit field error as writing one record
+field twice.
+
+The component's first parameter decides which properties are required. Ordinary
+record width subtyping admits extra fields and rejects an omitted required one.
+A field written with `?` elaborates to a field whose type includes `()`, and the
+call supplies `()` when it is omitted. Thus this signature requires `label` and
+makes `disabled` optional without an intrinsic `Option`:
+
+```blot
+sig Button = {
+  .label = Str;
+  .disabled? = Bool;
+} -> (Unit -> Unit) -> Unit ~ { Draw };
+```
+
+`<Button .label="Save" />` supplies `()` as `.disabled`, while `<Button />` is a
+type error because `label` is required. This is expectation-driven: projecting
+an unknown field from `{}` remains an error, and a typo does not silently
+acquire type `Unit`.
+
+A component is otherwise an ordinary curried function. For example:
+
+```blot
+let component = fn properties => fn children => do
+  _ <- children ();
+end;
+```
+
+Its principal type prints as `'a -> (() -> 'b ~ { e }) -> () ~ { e }`: the
+property argument remains polymorphic until the component inspects it, and the
+inferred row variable propagates exactly the effects performed by its child.
+Projecting fields or attaching a signature constrains `'a` to a record;
+performing renderer operations adds their effects to the outer row.
+
+The statements between paired tags become one `fn () => do ... end` child
+computation. A self-closing element receives a function that returns `()`.
+Control inside the child computation has that new lambda as its boundary, and
+effects run only if the component sequences `children ()`. The full lowering is
+equivalent to:
+
+```blot
+_ <- div { .class = "counter"; .hidden = hidden; } (fn () => do
+  _ <- text "Count: ";
+  _ <- Button { .disabled = True; } (fn () => ());
+end);
+```
+
+The source form lowers completely during CST lowering. There is no element AST
+node, element type, renderer primitive, implicit effect, or backend path.
+Opening and closing names must match exactly. `</` and `/>` are reserved element
+delimiters; exact `<` and `>` remain available as fixity operators, while longer
+operator spellings continue to lex as operators. The exact brackets are infix
+operators only; using `<` as a prefix would be indistinguishable from opening an
+element statement.
+
+### 4.7 Opening a record
 
 ```blot
 open {} = record;
@@ -432,7 +536,7 @@ lexical bindings and can shadow bindings from an outer scope.
 
 The canonical empty mask is `{}`.
 
-### 4.7 Return
+### 4.8 Return
 
 ```blot
 return value;
@@ -542,6 +646,19 @@ A shape is a structural record:
 Shape fields and spreads are applied from left to right. A later spread or field
 replaces an earlier field with the same name. Writing the same explicit field
 more than once is rejected.
+
+An optional field is written `.name? = T`. It is surface syntax for
+`.name = @type.union T ()`, conventionally written `.name = T | ()`; reflection
+and inference therefore see an ordinary field whose value admits `Unit`, not a
+second kind of record member.
+
+When a record flows into an expected record type, an omitted field is supplied
+as `()` only when that expected field explicitly contains `Unit`, either as `()`
+itself or as a member of a union. Other missing fields are type errors. The
+reference evaluator materializes the unit field at the call boundary. An exact
+`Unit` field remains `Unit` in Core. Core uses a private absent/present sum so
+`T | ()` has one HM representation; that sum is not source syntax and does not
+cross the Wasm ABI.
 
 A spread contributes the fields its operand is _known_ to have. Where the
 operand is a shape written nearby, that is all of them. Where it is a parameter,
@@ -1126,18 +1243,19 @@ let at = fn xs => fn n =>
 array's type carries no length (§13.3) and this does not put one there: the
 symbol is a range bound, so it is compared and never solved for.
 
-A length is keyed to the _binding occurrence_, which is what makes it denote one
-integer: blot has no assignment and arrays are immutable, so a binding holds one
-value for its whole lifetime. Every consequence follows from that key.
+A length is keyed to the immutable array value a binding denotes. blot has no
+assignment and arrays are immutable, so that identity denotes one length for its
+whole lifetime. Every consequence follows from that key.
 
 - `:=` binds a new occurrence, so a length proved before it says nothing after
-  it, in either direction.
-- An alias is another occurrence. After `let ys = xs;`, `len ys` and `len xs`
-  are two unrelated integers, and a comparison against one proves nothing about
-  a read of the other.
+  it unless the new value is an alias of the old one.
+- An immutable alias keeps the identity. After `let ys = xs;`, a comparison
+  against `@array.len xs` may prove a direct access through `ys`.
+- A measured length may itself be bound. `let length = @array.len xs;` keeps the
+  relationship, as do aliases of `length` and affine shifts by an integer
+  literal such as `length - 1`. Arbitrary arithmetic widens back to `Int`.
 - Two arrays are never related. `len xs` and `len ys` are not compared, ordered,
-  added, or subtracted, and neither is a length compared against another array's
-  index.
+  or solved against one another merely because their array types agree.
 - The one thing assumed about a length nobody measured is
   `0 <= len xs <= 2147483647`, because an array's length is a 32-bit count. It
   is what lets `n >= 0` and `n < @array.len xs` compose: without it, `0` and
@@ -1165,10 +1283,10 @@ the branch failing to cover a set the condition would have shrunk.
   `Logic.and` that is not conjunction proves nothing rather than being mistaken
   for one. Two halves that speak about _different_ names also prove nothing: a
   proof narrows one name.
-- **A length reached by anything but a name.** `@array.len box.values`,
-  `@array.len (f ())`, and the prelude's `Array.length xs` name no binding
-  occurrence, so there is no symbol to compare against. Only the primitive
-  applied to a name in scope is a witness.
+- **A length reached by an unstable expression.** `@array.len box.values`,
+  `@array.len (f ())`, and the prelude's `Array.length xs` name no stable value
+  identity, so there is no symbol to compare against. The primitive applied to a
+  name, or a binding that retained such a measurement, is a witness.
 - **Two lengths.** `@array.len xs == @array.len ys` has a witness on both sides
   and a subject on neither.
 - **A witness that is another runtime name.** `n == m` says `n` equals this `m`,
@@ -1383,6 +1501,27 @@ The type algebra includes:
 An attached namespace is transparent to type checking. This is how the prelude
 `struct` returns one value that is both a storage type and a namespace
 containing `.new`, accessors, and layout metadata.
+
+The prelude's `bit_width` reads the transparent width metadata attached by `I`
+and `U`. A plain `range` makes no storage-width promise and has no width for
+this function to return. `packed shape` applies `bit_width` to every field in
+declaration order and returns a compile-time layout descriptor:
+
+```blot
+packed {
+  .red = U 8;
+  .green = U 8;
+  .mode = U 2;
+}
+```
+
+The result has `.order`, `.bit_size`, `.byte_size`, `.trailing_bits`, `.fields`,
+and `.bit_offset`. Each field reports `.name`, `.bit_offset`, `.bit_width`, and
+an unshifted `.mask`; the example occupies 18 meaningful bits and three bytes,
+with six unused bits at the end. `packed` is ordinary prelude source over
+reflection and `layout`. It describes storage and does not change the positional
+tuple returned by `struct`, the runtime representation of an integer, or the
+Core Wasm ABI.
 
 A namespace member is a compile-time value, and projecting one is typed by that
 value rather than by the field rule. A member that is itself a type projects to
@@ -1756,8 +1895,8 @@ signed 64-bit range trap.
 | --------------- | ----------------------------------------------- |
 | `@array.empty`  | polymorphic empty array                         |
 | `@array.len`    | array length                                    |
-| `@array.get`    | checked indexed read                            |
-| `@array.set`    | checked immutable indexed replacement           |
+| `@array.get`    | proof-required indexed read                     |
+| `@array.set`    | proof-required immutable indexed replacement    |
 | `@array.push`   | immutable append                                |
 | `@shape.empty`  | empty shape                                     |
 | `@shape.get`    | get a field named by text                       |
@@ -1766,7 +1905,9 @@ signed 64-bit range trap.
 | `@shape.names`  | field names in insertion order                  |
 | `@shape.has`    | return `#True` or `#False` for field membership |
 
-Array indexing is zero-based and bounds-checked.
+Array indexing is zero-based. Direct primitive access is accepted only with a
+static bounds proof; the prelude's total `Array.get` and `Array.set` return an
+`Option`.
 
 #### A field named by a value
 
@@ -1792,11 +1933,19 @@ A name that is only known at run time — `@shape.get value name` inside a fold
 over `@shape.names` — leaves the result unconstrained, and a `sig` written over
 one of those is believed rather than checked.
 
-#### A read that cannot succeed
+#### Safe indexed access
 
-`@array.get` and `@array.set` are rejected at check time with
-`BLOT_OUT_OF_BOUNDS` when every index the source allows is outside the array,
-instead of trapping when the program runs:
+There are two indexed APIs, chosen explicitly.
+
+`Array.get (xs, index)` and `Array.set (xs, index, value)` are total. They
+return `#Some result` when `index` is in bounds and `#None` otherwise. Their
+guard is ordinary prelude source.
+
+`@array.get xs index` and `@array.set xs index value` are the direct path. The
+checker accepts them only when every value of `index` is inside
+`0..@array.len xs - 1`. An index known to be outside reports
+`BLOT_OUT_OF_BOUNDS`; an index with no sufficient proof reports
+`BLOT_UNPROVEN_INDEX` and points to the total API:
 
 ```blot
 let xs = [1, 2, 3];
@@ -1805,64 +1954,39 @@ return @array.get xs 99;   // BLOT_OUT_OF_BOUNDS: Index 99 is outside an array o
 
 ```blot
 sig at = [Int] -> Int -> Int;
-let at = fn xs => fn n => if n >= @array.len xs then @array.get xs n else 0 end;
-// BLOT_OUT_OF_BOUNDS: Index len xs.. is outside an array of len xs.
+let at = fn xs => fn n =>
+  if n >= 0 && n < @array.len xs then @array.get xs n else 0 end;
 ```
 
-The second needs no number. `n >= @array.len xs` proves `n : len xs..` (§8.5),
-whose smallest value is the first index past the end of `xs`, and the read names
-the same binding — so the two bounds are the same integer whatever the caller
-passes.
+The second needs no concrete length. The conjunction proves `n : 0..len xs - 1`
+(§8.5), and the read names the same immutable array value. The primitive still
+lowers to a Store read. gpufuck's range pass may remove its runtime check when
+the residual Core makes the same proof visible; the checked Store remains the
+safety net when it cannot.
 
-The index's type is _read_, never constrained. That is what keeps the rule from
-changing any program's type: a signature is what it was, and an ordinary call
-passing an unproved integer still checks. So nothing is ever proved to be _in_
-bounds either. The answer is a diagnostic or silence, and `@array.get` still
-emits a checked read in both cases — a proof here does not remove a run-time
-check, and none of these forms is faster than any other.
+The relationship survives ordinary immutable bindings:
 
-The array's length is decided in one of two ways: as a number, when the array is
-written out at the call site, the name denotes a compile-time array value, or
-the name was bound to an array literal with no spread; and otherwise as the
-symbol `len b` for the binding occurrence a plain name denotes. The index is
-decided when it is a compile-time integer, or when it is a name whose type is
-already a ground set of integers — one a `sig` declared, or one a branch proved.
-A `let` generalizes, so a `let`-bound integer decides nothing, and neither does
-anything computed.
+```blot
+let ys = xs;
+let length = @array.len xs;
+let last = length - 1;
+if n >= 0 && n <= last then @array.get ys n else 0 end
+```
 
-Everything else is silent rather than approximated, and a read through it traps
-at run time exactly as before:
+It does not become part of `[T]`, escape through an ordinary function result, or
+attach to an unstable field or call expression. A `:=` to a different value
+invalidates facts about the previous value. These cases fail closed with
+`BLOT_UNPROVEN_INDEX` rather than leaving a possible runtime trap.
 
-- an index proved against one array and used to read another, an alias
-  (`let ys = xs;`) included: two occurrences are two unrelated integers;
-- an array reached by anything but a plain name — a field, a call result, an
-  array written in place — which names no occurrence to compare against;
-- an array written with a spread, whose element count includes one this cannot
-  see. It still has an occurrence, so a comparison against its own `@array.len`
-  still proves;
-- a name rebound by `:=`, which binds a new occurrence and erases the number the
-  old one had. A `:=` to an array literal records that literal's length;
-- an index a comparison did not bound, and an index carried across arithmetic:
-  `@int.add n 1` is `Int` whatever `n` was;
-- an index bounded only by a literal, when the array's length is a symbol.
-  `n < 5` proves `..4`, and whether `..4` is inside `0..len xs - 1` depends on
-  an array nobody measured.
+For iteration, `Iter.items xs` yields each value and `Iter.indexed xs` yields
+`(index, value)`. Both perform one total termination test per iteration, so a
+loop body does not repeat the source-level test or perform another lookup:
 
-A loop is not a proof either. `for n in Iter.range (0, @array.len xs)` passes
-the length to an ordinary prelude iterator, and what comes back out is `Int`; a
-read inside the body is unproved and still bounds-checked.
-
-A shadowed binding is measured by the binding that shadows it or not at all. A
-lambda parameter, a pattern binder, and a later `let` each install a type of
-their own, and a length is recorded against the one it was written beside — so
-`let xs = [1, 2, 3]; let read = fn xs => @array.get xs 99;` reports nothing,
-because the `xs` being read is the caller's.
-
-All of this is for unqualified arrays. Every argument position is a move (§11),
-and both of these forms name the array twice — once to measure and once to read
-— so a linear or borrowed array cannot be written this way at all:
-`let !xs = [1, 2, 3]; let n = @array.len xs; let v = @array.get xs 0;` is
-`BLOT_LINEAR_CONSUMED_TWICE`, and this rule does not change that.
+```blot
+for (index, value) in Iter.indexed xs do
+  visit (index, value);
+end;
+```
 
 ### 13.3.1 Asking about a type
 
@@ -1977,8 +2101,10 @@ record currently exports:
 - type tools: `Type`, `Set`, `attach`, `seal`, `unseal`, `Reflect`, `reflect`,
   `refines`, `members`, `union_of`, `Extract`, `Exclude`, `Pick`, `Omit`,
   `opened`, and `range`;
-- storage tools: `struct`, `reorder`, `layout`, `aligned`, and `packed`; and
-- standard types: `I32`, `I64`, `U8`, `Nat`, `Int`, `Str`, `Unit`, `F64`, `F32`,
+- storage tools: `struct`, `reorder`, `layout`, `aligned`, `bit_width`, and
+  `packed`; and
+- standard types and integer range constructors: `I`, `I8`, `I16`, `I32`, `I64`,
+  `U`, `U8`, `U16`, `U32`, `U64`, `Nat`, `Int`, `Str`, `Unit`, `F64`, `F32`,
   `F32x4`, and `F32x4Mask`.
 
 Important conventional values include:

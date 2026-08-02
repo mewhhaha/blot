@@ -23,8 +23,8 @@ import { F32X4_MASK_NAME, F32X4_NAME } from "../comptime/value.ts";
 export type Level = number;
 
 /**
- * `length(binding) + offset` — the number of elements in the array value bound
- * at one binding occurrence, shifted by a literal.
+ * `length(binding) + offset` — the number of elements in one immutable array
+ * value, shifted by a literal.
  *
  * WHY A LENGTH IS A BOUND AND NOT A TYPE
  *
@@ -38,10 +38,10 @@ export type Level = number;
  *
  * IDENTITY IS THE BINDING OCCURRENCE
  *
- * `binding` is an id minted at a binder — `let`, `const`, `:=`, a lambda
- * parameter, a pattern binder, a `for` binder. blot has no assignment and
- * arrays are immutable, so one binding occurrence denotes exactly one value for
- * its whole lifetime, and `len(b)` therefore denotes exactly one integer.
+ * `binding` is an id minted for an immutable value. A fresh binder normally
+ * creates one; an alias keeps the id. blot has no assignment and arrays are
+ * immutable, so the identity denotes exactly one value for its whole lifetime,
+ * and `len(b)` therefore denotes exactly one integer.
  *
  * The two cheaper keys are unsound, each with a program that shows it:
  *
@@ -53,9 +53,9 @@ export type Level = number;
  *     xs 9;` shares `xs`'s variable. Measuring `bigger` would license a read of
  *     `xs` one element past its end.
  *
- * The cost of the sound key is that `let ys = xs;` gives `len(ys) != len(xs)`:
- * a fact proved about `xs` says nothing about `ys`. Sound, incomplete, and
- * visible in the source.
+ * `let ys = xs;` keeps the identity, while a function call or a `:=` to another
+ * value does not. This preserves a fact through a transparent alias without
+ * equating two arrays merely because their element types agree.
  *
  * `name` is for the reader only. Two occurrences may share it; it takes no part
  * in identity, and `lengthSubject` is what disambiguates it in a message.
@@ -272,6 +272,23 @@ export function openVariant(
 export function union(members: readonly SimpleType[]): SimpleType {
   if (members.length === 1) return members[0];
   return { tag: "union", members };
+}
+
+/** Whether a type explicitly names `Unit` as one of its inhabitants. */
+export function admitsOmission(
+  type: SimpleType,
+  seen = new Set<number>(),
+): boolean {
+  if (type.tag === "unit") return true;
+  if (type.tag === "union") {
+    return type.members.some((member) => admitsOmission(member, seen));
+  }
+  if (type.tag === "forall") return admitsOmission(type.body, seen);
+  if (type.tag !== "var" || seen.has(type.id)) return false;
+  seen.add(type.id);
+  return [...type.lower, ...type.upper].some((bound) =>
+    admitsOmission(bound, seen)
+  );
 }
 
 export function effects(labels: Iterable<string>): SimpleType {

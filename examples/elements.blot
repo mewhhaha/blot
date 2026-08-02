@@ -1,0 +1,65 @@
+open {} = (@import "blot:prelude") ();
+
+const Draw = @effect {
+  .write = Str -> Unit;
+};
+
+let element = fn name => fn _properties => fn children => do
+  _ <- Draw.write ("<" <> name <> ">");
+  _ <- children ();
+  _ <- Draw.write ("</" <> name <> ">");
+end;
+
+let Render = {
+  .text = fn text => do
+    _ <- Draw.write text;
+  end;
+  .div = element "div";
+  .icon = element "icon";
+};
+
+let text = Render.text;
+let div = Render.div;
+let icon = Render.icon;
+
+sig Button = {
+  .label = Str;
+  .disabled? = Bool;
+  .order? = Int;
+} -> (Unit -> Unit) -> Unit ~ { Draw };
+let Button = fn properties => fn children => do
+  let disabled = case properties.disabled of
+    () => "",
+    #False => "",
+    #True => " disabled"
+  end;
+  let order = case properties.order of
+    () => "",
+    value => " data-order=" <> Text.of_int value
+  end;
+  _ <- Draw.write ("<button" <> disabled <> order <> ">");
+  _ <- text properties.label;
+  _ <- children ();
+  _ <- Draw.write "</button>";
+end;
+
+let view = fn () => do
+  <div .class="counter" .hidden=False>
+    _ <- text "Count: ";
+    <Button .label="Save" />;
+    <Button .label="Delete" .disabled=True .order=2 />;
+    <icon />;
+  </div>;
+end;
+
+let collecting = {
+  .write = fn (fragment, ?resume) => do
+    rest <- resume ();
+    in fragment <> rest
+  end;
+  .return = fn _ => "";
+};
+
+return @handle (Draw, (fn () => do
+  _ <- view ();
+end), collecting);

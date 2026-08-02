@@ -47,16 +47,21 @@ const Sorted = struct (reorder (Record, alphabetical (@shape.names Record)));
 
 // --- packing is a different question ----------------------------------------
 //
-// `packed` is not `struct` with a sorted order. A placement decides which
-// *slot* a field occupies; packing decides which *bytes* it occupies, and a
-// packed record still has to say where each field starts, how wide it is, and
-// how much the order wasted. It reports a layout; `struct (reorder (...))` is
-// how you get storage arranged that way, and keeping that a separate call is
-// what keeps the two independent.
+// A placement decides which tuple slot a field occupies. `packed` instead
+// describes consecutive bits without changing that tuple representation.
+// Parameterized integer ranges carry enough compile-time information for the
+// source function to calculate every offset and mask.
 
 const declared_bytes = aligned (Record, Declared.fields, byte_width);
-const tight = packed (Record, byte_width);
-const Tight = struct (reorder (Record, tight.order));
+
+const Pixel = {
+  .red = U 8;
+  .green = U 8;
+  .mode = U 2;
+};
+const pixel_bits = packed Pixel;
+const signed_bit_width = bit_width (I 7);
+const unsigned_bit_width = bit_width U64;
 
 // `layout` is the unpadded case: offsets in a given order, nothing inserted.
 const raw = layout (Record, byte_width);
@@ -89,12 +94,16 @@ return {
   .declared_size = declared_bytes.size;
   .declared_padding = declared_bytes.padding;
 
-  .packed_order = tight.order;
-  .packed_type = Tight;
-  .packed_size = tight.size;
-  .packed_padding = tight.padding;
-  .packed_offsets = tight.fields;
-  .id_at = tight.offset "id";
+  .unsigned_two = U 2;
+  .signed_seven = I 7;
+  .signed_bit_width = signed_bit_width;
+  .unsigned_bit_width = unsigned_bit_width;
+  .packed_order = pixel_bits.order;
+  .packed_bit_size = pixel_bits.bit_size;
+  .packed_byte_size = pixel_bits.byte_size;
+  .packed_trailing_bits = pixel_bits.trailing_bits;
+  .packed_fields = pixel_bits.fields;
+  .mode_at = pixel_bits.bit_offset "mode";
 
   .sorted_order = Sorted.fields;
   .unpadded_size = raw.size;

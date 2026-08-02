@@ -304,6 +304,7 @@ function statementsContainReturn(cursors: readonly Cursor[]): boolean {
 function statementsContainEffect(cursors: readonly Cursor[]): boolean {
   for (const cursor of cursors) {
     const rule = statementRule(cursor);
+    if (rule.name === "element_statement") return true;
     if (
       rule.name === "rebinding" &&
       tokenOf(required(rule, "arrow")).text === "<-"
@@ -1361,6 +1362,112 @@ function lowerControlLoop(
 }
 
 function lowerDecl(rule: Rule, context: Context): Decl {
+  if (rule.name === "element_statement") {
+    const elementName = tokenOf(required(rule, "name"));
+    const properties: ShapeMember[] = fieldList(rule, "properties").map(
+      (cursor) => {
+        const property = asRule(cursor, "element_property");
+        const propertyName = tokenOf(required(property, "name"));
+        const propertyValue = asRule(
+          required(property, "value"),
+          "element_property_value",
+        );
+        const unwrapped = unwrap(propertyValue);
+        let value: Expr;
+        if (unwrapped.type === "token") {
+          value = lowerPrimary(unwrapped, context);
+        } else if (unwrapped.name === "element_property_expression") {
+          value = lowerValue(
+            asRule(required(unwrapped, "value"), "value"),
+            context,
+          );
+        } else {
+          value = lowerPrimary(unwrapped, context);
+        }
+        return { tag: "field", name: propertyName.text, value };
+      },
+    );
+
+    const ending = asRule(required(rule, "ending"), "element ending");
+    let childBody: Expr = {
+      tag: "unit",
+      span: ending.span,
+    };
+    if (ending.name === "element_body") {
+      const closingName = tokenOf(required(ending, "closing"));
+      if (closingName.text !== elementName.text) {
+        fail(
+          "BLOT_MISMATCHED_ELEMENT",
+          `Element \`<${elementName.text}>\` is closed by \`</${closingName.text}>\`.`,
+          closingName.span,
+        );
+      }
+      const children = fieldList(ending, "children");
+      const childContext: Context = {
+        ...context,
+        loop: null,
+        escapeBoundary: "none",
+      };
+      if (statementsNeedControlLowering(children)) {
+        childBody = resolveControlSequence(
+          children,
+          { tag: "unit", span: ending.span },
+          childContext,
+          ending.span,
+        );
+      } else {
+        childBody = {
+          tag: "block",
+          declarations: children.map((child) =>
+            lowerDecl(statementRule(child), childContext)
+          ),
+          result: { tag: "unit", span: ending.span },
+          resultEffects: "pure",
+          span: ending.span,
+        };
+      }
+    } else {
+      expect(
+        ending.name === "element_self_close",
+        `unknown element ending ${ending.name}`,
+      );
+    }
+
+    const children: Expr = {
+      tag: "lambda",
+      parameter: { tag: "unit", span: ending.span },
+      body: childBody,
+      span: ending.span,
+    };
+    const withProperties: Expr = {
+      tag: "apply",
+      fn: {
+        tag: "var",
+        name: elementName.text,
+        span: elementName.span,
+      },
+      arg: { tag: "shape", members: properties, span: rule.span },
+      span: rule.span,
+    };
+    return {
+      tag: "binding",
+      kind: "effect",
+      tags: [],
+      pattern: {
+        tag: "name",
+        name: "_",
+        qualifier: "none",
+        span: rule.span,
+      },
+      value: {
+        tag: "apply",
+        fn: withProperties,
+        arg: children,
+        span: rule.span,
+      },
+      span: rule.span,
+    };
+  }
   if (rule.name === "binding") {
     const kind = tokenOf(required(rule, "kind")).text;
     expect(
@@ -2144,10 +2251,28 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
           ),
         };
       }
+      let value = lowerValue(
+        asRule(field(member, "value"), "value"),
+        context,
+      );
+      if (field(member, "optional") !== null) {
+        const applied: Expr = {
+          tag: "apply",
+          fn: { tag: "intrinsic", name: "@type.union", span: member.span },
+          arg: value,
+          span: member.span,
+        };
+        value = {
+          tag: "apply",
+          fn: applied,
+          arg: { tag: "unit", span: member.span },
+          span: member.span,
+        };
+      }
       return {
         tag: "field",
         name: tokenOf(required(member, "name")).text,
-        value: lowerValue(asRule(field(member, "value"), "value"), context),
+        value,
       };
     });
     return { tag: "shape", members, span: rule.span };
