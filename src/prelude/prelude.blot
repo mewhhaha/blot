@@ -173,10 +173,10 @@ const text_eq = fn (left, right) => is_equal (@text.cmp left right);
 
 // --- arrays -----------------------------------------------------------------
 
-const array_get = fn (values, index) =>
+const array_get = fn (&values, index) =>
   if index >= 0
-  then (if index < @array.len values
-    then #Some (@array.get values index)
+  then (if index < @array.len (&values)
+    then #Some (@array.get (&values) index)
     else #None
   end)
   else #None
@@ -193,7 +193,7 @@ const array_set = fn (values, index, value) =>
 
 const Array = {
   .empty = @array.empty;
-  .length = fn values => @array.len values;
+  .length = fn &values => @array.len (&values);
   .get = array_get;
   .set = array_set;
   .push = fn (values, value) => @array.push values value;

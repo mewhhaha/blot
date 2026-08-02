@@ -462,6 +462,10 @@ interface Scope {
   readonly runtimeLambdas: Map<string, RuntimeLambda>;
   /** Concrete record representation selected for a specialized binding. */
   readonly recordShapes: Map<string, readonly string[]>;
+  /** Concrete record representation selected for a specialized parameter. */
+  readonly parameterShapes: Map<Pattern, readonly string[]>;
+  /** Concrete argument type selected for a specialized binding. */
+  readonly specializedTypes: Map<string, SimpleType>;
   readonly parent: Scope | null;
   /**
    * Set on a lambda's own scope, and flipped when a name resolves past it.
@@ -502,6 +506,8 @@ function childScope(parent: Scope | null, values?: ValueEnv): Scope {
     literals: new Map(),
     runtimeLambdas: new Map(),
     recordShapes: new Map(),
+    parameterShapes: new Map(),
+    specializedTypes: new Map(),
     parent,
     values: visibleValues,
     granted: parent?.granted,
@@ -527,6 +533,8 @@ function snapshotScope(scope: Scope): Scope {
     literals: new Map(scope.literals),
     runtimeLambdas: new Map(scope.runtimeLambdas),
     recordShapes: new Map(scope.recordShapes),
+    parameterShapes: new Map(scope.parameterShapes),
+    specializedTypes: new Map(scope.specializedTypes),
     parent,
     capture: scope.capture,
     values: snapshotValueEnv(scope.values),
@@ -571,6 +579,21 @@ function resolveRuntimeLambda(
   return null;
 }
 
+function specializableLambda(expr: Expr, scope: Scope): RuntimeLambda | null {
+  if (expr.tag === "lambda") return { expression: expr, environment: scope };
+  if (expr.tag === "var") return resolveRuntimeLambda(scope, expr.name);
+  if (expr.tag !== "apply") return null;
+
+  const identity = specializableLambda(expr.fn, scope);
+  if (identity === null) return null;
+  if (identity.expression.parameter.tag !== "name") return null;
+  if (identity.expression.body.tag !== "var") return null;
+  if (
+    identity.expression.body.name !== identity.expression.parameter.name
+  ) return null;
+  return specializableLambda(expr.arg, scope);
+}
+
 function capturesRuntimeBinding(lambda: Expr, scope: Scope): boolean {
   for (const name of freeNames(lambda)) {
     let current: Scope | null = scope;
@@ -603,6 +626,12 @@ function concreteRecordShape(
 ): readonly string[] | null {
   const type = lowering.facts.expressionTypes.get(expr);
   if (type === undefined) return null;
+  return concreteRecordShapeFromType(type);
+}
+
+function concreteRecordShapeFromType(
+  type: SimpleType,
+): readonly string[] | null {
   const shapes = new Map<string, readonly string[]>();
   const seen = new Set<number>();
   const visit = (current: SimpleType): void => {
@@ -619,6 +648,58 @@ function concreteRecordShape(
   if (shapes.size !== 1) return null;
   for (const fields of shapes.values()) return fields;
   return null;
+}
+
+function resolveSpecializedType(
+  scope: Scope,
+  name: string,
+): SimpleType | null {
+  let current: Scope | null = scope;
+  while (current !== null) {
+    const type = current.specializedTypes.get(name);
+    if (type !== undefined) return type;
+    if (current.names.has(name)) return null;
+    current = current.parent;
+  }
+  return null;
+}
+
+function concreteFieldType(type: SimpleType, name: string): SimpleType | null {
+  const found = new Set<SimpleType>();
+  const seen = new Set<number>();
+  const visit = (current: SimpleType): void => {
+    if (current.tag === "record") {
+      const field = current.fields.get(name);
+      if (field !== undefined) found.add(field);
+      return;
+    }
+    if (current.tag !== "var" || seen.has(current.id)) return;
+    seen.add(current.id);
+    for (const bound of current.lower) visit(bound);
+  };
+  visit(type);
+  if (found.size !== 1) return null;
+  for (const field of found) return field;
+  return null;
+}
+
+function specializePatternShapes(
+  pattern: Pattern,
+  type: SimpleType,
+  scope: Scope,
+): void {
+  if (pattern.tag === "shape") {
+    const fields = concreteRecordShapeFromType(type);
+    if (fields !== null) scope.parameterShapes.set(pattern, fields);
+    return;
+  }
+  if (pattern.tag !== "tuple") return;
+  for (let index = 0; index < pattern.elements.length; index += 1) {
+    const field = concreteFieldType(type, String(index));
+    if (field !== null) {
+      specializePatternShapes(pattern.elements[index], field, scope);
+    }
+  }
 }
 
 function resolve(scope: Scope, name: string): string | null {
@@ -1730,13 +1811,16 @@ function lowerBlock(
     }
     if (declaration.kind === "sig") continue;
 
-    if (
-      declaration.value.tag === "var" &&
-      declaration.pattern.tag === "name"
-    ) {
-      const aliased = resolveRuntimeLambda(inner, declaration.value.name);
-      if (aliased !== null) {
-        inner.runtimeLambdas.set(declaration.pattern.name, aliased);
+    if (declaration.pattern.tag === "name") {
+      const aliased = specializableLambda(declaration.value, inner);
+      if (
+        aliased !== null && declaration.value.tag !== "lambda" &&
+        !capturesRuntimeBinding(aliased.expression, aliased.environment)
+      ) {
+        inner.runtimeLambdas.set(declaration.pattern.name, {
+          expression: aliased.expression,
+          environment: snapshotScope(aliased.environment),
+        });
         continue;
       }
     }
@@ -1853,7 +1937,9 @@ function bind(
     // The *value's* field set, not the pattern's: width subtyping means
     // `let { .x; } = point;` names fewer than arrive, and Core records are
     // nominal.
-    const nominal = lowering.nominal(destructuredFields(pattern, lowering));
+    const nominal = lowering.nominal(
+      destructuredFields(pattern, scope, lowering),
+    );
     const parts = pattern.tag === "tuple"
       ? pattern.elements.map((element, index) => ({
         name: String(index),
@@ -1986,11 +2072,14 @@ function pinnedCondition(
  */
 function destructuredFields(
   pattern: Extract<Pattern, { tag: "tuple" | "shape" }>,
+  scope: Scope,
   lowering: Lowering,
 ): readonly string[] {
   if (pattern.tag === "tuple") {
     return pattern.elements.map((_, index) => String(index));
   }
+  const specialized = scope.parameterShapes.get(pattern);
+  if (specialized !== undefined) return specialized;
   const shape = lowering.facts.patternShapes.get(pattern);
   if (shape === undefined) return pattern.fields.map((field) => field.name);
   if (shape.tag === "disagreement") refuseDisagreement(shape, pattern.span);
@@ -2962,6 +3051,10 @@ function lowerTupleCase(
     [];
   for (const arm of expr.arms) {
     const inner = childScope(scope);
+    if (expr.target.tag === "var") {
+      const type = resolveSpecializedType(scope, expr.target.name);
+      if (type !== null) specializePatternShapes(arm.pattern, type, inner);
+    }
     if (arm.pattern.tag === "wildcard" || arm.pattern.tag === "name") {
       if (arm.pattern.tag === "name") {
         bindName(arm.pattern, subject, inner);
@@ -2998,12 +3091,9 @@ function lowerTupleCase(
     rows.push({ next, body });
   }
 
-  // Everywhere else an arm-less tail is a path the checker proved cannot be
-  // taken, because exhaustiveness is a checked error. Coverage does not yet
-  // look inside a tuple pattern, so here it is a path that can be reached —
-  // `(#Some a, #Some b)` alone is accepted today and traps on `(#Some a,
-  // #None)`. Lowering cannot decide it either: `(#Some a, #Some b)`, `(#None,
-  // _)`, `(_, #None)` covers the same scrutinee with no wildcard in sight.
+  // An arm-less tail is a path the tuple coverage matrix proved cannot be
+  // taken. It remains explicit Core so a violated checker invariant traps
+  // instead of choosing an arm the source did not contain.
   let matrix = fallback ?? at.unreachable("no arm matched");
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index];
@@ -3139,10 +3229,11 @@ function matchElement(
     };
   }
 
-  // A shape pattern names fewer fields than the value carries, and inference
-  // records what a value carries only where a binding destructures it — so
-  // there is nothing here to name the record's Core type with. An array
-  // pattern would need a length test coverage does not account for.
+  if (pattern.tag === "shape") {
+    return bind(pattern, value, scope, lowering);
+  }
+
+  // An array pattern would need a length test coverage does not account for.
   return unsupported(
     `a ${pattern.tag} pattern inside a tuple pattern`,
     pattern.span,
@@ -3792,28 +3883,30 @@ function lowerApply(
   lowering: Lowering,
   at: typeof surface,
 ): SurfaceExpression {
-  let specialized: RuntimeLambda | null = null;
-  if (expr.fn.tag === "lambda") {
-    specialized = { expression: expr.fn, environment: scope };
-  }
-  if (expr.fn.tag === "var") {
-    specialized = resolveRuntimeLambda(scope, expr.fn.name);
-  }
+  const specialized = specializableLambda(expr.fn, scope);
   if (specialized !== null) {
     const inner = childScope(specialized.environment);
     const parameter = lowering.fresh("specialized");
+    const fields = concreteRecordShape(expr.arg, lowering);
+    if (fields !== null) {
+      if (specialized.expression.parameter.tag === "name") {
+        inner.recordShapes.set(specialized.expression.parameter.name, fields);
+      } else if (specialized.expression.parameter.tag === "shape") {
+        inner.parameterShapes.set(specialized.expression.parameter, fields);
+      }
+    }
+    if (specialized.expression.parameter.tag === "name") {
+      const type = lowering.facts.expressionTypes.get(expr.arg);
+      if (type !== undefined) {
+        inner.specializedTypes.set(specialized.expression.parameter.name, type);
+      }
+    }
     const body = bindParameter(
       specialized.expression.parameter,
       parameter,
       inner,
       lowering,
     );
-    if (specialized.expression.parameter.tag === "name") {
-      const fields = concreteRecordShape(expr.arg, lowering);
-      if (fields !== null) {
-        inner.recordShapes.set(specialized.expression.parameter.name, fields);
-      }
-    }
     return surface.let(
       parameter,
       lower(expr.arg, scope, lowering),

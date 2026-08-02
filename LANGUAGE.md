@@ -1586,6 +1586,17 @@ A use has one of three meanings:
 `!value` explicitly moves a value and `&value` explicitly borrows it. Ordinary
 argument and result positions are moves.
 
+A borrow is a lexical view, not a first-class reference. It may appear only as
+an immediate projection, as the argument position corresponding to an
+`&parameter`, or as input to a read-only primitive operation. The ownership
+checker carries that transient evidence through tuples and records so a nested
+borrowing parameter can accept it. A declaration may not store the view, a
+function or module may not return it, and a call whose corresponding parameter
+is ordinary may not receive it. These rules also prevent a borrow from crossing
+a host-effect boundary. A closure may inspect a captured borrow only when it is
+called immediately; storing that closure is storing the borrow and is rejected.
+Blot deliberately has no inferred lifetimes or first-class borrowed values.
+
 Every branch starts from the same ownership state and must end in an agreeing
 state. A linear binding consumed on only one branch is rejected. An affine
 binding may be consumed on zero or one branch but never twice.
@@ -1969,6 +1980,10 @@ There are two indexed APIs, chosen explicitly.
 return `#Some result` when `index` is in bounds and `#None` otherwise. Their
 guard is ordinary prelude source.
 
+`Array.get` and `Array.length` bind their array parameter with `&`: observing an
+array does not consume it. An explicitly borrowed array must be passed in that
+position directly; the borrow cannot be retained by an intervening binding.
+
 `@array.get xs index` and `@array.set xs index value` are the direct path. The
 checker accepts them only when every value of `index` is inside
 `0..@array.len xs - 1`. An index known to be outside reports
@@ -2203,18 +2218,28 @@ of its callers, so `let get_x = fn v => v.x;` takes its record from the call
 sites. When nothing flows in — a parameter whose caller is outside the program —
 the fields the body demands decide instead, and they are unioned.
 
+An immutable alias or an application of a statically known identity function
+does not hide the lambda being specialized. The compiler follows the original
+lambda through either form and still clones it at each concrete call shape. A
+general higher-order result is not assumed to be an identity and remains a
+residual representation boundary.
+
+A shape parameter destructured in place is specialized by the same rule. For
+example, separate calls to `fn { .x = value; } => value` with `{ .x; .y; }` and
+`{ .x; .z; }` lower the parameter pattern against the respective concrete
+nominals rather than against an invented one-field record.
+
 Those call sites may be in another module. A record crosses into a module
 carrying more fields than that module reads and lowers there (§3), because the
 field sets are settled after every module in the program has been checked rather
 than as each one finishes: the answer for a projection in one file is decided by
 a call site in another.
 
-A record does not flow through a tuple `case`. Where a record reaches a
-projection only by having been an element of a tuple target, what is recorded is
-the narrower set the projection's own body reads, and the nominal built from it
-is not the one the value was built with — so such a program is refused at
-lowering rather than compiled against the wrong record. Matching the record's
-own option directly is what keeps the wider set.
+A shape nested inside a tuple `case` uses the concrete element type from the
+specialized call. Thus `case pair of ({ .x; }, _) => x end` may receive tuples
+whose first elements carry additional fields, and separate calls may carry
+different additional fields; each clone destructures the nominal actually passed
+to that call.
 
 Two different records reaching one runtime `let` lambda produce one specialized
 body per call shape. Each clone projects from the nominal actually passed at

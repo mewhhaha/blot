@@ -472,6 +472,32 @@ Deno.test("a generalized projection keeps its shape through a forwarder", async 
   );
 });
 
+Deno.test("a generalized projection keeps its shape after escaping through identity", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "escaped-shape.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "let get_x = fn value => value.x;",
+      "let identity = fn value => value;",
+      "let escaped = identity get_x;",
+      "sig at = Int -> Int;",
+      "let at = fn n => escaped { .x = n; .y = 0; } +",
+      "  escaped { .x = 0; .z = n; };",
+      "return { .at = at; };",
+    ].join("\n"),
+  );
+
+  assertEquals(
+    await runLoweringExport(path, "at", [{
+      kind: "signed-integer-64",
+      value: 41n,
+    }]),
+    { kind: "signed-integer-64", value: 41n },
+  );
+});
+
 // A `let`-bound function that destructures rather than projects reads the same
 // fact through the pattern, so it has to follow the copies too.
 Deno.test("a generalized destructuring takes its shape from the call site", async () => {
@@ -484,6 +510,30 @@ Deno.test("a generalized destructuring takes its shape from the call site", asyn
       "let get_x = fn v => do let { .x = a; } = v; in a end;",
       "sig at = Int -> Int;",
       "let at = fn n => get_x { .x = n; .y = 0; };",
+      "return { .at = at; };",
+    ].join("\n"),
+  );
+
+  assertEquals(
+    await runLoweringExport(path, "at", [{
+      kind: "signed-integer-64",
+      value: 41n,
+    }]),
+    { kind: "signed-integer-64", value: 41n },
+  );
+});
+
+Deno.test("a destructured parameter takes its shape from each call site", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "parameter-pattern-shapes.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "let get_x = fn { .x = value; } => value;",
+      "sig at = Int -> Int;",
+      "let at = fn n => get_x { .x = n; .y = 0; } +",
+      "  get_x { .x = 0; .z = n; };",
       "return { .at = at; };",
     ].join("\n"),
   );
@@ -714,6 +764,41 @@ Deno.test("text primitives are self-contained in emitted WebAssembly", async () 
     kind: "boolean",
     value: false,
   });
+});
+
+Deno.test("a generalized variant match resolves a wildcard's constructor set", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "generalized-variant.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "let is_some = fn option => case option of",
+      "  #Some _ => True,",
+      "  _ => False",
+      "end;",
+      "sig at = Int -> Bool;",
+      "let at = fn value => if value > 0 then",
+      "  is_some (Some value)",
+      "else is_some None end;",
+      "return { .at = at; };",
+    ].join("\n"),
+  );
+
+  assertEquals(
+    await runLoweringExport(path, "at", [{
+      kind: "signed-integer-64",
+      value: 1n,
+    }]),
+    { kind: "boolean", value: true },
+  );
+  assertEquals(
+    await runLoweringExport(path, "at", [{
+      kind: "signed-integer-64",
+      value: 0n,
+    }]),
+    { kind: "boolean", value: false },
+  );
 });
 
 Deno.test("host effects publish structural first-order imports", async () => {
@@ -1336,33 +1421,31 @@ Deno.test("an arm naming the whole tuple binds the scrutinee", async () => {
   );
 });
 
-Deno.test("a shape inside a tuple pattern is refused rather than guessed", async () => {
-  // Width subtyping means a shape pattern names fewer fields than the value
-  // carries, and inference records what a value carries only where a binding
-  // destructures it. Nothing here can name the record's Core type, so this
-  // reports instead of picking the pattern's own fields and hoping. A host
-  // effect keeps the scrutinee out of the comptime evaluator's reach, which is
-  // what leaves the pattern for lowering to meet at all.
+Deno.test("a shape inside a tuple pattern specializes at each call site", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "shape_column.blot");
   await Deno.writeTextFile(
     path,
     [
       'open {} = (@import "blot:prelude") ();',
-      "const Source = @effect.host { .read = Unit -> Int; };",
       "let total = fn pair => case pair of",
       "  ({ .x; }, #Some b) => x + b,",
       "  _ => 0",
       "end;",
-      "value <- Source.read ();",
-      "return total ({ .x = value; .y = 2; }, Some 3);",
+      "sig at = Int -> Int;",
+      "let at = fn value =>",
+      "  total ({ .x = value; .y = 2; }, Some 3) +",
+      "  total ({ .x = 0; .z = value; }, Some 5);",
+      "return { .at = at; };",
     ].join("\n"),
   );
 
-  await assertRejects(
-    () => validateLowering(path),
-    BlotError,
-    "BLOT_UNSUPPORTED_LOWERING",
+  assertEquals(
+    await runLoweringExport(path, "at", [{
+      kind: "signed-integer-64",
+      value: 41n,
+    }]),
+    { kind: "signed-integer-64", value: 49n },
   );
 });
 

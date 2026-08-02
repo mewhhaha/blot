@@ -82,6 +82,8 @@ interface Scope {
   readonly lambda: boolean;
   /** Outer linear bindings this lambda captured, if it is one. */
   readonly captures: Set<Binding>;
+  /** Outer bindings this lambda reaches only through a borrowed view. */
+  readonly borrowedCaptures: Set<Binding>;
 }
 
 export interface Ownership {
@@ -161,7 +163,13 @@ class Analysis {
 }
 
 function childScope(parent: Scope | null, lambda = false): Scope {
-  return { bindings: new Map(), parent, lambda, captures: new Set() };
+  return {
+    bindings: new Map(),
+    parent,
+    lambda,
+    captures: new Set(),
+    borrowedCaptures: new Set(),
+  };
 }
 
 /** A snapshot of which linear bindings are consumed, for comparing branches. */
@@ -190,6 +198,13 @@ export function checkLinearity(module: Module): LinearResult {
   }
   walkDeclarations(module.declarations, module.result, scope, analysis);
   const result = walk(module.result, scope, analysis, "move");
+  if (containsBorrow(result)) {
+    analysis.report(
+      "BLOT_BORROW_RESULT_ESCAPES",
+      "The module result contains a borrowed view. A borrow is valid only for an immediate borrowing call or projection and cannot cross the module boundary.",
+      module.result.span,
+    );
+  }
   if (obligation(result) !== "none") {
     analysis.report(
       "BLOT_LINEAR_RESULT_ESCAPES",
@@ -261,7 +276,7 @@ function declareProduced(
         source,
       );
       let owned = produced;
-      if (obligation(owned) === "none") owned = written;
+      if (!relevant(owned)) owned = written;
       scope.bindings.set(pattern.name, {
         pattern,
         qualifier: inherited(pattern.qualifier, owned),
@@ -395,7 +410,31 @@ function use(
     return NONE;
   }
 
-  if (!spendable(binding.qualifier) || kind === "borrow") {
+  if (
+    capturedBy !== null && (binding.qualifier === "borrow" || kind === "borrow")
+  ) {
+    capturedBy.borrowedCaptures.add(binding);
+    capturedBy.bindings.set(name, {
+      pattern: binding.pattern,
+      qualifier: "borrow",
+      owned: binding.owned,
+      parameter: binding.parameter,
+      parameterPattern: binding.parameterPattern,
+      result: binding.result,
+      value: binding.value,
+      moved: null,
+      borrows: 0,
+      lastUse: null,
+    });
+    return use(name, span, scope, analysis, kind);
+  }
+
+  if (kind === "borrow" || binding.qualifier === "borrow") {
+    binding.borrows += 1;
+    return borrowed(binding.owned);
+  }
+
+  if (!spendable(binding.qualifier)) {
     binding.borrows += 1;
     return NONE;
   }
@@ -444,17 +483,29 @@ function walkDeclarations(
     // hold a linear value — there is no run time for it to be consumed in. So
     // the expression is walked for what *it* consumes and nothing is declared.
     if (declaration.tag === "open") {
-      if (
-        obligation(walk(declaration.value, scope, analysis, "move")) !== "none"
-      ) {
+      const produced = walk(declaration.value, scope, analysis, "move");
+      if (containsBorrow(produced)) {
+        analysis.report(
+          "BLOT_BORROW_STORED",
+          "An `open` declaration cannot retain a borrowed view.",
+          declaration.span,
+        );
+      }
+      if (obligation(produced) !== "none") {
         escapes(declaration.span, analysis);
       }
       continue;
     }
     if (declaration.tag === "shadow") {
-      if (
-        obligation(walk(declaration.value, scope, analysis, "move")) !== "none"
-      ) {
+      const produced = walk(declaration.value, scope, analysis, "move");
+      if (containsBorrow(produced)) {
+        analysis.report(
+          "BLOT_BORROW_STORED",
+          "A stable rebinding cannot retain a borrowed view.",
+          declaration.span,
+        );
+      }
+      if (obligation(produced) !== "none") {
         escapes(declaration.span, analysis);
       }
       continue;
@@ -471,6 +522,13 @@ function walkDeclarations(
       continue;
     }
     const produced = walk(declaration.value, scope, analysis, "move");
+    if (containsBorrow(produced)) {
+      analysis.report(
+        "BLOT_BORROW_STORED",
+        "This declaration stores a borrowed view. Pass the borrow directly to a borrowing parameter or project it immediately instead.",
+        declaration.span,
+      );
+    }
     declareProduced(declaration.pattern, produced, scope, analysis, false);
     if (declaration.pattern.tag === "name") {
       const binding = scope.bindings.get(declaration.pattern.name);
@@ -502,7 +560,23 @@ function inherited(written: Qualifier, produced: Produced): Qualifier {
   const carried = obligation(produced);
   if (written === "linear" || carried === "linear") return "linear";
   if (written === "affine" || carried === "affine") return "affine";
+  if (containsBorrow(produced)) return "borrow";
   return written;
+}
+
+function patternBinds(pattern: Pattern): boolean {
+  if (pattern.tag === "name") return true;
+  if (pattern.tag === "tuple" || pattern.tag === "array") {
+    return pattern.elements.some(patternBinds);
+  }
+  if (pattern.tag === "constructor") {
+    if (pattern.payload === null) return false;
+    return patternBinds(pattern.payload);
+  }
+  if (pattern.tag === "shape") {
+    return pattern.fields.some((field) => patternBinds(field.pattern));
+  }
+  return false;
 }
 
 /**
@@ -635,6 +709,7 @@ interface Undo {
   readonly scope: Scope;
   readonly bindings: readonly (readonly [string, Binding])[];
   readonly captures: readonly Binding[];
+  readonly borrowedCaptures: readonly Binding[];
   readonly moved: readonly (readonly [Binding, Span | null])[];
 }
 
@@ -647,6 +722,7 @@ function checkpoint(scope: Scope): readonly Undo[] {
       scope: current,
       bindings,
       captures: [...current.captures],
+      borrowedCaptures: [...current.borrowedCaptures],
       moved: bindings.map(([, binding]) => [binding, binding.moved] as const),
     });
     current = current.parent;
@@ -662,6 +738,10 @@ function rewind(undo: readonly Undo[]): void {
     }
     entry.scope.captures.clear();
     for (const binding of entry.captures) entry.scope.captures.add(binding);
+    entry.scope.borrowedCaptures.clear();
+    for (const binding of entry.borrowedCaptures) {
+      entry.scope.borrowedCaptures.add(binding);
+    }
     for (const [binding, moved] of entry.moved) binding.moved = moved;
   }
 }
@@ -675,6 +755,7 @@ function rewind(undo: readonly Undo[]): void {
  */
 type Produced =
   | { readonly tag: "none" }
+  | { readonly tag: "borrow"; readonly value: Produced }
   | {
     readonly tag: "leaf";
     readonly qualifier: "affine" | "linear";
@@ -705,6 +786,7 @@ function writtenObligation(
 
 function obligation(produced: Produced): "none" | "affine" | "linear" {
   if (produced.tag === "none") return "none";
+  if (produced.tag === "borrow") return "none";
   if (produced.tag === "leaf") return produced.qualifier;
   if (produced.tag === "closure") return obligation(produced.captures);
   if (produced.tag === "variant") return obligation(produced.payload);
@@ -721,11 +803,32 @@ function obligation(produced: Produced): "none" | "affine" | "linear" {
   return result;
 }
 
+function containsBorrow(produced: Produced): boolean {
+  if (produced.tag === "borrow") return true;
+  if (produced.tag === "none" || produced.tag === "leaf") return false;
+  if (produced.tag === "closure") {
+    return containsBorrow(produced.captures) || containsBorrow(produced.result);
+  }
+  if (produced.tag === "variant") return containsBorrow(produced.payload);
+  if (produced.tag === "many") return produced.values.some(containsBorrow);
+  if (produced.tag === "sequence") {
+    return produced.elements.some(containsBorrow);
+  }
+  return [...produced.fields.values()].some(containsBorrow);
+}
+
+function relevant(produced: Produced): boolean {
+  return obligation(produced) !== "none" || containsBorrow(produced);
+}
+
+function borrowed(produced: Produced): Produced {
+  if (produced.tag === "borrow") return produced;
+  return { tag: "borrow", value: produced };
+}
+
 function combine(left: Produced, right: Produced): Produced {
-  const leftQualifier = obligation(left);
-  const rightQualifier = obligation(right);
-  if (leftQualifier === "none") return right;
-  if (rightQualifier === "none") return left;
+  if (!relevant(left)) return right;
+  if (!relevant(right)) return left;
   const values: Produced[] = [];
   if (left.tag === "many") values.push(...left.values);
   else values.push(left);
@@ -916,6 +1019,12 @@ function renameParameter(
 ): Produced {
   if (from === null || to === null || from === to) return produced;
   if (produced.tag === "none") return produced;
+  if (produced.tag === "borrow") {
+    return {
+      tag: "borrow",
+      value: renameParameter(produced.value, from, to),
+    };
+  }
   if (produced.tag === "leaf") {
     if (produced.source !== from) return produced;
     return { ...produced, source: to };
@@ -1031,6 +1140,12 @@ function substituteParameter(
 ): Produced {
   if (parameter === null || produced.tag === "none") return produced;
   if (parameter.tag !== "name") return produced;
+  if (produced.tag === "borrow") {
+    return {
+      tag: "borrow",
+      value: substituteParameter(produced.value, parameter, argument),
+    };
+  }
   if (produced.tag === "leaf") {
     if (produced.source === parameter) return argument;
     return produced;
@@ -1151,6 +1266,66 @@ function parameterAcceptsOwnership(
   return false;
 }
 
+function parameterAcceptsBorrow(
+  parameter: Pattern | null,
+  argument: Produced,
+): boolean {
+  if (!containsBorrow(argument)) return true;
+  if (parameter === null) return false;
+  if (argument.tag === "borrow") {
+    return parameter.tag === "name" && parameter.qualifier === "borrow";
+  }
+  if (
+    (parameter.tag === "tuple" || parameter.tag === "array") &&
+    argument.tag === "sequence"
+  ) {
+    if (parameter.elements.length !== argument.elements.length) return false;
+    return parameter.elements.every((element, index) =>
+      parameterAcceptsBorrow(element, argument.elements[index])
+    );
+  }
+  if (parameter.tag === "constructor" && argument.tag === "variant") {
+    if (parameter.payload === null) return !containsBorrow(argument.payload);
+    return parameterAcceptsBorrow(parameter.payload, argument.payload);
+  }
+  if (parameter.tag === "shape" && argument.tag === "shape") {
+    for (const [name, value] of argument.fields) {
+      if (!containsBorrow(value)) continue;
+      const field = parameter.fields.find((candidate) =>
+        candidate.name === name
+      );
+      if (field === undefined) return false;
+      if (!parameterAcceptsBorrow(field.pattern, value)) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+function trustedBorrowOperation(expr: Expr, scope: Scope): boolean {
+  const application = applicationSpine(expr);
+  if (application.callee.tag === "intrinsic") {
+    const name = application.callee.name;
+    return name.startsWith("@int.") ||
+      name.startsWith("@float.") ||
+      name.startsWith("@f32.") ||
+      name.startsWith("@f32x4.") ||
+      name.startsWith("@text.") ||
+      name === "@array.len" ||
+      name === "@shape.has";
+  }
+  if (application.callee.tag !== "field") return false;
+  if (application.callee.target.tag !== "var") return false;
+  const namespace = application.callee.target.name;
+  if (namespace === "Num" || namespace === "Text") {
+    return analysisBinding(scope, namespace) === null;
+  }
+  if (namespace !== "Array") return false;
+  if (analysisBinding(scope, namespace) !== null) return false;
+  return application.callee.name === "get" ||
+    application.callee.name === "length";
+}
+
 function trustedScalarOperation(
   expr: Expr,
   argument: Produced,
@@ -1264,8 +1439,7 @@ function walk(
       // `&x` and `!x` reach here as prefix-operator applications, and they are
       // the two places the intent is written down rather than inferred.
       if (expr.fn.tag === "intrinsic" && expr.fn.name === "@linear.borrow") {
-        walk(expr.arg, scope, analysis, "borrow");
-        return NONE;
+        return walk(expr.arg, scope, analysis, "borrow");
       }
       if (expr.fn.tag === "intrinsic" && expr.fn.name === "@linear.own") {
         return walk(expr.arg, scope, analysis, "move");
@@ -1284,7 +1458,7 @@ function walk(
       ) {
         const arguments_ = handleArguments(application.args);
         if (arguments_ !== null) {
-          walk(arguments_[0], scope, analysis, "move");
+          const effect = walk(arguments_[0], scope, analysis, "move");
           const computation = walk(arguments_[1], scope, analysis, "move");
           requireContinuationOwnership(
             staticExpression(arguments_[2], scope),
@@ -1292,6 +1466,15 @@ function walk(
             analysis,
           );
           const handler = walk(arguments_[2], scope, analysis, "move");
+          const handled = [effect, computation, handler];
+          for (const [index, produced] of handled.entries()) {
+            if (!containsBorrow(produced)) continue;
+            analysis.report(
+              "BLOT_BORROW_ARGUMENT_ESCAPES",
+              "`@handle` cannot retain a borrowed effect, computation, or handler.",
+              arguments_[index].span,
+            );
+          }
           if (obligation(handler) !== "none") {
             analysis.report(
               "BLOT_LINEAR_HANDLER_CAPTURE",
@@ -1308,8 +1491,10 @@ function walk(
         if (name === "@array.get" && application.args.length === 2) {
           const array = walk(application.args[0], scope, analysis, "project");
           walk(application.args[1], scope, analysis, "move");
+          let contents = array;
+          if (contents.tag === "borrow") contents = contents.value;
           if (
-            array.tag === "sequence" && obligation(array) !== "none"
+            contents.tag === "sequence" && obligation(contents) !== "none"
           ) {
             analysis.report(
               "BLOT_LINEAR_ARRAY_READ",
@@ -1361,6 +1546,19 @@ function walk(
       const argument = walk(expr.arg, scope, analysis, "move");
       const argumentOwnership = obligation(argument);
       const contract = functionContract(expr.fn, callee, scope, analysis);
+      if (containsBorrow(argument)) {
+        const accepted = parameterAcceptsBorrow(
+          contract.pattern,
+          argument,
+        ) || trustedBorrowOperation(expr.fn, scope);
+        if (!accepted) {
+          analysis.report(
+            "BLOT_BORROW_ARGUMENT_ESCAPES",
+            "This argument contains a borrowed view, but the called function does not promise to borrow that position. Pass it directly to a parameter marked with `&`.",
+            expr.arg.span,
+          );
+        }
+      }
       if (argumentOwnership !== "none") {
         const accepted = parameterAcceptsOwnership(
           contract.pattern,
@@ -1383,6 +1581,12 @@ function walk(
 
     case "field": {
       const target = walk(expr.target, scope, analysis, "project");
+      if (target.tag === "borrow") {
+        if (target.value.tag !== "shape") return target;
+        const field = target.value.fields.get(expr.name);
+        if (field === undefined) return borrowed(NONE);
+        return borrowed(field);
+      }
       if (target.tag !== "shape") return target;
       let selected = NONE;
       const found = target.fields.get(expr.name);
@@ -1404,6 +1608,13 @@ function walk(
       const inner = childScope(scope, true);
       declareProduced(expr.parameter, NONE, inner, analysis, true);
       const result = walk(expr.body, inner, analysis, "move");
+      if (containsBorrow(result)) {
+        analysis.report(
+          "BLOT_BORROW_RESULT_ESCAPES",
+          "This function returns a borrowed view. Consume the view with an immediate read-only operation before returning.",
+          expr.body.span,
+        );
+      }
       analysis.functionResults.set(expr, result);
       closeScope(inner, analysis);
       // Each captured value is spent once, here, into the closure. What the
@@ -1413,8 +1624,10 @@ function walk(
         consume(captured, expr.span, analysis);
         produced = combine(produced, captured.owned);
       }
-      const qualifier = obligation(produced);
-      if (qualifier !== "none") {
+      for (const captured of inner.borrowedCaptures) {
+        produced = combine(produced, borrowed(captured.owned));
+      }
+      if (relevant(produced)) {
         return {
           tag: "closure",
           captures: produced,
@@ -1515,6 +1728,13 @@ function walk(
       for (const arm of expr.arms) {
         restore(before);
         const inner = childScope(scope);
+        if (containsBorrow(target) && patternBinds(arm.pattern)) {
+          analysis.report(
+            "BLOT_BORROW_STORED",
+            "This pattern stores part of a borrowed view. Project or inspect the borrow without binding any of its components.",
+            arm.pattern.span,
+          );
+        }
         declareProduced(arm.pattern, target, inner, analysis, false);
         produced.push(walk(arm.body, inner, analysis, kind));
         closeScope(inner, analysis);

@@ -2282,11 +2282,10 @@ function reachedRecords(
  * their fields, and `#Ready` with no payload cannot share a field list with
  * `#Busy n`.
  *
- * Unlike `shapeOf` this still walks both directions in one pass, unions what it
- * finds, and does not follow instantiation copies. That is scope, not oversight:
- * a generalized function that matches on a variant has the same hole a
- * generalized projection had, and closing it wants the same treatment — the
- * copies are recorded, so it is a rewrite of this walk and nothing else.
+ * Unlike `shapeOf` this walks both directions in one pass and unions what it
+ * finds. It does not follow instantiation copies: a closed scrutinee records its
+ * set here, while an open set left by a wildcard is resolved during lowering
+ * from the declared union membership of the named arms.
  */
 function casesOf(type: SimpleType): readonly VariantCase[] | null {
   const found = new Map<string, boolean>();

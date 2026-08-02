@@ -27,7 +27,8 @@ consume (!token)
   never spending is fine; only the second spend is an error.
 - **`&x` is a borrow.** It may be read and projected freely and may never be
   moved, so a borrowing function is one you can call without losing what you
-  passed it.
+  passed it. It is a transient lexical view, not a value that can be stored or
+  returned.
 
 `resume` is the reason `?` exists. One-shot handlers are checked statically:
 
@@ -67,6 +68,27 @@ Three ways, and the distinction is the whole rule:
 
 Projecting spends a linear value because what is left of it cannot be used
 again. Reading is exactly what a borrow is for, so projecting a borrow is fine.
+
+## Borrows do not escape
+
+Blot has no lifetime parameters. Instead, the checker keeps `&value` as a
+transient ownership fact and accepts it only for an immediate projection, a
+read-only primitive, or the matching position of a parameter marked `&`:
+
+```blot
+let peek = fn &point => point.x + point.y;
+let consume = fn !point => case point of { .x; .y; } => x + y end;
+let !point = { .x = 20; .y = 22; };
+let total = peek (&point);
+return total + consume (!point);
+```
+
+The fact follows tuple and record structure, so `fn (&values, index) => ...` can
+borrow one component without borrowing the other. It may not enter a
+declaration, an ordinary parameter, a function or module result, or a host
+operation. A closure may capture a borrow only for an immediate call; binding
+the closure would retain the view and is rejected. This conservative rule gives
+borrows a lexical lifetime without putting regions into the type lattice.
 
 Branches are analysed from the same incoming state and must end in the same one.
 A value consumed on one path and not another is consumed neither exactly once

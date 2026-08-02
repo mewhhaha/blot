@@ -25,7 +25,9 @@ async function refusalAt(source: string): Promise<{
       if (!(error instanceof BlotError)) throw error;
       assertEquals(error.diagnostic.code, "BLOT_REFUSED");
       const origin = error.origin;
-      if (origin === null) throw new Error("a refusal reached the user unowned");
+      if (origin === null) {
+        throw new Error("a refusal reached the user unowned");
+      }
       return {
         line: locate(origin.source, error.diagnostic.span.start).line,
         lines: origin.source.trimEnd().split("\n").length,

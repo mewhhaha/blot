@@ -204,23 +204,20 @@ representation:
 - A residual structurally polymorphic function must have a concrete record shape
   before it reaches gpufuck. It gets one from the call sites that instantiated
   it. A runtime `let` lambda is cloned at each distinct concrete call shape;
-  compile-time generic functions are specialized at their Blot call sites. An
-  unconstrained runtime export is rejected instead of being assigned an
-  arbitrary nominal ABI.
+  immutable aliases and statically known identity applications preserve that
+  lambda, and compile-time generic functions are specialized at their Blot call
+  sites. An unconstrained runtime export is rejected instead of being assigned
+  an arbitrary nominal ABI.
 
-Two shape cases still reach gpufuck's own type checker rather than a blot
-refusal, and each reports `BLOT_LOWERING_BUG` with an `F2102` from gpufuck:
+The two formerly known shape leaks no longer reach gpufuck's type checker. A
+spread of a parameter, such as `fn r => { ...r; .x = 1; }`, needs a row variable
+to describe the fields it carries through and is rejected during source
+checking. A parameter destructured in place, such as `fn { .x = a; } => a`, is
+specialized with the concrete shape supplied by each call site.
 
-- **A spread of a value whose type is still a variable.**
-  `fn r => { ...r; .x = 1; }` infers the result `{ .x }` however wide `r` is,
-  because `case "shape"` in inference only widens the result when the spread
-  member is already a record. The construction the backend emits copies every
-  field, so the two disagree. Closing it needs row variables or a deferred
-  record type, not a shape fact.
-- **A parameter destructured in place**, as in `fn { .x = a; } => a` applied to
-  a wider record. A shape pattern's type _is_ a record rather than a variable
-  bounded by one, so there is nothing for the value's fields to flow into and
-  the pattern's own fields are all the fact can say.
+The same evidence follows a specialized parameter into a tuple `case`. A shape
+pattern in one tuple column destructures the concrete element nominal supplied
+at that call rather than the narrower record named by the pattern.
 
 A projecting function reached across `@import` used to be a third. It is not one
 now: the reads are held until every module has been checked and settled once, so

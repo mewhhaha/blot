@@ -105,8 +105,8 @@ production. Gpupaper validates that HIR and emits Wasm on the GPU. The target is
 intentionally local-checkout-only for now and does not support compiler-service
 mode. Multiple paths are prepared independently, then admitted modules are
 packed in stable input order into GPU emission groups of at most 16. A source
-failure remains local to its path; after submission the admitted batch is
-atomic rather than returning partially trusted artifacts.
+failure remains local to its path; after submission the admitted batch is atomic
+rather than returning partially trusted artifacts.
 
 `just build` is an isolated direct build and releases its GPU device on exit.
 For repeated local builds, run `just serve` in one terminal and use

@@ -43,7 +43,9 @@ record rather than as the tree:
   still open.
 - M3 is done, including M3c: a projecting function reached across `@import`
   lowers, because the held reads settle once for the whole program rather than
-  once per module. `examples/widened.blot` is the catalog entry.
+  once per module. `examples/widened.blot` is the catalog entry. Direct
+  parameter destructuring and tuple-contained shape patterns now also use each
+  specialized call's concrete record shape.
 - The literal-coverage gap below is closed for an open-ended target: a `case`
   over `Int` with literal arms is `BLOT_INCOMPLETE_CASE`, not an accepted
   program that traps.
@@ -825,22 +827,12 @@ does not survive a module boundary, and `@shape.get` with a runtime field name
 answers an unconstrained variable. They are three different problems, and a row
 closes at most one of them.
 
-_It does not close the module boundary._ Reproduced with a two-file program
-whose library is `let zoom_of = fn c => c.zoom;` and whose importer passes
-`{ .zoom = 3; .angle = 7; }` built behind an effect so staging cannot fold it.
-`blot check` accepts it and lowering refuses with
-`F2102: expected Shape1['a], received Shape2[I64, I64]`. There is no spread in
-that program and no row would appear anywhere in its type. What fails is that
-`checkLoaded` runs each dependency's whole check — including the `pending`
-closures that compute `shapeOf` — before the importer's module exists, so the
-library's projection is pinned to the one-field demand it can see locally. That
-is M3c, already on this list at ~60 lines, and it is a fact-collection ordering
-fix rather than a lattice change. Its unstated hazard is that `checkedFiles` is
-a process-wide `WeakMap`: sharing one instantiation registry across a dependency
-tree while caching the dependency's result would let the file checked first
-decide the nominals of the file checked second, which is the same contamination
-`load`'s one-cache-per-process rule exists to prevent. Solve that before writing
-the sixty lines.
+_It did not close the module boundary._ The original two-file reproducer had no
+spread and no place for a row to appear: a library projected `.zoom`, while its
+importer supplied `{ .zoom; .angle; }`. The compiler now settles structural
+facts after the complete dependency tree has been checked and specializes the
+imported projection to the caller's concrete shape. That closed the boundary as
+a fact-collection ordering change, without adding rows to the lattice.
 
 _It does not make `@shape.get` over a runtime name structural._ A row variable
 stands for a remainder; it does not enumerate the remainder's labels. Typing
@@ -850,17 +842,11 @@ typed `{ .a = Int; }` may carry a `.b` the call is reading, with or without a
 row in the type. The checker rejects this use as `BLOT_DYNAMIC_SHAPE_FIELD`; a
 homogeneous dictionary is the separate abstraction for dynamic keys.
 
-_It would close the spread, and the backend is already waiting for it._ For
-`let tagging = fn r => { ...r; .tag = 1; };` applied once, `shapeOf` already
-records `{ .x; }` for the spread operand through the instantiation copies M3a
-added, and `lower.ts` already expands a spread field-by-field into the union
-nominal. The only wrong thing is the type: `infer` returns `record({tag})`, so
-the projection's own shape fact is `{ .tag; }` and Core sees `Shape2[I64, I64]`
-against `Shape3['a]`. A record carrying an optional row tail — the spread mints
-`ρ`, constrains the operand under `{ | ρ }`, and returns `{ .tag = Int; | ρ }` —
-types it, and because a spread demand has no fields of its own the subtyping
-rule never constructs a new record object, so `constrain`'s identity cache still
-catches cycles and the algorithm stays polynomial.
+_It would close the spread._ For `let tagging = fn r => { ...r; .tag = 1; };`,
+inference cannot name the fields the parameter carries into the result and
+therefore rejects a later projection from that result. A record carrying an
+optional row tail — the spread mints `ρ`, constrains the operand under
+`{ | ρ }`, and returns `{ .tag = Int; | ρ }` — would type that program.
 
 _And it is still refused, for four reasons._ First, the payoff is bounded by
 monomorphization, not by the lattice: call sites specialize independently, while

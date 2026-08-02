@@ -436,20 +436,33 @@ implementation choices:
 The current practice of assigning `Top` or an unconstrained inference variable
 to a payload is not evidence that the payload has any requested type.
 
-### 5.3 Generative compile-time identities
+### 5.3 Compile-time identities
 
-An effect or seal declaration allocates a fresh compile-time atom. Equality is
-atom identity, not structural equality of the descriptor. Allocation is stable
-for one module evaluation and deterministic under the compiler's module cache.
+Effects are generative capabilities. An effect declaration allocates a fresh
+compile-time atom, and equality is atom identity rather than structural equality
+of the operation descriptor. Allocation is stable for one module evaluation and
+deterministic under the compiler's module cache.
 
 ```text
 newEffect(Sigma) downarrow effect(ell, Sigma)   where ell is fresh
-newSeal(name, A) downarrow sealAtom(s, name, A) where s is fresh
 ```
 
-Staging must preserve these atoms across inference and lowering. Re-evaluating
-the same source node in a later pass must retrieve the recorded value, not mint
-a new identity.
+Staging must preserve the atom across inference and lowering. Re-evaluating the
+same source node in a later pass must retrieve the recorded value, not mint a
+new identity.
+
+Seals are instead applicative named types:
+
+```text
+seal(name, A) = seal(name, B)  iff  A = B
+```
+
+The carrier participates invariantly in identity. Thus `List I32` is the same
+type every time its ordinary compile-time constructor runs, while `List I32` and
+`List Str` are distinct. Choosing the same public name and carrier chooses the
+same seal even across modules. A future abstraction capability that cannot be
+reconstructed from public inputs would be a separate generative primitive;
+making `seal` itself fresh would invalidate ordinary parameterized nominals.
 
 ## 6. Algebraic subtyping and inference
 
@@ -1114,27 +1127,28 @@ implementation is useless; it names the part of the model that the current
 compiler still does not establish. A row with no remaining gap is backed by an
 executable checker or lowering test, not only by documentation.
 
-| Area                         | Current implementation                                                                                                              | Model decision                                                         | Remaining gap                                                                                         |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| pure binding                 | liveness erases unused definitions; every remaining definition evaluates once in source order                                       | liveness erasure followed by strict evaluation                         | none                                                                                                  |
-| effect sequencing            | one shared Core elaboration classifies live declarations as `define` or `bind`, and results as `return` or `tail`                   | only `<-` binds a computation into scope                               | type and lower fine-grain Core rather than retaining surface expressions inside Core steps            |
-| coverage                     | uncertainty and every unlistable domain require an irrefutable arm; tuple coverage checks the complete cross-product                | accepted closed `case` is exhaustive or has an irrefutable arm         | none for the implemented pattern language                                                             |
-| type reflection              | saturated reflection has its exact bridged type; generic payload variables cannot discharge a signature or determine runtime work   | reflection payloads are indexed or typed at saturated call sites       | replace origin tracking with an explicit indexed `TyRep` in typed Core                                |
-| dynamic shape operations     | a run-time field name is rejected; compile-time structural folds remain available                                                   | structural fields require compile-time names                           | add a separate homogeneous dictionary abstraction when dynamic keys are needed                        |
-| optional fields              | omission is synthesized during record application but described as ordinary width subtyping                                         | completion is an explicit type-directed coercion visible to reflection | require one expected record and record the inserted fields in typed Core                              |
-| width subtyping              | direct calls of runtime `let` lambdas specialize the body to each concrete argument shape, including across imports                 | specialization closes representation for every call                    | specialize escaping and other residual structural functions through the same representation pass      |
-| integer domains              | run-time `Int` and `Nat` are signed-i64-bounded; wider `U64` is storage metadata and is rejected in runtime signatures              | run-time `Int` is bounded; storage width is separate                   | add a distinct word domain only if full-width run-time words become necessary                         |
-| array proofs                 | saturated direct access records an `ArrayIndexProof`; aliases and partial applications are rejected; lowering requires the proof    | proofs live in `Phi` and reach lowering explicitly                     | move all relation solving out of range terms and add a native unchecked target operation if available |
-| indexed loops                | `Iter.indexed` yields values with their indices, while branch refinements certify reuse of the index                                | iterator yields an erased relational package                           | make iterator-produced proof packages explicit and independent of the iterator's implementation       |
-| ownership of structures      | records, tuples, arrays, constructors, and closures propagate obligations; partial patterns cannot omit an owned component          | ownership propagates structurally                                      | add consuming array `take`/`split` operations for ergonomic extraction                                |
-| higher-order ownership       | `!parameter` and `?parameter` are checked call contracts; argument and result obligations are substituted through returned closures | functions carry separate usage summaries                               | infer contracts for unannotated parameters instead of requiring the ownership promise at the boundary |
-| recursion and ownership      | recursive closures with spendable captures are conservatively rejected                                                              | recursive closures capture only unrestricted values initially          | later relax only with a semantic call-count proof                                                     |
-| borrow scope                 | `&` is checked as a use mode without a complete first-class lifetime story                                                          | borrows are lexical non-escaping views                                 | reject storage, return, host passage, and escaping capture uniformly                                  |
-| handler abort                | a continuation that owns a linear capture requires `!resume`, which every clause must consume exactly once                          | a continuation owning linear resources has a linear `resume`           | add an explicit cancellation protocol before permitting such a continuation to abort                  |
-| effect identity              | several passes may evaluate compile-time values                                                                                     | generative atoms are allocated once and recorded                       | make identity provenance explicit and assert reuse in every downstream pass                           |
-| arithmetic refinements       | most arithmetic widens to `Int`, with a small special case for affine length bounds                                                 | refinement arithmetic is an independent entailment system              | move relationship reasoning out of ad hoc type-bound cases                                            |
-| optimizer correctness        | bounds and dead-code metrics test useful cases but do not define contextual equivalence                                             | demand and computation traces define observations                      | test and eventually prove each rewrite against those observations                                     |
-| experimental gpupaper target | target supports only a subset of ABI/runtime HIR                                                                                    | target restriction is allowed if it refuses before artifact production | keep target gaps separate from source-language acceptance claims                                      |
+| Area                         | Current implementation                                                                                                                              | Model decision                                                         | Remaining gap                                                                                         |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| pure binding                 | liveness erases unused definitions; every remaining definition evaluates once in source order                                                       | liveness erasure followed by strict evaluation                         | none                                                                                                  |
+| effect sequencing            | one shared Core elaboration classifies live declarations as `define` or `bind`, and results as `return` or `tail`                                   | only `<-` binds a computation into scope                               | type and lower fine-grain Core rather than retaining surface expressions inside Core steps            |
+| coverage                     | uncertainty and every unlistable domain require an irrefutable arm; tuple coverage checks the complete cross-product                                | accepted closed `case` is exhaustive or has an irrefutable arm         | none for the implemented pattern language                                                             |
+| type reflection              | saturated reflection has its exact bridged type; generic payload variables cannot discharge a signature or determine runtime work                   | reflection payloads are indexed or typed at saturated call sites       | replace origin tracking with an explicit indexed `TyRep` in typed Core                                |
+| dynamic shape operations     | a run-time field name is rejected; compile-time structural folds remain available                                                                   | structural fields require compile-time names                           | add a separate homogeneous dictionary abstraction when dynamic keys are needed                        |
+| optional fields              | inference records each call's source fields and absent/present/unit adaptations; lowering consumes that fact                                        | completion is an explicit type-directed coercion visible to reflection | none for direct record applications                                                                   |
+| width subtyping              | runtime lambdas specialize projections, direct destructuring, and tuple-contained shape patterns per concrete call across imports and known aliases | specialization closes representation for every call                    | specialize arbitrary escaping and other residual structural functions through one representation pass |
+| integer domains              | run-time `Int` and `Nat` are signed-i64-bounded; wider `U64` is storage metadata and is rejected in runtime signatures                              | run-time `Int` is bounded; storage width is separate                   | add a distinct word domain only if full-width run-time words become necessary                         |
+| array proofs                 | saturated direct access records an `ArrayIndexProof`; aliases and partial applications are rejected; lowering requires the proof                    | proofs live in `Phi` and reach lowering explicitly                     | move all relation solving out of range terms and add a native unchecked target operation if available |
+| indexed loops                | `Iter.indexed` yields values with their indices, while branch refinements certify reuse of the index                                                | iterator yields an erased relational package                           | make iterator-produced proof packages explicit and independent of the iterator's implementation       |
+| ownership of structures      | records, tuples, arrays, constructors, and closures propagate obligations; partial patterns cannot omit an owned component                          | ownership propagates structurally                                      | add consuming array `take`/`split` operations for ergonomic extraction                                |
+| higher-order ownership       | `!parameter` and `?parameter` are checked call contracts; argument and result obligations are substituted through returned closures                 | functions carry separate usage summaries                               | infer contracts for unannotated parameters instead of requiring the ownership promise at the boundary |
+| recursion and ownership      | recursive closures with spendable captures are conservatively rejected                                                                              | recursive closures capture only unrestricted values initially          | later relax only with a semantic call-count proof                                                     |
+| borrow scope                 | transient borrow evidence follows structural arguments; storage, return, ordinary or host passage, and retained closure capture are rejected        | borrows are lexical non-escaping views                                 | none for lexical borrows; first-class references would require explicit regions and provenance        |
+| handler abort                | a continuation that owns a linear capture requires `!resume`, which every clause must consume exactly once                                          | a continuation owning linear resources has a linear `resume`           | add an explicit cancellation protocol before permitting such a continuation to abort                  |
+| effect identity              | inference records each declaration's generative value by AST identity; lowering installs and compares those recorded atoms                          | generative atoms are allocated once and recorded                       | none for the current inference-to-lowering pipeline                                                   |
+| seal identity                | equality compares the public name and invariant carrier                                                                                             | seals are applicative named types                                      | none                                                                                                  |
+| arithmetic refinements       | most arithmetic widens to `Int`, with a small special case for affine length bounds                                                                 | refinement arithmetic is an independent entailment system              | move relationship reasoning out of ad hoc type-bound cases                                            |
+| optimizer correctness        | bounds and dead-code metrics test useful cases but do not define contextual equivalence                                                             | demand and computation traces define observations                      | test and eventually prove each rewrite against those observations                                     |
+| experimental gpupaper target | target supports only a subset of ABI/runtime HIR                                                                                                    | target restriction is allowed if it refuses before artifact production | keep target gaps separate from source-language acceptance claims                                      |
 
 ## 17. Migration plan
 
@@ -1179,14 +1193,16 @@ result types.
 
 - Replace unconstrained reflection and dynamic-shape results with indexed
   call-site rules or explicit dynamic results.
-- Record generative identities once.
+- Record generative effect identities once; keep applicative seals
+  deterministic.
 - Add phase checking before evaluation and staging.
 - Reject a run-time dependency in every compile-time context with one phase
   diagnostic.
 
 Saturated reflection is exact and unevidenced generic inspection cannot prove a
 signature or determine a runtime operation. Replacing the origin marker with an
-explicit indexed `TyRep` remains.
+explicit indexed `TyRep` remains. Effect declarations already record their
+generative values once, and downstream lowering consumes those recorded atoms.
 
 ### M3: Make matching total — complete
 
@@ -1222,8 +1238,11 @@ Record explicit coercions and specialize every residual structural use.
 - Preserve the full shape when polymorphic identity or spread requires it.
 - Ensure gpufuck HM-checks every program accepted by the closed source core.
 
-Direct calls of runtime `let` lambdas are cloned per concrete record shape.
-Escaping and other residual structural functions still need the same treatment.
+Runtime `let` lambdas are cloned per concrete record shape through direct calls,
+immutable aliases, source forwarders, imports, and transparent identity
+applications. Projection, direct parameter destructuring, and a shape nested in
+a tuple `case` all use the call-site representation. Arbitrary escaping and
+other residual structural functions still need the same treatment.
 
 ### M6: Propagate ownership structurally — aggregate propagation complete
 
@@ -1242,8 +1261,8 @@ Replace the closure-only escape restriction with obligations on aggregates.
 
 Known aggregates now carry one structural obligation derivation. Checked
 function contracts substitute caller obligations through ordinary and returned
-results. Inferred unannotated contracts and ergonomic consuming array extraction
-remain.
+results, and transient borrow evidence is rejected at every retaining boundary.
+Inferred unannotated contracts and ergonomic consuming array extraction remain.
 
 ### M7: Separate numeric values from storage descriptions — complete
 

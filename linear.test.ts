@@ -293,10 +293,86 @@ accepts(
   "let peek = fn &p => @int.add p.x p.y;\nreturn peek { .x = 1; .y = 2; };",
 );
 
+accepts(
+  "a borrow may occupy one position of a structural parameter",
+  `let peek = fn (&point, offset) => @int.add point.x offset;
+let consume_point = fn !value => case value of { .x; } => x end;
+let !point = { .x = 40; };
+return @int.add (peek ((&point), 1)) (consume_point (!point));`,
+);
+
 rejects(
   "a borrowed parameter may not be moved",
   "let steal = fn &p => p;\nreturn steal { .x = 1; };",
   "BLOT_BORROW_MOVED",
+);
+
+rejects(
+  "a borrow cannot be stored in a binding",
+  `${CONSUME}let !token = 41;
+let view = &token;
+return { .view = view; .consumed = consume (!token); };`,
+  "BLOT_BORROW_STORED",
+);
+
+rejects(
+  "a borrow cannot be stored by stable rebinding",
+  `${CONSUME}let !token = 41;
+let view = 0;
+view := &token;
+return @int.add view (consume (!token));`,
+  "BLOT_BORROW_STORED",
+);
+
+rejects(
+  "a borrowing function cannot return a projected view",
+  "let leak = fn &point => point.x;\nreturn leak { .x = 41; };",
+  "BLOT_BORROW_RESULT_ESCAPES",
+);
+
+rejects(
+  "an explicit borrow cannot pass through an ordinary parameter",
+  `${CONSUME}let ignore = fn value => 0;
+let !token = 41;
+return @int.add (ignore (&token)) (consume (!token));`,
+  "BLOT_BORROW_ARGUMENT_ESCAPES",
+);
+
+rejects(
+  "a borrow cannot cross a host effect boundary",
+  `const Sink = @effect.host { .write = Int -> Unit; };
+sig send = Int -> Unit ~ { Sink };
+let send = fn &value => do
+  _ <- Sink.write (&value);
+  in ()
+end;
+return send;`,
+  "BLOT_BORROW_ARGUMENT_ESCAPES",
+);
+
+rejects(
+  "a pattern cannot bind part of a borrowed view",
+  `${CONSUME}let !token = 41;
+let result = case #View (&token) of
+  #View view => @int.add view 1
+end;
+return @int.add result (consume (!token));`,
+  "BLOT_BORROW_STORED",
+);
+
+rejects(
+  "a closure carrying a borrow cannot be stored",
+  `let inspect = fn &point => do
+  let later = fn () => @int.add point.x 0;
+  in later ()
+end;
+return inspect { .x = 41; };`,
+  "BLOT_BORROW_STORED",
+);
+
+accepts(
+  "an immediately called closure may inspect a borrow",
+  "let inspect = fn &point => (fn () => @int.add point.x 0) ();\nreturn inspect { .x = 41; };",
 );
 
 // `?` is affine — at most once. Not a weaker `!`: the difference is whether

@@ -72,6 +72,19 @@ Deno.test("direct array access carries an explicit proof certificate", async () 
   }
 });
 
+Deno.test("generative effect identities are recorded once per declaration", async () => {
+  const checked = await checkFile("./examples/shadowed_effects.blot");
+  const effects = [...checked.comptimeValues.values()].filter((value) =>
+    value.tag === "effect" && value.name === "Log"
+  );
+  assertEquals(effects.length, 2);
+  const identities = effects.map((effect) => {
+    if (effect.tag !== "effect") throw new Error("expected an effect");
+    return effect.id;
+  });
+  assertEquals(new Set(identities).size, 2);
+});
+
 // --- literals are singleton types -------------------------------------------
 
 check(
@@ -84,6 +97,16 @@ check(
   "a float literal is not a singleton",
   "return 1.5;",
   "F64",
+);
+
+check(
+  "a seal is applicative in its name and carrier",
+  `const First = seal ("Token", I32);
+const Second = seal ("Token", I32);
+sig same = #True;
+const same = refines (First, Second);
+return same;`,
+  "#True",
 );
 
 check(
@@ -326,6 +349,29 @@ check(
     "return count {};",
   "Int",
 );
+
+Deno.test("an omitted optional field records its call-site coercion", async () => {
+  const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
+  await Deno.writeTextFile(
+    path,
+    `${PRELUDE}sig count = { .value? = Int; } -> Int;
+let count = fn properties => case properties.value of
+  () => 0,
+  value => value
+end;
+return count {};`,
+  );
+  const checked = await checkFile(path);
+  const adaptation = [...checked.recordAdaptations.values()].find((candidate) =>
+    candidate.sourceFields.length === 0 &&
+    candidate.fields.length === 1 &&
+    candidate.fields[0].name === "value"
+  );
+  if (adaptation === undefined) {
+    throw new Error("checking omitted the optional-field record adaptation");
+  }
+  assertEquals(adaptation.fields[0].optional, "absent");
+});
 
 // --- variants, unions, and narrowing ----------------------------------------
 
