@@ -34,6 +34,11 @@ for (index, value) in Iter.indexed values do
   indexed_sum := indexed_sum + index + value;
 end;
 
+let indexed_read_sum = 0;
+for (index, _) in Iter.indexed values do
+  indexed_read_sum := indexed_read_sum + @array.get values index;
+end;
+
 return {
   .inside = at values 1;
   .past_end = at values 3;
@@ -45,4 +50,5 @@ return {
     #None => -1
   end;
   .indexed_sum = indexed_sum;
+  .indexed_read_sum = indexed_read_sum;
 };

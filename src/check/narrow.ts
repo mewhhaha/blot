@@ -146,11 +146,9 @@ export function complement(
  * would be wrong, and this module never builds one — `@int.cmp` fails on text, so
  * a recognised comparison never sees any.
  *
- * `k` is a bound rather than an integer, so the value compared against may be an
- * array's length: `n < @array.len xs` gives `..len xs - 1` by the same
- * construction that gives `n < 3` the range `..2`. Nothing here knows the
- * difference, because the only operation it performs on `k` is stepping it by
- * one, and `shiftBound` is total on both.
+ * This set operation handles literal witnesses only. Relationships such as
+ * `n < @array.len xs` are retained separately in `Phi` and never enter the
+ * value-type lattice.
  */
 export function region(
   orderings: ReadonlySet<Ordering>,

@@ -61,7 +61,7 @@ import {
   TypeError_,
 } from "./constrain.ts";
 import { PRIMITIVE_TYPES } from "./primitives.ts";
-import { show as showType, showRange } from "./print.ts";
+import { show as showType } from "./print.ts";
 import type {
   ArrayIndexProof,
   RefinementInterval,
@@ -74,7 +74,6 @@ import {
 } from "../core/refinement.ts";
 import {
   admitsOmission,
-  type ClosedBound,
   type Domain,
   effects,
   evidenceOf,
@@ -84,12 +83,9 @@ import {
   I64_LOW,
   INT,
   intLiteral,
-  type LengthBound,
-  lengthBound,
   type Level,
   openVariant,
   record,
-  shiftBound,
   type SimpleType,
   TEXT,
   textLiteral,
@@ -100,6 +96,22 @@ import {
   UNIT,
   variant,
 } from "./type.ts";
+
+type RelationalValue =
+  | {
+    readonly tag: "index";
+    readonly value: RefinementTerm;
+    readonly length: RefinementTerm;
+  }
+  | {
+    readonly tag: "tuple";
+    readonly elements: readonly (RelationalValue | null)[];
+  }
+  | {
+    readonly tag: "variant";
+    readonly cases: ReadonlyMap<string, RelationalValue | null>;
+  }
+  | { readonly tag: "indexed-iterator"; readonly length: RefinementTerm };
 
 interface TypeEnv {
   readonly names: Map<string, Typing>;
@@ -135,18 +147,23 @@ interface TypeEnv {
    */
   readonly arrayLengths: Map<
     string,
-    { length: ClosedBound; typing: Typing }
+    { length: RefinementTerm; typing: Typing }
   >;
   /** Exact relational integer values retained by immutable bindings. */
   readonly integerValues: Map<
     string,
-    { value: ClosedBound; typing: Typing }
+    { value: RefinementTerm; typing: Typing }
+  >;
+  /** Erased relationship packages carried by ordinary runtime values. */
+  readonly relations: Map<
+    string,
+    { value: RelationalValue; typing: Typing }
   >;
   /**
    * The immutable value identity a name currently denotes, paired with the
    * `Typing` that binding installed.
    *
-   * The identity is what `len(b)` in a bound is keyed to (type.ts). blot has no
+   * The identity is what `length(b)` in `Phi` is keyed to. blot has no
    * assignment and arrays are immutable, so one identity denotes exactly one
    * value for its whole lifetime. A transparent alias keeps it; a new value
    * gets another.
@@ -190,6 +207,7 @@ function childTypeEnv(parent: TypeEnv | null): TypeEnv {
     comptime: new Map(),
     arrayLengths: new Map(),
     integerValues: new Map(),
+    relations: new Map(),
     bindings: new Map(),
     folded: new Map(),
     parent,
@@ -231,7 +249,7 @@ function lookupBinding(env: TypeEnv, name: string): number | null {
   return null;
 }
 
-function lookupIntegerValue(env: TypeEnv, name: string): ClosedBound | null {
+function lookupIntegerValue(env: TypeEnv, name: string): RefinementTerm | null {
   const typing = lookupType(env, name);
   if (typing === undefined) return null;
   let scope: TypeEnv | null = env;
@@ -249,32 +267,63 @@ function lookupIntegerValue(env: TypeEnv, name: string): ClosedBound | null {
 function recordIntegerValue(
   scope: TypeEnv,
   name: string,
-  value: ClosedBound,
+  value: RefinementTerm,
 ): void {
   const typing = scope.names.get(name);
   if (typing === undefined) return;
   scope.integerValues.set(name, { value, typing });
   const identity = lookupBinding(scope, name);
-  if (identity === null || typeof value === "string") return;
-  if (!assumeBound(scope.refinements, identity, value)) {
+  if (identity === null || !assumeTerm(scope.refinements, identity, value)) {
     throw new Error(`integer relationship for \`${name}\` is inconsistent`);
   }
 }
 
-function assumeBound(
+function lookupRelation(env: TypeEnv, name: string): RelationalValue | null {
+  const typing = lookupType(env, name);
+  if (typing === undefined) return null;
+  let scope: TypeEnv | null = env;
+  while (scope !== null) {
+    const found = scope.relations.get(name);
+    if (found !== undefined) {
+      if (found.typing !== typing) return null;
+      return found.value;
+    }
+    scope = scope.parent;
+  }
+  return null;
+}
+
+function recordRelation(
+  scope: TypeEnv,
+  name: string,
+  value: RelationalValue,
+): void {
+  const typing = scope.names.get(name);
+  if (typing === undefined) return;
+  scope.relations.set(name, { value, typing });
+}
+
+function assumeTerm(
   refinements: RefinementContext,
   variable: RefinementVariable,
-  bound: bigint | LengthBound,
+  term: RefinementTerm,
 ): boolean {
-  if (typeof bound === "bigint") {
-    return refinements.assume({ tag: "at-least", variable, value: bound }) &&
-      refinements.assume({ tag: "at-most", variable, value: bound });
+  if (term.tag === "literal") {
+    return refinements.assume({
+      tag: "at-least",
+      variable,
+      value: term.value,
+    }) && refinements.assume({
+      tag: "at-most",
+      variable,
+      value: term.value,
+    });
   }
   return refinements.assume({
     tag: "equal-offset",
     left: variable,
-    right: bound.binding,
-    offset: bound.offset,
+    right: term.identity,
+    offset: term.offset,
   });
 }
 
@@ -375,14 +424,14 @@ function recordComptimeBinding(
 function recordArrayLength(
   scope: TypeEnv,
   name: string,
-  length: ClosedBound,
+  length: RefinementTerm,
 ): void {
   const typing = scope.names.get(name);
   if (typing === undefined) return;
   scope.arrayLengths.set(name, { length, typing });
 }
 
-function lookupArrayLength(env: TypeEnv, name: string): ClosedBound | null {
+function lookupArrayLength(env: TypeEnv, name: string): RefinementTerm | null {
   const typing = lookupType(env, name);
   if (typing === undefined) return null;
   let scope: TypeEnv | null = env;
@@ -453,6 +502,8 @@ interface Context {
   readonly expressionTypes: Map<Expr, SimpleType>;
   /** Erasable evidence for direct array accesses proved in bounds. */
   readonly arrayProofs: Map<Expr, ArrayIndexProof>;
+  /** Erased relationship packages produced and projected by runtime expressions. */
+  readonly expressionRelations: Map<Expr, RelationalValue>;
   /** Field sets and constructor sets, recorded for the backend. */
   readonly shapes: Map<Expr, Shape>;
   readonly recordAdaptations: Map<Expr, RecordAdaptation>;
@@ -678,6 +729,7 @@ export function infer(
 ): SimpleType {
   const type = inferUnrecorded(expr, context, level, row);
   context.expressionTypes.set(expr, type);
+  recordExpressionRelation(expr, context);
   return type;
 }
 
@@ -1639,6 +1691,8 @@ interface Narrowing {
   readonly untakenRefinements: readonly RefinementProposition[];
 }
 
+type ComparisonWitness = bigint | RefinementTerm;
+
 /**
  * What `condition` proves, when the function it calls is a recognised comparison
  * of an integer against a witness.
@@ -1708,19 +1762,28 @@ function proves(
     readonly identity: RefinementVariable;
   },
   answers: ReadonlySet<Ordering>,
-  against: ClosedBound,
+  against: ComparisonWitness,
 ): Narrowing | null {
-  const taken = intersect(subject.type, region(answers, against));
-  const untaken = intersect(
-    subject.type,
-    region(complement(answers), against),
-  );
-  if (taken.tag !== "type" || untaken.tag !== "type") return null;
+  let taken = subject.type;
+  let untaken = subject.type;
+  if (typeof against === "bigint") {
+    const takenIntersection = intersect(subject.type, region(answers, against));
+    const untakenIntersection = intersect(
+      subject.type,
+      region(complement(answers), against),
+    );
+    if (
+      takenIntersection.tag !== "type" ||
+      untakenIntersection.tag !== "type"
+    ) return null;
+    taken = takenIntersection.type;
+    untaken = untakenIntersection.type;
+  }
   return {
     name: subject.name,
     before: subject.type,
-    taken: taken.type,
-    untaken: untaken.type,
+    taken,
+    untaken,
     takenRefinements: comparisonRefinements(
       subject.identity,
       answers,
@@ -1737,9 +1800,8 @@ function proves(
 function comparisonRefinements(
   subject: RefinementVariable,
   answers: ReadonlySet<Ordering>,
-  against: ClosedBound,
+  against: ComparisonWitness,
 ): readonly RefinementProposition[] {
-  if (typeof against === "string") return [];
   const less = answers.has("less");
   const equal = answers.has("equal");
   const greater = answers.has("greater");
@@ -1768,44 +1830,48 @@ function comparisonRefinements(
     return [];
   }
 
+  const related = against;
+  if (related.tag === "literal") {
+    return comparisonRefinements(subject, answers, related.value);
+  }
   if (less && equal) {
     return [{
       tag: "difference-at-most",
       left: subject,
-      right: against.binding,
-      offset: against.offset,
+      right: related.identity,
+      offset: related.offset,
     }];
   }
   if (equal && greater) {
     return [{
       tag: "difference-at-most",
-      left: against.binding,
+      left: related.identity,
       right: subject,
-      offset: -against.offset,
+      offset: -related.offset,
     }];
   }
   if (less) {
     return [{
       tag: "difference-at-most",
       left: subject,
-      right: against.binding,
-      offset: against.offset - 1n,
+      right: related.identity,
+      offset: related.offset - 1n,
     }];
   }
   if (greater) {
     return [{
       tag: "difference-at-most",
-      left: against.binding,
+      left: related.identity,
       right: subject,
-      offset: -against.offset - 1n,
+      offset: -related.offset - 1n,
     }];
   }
   if (equal) {
     return [{
       tag: "equal-offset",
       left: subject,
-      right: against.binding,
-      offset: against.offset,
+      right: related.identity,
+      offset: related.offset,
     }];
   }
   return [];
@@ -1992,16 +2058,19 @@ function comptimeInt(expr: Expr, scope: TypeEnv): bigint | null {
  * A literal or compile-time array contributes a number. A runtime binding may
  * instead carry the length relationship recorded when it was initialized.
  */
-function recordedArrayLength(expr: Expr, scope: TypeEnv): ClosedBound | null {
+function recordedArrayLength(
+  expr: Expr,
+  scope: TypeEnv,
+): RefinementTerm | null {
   if (expr.tag === "array") {
     if (expr.elements.some((item) => item.spread)) return null;
-    return BigInt(expr.elements.length);
+    return { tag: "literal", value: BigInt(expr.elements.length) };
   }
   const path = namePath(expr);
   if (path === null) return null;
   const value = comptimeAt(path, scope);
   if (value !== null && value.tag === "array") {
-    return BigInt(value.elements.length);
+    return { tag: "literal", value: BigInt(value.elements.length) };
   }
   // A runtime binding reaches the relationship recorded beside its type. A
   // nested path has no stable value identity of its own.
@@ -2010,22 +2079,22 @@ function recordedArrayLength(expr: Expr, scope: TypeEnv): ClosedBound | null {
 }
 
 /**
- * How many elements an array expression holds, as a bound.
+ * How many elements an array expression holds, as a refinement term.
  *
- * A number when the source decided it, and otherwise the symbol `len b` for the
- * immutable value identity the name denotes. The symbol names an integer the
+ * A number when the source decided it, and otherwise `length(b)` for the
+ * immutable value identity the name denotes. The term names an integer the
  * compiler cannot see, which is exactly enough: an index compared against it
- * and an index used to read the same array share one bound whatever it is.
+ * and an index used to read the same array share one value whatever it is.
  *
  * The number comes first because it says strictly more. `let xs = [1, 2, 3]`
  * gives every comparison against `@array.len xs` the witness `3`, so the
- * ordinary literal machinery decides it and no symbol is minted at all.
+ * ordinary literal machinery decides it and no identity term is needed.
  *
  * A plain name carries the identity, and a transparent alias keeps it. Fields
  * and call results are refused rather than given a symbol because no stable
  * identity for their value is in scope.
  */
-function arrayLength(expr: Expr, scope: TypeEnv): ClosedBound | null {
+function arrayLength(expr: Expr, scope: TypeEnv): RefinementTerm | null {
   const decided = recordedArrayLength(expr, scope);
   if (decided !== null) return decided;
   if (expr.tag === "var") {
@@ -2042,7 +2111,7 @@ function arrayLength(expr: Expr, scope: TypeEnv): ClosedBound | null {
     ) {
       throw new Error(`array length for \`${expr.name}\` is inconsistent`);
     }
-    return lengthBound(identity, 0n, expr.name);
+    return { tag: "variable", identity, offset: 0n };
   }
   const head = spine(expr);
   if (head === null || head.callee.tag !== "intrinsic") return null;
@@ -2059,7 +2128,7 @@ function arrayLength(expr: Expr, scope: TypeEnv): ClosedBound | null {
   if (head.callee.name !== "@array.push" || head.args.length !== 2) return null;
   const previous = arrayLength(head.args[0], scope);
   if (previous === null) return null;
-  return shiftBound(previous, 1n);
+  return shiftRefinementTerm(previous, 1n);
 }
 
 /**
@@ -2072,18 +2141,20 @@ function arrayLength(expr: Expr, scope: TypeEnv): ClosedBound | null {
  * A comparison of one length against another has two witnesses and no subject,
  * so `narrowing` refuses it before either is used.
  */
-function witness(expr: Expr, scope: TypeEnv): ClosedBound | null {
+function witness(expr: Expr, scope: TypeEnv): ComparisonWitness | null {
   const literal = comptimeInt(expr, scope);
   if (literal !== null) return literal;
   if (expr.tag === "var") {
     const related = lookupIntegerValue(scope, expr.name);
-    if (related !== null) return related;
+    if (related !== null) return comparisonWitness(related);
   }
   const head = spine(expr);
   if (head === null) return null;
   if (head.callee.tag !== "intrinsic") return null;
   if (head.callee.name === "@array.len" && head.args.length === 1) {
-    return arrayLength(head.args[0], scope);
+    const length = arrayLength(head.args[0], scope);
+    if (length === null) return null;
+    return comparisonWitness(length);
   }
   if (
     (head.callee.name === "@int.add" || head.callee.name === "@int.sub") &&
@@ -2092,17 +2163,184 @@ function witness(expr: Expr, scope: TypeEnv): ClosedBound | null {
     const left = witness(head.args[0], scope);
     const right = witness(head.args[1], scope);
     if (
-      left !== null && typeof left === "object" && typeof right === "bigint"
+      left !== null && typeof left !== "bigint" && typeof right === "bigint"
     ) {
-      const offset = head.callee.name === "@int.add" ? right : -right;
-      return shiftBound(left, offset);
+      let offset = right;
+      if (head.callee.name === "@int.sub") offset = -right;
+      return shiftRefinementTerm(left, offset);
     }
     if (
       head.callee.name === "@int.add" && typeof left === "bigint" &&
-      right !== null && typeof right === "object"
-    ) return shiftBound(right, left);
+      right !== null && typeof right !== "bigint"
+    ) return shiftRefinementTerm(right, left);
   }
   return null;
+}
+
+function comparisonWitness(term: RefinementTerm): ComparisonWitness {
+  if (term.tag === "literal") return term.value;
+  return term;
+}
+
+function shiftRefinementTerm(
+  term: RefinementTerm,
+  offset: bigint,
+): RefinementTerm {
+  if (term.tag === "literal") {
+    return { tag: "literal", value: term.value + offset };
+  }
+  return { ...term, offset: term.offset + offset };
+}
+
+function recordExpressionRelation(expr: Expr, context: Context): void {
+  if (expr.tag === "var") {
+    const related = lookupRelation(context.types, expr.name);
+    if (related !== null) context.expressionRelations.set(expr, related);
+    return;
+  }
+  if (expr.tag === "field") {
+    const target = expressionRelation(expr.target, context);
+    if (target === null) return;
+    if (target.tag === "tuple" && /^\d+$/.test(expr.name)) {
+      const element = target.elements[Number(expr.name)];
+      if (element !== undefined && element !== null) {
+        context.expressionRelations.set(expr, element);
+      }
+    }
+    return;
+  }
+  if (expr.tag !== "apply") return;
+  const application = spine(expr);
+  if (application === null) return;
+  const primitive = primitiveName(application.callee, context);
+  if (primitive === "@array.indexed" && application.args.length === 1) {
+    const length = arrayLength(application.args[0], context.types);
+    if (length !== null) {
+      context.expressionRelations.set(expr, {
+        tag: "indexed-iterator",
+        length,
+      });
+    }
+    return;
+  }
+  if (
+    application.callee.tag !== "field" ||
+    application.callee.name !== "step" || application.args.length !== 1
+  ) return;
+  const iterator = expressionRelation(
+    application.callee.target,
+    context,
+  );
+  if (iterator?.tag !== "indexed-iterator") return;
+  const index = refinementExpression(application.args[0], context.types);
+  if (index === null) return;
+  context.expressionRelations.set(expr, {
+    tag: "variant",
+    cases: new Map([
+      ["None", null],
+      ["Some", {
+        tag: "tuple",
+        elements: [
+          {
+            tag: "tuple",
+            elements: [
+              { tag: "index", value: index, length: iterator.length },
+              null,
+            ],
+          },
+          null,
+        ],
+      }],
+    ]),
+  });
+}
+
+function expressionRelation(
+  expr: Expr,
+  context: Context,
+): RelationalValue | null {
+  const recorded = context.expressionRelations.get(expr);
+  if (recorded !== undefined) return recorded;
+  if (expr.tag === "var") return lookupRelation(context.types, expr.name);
+  if (expr.tag !== "field") return null;
+  const target = expressionRelation(expr.target, context);
+  if (target?.tag !== "tuple" || !/^\d+$/.test(expr.name)) return null;
+  const element = target.elements[Number(expr.name)];
+  if (element === undefined) return null;
+  return element;
+}
+
+function bindPatternRelation(
+  pattern: Pattern,
+  relation: RelationalValue | null,
+  scope: TypeEnv,
+): void {
+  if (relation === null) return;
+  if (pattern.tag === "name") {
+    recordRelation(scope, pattern.name, relation);
+    if (relation.tag !== "index") return;
+    recordIntegerValue(scope, pattern.name, relation.value);
+    const identity = lookupBinding(scope, pattern.name);
+    if (identity === null) {
+      throw new Error(`proved index \`${pattern.name}\` has no identity`);
+    }
+    if (
+      !scope.refinements.assume({
+        tag: "at-least",
+        variable: identity,
+        value: 0n,
+      })
+    ) throw new Error(`proved index \`${pattern.name}\` is negative`);
+    let upper: RefinementProposition;
+    if (relation.length.tag === "literal") {
+      upper = {
+        tag: "at-most",
+        variable: identity,
+        value: relation.length.value - 1n,
+      };
+    } else {
+      upper = {
+        tag: "difference-at-most",
+        left: identity,
+        right: relation.length.identity,
+        offset: relation.length.offset - 1n,
+      };
+    }
+    if (!scope.refinements.assume(upper)) {
+      throw new Error(`proved index \`${pattern.name}\` is out of bounds`);
+    }
+    return;
+  }
+  if (pattern.tag === "tuple" && relation.tag === "tuple") {
+    for (const [index, element] of pattern.elements.entries()) {
+      let elementRelation = relation.elements[index];
+      if (elementRelation === undefined) elementRelation = null;
+      bindPatternRelation(element, elementRelation, scope);
+    }
+    return;
+  }
+  if (
+    pattern.tag === "constructor" && pattern.payload !== null &&
+    relation.tag === "variant"
+  ) {
+    let payload = relation.cases.get(pattern.name);
+    if (payload === undefined) payload = null;
+    bindPatternRelation(
+      pattern.payload,
+      payload,
+      scope,
+    );
+  }
+}
+
+function showRefinementTerm(term: RefinementTerm, array: Expr): string {
+  if (term.tag === "literal") return term.value.toString();
+  let subject = `array#${term.identity}`;
+  if (array.tag === "var") subject = array.name;
+  const length = `len ${subject}`;
+  if (term.offset === 0n) return length;
+  if (term.offset < 0n) return `${length} - ${-term.offset}`;
+  return `${length} + ${term.offset}`;
 }
 
 /** Direct access is admitted only when every possible index is in bounds. */
@@ -2122,18 +2360,36 @@ function requireProvenIndex(
     );
   }
   const indexTerm = refinementExpression(index, scope);
-  const lengthTerm = refinementTerm(length);
   if (
     indexTerm !== null &&
     refinementAtLeastZero(indexTerm, scope.refinements) &&
-    refinementLessThan(indexTerm, lengthTerm, scope.refinements)
+    refinementLessThan(indexTerm, length, scope.refinements)
   ) {
     return {
       tag: "array-index",
       assumptions: scope.refinements.assumptions(),
-      length: lengthTerm,
+      length,
       intervals: [{ low: indexTerm, high: indexTerm }],
     };
+  }
+  if (
+    indexTerm !== null &&
+    refinementAtLeast(indexTerm, length, scope.refinements)
+  ) {
+    if (indexTerm.tag === "literal" && length.tag === "literal") {
+      fail(
+        "BLOT_OUT_OF_BOUNDS",
+        `Index ${indexTerm.value} is outside an array of ${length.value}.`,
+        expr.span,
+      );
+    }
+    fail(
+      "BLOT_OUT_OF_BOUNDS",
+      `Index ${showRefinementTerm(indexTerm, index)} is at or past ${
+        showRefinementTerm(length, array)
+      }.`,
+      expr.span,
+    );
   }
   if (indices === null) {
     fail(
@@ -2142,40 +2398,43 @@ function requireProvenIndex(
       expr.span,
     );
   }
-  const inside: SimpleType = {
-    tag: "range",
-    domain: "int",
-    low: 0n,
-    high: shiftBound(length, -1n),
-  };
-  const both = intersect(indices, inside);
-  if (both.tag === "type" && both.type.tag === "bottom") {
+  const intervals = refinementIntervals(indices);
+  if (intervals === null) {
     fail(
-      "BLOT_OUT_OF_BOUNDS",
-      `Index ${showType(indices)} is outside an array of ${
-        showRange("int", length, length)
-      }.`,
+      "BLOT_UNPROVEN_INDEX",
+      "Direct array access needs a closed integer interval or a relational proof for its index.",
       expr.span,
     );
   }
-  if (both.tag === "type" && sameGround(both.type, indices)) {
-    const intervals = refinementIntervals(indices);
-    if (intervals === null) {
-      throw new Error(
-        "a proved integer set did not lower to refinement intervals",
-      );
-    }
+  const proved = intervals.every((interval) =>
+    refinementAtLeastZero(interval.low, scope.refinements) &&
+    refinementLessThan(interval.high, length, scope.refinements)
+  );
+  if (proved) {
     return {
       tag: "array-index",
-      assumptions: [],
-      length: refinementTerm(length),
+      assumptions: scope.refinements.assumptions(),
+      length,
       intervals,
     };
   }
+  if (
+    length.tag === "literal" &&
+    intervals.every((interval) =>
+      interval.high.tag === "literal" && interval.low.tag === "literal" &&
+      (interval.high.value < 0n || interval.low.value >= length.value)
+    )
+  ) {
+    fail(
+      "BLOT_OUT_OF_BOUNDS",
+      `Index ${showType(indices)} is outside an array of ${length.value}.`,
+      expr.span,
+    );
+  }
   fail(
     "BLOT_UNPROVEN_INDEX",
-    `Index ${showType(indices)} is not proved inside 0..${
-      showRange("int", shiftBound(length, -1n), shiftBound(length, -1n))
+    `Index ${showType(indices)} is not proved below ${
+      showRefinementTerm(length, array)
     }. Use \`Array.get\` or \`Array.set\` when the index may be out of bounds.`,
     expr.span,
   );
@@ -2190,8 +2449,8 @@ function refinementIntervals(
       return null;
     }
     return [{
-      low: refinementTerm(type.low),
-      high: refinementTerm(type.high),
+      low: { tag: "literal", value: type.low },
+      high: { tag: "literal", value: type.high },
     }];
   }
   if (type.tag !== "union") return null;
@@ -2204,24 +2463,13 @@ function refinementIntervals(
   return intervals;
 }
 
-function refinementTerm(bound: bigint | string | LengthBound): RefinementTerm {
-  if (typeof bound === "bigint") return { tag: "literal", value: bound };
-  if (typeof bound === "string") {
-    throw new Error("an array length lowered from a text bound");
-  }
-  return {
-    tag: "variable",
-    identity: bound.binding,
-    offset: bound.offset,
-  };
-}
-
 function refinementExpression(
   expression: Expr,
   scope: TypeEnv,
 ): RefinementTerm | null {
   const known = witness(expression, scope);
-  if (known !== null && typeof known !== "string") return refinementTerm(known);
+  if (typeof known === "bigint") return { tag: "literal", value: known };
+  if (known !== null) return known;
   if (expression.tag !== "var") return null;
   const identity = lookupBinding(scope, expression.name);
   if (identity === null) return null;
@@ -2271,6 +2519,37 @@ function refinementLessThan(
   });
 }
 
+function refinementAtLeast(
+  left: RefinementTerm,
+  right: RefinementTerm,
+  refinements: RefinementContext,
+): boolean {
+  if (left.tag === "literal" && right.tag === "literal") {
+    return left.value >= right.value;
+  }
+  if (left.tag === "variable" && right.tag === "literal") {
+    return refinements.entails({
+      tag: "at-least",
+      variable: left.identity,
+      value: right.value - left.offset,
+    });
+  }
+  if (left.tag === "literal" && right.tag === "variable") {
+    return refinements.entails({
+      tag: "at-most",
+      variable: right.identity,
+      value: left.value - right.offset,
+    });
+  }
+  if (left.tag === "literal" || right.tag === "literal") return false;
+  return refinements.entails({
+    tag: "difference-at-most",
+    left: right.identity,
+    right: left.identity,
+    offset: left.offset - right.offset,
+  });
+}
+
 /**
  * The integers an index expression can produce, when the source decides them.
  *
@@ -2281,33 +2560,20 @@ function refinementLessThan(
  */
 function indexSet(expr: Expr, scope: TypeEnv): SimpleType | null {
   const value = witness(expr, scope);
-  if (value !== null) {
+  if (typeof value === "bigint") {
     return { tag: "range", domain: "int", low: value, high: value };
   }
   if (expr.tag !== "var") return null;
   const typing = lookupType(scope, expr.name);
   if (typing === undefined) return null;
   if (typing.tag !== "scheme") return groundIntType(typing);
-  const type = groundIntType(typing.body);
-  if (type === null || !containsLengthBound(type)) return null;
-  return type;
-}
-
-function containsLengthBound(type: SimpleType): boolean {
-  if (type.tag === "range") {
-    return typeof type.low === "object" || typeof type.high === "object";
-  }
-  if (type.tag !== "union") return false;
-  return type.members.some(containsLengthBound);
+  return groundIntType(typing.body);
 }
 
 /**
  * Whether two ground types are the same set, written the same way.
  *
- * `===` on the bounds is exact for every `Bound` there is: two literals are
- * equal when their values are, and a length bound is interned per
- * `(identity, offset)` pair, so one object per denotation is what makes
- * `len xs..len xs` recognise itself.
+ * Literal range bounds are primitive values, so exact equality is sufficient.
  */
 function sameGround(left: SimpleType, right: SimpleType): boolean {
   if (left.tag === "range" && right.tag === "range") {
@@ -2330,6 +2596,7 @@ function inferCase(
   row: SimpleType,
 ): SimpleType {
   const target = infer(expr.target, context, level, row);
+  const targetRelation = expressionRelation(expr.target, context);
   requireEvidencedRuntimeType(target, expr.target, context);
   const result = freshVar(level);
   const accepted: AcceptedArm[] = [];
@@ -2357,6 +2624,7 @@ function inferCase(
     const scope = childTypeEnv(context.types);
     const inner: Context = { ...context, types: scope };
     const armType = bindPattern(arm.pattern, inner, level);
+    bindPatternRelation(arm.pattern, targetRelation, scope);
 
     if (arm.pattern.tag === "name") {
       // An irrefutable name matches every value, so it *is* the scrutinee.
@@ -3191,6 +3459,7 @@ function inferDeclarations(
       } else {
         inferred = bridged;
       }
+      const relation = expressionRelation(declaration.value, context);
       const previousType = stableRebindingType(
         instantiate(previous, level + 1, context.staging.instances),
       );
@@ -3240,6 +3509,7 @@ function inferDeclarations(
       // nothing about it. A rebinding to another literal records that one.
       context.types.arrayLengths.delete(declaration.name);
       context.types.integerValues.delete(declaration.name);
+      context.types.relations.delete(declaration.name);
       // And the computed value, which is a fact about the value the name held
       // rather than about the name.
       context.types.folded.delete(declaration.name);
@@ -3257,8 +3527,11 @@ function inferDeclarations(
           knownArrayLength,
         );
       }
-      if (integerValue !== null && typeof integerValue === "object") {
+      if (integerValue !== null && typeof integerValue !== "bigint") {
         recordIntegerValue(context.types, declaration.name, integerValue);
+      }
+      if (relation !== null) {
+        recordRelation(context.types, declaration.name, relation);
       }
       continue;
     }
@@ -3437,10 +3710,12 @@ function inferDeclarations(
     const identity = aliasedBinding(declaration.value, context.types);
     const integerValue = witness(declaration.value, context.types);
     const knownArrayLength = arrayLength(declaration.value, context.types);
+    const relation = expressionRelation(declaration.value, context);
     bindDeclaration(declaration.pattern, type, context, level, identity);
+    bindPatternRelation(declaration.pattern, relation, context.types);
     if (
       declaration.pattern.tag === "name" && integerValue !== null &&
-      typeof integerValue === "object"
+      typeof integerValue !== "bigint"
     ) {
       recordIntegerValue(
         context.types,
@@ -4221,6 +4496,7 @@ export function checkModule(
   const optionalCases = new Set<Expr>();
   const expressionTypes = new Map<Expr, SimpleType>();
   const arrayProofs = new Map<Expr, ArrayIndexProof>();
+  const expressionRelations = new Map<Expr, RelationalValue>();
   const variants = new Map<Expr, readonly VariantCase[]>();
   const patternShapes = new Map<Pattern, Shape>();
   const pinnedPatterns = new Map<Pattern, PinnedDomain>();
@@ -4238,6 +4514,7 @@ export function checkModule(
     phase: "runtime",
     expressionTypes,
     arrayProofs,
+    expressionRelations,
     opens,
     comptimeValues,
     memberValues,

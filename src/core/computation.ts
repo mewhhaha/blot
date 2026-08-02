@@ -23,14 +23,21 @@ import type {
   Pattern,
   Span,
 } from "../syntax/ast.ts";
-import { liveDeclarations } from "../syntax/live.ts";
+import { patternNames } from "../syntax/ast.ts";
+import { freeNames, liveDeclarations } from "../syntax/live.ts";
 import { TyRepBuilder, type TyRepId, type TyRepTable } from "./type_rep.ts";
+import type { RecordAdaptation } from "../check/infer.ts";
+import type { ArrayIndexProof } from "./proof.ts";
 
 export interface CoreNode {
   readonly id: number;
   readonly type: SimpleType;
   readonly typeRep: TyRepId;
   readonly span: Span;
+  /** Type-directed record completion attached at the argument occurrence. */
+  readonly adaptation: RecordAdaptation | null;
+  /** Erasable bounds evidence for a proof-required intrinsic application. */
+  readonly arrayProof: ArrayIndexProof | null;
   /** Provenance only. No Core consumer may recover semantics from this node. */
   readonly origin: Expr;
 }
@@ -143,6 +150,21 @@ export type CoreDefinition =
     readonly origin: Decl;
   }
   | {
+    /** A checked compile-time binding retained for residual Core scope. */
+    readonly tag: "static";
+    readonly pattern: Pattern;
+    readonly value: Value;
+    readonly span: Span;
+    readonly origin: Decl;
+  }
+  | {
+    readonly tag: "static-shadow";
+    readonly name: string;
+    readonly value: Value;
+    readonly span: Span;
+    readonly origin: Decl;
+  }
+  | {
     readonly tag: "shadow";
     readonly name: string;
     readonly value: CoreExpression;
@@ -203,8 +225,16 @@ export function elaborateComputation(
   expressionTypes: ReadonlyMap<Expr, SimpleType>,
   comptimeValues: ReadonlyMap<Expr, Value> = new Map(),
   opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>> = new Map(),
+  recordAdaptations: ReadonlyMap<Expr, RecordAdaptation> = new Map(),
+  arrayProofs: ReadonlyMap<Expr, ArrayIndexProof> = new Map(),
 ): CoreComputation {
-  const elaborator = new Elaborator(expressionTypes, comptimeValues, opens);
+  const elaborator = new Elaborator(
+    expressionTypes,
+    comptimeValues,
+    opens,
+    recordAdaptations,
+    arrayProofs,
+  );
   return elaborator.computation(declarations, result, resultEffects);
 }
 
@@ -247,8 +277,17 @@ export function elaborateModule(
   resultType: SimpleType,
   comptimeValues: ReadonlyMap<Expr, Value> = new Map(),
   opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>> = new Map(),
+  recordAdaptations: ReadonlyMap<Expr, RecordAdaptation> = new Map(),
+  arrayProofs: ReadonlyMap<Expr, ArrayIndexProof> = new Map(),
 ): TypedCoreModule {
-  const elaborator = new Elaborator(expressionTypes, comptimeValues, opens);
+  const elaborator = new Elaborator(
+    expressionTypes,
+    comptimeValues,
+    opens,
+    recordAdaptations,
+    arrayProofs,
+  );
+  elaborator.runtimeParameter(module.parameter);
   const computation = elaborator.computation(
     module.declarations,
     module.result,
@@ -266,21 +305,33 @@ class Elaborator {
   readonly #expressionTypes: ReadonlyMap<Expr, SimpleType>;
   readonly #comptimeValues: ReadonlyMap<Expr, Value>;
   readonly #opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
+  readonly #recordAdaptations: ReadonlyMap<Expr, RecordAdaptation>;
+  readonly #arrayProofs: ReadonlyMap<Expr, ArrayIndexProof>;
   readonly #typeRepresentations = new TyRepBuilder();
+  #runtimeNames = new Set<string>();
   #nextNode = 0;
 
   constructor(
     expressionTypes: ReadonlyMap<Expr, SimpleType>,
     comptimeValues: ReadonlyMap<Expr, Value>,
     opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>,
+    recordAdaptations: ReadonlyMap<Expr, RecordAdaptation>,
+    arrayProofs: ReadonlyMap<Expr, ArrayIndexProof>,
   ) {
     this.#expressionTypes = expressionTypes;
     this.#comptimeValues = comptimeValues;
     this.#opens = opens;
+    this.#recordAdaptations = recordAdaptations;
+    this.#arrayProofs = arrayProofs;
   }
 
   typeRepresentations(): TyRepTable {
     return this.#typeRepresentations.table();
+  }
+
+  runtimeParameter(pattern: Pattern | null): void {
+    if (pattern === null) return;
+    for (const name of patternNames(pattern)) this.#runtimeNames.add(name);
   }
 
   computation(
@@ -288,6 +339,8 @@ class Elaborator {
     result: Expr,
     resultEffects: "pure" | "ambient",
   ): CoreComputation {
+    const outerRuntimeNames = this.#runtimeNames;
+    this.#runtimeNames = new Set(outerRuntimeNames);
     const live = liveDeclarations(declarations, result);
     const steps: CoreStep[] = [];
     for (const declaration of declarations) {
@@ -295,14 +348,38 @@ class Elaborator {
       if (declaration.tag === "binding" && declaration.kind === "sig") continue;
       if (declaration.tag === "shadow") {
         const value = this.#comptimeValues.get(declaration.value);
-        if (value !== undefined && erasedComptimeValue(value)) continue;
+        if (value !== undefined && erasedComptimeValue(value)) {
+          steps.push({
+            tag: "define",
+            definition: {
+              tag: "static-shadow",
+              name: declaration.name,
+              value,
+              span: declaration.span,
+              origin: declaration,
+            },
+          });
+          continue;
+        }
       }
-      if (
-        declaration.tag === "binding" && declaration.kind === "const" &&
-        this.#comptimeValues.has(declaration.value)
-      ) {
+      if (declaration.tag === "binding" && declaration.kind === "const") {
         const value = this.#comptimeValues.get(declaration.value);
-        if (value !== undefined && value.tag !== "effect") continue;
+        if (
+          value !== undefined &&
+          !dependsOnNames(declaration.value, this.#runtimeNames)
+        ) {
+          steps.push({
+            tag: "define",
+            definition: {
+              tag: "static",
+              pattern: declaration.pattern,
+              value,
+              span: declaration.span,
+              origin: declaration,
+            },
+          });
+          continue;
+        }
       }
       const definition = this.definition(declaration);
       let tag: CoreStep["tag"] = "define";
@@ -310,8 +387,16 @@ class Elaborator {
         tag = "bind";
       }
       steps.push({ tag, definition });
+      if (declaration.tag === "binding") {
+        for (const name of patternNames(declaration.pattern)) {
+          this.#runtimeNames.add(name);
+        }
+      } else if (declaration.tag === "shadow") {
+        this.#runtimeNames.add(declaration.name);
+      }
     }
     const expression = this.expression(result);
+    this.#runtimeNames = outerRuntimeNames;
     if (resultEffects === "pure") {
       return { steps, result: { tag: "return", value: expression } };
     }
@@ -356,15 +441,26 @@ class Elaborator {
 
   expression(expression: Expr): CoreExpression {
     const type = this.typeOf(expression);
+    let adaptation: RecordAdaptation | null = null;
+    const foundAdaptation = this.#recordAdaptations.get(expression);
+    if (foundAdaptation !== undefined) adaptation = foundAdaptation;
+    let arrayProof: ArrayIndexProof | null = null;
+    const foundArrayProof = this.#arrayProofs.get(expression);
+    if (foundArrayProof !== undefined) arrayProof = foundArrayProof;
     const metadata = {
       id: this.#nextNode++,
       type,
       typeRep: this.#typeRepresentations.reference(type),
       span: expression.span,
+      adaptation,
+      arrayProof,
       origin: expression,
     };
     const constant = this.#comptimeValues.get(expression);
-    if (constant !== undefined) {
+    if (
+      constant !== undefined &&
+      !dependsOnNames(expression, this.#runtimeNames)
+    ) {
       return { ...metadata, tag: "constant", value: constant };
     }
     switch (expression.tag) {
@@ -490,13 +586,21 @@ class Elaborator {
           target: this.expression(expression.target),
           name: expression.name,
         };
-      case "lambda":
+      case "lambda": {
+        const outerRuntimeNames = this.#runtimeNames;
+        this.#runtimeNames = new Set(outerRuntimeNames);
+        for (const name of patternNames(expression.parameter)) {
+          this.#runtimeNames.add(name);
+        }
+        const body = this.expression(expression.body);
+        this.#runtimeNames = outerRuntimeNames;
         return {
           ...metadata,
           tag: "lambda",
           parameter: expression.parameter,
-          body: this.expression(expression.body),
+          body,
         };
+      }
       case "array":
         return {
           ...metadata,
@@ -613,6 +717,16 @@ function erasedComptimeValue(value: Value): boolean {
     value.tag === "sealed" || value.tag === "extended" ||
     value.tag === "opaque-type" || value.tag === "type-variable" ||
     value.tag === "effect" || value.tag === "forall";
+}
+
+function dependsOnNames(
+  expression: Expr,
+  names: ReadonlySet<string>,
+): boolean {
+  for (const name of freeNames(expression)) {
+    if (names.has(name)) return true;
+  }
+  return false;
 }
 
 function applicationSpine(

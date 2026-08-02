@@ -22,53 +22,8 @@ import { F32X4_MASK_NAME, F32X4_NAME } from "../comptime/value.ts";
 
 export type Level = number;
 
-/**
- * `length(binding) + offset` — the number of elements in one immutable array
- * value, shifted by a literal.
- *
- * WHY A LENGTH IS A BOUND AND NOT A TYPE
- *
- * An array's type is `{ tag: "array", element }` and carries no length, because
- * a length is a fact about a *value*. What an index needs is not the array's
- * type but something it can be compared against, and the thing an integer range
- * compares against is a `Bound`. So the symbol goes here, in the one place the
- * lattice already reads relationally, and nowhere else: there is no new
- * `SimpleType` constructor, no equation store, and no constraint between two
- * symbols. Comparison is same-root-or-unknown, which is O(1) and total.
- *
- * IDENTITY IS THE BINDING OCCURRENCE
- *
- * `binding` is an id minted for an immutable value. A fresh binder normally
- * creates one; an alias keeps the id. blot has no assignment and arrays are
- * immutable, so the identity denotes exactly one value for its whole lifetime,
- * and `len(b)` therefore denotes exactly one integer.
- *
- * The two cheaper keys are unsound, each with a program that shows it:
- *
- *   * By name. `let measure = fn vs => @array.len vs; let read = fn vs => fn i =>
- *     @array.get vs i;` — two lambdas, two different arrays, one name. A
- *     measurement of the first would license a read of the second.
- *   * By type variable. `@array.push`'s scheme builds parameter and result from
- *     the same `element` object (primitives.ts), so `let bigger = @array.push
- *     xs 9;` shares `xs`'s variable. Measuring `bigger` would license a read of
- *     `xs` one element past its end.
- *
- * `let ys = xs;` keeps the identity, while a function call or a `:=` to another
- * value does not. This preserves a fact through a transparent alias without
- * equating two arrays merely because their element types agree.
- *
- * `name` is for the reader only. Two occurrences may share it; it takes no part
- * in identity, and `lengthSubject` is what disambiguates it in a message.
- */
-export interface LengthBound {
-  readonly tag: "len";
-  readonly binding: number;
-  readonly offset: bigint;
-  readonly name: string;
-}
-
 /** `null` is an open end: the domain is unbounded in that direction. */
-export type Bound = bigint | string | LengthBound | null;
+export type Bound = bigint | string | null;
 
 /** A bound that names a value — everything but the open end. */
 export type ClosedBound = Exclude<Bound, null>;
@@ -332,133 +287,22 @@ export function tupleType(elements: readonly SimpleType[]): SimpleType {
   );
 }
 
-const lengthBounds = new Map<string, LengthBound>();
-
-/**
- * `len(binding) + offset`, interned so that `===` is denotational equality.
- *
- * The interning is load-bearing rather than a cache. `sameGround` in infer.ts
- * compares bounds with `===`, and `boundAtMost` must accept
- * `0..len xs - 1 <: 0..len xs - 1`; on two structurally equal objects a raw
- * `===` would answer no and a raw `<=` would answer yes in *both* directions,
- * because JavaScript stringifies every object to `"[object Object]"`. One
- * object per pair removes the question.
- */
-export function lengthBound(
-  binding: number,
-  offset: bigint,
-  name: string,
-): LengthBound {
-  const key = `${binding}:${offset}`;
-  const existing = lengthBounds.get(key);
-  if (existing !== undefined) return existing;
-  const minted: LengthBound = { tag: "len", binding, offset, name };
-  lengthBounds.set(key, minted);
-  return minted;
-}
-
-export function isLength(bound: Bound): bound is LengthBound {
-  return bound !== null && typeof bound === "object";
-}
-
-/**
- * `bound + delta`, the one place an offset is ever built.
- *
- * Two callers, and both build the same `1`: `region` in narrow.ts, because
- * "below `k`" ends at `k - 1`, and the valid index set of an array, because the
- * last index of `len xs` elements is `len xs - 1`. Keeping the arithmetic here
- * is what keeps it from spreading — an offset that no function outside this one
- * can construct cannot grow a second term.
- *
- * A text bound is never stepped. Text order is dense, so no bound names the
- * value just below another one, and the two operations that would want to —
- * `region` and set difference — are over `@int.cmp` and refuse text outright.
- */
 export function shiftBound(bound: ClosedBound, delta: bigint): ClosedBound {
   if (typeof bound === "bigint") return bound + delta;
-  if (isLength(bound)) {
-    return lengthBound(bound.binding, bound.offset + delta, bound.name);
-  }
   expect(false, "a text bound was stepped");
 }
 
-/**
- * How a message names the array whose length this is, beside another bound.
- *
- * Two occurrences may be written with the same name, and a range whose two ends
- * said `len xs` about two different arrays would read as a compiler bug. So the
- * occurrence id is spelled — `xs#7` — exactly when the bound printed next to
- * this one is a different occurrence with the same name, and never otherwise.
- *
- * Deciding it from the pair rather than from a claim made once per process is
- * what keeps the id out of the message a reader actually gets. A diagnostic
- * carries a span, so `len xs` at that span names the `xs` in scope there; a
- * number attached to it because some unrelated function also had a parameter
- * called `xs` would be noise the reader cannot act on.
- */
-export function lengthSubject(bound: LengthBound, beside: Bound): string {
-  if (!isLength(beside)) return bound.name;
-  if (beside.name !== bound.name) return bound.name;
-  if (beside.binding === bound.binding) return bound.name;
-  return `${bound.name}#${bound.binding}`;
-}
-
-/**
- * The one fact the compiler assumes about a length it cannot see.
- *
- * `@array.len` lowers to `at.storeLength` converted through
- * `SignedInteger32ToSignedInteger64` (src/backend/lower.ts), so an array's
- * length is an i32 and `0 <= len(b) <= 2147483647` holds of every array a blot
- * program can build. It is admitted here because without it nothing narrows:
- * `n >= 0` proves `0..` and `n < @array.len xs` proves `..len xs - 1`, and
- * intersecting those two needs `0 <= len xs` to pick a lower bound at all.
- *
- * It is not the first step of a theory, because there is no second step
- * available. A bound holds one symbol and one literal offset, so relating a
- * symbol to a literal is the only assumption there is room to make; relating
- * two symbols would need a normal form this representation cannot express.
- */
-export const LONGEST_ARRAY = 2147483647n;
-
-/**
- * `left <= right`, or `null` when the lengths involved do not settle it.
- *
- * Partial, and that is the representation's whole soundness. A three-way
- * ordering cannot express the state of `0` against `len xs` — below or same,
- * and which one is unknown — which is the state of the comparison the feature
- * exists to make. Every caller is told which arm it took and decides for
- * itself what an unknown means; none of them may treat it as an ordering.
- */
+/** `left <= right` within one scalar domain. */
 export function boundAtMost(
   left: ClosedBound,
   right: ClosedBound,
-): boolean | null {
+): boolean {
   if (typeof left === "bigint" && typeof right === "bigint") {
     return left <= right;
   }
   if (typeof left === "string" && typeof right === "string") {
     return left <= right;
   }
-  if (isLength(left) && isLength(right)) {
-    // The same occurrence denotes the same integer, so only the offsets differ.
-    // Two different occurrences are two unrelated integers: no envelope can
-    // settle them, and asking would be the first constraint between symbols.
-    if (left.binding !== right.binding) return null;
-    return left.offset <= right.offset;
-  }
-  if (isLength(left) && typeof right === "bigint") {
-    if (LONGEST_ARRAY + left.offset <= right) return true;
-    if (left.offset > right) return false;
-    return null;
-  }
-  if (typeof left === "bigint" && isLength(right)) {
-    if (left <= right.offset) return true;
-    if (left > LONGEST_ARRAY + right.offset) return false;
-    return null;
-  }
-  // A length is an integer, so this is a text bound against an int one. A
-  // range's domain is checked before its bounds are, so reaching here is the
-  // compiler having built a range whose bounds disagree with its domain.
   expect(false, "a range compared bounds across two domains");
 }
 

@@ -65,6 +65,8 @@ export interface OwnedBinding {
   readonly lastUse: Span | null;
   /** Its linear or affine obligation was proved discharged exactly once. */
   readonly spent: boolean;
+  /** All path-specific source occurrences that discharged this obligation. */
+  readonly consumptions: readonly Span[];
   /**
    * `lastUse` is the last read walked, not the last read taken; see
    * `Ownership.reentrant`. Anything that would treat that read as the binding's
@@ -325,6 +327,14 @@ function assemble(
       checked.type,
       comptimeValues,
       opens,
+      mergeAll([
+        ...below.map((dependency) => dependency.recordAdaptations),
+        checked.recordAdaptations,
+      ]),
+      mergeAll([
+        ...below.map((dependency) => dependency.arrayProofs),
+        checked.arrayProofs,
+      ]),
     ),
     expressionTypes,
     arrayProofs: mergeAll([
@@ -441,22 +451,28 @@ function own(
     return allocated;
   };
   for (const [pattern, lastUse] of ownership.lastUses) {
+    let consumptions = ownership.consumptions.get(pattern);
+    if (consumptions === undefined) consumptions = [];
     facts.set(pattern, {
       path,
       bindingId: bindingId(pattern),
       lastUse,
       spent: ownership.linear.has(pattern),
+      consumptions,
       reentrant: ownership.reentrant.has(pattern),
     });
   }
   for (const pattern of ownership.linear) {
     if (facts.has(pattern)) continue;
     // Nothing read it, so there is no read to be wrong about when it happened.
+    let consumptions = ownership.consumptions.get(pattern);
+    if (consumptions === undefined) consumptions = [];
     facts.set(pattern, {
       path,
       bindingId: bindingId(pattern),
       lastUse: null,
       spent: true,
+      consumptions,
       reentrant: false,
     });
   }

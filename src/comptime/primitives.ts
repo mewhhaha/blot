@@ -879,6 +879,42 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
       elements: [...arrayElements(array, span, "@array.push"), value],
     }),
   }],
+  ["@array.indexed", {
+    arity: 1,
+    run: ([array], span) => {
+      const elements = arrayElements(array, span, "@array.indexed");
+      return {
+        tag: "shape",
+        fields: new Map<string, Value>([
+          ["state", { tag: "int", value: 0n }],
+          ["step", {
+            tag: "native",
+            name: "@array.indexed.step",
+            arity: 1,
+            applied: [],
+            run: (arguments_: readonly Value[]) => {
+              const index = arguments_[0];
+              if (index.tag !== "int") {
+                throw new Error("an indexed iterator state is not an integer");
+              }
+              const position = Number(index.value);
+              if (position < 0 || position >= elements.length) {
+                return { tag: "tag", name: "None", payload: null };
+              }
+              return {
+                tag: "tag",
+                name: "Some",
+                payload: tupleOf([
+                  tupleOf([index, elements[position]]),
+                  { tag: "int", value: index.value + 1n },
+                ]),
+              };
+            },
+          }],
+        ]),
+      };
+    },
+  }],
   ["@array.take", {
     arity: 2,
     run: ([array, index], span) => {

@@ -63,14 +63,28 @@ Deno.test("direct array access carries an explicit proof certificate", async () 
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
   await Deno.writeTextFile(
     path,
-    `${PRELUDE}let [only] = [42];\nreturn only;`,
+    `${PRELUDE}let values = [42];\nreturn @array.get values 0;`,
   );
   const checked = await checkFile(path);
   assertEquals(checked.arrayProofs.size > 0, true);
   for (const proof of checked.arrayProofs.values()) {
     assertEquals(proof.tag, "array-index");
   }
+  assertEquals(coreCarriesArrayProof(checked.core), true);
 });
+
+function coreCarriesArrayProof(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  if (
+    "arrayProof" in value && value.arrayProof !== null &&
+    typeof value.arrayProof === "object" && "tag" in value.arrayProof &&
+    value.arrayProof.tag === "array-index"
+  ) return true;
+  for (const member of Object.values(value)) {
+    if (coreCarriesArrayProof(member)) return true;
+  }
+  return false;
+}
 
 Deno.test("generative effect identities are recorded once per declaration", async () => {
   const checked = await checkFile("./examples/shadowed_effects.blot");
@@ -890,17 +904,16 @@ rejects(
 // infer it twice.
 
 rejects(
-  "an index bound by `let` still needs a proof",
+  "an index bound by `let` is rejected when its ground type is outside",
   "let n = 99;\nlet xs = [1, 2, 3];\nreturn @array.get xs n;",
-  "BLOT_UNPROVEN_INDEX",
+  "BLOT_OUT_OF_BOUNDS",
 );
 
 // --- an index proved against the array's length -----------------------------
 //
-// `@array.len xs` is a run-time value, and a comparison against it narrows
-// anyway: the bound is the symbol `len xs`, keyed to the immutable array value,
-// so the index and the read name the same integer without anyone knowing which
-// one it is. The proof admits the direct access without changing its signature.
+// `@array.len xs` is a run-time value, but a comparison against it still adds a
+// proposition to `Phi`, keyed to the immutable array value. The index and read
+// therefore name the same integer without putting that relation in their types.
 
 const GUARDED = "sig at = [Int] -> Int -> Int;\n" +
   "let at = fn xs => fn n =>\n" +
@@ -915,9 +928,8 @@ check(
   "{ .fn = [Int] -> Int -> Int; .call = Int; }",
 );
 
-// The proof itself, as a string. Two nested comparisons leave the index exactly
-// the set of indices the array has, and the second one is the half that needs
-// `0 <= len xs` to be admitted at all.
+// Relational proofs do not turn into public range types. Calling `small` still
+// sees the ordinary nonnegative branch type rather than an array relationship.
 rejects(
   "two comparisons prove the index is an index of that array",
   "sig small = 1 | 2 -> Str;\n" +
@@ -927,14 +939,14 @@ rejects(
     '  if n >= 0 then (if n < @array.len xs then small n else "hi" end)\n' +
     '  else "lo" end;\n' +
     "return at;",
-  "`0..len xs - 1` is not one of `1` | `2`",
+  "`0..9223372036854775807` is not one of `1` | `2`",
 );
 
 check(
-  "a proved index escaping into a published type is spelled, not hidden",
+  "a relationally proved index does not escape into a published type",
   "sig n = Int;\nlet n = 5;\n" +
     "let g = fn xs => if n < @array.len xs then n else 0 end;\nreturn g;",
-  "['a] -> (-9223372036854775808..len xs - 1 | 0)",
+  "['a] -> (Int | 0)",
 );
 
 // A junction is recognised by its truth table, so the prelude's `&&` narrows —
@@ -975,7 +987,7 @@ rejects(
   "sig at = [Int] -> Int -> Int;\n" +
     "let at = fn xs => fn n => if n >= @array.len xs then @array.get xs n else 0 end;\n" +
     "return at;",
-  "Index len xs..9223372036854775807 is outside an array of len xs",
+  "BLOT_OUT_OF_BOUNDS",
 );
 
 rejects(
@@ -983,7 +995,7 @@ rejects(
   "sig at = [Int] -> Int -> Int;\n" +
     "let at = fn xs => fn n => if n == @array.len xs then @array.get xs n else 0 end;\n" +
     "return at;",
-  "Index len xs is outside an array of len xs",
+  "BLOT_OUT_OF_BOUNDS",
 );
 
 rejects(
@@ -991,7 +1003,7 @@ rejects(
   "sig put = [Int] -> Int -> [Int];\n" +
     "let put = fn xs => fn n => if n >= @array.len xs then @array.set xs n 0 else xs end;\n" +
     "return put;",
-  "Index len xs..9223372036854775807 is outside an array of len xs",
+  "BLOT_OUT_OF_BOUNDS",
 );
 
 // Each refusal is a length the comparison and the read do not agree about.
@@ -1014,7 +1026,7 @@ rejects(
     "  in if n >= @array.len xs then @array.get ys n else 0 end\n" +
     "end;\n" +
     "return at;",
-  "Index len xs..9223372036854775807 is outside an array of len xs",
+  "BLOT_OUT_OF_BOUNDS",
 );
 
 rejects(
@@ -1033,7 +1045,7 @@ rejects(
   "an inferred integer is checked once a comparison grounds it",
   "let at = fn xs => fn n => if n >= @array.len xs then @array.get xs n else 0 end;\n" +
     "return at;",
-  "Index len xs..9223372036854775807 is outside an array of len xs",
+  "BLOT_OUT_OF_BOUNDS",
 );
 
 rejects(
@@ -1088,6 +1100,40 @@ check(
     "let put = fn xs => fn n => fn value => Array.set (xs, n, value);\n" +
     "return put;",
   "[Int] -> Int -> Int -> #None | #Some [Int]",
+);
+
+check(
+  "indexed iteration installs its erased bounds package in the loop body",
+  "sig sum = [Int] -> Int;\n" +
+    "let sum = fn values => do\n" +
+    "  let total = 0;\n" +
+    "  for (index, _) in Iter.indexed values do\n" +
+    "    total := total + @array.get values index;\n" +
+    "  end;\n" +
+    "  in total\n" +
+    "end;\n" +
+    "return sum;",
+  "[Int] -> Int",
+);
+
+rejects(
+  "an ordinary iterator record cannot forge an index package",
+  "sig sum = [Int] -> Int;\n" +
+    "let sum = fn values => do\n" +
+    "  let iterator = {\n" +
+    "    .state = 0;\n" +
+    "    .step = fn index => if index < @array.len values\n" +
+    "      then #Some ((index, @array.get values index), index + 1)\n" +
+    "      else #None end;\n" +
+    "  };\n" +
+    "  let total = 0;\n" +
+    "  for (index, _) in iterator do\n" +
+    "    total := total + @array.get values index;\n" +
+    "  end;\n" +
+    "  in total\n" +
+    "end;\n" +
+    "return sum;",
+  "BLOT_UNPROVEN_INDEX",
 );
 
 // --- effects are a lattice element, not a separate pass ---------------------

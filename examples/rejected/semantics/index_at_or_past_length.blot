@@ -1,15 +1,13 @@
 // A guard that proves the wrong half.
 //
-// `n >= @array.len xs` proves `n : len xs..`, and the smallest value that range
-// holds is the first index past the end of `xs`. Every value it holds is
-// outside the array, so this read cannot succeed whatever the caller passes —
-// and a read no execution of which could succeed is reported where it is
-// written instead of trapping when it runs.
+// `n >= @array.len xs` adds that proposition to `Phi`. It places every possible
+// `n` at or past the first index outside `xs`, so this read cannot succeed
+// whatever the caller passes and is rejected where it is written.
 //
 // Nothing about the array's length is known here, and nothing has to be. `xs`
-// is a parameter, so `len xs` names an integer the compiler cannot see; the
-// index and the array name the same binding, so the two bounds are the same
-// integer, and `len xs..` cannot meet `0..len xs - 1` whatever that integer is.
+// is a parameter, so `length(identity(xs))` names an integer the compiler cannot
+// see. The comparison and access use the same immutable identity, which is all
+// the entailment check needs.
 //
 // Writing `<` instead of `>=` is the accepted program, in `examples/indexed.blot`.
 

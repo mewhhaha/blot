@@ -73,7 +73,7 @@ import type { OwnedBinding } from "../check/mod.ts";
 import type { NamePattern } from "../linear/check.ts";
 import {
   type OwnershipCertificate,
-  ownershipIdentity,
+  ownershipUseIdentity,
   verifyOwnershipCertificate,
 } from "../linear/certificate.ts";
 import {
@@ -481,6 +481,11 @@ interface Scope {
   readonly literals: Map<string, Expr>;
   /** Runtime lambdas elaborated at each call site's concrete representation. */
   readonly runtimeLambdas: Map<string, RuntimeLambda>;
+  /** Specializable functions retained through a concrete aggregate binding. */
+  readonly runtimeLambdaMembers: Map<
+    string,
+    ReadonlyMap<string, RuntimeLambda>
+  >;
   /** A runtime choice of lambdas, retained until each concrete application. */
   readonly runtimeLambdaChoices: Map<string, RuntimeLambdaChoice>;
   /** Concrete record representation selected for a specialized binding. */
@@ -528,6 +533,7 @@ function childScope(parent: Scope | null, values?: ValueEnv): Scope {
     exits: new Map(),
     literals: new Map(),
     runtimeLambdas: new Map(),
+    runtimeLambdaMembers: new Map(),
     runtimeLambdaChoices: new Map(),
     recordShapes: new Map(),
     parameterShapes: new Map(),
@@ -556,6 +562,7 @@ function snapshotScope(scope: Scope): Scope {
     exits: new Map(scope.exits),
     literals: new Map(scope.literals),
     runtimeLambdas: new Map(scope.runtimeLambdas),
+    runtimeLambdaMembers: new Map(scope.runtimeLambdaMembers),
     runtimeLambdaChoices: new Map(scope.runtimeLambdaChoices),
     recordShapes: new Map(scope.recordShapes),
     parameterShapes: new Map(scope.parameterShapes),
@@ -604,6 +611,39 @@ function resolveRuntimeLambda(
   return null;
 }
 
+function resolveRuntimeLambdaMember(
+  scope: Scope,
+  name: string,
+  member: string,
+): RuntimeLambda | null {
+  let current: Scope | null = scope;
+  while (current !== null) {
+    const aggregate = current.runtimeLambdaMembers.get(name);
+    if (aggregate !== undefined) {
+      const found = aggregate.get(member);
+      if (found === undefined) return null;
+      return found;
+    }
+    if (current.names.has(name)) return null;
+    current = current.parent;
+  }
+  return null;
+}
+
+function resolveRuntimeLambdaMembers(
+  scope: Scope,
+  name: string,
+): ReadonlyMap<string, RuntimeLambda> | null {
+  let current: Scope | null = scope;
+  while (current !== null) {
+    const aggregate = current.runtimeLambdaMembers.get(name);
+    if (aggregate !== undefined) return aggregate;
+    if (current.names.has(name)) return null;
+    current = current.parent;
+  }
+  return null;
+}
+
 function resolveRuntimeLambdaChoice(
   scope: Scope,
   name: string,
@@ -645,7 +685,28 @@ function runtimeLambdaChoice(
 function specializableLambda(expr: Expr, scope: Scope): RuntimeLambda | null {
   if (expr.tag === "lambda") return { expression: expr, environment: scope };
   if (expr.tag === "var") return resolveRuntimeLambda(scope, expr.name);
+  if (expr.tag === "field" && expr.target.tag === "var") {
+    return resolveRuntimeLambdaMember(
+      scope,
+      expr.target.name,
+      expr.name,
+    );
+  }
   if (expr.tag !== "apply") return null;
+
+  const application = flatten(expr);
+  if (
+    application.callee.tag === "intrinsic" &&
+    application.callee.name === "@array.get" &&
+    application.args.length === 2 &&
+    application.args[0].tag === "var" && application.args[1].tag === "int"
+  ) {
+    return resolveRuntimeLambdaMember(
+      scope,
+      application.args[0].name,
+      application.args[1].value.toString(),
+    );
+  }
 
   const identity = specializableLambda(expr.fn, scope);
   if (identity === null) return null;
@@ -655,6 +716,40 @@ function specializableLambda(expr: Expr, scope: Scope): RuntimeLambda | null {
     identity.expression.body.name !== identity.expression.parameter.name
   ) return null;
   return specializableLambda(expr.arg, scope);
+}
+
+function aggregateRuntimeLambdas(
+  expr: Expr,
+  scope: Scope,
+): ReadonlyMap<string, RuntimeLambda> | null {
+  const candidates: { readonly name: string; readonly value: Expr }[] = [];
+  if (expr.tag === "shape") {
+    if (expr.members.some((member) => member.tag !== "field")) return null;
+    for (const member of expr.members) {
+      if (member.tag !== "field") {
+        throw new Error("a checked direct shape member is a spread");
+      }
+      candidates.push({ name: member.name, value: member.value });
+    }
+  }
+  if (expr.tag === "tuple") {
+    for (const [index, value] of expr.elements.entries()) {
+      candidates.push({ name: String(index), value });
+    }
+  }
+  if (expr.tag === "array") {
+    if (expr.elements.some((element) => element.spread)) return null;
+    for (const [index, element] of expr.elements.entries()) {
+      candidates.push({ name: String(index), value: element.value });
+    }
+  }
+  const found = new Map<string, RuntimeLambda>();
+  for (const candidate of candidates) {
+    const lambda = specializableLambda(candidate.value, scope);
+    if (lambda !== null) found.set(candidate.name, lambda);
+  }
+  if (found.size === 0) return null;
+  return found;
 }
 
 function capturesRuntimeBinding(lambda: Expr, scope: Scope): boolean {
@@ -1840,6 +1935,25 @@ function lowerBlock(
     ) {
       inner.literals.set(declaration.pattern.name, declaration.value);
     }
+    let specializedAggregate = false;
+    if (declaration.pattern.tag === "name") {
+      const members = aggregateRuntimeLambdas(declaration.value, inner);
+      if (members !== null) {
+        inner.runtimeLambdaMembers.set(declaration.pattern.name, members);
+        let memberCount = 0;
+        if (declaration.value.tag === "shape") {
+          memberCount = declaration.value.members.length;
+        }
+        if (declaration.value.tag === "tuple") {
+          memberCount = declaration.value.elements.length;
+        }
+        if (declaration.value.tag === "array") {
+          memberCount = declaration.value.elements.length;
+        }
+        specializedAggregate = memberCount > 0 && members.size === memberCount;
+      }
+    }
+    if (specializedAggregate) continue;
 
     // A recursive group becomes a *local* `let-rec` binding all its members at
     // once. Lifting it to top-level definitions would strand whatever the
@@ -2273,6 +2387,12 @@ function lower(
           runtimeLambda.expression,
           runtimeLambda.environment,
           lowering,
+        );
+      }
+      if (resolveRuntimeLambdaMembers(scope, expr.name) !== null) {
+        return unsupported(
+          `the function aggregate \`${expr.name}\` escaping a specialized member call`,
+          expr.span,
         );
       }
       // Not a local, so it is a compile-time binding: specialize it.
@@ -3889,11 +4009,11 @@ function storeUpdateOptions(
   }
   const ownership = lowering.facts.ownership.get(pattern);
   if (!ownership?.spent || ownership.lastUse === null) return undefined;
-  const identity = ownershipIdentity({
-    path: ownership.path,
-    bindingId: ownership.bindingId,
-  });
-  if (!lowering.reusableOwnership.has(identity)) return undefined;
+  const use = ownershipUseIdentity(
+    { path: ownership.path, bindingId: ownership.bindingId },
+    source.span,
+  );
+  if (!lowering.reusableOwnership.has(use)) return undefined;
   // A read some closure makes across its own boundary happens when that closure
   // is called, and a recursive group's members call each other in an order the
   // block does not write down. Where the pass says so, the recorded last use is
@@ -4610,6 +4730,14 @@ function lowerApply(
         at,
       );
     }
+    if (spine.callee.name === "@array.indexed" && spine.args.length === 1) {
+      return lowerIndexedIterator(
+        spine.args[0],
+        scope,
+        lowering,
+        at,
+      );
+    }
     // A refusal that survived compiling is one the program reached at run time,
     // so it becomes a fault with the same message. `expect` is a prelude
     // function and gets lowered like any other, whether or not this arm of it
@@ -4683,6 +4811,75 @@ function lowerSpecializedApplication(
     parameter,
     value,
     body(specialized.expression.body),
+  );
+}
+
+function lowerIndexedIterator(
+  array: Expr,
+  scope: Scope,
+  lowering: Lowering,
+  at: typeof surface,
+): SurfaceExpression {
+  const source = lowering.fresh("indexed");
+  const index = lowering.fresh("index");
+  const index32 = lowering.fresh("index32");
+  const iterator = lowering.nominal(["state", "step"]);
+  const pair = lowering.nominal(["0", "1"]);
+  const option = lowering.sum([
+    { name: "None", payload: false },
+    { name: "Some", payload: true },
+  ]);
+  const none = at.name(constructorName(option, "None"));
+  const selected = at.apply(
+    at.name(pair.name),
+    at.name(index),
+    at.storeRead(at.name(source), at.name(index32)),
+  );
+  const next = at.binary(
+    BinaryOperator.AddSignedInteger64,
+    at.name(index),
+    at.signedInteger64(1n),
+  );
+  const success = at.apply(
+    at.name(constructorName(option, "Some")),
+    at.apply(at.name(pair.name), selected, next),
+  );
+  const length = at.convert(
+    NumericConversion.SignedInteger32ToSignedInteger64,
+    at.storeLength(at.name(source)),
+  );
+  const body = at.if(
+    at.binary(
+      BinaryOperator.LessSignedInteger64,
+      at.name(index),
+      at.signedInteger64(0n),
+    ),
+    none,
+    at.if(
+      at.binary(
+        BinaryOperator.LessSignedInteger64,
+        at.name(index),
+        length,
+      ),
+      surface.let(
+        index32,
+        at.convert(
+          NumericConversion.SignedInteger64ToSignedInteger32,
+          at.name(index),
+        ),
+        success,
+      ),
+      none,
+    ),
+  );
+  return surface.let(
+    source,
+    lower(array, scope, lowering),
+    at.apply(
+      at.name(iterator.name),
+      at.signedInteger64(0n),
+      at.lambda([index], body),
+    ),
   );
 }
 

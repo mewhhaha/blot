@@ -446,6 +446,26 @@ Deno.test("two shapes at one generalized projection are cloned", async () => {
   );
 });
 
+Deno.test("a structural function remains specializable through a record", async () => {
+  const path = await fixture("aggregate-specialization.blot", [
+    'open {} = (@import "blot:prelude") ();',
+    "let project = fn record => record.x;",
+    "let functions = { .project = project; };",
+    "sig at = Int -> Int;",
+    "let at = fn n =>",
+    "  functions.project { .x = n; .y = 0; } +",
+    "  functions.project { .x = n; .z = 0; };",
+    "return { .at = at; };",
+  ]);
+  assertEquals(
+    await runLoweringExport(path, "at", [{
+      kind: "signed-integer-64",
+      value: 21n,
+    }]),
+    { kind: "signed-integer-64", value: 42n },
+  );
+});
+
 Deno.test("an immutable alias preserves structural call specialization", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "aliased-shapes.blot");
@@ -680,6 +700,31 @@ Deno.test("Store values cross named exports as arrays", async () => {
         { kind: "text", value: "label" },
       ],
     },
+  );
+});
+
+Deno.test("indexed iteration carries a bounds proof into a dynamic loop", async () => {
+  const path = await fixture("indexed-runtime.blot", [
+    'open {} = (@import "blot:prelude") ();',
+    "sig sum = [Int] -> Int;",
+    "let sum = fn values => do",
+    "  let total = 0;",
+    "  for (index, _) in Iter.indexed values do",
+    "    total := total + @array.get values index;",
+    "  end;",
+    "  in total",
+    "end;",
+    "return { .sum = sum; };",
+  ]);
+  assertEquals(
+    await runLoweringExport(path, "sum", [{
+      kind: "array",
+      values: [2n, 3n, 5n].map((value) => ({
+        kind: "signed-integer-64" as const,
+        value,
+      })),
+    }]),
+    { kind: "signed-integer-64", value: 10n },
   );
 });
 

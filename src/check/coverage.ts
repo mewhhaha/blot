@@ -23,7 +23,7 @@
 // coverage check.
 
 import type { Pattern } from "../syntax/ast.ts";
-import { type Domain, isLength, type SimpleType } from "./type.ts";
+import type { Domain, SimpleType } from "./type.ts";
 import { showRange } from "./print.ts";
 
 /** One inhabitant of a ground literal type. */
@@ -43,11 +43,6 @@ const LISTABLE = 256n;
 function enumerate(type: SimpleType): readonly Literal[] | null {
   if (type.tag === "range") {
     if (type.low === null || type.high === null) return null;
-    // A length is not a literal. `len xs..len xs` is a singleton, but nothing
-    // here knows which integer it holds, so it names no inhabitant. The guard
-    // sits above the singleton shortcut rather than below it: the shortcut's
-    // test is `===`, and an interned symbol is `===` itself.
-    if (isLength(type.low) || isLength(type.high)) return null;
     if (type.low === type.high) {
       return [{ domain: type.domain, value: type.low }];
     }
@@ -139,10 +134,6 @@ export function unlistable(type: SimpleType): boolean {
     // rejected `case i of 1 => …, 2 => …` over the `1..2` a pair of
     // comparisons had just proved.
     if (type.low === null || type.high === null) return true;
-    // Above the singleton shortcut for the same reason, and with the opposite
-    // answer: a singleton whose one value the compiler cannot name is a set no
-    // arm list can be shown to exhaust, so a `case` over it still owes a `_`.
-    if (isLength(type.low) || isLength(type.high)) return true;
     if (type.low === type.high) return false;
     if (type.domain !== "int") return true;
     if (typeof type.low !== "bigint" || typeof type.high !== "bigint") {

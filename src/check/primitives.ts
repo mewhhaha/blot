@@ -258,6 +258,26 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
       );
     }),
   ],
+  [
+    "@array.indexed",
+    poly((fresh) => {
+      const element = fresh();
+      const stepResult = variant([
+        ["None", UNIT],
+        ["Some", tupleType([tupleType([INT, element]), INT])],
+      ]);
+      return curried(
+        [{
+          tag: "array",
+          element,
+        }],
+        record([
+          ["state", INT],
+          ["step", curried([INT], stepResult)],
+        ]),
+      );
+    }),
+  ],
 
   // --- shapes ---
   //

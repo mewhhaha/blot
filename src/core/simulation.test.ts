@@ -49,6 +49,27 @@ function evaluateComputation(
 ): SimulatedValue {
   for (const step of core.steps) {
     if (step.definition.tag === "open") continue;
+    if (step.definition.tag === "static") {
+      if (step.definition.pattern.tag !== "name") {
+        throw new Error(
+          "the generated core contains a compound static pattern",
+        );
+      }
+      const value = step.definition.value;
+      if (value.tag !== "effect") {
+        throw new Error(
+          "the generated core contains an unsupported static value",
+        );
+      }
+      scope.set(step.definition.pattern.name, {
+        tag: "host-effect",
+        name: value.name,
+      });
+      continue;
+    }
+    if (step.definition.tag === "static-shadow") {
+      throw new Error("the generated core contains a static shadow");
+    }
     if (step.definition.tag !== "binding") {
       throw new Error("the generated core contains a non-binding definition");
     }

@@ -22,9 +22,6 @@ import {
   type Domain,
   I64_HIGH,
   I64_LOW,
-  isLength,
-  type LengthBound,
-  lengthSubject,
   type SimpleType,
   type Variable,
 } from "./type.ts";
@@ -374,7 +371,6 @@ export function showRange(
   high: Bound,
 ): string {
   if (low !== null && low === high) {
-    if (isLength(low)) return showLength(low, high);
     return domain === "text" ? JSON.stringify(low) : String(low);
   }
   if (domain === "int" && low === I64_LOW && high === I64_HIGH) return "Int";
@@ -388,29 +384,13 @@ export function showRange(
   }
   // `""` is the bottom of the lexicographic order, so `""..` is every text.
   if (domain === "text" && low === "" && high === null) return "Str";
-  return `${showEnd(domain, low, high)}..${showEnd(domain, high, low)}`;
+  return `${showEnd(domain, low)}..${showEnd(domain, high)}`;
 }
 
-function showEnd(domain: Domain, bound: Bound, beside: Bound): string {
+function showEnd(domain: Domain, bound: Bound): string {
   if (bound === null) return "";
-  if (isLength(bound)) return showLength(bound, beside);
   if (domain === "text") return JSON.stringify(bound);
   return String(bound);
-}
-
-/**
- * `len xs`, `len xs - 1`, `len xs + 1`.
- *
- * Spelled as the arithmetic it is, because a reader who is told their index is
- * outside `0..len xs - 1` can act on it, and one who is told `0..[object
- * Object]` cannot. The subject is `lengthSubject`'s, so a range whose two ends
- * are two arrays that share a name still tells them apart.
- */
-function showLength(bound: LengthBound, beside: Bound): string {
-  const subject = `len ${lengthSubject(bound, beside)}`;
-  if (bound.offset === 0n) return subject;
-  if (bound.offset < 0n) return `${subject} - ${-bound.offset}`;
-  return `${subject} + ${bound.offset}`;
 }
 
 /** The module-level row: empty means nothing escaped unhandled. */

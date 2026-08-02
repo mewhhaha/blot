@@ -409,9 +409,10 @@ const Error = fn value => #Error value;
 // the loop; this form is one closure total and a plain value threaded through
 // it, which is a Core loop.
 //
-// And it is source. `range` and `items` are ordinary functions, so a new kind
-// of sequence is a function someone writes rather than a case the compiler has
-// to know about.
+// The protocol is source. `range` and `items` are ordinary functions, so a new
+// kind of sequence is a function someone writes rather than a case the compiler
+// has to know about. `indexed` alone needs a primitive because its erased bounds
+// evidence must not be forgeable as an ordinary record.
 
 const ever = {
   .state = ();
@@ -431,14 +432,6 @@ const iter_items = fn values => {
   .state = 0;
   .step = fn index => case array_get (values, index) of
     #Some value => Some (value, @int.add index 1),
-    #None => None
-    end;
-};
-
-const iter_indexed = fn values => {
-  .state = 0;
-  .step = fn index => case array_get (values, index) of
-    #Some value => Some ((index, value), @int.add index 1),
     #None => None
     end;
 };
@@ -467,7 +460,7 @@ end;
 const Iter = {
   .range = iter_range;
   .items = iter_items;
-  .indexed = iter_indexed;
+  .indexed = @array.indexed;
   .iterate = iterate;
   .collect = collect;
 };

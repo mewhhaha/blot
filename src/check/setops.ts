@@ -36,11 +36,6 @@
 //     the values just below `"m"`; splitting `Str` at `"m"` would print
 //     `.."m" | "m"..` and readmit the value it was asked to remove. Integers are
 //     discrete, so the same split is exact for them and is performed.
-//   * A length cannot be subtracted from, or subtracted out of. `len xs` names
-//     an integer the compiler cannot see, so the two pieces a subtraction
-//     leaves cannot be shown to stay inside the range they came from. The
-//     ordering questions intersection asks are answered where a length permits
-//     it and refused where it does not; difference is refused outright.
 //   * An open `variant` is "these constructors, and possibly others". `variant`
 //     carries only `cases` and `open`, so there is no way to write down "those
 //     others, minus `#A`" — a negated constructor set is unrepresentable.
@@ -62,7 +57,6 @@ import {
   type Bound,
   boundAtMost,
   type ClosedBound,
-  isLength,
   type SimpleType,
   union,
 } from "./type.ts";
@@ -225,21 +219,6 @@ function differenceAtoms(left: Atom, right: Atom): Atom[] {
 
   if (left.tag === "range" && right.tag === "range") {
     if (left.domain !== right.domain) return [left];
-    // Subtraction splits an interval, and each piece keeps one of `left`'s own
-    // bounds beside one stepped off `right` — so a piece is inside `left` only
-    // if the two were comparable. `0..len xs - 1` minus `3` would otherwise
-    // yield `0..2`, which holds 2 even when the array holds one element.
-    // Refused rather than approximated: intersection is the operation the
-    // checker calls, and it loses nothing here.
-    for (const bound of [left.low, left.high, right.low, right.high]) {
-      if (isLength(bound)) {
-        refuse(
-          `\`${show(right)}\` cannot be removed from \`${
-            show(left)
-          }\`: a length is not a literal, so the values on either side of it cannot be listed`,
-        );
-      }
-    }
     if (apart(left.high, right.low) || apart(right.high, left.low)) {
       return [left];
     }
@@ -295,9 +274,7 @@ function differenceAtoms(left: Atom, right: Atom): Atom[] {
  * approximate: naming the wrong one as the greater either drops values the
  * intersection contains or admits values it does not.
  *
- * `boundAtMost` rather than a strict comparison is what makes the headline case
- * work. `higherLow(0, len xs)` asks which of the two is greater when they may
- * be equal, and `0 <= len xs` is decided even though `0 < len xs` is not.
+ * `boundAtMost` rather than a strict comparison preserves equal endpoints.
  */
 function higherLow(left: Bound, right: Bound): Bound {
   if (left === null) return right;

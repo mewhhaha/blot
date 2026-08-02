@@ -5,7 +5,7 @@
 // in agreement.
 
 import {
-  apply,
+  evaluateCoreModule,
   evaluationRuntime,
   type Host,
   type Perform,
@@ -63,13 +63,18 @@ export async function evaluateFile(
 ): Promise<Value> {
   const checked = await checkFile(path);
   const loaded = await load(path);
+  if (loaded.closure.tag !== "closure") {
+    throw new Error(`module ${path} did not load as a closure`);
+  }
+  let imports = loaded.closure.imports;
+  if (imports === undefined) imports = new Map();
   return run(
-    apply(
-      loaded.closure,
+    evaluateCoreModule(
+      checked.core,
       grantsFor(grants),
-      loaded.module.span,
+      checked.values,
       evaluationRuntime(
-        new Map(),
+        imports,
         "runtime",
         undefined,
         checked.recordAdaptations,

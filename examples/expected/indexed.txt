@@ -1,1 +1,1 @@
-{ .inside = 20; .past_end = 0; .negative = 0; .cleared = [10, 20, 0]; .unchanged = [10, 20, 30]; .missing = -1; .indexed_sum = 63; }
+{ .inside = 20; .past_end = 0; .negative = 0; .cleared = [10, 20, 0]; .unchanged = [10, 20, 30]; .missing = -1; .indexed_sum = 63; .indexed_read_sum = 60; }

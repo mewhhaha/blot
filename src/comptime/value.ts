@@ -7,6 +7,7 @@
 // builtin.
 
 import type { Expr, Pattern } from "../syntax/ast.ts";
+import type { CoreExpression } from "../core/computation.ts";
 
 export interface Env {
   readonly names: Map<string, Value>;
@@ -75,6 +76,14 @@ export type Value =
      * module, not to the program.
      */
     readonly imports?: ReadonlyMap<string, Value>;
+  }
+  | {
+    /** A checked runtime closure whose body no longer depends on source AST. */
+    readonly tag: "core-closure";
+    readonly parameter: Pattern;
+    readonly body: CoreExpression;
+    readonly env: Env;
+    readonly self: string | null;
   }
   | {
     readonly tag: "primitive";
@@ -272,7 +281,9 @@ export function show(value: Value): string {
   if (value.tag === "forall") {
     return `forall 't${value.variable}. ${show(value.body)}`;
   }
-  if (value.tag === "closure") return "<function>";
+  if (value.tag === "closure" || value.tag === "core-closure") {
+    return "<function>";
+  }
   if (value.tag === "primitive") return `<${value.name}>`;
   if (value.tag === "native") return `<host ${value.name}>`;
   if (value.tag === "continuation") return "<resume>";

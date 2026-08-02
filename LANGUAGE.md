@@ -1236,7 +1236,8 @@ The first is a single compile-time integer — an integer literal, or a name who
 `const` value is one. `if 0 < n` reads the same as `if n > 0`.
 
 The second is the length of an array a name in scope holds, written
-`@array.len xs`. That one is not a number and does not have to be:
+`@array.len xs`. Inference records that value relationship in the refinement
+context rather than in the integer's type:
 
 ```blot
 sig at = [Int] -> Int -> Int;
@@ -1247,10 +1248,10 @@ let at = fn xs => fn n =>
   end;
 ```
 
-`n` is `..len xs - 1` in the inner branch and `0..len xs - 1` inside both, where
-`len xs` names the number of elements in the array the binding `xs` holds. An
-array's type carries no length (§13.3) and this does not put one there: the
-symbol is a range bound, so it is compared and never solved for.
+The inner branch retains `n : Int` and records `n < length(identity(xs))`;
+inside both branches it additionally records `0 <= n`. An array's type carries
+no length (§13.3), and neither does the integer type. These propositions live
+only in `Phi`, the refinement context consumed by proof-required operations.
 
 A length is keyed to the immutable array value a binding denotes. blot has no
 assignment and arrays are immutable, so that identity denotes one length for its
@@ -1270,8 +1271,9 @@ whole lifetime. Every consequence follows from that key.
   is what lets `n >= 0` and `n < @array.len xs` compose: without it, `0` and
   `len xs` could not be ordered and the second comparison would prove nothing.
 
-Narrowing never changes a program's type. It only lets a branch use a name at a
-type the branch has proved, so a function's own signature is what it was.
+Literal narrowing may give a branch a smaller ordinary value type. Relational
+narrowing never changes a program's type: it adds propositions to `Phi`, so a
+function's published signature remains independent of the values it relates.
 
 **What it does not prove.** Narrowing is silent, not an error, wherever it
 declines. A refused condition leaves every name exactly as wide as it was
@@ -1404,6 +1406,22 @@ into scope like every other prelude value.
 
 There is no `continue` form.
 
+### 9.2 Proof-producing iteration
+
+`Iter.indexed values` has the ordinary iterator shape and yields
+`(index, value)` pairs. Its implementation is `@array.indexed`, because source
+code cannot manufacture proof authority. In the successful `.step` result the
+checker carries an erased relationship package proving
+`0 <= index < @array.len values` and that `value` is the selected element.
+Pattern matching and tuple projection propagate the package into the loop body,
+where the index may be reused by `@array.get` or `@array.set` without another
+run-time bounds decision.
+
+The `for` lowering does not recognize `Iter.indexed`, `.step`, or any lexical
+name. It remains the generic iterator fold described above. The proof comes from
+the primitive value and follows ordinary aliases and pattern bindings; a source
+record with the same fields carries no authority.
+
 ## 10. Types and inference
 
 Types are compile-time values in the same value domain as runtime data. There is
@@ -1463,25 +1481,23 @@ inference lattice only when it denotes a type.
 
 Compiler output uses notation that is not additional source syntax:
 
-| display                   | meaning                              |
-| ------------------------- | ------------------------------------ |
-| `Int`, `Str`, `1`, `"x"`  | ranges and singleton ranges          |
-| `0..9`, `0..`             | bounded and half-bounded ranges      |
-| `len xs`, `0..len xs - 1` | a range bounded by an array's length |
-| `{ .x = Int; }`           | structural record                    |
-| `[Int]`                   | homogeneous array                    |
-| `#None \| #Some Int`      | constructor variant                  |
-| `#Some Int \| ..`         | variant with an open set             |
-| `A -> B`                  | pure function                        |
-| `A -> B ~ { Console, e }` | function with an effect row          |
-| `'a`, `'b`                | inferred type variables              |
-| `forall 'q0. ...`         | explicit quantified type             |
-| `⊤`, `⊥`                  | top and bottom                       |
+| display                   | meaning                         |
+| ------------------------- | ------------------------------- |
+| `Int`, `Str`, `1`, `"x"`  | ranges and singleton ranges     |
+| `0..9`, `0..`             | bounded and half-bounded ranges |
+| `{ .x = Int; }`           | structural record               |
+| `[Int]`                   | homogeneous array               |
+| `#None \| #Some Int`      | constructor variant             |
+| `#Some Int \| ..`         | variant with an open set        |
+| `A -> B`                  | pure function                   |
+| `A -> B ~ { Console, e }` | function with an effect row     |
+| `'a`, `'b`                | inferred type variables         |
+| `forall 'q0. ...`         | explicit quantified type        |
+| `⊤`, `⊥`                  | top and bottom                  |
 
-`len xs` is printed, never written: it names the length of the array a binding
-holds (§8.5), and a `sig` has no syntax for it. Where a range's two ends are the
-lengths of two different arrays that share a name, each is printed with the
-occurrence that distinguishes it — `len xs#7`.
+Array lengths and affine relations are not display types. Diagnostics that need
+to explain a failed proof render propositions such as `index < length(values)`
+directly from `Phi`; a `sig` cannot name them.
 
 An effect row is the one piece of this notation that is also source:
 `A -> B ~ {
@@ -1696,10 +1712,12 @@ When the proved consumption of a linear binding is the array operand of
 `@array.set` or `@array.push`, the backend may reuse that array's Store. This is
 an implementation permission published in an ownership certificate. A separate
 checker rejects duplicate binding identities, invalid spans, reentrant reads, or
-a reuse flag without proved consumption before lowering consults it. This is not
-mutation in the language: the source binding is unavailable after the consuming
-use, and updates of ordinary shared arrays remain persistent with the immutable
-behavior specified in §6.1.
+a reuse site absent from the complete set of path-specific consumptions before
+lowering consults it. Authorization is keyed to the exact binding identity and
+source occurrence, so one branch's consumption cannot authorize another branch's
+update. This is not mutation in the language: the source binding is unavailable
+after the consuming use, and updates of ordinary shared arrays remain persistent
+with the immutable behavior specified in §6.1.
 
 ## 12. Effects and handlers
 
@@ -1962,22 +1980,23 @@ signed 64-bit range trap.
 
 ### 13.3 Arrays and shapes
 
-| primitive              | meaning                                            |
-| ---------------------- | -------------------------------------------------- |
-| `@array.empty`         | polymorphic empty array                            |
-| `@array.len`           | array length                                       |
-| `@array.get`           | proof-required indexed read                        |
-| `@array.set`           | proof-required immutable indexed replacement       |
-| `@array.push`          | immutable append                                   |
-| `@array.take`          | consuming extraction with the ordered remainder    |
-| `@array.split`         | consuming prefix, selected value, and suffix       |
-| `@continuation.cancel` | consume a handler continuation without resuming it |
-| `@shape.empty`         | empty shape                                        |
-| `@shape.get`           | get a field named by text                          |
-| `@shape.set`           | immutably set a field named by text                |
-| `@shape.remove`        | immutably remove a field named by text             |
-| `@shape.names`         | field names in insertion order                     |
-| `@shape.has`           | return `#True` or `#False` for field membership    |
+| primitive              | meaning                                             |
+| ---------------------- | --------------------------------------------------- |
+| `@array.empty`         | polymorphic empty array                             |
+| `@array.len`           | array length                                        |
+| `@array.get`           | proof-required indexed read                         |
+| `@array.set`           | proof-required immutable indexed replacement        |
+| `@array.push`          | immutable append                                    |
+| `@array.indexed`       | iterator yielding an index proof and selected value |
+| `@array.take`          | consuming extraction with the ordered remainder     |
+| `@array.split`         | consuming prefix, selected value, and suffix        |
+| `@continuation.cancel` | consume a handler continuation without resuming it  |
+| `@shape.empty`         | empty shape                                         |
+| `@shape.get`           | get a field named by text                           |
+| `@shape.set`           | immutably set a field named by text                 |
+| `@shape.remove`        | immutably remove a field named by text              |
+| `@shape.names`         | field names in insertion order                      |
+| `@shape.has`           | return `#True` or `#False` for field membership     |
 
 Array indexing is zero-based. Direct primitive access is accepted only with a
 static bounds proof; the prelude's total `Array.get` and `Array.set` return an
@@ -2074,6 +2093,13 @@ type, and a separate difference-constraint checker must replay it before
 lowering may emit the Store read. The Store's checked form remains the safety
 net; gpufuck's range pass removes the runtime check for the certified residual
 comparison.
+
+`@array.indexed xs` is the proof-producing traversal path (§9.2). Its `.step`
+performs one bounds decision to decide whether another element exists. A
+successful step packages the already selected element with its index proof, so
+reusing that index for the same immutable array requires no second check. The
+package is compiler evidence, not a source constructor, and is erased before the
+gpufuck boundary.
 
 The relationship survives ordinary immutable bindings:
 

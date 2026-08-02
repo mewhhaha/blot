@@ -68,6 +68,19 @@ accepts(
 return if 1 < 2 then consume (!token) else consume (!token) end;`,
 );
 
+Deno.test("ownership certificates publish every branch consumption", async () => {
+  const { checked, path } = await analyze(
+    `${CONSUME}let !token = 41;
+return if 1 < 2 then consume (!token) else consume (!token) end;`,
+  );
+  const entry = checked.ownershipCertificate.entries.find((candidate) =>
+    candidate.path === path && candidate.name === "token"
+  );
+  assert(entry !== undefined);
+  assertEquals(entry.consumptions.length, 2);
+  assertEquals(entry.reusableAt, entry.consumptions);
+});
+
 rejects(
   "branches that disagree about consuming are rejected",
   `${CONSUME}let !token = 41;

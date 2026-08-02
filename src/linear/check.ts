@@ -107,6 +107,8 @@ export interface Ownership {
    * path consumed it exactly once, which is what `agree` enforces.
    */
   readonly linear: ReadonlySet<NamePattern>;
+  /** Every source occurrence that consumes the binding on some checked path. */
+  readonly consumptions: ReadonlyMap<NamePattern, readonly Span[]>;
   /**
    * The bindings whose `lastUses` entry is the last read *walked* rather than
    * the last read *taken*.
@@ -130,6 +132,7 @@ class Analysis {
   readonly diagnostics: Diagnostic[] = [];
   readonly lastUses = new Map<NamePattern, Span>();
   readonly linear = new Set<NamePattern>();
+  readonly consumptions = new Map<NamePattern, Span[]>();
   /** Where each binding was read, by the offset the read started at. */
   readonly reads = new Map<NamePattern, Set<number>>();
   /** The bindings some closure reached from outside its own body. */
@@ -238,6 +241,7 @@ export function checkLinearity(module: Module): LinearResult {
     ownership: {
       lastUses: analysis.lastUses,
       linear: analysis.linear,
+      consumptions: analysis.consumptions,
       reentrant,
     },
   };
@@ -2236,6 +2240,14 @@ function consume(binding: Binding, span: Span, analysis: Analysis): void {
     return;
   }
   binding.moved = span;
+  const sites = analysis.consumptions.get(binding.pattern);
+  if (sites === undefined) {
+    analysis.consumptions.set(binding.pattern, [span]);
+    return;
+  }
+  if (
+    !sites.some((site) => site.start === span.start && site.end === span.end)
+  ) sites.push(span);
 }
 
 /** An owned value entered a declaration form that cannot bind its obligation. */

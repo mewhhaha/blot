@@ -20,8 +20,12 @@ import type {
 import type { RecordAdaptation } from "../check/infer.ts";
 import {
   type ComputationSchedule,
+  type CoreComputation,
+  type CoreExpression,
+  type CoreStep,
   scheduleComputation,
   scheduledResultExpression,
+  type TypedCoreModule,
 } from "../core/computation.ts";
 import { expect, fail } from "../diagnostic.ts";
 import {
@@ -354,6 +358,453 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
   expect(false, `unhandled expression ${(expr as Expr).tag}`);
 }
 
+/** Evaluates checked runtime Core without recovering behavior from its AST provenance. */
+export function* evaluateCoreModule(
+  module: TypedCoreModule,
+  argument: Value,
+  env: Env,
+  runtime: Runtime,
+): Eval {
+  const scope = childEnv(env);
+  let parameter: Pattern;
+  if (module.parameter === null) {
+    let span: Span;
+    if (module.result.tag === "return") span = module.result.value.span;
+    else span = module.result.computation.span;
+    parameter = { tag: "wildcard", span };
+  } else parameter = module.parameter;
+  if (!match(parameter, argument, scope)) {
+    fail(
+      "BLOT_ARGUMENT_MISMATCH",
+      `${show(argument)} does not match this module parameter.`,
+      parameter.span,
+    );
+  }
+  return yield* evaluateCoreComputation(module, scope, runtime);
+}
+
+function* evaluateCoreComputation(
+  computation: CoreComputation,
+  scope: Env,
+  runtime: Runtime,
+): Eval {
+  yield* runCoreSteps(computation.steps, scope, runtime);
+  if (computation.result.tag === "return") {
+    return yield* evaluateCoreExpression(
+      computation.result.value,
+      scope,
+      runtime,
+    );
+  }
+  return yield* evaluateCoreExpression(
+    computation.result.computation,
+    scope,
+    runtime,
+  );
+}
+
+function* runCoreSteps(
+  steps: readonly CoreStep[],
+  scope: Env,
+  runtime: Runtime,
+): Generator<Perform, void, Value> {
+  for (const step of steps) {
+    const definition = step.definition;
+    if (definition.tag === "open") {
+      for (const [name, value] of definition.bindings) {
+        scope.names.set(name, value);
+      }
+      continue;
+    }
+    if (definition.tag === "static") {
+      if (!match(definition.pattern, definition.value, scope)) {
+        fail(
+          "BLOT_BINDING_MISMATCH",
+          `${show(definition.value)} does not match this pattern.`,
+          definition.span,
+        );
+      }
+      continue;
+    }
+    if (definition.tag === "static-shadow") {
+      if (lookup(scope, definition.name) === undefined) {
+        fail(
+          "BLOT_UNBOUND",
+          `\`${definition.name} := ...\` cannot shadow a name that is not in scope.`,
+          definition.span,
+        );
+      }
+      scope.names.set(definition.name, definition.value);
+      continue;
+    }
+    if (definition.tag === "shadow") {
+      if (lookup(scope, definition.name) === undefined) {
+        fail(
+          "BLOT_UNBOUND",
+          `\`${definition.name} := ...\` cannot shadow a name that is not in scope.`,
+          definition.span,
+        );
+      }
+      const value = yield* evaluateCoreExpression(
+        definition.value,
+        scope,
+        runtime,
+      );
+      scope.names.set(definition.name, namedEffect(value, definition.name));
+      continue;
+    }
+
+    let value: Value;
+    if (definition.value.tag === "rec") {
+      const recursive = yield* evaluateCoreExpression(
+        definition.value.lambda,
+        scope,
+        runtime,
+      );
+      if (
+        definition.pattern.tag !== "name" ||
+        recursive.tag !== "core-closure"
+      ) {
+        fail(
+          "BLOT_MISPLACED_REC",
+          "`rec` marks a binding to one lambda name.",
+          definition.span,
+        );
+      }
+      value = { ...recursive, self: definition.pattern.name };
+    } else {
+      value = yield* evaluateCoreExpression(
+        definition.value,
+        scope,
+        runtime,
+      );
+      if (definition.pattern.tag === "name") {
+        value = namedEffect(value, definition.pattern.name);
+      }
+    }
+    if (!match(definition.pattern, value, scope)) {
+      fail(
+        "BLOT_BINDING_MISMATCH",
+        `${show(value)} does not match this pattern.`,
+        definition.span,
+      );
+    }
+  }
+}
+
+function namedEffect(value: Value, name: string): Value {
+  if (value.tag !== "effect" || value.name !== "Effect") return value;
+  return { ...value, name };
+}
+
+function* evaluateCoreExpression(
+  expression: CoreExpression,
+  env: Env,
+  runtime: Runtime,
+): Eval {
+  runtime.budget.remaining -= 1;
+  if (runtime.budget.remaining < 0) {
+    fail(
+      "BLOT_EVALUATION_LIMIT",
+      `Evaluation exceeded its deterministic limit of ${runtime.budget.limit} steps.`,
+      expression.span,
+    );
+  }
+
+  switch (expression.tag) {
+    case "int":
+      if (
+        runtime.phase === "runtime" &&
+        (expression.value < -0x8000000000000000n ||
+          expression.value > 0x7fffffffffffffffn)
+      ) {
+        fail(
+          "BLOT_INTEGER_OVERFLOW",
+          `The runtime integer ${expression.value} is outside signed i64 -9223372036854775808..9223372036854775807.`,
+          expression.span,
+        );
+      }
+      return { tag: "int", value: expression.value };
+    case "float":
+      return { tag: "float", value: expression.value };
+    case "text":
+      return { tag: "text", value: expression.value };
+    case "unit":
+      return UNIT;
+    case "tag":
+      return { tag: "tag", name: expression.name, payload: null };
+    case "constant":
+      return expression.value;
+    case "var": {
+      const value = lookup(env, expression.name);
+      if (value === undefined) {
+        fail(
+          "BLOT_UNBOUND",
+          `\`${expression.name}\` is not in scope.`,
+          expression.span,
+        );
+      }
+      return value;
+    }
+    case "intrinsic":
+      return intrinsicValue(expression.name, expression.span);
+    case "apply": {
+      const fn = yield* evaluateCoreExpression(expression.fn, env, runtime);
+      let argument = yield* evaluateCoreExpression(
+        expression.arg,
+        env,
+        runtime,
+      );
+      if (expression.arg.adaptation !== null) {
+        argument = adaptRecord(
+          argument,
+          expression.arg.adaptation,
+          expression.arg.span,
+        );
+      }
+      return yield* apply(fn, argument, expression.span, runtime);
+    }
+    case "intrinsic-apply": {
+      let fn = intrinsicValue(expression.name, expression.span);
+      if (expression.name === "@handle" && expression.args.length === 3) {
+        const values: Value[] = [];
+        for (const argument of expression.args) {
+          values.push(yield* evaluateCoreExpression(argument, env, runtime));
+        }
+        return yield* apply(
+          fn,
+          tupleOf(values),
+          expression.span,
+          runtime,
+        );
+      }
+      for (const argumentExpression of expression.args) {
+        let argument = yield* evaluateCoreExpression(
+          argumentExpression,
+          env,
+          runtime,
+        );
+        if (argumentExpression.adaptation !== null) {
+          argument = adaptRecord(
+            argument,
+            argumentExpression.adaptation,
+            argumentExpression.span,
+          );
+        }
+        fn = yield* apply(fn, argument, expression.span, runtime);
+      }
+      return fn;
+    }
+    case "import": {
+      let value = runtime.imports.get(expression.specifier);
+      if (value === undefined) {
+        fail(
+          "BLOT_UNRESOLVED_IMPORT",
+          `\`${expression.specifier}\` was not resolved.`,
+          expression.span,
+        );
+      }
+      for (const argumentExpression of expression.args) {
+        const argument = yield* evaluateCoreExpression(
+          argumentExpression,
+          env,
+          runtime,
+        );
+        value = yield* apply(value, argument, expression.span, runtime);
+      }
+      return value;
+    }
+    case "static-member": {
+      const target = lookup(env, expression.target);
+      if (target === undefined) {
+        fail(
+          "BLOT_UNBOUND",
+          `\`${expression.target}\` is not in scope.`,
+          expression.span,
+        );
+      }
+      return project(target, expression.name, expression.span);
+    }
+    case "static-member-apply": {
+      const target = lookup(env, expression.target);
+      if (target === undefined) {
+        fail(
+          "BLOT_UNBOUND",
+          `\`${expression.target}\` is not in scope.`,
+          expression.span,
+        );
+      }
+      let fn = project(target, expression.name, expression.span);
+      for (const argumentExpression of expression.args) {
+        let argument = yield* evaluateCoreExpression(
+          argumentExpression,
+          env,
+          runtime,
+        );
+        if (argumentExpression.adaptation !== null) {
+          argument = adaptRecord(
+            argument,
+            argumentExpression.adaptation,
+            argumentExpression.span,
+          );
+        }
+        fn = yield* apply(fn, argument, expression.span, runtime);
+      }
+      return fn;
+    }
+    case "constructor":
+      return {
+        tag: "tag",
+        name: expression.name,
+        payload: yield* evaluateCoreExpression(
+          expression.payload,
+          env,
+          runtime,
+        ),
+      };
+    case "checked":
+      return yield* evaluateCoreExpression(expression.value, env, runtime);
+    case "field": {
+      const target = yield* evaluateCoreExpression(
+        expression.target,
+        env,
+        runtime,
+      );
+      return project(target, expression.name, expression.span);
+    }
+    case "lambda":
+      return {
+        tag: "core-closure",
+        parameter: expression.parameter,
+        body: expression.body,
+        env,
+        self: null,
+      };
+    case "array": {
+      const elements: Value[] = [];
+      for (const element of expression.elements) {
+        const value = yield* evaluateCoreExpression(
+          element.value,
+          env,
+          runtime,
+        );
+        if (!element.spread) {
+          elements.push(value);
+          continue;
+        }
+        if (value.tag !== "array") {
+          fail(
+            "BLOT_TYPE",
+            `\`...\` spreads an array, found ${show(value)}.`,
+            expression.span,
+          );
+        }
+        elements.push(...value.elements);
+      }
+      return { tag: "array", elements };
+    }
+    case "tuple": {
+      const elements: Value[] = [];
+      for (const element of expression.elements) {
+        elements.push(yield* evaluateCoreExpression(element, env, runtime));
+      }
+      return tupleOf(elements);
+    }
+    case "shape": {
+      const fields = new Map<string, Value>();
+      for (const member of expression.members) {
+        const value = yield* evaluateCoreExpression(
+          member.value,
+          env,
+          runtime,
+        );
+        if (member.tag === "field") {
+          fields.set(member.name, value);
+          continue;
+        }
+        if (value.tag !== "shape") {
+          fail(
+            "BLOT_TYPE",
+            `\`...\` spreads a shape, found ${show(value)}.`,
+            expression.span,
+          );
+        }
+        for (const [name, field] of value.fields) fields.set(name, field);
+      }
+      return { tag: "shape", fields };
+    }
+    case "if": {
+      for (const branch of expression.branches) {
+        const condition = yield* evaluateCoreExpression(
+          branch.condition,
+          env,
+          runtime,
+        );
+        if (truth(condition, branch.condition.span)) {
+          return yield* evaluateCoreExpression(
+            branch.consequence,
+            env,
+            runtime,
+          );
+        }
+      }
+      if (expression.fallback === null) {
+        fail(
+          "BLOT_NO_BRANCH",
+          "No branch matched and there is no `else`.",
+          expression.span,
+        );
+      }
+      return yield* evaluateCoreExpression(expression.fallback, env, runtime);
+    }
+    case "case": {
+      const target = yield* evaluateCoreExpression(
+        expression.target,
+        env,
+        runtime,
+      );
+      for (const arm of expression.arms) {
+        const scope = childEnv(env);
+        if (!match(arm.pattern, target, scope)) continue;
+        return yield* evaluateCoreExpression(arm.body, scope, runtime);
+      }
+      fail(
+        "BLOT_NO_MATCH",
+        `No arm matched ${show(target)}.`,
+        expression.span,
+      );
+      break;
+    }
+    case "block":
+      return yield* evaluateCoreComputation(
+        expression.computation,
+        childEnv(env),
+        runtime,
+      );
+    case "rec":
+      fail(
+        "BLOT_MISPLACED_REC",
+        "`rec` marks a named binding.",
+        expression.span,
+      );
+      break;
+    case "comptime": {
+      const comptimeRuntime: Runtime = {
+        imports: runtime.imports,
+        phase: "comptime",
+        budget: runtime.budget,
+        recordAdaptations: runtime.recordAdaptations,
+      };
+      return yield* evaluateCoreExpression(
+        expression.body,
+        env,
+        comptimeRuntime,
+      );
+    }
+  }
+  expect(false, `unhandled Core expression ${expression.tag}`);
+}
+
 /**
  * Every declaration of a block binds into one environment, and every closure a
  * declaration produces captures that environment rather than a copy of it. That
@@ -550,6 +1001,19 @@ export function* apply(
   span: Span,
   runtime: Runtime,
 ): Eval {
+  if (fn.tag === "core-closure") {
+    const scope = childEnv(fn.env);
+    if (fn.self !== null) scope.names.set(fn.self, fn);
+    if (!match(fn.parameter, argument, scope)) {
+      fail(
+        "BLOT_ARGUMENT_MISMATCH",
+        `${show(argument)} does not match this parameter.`,
+        span,
+      );
+    }
+    return yield* evaluateCoreExpression(fn.body, scope, runtime);
+  }
+
   if (fn.tag === "closure") {
     const scope = childEnv(fn.env);
     if (fn.self !== null) scope.names.set(fn.self, fn);
@@ -634,6 +1098,25 @@ const SPECIAL: ReadonlyMap<string, number> = new Map([
   ["@handle", 1],
   ["@import", 1],
 ]);
+
+function intrinsicValue(name: string, span: Span): Value {
+  const constant = PRIMITIVE_VALUES.get(name);
+  if (constant !== undefined) return constant;
+  const primitive = PRIMITIVES.get(name);
+  if (primitive !== undefined) {
+    return {
+      tag: "primitive",
+      name,
+      arity: primitive.arity,
+      applied: [],
+    };
+  }
+  const special = SPECIAL.get(name);
+  if (special !== undefined) {
+    return { tag: "primitive", name, arity: special, applied: [] };
+  }
+  fail("BLOT_UNKNOWN_PRIMITIVE", `\`${name}\` is not a primitive.`, span);
+}
 
 let nextTypeVariable = 0;
 

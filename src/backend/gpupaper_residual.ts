@@ -376,6 +376,22 @@ class ResidualHirBuilder {
         }
         continue;
       }
+      if (definition.tag === "static") {
+        this.bind(
+          definition.pattern,
+          { kind: "static", value: definition.value },
+          environment,
+          definition.span,
+        );
+        continue;
+      }
+      if (definition.tag === "static-shadow") {
+        environment.names.set(
+          definition.name,
+          { kind: "static", value: definition.value },
+        );
+        continue;
+      }
       const value = this.evaluate(definition.value, environment);
       this.bind(definition.pattern, value, environment, definition.span);
     }

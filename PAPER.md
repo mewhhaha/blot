@@ -1140,28 +1140,28 @@ implementation is useless; it names the part of the model that the current
 compiler still does not establish. A row with no remaining gap is backed by an
 executable checker or lowering test, not only by documentation.
 
-| Area                         | Current implementation                                                                                                                                                          | Model decision                                                         | Remaining gap                                                                                           |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| pure binding                 | liveness erases unused definitions; every remaining definition evaluates once in source order                                                                                   | liveness erasure followed by strict evaluation                         | none                                                                                                    |
-| effect sequencing            | typed Core classifies live declarations as `define` or `bind`, gives compiler-owned applications dedicated nodes, and records every residual type                               | only `<-` binds a computation into scope                               | migrate evaluator and lowerers from the shared source schedule to typed Core                            |
-| coverage                     | uncertainty and every unlistable domain require an irrefutable arm; tuple coverage checks the complete cross-product                                                            | accepted closed `case` is exhaustive or has an irrefutable arm         | none for the implemented pattern language                                                               |
-| type reflection              | Core carries a graph-form `TyRep` table; saturated reflection is exact, generic payloads cannot authorize runtime work, and phase evidence is separate from inference variables | reflection payloads are indexed or typed at saturated call sites       | none                                                                                                    |
-| dynamic shape operations     | a run-time field name is rejected; `Dict` provides homogeneous run-time keys with ownership-preserving replacement and removal                                                  | structural fields require compile-time names                           | none                                                                                                    |
-| optional fields              | inference records each call's source fields and absent/present/unit adaptations; lowering consumes that fact                                                                    | completion is an explicit type-directed coercion visible to reflection | none for direct record applications                                                                     |
-| width subtyping              | runtime lambdas specialize projections, destructuring, tuple-contained shapes, aliases, imports, and run-time choices of known lambdas per concrete call                        | specialization closes representation for every call                    | represent structural functions that escape through arbitrary aggregates or unknown higher-order results |
-| integer domains              | run-time `Int` and `Nat` are signed-i64-bounded; wider `U64` is storage metadata and is rejected in runtime signatures                                                          | run-time `Int` is bounded; storage width is separate                   | add a distinct word domain only if full-width run-time words become necessary                           |
-| array proofs                 | comparison branches and immutable aliases populate `Phi`; saturated direct access records their type-independent assumptions and intervals for independent replay               | proofs live in `Phi` and reach lowering explicitly                     | remove the duplicate range-bound representation and add iterator-produced packages                      |
-| indexed loops                | `Iter.indexed` yields values with their indices, while branch refinements certify reuse of the index                                                                            | iterator yields an erased relational package                           | make iterator-produced proof packages explicit and independent of the iterator's implementation         |
-| ownership of structures      | aggregate obligations propagate; a replayed ownership certificate gates every published Store-reuse permission; `take`/`split` preserve both branches                           | ownership propagates structurally                                      | retain branch-specific extraction derivations in the published certificate                              |
-| higher-order ownership       | explicit contracts and ownership-transparent unannotated name parameters carry checked usage summaries; caller obligations substitute through returned closures                 | functions carry separate usage summaries                               | infer summaries through calls, projections, and destructuring                                           |
-| recursion and ownership      | a certified SCC may transfer shared spendable captures through exactly one ownership-tail recursive edge per path; other recursion refuses closed                               | recursive ownership requires a semantic call-count proof               | none for the certified ownership-tail class                                                             |
-| borrow scope                 | transient borrow evidence follows structural arguments; storage, return, ordinary or host passage, and retained closure capture are rejected                                    | borrows are lexical non-escaping views                                 | none for lexical borrows; first-class references would require explicit regions and provenance          |
-| handler abort                | a continuation that owns a linear capture requires `!resume`, consumed exactly once by resuming or explicit sequenced cancellation                                              | a continuation owning linear resources has a linear `resume`           | none for statically known handlers                                                                      |
-| effect identity              | inference records each declaration's generative value by AST identity; lowering installs and compares those recorded atoms                                                      | generative atoms are allocated once and recorded                       | none for the current inference-to-lowering pipeline                                                     |
-| seal identity                | equality compares the public name and invariant carrier                                                                                                                         | seals are applicative named types                                      | none                                                                                                    |
-| arithmetic refinements       | most arithmetic widens to `Int`, with a small special case for affine length bounds                                                                                             | refinement arithmetic is an independent entailment system              | move relationship reasoning out of ad hoc type-bound cases                                              |
-| optimizer correctness        | generated pure programs and an ordered host-effect trace compare typed-Core evaluation with direct evaluation; refinement and ownership certificates have mutation tests        | demand and computation traces define observations                      | extend simulations to handlers, staging, generated ownership paths, and target traces                   |
-| experimental gpupaper target | target supports only a subset of ABI/runtime HIR                                                                                                                                | target restriction is allowed if it refuses before artifact production | keep target gaps separate from source-language acceptance claims                                        |
+| Area                         | Current implementation                                                                                                                                                          | Model decision                                                         | Remaining gap                                                                                        |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| pure binding                 | liveness erases unused definitions; every remaining definition evaluates once in source order                                                                                   | liveness erasure followed by strict evaluation                         | none                                                                                                 |
+| effect sequencing            | typed Core classifies live declarations as `define` or `bind`, gives compiler-owned applications dedicated nodes, records every residual type, and drives reference evaluation  | only `<-` binds a computation into scope                               | migrate the production gpufuck lowerer from the shared source schedule to typed Core                 |
+| coverage                     | uncertainty and every unlistable domain require an irrefutable arm; tuple coverage checks the complete cross-product                                                            | accepted closed `case` is exhaustive or has an irrefutable arm         | none for the implemented pattern language                                                            |
+| type reflection              | Core carries a graph-form `TyRep` table; saturated reflection is exact, generic payloads cannot authorize runtime work, and phase evidence is separate from inference variables | reflection payloads are indexed or typed at saturated call sites       | none                                                                                                 |
+| dynamic shape operations     | a run-time field name is rejected; `Dict` provides homogeneous run-time keys with ownership-preserving replacement and removal                                                  | structural fields require compile-time names                           | none                                                                                                 |
+| optional fields              | inference records each call's source fields and absent/present/unit adaptations; lowering consumes that fact                                                                    | completion is an explicit type-directed coercion visible to reflection | none for direct record applications                                                                  |
+| width subtyping              | runtime lambdas specialize projections, destructuring, direct record/tuple/array members, aliases, imports, and run-time choices per concrete call                              | specialization closes representation for every call                    | represent structural functions that escape through nested aggregates or unknown higher-order results |
+| integer domains              | run-time `Int` and `Nat` are signed-i64-bounded; wider `U64` is storage metadata and is rejected in runtime signatures                                                          | run-time `Int` is bounded; storage width is separate                   | add a distinct word domain only if full-width run-time words become necessary                        |
+| array proofs                 | comparison branches, immutable aliases, and proof-producing iteration populate `Phi`; direct access carries independently replayed evidence                                     | proofs live in `Phi` and reach lowering explicitly                     | none for arrays                                                                                      |
+| indexed loops                | `@array.indexed` yields an ordinary iterator plus unforgeable erased packages propagated through projections and patterns                                                       | iterator yields an erased relational package                           | generalize the relational-value channel when another proof-producing collection needs it             |
+| ownership of structures      | aggregate obligations propagate; certificates publish every path-specific consumption and gate reuse at that exact site; extraction preserves every branch                      | ownership propagates structurally                                      | publish structural extraction lineage beyond the certified consumption sites                         |
+| higher-order ownership       | explicit contracts and ownership-transparent unannotated name parameters carry checked usage summaries; caller obligations substitute through returned closures                 | functions carry separate usage summaries                               | infer summaries through calls, projections, and destructuring                                        |
+| recursion and ownership      | a certified SCC may transfer shared spendable captures through exactly one ownership-tail recursive edge per path; other recursion refuses closed                               | recursive ownership requires a semantic call-count proof               | none for the certified ownership-tail class                                                          |
+| borrow scope                 | transient borrow evidence follows structural arguments; storage, return, ordinary or host passage, and retained closure capture are rejected                                    | borrows are lexical non-escaping views                                 | none for lexical borrows; first-class references would require explicit regions and provenance       |
+| handler abort                | a continuation that owns a linear capture requires `!resume`, consumed exactly once by resuming or explicit sequenced cancellation                                              | a continuation owning linear resources has a linear `resume`           | none for statically known handlers                                                                   |
+| effect identity              | inference records each declaration's generative value by AST identity; lowering installs and compares those recorded atoms                                                      | generative atoms are allocated once and recorded                       | none for the current inference-to-lowering pipeline                                                  |
+| seal identity                | equality compares the public name and invariant carrier                                                                                                                         | seals are applicative named types                                      | none                                                                                                 |
+| arithmetic refinements       | public arithmetic types widen normally while `Phi` separately retains supported affine relationships                                                                            | refinement arithmetic is an independent entailment system              | none for the implemented affine fragment                                                             |
+| optimizer correctness        | generated pure programs and an ordered host-effect trace compare typed-Core evaluation with direct evaluation; refinement and ownership certificates have mutation tests        | demand and computation traces define observations                      | extend simulations to handlers, staging, generated ownership paths, and target traces                |
+| experimental gpupaper target | target supports only a subset of ABI/runtime HIR                                                                                                                                | target restriction is allowed if it refuses before artifact production | keep target gaps separate from source-language acceptance claims                                     |
 
 ## 17. Migration plan
 
@@ -1199,9 +1199,9 @@ Elaborate the existing AST into an internal fine-grain core with explicit
 Typed Core now owns residual expression structure, explicit `return`/`bind`,
 dedicated nodes for compiler-known applications, and a settled `TyRep` reference
 on every node. Live host-effect capabilities stay in Core so erasure cannot
-leave their operations unbound. The reference evaluator and main backend still
-consume the shared source schedule while they migrate to this representation;
-the experimental residual builder consumes typed Core directly. Resolved `open`
+leave their operations unbound. The reference evaluator and experimental
+residual builder consume typed Core directly. The production gpufuck lowerer
+still consumes the shared source schedule while it migrates. Resolved `open`
 bindings are Core facts, so imported scopes require no source-AST replay.
 
 ### M2: Make compile-time representations typed — inference boundary complete
@@ -1235,7 +1235,7 @@ Replace permissive unknown coverage with conservative coverage.
 
 Success means `BLOT_NO_MATCH` is unreachable for checked source programs.
 
-### M4: Add a refinement proof IR — access certificates complete
+### M4: Add a refinement proof IR — complete for arrays
 
 Move array identity and length relations into `Phi`.
 
@@ -1251,8 +1251,11 @@ lowering refuses to emit one without successful independent replay. The `Phi`
 kernel implements integer difference constraints, affine equality, cloning,
 contradiction rollback, and entailment. Recognized comparison branches and
 immutable aliases feed the kernel; their assumptions are replayed from the
-certificate. Removing the duplicate public range-bound representation and adding
-iterator-produced packages remain.
+certificate. Relational bounds have been removed from the public value-type
+lattice. `@array.indexed` produces an unforgeable erased relationship package;
+ordinary projections and pattern bindings install its index proposition in
+`Phi`, and the dynamic Wasm path performs only the iterator step's bounds
+decision.
 
 ### M5: Close structural specialization — direct calls complete
 
@@ -1266,8 +1269,10 @@ Record explicit coercions and specialize every residual structural use.
 Runtime `let` lambdas are cloned per concrete record shape through direct calls,
 immutable aliases, source forwarders, imports, and transparent identity
 applications. Projection, direct parameter destructuring, and a shape nested in
-a tuple `case` all use the call-site representation. Arbitrary escaping and
-other residual structural functions still need the same treatment.
+a tuple `case` all use the call-site representation. A function retained in a
+direct record, tuple, or literal array remains specializable rather than forcing
+one nominal parameter representation. Nested aggregate escape and unknown
+higher-order results still need the same treatment.
 
 ### M6: Propagate ownership structurally — aggregate propagation complete
 
@@ -1292,8 +1297,10 @@ results, and ownership-transparent unannotated name parameters infer the same
 summary. Transient borrow evidence is rejected at every retaining boundary, and
 a linear handler continuation may be cancelled explicitly. A separately verified
 certificate now gates backend reuse permissions. General summary inference
-through calls, projections, and destructuring, plus branch-specific extraction
-derivations in that certificate, remain.
+through calls, projections, and destructuring remains. The certificate retains
+every branch-specific consumption and authorizes reuse only at those exact
+occurrences; publishing the structural lineage of each extracted component
+remains.
 
 ### M7: Separate numeric values from storage descriptions — complete
 
