@@ -642,6 +642,13 @@ function inferUnrecorded(
     }
 
     case "intrinsic": {
+      if (expr.name === "@array.get" || expr.name === "@array.set") {
+        fail(
+          "BLOT_ARRAY_ACCESS_NOT_DIRECT",
+          `\`${expr.name}\` must be fully applied at its use site so the checker can attach a bounds proof. Use the total prelude operation when the index is not proved there.`,
+          expr.span,
+        );
+      }
       const primitive = PRIMITIVE_TYPES.get(expr.name);
       if (primitive === undefined) {
         // `@effect` and `@handle` are handled at their application sites,
@@ -984,6 +991,22 @@ function inferSpecial(
       context.types,
     );
     context.arrayProofs.set(expr, proof);
+    const arrayType = infer(head.args[0], context, level, row);
+    const indexType = infer(head.args[1], context, level, row);
+    const element = freshVar(level);
+    const result: SimpleType = { tag: "array", element };
+    located(expr.span, () => {
+      constrain(arrayType, result);
+      constrain(indexType, INT);
+    });
+    if (callee.name === "@array.get" && head.args.length === 2) {
+      return element;
+    }
+    if (callee.name === "@array.set" && head.args.length === 3) {
+      const valueType = infer(head.args[2], context, level, row);
+      located(expr.span, () => constrain(valueType, element));
+      return result;
+    }
   }
 
   if (callee.name === "@type.reflect" && head.args.length === 1) {

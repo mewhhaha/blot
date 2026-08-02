@@ -825,6 +825,18 @@ rejects(
   "BLOT_UNPROVEN_INDEX",
 );
 
+rejects(
+  "a direct array read cannot be partially applied around its proof site",
+  "let read = fn xs => @array.get xs;\nreturn read;",
+  "BLOT_ARRAY_ACCESS_NOT_DIRECT",
+);
+
+rejects(
+  "a direct array write cannot be aliased away from its proof site",
+  "let write = @array.set;\nreturn write;",
+  "BLOT_ARRAY_ACCESS_NOT_DIRECT",
+);
+
 // The index is decided by a compile-time integer or by a ground type — a `sig`
 // gave the name one, or a branch proved one. A `let` generalizes, so a
 // `let`-bound integer has a scheme rather than a ground type and decides

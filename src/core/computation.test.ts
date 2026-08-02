@@ -28,3 +28,16 @@ Deno.test("core marks an ambient block result as a tail computation", async () =
   );
   assertEquals(core.result.tag, "tail");
 });
+
+Deno.test("core retains an explicit bind whose result is unused", async () => {
+  const parsed = await parse(
+    "_ <- perform ();\nreturn ();",
+  );
+  if (!parsed.ok) throw new Error("unused-bind fixture did not parse");
+  const core = elaborateComputation(
+    parsed.module.declarations,
+    parsed.module.result,
+    parsed.module.resultEffects,
+  );
+  assertEquals(core.steps.map((step) => step.tag), ["bind"]);
+});

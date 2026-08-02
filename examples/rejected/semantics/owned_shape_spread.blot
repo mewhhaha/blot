@@ -1,0 +1,8 @@
+open {} = (@import "blot:prelude") ();
+
+let consume = fn !value => value + 1;
+let !token = 41;
+let source = { .go = fn () => consume (!token); };
+let moved = { ...source; .value = 1; };
+
+return moved.value;

@@ -395,6 +395,30 @@ Deno.test("two shapes at one generalized projection are cloned", async () => {
   );
 });
 
+Deno.test("an immutable alias preserves structural call specialization", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "aliased-shapes.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "let get_x = fn value => value.x;",
+      "let alias = get_x;",
+      "sig at = Int -> Int;",
+      "let at = fn n => alias { .x = n; .y = 0; } + alias { .x = 1; .z = n; };",
+      "return { .at = at; };",
+    ].join("\n"),
+  );
+
+  assertEquals(
+    await runLoweringExport(path, "at", [{
+      kind: "signed-integer-64",
+      value: 41n,
+    }]),
+    { kind: "signed-integer-64", value: 42n },
+  );
+});
+
 // Narrower and wider are still two records: a `{ .x; }` is really built at one
 // call site and a `{ .x; .y; }` at the other, and taking the widest would read
 // a field the first value does not have.

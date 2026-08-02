@@ -80,6 +80,10 @@ const REJECTIONS: Record<
   // number.
   "index_at_or_past_length": { code: "BLOT_OUT_OF_BOUNDS", stage: "check" },
   "unproven_index": { code: "BLOT_UNPROVEN_INDEX", stage: "check" },
+  "partial_direct_array_access": {
+    code: "BLOT_ARRAY_ACCESS_NOT_DIRECT",
+    stage: "check",
+  },
   "wrong_argument": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "missing_field": { code: "BLOT_TYPE_ERROR", stage: "check" },
   // The same rule across a module boundary, and the half that was wrong: an
@@ -111,6 +115,14 @@ const REJECTIONS: Record<
   },
   "linear_handler_abort": {
     code: "BLOT_LINEAR_HANDLER_MAY_ABORT",
+    stage: "check",
+  },
+  "partial_owned_pattern": {
+    code: "BLOT_LINEAR_PATTERN_DISCARDS",
+    stage: "check",
+  },
+  "owned_shape_spread": {
+    code: "BLOT_LINEAR_SHAPE_SPREAD",
     stage: "check",
   },
   "recursive_group_consumed_twice": {

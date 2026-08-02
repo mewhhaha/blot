@@ -62,6 +62,8 @@ interface Binding {
   readonly owned: Produced;
   /** The ownership contract of this function's parameter, when statically known. */
   parameter: Qualifier | null;
+  /** Parameter structure substituted when a function returns caller ownership. */
+  parameterPattern: Pattern | null;
   /** Obligations returned by one call, when this binding is a known function. */
   result: Produced;
   /** Source value retained for handler and usage-summary specialization. */
@@ -240,7 +242,7 @@ function closeScope(scope: Scope, analysis: Analysis): void {
 }
 
 function declare(pattern: Pattern, scope: Scope, analysis: Analysis): void {
-  declareProduced(pattern, NONE, scope, analysis);
+  declareProduced(pattern, NONE, scope, analysis, false);
 }
 
 function declareProduced(
@@ -248,15 +250,24 @@ function declareProduced(
   produced: Produced,
   scope: Scope,
   analysis: Analysis,
+  parameter: boolean,
 ): void {
   switch (pattern.tag) {
-    case "name":
-      const owned = combine(writtenObligation(pattern.qualifier), produced);
+    case "name": {
+      let source: NamePattern | null = null;
+      if (parameter) source = pattern;
+      const written = writtenObligation(
+        pattern.qualifier,
+        source,
+      );
+      let owned = produced;
+      if (obligation(owned) === "none") owned = written;
       scope.bindings.set(pattern.name, {
         pattern,
         qualifier: inherited(pattern.qualifier, owned),
         owned,
         parameter: null,
+        parameterPattern: null,
         result: NONE,
         value: null,
         moved: null,
@@ -264,6 +275,7 @@ function declareProduced(
         lastUse: null,
       });
       return;
+    }
     case "pin":
       use(pattern.name, pattern.span, scope, analysis, "project");
       return;
@@ -274,15 +286,22 @@ function declareProduced(
       for (const [index, inner] of pattern.elements.entries()) {
         let element = NONE;
         if (elements[index] !== undefined) element = elements[index];
-        declareProduced(inner, element, scope, analysis);
+        declareProduced(inner, element, scope, analysis, parameter);
       }
+      reportDiscardedPattern(
+        pattern,
+        joinProduced(elements.slice(pattern.elements.length)),
+        analysis,
+      );
       return;
     }
     case "constructor":
       if (pattern.payload !== null) {
         let payload = NONE;
         if (produced.tag === "variant") payload = produced.payload;
-        declareProduced(pattern.payload, payload, scope, analysis);
+        declareProduced(pattern.payload, payload, scope, analysis, parameter);
+      } else if (produced.tag === "variant") {
+        reportDiscardedPattern(pattern, produced.payload, analysis);
       }
       return;
     case "shape": {
@@ -297,13 +316,37 @@ function declareProduced(
           fieldValue,
           scope,
           analysis,
+          parameter,
         );
       }
+      const named = new Set(pattern.fields.map((field) => field.name));
+      reportDiscardedPattern(
+        pattern,
+        joinProduced(
+          [...fields]
+            .filter(([name]) => !named.has(name))
+            .map(([, value]) => value),
+        ),
+        analysis,
+      );
       return;
     }
     default:
       return;
   }
+}
+
+function reportDiscardedPattern(
+  pattern: Pattern,
+  produced: Produced,
+  analysis: Analysis,
+): void {
+  if (obligation(produced) !== "linear") return;
+  analysis.report(
+    "BLOT_LINEAR_PATTERN_DISCARDS",
+    "This pattern discards part of a linear value. Bind every linear component and consume it exactly once.",
+    pattern.span,
+  );
 }
 
 /**
@@ -368,6 +411,7 @@ function use(
       qualifier: binding.qualifier,
       owned: binding.owned,
       parameter: binding.parameter,
+      parameterPattern: binding.parameterPattern,
       result: binding.result,
       value: binding.value,
       moved: null,
@@ -427,12 +471,19 @@ function walkDeclarations(
       continue;
     }
     const produced = walk(declaration.value, scope, analysis, "move");
-    declareProduced(declaration.pattern, produced, scope, analysis);
+    declareProduced(declaration.pattern, produced, scope, analysis, false);
     if (declaration.pattern.tag === "name") {
       const binding = scope.bindings.get(declaration.pattern.name);
       if (binding !== undefined) {
-        binding.parameter = parameterQualifier(declaration.value, scope);
-        binding.result = functionResult(declaration.value, scope, analysis);
+        const contract = functionContract(
+          declaration.value,
+          produced,
+          scope,
+          analysis,
+        );
+        binding.parameter = contract.parameter;
+        binding.parameterPattern = contract.pattern;
+        binding.result = contract.result;
         binding.value = declaration.value;
       }
     }
@@ -449,8 +500,9 @@ function walkDeclarations(
  */
 function inherited(written: Qualifier, produced: Produced): Qualifier {
   const carried = obligation(produced);
-  if (carried === "none") return written;
-  return carried;
+  if (written === "linear" || carried === "linear") return "linear";
+  if (written === "affine" || carried === "affine") return "affine";
+  return written;
 }
 
 /**
@@ -547,8 +599,9 @@ function declareGroup(
     scope.bindings.set(member.name, {
       pattern: member.pattern,
       qualifier: settled[index],
-      owned: writtenObligation(settled[index]),
+      owned: writtenObligation(settled[index], null),
       parameter: patternQualifier(member.lambda.parameter),
+      parameterPattern: member.lambda.parameter,
       result: NONE,
       value: member.declaration.value,
       moved: null,
@@ -625,17 +678,27 @@ type Produced =
   | {
     readonly tag: "leaf";
     readonly qualifier: "affine" | "linear";
-    readonly kind: "value" | "closure";
+    readonly source: NamePattern | null;
   }
+  | {
+    readonly tag: "closure";
+    readonly captures: Produced;
+    readonly parameter: Pattern;
+    readonly result: Produced;
+  }
+  | { readonly tag: "many"; readonly values: readonly Produced[] }
   | { readonly tag: "sequence"; readonly elements: readonly Produced[] }
   | { readonly tag: "shape"; readonly fields: ReadonlyMap<string, Produced> }
   | { readonly tag: "variant"; readonly payload: Produced };
 
 const NONE: Produced = { tag: "none" };
 
-function writtenObligation(qualifier: Qualifier): Produced {
+function writtenObligation(
+  qualifier: Qualifier,
+  source: NamePattern | null,
+): Produced {
   if (qualifier === "linear" || qualifier === "affine") {
-    return { tag: "leaf", qualifier, kind: "value" };
+    return { tag: "leaf", qualifier, source };
   }
   return NONE;
 }
@@ -643,8 +706,10 @@ function writtenObligation(qualifier: Qualifier): Produced {
 function obligation(produced: Produced): "none" | "affine" | "linear" {
   if (produced.tag === "none") return "none";
   if (produced.tag === "leaf") return produced.qualifier;
+  if (produced.tag === "closure") return obligation(produced.captures);
   if (produced.tag === "variant") return obligation(produced.payload);
   let members: readonly Produced[] = [];
+  if (produced.tag === "many") members = produced.values;
   if (produced.tag === "sequence") members = produced.elements;
   if (produced.tag === "shape") members = [...produced.fields.values()];
   let result: "none" | "affine" | "linear" = "none";
@@ -661,30 +726,12 @@ function combine(left: Produced, right: Produced): Produced {
   const rightQualifier = obligation(right);
   if (leftQualifier === "none") return right;
   if (rightQualifier === "none") return left;
-  let kind: "value" | "closure" = "value";
-  if (containsClosure(left) || containsClosure(right)) kind = "closure";
-  if (leftQualifier === "linear" || rightQualifier === "linear") {
-    return {
-      tag: "leaf",
-      qualifier: "linear",
-      kind,
-    };
-  }
-  return {
-    tag: "leaf",
-    qualifier: "affine",
-    kind,
-  };
-}
-
-function containsClosure(produced: Produced): boolean {
-  if (produced.tag === "none") return false;
-  if (produced.tag === "leaf") return produced.kind === "closure";
-  if (produced.tag === "variant") return containsClosure(produced.payload);
-  let members: readonly Produced[] = [];
-  if (produced.tag === "sequence") members = produced.elements;
-  if (produced.tag === "shape") members = [...produced.fields.values()];
-  return members.some(containsClosure);
+  const values: Produced[] = [];
+  if (left.tag === "many") values.push(...left.values);
+  else values.push(left);
+  if (right.tag === "many") values.push(...right.values);
+  else values.push(right);
+  return { tag: "many", values };
 }
 
 function joinProduced(values: readonly Produced[]): Produced {
@@ -693,41 +740,434 @@ function joinProduced(values: readonly Produced[]): Produced {
   return result;
 }
 
+function joinAlternatives(values: readonly Produced[]): Produced {
+  if (values.length === 0) return NONE;
+  if (values.every((value) => value.tag === "none")) return NONE;
+  if (values.every((value) => value.tag === "sequence")) {
+    const sequences = values.map((value) => {
+      if (value.tag !== "sequence") throw new Error("expected a sequence");
+      return value.elements;
+    });
+    const length = sequences[0].length;
+    if (sequences.every((elements) => elements.length === length)) {
+      const elements: Produced[] = [];
+      for (let index = 0; index < length; index += 1) {
+        elements.push(joinAlternatives(sequences.map((each) => each[index])));
+      }
+      return { tag: "sequence", elements };
+    }
+  }
+  if (values.every((value) => value.tag === "shape")) {
+    const shapes = values.map((value) => {
+      if (value.tag !== "shape") throw new Error("expected a shape");
+      return value.fields;
+    });
+    const names = [...shapes[0].keys()];
+    if (
+      shapes.every((fields) =>
+        fields.size === names.length && names.every((name) => fields.has(name))
+      )
+    ) {
+      const fields = new Map<string, Produced>();
+      for (const name of names) {
+        const alternatives: Produced[] = [];
+        for (const shape of shapes) {
+          const field = shape.get(name);
+          if (field === undefined) {
+            throw new Error(`ownership shape lost field \`${name}\``);
+          }
+          alternatives.push(field);
+        }
+        fields.set(
+          name,
+          joinAlternatives(alternatives),
+        );
+      }
+      return { tag: "shape", fields };
+    }
+  }
+  if (values.every((value) => value.tag === "variant")) {
+    return {
+      tag: "variant",
+      payload: joinAlternatives(values.map((value) => {
+        if (value.tag !== "variant") throw new Error("expected a variant");
+        return value.payload;
+      })),
+    };
+  }
+  if (values.every((value) => value.tag === "closure")) {
+    const closures = values.map((value) => {
+      if (value.tag !== "closure") throw new Error("expected a closure");
+      return value;
+    });
+    const parameter = closures[0].parameter;
+    if (
+      closures.every((closure) =>
+        sameParameterUse(closure.parameter, parameter)
+      )
+    ) {
+      return {
+        tag: "closure",
+        captures: joinAlternatives(
+          closures.map((closure) =>
+            renameParameters(closure.captures, closure.parameter, parameter)
+          ),
+        ),
+        parameter,
+        result: joinAlternatives(
+          closures.map((closure) =>
+            renameParameters(closure.result, closure.parameter, parameter)
+          ),
+        ),
+      };
+    }
+  }
+  return joinProduced(values);
+}
+
+function sameParameterUse(left: Pattern, right: Pattern): boolean {
+  if (left.tag !== right.tag) return false;
+  if (left.tag === "name" && right.tag === "name") {
+    return left.qualifier === right.qualifier;
+  }
+  if (
+    (left.tag === "tuple" || left.tag === "array") &&
+    (right.tag === "tuple" || right.tag === "array")
+  ) {
+    if (left.elements.length !== right.elements.length) return false;
+    return left.elements.every((element, index) =>
+      sameParameterUse(element, right.elements[index])
+    );
+  }
+  if (left.tag === "constructor" && right.tag === "constructor") {
+    if (left.name !== right.name) return false;
+    if (left.payload === null || right.payload === null) {
+      return left.payload === right.payload;
+    }
+    return sameParameterUse(left.payload, right.payload);
+  }
+  if (left.tag === "shape" && right.tag === "shape") {
+    if (left.fields.length !== right.fields.length) return false;
+    return left.fields.every((field) => {
+      const found = right.fields.find((candidate) =>
+        candidate.name === field.name
+      );
+      if (found === undefined) return false;
+      return sameParameterUse(field.pattern, found.pattern);
+    });
+  }
+  if (left.tag === "int" && right.tag === "int") {
+    return left.value === right.value;
+  }
+  if (left.tag === "float" && right.tag === "float") {
+    return Object.is(left.value, right.value);
+  }
+  if (left.tag === "text" && right.tag === "text") {
+    return left.value === right.value;
+  }
+  if (left.tag === "pin" && right.tag === "pin") {
+    return left.name === right.name;
+  }
+  return true;
+}
+
+function renameParameters(
+  produced: Produced,
+  from: Pattern,
+  to: Pattern,
+): Produced {
+  if (from.tag === "name" && to.tag === "name") {
+    return renameParameter(produced, from, to);
+  }
+  if (
+    (from.tag === "tuple" || from.tag === "array") &&
+    (to.tag === "tuple" || to.tag === "array")
+  ) {
+    let renamed = produced;
+    for (const [index, element] of from.elements.entries()) {
+      const target = to.elements[index];
+      if (target === undefined) continue;
+      renamed = renameParameters(renamed, element, target);
+    }
+    return renamed;
+  }
+  if (from.tag === "constructor" && to.tag === "constructor") {
+    if (from.payload === null || to.payload === null) return produced;
+    return renameParameters(produced, from.payload, to.payload);
+  }
+  if (from.tag === "shape" && to.tag === "shape") {
+    let renamed = produced;
+    for (const field of from.fields) {
+      const target = to.fields.find((candidate) =>
+        candidate.name === field.name
+      );
+      if (target === undefined) continue;
+      renamed = renameParameters(renamed, field.pattern, target.pattern);
+    }
+    return renamed;
+  }
+  return produced;
+}
+
+function renameParameter(
+  produced: Produced,
+  from: NamePattern | null,
+  to: NamePattern | null,
+): Produced {
+  if (from === null || to === null || from === to) return produced;
+  if (produced.tag === "none") return produced;
+  if (produced.tag === "leaf") {
+    if (produced.source !== from) return produced;
+    return { ...produced, source: to };
+  }
+  if (produced.tag === "closure") {
+    return {
+      tag: "closure",
+      captures: renameParameter(produced.captures, from, to),
+      parameter: produced.parameter,
+      result: renameParameter(produced.result, from, to),
+    };
+  }
+  if (produced.tag === "many") {
+    return {
+      tag: "many",
+      values: produced.values.map((value) => renameParameter(value, from, to)),
+    };
+  }
+  if (produced.tag === "sequence") {
+    return {
+      tag: "sequence",
+      elements: produced.elements.map((element) =>
+        renameParameter(element, from, to)
+      ),
+    };
+  }
+  if (produced.tag === "shape") {
+    return {
+      tag: "shape",
+      fields: new Map(
+        [...produced.fields].map(([name, field]) => [
+          name,
+          renameParameter(field, from, to),
+        ]),
+      ),
+    };
+  }
+  return {
+    tag: "variant",
+    payload: renameParameter(produced.payload, from, to),
+  };
+}
+
 function patternQualifier(pattern: Pattern): Qualifier | null {
   if (pattern.tag !== "name") return null;
   return pattern.qualifier;
 }
 
-function parameterQualifier(expr: Expr, scope: Scope): Qualifier | null {
-  if (expr.tag === "lambda") return patternQualifier(expr.parameter);
-  if (expr.tag === "rec" && expr.lambda.tag === "lambda") {
-    return patternQualifier(expr.lambda.parameter);
-  }
-  if (expr.tag !== "var") return null;
-  const binding = analysisBinding(scope, expr.name);
-  if (binding === null) return null;
-  return binding.parameter;
+function namePattern(pattern: Pattern): NamePattern | null {
+  if (pattern.tag !== "name") return null;
+  return pattern;
 }
 
-function functionResult(
+interface FunctionContract {
+  readonly parameter: Qualifier | null;
+  readonly pattern: Pattern | null;
+  readonly result: Produced;
+}
+
+const NO_FUNCTION_CONTRACT: FunctionContract = {
+  parameter: null,
+  pattern: null,
+  result: NONE,
+};
+
+function functionContract(
   expr: Expr,
+  produced: Produced,
   scope: Scope,
   analysis: Analysis,
-): Produced {
+): FunctionContract {
+  if (produced.tag === "closure") {
+    return {
+      parameter: patternQualifier(produced.parameter),
+      pattern: produced.parameter,
+      result: produced.result,
+    };
+  }
   if (expr.tag === "lambda") {
     const result = analysis.functionResults.get(expr);
-    if (result !== undefined) return result;
-    return NONE;
+    let knownResult = NONE;
+    if (result !== undefined) knownResult = result;
+    return {
+      parameter: patternQualifier(expr.parameter),
+      pattern: expr.parameter,
+      result: knownResult,
+    };
   }
   if (expr.tag === "rec" && expr.lambda.tag === "lambda") {
     const result = analysis.functionResults.get(expr.lambda);
-    if (result !== undefined) return result;
-    return NONE;
+    let knownResult = NONE;
+    if (result !== undefined) knownResult = result;
+    return {
+      parameter: patternQualifier(expr.lambda.parameter),
+      pattern: expr.lambda.parameter,
+      result: knownResult,
+    };
   }
-  if (expr.tag !== "var") return NONE;
+  if (expr.tag !== "var") return NO_FUNCTION_CONTRACT;
   const binding = analysisBinding(scope, expr.name);
-  if (binding === null) return NONE;
-  return binding.result;
+  if (binding === null) return NO_FUNCTION_CONTRACT;
+  return {
+    parameter: binding.parameter,
+    pattern: binding.parameterPattern,
+    result: binding.result,
+  };
+}
+
+function substituteParameter(
+  produced: Produced,
+  parameter: Pattern | null,
+  argument: Produced,
+): Produced {
+  if (parameter === null || produced.tag === "none") return produced;
+  if (parameter.tag !== "name") return produced;
+  if (produced.tag === "leaf") {
+    if (produced.source === parameter) return argument;
+    return produced;
+  }
+  if (produced.tag === "closure") {
+    return {
+      tag: "closure",
+      captures: substituteParameter(produced.captures, parameter, argument),
+      parameter: produced.parameter,
+      result: substituteParameter(produced.result, parameter, argument),
+    };
+  }
+  if (produced.tag === "many") {
+    return {
+      tag: "many",
+      values: produced.values.map((value) =>
+        substituteParameter(value, parameter, argument)
+      ),
+    };
+  }
+  if (produced.tag === "sequence") {
+    return {
+      tag: "sequence",
+      elements: produced.elements.map((element) =>
+        substituteParameter(element, parameter, argument)
+      ),
+    };
+  }
+  if (produced.tag === "shape") {
+    return {
+      tag: "shape",
+      fields: new Map(
+        [...produced.fields].map(([name, field]) => [
+          name,
+          substituteParameter(field, parameter, argument),
+        ]),
+      ),
+    };
+  }
+  return {
+    tag: "variant",
+    payload: substituteParameter(produced.payload, parameter, argument),
+  };
+}
+
+function substituteParameters(
+  produced: Produced,
+  parameter: Pattern | null,
+  argument: Produced,
+): Produced {
+  if (parameter === null) return produced;
+  if (parameter.tag === "name") {
+    return substituteParameter(produced, parameter, argument);
+  }
+  if (
+    (parameter.tag === "tuple" || parameter.tag === "array") &&
+    argument.tag === "sequence"
+  ) {
+    let substituted = produced;
+    for (const [index, element] of parameter.elements.entries()) {
+      const value = argument.elements[index];
+      if (value === undefined) continue;
+      substituted = substituteParameters(substituted, element, value);
+    }
+    return substituted;
+  }
+  if (parameter.tag === "constructor" && argument.tag === "variant") {
+    return substituteParameters(produced, parameter.payload, argument.payload);
+  }
+  if (parameter.tag === "shape" && argument.tag === "shape") {
+    let substituted = produced;
+    for (const field of parameter.fields) {
+      const value = argument.fields.get(field.name);
+      if (value === undefined) continue;
+      substituted = substituteParameters(substituted, field.pattern, value);
+    }
+    return substituted;
+  }
+  return produced;
+}
+
+function parameterAcceptsOwnership(
+  parameter: Pattern | null,
+  argument: Produced,
+): boolean {
+  const ownership = obligation(argument);
+  if (ownership === "none") return true;
+  if (parameter === null) return false;
+  if (parameter.tag === "name") {
+    if (parameter.qualifier === "linear") return true;
+    return parameter.qualifier === "affine" && ownership === "affine";
+  }
+  if (
+    (parameter.tag === "tuple" || parameter.tag === "array") &&
+    argument.tag === "sequence"
+  ) {
+    if (parameter.elements.length !== argument.elements.length) return false;
+    return parameter.elements.every((element, index) =>
+      parameterAcceptsOwnership(element, argument.elements[index])
+    );
+  }
+  if (parameter.tag === "constructor" && argument.tag === "variant") {
+    return parameterAcceptsOwnership(parameter.payload, argument.payload);
+  }
+  if (parameter.tag === "shape" && argument.tag === "shape") {
+    for (const [name, value] of argument.fields) {
+      const field = parameter.fields.find((candidate) =>
+        candidate.name === name
+      );
+      if (field === undefined) {
+        if (obligation(value) === "linear") return false;
+        continue;
+      }
+      if (!parameterAcceptsOwnership(field.pattern, value)) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+function trustedScalarOperation(
+  expr: Expr,
+  argument: Produced,
+  scope: Scope,
+): boolean {
+  const application = applicationSpine(expr);
+  if (application.callee.tag === "intrinsic") return true;
+  if (application.callee.tag !== "field") return false;
+  if (application.callee.target.tag !== "var") return false;
+  const namespace = application.callee.target.name;
+  if (namespace !== "Num" && namespace !== "Array") return false;
+  if (analysisBinding(scope, namespace) !== null) return false;
+  if (argument.tag === "leaf") return true;
+  if (argument.tag !== "sequence") return false;
+  return argument.elements.every((element) =>
+    element.tag === "none" || element.tag === "leaf"
+  );
 }
 
 function analysisBinding(scope: Scope, name: string): Binding | null {
@@ -762,7 +1202,9 @@ function applicationSpine(expr: Expr): ApplicationSpine {
   return { callee, args };
 }
 
-function handleArguments(args: readonly Expr[]): readonly [Expr, Expr, Expr] | null {
+function handleArguments(
+  args: readonly Expr[],
+): readonly [Expr, Expr, Expr] | null {
   if (args.length === 3) return [args[0], args[1], args[2]];
   if (
     args.length === 1 && args[0].tag === "tuple" &&
@@ -895,21 +1337,35 @@ function walk(
         if (name === "@array.push" && application.args.length === 2) {
           const array = walk(application.args[0], scope, analysis, "move");
           const value = walk(application.args[1], scope, analysis, "move");
+          if (array.tag === "sequence") {
+            return {
+              tag: "sequence",
+              elements: [...array.elements, value],
+            };
+          }
+          if (obligation(value) !== "none") {
+            analysis.report(
+              "BLOT_LINEAR_ARRAY_PUSH_UNKNOWN",
+              "Appending an owned value to an array of unknown length would lose its consuming position. Build or split an array whose elements the ownership checker can account for.",
+              expr.span,
+            );
+          }
           return combine(array, value);
         }
       }
 
       // Applying a linear closure right where it was built discharges it: the
       // one call it owed is this one.
-      walk(expr.fn, scope, analysis, "project");
+      const callee = walk(expr.fn, scope, analysis, "project");
       // An argument is moved into the call unless it was explicitly borrowed.
       const argument = walk(expr.arg, scope, analysis, "move");
       const argumentOwnership = obligation(argument);
-      if (argumentOwnership !== "none" && containsClosure(argument)) {
-        const parameter = parameterQualifier(expr.fn, scope);
-        const intrinsic = applicationSpine(expr.fn).callee.tag === "intrinsic";
-        const accepted = intrinsic || parameter === "linear" ||
-          (parameter === "affine" && argumentOwnership === "affine");
+      const contract = functionContract(expr.fn, callee, scope, analysis);
+      if (argumentOwnership !== "none") {
+        const accepted = parameterAcceptsOwnership(
+          contract.pattern,
+          argument,
+        ) || trustedScalarOperation(expr.fn, argument, scope);
         if (!accepted) {
           analysis.report(
             "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
@@ -918,7 +1374,11 @@ function walk(
           );
         }
       }
-      return functionResult(expr.fn, scope, analysis);
+      return substituteParameters(
+        contract.result,
+        contract.pattern,
+        argument,
+      );
     }
 
     case "field": {
@@ -930,7 +1390,7 @@ function walk(
       const remaining = [...target.fields]
         .filter(([name]) => name !== expr.name)
         .map(([, value]) => value);
-      if (obligation(joinProduced(remaining)) !== "none") {
+      if (obligation(joinProduced(remaining)) === "linear") {
         analysis.report(
           "BLOT_LINEAR_PARTIAL_MOVE",
           `Projecting \`.${expr.name}\` would discard another owned field. Destructure the record so every owned field is consumed.`,
@@ -942,7 +1402,7 @@ function walk(
 
     case "lambda": {
       const inner = childScope(scope, true);
-      declare(expr.parameter, inner, analysis);
+      declareProduced(expr.parameter, NONE, inner, analysis, true);
       const result = walk(expr.body, inner, analysis, "move");
       analysis.functionResults.set(expr, result);
       closeScope(inner, analysis);
@@ -955,7 +1415,12 @@ function walk(
       }
       const qualifier = obligation(produced);
       if (qualifier !== "none") {
-        return { tag: "leaf", qualifier, kind: "closure" };
+        return {
+          tag: "closure",
+          captures: produced,
+          parameter: expr.parameter,
+          result,
+        };
       }
       return produced;
     }
@@ -974,13 +1439,26 @@ function walk(
         ),
       };
 
-    case "array":
-      return {
+    case "array": {
+      const elements = expr.elements.map((element) =>
+        walk(element.value, scope, analysis, "move")
+      );
+      const result: Produced = {
         tag: "sequence",
-        elements: expr.elements.map((element) =>
-          walk(element.value, scope, analysis, "move")
-        ),
+        elements,
       };
+      if (
+        expr.elements.some((element) => element.spread) &&
+        obligation(result) !== "none"
+      ) {
+        analysis.report(
+          "BLOT_LINEAR_ARRAY_SPREAD",
+          "An array spread makes owned element positions unknown. Split the owned input explicitly before constructing the result.",
+          expr.span,
+        );
+      }
+      return result;
+    }
 
     case "shape": {
       const fields = new Map<string, Produced>();
@@ -990,11 +1468,19 @@ function walk(
         if (member.tag === "field") fields.set(member.name, produced);
         else spread = combine(spread, produced);
       }
-      if (obligation(spread) !== "none") return combine(spread, {
-        tag: "shape",
-        fields,
-      });
-      return { tag: "shape", fields };
+      const result: Produced = { tag: "shape", fields };
+      if (
+        expr.members.some((member) => member.tag === "spread") &&
+        obligation(combine(spread, result)) !== "none"
+      ) {
+        analysis.report(
+          "BLOT_LINEAR_SHAPE_SPREAD",
+          "A record spread makes owned field provenance ambiguous. Destructure the owned input and construct every owned field explicitly.",
+          expr.span,
+        );
+      }
+      if (obligation(spread) !== "none") return combine(spread, result);
+      return result;
     }
 
     case "if": {
@@ -1018,7 +1504,7 @@ function walk(
         outcomes.push(snapshot(scope));
       }
       agree(outcomes, before, expr.span, analysis);
-      return joinProduced(produced);
+      return joinAlternatives(produced);
     }
 
     case "case": {
@@ -1029,13 +1515,13 @@ function walk(
       for (const arm of expr.arms) {
         restore(before);
         const inner = childScope(scope);
-        declareProduced(arm.pattern, target, inner, analysis);
+        declareProduced(arm.pattern, target, inner, analysis, false);
         produced.push(walk(arm.body, inner, analysis, kind));
         closeScope(inner, analysis);
         outcomes.push(snapshot(scope));
       }
       agree(outcomes, before, expr.span, analysis);
-      return joinProduced(produced);
+      return joinAlternatives(produced);
     }
 
     case "block": {

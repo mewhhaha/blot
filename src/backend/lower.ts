@@ -1731,6 +1731,17 @@ function lowerBlock(
     if (declaration.kind === "sig") continue;
 
     if (
+      declaration.value.tag === "var" &&
+      declaration.pattern.tag === "name"
+    ) {
+      const aliased = resolveRuntimeLambda(inner, declaration.value.name);
+      if (aliased !== null) {
+        inner.runtimeLambdas.set(declaration.pattern.name, aliased);
+        continue;
+      }
+    }
+
+    if (
       declaration.value.tag === "lambda" &&
       declaration.pattern.tag === "name" &&
       !capturesRuntimeBinding(declaration.value, inner)

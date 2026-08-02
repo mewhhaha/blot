@@ -151,12 +151,140 @@ return twice go;`,
   "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
 );
 
+rejects(
+  "an ordinary function parameter cannot discard an owned scalar",
+  `${CONSUME}let ignore = fn value => 0;
+let !token = 41;
+return ignore (!token);`,
+  "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
+);
+
+rejects(
+  "a runtime shadow cannot impersonate a consuming numeric operation",
+  `let Num = { .add = fn value => fn _ => 0; };
+let !token = 41;
+return Num.add (!token) 1;`,
+  "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
+);
+
 accepts(
   "a linear function parameter promises one invocation",
   `${CONSUME}let once = fn !f => f ();
 let !token = 41;
 let go = fn () => consume (!token);
 return once go;`,
+);
+
+accepts(
+  "a linear identity returns only the obligation supplied by its caller",
+  "let identity = fn !value => value;\nreturn identity 1;",
+);
+
+accepts(
+  "a linear identity transfers its caller's owned value",
+  `${CONSUME}let identity = fn !value => value;
+let !token = 41;
+let returned = identity (!token);
+return consume (!returned);`,
+);
+
+accepts(
+  "a destructured parameter transfers its linear component",
+  `${CONSUME}let first = fn (!value, _) => value;
+let !token = 41;
+let returned = first ((!token), 0);
+return consume (!returned);`,
+);
+
+rejects(
+  "an ordinary component in a destructured parameter rejects ownership",
+  "let ignore = fn (value, result) => result;\nlet !token = 41;\nreturn ignore ((!token), 0);",
+  "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
+);
+
+accepts(
+  "a returned closure transfers an owned parameter through both calls",
+  `${CONSUME}let defer = fn !value => fn () => value;
+let !token = 41;
+let later = defer (!token);
+let returned = later ();
+return consume (!returned);`,
+);
+
+accepts(
+  "a returned closure does not invent ownership for an ordinary argument",
+  "let defer = fn !value => fn () => value;\nlet later = defer 41;\nreturn later ();",
+);
+
+rejects(
+  "branch-produced records retain the obligation in their common field",
+  `${CONSUME}let !token = 41;
+let holder = if 1 < 2
+  then { .go = fn () => consume (!token); .value = 1; }
+  else { .go = fn () => consume (!token); .value = 2; }
+end;
+let { .go; .value; } = holder;
+return value;`,
+  "BLOT_LINEAR_NOT_CONSUMED",
+);
+
+rejects(
+  "a branch-produced closure retains ownership in its call result",
+  `let !token = 41;
+let chosen = if 1 < 2 then fn () => token else fn () => token end;
+return chosen ();`,
+  "BLOT_LINEAR_RESULT_ESCAPES",
+);
+
+rejects(
+  "partial destructuring cannot discard an owned field",
+  `${CONSUME}let !left = 40;
+let !right = 41;
+let holder = {
+  .first = fn () => consume (!left);
+  .second = fn () => consume (!right);
+};
+let { .first; } = holder;
+return first ();`,
+  "BLOT_LINEAR_PATTERN_DISCARDS",
+);
+
+rejects(
+  "array push preserves the appended ownership position",
+  `${CONSUME}let !token = 41;
+let values = @array.push [1] (fn () => consume (!token));
+let [first, go] = values;
+return first;`,
+  "BLOT_LINEAR_NOT_CONSUMED",
+);
+
+rejects(
+  "an array spread cannot obscure an owned element position",
+  `${CONSUME}let !token = 41;
+let prefix = [1];
+let values = [...prefix, fn () => consume (!token)];
+let [first, go] = values;
+return first;`,
+  "BLOT_LINEAR_ARRAY_SPREAD",
+);
+
+rejects(
+  "a record spread cannot obscure an owned field",
+  `${CONSUME}let !token = 41;
+let source = { .go = fn () => consume (!token); };
+let moved = { ...source; .value = 1; };
+return moved.value;`,
+  "BLOT_LINEAR_SHAPE_SPREAD",
+);
+
+accepts(
+  "a wildcard pattern consumes the whole linear value it matches",
+  "let !token = 41;\nreturn case token of _ => 0 end;",
+);
+
+accepts(
+  "a wildcard pattern may discard an affine value",
+  "let ?token = 41;\nreturn case token of _ => 0 end;",
 );
 
 // A borrow reads without spending, which is the whole reason to have one.

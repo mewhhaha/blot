@@ -1602,12 +1602,20 @@ through nested closures.
 Ownership propagates through arrays, tuples, variants, and shapes. Destructuring
 transfers each known component obligation to the corresponding binding. Moving
 an aggregate consumes it; projecting one field is rejected when that would
-silently discard another owned field. A direct array read cannot copy a known
-owned element, and replacement cannot discard one.
+silently discard another owned field, and a partial destructuring pattern is
+rejected when it has no subpattern for an owned component. A direct array read
+cannot copy a known owned element, and replacement cannot discard one. Appending
+to an array with known elements preserves the appended component's obligation.
+An array or record spread is rejected when an owned component would lose the
+position or field identity needed for later consuming extraction.
 
-A known function parameter is an ownership contract. Passing an owned closure to
-an ordinary or affine parameter is rejected; a `!parameter` promises one
-invocation and may accept it. This usage summary remains separate from the type
+A known function parameter is an ownership contract. Passing any owned value to
+an ordinary parameter is rejected; a `!parameter` promises one consumption and
+may accept it. An affine parameter may accept an affine value but cannot accept
+a linear one because it may discard the argument. Ownership returned from a
+linear or affine parameter is instantiated with the caller's actual obligation,
+including through a returned closure; passing an unrestricted value therefore
+does not invent ownership. This usage summary remains separate from the type
 lattice. A module result may not retain an ownership obligation because the ABI
 has no implicit ownership contract. Last-use and proved-consumption facts are
 recorded for the backend.
@@ -1971,6 +1979,10 @@ checker accepts them only when every value of `index` is inside
 let xs = [1, 2, 3];
 return @array.get xs 99;   // BLOT_OUT_OF_BOUNDS: Index 99 is outside an array of 3.
 ```
+
+The proof belongs to the saturated primitive call. These primitives cannot be
+aliased or partially applied: doing so would separate the eventual index from
+the site that must carry its certificate and is `BLOT_ARRAY_ACCESS_NOT_DIRECT`.
 
 ```blot
 sig at = [Int] -> Int -> Int;
