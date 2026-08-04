@@ -124,11 +124,23 @@ sometimes has. There is no f32 literal — the grammar has one float token, and
 than one performed on it. `Float32.widen` goes back, exactly, because every
 `F32` is an `F64`.
 
-`F32x4` is four `F32` lanes as one value, and a distinct type rather than a
-tuple of four: the operations over it are single instructions, and a shape the
-compiler could take apart field by field would not be. Lanes are read by name —
-`Vec4.x` through `Vec4.w` — because the target has four extract instructions and
-no way to choose between them at run time.
+`F32x4`, `I32x4`, `I16x8`, and `I8x16` are 128-bit SIMD values. Their lane width
+and count are part of the type; none is a tuple or record that can be projected
+structurally. `Vec4`, `Int32x4`, `Int16x8`, and `Int8x16` are the prelude
+namespaces for their operations. The emitted `wasm-simd128` artifact uses native
+vector instructions. The gpufuck conformance path may implement an integer
+vector lane by lane, but must produce the same value.
+
+Integer lane arithmetic wraps modulo (2^{32}), (2^{16}), or (2^8). Shift amounts
+are reduced modulo the lane width. Operations whose interpretation matters say
+`signed` or `unsigned` in their name; the bits in the vector do not otherwise
+carry signedness. Checked constructors accept `I32`, `I16`, or `I8` as
+appropriate and preserve the integer they receive. The explicitly named
+`of_wrapping`, `splat_wrapping`, and `with_*_wrapping` operations accept `Int`
+and reduce it modulo the lane width. Arithmetic is inherently wrapping.
+`Int32x4.of` constructs four lanes and its named projections and replacements
+are `x`, `y`, `z`, `w` and `with_x`, `with_y`, `with_z`, `with_w`. The narrower
+namespaces currently construct only with `splat`.
 
 `F32x4` is opaque rather than ordered. `Int`, `Str`, `F64`, and `F32` are ranges
 over an ordered domain; four lanes are not an interval, so there is no bound to
@@ -137,12 +149,20 @@ its name: `F32x4` matches `F32x4` and nothing else, `@type.reflect` reports it
 as `#Opaque` (§13.4), and `Reflect.refines` therefore answers `#False` for it,
 having nothing to compare.
 
-Lane comparisons produce the separate opaque `F32x4Mask` type. A mask can be
-passed to `Vec4.select` but has no lane projection or module-boundary layout.
+Lane comparisons produce separate opaque `F32x4Mask`, `I32x4Mask`, `I16x8Mask`,
+and `I8x16Mask` types. A mask is accepted only by the matching vector namespace.
+Integer `mask_bits` returns bit (i) for lane (i), while `all` and `any` reduce
+the mask to `Bool`. Masks have no lane projection or module-boundary layout.
 `Vec4.shuffle` selects four constant lanes from two vectors; `Vec4.swizzle` is
 the one-vector spelling. Lane selectors are integers in `0..7` for shuffle and
 `0..3` for swizzle, and must be known while compiling so they can become the
 instruction immediate.
+
+`Int32x4.lane vector selector` selects a lane whose integer selector is in
+`0..3` and known at compile time. A singleton integer type alone is
+insufficient: the selector must be a literal or a `const` value so lowering
+receives an immediate certificate. The named `x`, `y`, `z`, and `w` operations
+remain the shortest spelling for fixed positions.
 
 There is no implicit conversion between the numeric types, and no operator
 serves more than one. An operator resolves to one binding by name (§4.7), so a
@@ -242,6 +262,64 @@ open {} = @import "blot:prelude" ();
 At compilation, imported module bodies are specialized and inlined. This does
 not alter their source semantics as functions.
 
+### 3.1 Included files
+
+`@include` makes a non-Blot file available to an ordinary compile-time Blot
+function:
+
+```blot
+const as_raw = fn source => source.text;
+const shader = @include "./shaders/main.wgsl" as_raw;
+```
+
+Schematically, for every result type `a`, its type is:
+
+```blot
+Str -> ({ .specifier = Str; .path = Str; .text = Str; } -> a) -> a
+```
+
+The first argument must be a text literal at the call site. Relative paths are
+resolved from the including module; absolute paths retain their usual file
+meaning. The parser receives the exact written `.specifier`, a normalized
+module-relative `.path` using `/` separators, and the file's UTF-8 `.text`. It
+is an ordinary Blot function, so the program chooses the result type and
+representation. A JSON parser can return a structural value, for example, while
+a shader parser can return metadata and source text together. These are library
+policies; only decoding operations that Blot cannot express from its current
+text primitives require compiler support.
+
+The prelude supplies the conventional JSON policies:
+
+```blot
+const config = @include "./config.json" as_json;
+const fixed_config = @include "./config.json" as_const_json;
+```
+
+Both produce ordinary Blot values. JSON objects become records, arrays become
+arrays, strings become text, integral numbers become `Int`, other numbers become
+`F64`, booleans become `Bool`, and `null` becomes `()`. `as_json` assigns the
+usual widened type recursively: text is `Str`, integers are `Int`, booleans are
+`Bool`, and array elements are joined into one homogeneous element type. Object
+field names remain structural because they are present in the file.
+`as_const_json` instead preserves every text, integer, and boolean literal in
+the compile-time type and preserves the exact compile-time array contents. `F64`
+has no singleton types, and a runtime array remains homogeneous because Blot
+does not encode array length in its type.
+
+JSON decoding follows the platform JSON grammar, including last-field-wins for
+duplicate object names. An integral token is read from its source spelling, so
+compile-time integers do not lose precision through an intermediate JavaScript
+number. A non-integral number outside finite `F64` and malformed JSON are
+diagnostics at the `@include` call.
+
+An include is compile-time-only and its result must be bound with `const` or
+consumed by another compile-time expression. It grants no runtime filesystem
+authority and never leaves an unresolved file read in emitted code. The loader
+reads included files before evaluation, reports a missing file at its literal,
+and records the file as a dependency. A resident compilation therefore
+invalidates the including module and its importers when the included contents
+change.
+
 ## 4. Scope and declarations
 
 Scopes are lexical and declarations are processed in source order. A new binding
@@ -288,8 +366,31 @@ end;
 const measure_text = measuring Str;   // Str -> Int, not joined with the other arm
 ```
 
-This applies to a `const` whose value is a function written in the same module.
-A function that arrived from an import is typed from the import.
+This applies equally to a compile-time function reached through an imported
+module record. If the callee and arguments are known at compile time, checking
+evaluates the application and types the value it produced under the function's
+defining module scope and concrete captures when the ordinary result has
+alternative structural or function lower bounds, or carries an unevidenced
+structural inspection. An evaluated record is typed field-by-field, so a
+descriptor may contain a branch-selected function whose arrow differs from
+another call's. The ordinary application is checked in either case: it remains
+responsible for parameter, effect, and representation constraints. If the
+application cannot be evaluated or its settled result is already precise, that
+ordinary result remains authoritative.
+
+The defining-module provenance belongs to the function value, not to the field
+path used to reach it. Aliasing or re-exporting the function through another
+module therefore preserves specialization. Each concrete call is inferred with
+fresh variables; one importer's selection cannot constrain another's.
+
+After a module has been checked, imported specialization uses its immutable
+specialization capsule rather than the module's live inference environment. The
+capsule contains closed lexical schemes and its deterministic compile-time
+environment; mutable inference variables and pending constraints never cross the
+module boundary. A module parameter is not cached: each module application
+captures and types the concrete argument it received. Unchanged loader revisions
+may reuse a capsule across root checks, while a source, include, transitive
+dependency, or generative effect-identity change replaces it.
 
 A recursive function is typed the same way. Its body names the binding being
 defined, which is not a capture: the name is bound to a placeholder and the body
@@ -472,11 +573,14 @@ value; boolean-like properties use ordinary values such as `True`. Writing one
 property twice is the same duplicate explicit field error as writing one record
 field twice.
 
-The component's first parameter decides which properties are required. Ordinary
-record width subtyping admits extra fields and rejects an omitted required one.
-A field written with `?` elaborates to a field whose type includes `()`, and the
-call supplies `()` when it is omitted. Thus this signature requires `label` and
-makes `disabled` optional without an intrinsic `Option`:
+The component's first parameter decides which properties are required. An
+element property record is a closed call-site row: every required field must be
+written and every written field must be declared by the component. Ordinary
+records retain width subtyping; the closed check applies only to element syntax,
+where an extra property is otherwise almost always a misspelling. A field
+written with `?` elaborates to a field whose type includes `()`, and the call
+supplies `()` when it is omitted. Thus this signature requires `label` and makes
+`disabled` optional without an intrinsic `Option`:
 
 ```blot
 sig Button = {
@@ -785,9 +889,8 @@ The body extends as far to the right as it can, so an inner lambda that is
 followed by more of the enclosing expression is parenthesized like any other
 operand.
 
-Because every character of `=>` is in the operator class, a lambda written
-without `fn` is a well-formed operator chain rather than a syntax error. It is
-reported as `BLOT_LAMBDA_WITHOUT_FN` when the chain reaches the fixity table.
+The `=>` token is reserved for lambda parameters and case arms. A lambda written
+without `fn` is therefore a syntax error rather than an operator chain.
 
 ### 6.4 Blocks
 
@@ -1440,6 +1543,12 @@ name. It remains the generic iterator fold described above. The proof comes from
 the primitive value and follows ordinary aliases and pattern bindings; a source
 record with the same fields carries no authority.
 
+An immutable field path derives its identity from its parent value and field
+name. A comparison against `@array.len box.values` therefore proves access to
+that same `box.values`, including through an immutable alias. It proves nothing
+about `box.other`; rebinding the parent mints another identity and invalidates
+the previous relationship.
+
 ## 10. Types and inference
 
 Types are compile-time values in the same value domain as runtime data. There is
@@ -1576,6 +1685,15 @@ it already computed to type an earlier member call. A call it cannot evaluate
 has result type `⊤`, so nothing can be done with the result and no `sig` is
 satisfied by it.
 
+The same application rule specializes a callable field of an ordinary record
+whose value is known at compile time. Unlike an attached namespace, that record
+also has an ordinary structural type. Consequently an unevaluable call falls
+back to its inferred arrow rather than becoming `⊤`. This remains true when the
+record is reached through a namespace member: `World.Position.insert entity`
+types `Position` as the attached record and `insert` as its ordinary callable
+field. Compile-time projection follows the whole chain; it does not force games
+to bind each intermediate record before using it.
+
 A sealed type is nominal and invariant. Its identity is its name together with
 its carrier.
 
@@ -1590,8 +1708,8 @@ The implemented checker does not currently prove:
   against `@array.len` applied to a name (§8.5, §13.3);
 - the result of `@shape.get`, `@shape.set`, or `@shape.remove` whose field name
   is a runtime value (§13.3);
-- anything about a namespace member that is a function, or about a call to one
-  whose arguments are not compile-time values (§10.2);
+- anything about a namespace member call whose arguments are not compile-time
+  values (§10.2);
 - the fields a spread carries through from an operand whose own fields are not
   known where the spread is written (§6); or
 - impredicative instantiation.
@@ -1650,13 +1768,15 @@ through nested closures.
 
 Ownership propagates through arrays, tuples, variants, and shapes. Destructuring
 transfers each known component obligation to the corresponding binding. Moving
-an aggregate consumes it; projecting one field is rejected when that would
-silently discard another owned field, and a partial destructuring pattern is
-rejected when it has no subpattern for an owned component. A direct array read
-cannot copy a known owned element, and replacement cannot discard one. Appending
-to an array with known elements preserves the appended component's obligation.
-An array or record spread is rejected when an owned component would lose the
-position or field identity needed for later consuming extraction.
+an aggregate consumes it. Moving an owned record field marks that path moved
+while leaving sibling paths live; the whole record cannot subsequently be used,
+but another live field may be moved or borrowed. Continuing branches must agree
+on the live path set. A partial destructuring pattern is rejected when it has no
+subpattern for an owned component. A direct array read cannot copy a known owned
+element, and replacement cannot discard one. Appending to an array with known
+elements preserves the appended component's obligation. An array or record
+spread is rejected when an owned component would lose the position or field
+identity needed for later consuming extraction.
 
 A known function parameter is an ownership contract. An unannotated name
 parameter whose result structurally carries that parameter exactly once infers a
@@ -1936,6 +2056,8 @@ Everything not listed here belongs in source, normally the prelude.
 | primitive         | meaning                                                       |
 | ----------------- | ------------------------------------------------------------- |
 | `@import`         | resolve a text module specifier and return its function       |
+| `@include`        | parse a dependency-tracked file at compile time               |
+| `@json.parse`     | decode JSON under an explicit compile-time inference policy   |
 | `@effect`         | create a fresh source effect from operation types             |
 | `@effect.host`    | create a fresh host effect                                    |
 | `@handle`         | discharge one effect from a nullary computation               |
@@ -1947,51 +2069,66 @@ Everything not listed here belongs in source, normally the prelude.
 
 ### 13.2 Numeric and text operations
 
-| primitive        | meaning                                              |
-| ---------------- | ---------------------------------------------------- |
-| `@int.add`       | signed addition                                      |
-| `@int.sub`       | signed subtraction                                   |
-| `@int.mul`       | signed multiplication                                |
-| `@int.div`       | division truncated toward zero                       |
-| `@int.rem`       | remainder                                            |
-| `@int.neg`       | negation                                             |
-| `@int.cmp`       | return `#Less`, `#Equal`, or `#Greater` for integers |
-| `@float.add`     | addition                                             |
-| `@float.sub`     | subtraction                                          |
-| `@float.mul`     | multiplication                                       |
-| `@float.div`     | division                                             |
-| `@float.rem`     | remainder                                            |
-| `@float.neg`     | negation                                             |
-| `@float.cmp`     | order two floats, refusing NaN                       |
-| `@float.is_nan`  | test for the value no ordering accepts               |
-| `@f32.add`       | single-precision addition                            |
-| `@f32.sub`       | single-precision subtraction                         |
-| `@f32.mul`       | single-precision multiplication                      |
-| `@f32.div`       | single-precision division                            |
-| `@f32.neg`       | single-precision negation                            |
-| `@f32.cmp`       | order two `F32`, refusing NaN                        |
-| `@f32.is_nan`    | test an `F32` for NaN                                |
-| `@f32.of_float`  | narrow an `F64`, which may lose the value            |
-| `@float.of_f32`  | widen an `F32`, which never does                     |
-| `@f32x4.of`      | gather four `F32` into one vector                    |
-| `@f32x4.splat`   | one `F32` into every lane                            |
-| `@f32x4.add`     | lane-wise addition                                   |
-| `@f32x4.sub`     | lane-wise subtraction                                |
-| `@f32x4.mul`     | lane-wise multiplication                             |
-| `@f32x4.div`     | lane-wise division                                   |
-| `@f32x4.eq`      | lane-wise equality mask                              |
-| `@f32x4.less`    | lane-wise less-than mask                             |
-| `@f32x4.select`  | choose lanes from two vectors by mask                |
-| `@f32x4.shuffle` | four constant lanes selected from two vectors        |
-| `@f32x4.sum`     | add the four lanes together                          |
-| `@f32x4.x`       | read lane zero, and `.y`, `.z`, `.w` for the rest    |
-| `@float.of_int`  | widen an integer to a float                          |
-| `@int.of_float`  | truncate a float toward zero                         |
-| `@text.concat`   | concatenate text                                     |
-| `@text.len`      | count Unicode code points                            |
-| `@text.cmp`      | compare text and return an ordering constructor      |
-| `@text.contains` | test whether text contains a query                   |
-| `@text.of_int`   | render an integer as decimal text                    |
+| primitive                                   | meaning                                              |
+| ------------------------------------------- | ---------------------------------------------------- |
+| `@int.add`                                  | signed addition                                      |
+| `@int.sub`                                  | signed subtraction                                   |
+| `@int.mul`                                  | signed multiplication                                |
+| `@int.div`                                  | division truncated toward zero                       |
+| `@int.rem`                                  | remainder                                            |
+| `@int.neg`                                  | negation                                             |
+| `@int.cmp`                                  | return `#Less`, `#Equal`, or `#Greater` for integers |
+| `@float.add`                                | addition                                             |
+| `@float.sub`                                | subtraction                                          |
+| `@float.mul`                                | multiplication                                       |
+| `@float.div`                                | division                                             |
+| `@float.rem`                                | remainder                                            |
+| `@float.neg`                                | negation                                             |
+| `@float.cmp`                                | order two floats, refusing NaN                       |
+| `@float.is_nan`                             | test for the value no ordering accepts               |
+| `@f32.add`                                  | single-precision addition                            |
+| `@f32.sub`                                  | single-precision subtraction                         |
+| `@f32.mul`                                  | single-precision multiplication                      |
+| `@f32.div`                                  | single-precision division                            |
+| `@f32.neg`                                  | single-precision negation                            |
+| `@f32.cmp`                                  | order two `F32`, refusing NaN                        |
+| `@f32.is_nan`                               | test an `F32` for NaN                                |
+| `@f32.of_float`                             | narrow an `F64`, which may lose the value            |
+| `@float.of_f32`                             | widen an `F32`, which never does                     |
+| `@f32x4.of`                                 | gather four `F32` into one vector                    |
+| `@f32x4.splat`                              | one `F32` into every lane                            |
+| `@f32x4.add`                                | lane-wise addition                                   |
+| `@f32x4.sub`                                | lane-wise subtraction                                |
+| `@f32x4.mul`                                | lane-wise multiplication                             |
+| `@f32x4.div`                                | lane-wise division                                   |
+| `@f32x4.eq`                                 | lane-wise equality mask                              |
+| `@f32x4.less`                               | lane-wise less-than mask                             |
+| `@f32x4.select`                             | choose lanes from two vectors by mask                |
+| `@f32x4.shuffle`                            | four constant lanes selected from two vectors        |
+| `@f32x4.sum`                                | add the four lanes together                          |
+| `@f32x4.x`                                  | read lane zero, and `.y`, `.z`, `.w` for the rest    |
+| `@i32x4.of`                                 | gather four checked `I32` lanes                      |
+| `@i32x4.of_wrapping`                        | gather four `Int` values modulo 2³²                  |
+| `@i{8,16,32}xN.splat`                       | copy one width-checked integer into every lane       |
+| `@i{8,16,32}xN.splat_wrapping`              | copy one explicitly wrapped `Int` into every lane    |
+| `@i{8,16,32}xN.{add,sub}`                   | lane-wise wrapping arithmetic                        |
+| `@i{16,32}xN.mul`                           | lane-wise wrapping multiplication                    |
+| `@i{8,16,32}xN.{and,or,xor,not}`            | lane-wise bit operations                             |
+| `@i{8,16,32}xN.{shl,shr_s,shr_u}`           | lane-wise shifts by a scalar amount                  |
+| `@i{8,16,32}xN.{eq,lt_s,lt_u}`              | lane comparison producing its mask                   |
+| `@i32x4.{ne,gt_s,gt_u,le_s,le_u,ge_s,ge_u}` | remaining comparisons                                |
+| `@i{8,16,32}xN.{min_s,min_u,max_s,max_u}`   | lane-wise extrema                                    |
+| `@i{8,16,32}xN.select`                      | select lanes from two vectors by matching mask       |
+| `@i{8,16,32}xN.mask_{bitmask,all,any}`      | reduce a matching mask                               |
+| `@i32x4.lane`                               | read a compile-time-selected lane in `0..3`          |
+| `@i32x4.laneN`                              | read constant lane `N`; `with_laneN` replaces it     |
+| `@float.of_int`                             | widen an integer to a float                          |
+| `@int.of_float`                             | truncate a float toward zero                         |
+| `@text.concat`                              | concatenate text                                     |
+| `@text.len`                                 | count Unicode code points                            |
+| `@text.cmp`                                 | compare text and return an ordering constructor      |
+| `@text.contains`                            | test whether text contains a query                   |
+| `@text.of_int`                              | render an integer as decimal text                    |
 
 Division and remainder by zero are errors. Runtime integer results outside
 signed 64-bit range trap.
@@ -2045,7 +2182,9 @@ record has no one element type, and width subtyping hides its complete field
 set. Runtime `@shape.get`, `@shape.set`, or `@shape.remove` with such a name is
 `BLOT_DYNAMIC_SHAPE_FIELD`. Compile-time shape folds may use dynamic names while
 evaluating; their unevidenced result variables cannot prove a `sig`. Runtime
-dynamic keys belong in the prelude's homogeneous `Dict` abstraction.
+dynamic keys belong in the prelude's homogeneous `Dict` abstraction. When the
+name is static, all three operations may project or rebuild a record whose field
+values are available only at runtime.
 
 `Dict.of A` is represented by an association array of `(Str, A)` pairs. The
 first matching key is visible. Its operations are ordinary prelude source:
@@ -2362,15 +2501,27 @@ record. A structurally polymorphic function crossing the external ABI still
 needs a concrete signature, because an unknown caller cannot be whole-program
 specialized.
 
+A compile-time array of field names may drive a residual structural fold. The
+compiler evaluates the fold's recursive control while the name and index are
+static, but retains operations over runtime values. Thus a fold containing
+`@shape.get value name` becomes one direct projection per name followed by the
+residual scalar operations; neither the recursive iterator nor a dynamic field
+name reaches Runtime HIR. This is ordinary partial evaluation of `fold`, not an
+ECS-specific lowering rule. If the field-name array is not known at compile
+time, the ordinary dynamic-shape refusal still applies.
+
 ### 15.1 Core WebAssembly ABI
 
 `blot build` validates Blot Runtime HIR, constructs the ABI adapters specified
 here, lowers to gpupaper's language-independent Core, and emits the resulting
 plan through gpupaper's checked Rust/WebAssembly emitter. Gpupaper contributes
-no Blot-specific HIR, ABI rule, or adapter. The compiler parses through baba's
-generated WebAssembly parser and does not initialize WebGPU. The separate
-conformance tools exercise the GPU frontend and evaluator, but they are not
-compiler targets. Generated modules implement Blot Core Wasm ABI 1.0.
+no Blot-specific HIR, ABI rule, or adapter. The compiler parses through Baba 9's
+CPU frontend and materializes its compact CST without initializing WebGPU. When
+Baba reports only its built-in signed-I32 literal policy, Blot re-ingests those
+already-identified token spans with offset-preserving zero spellings and
+materializes the original I64 text; no tokenization rule is duplicated. The
+separate conformance tools exercise the GPU frontend and evaluator, but they are
+not compiler targets. Generated modules implement Blot Core Wasm ABI 1.0.
 Backend-private values and heap objects never cross the generated adapters,
 which expose the synchronous memory32, UTF-8 subset of the Component Model
 Canonical ABI.

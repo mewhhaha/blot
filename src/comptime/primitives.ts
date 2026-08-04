@@ -17,11 +17,19 @@ import {
   equal,
   F32X4_MASK_NAME,
   F32X4_NAME,
+  I16X8_MASK_NAME,
+  I16X8_NAME,
+  I32X4_MASK_NAME,
+  I32X4_NAME,
+  I8X16_MASK_NAME,
+  I8X16_NAME,
+  inferredTypeOf,
   show,
   tupleOf,
   UNIT,
   type Value,
 } from "./value.ts";
+import { parseJson } from "./json.ts";
 
 export interface Primitive {
   readonly arity: number;
@@ -94,7 +102,7 @@ function float32Of(value: Value, span: Span, what: string): number {
 }
 
 function do_splat(lane: number): Value {
-  return { tag: "vector", lanes: [lane, lane, lane, lane] };
+  return { tag: "vector", element: "f32", lanes: [lane, lane, lane, lane] };
 }
 
 function vectorOf(
@@ -102,7 +110,7 @@ function vectorOf(
   span: Span,
   what: string,
 ): readonly number[] {
-  if (value.tag !== "vector") {
+  if (value.tag !== "vector" || value.element !== "f32") {
     fail("BLOT_TYPE", `${what} expects an F32x4, found ${show(value)}.`, span);
   }
   return value.lanes;
@@ -113,7 +121,7 @@ function vectorMaskOf(
   span: Span,
   what: string,
 ): readonly boolean[] {
-  if (value.tag !== "vector-mask") {
+  if (value.tag !== "vector-mask" || value.element !== "f32") {
     fail(
       "BLOT_TYPE",
       `${what} expects an F32x4Mask, found ${show(value)}.`,
@@ -131,8 +139,431 @@ function lanewise(
 ): Value {
   return {
     tag: "vector",
+    element: "f32",
     lanes: left.map((lane, index) => Math.fround(step(lane, right[index]))),
   };
+}
+
+type PrimitiveEntry = readonly [string, Primitive];
+
+function simdVector(
+  element: "f32" | "i32" | "i16" | "i8",
+  lanes: readonly number[],
+): Value {
+  return { tag: "vector", element, lanes };
+}
+
+function simdMask(
+  element: "f32" | "i32" | "i16" | "i8",
+  lanes: readonly boolean[],
+): Value {
+  return { tag: "vector-mask", element, lanes };
+}
+
+function simdLanes(
+  value: Value,
+  element: "f32" | "i32" | "i16" | "i8",
+  span: Span,
+  operation: string,
+): readonly number[] {
+  if (value.tag === "vector" && value.element === element) return value.lanes;
+  fail(
+    "BLOT_TYPE",
+    `${operation} expects an ${simdName(element)}, found ${show(value)}.`,
+    span,
+  );
+}
+
+function simdMaskLanes(
+  value: Value,
+  element: "f32" | "i32" | "i16" | "i8",
+  span: Span,
+  operation: string,
+): readonly boolean[] {
+  if (value.tag === "vector-mask" && value.element === element) {
+    return value.lanes;
+  }
+  fail(
+    "BLOT_TYPE",
+    `${operation} expects an ${simdName(element)}Mask, found ${show(value)}.`,
+    span,
+  );
+}
+
+function simdName(element: "f32" | "i32" | "i16" | "i8"): string {
+  if (element === "f32") return "F32x4";
+  if (element === "i32") return "I32x4";
+  if (element === "i16") return "I16x8";
+  return "I8x16";
+}
+
+function integerLane(value: Value, span: Span, operation: string): number {
+  const lane = intOf(value, span, operation);
+  return Number(BigInt.asIntN(32, lane));
+}
+
+function wrapLane(value: number, bits: 8 | 16 | 32): number {
+  if (bits === 32) return value | 0;
+  if (bits === 16) return (value << 16) >> 16;
+  return (value << 24) >> 24;
+}
+
+function unsignedLane(value: number, bits: 8 | 16 | 32): number {
+  if (bits === 32) return value >>> 0;
+  if (bits === 16) return value & 0xffff;
+  return value & 0xff;
+}
+
+function maskReductionEntries(
+  prefix: string,
+  element: "f32" | "i32" | "i16" | "i8",
+): PrimitiveEntry[] {
+  return [
+    [`@${prefix}.mask_bitmask`, {
+      arity: 1,
+      run: ([value], span) => {
+        const lanes = simdMaskLanes(
+          value,
+          element,
+          span,
+          `@${prefix}.mask_bitmask`,
+        );
+        let mask = 0n;
+        lanes.forEach((lane, index) => {
+          if (lane) mask |= 1n << BigInt(index);
+        });
+        return { tag: "int", value: mask };
+      },
+    }],
+    [`@${prefix}.mask_all`, {
+      arity: 1,
+      run: ([value], span) => {
+        const lanes = simdMaskLanes(
+          value,
+          element,
+          span,
+          `@${prefix}.mask_all`,
+        );
+        let result = 0n;
+        if (lanes.every(Boolean)) result = 1n;
+        return { tag: "int", value: result };
+      },
+    }],
+    [`@${prefix}.mask_any`, {
+      arity: 1,
+      run: ([value], span) => {
+        const lanes = simdMaskLanes(
+          value,
+          element,
+          span,
+          `@${prefix}.mask_any`,
+        );
+        let result = 0n;
+        if (lanes.some(Boolean)) result = 1n;
+        return { tag: "int", value: result };
+      },
+    }],
+  ];
+}
+
+function integerSimdEntries(
+  prefix: "i32x4" | "i16x8" | "i8x16",
+  element: "i32" | "i16" | "i8",
+  bits: 8 | 16 | 32,
+  lanes: 4 | 8 | 16,
+  multiply: boolean,
+  extendedComparisons: boolean,
+): PrimitiveEntry[] {
+  const unary = (
+    name: string,
+    apply: (lane: number) => number,
+  ): PrimitiveEntry => [
+    `@${prefix}.${name}`,
+    {
+      arity: 1,
+      run: ([value], span) =>
+        simdVector(
+          element,
+          simdLanes(value, element, span, `@${prefix}.${name}`).map((lane) =>
+            wrapLane(apply(lane), bits)
+          ),
+        ),
+    },
+  ];
+  const binary = (
+    name: string,
+    apply: (left: number, right: number) => number,
+  ): PrimitiveEntry => [
+    `@${prefix}.${name}`,
+    {
+      arity: 2,
+      run: ([left, right], span) => {
+        const leftLanes = simdLanes(left, element, span, `@${prefix}.${name}`);
+        const rightLanes = simdLanes(
+          right,
+          element,
+          span,
+          `@${prefix}.${name}`,
+        );
+        return simdVector(
+          element,
+          leftLanes.map((lane, index) =>
+            wrapLane(apply(lane, rightLanes[index]), bits)
+          ),
+        );
+      },
+    },
+  ];
+  const compare = (
+    name: string,
+    apply: (left: number, right: number) => boolean,
+  ): PrimitiveEntry => [
+    `@${prefix}.${name}`,
+    {
+      arity: 2,
+      run: ([left, right], span) => {
+        const leftLanes = simdLanes(left, element, span, `@${prefix}.${name}`);
+        const rightLanes = simdLanes(
+          right,
+          element,
+          span,
+          `@${prefix}.${name}`,
+        );
+        return simdMask(
+          element,
+          leftLanes.map((lane, index) => apply(lane, rightLanes[index])),
+        );
+      },
+    },
+  ];
+  const entries: PrimitiveEntry[] = [
+    [`@${prefix}.splat`, {
+      arity: 1,
+      run: ([value], span) =>
+        simdVector(
+          element,
+          Array.from({ length: lanes }, () =>
+            wrapLane(integerLane(value, span, `@${prefix}.splat`), bits)),
+        ),
+    }],
+    binary("add", (left, right) => left + right),
+    binary("sub", (left, right) => left - right),
+    binary("and", (left, right) => left & right),
+    binary("or", (left, right) => left | right),
+    binary("xor", (left, right) => left ^ right),
+    unary("not", (lane) => ~lane),
+    binary("min_s", Math.min),
+    binary("max_s", Math.max),
+    binary("min_u", (left, right) => {
+      if (unsignedLane(left, bits) < unsignedLane(right, bits)) return left;
+      return right;
+    }),
+    binary("max_u", (left, right) => {
+      if (unsignedLane(left, bits) > unsignedLane(right, bits)) return left;
+      return right;
+    }),
+    compare("eq", (left, right) => left === right),
+    compare("lt_s", (left, right) => left < right),
+    compare(
+      "lt_u",
+      (left, right) => unsignedLane(left, bits) < unsignedLane(right, bits),
+    ),
+    [`@${prefix}.shl`, {
+      arity: 2,
+      run: ([value, amount], span) => {
+        const shift = integerLane(amount, span, `@${prefix}.shl`) & (bits - 1);
+        return simdVector(
+          element,
+          simdLanes(value, element, span, `@${prefix}.shl`).map(
+            (lane) => wrapLane(lane << shift, bits),
+          ),
+        );
+      },
+    }],
+    [`@${prefix}.shr_s`, {
+      arity: 2,
+      run: ([value, amount], span) => {
+        const shift = integerLane(amount, span, `@${prefix}.shr_s`) &
+          (bits - 1);
+        return simdVector(
+          element,
+          simdLanes(value, element, span, `@${prefix}.shr_s`).map(
+            (lane) => wrapLane(lane >> shift, bits),
+          ),
+        );
+      },
+    }],
+    [`@${prefix}.shr_u`, {
+      arity: 2,
+      run: ([value, amount], span) => {
+        const shift = integerLane(amount, span, `@${prefix}.shr_u`) &
+          (bits - 1);
+        return simdVector(
+          element,
+          simdLanes(value, element, span, `@${prefix}.shr_u`).map(
+            (lane) => wrapLane(unsignedLane(lane, bits) >>> shift, bits),
+          ),
+        );
+      },
+    }],
+    [`@${prefix}.select`, {
+      arity: 3,
+      run: ([mask, whenTrue, whenFalse], span) => {
+        const selected = simdMaskLanes(
+          mask,
+          element,
+          span,
+          `@${prefix}.select`,
+        );
+        const trueLanes = simdLanes(
+          whenTrue,
+          element,
+          span,
+          `@${prefix}.select`,
+        );
+        const falseLanes = simdLanes(
+          whenFalse,
+          element,
+          span,
+          `@${prefix}.select`,
+        );
+        return simdVector(
+          element,
+          selected.map((lane, index) => {
+            if (lane) return trueLanes[index];
+            return falseLanes[index];
+          }),
+        );
+      },
+    }],
+    ...maskReductionEntries(prefix, element),
+  ];
+  if (multiply) entries.push(binary("mul", (left, right) => left * right));
+  if (extendedComparisons) {
+    entries.push(
+      compare("ne", (left, right) => left !== right),
+      compare("gt_s", (left, right) => left > right),
+      compare(
+        "gt_u",
+        (left, right) => unsignedLane(left, bits) > unsignedLane(right, bits),
+      ),
+      compare("le_s", (left, right) => left <= right),
+      compare(
+        "le_u",
+        (left, right) => unsignedLane(left, bits) <= unsignedLane(right, bits),
+      ),
+      compare("ge_s", (left, right) => left >= right),
+      compare(
+        "ge_u",
+        (left, right) => unsignedLane(left, bits) >= unsignedLane(right, bits),
+      ),
+    );
+  }
+  if (prefix === "i32x4") {
+    entries.push(
+      ["@i32x4.of", {
+        arity: 4,
+        run: (values, span) =>
+          simdVector(
+            "i32",
+            values.map((value) => integerLane(value, span, "@i32x4.of")),
+          ),
+      }],
+      ["@i32x4.of_wrapping", {
+        arity: 4,
+        run: (values, span) =>
+          simdVector(
+            "i32",
+            values.map((value) =>
+              integerLane(value, span, "@i32x4.of_wrapping")
+            ),
+          ),
+      }],
+      ["@i32x4.lane", {
+        arity: 2,
+        run: ([value, selector], span) => {
+          const lane = Number(intOf(selector, span, "@i32x4.lane"));
+          if (!Number.isSafeInteger(lane) || lane < 0 || lane > 3) {
+            fail(
+              "BLOT_SIMD_IMMEDIATE_RANGE",
+              `I32x4 lane ${lane} is outside 0..3.`,
+              span,
+            );
+          }
+          return {
+            tag: "int",
+            value: BigInt(simdLanes(value, "i32", span, "@i32x4.lane")[lane]),
+          };
+        },
+      }],
+      ...[0, 1, 2, 3].map((lane): PrimitiveEntry => [
+        `@i32x4.lane${lane}`,
+        {
+          arity: 1,
+          run: ([value], span) => ({
+            tag: "int",
+            value: BigInt(
+              simdLanes(value, "i32", span, `@i32x4.lane${lane}`)[lane],
+            ),
+          }),
+        },
+      ]),
+      ...[0, 1, 2, 3].map((lane): PrimitiveEntry => [
+        `@i32x4.with_lane${lane}`,
+        {
+          arity: 2,
+          run: ([value, replacement], span) => {
+            const result = [
+              ...simdLanes(value, "i32", span, `@i32x4.with_lane${lane}`),
+            ];
+            result[lane] = integerLane(
+              replacement,
+              span,
+              `@i32x4.with_lane${lane}`,
+            );
+            return simdVector("i32", result);
+          },
+        },
+      ]),
+      ...[0, 1, 2, 3].map((lane): PrimitiveEntry => [
+        `@i32x4.with_lane${lane}_wrapping`,
+        {
+          arity: 2,
+          run: ([value, replacement], span) => {
+            const result = [
+              ...simdLanes(
+                value,
+                "i32",
+                span,
+                `@i32x4.with_lane${lane}_wrapping`,
+              ),
+            ];
+            result[lane] = integerLane(
+              replacement,
+              span,
+              `@i32x4.with_lane${lane}_wrapping`,
+            );
+            return simdVector("i32", result);
+          },
+        },
+      ]),
+    );
+  }
+  return entries;
+}
+
+function additionalSimdEntries(): PrimitiveEntry[] {
+  const entries: PrimitiveEntry[] = [
+    ...integerSimdEntries("i32x4", "i32", 32, 4, true, true),
+    ...integerSimdEntries("i16x8", "i16", 16, 8, true, true),
+    ...integerSimdEntries("i8x16", "i8", 8, 16, false, true),
+  ];
+  for (const prefix of ["i32x4", "i16x8", "i8x16"] as const) {
+    const splat = entries.find(([name]) => name === `@${prefix}.splat`);
+    if (splat === undefined) throw new Error(`missing @${prefix}.splat`);
+    entries.push([`@${prefix}.splat_wrapping`, splat[1]]);
+  }
+  return entries;
 }
 
 function textOf(value: Value, span: Span, what: string): string {
@@ -457,6 +888,8 @@ function reflect(value: Value): Value {
 
 /** A literal's type is the literal: `@type.of 1` is `1`, never `I32`. */
 function typeOf(value: Value): Value {
+  const inferred = inferredTypeOf(value);
+  if (inferred !== undefined) return inferred;
   if (value.tag === "extended") return typeOf(value.inner);
   if (value.tag === "shape") {
     return {
@@ -522,8 +955,30 @@ export function inhabits(value: Value, type: Value): boolean {
     // Nothing to compare: an opaque type is a name, so which values are in it
     // is a fact the evaluator holds rather than one it computes. `F32x4` is the
     // only one there is, and a vector is the only thing in it.
-    if (type.name === F32X4_NAME) return value.tag === "vector";
-    if (type.name === F32X4_MASK_NAME) return value.tag === "vector-mask";
+    const vectors = new Map<string, "f32" | "i32" | "i16" | "i8">(
+      [
+        [F32X4_NAME, "f32"],
+        [I32X4_NAME, "i32"],
+        [I16X8_NAME, "i16"],
+        [I8X16_NAME, "i8"],
+      ],
+    );
+    const masks = new Map<string, "f32" | "i32" | "i16" | "i8">(
+      [
+        [F32X4_MASK_NAME, "f32"],
+        [I32X4_MASK_NAME, "i32"],
+        [I16X8_MASK_NAME, "i16"],
+        [I8X16_MASK_NAME, "i8"],
+      ],
+    );
+    const vectorElement = vectors.get(type.name);
+    if (vectorElement !== undefined) {
+      return value.tag === "vector" && value.element === vectorElement;
+    }
+    const maskElement = masks.get(type.name);
+    if (maskElement !== undefined) {
+      return value.tag === "vector-mask" && value.element === maskElement;
+    }
     expect(
       false,
       `the opaque type ${type.name} has no inhabitants the evaluator knows`,
@@ -593,6 +1048,12 @@ export const PRIMITIVE_VALUES: ReadonlyMap<string, Value> = new Map<
   // rather than a range that would never be asked about its bounds.
   ["@type.f32x4", { tag: "opaque-type", name: F32X4_NAME }],
   ["@type.f32x4_mask", { tag: "opaque-type", name: F32X4_MASK_NAME }],
+  ["@type.i32x4", { tag: "opaque-type", name: I32X4_NAME }],
+  ["@type.i32x4_mask", { tag: "opaque-type", name: I32X4_MASK_NAME }],
+  ["@type.i16x8", { tag: "opaque-type", name: I16X8_NAME }],
+  ["@type.i16x8_mask", { tag: "opaque-type", name: I16X8_MASK_NAME }],
+  ["@type.i8x16", { tag: "opaque-type", name: I8X16_NAME }],
+  ["@type.i8x16_mask", { tag: "opaque-type", name: I8X16_MASK_NAME }],
   // Always open at both ends. A float bound would have to be a real number and
   // nothing in the lattice could use one, so `Float` is the only float type
   // there is.
@@ -1086,6 +1547,42 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     }),
   }],
 
+  ["@json.parse", {
+    arity: 2,
+    run: ([mode, source], span, phase) => {
+      if (phase !== "comptime") {
+        fail(
+          "BLOT_JSON_NOT_COMPTIME",
+          "`@json.parse` can only be evaluated at compile time.",
+          span,
+        );
+      }
+      if (mode.tag !== "tag" || mode.payload !== null) {
+        fail(
+          "BLOT_TYPE",
+          "`@json.parse` expects `#Widen` or `#Exact` as its inference policy.",
+          span,
+        );
+      }
+      const text = shapeFields(source, span, "@json.parse").get("text");
+      if (text === undefined) {
+        fail("BLOT_TYPE", "`@json.parse` source has no `.text` field.", span);
+      }
+      const json = textOf(text, span, "@json.parse");
+      if (mode.name === "Widen") {
+        return parseJson(json, "widen", span);
+      }
+      if (mode.name === "Exact") {
+        return parseJson(json, "exact", span);
+      }
+      fail(
+        "BLOT_TYPE",
+        `\`@json.parse\` does not recognize inference policy \`#${mode.name}\`.`,
+        span,
+      );
+    },
+  }],
+
   // --- ownership (given meaning by the linearity pass; identity when running) ---
   ["@linear.own", { arity: 1, run: ([value]) => value }],
   ["@linear.maybe", { arity: 1, run: ([value]) => value }],
@@ -1272,6 +1769,7 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     arity: 4,
     run: ([a, b, c, d], s) => ({
       tag: "vector",
+      element: "f32",
       lanes: [
         float32Of(a, s, "@f32x4.of"),
         float32Of(b, s, "@f32x4.of"),
@@ -1327,6 +1825,7 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
       const rightLanes = vectorOf(right, span, "@f32x4.eq");
       return {
         tag: "vector-mask",
+        element: "f32",
         lanes: leftLanes.map((lane, index) => lane === rightLanes[index]),
       };
     },
@@ -1338,6 +1837,7 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
       const rightLanes = vectorOf(right, span, "@f32x4.less");
       return {
         tag: "vector-mask",
+        element: "f32",
         lanes: leftLanes.map((lane, index) => lane < rightLanes[index]),
       };
     },
@@ -1350,6 +1850,7 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
       const falseLanes = vectorOf(whenFalse, span, "@f32x4.select");
       return {
         tag: "vector",
+        element: "f32",
         lanes: lanes.map((selected, index) =>
           selected ? trueLanes[index] : falseLanes[index]
         ),
@@ -1365,6 +1866,7 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
       ];
       return {
         tag: "vector",
+        element: "f32",
         lanes: selectors.map((selector) => {
           const lane = Number(intOf(selector, span, "@f32x4.shuffle"));
           if (lane >= 0 && lane < lanes.length) return lanes[lane];
@@ -1419,6 +1921,7 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     run: ([message], span) =>
       fail("BLOT_PANIC", textOf(message, span, "@panic"), span),
   }],
+  ...additionalSimdEntries(),
 ]);
 
 /** `@effect` needs a fresh identity per call, so it is built rather than tabled. */

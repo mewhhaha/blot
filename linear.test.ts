@@ -143,16 +143,34 @@ let holder = #Held (fn () => consume (!token));
 return case holder of #Held go => go () end;`,
 );
 
-rejects(
-  "projecting one field cannot discard another owned field",
+accepts(
+  "owned record fields can be moved independently",
   `${CONSUME}let !left = 40;
 let !right = 41;
 let holder = {
   .first = fn () => consume (!left);
   .second = fn () => consume (!right);
 };
-return holder.first ();`,
-  "BLOT_LINEAR_PARTIAL_MOVE",
+let first = holder.first ();
+return @int.add first (holder.second ());`,
+);
+
+rejects(
+  "a partially moved record cannot be reused as a whole",
+  `${CONSUME}let !left = 40;
+let !right = 41;
+let holder = {
+  .first = fn () => consume (!left);
+  .second = fn () => consume (!right);
+};
+let first = holder.first ();
+let consume_holder = fn !value => do
+  let { .first; .second; } = !value;
+  let _ = first ();
+  in second ()
+end;
+return @int.add first (consume_holder holder);`,
+  "BLOT_LINEAR_PARTIAL_REUSE",
 );
 
 rejects(
@@ -282,8 +300,8 @@ return first;`,
 rejects(
   "an array spread cannot obscure an owned element position",
   `${CONSUME}let !token = 41;
-let prefix = [1];
-let values = [...prefix, fn () => consume (!token)];
+let initial = [1];
+let values = [...initial, fn () => consume (!token)];
 let [first, go] = values;
 return first;`,
   "BLOT_LINEAR_ARRAY_SPREAD",

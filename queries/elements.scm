@@ -1,7 +1,7 @@
 ; Element highlighting is scoped to element rules because `<` and `>` remain
 ; ordinary operators everywhere else in the language.
 
-(element_statement
+(element_expression
   (ANGLE_LEFT) @punctuation.bracket
   name: (element_name
     [

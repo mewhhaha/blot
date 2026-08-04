@@ -1,9 +1,9 @@
 // Parses a blot source file and reports diagnostics.
 //
-// Uses the same generated WebAssembly parser as every compiler command, so
-// syntax and semantic tooling need no WebGPU adapter.
+// Uses the same Baba CPU frontend and CST lowering as every compiler command,
+// so syntax and semantic tooling need no WebGPU adapter.
 
-import { createParser } from "../generated/wasm/mod.ts";
+import { dispose, parse } from "../src/syntax/parse.ts";
 
 const sourcePath = Deno.args[0];
 if (sourcePath === undefined) {
@@ -12,13 +12,8 @@ if (sourcePath === undefined) {
 }
 
 const source = await Deno.readTextFile(sourcePath);
-const parser = createParser({
-  bytes: await Deno.readFile("generated/wasm/parser.wasm"),
-  plan: await Deno.readFile("generated/wasm/parser.plan"),
-});
-
 try {
-  const result = parser.parse(source);
+  const result = await parse(source);
   if (!result.ok) {
     for (const diagnostic of result.diagnostics) {
       const { line, column } = locate(source, diagnostic.span.start);
@@ -29,10 +24,10 @@ try {
     Deno.exit(1);
   }
   console.log(
-    `${sourcePath}: accepted, ${result.cursor.children().length} top-level nodes.`,
+    `${sourcePath}: accepted, ${result.module.declarations.length} declarations.`,
   );
 } finally {
-  parser.dispose();
+  dispose();
 }
 
 function locate(

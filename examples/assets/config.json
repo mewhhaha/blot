@@ -1,0 +1,7 @@
+{
+  "name": "blot",
+  "count": 3,
+  "flags": [true, false],
+  "threshold": 1.5,
+  "nothing": null
+}

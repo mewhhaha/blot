@@ -13,15 +13,15 @@ inspect:
 parse file:
   deno task parse {{file}}
 
-# Byte parity between baba's CPU oracle and the WebGPU frontend. Needs an
-# adapter; nothing else in the repository does.
+# Diagnostic comparison between Baba's CPU and WebGPU general-profile
+# executors. Needs an adapter and is not a release gate.
 parity:
     WGPU_BACKENDS=vulkan WGPU_POWER_PREF=high \
       deno run --unstable-webgpu --allow-read --allow-env scripts/parity.ts \
       examples/*.blot examples/lib/*.blot case-studies/*/*.blot \
       case-studies/*/lib/*.blot src/prelude/*.blot
 
-# The same corpus through the CPU oracle only.
+# The compiler corpus through the authoritative CPU frontend only.
 parity-cpu:
   deno run --allow-read scripts/parity.ts --cpu examples/*.blot examples/lib/*.blot case-studies/*/*.blot case-studies/*/lib/*.blot src/prelude/*.blot
 
@@ -41,6 +41,10 @@ ownership file:
 build file:
   deno run --allow-read --allow-write src/cli.ts build {{file}}
 
+# Compile from source to the final artifact in one Rust/WebAssembly instance.
+build-experimental file:
+  deno run --allow-read --allow-write src/cli.ts build-experimental {{file}}
+
 # Do the interpreter, the GPU evaluator, and the emitted Wasm agree?
 wasm:
   WGPU_BACKENDS=vulkan deno run --unstable-webgpu --allow-read --allow-write --allow-env scripts/wasm.ts
@@ -59,9 +63,19 @@ grammar-check:
   deno run --allow-read --allow-run=tree-sitter scripts/check_grammar.ts
 
 check:
-  deno check mod.ts scripts/*.ts case-studies/*.ts src/cli.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts
+  deno run --allow-read scripts/generate_rust_middle_schema.ts --check
+  deno check mod.ts scripts/*.ts case-studies/*.ts experiments/rust-middle/*.ts src/cli.ts src/backend/rust_middle.test.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts
   deno fmt --check
   deno lint
+  cargo fmt --manifest-path experiments/rust-middle/Cargo.toml --check
+  cargo clippy --manifest-path experiments/rust-middle/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+  cargo test --manifest-path experiments/rust-middle/Cargo.toml
+  deno task check:rust-middle-artifact
+  deno task experiment:rust-middle-parity
+  deno task experiment:rust-middle-check-parity
+  deno task experiment:rust-middle-eval-parity
+  deno task experiment:rust-middle-hir-parity
+  deno task verify:rust-compiler
 
 test:
   deno test --allow-read --allow-write

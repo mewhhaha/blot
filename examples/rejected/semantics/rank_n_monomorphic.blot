@@ -1,0 +1,9 @@
+open {} = (@import "blot:prelude") ();
+
+sig use = (@forall (fn T => T -> T)) -> { .number = Int; .text = Str; };
+let use = fn identity => {
+  .number = identity 42;
+  .text = identity "forty-two";
+};
+let increment = fn value => @int.add value 1;
+return use increment;

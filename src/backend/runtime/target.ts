@@ -10,25 +10,23 @@ import {
   compileBlotCanonicalTextAbi,
   supportsBlotCanonicalTextAbi,
 } from "./canonical_text_abi.ts";
-import type {
-  CoreBinaryOperator,
-  CoreBlockId,
-  CoreFunction,
-  CoreFunctionId,
-  CoreModule,
-  CoreOperation,
-  CoreSignatureId,
-  CoreType,
-  CoreTypeId,
-  CoreValueId,
-} from "../../../../gpupaper/src/core.ts";
 import {
+  type CoreBinaryOperator,
+  type CoreBlockId,
+  type CoreFunction,
+  type CoreFunctionId,
+  type CoreModule,
+  type CoreOperation,
+  type CoreSignatureId,
+  type CoreType,
+  type CoreTypeId,
+  type CoreValueId,
   type CoreWasmArtifact,
+  emitWasmPlanOnRustWasm,
   lowerCoreToWasm,
+  PrimitiveId,
   type WasmTarget,
-} from "../../../../gpupaper/src/core_wasm.ts";
-import { emitWasmPlanOnRustWasm } from "../../../../gpupaper/src/rust_wasm_emitter.ts";
-import { PrimitiveId } from "../../../../gpupaper/src/runtime.ts";
+} from "@mewhhaha/gpupaper";
 import type {
   BlotRuntimeFunction,
   BlotRuntimeModule,
@@ -344,7 +342,11 @@ function lowerTypes(module: BlotRuntimeModule): readonly CoreType[] {
     if (type.kind === "float-64") return { kind: "scalar", scalar: "f64" };
     if (type.kind === "text") return { kind: "buffer", buffer: "text" };
     if (type.kind === "vector" || type.kind === "mask") {
-      return { kind: type.kind, lanes: 4, element: "f32" };
+      let element: "f32" | "i32" | "i16" | "i8" = "f32";
+      if (type.element === "integer-32") element = "i32";
+      if (type.element === "integer-16") element = "i16";
+      if (type.element === "integer-8") element = "i8";
+      return { kind: type.kind, lanes: type.lanes, element };
     }
     if (type.kind === "product") {
       return {
@@ -467,7 +469,7 @@ function lowerOperation(
     return {
       ...base,
       kind: "primitive",
-      primitiveId: vectorPrimitive(module, operation),
+      primitiveId: vectorPrimitive(module, operation, valueTypes),
     };
   }
   if (operation.kind === "product.make") {
@@ -917,6 +919,7 @@ function conversionPrimitive(
   operation: Extract<BlotRuntimeOperation, { readonly kind: "convert" }>,
 ): typeof PrimitiveId[keyof typeof PrimitiveId] {
   const primitive = {
+    "signed-integer-64-to-signed-integer-32": PrimitiveId.i32WrapI64,
     "signed-integer-32-to-signed-integer-64": PrimitiveId.i64ExtendI32Signed,
     "signed-integer-32-to-float-32": PrimitiveId.f32FromI32,
     "signed-integer-32-to-float-64": PrimitiveId.f64FromI32,
@@ -934,14 +937,31 @@ function conversionPrimitive(
 function vectorPrimitive(
   module: BlotRuntimeModule,
   operation: Extract<BlotRuntimeOperation, { readonly kind: "vector" }>,
+  valueTypes: ReadonlyMap<number, number>,
 ): typeof PrimitiveId[keyof typeof PrimitiveId] {
+  let simdType = module.types[operation.type];
+  if (simdType.kind !== "vector" && simdType.kind !== "mask") {
+    const operandType = valueTypes.get(operation.operands[0]);
+    if (operandType === undefined) {
+      throw new TypeError(
+        `${module.source}:${operation.span.start}: vector operation ${operation.operator} has no typed SIMD operand`,
+      );
+    }
+    simdType = module.types[operandType];
+  }
+  if (simdType.kind !== "vector" && simdType.kind !== "mask") {
+    throw new TypeError(
+      `${module.source}:${operation.span.start}: vector operation ${operation.operator} has no SIMD type`,
+    );
+  }
+  const element = simdType.element;
   if (operation.operator === "extract" || operation.operator === "replace") {
     if (operation.lane === undefined) {
       throw new TypeError(
         `${module.source}:${operation.span.start}: vector ${operation.operator} requires a lane`,
       );
     }
-    if (operation.operator === "extract") {
+    if (element === "float-32" && operation.operator === "extract") {
       return [
         PrimitiveId.f32x4ExtractLane0,
         PrimitiveId.f32x4ExtractLane1,
@@ -949,14 +969,40 @@ function vectorPrimitive(
         PrimitiveId.f32x4ExtractLane3,
       ][operation.lane];
     }
-    return [
-      PrimitiveId.f32x4ReplaceLane0,
-      PrimitiveId.f32x4ReplaceLane1,
-      PrimitiveId.f32x4ReplaceLane2,
-      PrimitiveId.f32x4ReplaceLane3,
-    ][operation.lane];
+    if (element === "float-32") {
+      return [
+        PrimitiveId.f32x4ReplaceLane0,
+        PrimitiveId.f32x4ReplaceLane1,
+        PrimitiveId.f32x4ReplaceLane2,
+        PrimitiveId.f32x4ReplaceLane3,
+      ][operation.lane];
+    }
+    if (element === "integer-32" && operation.operator === "extract") {
+      return [
+        PrimitiveId.i32x4ExtractLane0,
+        PrimitiveId.i32x4ExtractLane1,
+        PrimitiveId.i32x4ExtractLane2,
+        PrimitiveId.i32x4ExtractLane3,
+      ][operation.lane];
+    }
+    if (element === "integer-32") {
+      return [
+        PrimitiveId.i32x4ReplaceLane0,
+        PrimitiveId.i32x4ReplaceLane1,
+        PrimitiveId.i32x4ReplaceLane2,
+        PrimitiveId.i32x4ReplaceLane3,
+      ][operation.lane];
+    }
+    throw new TypeError(
+      `${module.source}:${operation.span.start}: ${element} has no lane ${operation.operator} primitive`,
+    );
   }
-  const primitive = {
+  const floatPrimitives: Partial<
+    Record<
+      typeof operation.operator,
+      typeof PrimitiveId[keyof typeof PrimitiveId]
+    >
+  > = {
     make: PrimitiveId.f32x4Make,
     splat: PrimitiveId.f32x4Splat,
     add: PrimitiveId.f32x4Add,
@@ -970,8 +1016,150 @@ function vectorPrimitive(
     "greater-than": PrimitiveId.f32x4GreaterThan,
     "greater-than-or-equal": PrimitiveId.f32x4GreaterThanOrEqual,
     select: PrimitiveId.f32x4Select,
-  }[operation.operator];
-  if (primitive !== undefined) return primitive;
+    absolute: PrimitiveId.f32x4Absolute,
+    negate: PrimitiveId.f32x4Negate,
+    "square-root": PrimitiveId.f32x4SquareRoot,
+    ceiling: PrimitiveId.f32x4Ceiling,
+    floor: PrimitiveId.f32x4Floor,
+    truncate: PrimitiveId.f32x4Truncate,
+    nearest: PrimitiveId.f32x4Nearest,
+    minimum: PrimitiveId.f32x4Minimum,
+    maximum: PrimitiveId.f32x4Maximum,
+    "pseudo-minimum": PrimitiveId.f32x4PseudoMinimum,
+    "pseudo-maximum": PrimitiveId.f32x4PseudoMaximum,
+    "mask-bitmask": PrimitiveId.f32x4MaskBitmask,
+    "mask-all": PrimitiveId.f32x4MaskAllTrue,
+    "mask-any": PrimitiveId.f32x4MaskAnyTrue,
+    "convert-i32-signed": PrimitiveId.f32x4ConvertI32x4Signed,
+    "convert-i32-unsigned": PrimitiveId.f32x4ConvertI32x4Unsigned,
+  };
+  const floatPrimitive = floatPrimitives[operation.operator];
+  if (element === "float-32" && floatPrimitive !== undefined) {
+    return floatPrimitive;
+  }
+  const integer32Primitives: Partial<
+    Record<
+      typeof operation.operator,
+      typeof PrimitiveId[keyof typeof PrimitiveId]
+    >
+  > = {
+    make: PrimitiveId.i32x4Make,
+    splat: PrimitiveId.i32x4Splat,
+    add: PrimitiveId.i32x4Add,
+    subtract: PrimitiveId.i32x4Subtract,
+    multiply: PrimitiveId.i32x4Multiply,
+    "bit-and": PrimitiveId.i32x4And,
+    "bit-or": PrimitiveId.i32x4Or,
+    "bit-xor": PrimitiveId.i32x4Xor,
+    "bit-not": PrimitiveId.i32x4Not,
+    "shift-left": PrimitiveId.i32x4ShiftLeft,
+    "shift-right-signed": PrimitiveId.i32x4ShiftRightSigned,
+    "shift-right-unsigned": PrimitiveId.i32x4ShiftRightUnsigned,
+    equal: PrimitiveId.i32x4Equal,
+    "not-equal": PrimitiveId.i32x4NotEqual,
+    "less-than-signed": PrimitiveId.i32x4LessThanSigned,
+    "less-than-unsigned": PrimitiveId.i32x4LessThanUnsigned,
+    "greater-than-signed": PrimitiveId.i32x4GreaterThanSigned,
+    "greater-than-unsigned": PrimitiveId.i32x4GreaterThanUnsigned,
+    "less-than-or-equal-signed": PrimitiveId.i32x4LessThanOrEqualSigned,
+    "less-than-or-equal-unsigned": PrimitiveId.i32x4LessThanOrEqualUnsigned,
+    "greater-than-or-equal-signed": PrimitiveId.i32x4GreaterThanOrEqualSigned,
+    "greater-than-or-equal-unsigned":
+      PrimitiveId.i32x4GreaterThanOrEqualUnsigned,
+    "minimum-signed": PrimitiveId.i32x4MinimumSigned,
+    "minimum-unsigned": PrimitiveId.i32x4MinimumUnsigned,
+    "maximum-signed": PrimitiveId.i32x4MaximumSigned,
+    "maximum-unsigned": PrimitiveId.i32x4MaximumUnsigned,
+    select: PrimitiveId.i32x4Select,
+    "mask-bitmask": PrimitiveId.i32x4MaskBitmask,
+    "mask-all": PrimitiveId.i32x4MaskAllTrue,
+    "mask-any": PrimitiveId.i32x4MaskAnyTrue,
+    "truncate-saturating-f32-signed":
+      PrimitiveId.i32x4TruncateSaturateF32x4Signed,
+    "truncate-saturating-f32-unsigned":
+      PrimitiveId.i32x4TruncateSaturateF32x4Unsigned,
+  };
+  const integer32Primitive = integer32Primitives[operation.operator];
+  if (element === "integer-32" && integer32Primitive !== undefined) {
+    return integer32Primitive;
+  }
+  const narrowPrimitives: Record<
+    "integer-16" | "integer-8",
+    Partial<
+      Record<
+        typeof operation.operator,
+        typeof PrimitiveId[keyof typeof PrimitiveId]
+      >
+    >
+  > = {
+    "integer-16": {
+      splat: PrimitiveId.i16x8Splat,
+      add: PrimitiveId.i16x8Add,
+      subtract: PrimitiveId.i16x8Subtract,
+      multiply: PrimitiveId.i16x8Multiply,
+      "bit-and": PrimitiveId.i16x8And,
+      "bit-or": PrimitiveId.i16x8Or,
+      "bit-xor": PrimitiveId.i16x8Xor,
+      "bit-not": PrimitiveId.i16x8Not,
+      "shift-left": PrimitiveId.i16x8ShiftLeft,
+      "shift-right-signed": PrimitiveId.i16x8ShiftRightSigned,
+      "shift-right-unsigned": PrimitiveId.i16x8ShiftRightUnsigned,
+      equal: PrimitiveId.i16x8Equal,
+      "not-equal": PrimitiveId.i16x8NotEqual,
+      "less-than-signed": PrimitiveId.i16x8LessThanSigned,
+      "less-than-unsigned": PrimitiveId.i16x8LessThanUnsigned,
+      "greater-than-signed": PrimitiveId.i16x8GreaterThanSigned,
+      "greater-than-unsigned": PrimitiveId.i16x8GreaterThanUnsigned,
+      "less-than-or-equal-signed": PrimitiveId.i16x8LessThanOrEqualSigned,
+      "less-than-or-equal-unsigned": PrimitiveId.i16x8LessThanOrEqualUnsigned,
+      "greater-than-or-equal-signed": PrimitiveId.i16x8GreaterThanOrEqualSigned,
+      "greater-than-or-equal-unsigned":
+        PrimitiveId.i16x8GreaterThanOrEqualUnsigned,
+      "minimum-signed": PrimitiveId.i16x8MinimumSigned,
+      "minimum-unsigned": PrimitiveId.i16x8MinimumUnsigned,
+      "maximum-signed": PrimitiveId.i16x8MaximumSigned,
+      "maximum-unsigned": PrimitiveId.i16x8MaximumUnsigned,
+      select: PrimitiveId.i16x8Select,
+      "mask-bitmask": PrimitiveId.i16x8MaskBitmask,
+      "mask-all": PrimitiveId.i16x8MaskAllTrue,
+      "mask-any": PrimitiveId.i16x8MaskAnyTrue,
+    },
+    "integer-8": {
+      splat: PrimitiveId.i8x16Splat,
+      add: PrimitiveId.i8x16Add,
+      subtract: PrimitiveId.i8x16Subtract,
+      "bit-and": PrimitiveId.i8x16And,
+      "bit-or": PrimitiveId.i8x16Or,
+      "bit-xor": PrimitiveId.i8x16Xor,
+      "bit-not": PrimitiveId.i8x16Not,
+      "shift-left": PrimitiveId.i8x16ShiftLeft,
+      "shift-right-signed": PrimitiveId.i8x16ShiftRightSigned,
+      "shift-right-unsigned": PrimitiveId.i8x16ShiftRightUnsigned,
+      equal: PrimitiveId.i8x16Equal,
+      "not-equal": PrimitiveId.i8x16NotEqual,
+      "less-than-signed": PrimitiveId.i8x16LessThanSigned,
+      "less-than-unsigned": PrimitiveId.i8x16LessThanUnsigned,
+      "greater-than-signed": PrimitiveId.i8x16GreaterThanSigned,
+      "greater-than-unsigned": PrimitiveId.i8x16GreaterThanUnsigned,
+      "less-than-or-equal-signed": PrimitiveId.i8x16LessThanOrEqualSigned,
+      "less-than-or-equal-unsigned": PrimitiveId.i8x16LessThanOrEqualUnsigned,
+      "greater-than-or-equal-signed": PrimitiveId.i8x16GreaterThanOrEqualSigned,
+      "greater-than-or-equal-unsigned":
+        PrimitiveId.i8x16GreaterThanOrEqualUnsigned,
+      "minimum-signed": PrimitiveId.i8x16MinimumSigned,
+      "minimum-unsigned": PrimitiveId.i8x16MinimumUnsigned,
+      "maximum-signed": PrimitiveId.i8x16MaximumSigned,
+      "maximum-unsigned": PrimitiveId.i8x16MaximumUnsigned,
+      select: PrimitiveId.i8x16Select,
+      "mask-bitmask": PrimitiveId.i8x16MaskBitmask,
+      "mask-all": PrimitiveId.i8x16MaskAllTrue,
+      "mask-any": PrimitiveId.i8x16MaskAnyTrue,
+    },
+  };
+  if (element === "integer-16" || element === "integer-8") {
+    const primitive = narrowPrimitives[element][operation.operator];
+    if (primitive !== undefined) return primitive;
+  }
   throw new TypeError(
     `${module.source}:${operation.span.start}: unsupported vector operation ${operation.operator}`,
   );

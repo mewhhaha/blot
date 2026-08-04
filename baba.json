@@ -2,11 +2,16 @@
   "version": 2,
   "gpuFrontend": {
     "version": 3,
-    "throughput": "strict",
     "root": "program",
     "islands": [
       {
         "rule": "program",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "operator_token",
         "boundary": {
           "kind": "root"
         }
@@ -26,6 +31,12 @@
         }
       },
       {
+        "rule": "fixity_declaration",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
         "rule": "declaration",
         "boundary": {
           "kind": "terminated",
@@ -40,13 +51,61 @@
         }
       },
       {
-        "rule": "expression",
+        "rule": "binding",
         "boundary": {
           "kind": "root"
         }
       },
       {
-        "rule": "element_expression",
+        "rule": "declaration_tag",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "rebinding",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "iteration",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "iteration_source",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "breaking",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "opening",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "open_mask",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "open_mapping",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "result",
         "boundary": {
           "kind": "root"
         }
@@ -58,7 +117,19 @@
         }
       },
       {
-        "rule": "constructor_pattern",
+        "rule": "pattern_core",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "pinned_pattern",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "unit_pattern",
         "boundary": {
           "kind": "root"
         }
@@ -81,6 +152,12 @@
         }
       },
       {
+        "rule": "constructor_pattern",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
         "rule": "shape_pattern",
         "boundary": {
           "kind": "paired",
@@ -96,7 +173,88 @@
         }
       },
       {
-        "rule": "lambda",
+        "rule": "expression",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "infix_operation",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "operand",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "prefix_operator",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "postfix_expression",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "application_argument",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "field_suffix",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "field_name",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "keyword",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "primary_expression",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "effect_row",
+        "boundary": {
+          "kind": "separated",
+          "open": "{",
+          "close": "}",
+          "separator": ","
+        }
+      },
+      {
+        "rule": "application_primary",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "constructor_expression",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "unit",
         "boundary": {
           "kind": "root"
         }
@@ -119,6 +277,60 @@
         }
       },
       {
+        "rule": "array_element",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "element_expression",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "element_name",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "element_property",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "element_property_value",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "element_property_expression",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "element_self_close",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "element_body",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "value",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
         "rule": "shape",
         "boundary": {
           "kind": "paired",
@@ -127,12 +339,33 @@
         }
       },
       {
-        "rule": "effect_row",
+        "rule": "shape_member",
         "boundary": {
-          "kind": "separated",
-          "open": "{",
-          "close": "}",
-          "separator": ","
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "shape_spread",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "shape_field",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "lambda",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "lambda_parameter",
+        "boundary": {
+          "kind": "root"
         }
       },
       {
@@ -143,10 +376,64 @@
         }
       },
       {
+        "rule": "else_if_clause",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "else_clause",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "conditional_statement",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "conditional_statement_guard",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "conditional_statement_branches",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "conditional_statement_else_if_clause",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "conditional_statement_else_clause",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
         "rule": "case_expression",
         "boundary": {
           "kind": "terminated",
           "terminal": "end"
+        }
+      },
+      {
+        "rule": "case_arm",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "case_guard",
+        "boundary": {
+          "kind": "root"
         }
       },
       {
@@ -157,10 +444,34 @@
         }
       },
       {
+        "rule": "handler_composition_step",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "handler_composition_action",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
         "rule": "block",
         "boundary": {
           "kind": "terminated",
           "terminal": "end"
+        }
+      },
+      {
+        "rule": "qualified_name",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "qualified_name_part",
+        "boundary": {
+          "kind": "root"
         }
       }
     ],

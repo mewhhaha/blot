@@ -1,5 +1,15 @@
 import { assertEquals, assertThrows } from "@std/assert";
-import { boundAbove, boundAtMost, boundBelow, shiftBound } from "./type.ts";
+import { constrain } from "./constrain.ts";
+import {
+  boundAbove,
+  boundAtMost,
+  boundBelow,
+  freshVar,
+  intLiteral,
+  shiftBound,
+  type SimpleType,
+  textLiteral,
+} from "./type.ts";
 
 Deno.test("literal bounds compare exactly within their domain", () => {
   assertEquals(boundAtMost(1n, 2n), true);
@@ -27,3 +37,69 @@ Deno.test("integer bounds step by literal offsets", () => {
   assertEquals(shiftBound(3n, 1n), 4n);
   assertThrows(() => shiftBound("a", 1n), Error, "blot invariant violated");
 });
+
+Deno.test("an inferred upper union retains every admitted member", () => {
+  const inferred = freshVar(0);
+  constrain(inferred, union([intLiteral(1n), textLiteral("one")]));
+
+  constrain(textLiteral("one"), inferred);
+});
+
+Deno.test("a failed union candidate leaves no bounds in the next candidate", () => {
+  const inferred = freshVar(0);
+  const subject = record([
+    ["value", inferred],
+    ["tag", intLiteral(2n)],
+  ]);
+  const alternatives = union([
+    record([
+      ["value", intLiteral(1n)],
+      ["tag", intLiteral(1n)],
+    ]),
+    record([
+      ["value", intLiteral(2n)],
+      ["tag", intLiteral(2n)],
+    ]),
+  ]);
+
+  constrain(subject, alternatives);
+  constrain(intLiteral(2n), inferred);
+});
+
+Deno.test("a failed union candidate restores inference identities", () => {
+  const before = freshVar(0);
+  const polymorphic: SimpleType = {
+    tag: "forall",
+    variables: [1],
+    body: { tag: "rigid", id: 1 },
+  };
+  const subject = record([
+    ["value", polymorphic],
+    ["tag", intLiteral(2n)],
+  ]);
+  const alternatives = union([
+    record([
+      ["value", intLiteral(1n)],
+      ["tag", intLiteral(1n)],
+    ]),
+    record([
+      ["value", intLiteral(2n)],
+      ["tag", intLiteral(2n)],
+    ]),
+  ]);
+
+  constrain(subject, alternatives);
+
+  const after = freshVar(0);
+  assertEquals(after.id, before.id + 2);
+});
+
+function union(members: readonly SimpleType[]): SimpleType {
+  return { tag: "union", members };
+}
+
+function record(
+  fields: readonly (readonly [string, SimpleType])[],
+): SimpleType {
+  return { tag: "record", fields: new Map(fields) };
+}

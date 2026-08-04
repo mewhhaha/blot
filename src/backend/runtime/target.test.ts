@@ -13,7 +13,7 @@ import {
   coreRuntimeImportModule,
   createRuntimeHeap,
   createRuntimeImports,
-} from "../../../../gpupaper/src/runtime.ts";
+} from "@mewhhaha/gpupaper/runtime";
 
 const span = { file: "target.blot", start: 0, end: 1 } as const;
 

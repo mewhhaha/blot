@@ -28,6 +28,12 @@ import {
   FLOAT32,
   freshVar,
   fun,
+  I16X8,
+  I16X8_MASK,
+  I32X4,
+  I32X4_MASK,
+  I8X16,
+  I8X16_MASK,
   INT,
   record,
   type Scheme,
@@ -129,6 +135,111 @@ function mono(type: SimpleType): Scheme {
   return scheme(type, 0);
 }
 
+type PrimitiveTypeEntry = readonly [string, Scheme];
+
+function integerSimdTypes(
+  prefix: "i32x4" | "i16x8" | "i8x16",
+  vector: SimpleType,
+  mask: SimpleType,
+  multiply: boolean,
+  extendedComparisons: boolean,
+): PrimitiveTypeEntry[] {
+  const entries: PrimitiveTypeEntry[] = [];
+  let lane: SimpleType = {
+    tag: "range",
+    domain: "int",
+    low: -0x80000000n,
+    high: 0x7fffffffn,
+  };
+  if (prefix === "i16x8") {
+    lane = { tag: "range", domain: "int", low: -0x8000n, high: 0x7fffn };
+  }
+  if (prefix === "i8x16") {
+    lane = { tag: "range", domain: "int", low: -0x80n, high: 0x7fn };
+  }
+  const unary = ["not"];
+  const binary = [
+    "add",
+    "sub",
+    "and",
+    "or",
+    "xor",
+    "min_s",
+    "min_u",
+    "max_s",
+    "max_u",
+  ];
+  const comparisons = ["eq", "lt_s", "lt_u"];
+  if (multiply) binary.push("mul");
+  if (extendedComparisons) {
+    comparisons.push("ne", "gt_s", "gt_u", "le_s", "le_u", "ge_s", "ge_u");
+  }
+  entries.push(
+    [`@${prefix}.splat`, mono(curried([lane], vector))],
+    [`@${prefix}.splat_wrapping`, mono(curried([INT], vector))],
+  );
+  unary.forEach((name) =>
+    entries.push([`@${prefix}.${name}`, mono(curried([vector], vector))])
+  );
+  binary.forEach((name) =>
+    entries.push([
+      `@${prefix}.${name}`,
+      mono(curried([vector, vector], vector)),
+    ])
+  );
+  comparisons.forEach((name) =>
+    entries.push([`@${prefix}.${name}`, mono(curried([vector, vector], mask))])
+  );
+  ["shl", "shr_s", "shr_u"].forEach((name) =>
+    entries.push([`@${prefix}.${name}`, mono(curried([vector, INT], vector))])
+  );
+  entries.push([
+    `@${prefix}.select`,
+    mono(curried([mask, vector, vector], vector)),
+  ]);
+  ["mask_bitmask", "mask_all", "mask_any"].forEach((name) =>
+    entries.push([`@${prefix}.${name}`, mono(curried([mask], INT))])
+  );
+  return entries;
+}
+
+function additionalSimdTypes(): PrimitiveTypeEntry[] {
+  const entries: PrimitiveTypeEntry[] = [];
+  const i32: SimpleType = {
+    tag: "range",
+    domain: "int",
+    low: -0x80000000n,
+    high: 0x7fffffffn,
+  };
+  entries.push(
+    ["@i32x4.of", mono(curried([i32, i32, i32, i32], I32X4))],
+    ["@i32x4.of_wrapping", mono(curried([INT, INT, INT, INT], I32X4))],
+    [
+      "@i32x4.lane",
+      mono(curried([
+        I32X4,
+        { tag: "range", domain: "int", low: 0n, high: 3n },
+      ], INT)),
+    ],
+  );
+  [0, 1, 2, 3].forEach((lane) => {
+    entries.push(
+      [`@i32x4.lane${lane}`, mono(curried([I32X4], INT))],
+      [`@i32x4.with_lane${lane}`, mono(curried([I32X4, i32], I32X4))],
+      [
+        `@i32x4.with_lane${lane}_wrapping`,
+        mono(curried([I32X4, INT], I32X4)),
+      ],
+    );
+  });
+  entries.push(
+    ...integerSimdTypes("i32x4", I32X4, I32X4_MASK, true, true),
+    ...integerSimdTypes("i16x8", I16X8, I16X8_MASK, true, true),
+    ...integerSimdTypes("i8x16", I8X16, I8X16_MASK, false, true),
+  );
+  return entries;
+}
+
 export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   string,
   Scheme
@@ -189,6 +300,7 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ["@f32x4.y", mono(curried([F32X4], FLOAT32))],
   ["@f32x4.z", mono(curried([F32X4], FLOAT32))],
   ["@f32x4.w", mono(curried([F32X4], FLOAT32))],
+  ...additionalSimdTypes(),
 
   // --- branch layout metadata ---
   ["@branch.likely", mono(curried([BOOL], BOOL))],
@@ -200,6 +312,20 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ["@text.cmp", mono(curried([TEXT, TEXT], ORDERING))],
   ["@text.contains", mono(curried([TEXT, TEXT], BOOL))],
   ["@text.of_int", mono(curried([INT], TEXT))],
+  [
+    "@json.parse",
+    poly((fresh) => {
+      const source = record([
+        ["specifier", TEXT],
+        ["path", TEXT],
+        ["text", TEXT],
+      ]);
+      return curried(
+        [variant([["Widen", UNIT], ["Exact", UNIT]]), source],
+        fresh(),
+      );
+    }),
+  ],
 
   // --- arrays ---
   ["@array.empty", poly((fresh) => ({ tag: "array", element: fresh() }))],
@@ -386,6 +512,18 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ],
 
   ["@panic", mono(curried([TEXT], BOTTOM))],
+  [
+    "@include",
+    poly((fresh) => {
+      const result = fresh();
+      const source = record([
+        ["specifier", TEXT],
+        ["path", TEXT],
+        ["text", TEXT],
+      ]);
+      return curried([TEXT, fun(source, result, PURE)], result);
+    }),
+  ],
   ["@import", poly((fresh) => curried([TEXT], fresh()))],
 ]);
 

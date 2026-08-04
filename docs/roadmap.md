@@ -464,8 +464,10 @@ and shipping before M3b starts.
 
 **What it unlocks.** The first wall a real program hits, and a hard one. The
 grep case study is only possible because the host hands blot one whole line at a
-time. With the current primitives there is no word counter, no tokenizer, no CSV
-reader, no argument parser, no template renderer, and no JSON _parser_.
+time. With the current primitives there is no word counter, tokenizer, CSV
+reader, argument parser, or template renderer. `@include` has a
+compiler-boundary JSON decoder, but a Blot program still cannot write a JSON
+parser or inspect text one code point at a time.
 
 **Work.** Two primitives, and everything else is prelude source:
 

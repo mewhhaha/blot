@@ -12,11 +12,12 @@
 // silently widening to "anything" would turn a missing case into a passing
 // check.
 
-import { equal, show, type Value } from "../comptime/value.ts";
+import { equal, inferredTypeOf, show, type Value } from "../comptime/value.ts";
 import {
   type Bound,
   type Domain,
   effects as effectRow,
+  FLOAT,
   freshRigid,
   fun,
   INT,
@@ -58,11 +59,15 @@ function bridgeValue(
   value: Value,
   variables: ReadonlyMap<number, SimpleType>,
 ): SimpleType | null {
+  const inferred = inferredTypeOf(value);
+  if (inferred !== undefined) return bridgeValue(inferred, variables);
   switch (value.tag) {
     case "int":
       return intLiteral(value.value);
     case "text":
       return textLiteral(value.value);
+    case "float":
+      return FLOAT;
     case "unit":
       return UNIT;
     case "unbounded":

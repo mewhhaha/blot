@@ -166,6 +166,9 @@ const Text = {
   .of_int = fn value => @text.of_int value;
 };
 
+const as_json = @json.parse #Widen;
+const as_const_json = @json.parse #Exact;
+
 const Semigroup = { .append = Text.append; };
 
 const text_eq = fn (left, right) => is_equal (@text.cmp left right);
@@ -377,6 +380,122 @@ const Vec4 = {
   .scale = fn (value, factor) => @f32x4.mul value (@f32x4.splat factor);
 };
 
+const Int32x4 = {
+  .of = fn (x, y, z, w) => @i32x4.of x y z w;
+  .of_wrapping = fn (x, y, z, w) => @i32x4.of_wrapping x y z w;
+  .splat = fn value => @i32x4.splat value;
+  .splat_wrapping = fn value => @i32x4.splat_wrapping value;
+  .add = fn left => fn right => @i32x4.add left right;
+  .sub = fn left => fn right => @i32x4.sub left right;
+  .mul = fn left => fn right => @i32x4.mul left right;
+  .bit_and = fn left => fn right => @i32x4.and left right;
+  .bit_or = fn left => fn right => @i32x4.or left right;
+  .bit_xor = fn left => fn right => @i32x4.xor left right;
+  .bit_not = fn value => @i32x4.not value;
+  .shift_left = fn value => fn amount => @i32x4.shl value amount;
+  .shift_right_signed = fn value => fn amount => @i32x4.shr_s value amount;
+  .shift_right_unsigned = fn value => fn amount => @i32x4.shr_u value amount;
+  .equal = fn left => fn right => @i32x4.eq left right;
+  .not_equal = fn left => fn right => @i32x4.ne left right;
+  .less_signed = fn left => fn right => @i32x4.lt_s left right;
+  .less_unsigned = fn left => fn right => @i32x4.lt_u left right;
+  .greater_signed = fn left => fn right => @i32x4.gt_s left right;
+  .greater_unsigned = fn left => fn right => @i32x4.gt_u left right;
+  .less_or_equal_signed = fn left => fn right => @i32x4.le_s left right;
+  .less_or_equal_unsigned = fn left => fn right => @i32x4.le_u left right;
+  .greater_or_equal_signed = fn left => fn right => @i32x4.ge_s left right;
+  .greater_or_equal_unsigned = fn left => fn right => @i32x4.ge_u left right;
+  .min_signed = fn left => fn right => @i32x4.min_s left right;
+  .min_unsigned = fn left => fn right => @i32x4.min_u left right;
+  .max_signed = fn left => fn right => @i32x4.max_s left right;
+  .max_unsigned = fn left => fn right => @i32x4.max_u left right;
+  .select = fn mask => fn when_true => fn when_false =>
+    @i32x4.select mask when_true when_false;
+  .x = fn value => @i32x4.lane0 value;
+  .y = fn value => @i32x4.lane1 value;
+  .z = fn value => @i32x4.lane2 value;
+  .w = fn value => @i32x4.lane3 value;
+  .lane = @i32x4.lane;
+  .with_x = fn value => fn lane => @i32x4.with_lane0 value lane;
+  .with_y = fn value => fn lane => @i32x4.with_lane1 value lane;
+  .with_z = fn value => fn lane => @i32x4.with_lane2 value lane;
+  .with_w = fn value => fn lane => @i32x4.with_lane3 value lane;
+  .with_x_wrapping = fn value => fn lane => @i32x4.with_lane0_wrapping value lane;
+  .with_y_wrapping = fn value => fn lane => @i32x4.with_lane1_wrapping value lane;
+  .with_z_wrapping = fn value => fn lane => @i32x4.with_lane2_wrapping value lane;
+  .with_w_wrapping = fn value => fn lane => @i32x4.with_lane3_wrapping value lane;
+  .mask_bits = fn mask => @i32x4.mask_bitmask mask;
+  .all = fn mask => is_equal (@int.cmp (@i32x4.mask_all mask) 1);
+  .any = fn mask => is_equal (@int.cmp (@i32x4.mask_any mask) 1);
+};
+
+const Int16x8 = {
+  .splat = fn value => @i16x8.splat value;
+  .splat_wrapping = fn value => @i16x8.splat_wrapping value;
+  .add = fn left => fn right => @i16x8.add left right;
+  .sub = fn left => fn right => @i16x8.sub left right;
+  .mul = fn left => fn right => @i16x8.mul left right;
+  .bit_and = fn left => fn right => @i16x8.and left right;
+  .bit_or = fn left => fn right => @i16x8.or left right;
+  .bit_xor = fn left => fn right => @i16x8.xor left right;
+  .bit_not = fn value => @i16x8.not value;
+  .shift_left = fn value => fn amount => @i16x8.shl value amount;
+  .shift_right_signed = fn value => fn amount => @i16x8.shr_s value amount;
+  .shift_right_unsigned = fn value => fn amount => @i16x8.shr_u value amount;
+  .equal = fn left => fn right => @i16x8.eq left right;
+  .not_equal = fn left => fn right => @i16x8.ne left right;
+  .less_signed = fn left => fn right => @i16x8.lt_s left right;
+  .less_unsigned = fn left => fn right => @i16x8.lt_u left right;
+  .greater_signed = fn left => fn right => @i16x8.gt_s left right;
+  .greater_unsigned = fn left => fn right => @i16x8.gt_u left right;
+  .less_or_equal_signed = fn left => fn right => @i16x8.le_s left right;
+  .less_or_equal_unsigned = fn left => fn right => @i16x8.le_u left right;
+  .greater_or_equal_signed = fn left => fn right => @i16x8.ge_s left right;
+  .greater_or_equal_unsigned = fn left => fn right => @i16x8.ge_u left right;
+  .min_signed = fn left => fn right => @i16x8.min_s left right;
+  .min_unsigned = fn left => fn right => @i16x8.min_u left right;
+  .max_signed = fn left => fn right => @i16x8.max_s left right;
+  .max_unsigned = fn left => fn right => @i16x8.max_u left right;
+  .select = fn mask => fn when_true => fn when_false =>
+    @i16x8.select mask when_true when_false;
+  .mask_bits = fn mask => @i16x8.mask_bitmask mask;
+  .all = fn mask => is_equal (@int.cmp (@i16x8.mask_all mask) 1);
+  .any = fn mask => is_equal (@int.cmp (@i16x8.mask_any mask) 1);
+};
+
+const Int8x16 = {
+  .splat = fn value => @i8x16.splat value;
+  .splat_wrapping = fn value => @i8x16.splat_wrapping value;
+  .add = fn left => fn right => @i8x16.add left right;
+  .sub = fn left => fn right => @i8x16.sub left right;
+  .bit_and = fn left => fn right => @i8x16.and left right;
+  .bit_or = fn left => fn right => @i8x16.or left right;
+  .bit_xor = fn left => fn right => @i8x16.xor left right;
+  .bit_not = fn value => @i8x16.not value;
+  .shift_left = fn value => fn amount => @i8x16.shl value amount;
+  .shift_right_signed = fn value => fn amount => @i8x16.shr_s value amount;
+  .shift_right_unsigned = fn value => fn amount => @i8x16.shr_u value amount;
+  .equal = fn left => fn right => @i8x16.eq left right;
+  .not_equal = fn left => fn right => @i8x16.ne left right;
+  .less_signed = fn left => fn right => @i8x16.lt_s left right;
+  .less_unsigned = fn left => fn right => @i8x16.lt_u left right;
+  .greater_signed = fn left => fn right => @i8x16.gt_s left right;
+  .greater_unsigned = fn left => fn right => @i8x16.gt_u left right;
+  .less_or_equal_signed = fn left => fn right => @i8x16.le_s left right;
+  .less_or_equal_unsigned = fn left => fn right => @i8x16.le_u left right;
+  .greater_or_equal_signed = fn left => fn right => @i8x16.ge_s left right;
+  .greater_or_equal_unsigned = fn left => fn right => @i8x16.ge_u left right;
+  .min_signed = fn left => fn right => @i8x16.min_s left right;
+  .min_unsigned = fn left => fn right => @i8x16.min_u left right;
+  .max_signed = fn left => fn right => @i8x16.max_s left right;
+  .max_unsigned = fn left => fn right => @i8x16.max_u left right;
+  .select = fn mask => fn when_true => fn when_false =>
+    @i8x16.select mask when_true when_false;
+  .mask_bits = fn mask => @i8x16.mask_bitmask mask;
+  .all = fn mask => is_equal (@int.cmp (@i8x16.mask_all mask) 1);
+  .any = fn mask => is_equal (@int.cmp (@i8x16.mask_any mask) 1);
+};
+
 // --- option and result ------------------------------------------------------
 
 const Option = fn value => #None | #Some value;
@@ -580,6 +699,12 @@ const F64 = @type.float;
 const F32 = @type.float32;
 const F32x4 = @type.f32x4;
 const F32x4Mask = @type.f32x4_mask;
+const I32x4 = @type.i32x4;
+const I32x4Mask = @type.i32x4_mask;
+const I16x8 = @type.i16x8;
+const I16x8Mask = @type.i16x8_mask;
+const I8x16 = @type.i8x16;
+const I8x16Mask = @type.i8x16_mask;
 const likely = fn condition => @branch.likely condition;
 const unlikely = fn condition => @branch.unlikely condition;
 
@@ -1009,9 +1134,14 @@ return {
   .Float = Float;
   .Float32 = Float32;
   .Vec4 = Vec4;
+  .Int32x4 = Int32x4;
+  .Int16x8 = Int16x8;
+  .Int8x16 = Int8x16;
   .likely = likely;
   .unlikely = unlikely;
   .Text = Text;
+  .as_json = as_json;
+  .as_const_json = as_const_json;
   .Semigroup = Semigroup;
 
   .Array = Array;
@@ -1068,6 +1198,12 @@ return {
   .F32 = F32;
   .F32x4 = F32x4;
   .F32x4Mask = F32x4Mask;
+  .I32x4 = I32x4;
+  .I32x4Mask = I32x4Mask;
+  .I16x8 = I16x8;
+  .I16x8Mask = I16x8Mask;
+  .I8x16 = I8x16;
+  .I8x16Mask = I8x16Mask;
   .I = I;
   .I8 = I8;
   .I16 = I16;

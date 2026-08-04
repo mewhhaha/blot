@@ -1,23 +1,20 @@
-// The parse entry point. Every compiler command uses baba's generated
-// WebAssembly parser, so parsing never depends on a WebGPU adapter.
+// The parse entry point. Every compiler command uses baba's explicit CPU
+// frontend, so parsing never initializes WebGPU.
 
-import { createParser, type ParserInstance } from "../../generated/wasm/mod.ts";
+import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
 import type { Diagnostic } from "../diagnostic.ts";
 import { BlotError } from "../diagnostic.ts";
 import type { Module } from "./ast.ts";
-import { lowerModule, type Rule } from "./lower.ts";
+import { lowerModule } from "./lower.ts";
+import { materializeCpuCst } from "./cpu_cst.ts";
 
-const wasmUrl = new URL("../../generated/wasm/parser.wasm", import.meta.url);
 const planUrl = new URL("../../generated/wasm/parser.plan", import.meta.url);
 
-let shared: ParserInstance | null = null;
+let shared: CpuFrontend | null = null;
 
-async function parser(): Promise<ParserInstance> {
+async function parser(): Promise<CpuFrontend> {
   if (shared !== null) return shared;
-  shared = createParser({
-    bytes: await Deno.readFile(wasmUrl),
-    plan: await Deno.readFile(planUrl),
-  });
+  shared = CpuFrontend.create(await Deno.readFile(planUrl));
   return shared;
 }
 
@@ -27,14 +24,14 @@ export type ParseResult =
 
 export async function parse(source: string): Promise<ParseResult> {
   const instance = await parser();
-  const result = instance.parse(source);
+  const result = ingestCpuSource(instance, source);
   if (!result.ok) {
     return {
       ok: false,
       diagnostics: result.diagnostics.map((diagnostic) => ({
         code: diagnostic.code,
         message: diagnostic.message,
-        span: diagnostic.span,
+        span: { start: diagnostic.start, end: diagnostic.end },
       })),
     };
   }
@@ -42,7 +39,10 @@ export async function parse(source: string): Promise<ParseResult> {
   try {
     return {
       ok: true,
-      module: lowerModule(result.cursor as unknown as Rule, source),
+      module: lowerModule(
+        materializeCpuCst(instance, result.program, source),
+        source,
+      ),
     };
   } catch (error) {
     if (error instanceof BlotError) {
@@ -52,9 +52,33 @@ export async function parse(source: string): Promise<ParseResult> {
   }
 }
 
-export function dispose(): void {
-  if (shared !== null) {
-    shared.dispose();
-    shared = null;
+export function ingestCpuSource(
+  instance: CpuFrontend,
+  source: string,
+): ReturnType<CpuFrontend["ingest"]> {
+  let result = instance.ingest(source);
+  if (
+    !result.ok &&
+    result.diagnostics.length > 0 &&
+    result.diagnostics.every((diagnostic) =>
+      diagnostic.code === "GPU_FRONTEND_INTEGER_BOUNDS"
+    )
+  ) {
+    // Baba owns syntax, but its compact frontend also applies an I32 policy
+    // that is not part of Blot's I64 integer domain. Baba has already proved
+    // these spans are integer tokens, so replacing their digits preserves token
+    // identities and offsets without duplicating any lexical logic in Blot.
+    let syntaxSource = source;
+    for (const diagnostic of [...result.diagnostics].reverse()) {
+      syntaxSource = syntaxSource.slice(0, diagnostic.start) +
+        "0".repeat(diagnostic.end - diagnostic.start) +
+        syntaxSource.slice(diagnostic.end);
+    }
+    result = instance.ingest(syntaxSource);
   }
+  return result;
+}
+
+export function dispose(): void {
+  shared = null;
 }

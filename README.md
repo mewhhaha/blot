@@ -1,9 +1,8 @@
 # Blot
 
-Blot is a functional language built as one coherent system: generated
-WebAssembly parsing, comptime evaluation, algebraic subtyping, typed effects,
-ownership, specialization, and WebAssembly compilation all shape the source
-language.
+Blot is a functional language built as one coherent system: compact CST parsing,
+comptime evaluation, algebraic subtyping, typed effects, ownership,
+specialization, and WebAssembly compilation all shape the source language.
 
 See [LANGUAGE.md](LANGUAGE.md) for the complete language specification.
 Executable application studies live in [case-studies/](case-studies/): a
@@ -20,21 +19,25 @@ const result = await parse("return 42;");
 
 Run `deno task publish:dry-run` to verify the package before publishing.
 
-The strict parser profile is a design tool, not an implementation afterthought.
-It rules out contextual lexing, recursive precedence grammar, and unbounded
-regions, keeping both the grammar and the language small enough to understand.
+The parser profile is a design tool, not an implementation afterthought. It
+rules out contextual lexing and recursive precedence grammar, keeping both the
+grammar and the language small enough to understand. The default compiler uses
+the Baba 9 CPU frontend; the full Rust compiler executes tables generated from
+that same plan. The WebGPU frontend remains a comparison target.
 
 ## Status
 
-It runs. M0 (the GPU-parseable grammar) and M1 (elaboration, the comptime
+It runs. M0 (the Baba-profile grammar) and M1 (elaboration, the comptime
 evaluator, and the prelude) are done. Every example in `examples/` evaluates to
-a recorded value, and every program in the corpus — the prelude included — holds
-byte parity between the CPU parser oracle and the WebGPU frontend.
+a recorded value, and every program in the corpus — the prelude included — is
+accepted and materialized by Baba 9's CPU frontend.
 
 Type inference (M2) landed too: `blot check` infers principal types with no
 annotations anywhere, enforces `sig` by subsumption, and rejects unhandled
 effects at the module boundary. See [docs/inference.md](docs/inference.md),
-including what it does _not_ yet prove.
+including what it does _not_ yet prove. The declarative relation, solver lemmas,
+transactional implementation invariants, and performance gates are in
+[TYPECHECKING.md](TYPECHECKING.md).
 
 A branch proves what its condition computes, and the proof is set algebra on
 types. `if n == 1` narrows `n` to `1` in the taken branch and to `T \\ 1` in the
@@ -73,15 +76,36 @@ fields become named Wasm exports, host effects become typed imports, and
 one-shot handlers are specialized through non-tail resume and abort. See
 [docs/backend.md](docs/backend.md).
 
+An experimental, full Rust/WebAssembly implementation of the compiler is
+available through `blot build-experimental` and the public
+`ExperimentalCompiler` API. Its single checked-in Wasm parses source, checks and
+stages the program, constructs the caller ABI, and emits the final WebAssembly
+module. Baba generates the parser tables embedded at build time; normal
+compilation does not load Baba or gpupaper. The conformance gates and fair
+end-to-end benchmark are documented in
+[docs/rust-middle.md](docs/rust-middle.md).
+
+```ts
+import { ExperimentalCompiler } from "@mewhhaha/blot";
+
+const compiler = await ExperimentalCompiler.create();
+try {
+  const artifact = await compiler.compile("examples/minimal.blot");
+  console.log(artifact.wasm.byteLength);
+} finally {
+  compiler.destroy();
+}
+```
+
 ```bash
 just run examples/tour.blot   # evaluate a program
 just check-file examples/tour.blot  # infer its type and check ownership
 just ownership examples/tour.blot   # last-use and linearity facts
 just build examples/compiled.blot   # compile to WebAssembly
+just build-experimental examples/compiled.blot # use the experimental compiler
 just wasm                           # interpreter vs GPU evaluator vs Wasm
 just test                     # corpus goldens, rejections, profile gate
-just parity                   # CPU oracle vs WebGPU frontend, needs an adapter
-just generate                 # regenerate the parser; fails if the profile regresses
+just generate                 # regenerate the frontend plan; fails if its profile regresses
 just inspect                  # the counters recorded in docs/gpu-profile.md
 just install                  # Helix: grammar, queries, `.blot` association
 ```
@@ -94,11 +118,14 @@ deno run --allow-read --allow-write \
   examples/minimal.blot examples/arithmetic.blot
 ```
 
-Blot owns parsing, checking, staging, specialization, Runtime HIR validation,
-canonical ABI adapters, and target orchestration. Those Blot-specific layers
-live in `src/backend/runtime/`. The sibling gpupaper checkout exposes only its
-language-independent Core, Wasm planner, and Rust/WebAssembly plan emitter. The
-compiler uses generated WebAssembly for both parsing and final code emission. No
+Use `build-experimental` in place of `build` to compare the single-Wasm Rust
+compiler while retaining the same Wasm and ABI output contract.
+
+Blot owns parsing policy, checking, staging, specialization, Runtime HIR,
+canonical ABI adapters, and target orchestration. The default implementation
+uses Baba's CPU frontend and the language-independent gpupaper Core and emitter.
+The alternative implements those Blot-owned stages and its binary encoder in the
+checked-in Rust compiler Wasm while consuming Baba-generated parser tables. No
 compiler command initializes WebGPU. Multiple paths are prepared independently
 and cache misses retain stable input order. A source failure remains local to
 its path; an emitter failure rejects every admitted miss rather than returning
@@ -167,7 +194,7 @@ every name in the pattern is known to exist afterward.
 
 `do` is an expression block. Its semicolon-terminated statements are separated
 from its value by `in`; without `in`, its value is `()`. The marker is required
-by the strict GPU grammar because a bare trailing name and the start of
+by the frontend grammar because a bare trailing name and the start of
 `name := ...;` have the same one-token prefix.
 
 Element expressions are ordinary component calls with property records and a
@@ -279,6 +306,24 @@ unlisted field still enters scope unchanged. Renames may not collide with an
 unlisted field; suppress or rename that field explicitly when both exist.
 `@import` returns the imported module function, and the final `()` supplies its
 empty module parameter.
+
+Non-Blot files enter through `@include`. The second argument is an ordinary
+compile-time function, so the program owns both parsing and representation:
+
+```blot
+const as_raw = fn source => source.text;
+const shader = @include "./shaders/main.wgsl" as_raw;
+
+open {} = (@import "blot:prelude") ();
+const config = @include "./config.json" as_json;
+const fixed_config = @include "./config.json" as_const_json;
+```
+
+The function receives `{ .specifier; .path; .text; }`. Included files are
+tracked compiler dependencies, and the result is compile-time-only: bind it with
+`const`, then specialize whatever runtime value the program needs. `as_json`
+widens JSON leaves to `Str`, `Int`, `Bool`, and `F64` while preserving object
+fields. `as_const_json` retains literal compile-time values instead.
 
 That line is what makes `+` work: the default fixity for `+` names `Num.add`,
 and a fixity whose target is not in scope is useless. A module that skips it

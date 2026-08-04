@@ -1,0 +1,609 @@
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
+
+use serde::Serialize;
+
+use crate::ast::{AstArena, Declaration, Expression, ExpressionId, Module};
+use crate::backend::CompiledModule;
+use crate::cst::{CompactCst, RULE_NAMES};
+use crate::diagnostic::Diagnostic;
+use crate::eval::{Context, IncludedFile, LoadedModule, Phase, Runtime, evaluate_module, run};
+use crate::frontend::{FrontendState, ingest_incremental};
+use crate::hir::RuntimeModule;
+use crate::typecheck::{CachedModuleAnalyses, CachedModuleInterface, Checker};
+use crate::value::{Value, show};
+
+pub struct CompilerSession {
+    context: Rc<Context>,
+    frontends: HashMap<String, FrontendState>,
+    module_interfaces: Rc<RefCell<HashMap<String, CachedModuleInterface>>>,
+    module_analyses: Rc<RefCell<HashMap<String, CachedModuleAnalyses>>>,
+    checker: Checker,
+    runtime_modules: RefCell<HashMap<String, Rc<RuntimeModule>>>,
+    compiled_modules: RefCell<HashMap<String, CompiledModule>>,
+}
+
+impl Default for CompilerSession {
+    fn default() -> Self {
+        let context = Rc::new(Context::default());
+        let module_interfaces = Rc::new(RefCell::new(HashMap::new()));
+        let module_analyses = Rc::new(RefCell::new(HashMap::new()));
+        let checker = Checker::with_caches(
+            context.clone(),
+            module_interfaces.clone(),
+            module_analyses.clone(),
+        );
+        Self {
+            context,
+            frontends: HashMap::new(),
+            module_interfaces,
+            module_analyses,
+            checker,
+            runtime_modules: RefCell::new(HashMap::new()),
+            compiled_modules: RefCell::new(HashMap::new()),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct AddedModule {
+    pub imports: Vec<String>,
+    pub includes: Vec<String>,
+}
+
+#[derive(Debug)]
+pub enum AddSourceError {
+    Diagnostics(Vec<Diagnostic>),
+    Lowering(String),
+}
+
+impl CompilerSession {
+    pub fn add_source(
+        &mut self,
+        path: String,
+        source: Vec<u16>,
+    ) -> Result<AddedModule, AddSourceError> {
+        let (program, frontend) = ingest_incremental(&source, self.frontends.get(&path))
+            .map_err(AddSourceError::Diagnostics)?;
+        let cst = CompactCst::new(
+            &source,
+            &program.tokens,
+            &program.nodes,
+            &program.edges,
+            RULE_NAMES,
+        )
+        .map_err(AddSourceError::Lowering)?;
+        let module = crate::lower::lower_module(&cst).map_err(AddSourceError::Lowering)?;
+        let dependencies = module_dependencies(&module);
+        let unchanged = self
+            .context
+            .modules
+            .borrow()
+            .get(&path)
+            .is_some_and(|loaded| loaded.module.as_ref() == &module);
+        self.frontends.insert(path.clone(), frontend);
+        if unchanged {
+            return Ok(AddedModule {
+                imports: dependencies.imports,
+                includes: dependencies.includes,
+            });
+        }
+
+        self.invalidate(&path);
+        self.context.modules.borrow_mut().insert(
+            path,
+            LoadedModule {
+                module: Rc::new(module),
+                imports: BTreeMap::new(),
+                includes: BTreeMap::new(),
+            },
+        );
+        Ok(AddedModule {
+            imports: dependencies.imports,
+            includes: dependencies.includes,
+        })
+    }
+
+    pub fn configure_module(
+        &mut self,
+        path: &str,
+        imports: BTreeMap<String, String>,
+        includes: BTreeMap<String, IncludedFile>,
+    ) -> Result<(), String> {
+        let mut modules = self.context.modules.borrow_mut();
+        let module = modules
+            .get_mut(path)
+            .ok_or_else(|| format!("cannot configure unknown module {path}"))?;
+        if module.imports != imports || module.includes != includes {
+            module.imports = imports;
+            module.includes = includes;
+            drop(modules);
+            self.invalidate(path);
+        }
+        Ok(())
+    }
+
+    pub fn evaluate_module(&self, path: &str) -> serde_json::Value {
+        let computation = evaluate_module(
+            self.context.clone(),
+            path.to_owned(),
+            Value::Unit,
+            Runtime::new(Phase::Runtime, path.to_owned()),
+        );
+        match run(computation) {
+            Ok(value) => serde_json::json!({
+                "ok": true,
+                "value": json_value(&value),
+                "display": show(&value),
+            }),
+            Err(diagnostic) => serde_json::json!({
+                "ok": false,
+                "diagnostic": {
+                    "code": diagnostic.code,
+                    "message": diagnostic.message,
+                    "span": {
+                        "start": diagnostic.span.start,
+                        "end": diagnostic.span.end,
+                    },
+                },
+            }),
+        }
+    }
+
+    pub fn check_module(&self, path: &str) -> serde_json::Value {
+        self.checker.begin_request();
+        self.checker.check_json(path)
+    }
+
+    pub fn prepare_runtime_hir(&self, path: &str) -> serde_json::Value {
+        match self.runtime_hir(path) {
+            Ok(module) => serde_json::json!({ "ok": true, "module": module.as_ref() }),
+            Err(diagnostic) => diagnostic_json(diagnostic),
+        }
+    }
+
+    pub fn compile_module(&self, path: &str) -> Result<CompiledModule, Diagnostic> {
+        if let Some(compiled) = self.compiled_modules.borrow().get(path) {
+            return Ok(compiled.clone());
+        }
+        let module = self.runtime_hir(path)?;
+        let compiled = crate::backend::compile(module.as_ref()).map_err(|message| {
+            Diagnostic::new(
+                "BLOT_BACKEND_ERROR",
+                message,
+                crate::ast::Span { start: 0, end: 0 },
+            )
+            .at(path)
+        })?;
+        self.compiled_modules
+            .borrow_mut()
+            .insert(path.to_owned(), compiled.clone());
+        Ok(compiled)
+    }
+
+    fn runtime_hir(&self, path: &str) -> Result<Rc<RuntimeModule>, Diagnostic> {
+        if let Some(module) = self.runtime_modules.borrow().get(path) {
+            return Ok(module.clone());
+        }
+        self.checker.begin_request();
+        let checked = self
+            .checker
+            .check(path)
+            .map_err(|diagnostic| diagnostic.at(path))?;
+        let module = Rc::new(
+            crate::hir::prepare(self.context.clone(), path, checked)
+                .map_err(|diagnostic| diagnostic.at(path))?,
+        );
+        self.runtime_modules
+            .borrow_mut()
+            .insert(path.to_owned(), module.clone());
+        Ok(module)
+    }
+
+    fn invalidate(&self, changed: &str) {
+        let modules = self.context.modules.borrow();
+        let mut invalidated = HashSet::from([changed.to_owned()]);
+        loop {
+            let previous = invalidated.len();
+            for (path, loaded) in modules.iter() {
+                if loaded
+                    .imports
+                    .values()
+                    .any(|dependency| invalidated.contains(dependency))
+                {
+                    invalidated.insert(path.clone());
+                }
+            }
+            if invalidated.len() == previous {
+                break;
+            }
+        }
+        drop(modules);
+        self.module_interfaces
+            .borrow_mut()
+            .retain(|path, _| !invalidated.contains(path));
+        self.module_analyses
+            .borrow_mut()
+            .retain(|path, _| !invalidated.contains(path));
+        self.checker.invalidate(&invalidated);
+        self.context
+            .module_results
+            .borrow_mut()
+            .retain(|path, _| !invalidated.contains(path));
+        self.runtime_modules
+            .borrow_mut()
+            .retain(|path, _| !invalidated.contains(path));
+        self.compiled_modules
+            .borrow_mut()
+            .retain(|path, _| !invalidated.contains(path));
+    }
+}
+
+fn diagnostic_json(diagnostic: crate::diagnostic::Diagnostic) -> serde_json::Value {
+    serde_json::json!({
+        "ok": false,
+        "diagnostic": {
+            "code": diagnostic.code,
+            "message": diagnostic.message,
+            "origin": diagnostic.origin,
+            "span": {
+                "start": diagnostic.span.start,
+                "end": diagnostic.span.end,
+            },
+        },
+    })
+}
+
+fn json_value(value: &Value) -> serde_json::Value {
+    match value {
+        Value::Int(value) => serde_json::json!({ "tag": "int", "value": value.to_string() }),
+        Value::Float(value) => serde_json::json!({ "tag": "float", "value": value }),
+        Value::Float32(value) => serde_json::json!({ "tag": "float32", "value": value }),
+        Value::Vector(lanes) => serde_json::json!({ "tag": "vector", "lanes": lanes }),
+        Value::VectorMask(lanes) => serde_json::json!({ "tag": "vector-mask", "lanes": lanes }),
+        Value::IntegerVector { bits, lanes } => {
+            serde_json::json!({ "tag": "integer-vector", "bits": bits, "lanes": lanes })
+        }
+        Value::IntegerVectorMask { bits, lanes } => {
+            serde_json::json!({ "tag": "integer-vector-mask", "bits": bits, "lanes": lanes })
+        }
+        Value::Text(value) => serde_json::json!({ "tag": "text", "value": value }),
+        Value::Unit => serde_json::json!({ "tag": "unit" }),
+        Value::Shape(fields) => serde_json::json!({
+            "tag": "shape",
+            "fields": fields.iter().map(|(name, value)| {
+                serde_json::json!([name, json_value(value)])
+            }).collect::<Vec<_>>(),
+        }),
+        Value::Array(elements) => serde_json::json!({
+            "tag": "array",
+            "elements": elements.iter().map(json_value).collect::<Vec<_>>(),
+        }),
+        Value::Tag { name, payload } => serde_json::json!({
+            "tag": "tag",
+            "name": name,
+            "payload": payload.as_deref().map(json_value),
+        }),
+        Value::Range { low, high, domain } => serde_json::json!({
+            "tag": "range",
+            "low": json_value(low),
+            "high": json_value(high),
+            "domain": domain.map(|domain| format!("{domain:?}").to_lowercase()),
+        }),
+        Value::Union(members) => serde_json::json!({
+            "tag": "union",
+            "members": members.iter().map(json_value).collect::<Vec<_>>(),
+        }),
+        Value::Unbounded => serde_json::json!({ "tag": "unbounded" }),
+        Value::Arrow {
+            domain,
+            codomain,
+            effects,
+        } => serde_json::json!({
+            "tag": "arrow",
+            "domain": json_value(domain),
+            "codomain": json_value(codomain),
+            "effects": effects.iter().map(json_value).collect::<Vec<_>>(),
+        }),
+        Value::TypeVariable(id) => serde_json::json!({ "tag": "type-variable", "id": id }),
+        Value::Forall { variable, body } => serde_json::json!({
+            "tag": "forall", "variable": variable, "body": json_value(body),
+        }),
+        Value::Effect {
+            id,
+            name,
+            operations,
+            host,
+        } => serde_json::json!({
+            "tag": "effect", "id": id, "name": name, "host": host,
+            "operations": operations.iter().map(|(name, value)| {
+                serde_json::json!([name, json_value(value)])
+            }).collect::<Vec<_>>(),
+        }),
+        Value::Operation { effect, name } => serde_json::json!({
+            "tag": "operation", "effect": json_value(effect), "name": name,
+        }),
+        Value::Extended { inner, members } => serde_json::json!({
+            "tag": "extended", "inner": json_value(inner),
+            "members": members.iter().map(|(name, value)| {
+                serde_json::json!([name, json_value(value)])
+            }).collect::<Vec<_>>(),
+        }),
+        Value::Sealed { name, inner } => serde_json::json!({
+            "tag": "sealed", "name": name, "inner": json_value(inner),
+        }),
+        Value::OpaqueType(name) => serde_json::json!({ "tag": "opaque-type", "name": name }),
+        Value::Runtime(value) => serde_json::json!({
+            "tag": "runtime", "value": value.id, "type": value.type_id,
+        }),
+        Value::Closure { .. }
+        | Value::ModuleClosure { .. }
+        | Value::IndexedStep { .. }
+        | Value::Primitive { .. }
+        | Value::Continuation { .. } => {
+            serde_json::json!({ "tag": "opaque", "display": show(value) })
+        }
+    }
+}
+
+#[derive(Default)]
+struct ModuleDependencies {
+    imports: Vec<String>,
+    includes: Vec<String>,
+    seen_imports: HashSet<String>,
+    seen_includes: HashSet<String>,
+}
+
+fn module_dependencies(module: &Module) -> ModuleDependencies {
+    let mut dependencies = ModuleDependencies::default();
+    for declaration in &module.declarations {
+        collect_declaration_dependencies(
+            &module.arena.declarations[declaration.0 as usize],
+            &module.arena,
+            &mut dependencies,
+        );
+    }
+    collect_expression_dependencies(module.result, &module.arena, &mut dependencies);
+    dependencies
+}
+
+fn collect_declaration_dependencies(
+    declaration: &Declaration,
+    arena: &AstArena,
+    dependencies: &mut ModuleDependencies,
+) {
+    let value = match declaration {
+        Declaration::Binding { value, .. }
+        | Declaration::Shadow { value, .. }
+        | Declaration::Open { value, .. } => *value,
+    };
+    collect_expression_dependencies(value, arena, dependencies);
+}
+
+fn collect_expression_dependencies(
+    expression: ExpressionId,
+    arena: &AstArena,
+    dependencies: &mut ModuleDependencies,
+) {
+    let expression = &arena.expressions[expression.0 as usize];
+    match expression {
+        Expression::Apply {
+            function, argument, ..
+        } => {
+            if let Expression::Intrinsic { name, .. } = &arena.expressions[function.0 as usize]
+                && let Expression::Text { value, .. } = &arena.expressions[argument.0 as usize]
+            {
+                if name == "@import" && dependencies.seen_imports.insert(value.clone()) {
+                    dependencies.imports.push(value.clone());
+                }
+                if name == "@include" && dependencies.seen_includes.insert(value.clone()) {
+                    dependencies.includes.push(value.clone());
+                }
+            }
+            collect_expression_dependencies(*function, arena, dependencies);
+            collect_expression_dependencies(*argument, arena, dependencies);
+        }
+        Expression::Field { target, .. } => {
+            collect_expression_dependencies(*target, arena, dependencies);
+        }
+        Expression::Lambda { body, .. } | Expression::Comptime { body, .. } => {
+            collect_expression_dependencies(*body, arena, dependencies);
+        }
+        Expression::Rec { lambda, .. } => {
+            collect_expression_dependencies(*lambda, arena, dependencies);
+        }
+        Expression::Array { elements, .. } => {
+            for element in elements {
+                collect_expression_dependencies(element.value, arena, dependencies);
+            }
+        }
+        Expression::Tuple { elements, .. } => {
+            for element in elements {
+                collect_expression_dependencies(*element, arena, dependencies);
+            }
+        }
+        Expression::Shape { members, .. } => {
+            for member in members {
+                let value = match member {
+                    crate::ast::ShapeMember::Field { value, .. }
+                    | crate::ast::ShapeMember::Spread { value } => *value,
+                };
+                collect_expression_dependencies(value, arena, dependencies);
+            }
+        }
+        Expression::If {
+            branches, fallback, ..
+        } => {
+            for branch in branches {
+                collect_expression_dependencies(branch.condition, arena, dependencies);
+                collect_expression_dependencies(branch.consequence, arena, dependencies);
+            }
+            if let Some(fallback) = fallback {
+                collect_expression_dependencies(*fallback, arena, dependencies);
+            }
+        }
+        Expression::Case { target, arms, .. } => {
+            collect_expression_dependencies(*target, arena, dependencies);
+            for arm in arms {
+                collect_expression_dependencies(arm.body, arena, dependencies);
+            }
+        }
+        Expression::Block {
+            declarations,
+            result,
+            ..
+        } => {
+            for declaration in declarations {
+                collect_declaration_dependencies(
+                    &arena.declarations[declaration.0 as usize],
+                    arena,
+                    dependencies,
+                );
+            }
+            collect_expression_dependencies(*result, arena, dependencies);
+        }
+        Expression::Var { .. }
+        | Expression::Int { .. }
+        | Expression::Float { .. }
+        | Expression::Text { .. }
+        | Expression::Unit { .. }
+        | Expression::Intrinsic { .. }
+        | Expression::Tag { .. } => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{AstArena, Expression, ResultEffects, Span};
+
+    #[test]
+    fn comment_only_edit_preserves_resident_module() {
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source("return 1;"))
+            .expect("initial source should load");
+        let initial = session.context.modules.borrow()["main.blot"].module.clone();
+
+        session
+            .add_source("main.blot".to_owned(), source("return 1; // changed"))
+            .expect("edited source should load");
+        let edited = session.context.modules.borrow()["main.blot"].module.clone();
+
+        assert!(Rc::ptr_eq(&initial, &edited));
+    }
+
+    #[test]
+    fn runtime_hir_and_artifact_follow_semantic_revision() {
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source("return 1;"))
+            .expect("initial source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("initial source should configure");
+
+        let prepared = session.prepare_runtime_hir("main.blot");
+        assert_eq!(prepared["ok"], true);
+        assert_eq!(session.runtime_modules.borrow().len(), 1);
+        assert!(session.compiled_modules.borrow().is_empty());
+
+        let first = session
+            .compile_module("main.blot")
+            .expect("initial source should compile");
+        let second = session
+            .compile_module("main.blot")
+            .expect("unchanged source should compile");
+        assert_eq!(first.wasm, second.wasm);
+        assert_eq!(session.compiled_modules.borrow().len(), 1);
+
+        session
+            .add_source("main.blot".to_owned(), source("return 1; // changed"))
+            .expect("comment edit should load");
+        assert_eq!(session.runtime_modules.borrow().len(), 1);
+        assert_eq!(session.compiled_modules.borrow().len(), 1);
+
+        session
+            .add_source("main.blot".to_owned(), source("return 2;"))
+            .expect("semantic edit should load");
+        assert!(session.runtime_modules.borrow().is_empty());
+        assert!(session.compiled_modules.borrow().is_empty());
+    }
+
+    #[test]
+    fn dependencies_are_unique_in_source_traversal_order() {
+        let span = Span { start: 0, end: 1 };
+        let mut arena = AstArena::default();
+        let import = arena.expression(Expression::Intrinsic {
+            name: "@import".to_owned(),
+            span,
+        });
+        let first_path = arena.expression(Expression::Text {
+            value: "first.blot".to_owned(),
+            span,
+        });
+        let first = arena.expression(Expression::Apply {
+            function: import,
+            argument: first_path,
+            span,
+        });
+        let second_path = arena.expression(Expression::Text {
+            value: "second.blot".to_owned(),
+            span,
+        });
+        let second = arena.expression(Expression::Apply {
+            function: import,
+            argument: second_path,
+            span,
+        });
+        let repeated = arena.expression(Expression::Apply {
+            function: import,
+            argument: first_path,
+            span,
+        });
+        let include = arena.expression(Expression::Intrinsic {
+            name: "@include".to_owned(),
+            span,
+        });
+        let included_path = arena.expression(Expression::Text {
+            value: "shader.wgsl".to_owned(),
+            span,
+        });
+        let included_source = arena.expression(Expression::Apply {
+            function: include,
+            argument: included_path,
+            span,
+        });
+        let parser = arena.expression(Expression::Var {
+            name: "as_raw".to_owned(),
+            span,
+        });
+        let included = arena.expression(Expression::Apply {
+            function: included_source,
+            argument: parser,
+            span,
+        });
+        let result = arena.expression(Expression::Tuple {
+            elements: vec![first, second, repeated, included],
+            span,
+        });
+        let module = Module {
+            parameter: None,
+            fixities: Vec::new(),
+            declarations: Vec::new(),
+            result,
+            result_effects: ResultEffects::Pure,
+            span,
+            arena,
+        };
+
+        let dependencies = module_dependencies(&module);
+        assert_eq!(dependencies.imports, ["first.blot", "second.blot"]);
+        assert_eq!(dependencies.includes, ["shader.wgsl"]);
+    }
+
+    fn source(value: &str) -> Vec<u16> {
+        value.encode_utf16().collect()
+    }
+}

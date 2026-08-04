@@ -59,7 +59,9 @@ interface Binding {
    */
   readonly qualifier: Qualifier;
   /** Obligations carried inside this value, including inside aggregates. */
-  readonly owned: Produced;
+  owned: Produced;
+  /** A child path has moved while the whole value remains unavailable. */
+  partial: boolean;
   /** The ownership contract of this function's parameter, when statically known. */
   parameter: Qualifier | null;
   /** Parameter structure substituted when a function returns caller ownership. */
@@ -184,20 +186,36 @@ function childScope(parent: Scope | null, lambda = false): Scope {
 }
 
 /** A snapshot of which linear bindings are consumed, for comparing branches. */
-function snapshot(scope: Scope): Map<Binding, Span | null> {
-  const state = new Map<Binding, Span | null>();
+interface BindingState {
+  readonly moved: Span | null;
+  readonly owned: Produced;
+  readonly partial: boolean;
+}
+
+function snapshot(scope: Scope): Map<Binding, BindingState> {
+  const state = new Map<Binding, BindingState>();
   let current: Scope | null = scope;
   while (current !== null) {
     for (const binding of current.bindings.values()) {
-      if (spendable(binding.qualifier)) state.set(binding, binding.moved);
+      if (spendable(binding.qualifier)) {
+        state.set(binding, {
+          moved: binding.moved,
+          owned: binding.owned,
+          partial: binding.partial,
+        });
+      }
     }
     current = current.parent;
   }
   return state;
 }
 
-function restore(state: Map<Binding, Span | null>): void {
-  for (const [binding, moved] of state) binding.moved = moved;
+function restore(state: Map<Binding, BindingState>): void {
+  for (const [binding, value] of state) {
+    binding.moved = value.moved;
+    binding.owned = value.owned;
+    binding.partial = value.partial;
+  }
 }
 
 export function checkLinearity(module: Module): LinearResult {
@@ -293,6 +311,7 @@ function declareProduced(
         pattern,
         qualifier: inherited(pattern.qualifier, owned),
         owned,
+        partial: false,
         parameter: null,
         parameterPattern: null,
         result: NONE,
@@ -453,6 +472,7 @@ function use(
       pattern: binding.pattern,
       qualifier: "borrow",
       owned: binding.owned,
+      partial: binding.partial,
       parameter: binding.parameter,
       parameterPattern: binding.parameterPattern,
       result: binding.result,
@@ -474,6 +494,16 @@ function use(
     return NONE;
   }
 
+  if (binding.partial) {
+    analysis.report(
+      "BLOT_LINEAR_PARTIAL_REUSE",
+      `\`${name}\` has a moved field and cannot be used as a whole value. Move or borrow only fields that remain live.`,
+      span,
+    );
+    consume(binding, span, analysis);
+    return NONE;
+  }
+
   // Capturing a linear value does not refuse it and does not spend it here.
   // The obligation *moves into the closure*: the closure becomes linear, and
   // whoever holds it owes exactly one call. Inside the body the captured value
@@ -484,6 +514,7 @@ function use(
       pattern: binding.pattern,
       qualifier: binding.qualifier,
       owned: binding.owned,
+      partial: binding.partial,
       parameter: binding.parameter,
       parameterPattern: binding.parameterPattern,
       result: binding.result,
@@ -902,6 +933,7 @@ function declareGroup(
       result: NONE,
       value: member.declaration.value,
       moved: null,
+      partial: false,
       borrows: 0,
       lastUse: null,
     });
@@ -933,7 +965,7 @@ interface Undo {
   readonly bindings: readonly (readonly [string, Binding])[];
   readonly captures: readonly Binding[];
   readonly borrowedCaptures: readonly Binding[];
-  readonly moved: readonly (readonly [Binding, Span | null])[];
+  readonly states: readonly (readonly [Binding, BindingState])[];
 }
 
 function checkpoint(scope: Scope): readonly Undo[] {
@@ -946,7 +978,13 @@ function checkpoint(scope: Scope): readonly Undo[] {
       bindings,
       captures: [...current.captures],
       borrowedCaptures: [...current.borrowedCaptures],
-      moved: bindings.map(([, binding]) => [binding, binding.moved] as const),
+      states: bindings.map(([, binding]) =>
+        [binding, {
+          moved: binding.moved,
+          owned: binding.owned,
+          partial: binding.partial,
+        }] as const
+      ),
     });
     current = current.parent;
   }
@@ -965,7 +1003,11 @@ function rewind(undo: readonly Undo[]): void {
     for (const binding of entry.borrowedCaptures) {
       entry.scope.borrowedCaptures.add(binding);
     }
-    for (const [binding, moved] of entry.moved) binding.moved = moved;
+    for (const [binding, state] of entry.states) {
+      binding.moved = state.moved;
+      binding.owned = state.owned;
+      binding.partial = state.partial;
+    }
   }
 }
 
@@ -1987,6 +2029,8 @@ function walk(
     }
 
     case "field": {
+      const projected = projectOwnedPath(expr, scope, analysis, kind);
+      if (projected !== null) return projected;
       const target = walk(expr.target, scope, analysis, "project");
       if (target.tag === "borrow") {
         if (target.value.tag !== "shape") return target;
@@ -2132,7 +2176,7 @@ function walk(
       // a value consumed on one path and not another is consumed neither
       // exactly once nor never.
       const before = snapshot(scope);
-      const outcomes: Map<Binding, Span | null>[] = [];
+      const outcomes: Map<Binding, BindingState>[] = [];
       const produced: Produced[] = [];
       for (const branch of expr.branches) {
         walk(branch.condition, scope, analysis, "project");
@@ -2154,7 +2198,7 @@ function walk(
     case "case": {
       const target = walk(expr.target, scope, analysis, "project");
       const before = snapshot(scope);
-      const outcomes: Map<Binding, Span | null>[] = [];
+      const outcomes: Map<Binding, BindingState>[] = [];
       const produced: Produced[] = [];
       for (const arm of expr.arms) {
         restore(before);
@@ -2188,6 +2232,78 @@ function walk(
   }
 }
 
+function projectOwnedPath(
+  expression: Expr & { tag: "field" },
+  scope: Scope,
+  analysis: Analysis,
+  kind: Use,
+): Produced | null {
+  const path: string[] = [];
+  let root: Expr = expression;
+  while (root.tag === "field") {
+    path.unshift(root.name);
+    root = root.target;
+  }
+  if (root.tag !== "var") return null;
+  const found = analysis.lookup(scope, root.name);
+  if (found === null || found.capturedBy !== null) return null;
+  const binding = found.binding;
+  if (!spendable(binding.qualifier) || binding.owned.tag !== "shape") {
+    return null;
+  }
+  if (binding.moved !== null) {
+    consume(binding, expression.span, analysis);
+    return NONE;
+  }
+
+  const projected = removeOwnedPath(binding.owned, path);
+  if (projected === null) return null;
+  analysis.lastUses.set(binding.pattern, expression.span);
+  binding.lastUse = expression.span;
+  const reads = analysis.reads.get(binding.pattern);
+  if (reads === undefined) {
+    analysis.reads.set(binding.pattern, new Set([expression.span.start]));
+  } else {
+    reads.add(expression.span.start);
+  }
+  if (kind === "borrow") {
+    binding.borrows += 1;
+    return borrowed(projected.selected);
+  }
+  if (!relevant(projected.selected)) return projected.selected;
+
+  binding.owned = projected.remaining;
+  binding.partial = true;
+  if (!relevant(binding.owned)) consume(binding, expression.span, analysis);
+  return projected.selected;
+}
+
+interface OwnedProjection {
+  readonly selected: Produced;
+  readonly remaining: Produced;
+}
+
+function removeOwnedPath(
+  produced: Produced,
+  path: readonly string[],
+): OwnedProjection | null {
+  if (path.length === 0 || produced.tag !== "shape") return null;
+  const selected = produced.fields.get(path[0]);
+  if (selected === undefined) return null;
+  const fields = new Map(produced.fields);
+  if (path.length === 1) {
+    fields.set(path[0], NONE);
+    return { selected, remaining: { tag: "shape", fields } };
+  }
+  const nested = removeOwnedPath(selected, path.slice(1));
+  if (nested === null) return null;
+  fields.set(path[0], nested.remaining);
+  return {
+    selected: nested.selected,
+    remaining: { tag: "shape", fields },
+  };
+}
+
 function installRecursiveCapture(
   name: string,
   scope: Scope,
@@ -2209,6 +2325,7 @@ function installRecursiveCapture(
     result: binding.result,
     value: binding.value,
     moved: null,
+    partial: false,
     borrows: 0,
     lastUse: null,
   });
@@ -2261,18 +2378,20 @@ function escapes(span: Span, analysis: Analysis): void {
 
 /** Branches must agree about what they consumed. */
 function agree(
-  outcomes: readonly Map<Binding, Span | null>[],
-  before: Map<Binding, Span | null>,
+  outcomes: readonly Map<Binding, BindingState>[],
+  before: Map<Binding, BindingState>,
   span: Span,
   analysis: Analysis,
 ): void {
   if (outcomes.length === 0) return;
-  const merged = new Map<Binding, Span | null>();
+  const merged = new Map<Binding, BindingState>();
 
   for (const [binding] of before) {
-    const consumed = outcomes.map((outcome) => outcome.get(binding) ?? null);
-    const some = consumed.some((moved) => moved !== null);
-    const every = consumed.every((moved) => moved !== null);
+    const prior = before.get(binding);
+    if (prior === undefined) throw new Error("ownership snapshot lost binding");
+    const states = outcomes.map((outcome) => outcome.get(binding) ?? prior);
+    const some = states.some((state) => state.moved !== null);
+    const every = states.every((state) => state.moved !== null);
     // Affine branches need not agree: spending on one path and not another is
     // still at most once.
     if (some && !every && binding.qualifier === "linear") {
@@ -2282,11 +2401,47 @@ function agree(
         span,
       );
     }
-    merged.set(
-      binding,
-      some ? consumed.find((moved) => moved !== null) ?? null : null,
+    const first = states[0];
+    const disagree = states.some((state) =>
+      state.partial !== first.partial || !sameProduced(state.owned, first.owned)
     );
+    if (disagree && binding.qualifier === "linear") {
+      analysis.report(
+        "BLOT_LINEAR_BRANCH_DISAGREEMENT",
+        `\`${binding.pattern.name}\` has different live fields on continuing branches.`,
+        span,
+      );
+    }
+    let chosen = first;
+    if (some) {
+      const consumed = states.find((state) => state.moved !== null);
+      if (consumed !== undefined) chosen = consumed;
+    }
+    merged.set(binding, chosen);
   }
 
   restore(merged);
+}
+
+function sameProduced(left: Produced, right: Produced): boolean {
+  if (left === right) return true;
+  if (left.tag !== right.tag) return false;
+  if (left.tag === "none" && right.tag === "none") return true;
+  if (left.tag === "leaf" && right.tag === "leaf") {
+    return left.qualifier === right.qualifier && left.source === right.source;
+  }
+  if (left.tag === "borrow" && right.tag === "borrow") {
+    return sameProduced(left.value, right.value);
+  }
+  if (left.tag === "shape" && right.tag === "shape") {
+    if (left.fields.size !== right.fields.size) return false;
+    for (const [name, value] of left.fields) {
+      const compared = right.fields.get(name);
+      if (compared === undefined || !sameProduced(value, compared)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
 }

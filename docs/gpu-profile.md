@@ -1,9 +1,9 @@
 # GPU Frontend Profile
 
-blot's grammar targets baba's version-3 WebGPU frontend profile with
-`"throughput": "strict"`. This is the only external constraint on blot's syntax,
-and it is deliberate: almost everything the profile forbids is also what made
-the reference language large.
+Blot's grammar targets Baba's version-3 general frontend profile. Compiler
+commands execute the CPU frontend over this plan; the WebGPU implementation is
+an experimental comparison target. Every grammar rule is declared as an island
+so the compact CST retains every wrapper consumed by Blot's elaborator.
 
 Regenerate and re-measure with:
 
@@ -13,24 +13,37 @@ deno task generate && deno task inspect
 
 ## Recorded counters
 
-Measured against baba 7.10.0. These are checked into the repository so that a
+Measured against Baba 9.0.0. These are checked into the repository so that a
 grammar change which quietly degrades parallelism shows up in a diff instead of
 in a benchmark months later.
 
-| counter                    |              blot | gpu-duck | note                                               |
-| -------------------------- | ----------------: | -------: | -------------------------------------------------- |
-| `lexerStates`              |               122 |      175 | direct multiplier in the parallel DFA summary pass |
-| `maxCandidateMultiplicity` |                 5 |        9 | worst-case island candidates allocated per token   |
-| `islandCount`              |                22 |       24 |                                                    |
-| `islandStates`             |               712 |        — |                                                    |
-| `contractionRounds`        |                33 |        — | fixed dispatch bound                               |
-| `denseTransitionBytes`     |           666,432 |        — | immutable device table                             |
-| `packedBytes`              |           823,414 |        — | version-3 runtime section                          |
-| `rootLoopIsland`           | 3 (`declaration`) |        — | strict root loop proven                            |
+| counter                    |              blot | note                                               |
+| -------------------------- | ----------------: | -------------------------------------------------- |
+| `lexerStates`              |               122 | direct multiplier in the parallel DFA summary pass |
+| `maxCandidateMultiplicity` |                21 | worst-case island candidates allocated per token   |
+| `islandCount`              |                74 | one island for every grammar rule                  |
+| `islandStates`             |               425 |                                                    |
+| `islandTransitions`        |               428 |                                                    |
+| `contractionRounds`        |                33 | fixed dispatch bound                               |
+| `denseTransitionBytes`     |           663,000 | immutable device table                             |
+| `packedBytes`              |           514,619 | version-3 runtime section                          |
+| `rootLoopIsland`           | 5 (`declaration`) | root loop still proven under general throughput    |
 
-blot beats the gpu-duck reference on both counters that matter most for
-occupancy, because it has three declaration forms where gpu-duck has six and no
-type sublanguage at all.
+Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
+`CpuFrontend`, which accepts the general plan and emits the compact token, node,
+and edge arrays directly. Declaring all 74 rules as islands is what preserves
+the full CST shape needed by source lowering.
+
+## Historical strict-profile measurements
+
+The measurements below record earlier syntax decisions under the Baba 7 strict
+profile. They explain the source forms that remain, but they are not the current
+plan counters.
+
+Updating Baba from 8.0.0 to 9.0.0 moved strict-island analysis and compact CST
+materialization into its Rust core. Blot regenerated parser plan 5 and Wasm ABI
+14; the grammar-dependent version-3 general-profile counters above did not
+change.
 
 Changing elements from statements to value expressions adds one root island but
 removes fifty-two island states, 39,504 dense-transition bytes, and 34,855
@@ -220,24 +233,20 @@ The ten proofs are listed in `../baba/docs/webgpu-frontend.md`.
 
 The concessions are recorded here so they are not rediscovered as bugs:
 
-- **`return expr;` is a declaration form**, not a trailing bare expression. A
-  bare final expression would break the strict root loop, which requires the
-  root to be one repeated island with an explicit structural boundary.
+- **`return expr;` is a declaration form**, not a trailing bare expression. It
+  keeps the root a bounded sequence with an explicit structural boundary.
 - **An expression block separates its value with `in`.** In
   `do statements in value end`, the marker distinguishes the value from another
   semicolon-terminated statement. Without it, an `IDENT` could begin either the
   value or `name := ...;`, which is an LR conflict and an unbounded GPU island.
-- **`statement` duplicates `declaration`.** The two rules are identical. Strict
-  throughput requires the repeated root island not be self-nesting, and blocks
-  nest declarations; routing block bodies through a second rule name keeps
-  `declaration` non-self-nesting. The language does not distinguish them.
+- **`statement` duplicates `declaration`.** The two rules are identical, but
+  their distinct compact-CST nodes make top-level and nested sequences explicit.
 - **A lambda opens with a keyword.** `fn x => x`, not `x => x`. Requirement 4
   wants an island's FIRST set to be lexically identifiable, and a bare parameter
   shares every opener with an ordinary operand. This was once paid for the other
   way — no keyword, and currying spelled `f => (x => f (f x))` — and the keyword
-  is cheaper by every counter above. Because every character of `=>` is in the
-  operator class, a lambda written without `fn` reaches the fixity table rather
-  than failing to parse, so the diagnostic says exactly this.
+  is cheaper by every counter above. `=>` is reserved for lambda parameters and
+  case arms, so omitting `fn` is a syntax error.
 - **A prefixed operand needs parentheses.** `consume (!token)`, not
   `consume !token`: in a flat chain a trailing operator reads as infix.
 - **`_` is an ordinary name, not a literal.** It also matches `IDENT`, so a
@@ -246,10 +255,10 @@ The concessions are recorded here so they are not rediscovered as bugs:
   wildcard, which costs nothing — a binding nobody reads is what a wildcard is.
   This one was found by parity, not by generation: the LR parser accepted both
   readings and the GPU frontend did not.
-- **Integer literals must fit the signed 32-bit domain.** The frontend rejects
-  wider ones outright, so `I64`'s bounds are computed at compile time in the
-  prelude rather than spelled. Holding the prelude to the same profile is what
-  surfaced this.
+- **Baba's semantic recipe checks signed 32-bit literals.** Blot's integer
+  domain is signed 64-bit, so the compiler re-ingests Baba-identified wide
+  integer spans with same-width zero spellings and materializes their original
+  text. Baba still owns tokenization and offsets; Blot retains its I64 policy.
 
 Two things the profile did _not_ cost, contrary to the gpu-duck reference:
 
@@ -261,30 +270,29 @@ Two things the profile did _not_ cost, contrary to the gpu-duck reference:
   `fn { .x; } => x` and `fn !value => …` are spelled the way every other binder
   is.
 
-## Parity
+## WebGPU comparison
 
-The GPU frontend has no automatic CPU fallback and no partial program on
-failure, so byte parity against baba's `CpuFrontend` oracle is the only thing
-that makes a grammar change safe:
+The Baba 9 general-profile CPU frontend is the compiler authority. The WebGPU
+executor can still be compared with it when an adapter is available:
 
 ```bash
 just parity
 ```
 
-Tokens, nodes, edges, symbols, and types must match word for word. A
-disagreement means the grammar has drifted out of the profile even though
-generation still succeeds — which has already happened once, over `_`.
+This diagnostic compares raw tokens, nodes, edges, symbols, and types word for
+word. Baba 9's general CPU and WebGPU executors can currently choose different
+node orders or reject different nested-island candidates, so this comparison is
+not a Blot release gate. `deno task generate`, the CPU corpus gate, lowering,
+and the executable catalog are the release checks.
 
 The corpus includes `src/prelude/*.blot`. The prelude is blot source and gets no
-exemption; parsing it only through the CPU path would have hidden the signed-i32
-literal bound until some user hit it.
+exemption from the compiler's CPU frontend contract.
 
 ## A float token
 
 Adding `FLOAT = /[0-9]+\.[0-9]+/` at priority 3 moved `lexerStates` from 114 to
 116 and changed nothing else: `maxCandidateMultiplicity` stayed at 6 and
-`contractionRounds` at 33, and the profile is still accepted with
-`"throughput": "strict"`. Two states is what a token costs when it is a fixed
-terminal identity rather than a contextual promotion — the digit-point-digit
-shape is decided by the lexer alone, with no island having to know whether a dot
-begins a projection or continues a number.
+`contractionRounds` at 33 under the historical strict plan. Two states is what a
+token costs when it is a fixed terminal identity rather than a contextual
+promotion — the digit-point-digit shape is decided by the lexer alone, with no
+island having to know whether a dot begins a projection or continues a number.

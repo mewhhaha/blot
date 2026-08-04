@@ -39,11 +39,11 @@ const REJECTIONS: Record<
     code: "BLOT_HANDLER_RESUME_NOT_AFFINE",
     stage: "check",
   },
-  "lambda_without_fn": { code: "BLOT_LAMBDA_WITHOUT_FN", stage: "check" },
   "unknown_operator": { code: "BLOT_UNKNOWN_OPERATOR", stage: "check" },
   "unhandled_effect": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },
   "effect_in_let": { code: "BLOT_UNSEQUENCED_EFFECT", stage: "check" },
   "sig_mismatch": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "rank_n_monomorphic": { code: "BLOT_TYPE_ERROR", stage: "check" },
   // Both halves of how a member call is typed, and both would be *accepted* by
   // a rule that answered with a type variable: the first because the computed
   // value would never be compared against the `sig`, the second because a
@@ -69,6 +69,10 @@ const REJECTIONS: Record<
   // trap at run time. They report through coverage because a refused narrowing
   // leaves the scrutinee exactly as wide as it was declared.
   "shadowed_equality": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
+  "shadowed_const_equality": {
+    code: "BLOT_INCOMPLETE_CASE",
+    stage: "check",
+  },
   "compared_names": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
   // The one bounds failure the checker can already decide: both the index and
   // the array's length are written out in the source. It is the same code the
@@ -121,6 +125,10 @@ const REJECTIONS: Record<
     code: "BLOT_LINEAR_PATTERN_DISCARDS",
     stage: "check",
   },
+  "partially_moved_record": {
+    code: "BLOT_LINEAR_PARTIAL_REUSE",
+    stage: "check",
+  },
   "owned_shape_spread": {
     code: "BLOT_LINEAR_SHAPE_SPREAD",
     stage: "check",
@@ -169,7 +177,14 @@ const REJECTIONS: Record<
     code: "BLOT_DUPLICATE_FIELD",
     stage: "check",
   },
-  "missing_element_property": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "missing_element_property": {
+    code: "BLOT_ELEMENT_MISSING_PROPERTY",
+    stage: "check",
+  },
+  "unknown_element_property": {
+    code: "BLOT_ELEMENT_UNKNOWN_PROPERTY",
+    stage: "check",
+  },
   "tagged_sig": { code: "BLOT_TAGGED_SIG", stage: "check" },
   "bad_declaration_tag": {
     code: "BLOT_BAD_DECLARATION_TAG",
@@ -207,6 +222,13 @@ const REJECTIONS: Record<
     code: "BLOT_UNREPRESENTABLE_INTEGER",
     stage: "check",
   },
+  "include_dynamic_path": { code: "BLOT_INCLUDE_PATH", stage: "check" },
+  "include_at_runtime": {
+    code: "BLOT_INCLUDE_NOT_COMPTIME",
+    stage: "check",
+  },
+  "include_invalid_json": { code: "BLOT_JSON_PARSE", stage: "check" },
+  "json_at_runtime": { code: "BLOT_JSON_NOT_COMPTIME", stage: "check" },
   "pinned_structural_value": {
     code: "BLOT_UNMATCHABLE_PIN",
     stage: "check",

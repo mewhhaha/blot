@@ -12,6 +12,12 @@ import type { CoreExpression } from "../core/computation.ts";
 export interface Env {
   readonly names: Map<string, Value>;
   readonly parent: Env | null;
+  readonly module:
+    | {
+      readonly identity: object;
+      readonly scope: "parameter" | "body" | "inner";
+    }
+    | null;
 }
 
 export type Value =
@@ -31,10 +37,18 @@ export type Value =
    * Four single-precision lanes. Always exactly four, and each already rounded
    * to f32, so the interpreter holds what one SIMD register holds.
    */
-  | { readonly tag: "vector"; readonly lanes: readonly number[] }
-  | { readonly tag: "vector-mask"; readonly lanes: readonly boolean[] }
+  | {
+    readonly tag: "vector";
+    readonly element: SimdElement;
+    readonly lanes: readonly number[];
+  }
+  | {
+    readonly tag: "vector-mask";
+    readonly element: SimdElement;
+    readonly lanes: readonly boolean[];
+  }
   /**
-   * A type with no parts to take apart. `F32x4` is the only one.
+   * A type with no parts to take apart, including every SIMD vector and mask.
    *
    * It is not a range, because a vector is not an interval: a range answers
    * questions about bounds, and `<1.0 2.0 3.0 4.0>` sits between nothing. It
@@ -201,10 +215,48 @@ export type Value =
  */
 export const F32X4_NAME = "F32x4";
 export const F32X4_MASK_NAME = "F32x4Mask";
+export const I32X4_NAME = "I32x4";
+export const I32X4_MASK_NAME = "I32x4Mask";
+export const I16X8_NAME = "I16x8";
+export const I16X8_MASK_NAME = "I16x8Mask";
+export const I8X16_NAME = "I8x16";
+export const I8X16_MASK_NAME = "I8x16Mask";
+
+export type SimdElement = "f32" | "i32" | "i16" | "i8";
+
+export function simdTypeName(element: SimdElement, mask: boolean): string {
+  const name = {
+    f32: F32X4_NAME,
+    i32: I32X4_NAME,
+    i16: I16X8_NAME,
+    i8: I8X16_NAME,
+  }[element];
+  if (mask) return `${name}Mask`;
+  return name;
+}
 
 export const UNIT: Value = { tag: "unit" };
 export const TRUE: Value = { tag: "tag", name: "True", payload: null };
 export const FALSE: Value = { tag: "tag", name: "False", payload: null };
+
+/**
+ * A compile-time value may carry a wider inferred type without changing what
+ * evaluating, comparing, showing, or lowering that value observes.
+ *
+ * The map is weak because the annotation belongs to this value identity. A
+ * producer must only attach a type the value inhabits; `as_json` uses this to
+ * distinguish ordinary JSON inference from literal-preserving `as_const_json`.
+ */
+const inferredTypes = new WeakMap<object, Value>();
+
+export function withInferredType(value: Value, type: Value): Value {
+  inferredTypes.set(value, type);
+  return value;
+}
+
+export function inferredTypeOf(value: Value): Value | undefined {
+  return inferredTypes.get(value);
+}
 
 export function bool(condition: boolean): Value {
   return condition ? TRUE : FALSE;
@@ -233,7 +285,33 @@ export function asTuple(value: Value, arity: number): readonly Value[] | null {
 }
 
 export function childEnv(parent: Env | null): Env {
-  return { names: new Map(), parent };
+  let module: Env["module"] = null;
+  if (parent !== null && parent.module !== null) {
+    module = { identity: parent.module.identity, scope: "inner" };
+  }
+  return {
+    names: new Map(),
+    parent,
+    module,
+  };
+}
+
+/** The fresh body scope of one application of a source module. */
+export function moduleEnv(parent: Env, module: object): Env {
+  return {
+    names: new Map(),
+    parent,
+    module: { identity: module, scope: "body" },
+  };
+}
+
+/** The parameter scope immediately outside a source module body. */
+export function moduleParameterEnv(parent: Env, module: object): Env {
+  return {
+    names: new Map(),
+    parent,
+    module: { identity: module, scope: "parameter" },
+  };
 }
 
 export function lookup(env: Env, name: string): Value | undefined {
@@ -252,10 +330,10 @@ export function show(value: Value): string {
     const lanes = value.lanes.map((lane) =>
       Number.isInteger(lane) ? `${lane}.0` : String(lane)
     );
-    return `<${lanes.join(" ")}>`;
+    return `${value.element}<${lanes.join(" ")}>`;
   }
   if (value.tag === "vector-mask") {
-    return `<${
+    return `${value.element}-mask<${
       value.lanes.map((lane) => lane ? "#True" : "#False").join(" ")
     }>`;
   }
@@ -375,12 +453,12 @@ export function equal(left: Value, right: Value): boolean {
     return left.value === right.value;
   }
   if (left.tag === "vector" && right.tag === "vector") {
-    return left.lanes.every((lane, index) =>
-      Object.is(lane, right.lanes[index])
-    );
+    return left.element === right.element &&
+      left.lanes.every((lane, index) => Object.is(lane, right.lanes[index]));
   }
   if (left.tag === "vector-mask" && right.tag === "vector-mask") {
-    return left.lanes.every((lane, index) => lane === right.lanes[index]);
+    return left.element === right.element &&
+      left.lanes.every((lane, index) => lane === right.lanes[index]);
   }
   if (left.tag === "float32" && right.tag === "float32") {
     return Object.is(left.value, right.value);

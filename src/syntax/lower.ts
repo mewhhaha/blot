@@ -2192,12 +2192,8 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
 
   if (rule.name === "parenthesized_or_tuple") {
     const first = lowerValue(asRule(field(rule, "first"), "first"), context);
-    // The remaining elements live inside the optional `("," rest:...)` group,
-    // so they are reached through `tail`; the flattened `rest` field is empty.
-    const tail = rule.field("tail");
-    if (tail === null || tail === undefined) return first;
-    expect(Array.isArray(tail), "tuple tail is not a group");
-    const rest = (tail[1] as readonly Cursor[]).map((c) =>
+    if (field(rule, "tail") === null) return first;
+    const rest = fieldList(rule, "rest").map((c) =>
       lowerValue(asRule(c, "tuple element"), context)
     );
     if (rest.length === 0) return first;
@@ -2319,9 +2315,7 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
       lowerArm(asRule(field(rule, "first"), "first"), closed),
     ];
     for (const cursor of fieldList(rule, "rest")) {
-      // Each entry is the `,` token paired with the arm.
-      const pair = cursor as unknown as readonly Cursor[];
-      arms.push(lowerArm(asRule(pair[1], "case_arm"), closed));
+      arms.push(lowerArm(asRule(cursor, "case_arm"), closed));
     }
     const target = lowerExpression(
       asRule(field(rule, "target"), "target"),

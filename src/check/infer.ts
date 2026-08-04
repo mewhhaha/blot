@@ -23,6 +23,7 @@ import type {
   Span,
 } from "../syntax/ast.ts";
 import { patternNames, recursiveGroups } from "../syntax/ast.ts";
+import { freeNames } from "../syntax/live.ts";
 import { BlotError, expect, fail } from "../diagnostic.ts";
 import type { Env as ValueEnv } from "../comptime/value.ts";
 import { childEnv, show, type Value } from "../comptime/value.ts";
@@ -94,6 +95,7 @@ import {
   type Typing,
   union as unionType,
   UNIT,
+  type Variable,
   variant,
 } from "./type.ts";
 
@@ -175,6 +177,8 @@ interface TypeEnv {
    * scope.
    */
   readonly bindings: Map<string, { id: number; typing: Typing }>;
+  /** Stable identities for immutable projections, keyed by parent identity and field. */
+  readonly projections: Map<string, number>;
   /**
    * The value a binding holds, when typing it required the checker to compute
    * one, paired with the `Typing` installed beside it.
@@ -209,6 +213,7 @@ function childTypeEnv(parent: TypeEnv | null): TypeEnv {
     integerValues: new Map(),
     relations: new Map(),
     bindings: new Map(),
+    projections: new Map(),
     folded: new Map(),
     parent,
   };
@@ -330,6 +335,7 @@ function assumeTerm(
 /** The immutable value identity an alias keeps. */
 function aliasedBinding(expr: Expr, scope: TypeEnv): number | null {
   if (expr.tag === "var") return lookupBinding(scope, expr.name);
+  if (expr.tag === "field") return projectedBinding(expr, scope);
   const head = spine(expr);
   if (head === null || head.args.length !== 1) return null;
   if (head.callee.tag !== "intrinsic") return null;
@@ -339,6 +345,24 @@ function aliasedBinding(expr: Expr, scope: TypeEnv): number | null {
     head.callee.name !== "@linear.maybe"
   ) return null;
   return aliasedBinding(head.args[0], scope);
+}
+
+function projectedBinding(
+  expression: Expr & { tag: "field" },
+  scope: TypeEnv,
+): number | null {
+  const parent = aliasedBinding(expression.target, scope);
+  if (parent === null) return null;
+  const key = `${parent}.${expression.name}`;
+  let current: TypeEnv | null = scope;
+  while (current !== null) {
+    const found = current.projections.get(key);
+    if (found !== undefined) return found;
+    current = current.parent;
+  }
+  nextBinding += 1;
+  scope.projections.set(key, nextBinding);
+  return nextBinding;
 }
 
 function lookupType(env: TypeEnv, name: string): Typing | undefined {
@@ -480,11 +504,35 @@ function lookupLiteral(env: TypeEnv, name: string): Expr | undefined {
 export interface Staging {
   readonly instances: Instances;
   readonly reads: (() => void)[];
+  /** A module may use its live context only while its own body is being checked. */
+  readonly activeOrigins: Map<object, Context>;
+  /** Closed lexical interfaces used to type closures imported from completed modules. */
+  readonly interfaces: Map<object, SpecializationInterface>;
 }
 
 export function newStaging(): Staging {
-  return { instances: new Map(), reads: [] };
+  return {
+    instances: new Map(),
+    reads: [],
+    activeOrigins: new Map(),
+    interfaces: new Map(),
+  };
 }
+
+interface SpecializationInterface {
+  readonly declarationIdentity: string;
+  readonly types: TypeEnv;
+  readonly values: ValueEnv;
+  readonly imports: Imports;
+  readonly modules: ReadonlyMap<string, SimpleType>;
+  readonly parameterName: string | null;
+}
+
+/** Loader identities change with any source, include, or transitive import revision. */
+const specializationInterfaces = new WeakMap<
+  object,
+  SpecializationInterface
+>();
 
 /**
  * Answer every held read. A compilation settles once, at its root, because that
@@ -508,6 +556,8 @@ interface Context {
   readonly shapes: Map<Expr, Shape>;
   readonly recordAdaptations: Map<Expr, RecordAdaptation>;
   readonly optionalCases: Set<Expr>;
+  /** Property records identified by element desugaring's span-preserving shape. */
+  readonly closedRecordArguments: Set<Expr>;
   /** Compile-time declaration values, keyed by their source expression. */
   readonly comptimeValues: Map<Expr, Value>;
   /**
@@ -540,6 +590,8 @@ interface Context {
   readonly grants: Map<Expr, GrantSignature>;
   /** The entry module's parameter name, when it has one. */
   parameterName: string | null;
+  /** Bindings supplied afresh by each application of this source module. */
+  readonly moduleParameters: ReadonlySet<string>;
   readonly types: TypeEnv;
   /** Comptime bindings, for bridging `sig` expressions and `const` values. */
   readonly values: ValueEnv;
@@ -777,6 +829,20 @@ function inferUnrecorded(
 
     case "intrinsic": {
       refuseCancellationValue(expr, context);
+      if (expr.name === "@include" && context.phase !== "comptime") {
+        fail(
+          "BLOT_INCLUDE_NOT_COMPTIME",
+          "`@include` is compile-time-only; bind its result with `const`.",
+          expr.span,
+        );
+      }
+      if (expr.name === "@json.parse" && context.phase !== "comptime") {
+        fail(
+          "BLOT_JSON_NOT_COMPTIME",
+          "`@json.parse` is compile-time-only; bind its result with `const`.",
+          expr.span,
+        );
+      }
       if (expr.name === "@array.get" || expr.name === "@array.set") {
         fail(
           "BLOT_ARRAY_ACCESS_NOT_DIRECT",
@@ -814,6 +880,11 @@ function inferUnrecorded(
         return variant([[expr.fn.name, payload]]);
       }
 
+      const elementProperties = elementPropertyApplication(expr);
+      if (elementProperties !== null) {
+        context.closedRecordArguments.add(elementProperties);
+      }
+
       const special = inferSpecial(expr, context, level, row);
       if (special !== null) return special;
 
@@ -823,6 +894,9 @@ function inferUnrecorded(
       const fnType = infer(expr.fn, context, level, row);
       const argType = infer(expr.arg, context, level, row);
       requireEvidencedRuntimeType(argType, expr.arg, context);
+      if (context.closedRecordArguments.has(expr.arg)) {
+        requireClosedRecord(expr.fn, fnType, argType, expr.arg.span);
+      }
       const result = freshVar(level);
       located(expr.span, () => {
         constrain(fnType, { tag: "fun", param: argType, effects: row, result });
@@ -838,19 +912,21 @@ function inferUnrecorded(
       // a field of the type and asking for one would be a false error. When
       // the target is a name bound to such a value and the name is a member,
       // the member decides.
-      const member = memberOf(expr, context);
-      if (member !== null) {
-        const bridged = bridge(member);
+      const member = compileTimeMemberOf(expr, context);
+      if (member !== null && !member.ordinary) {
+        context.comptimeValues.set(expr, member.value);
+        const bridged = bridge(member.value);
         if (bridged !== null) return bridged;
-        // A member that is a function has no type to read off the value, and no
-        // scope to infer one in either — a closure captures values, not
-        // typings, and `struct`'s accessors name their field by computing a
-        // string, so there is no arrow in the body to find. `⊤` is what the
-        // checker knows about the member: nothing. A variable would be the
-        // opposite claim, because every constraint on it is satisfiable and a
-        // `sig` naming any type at all would then be believed without being
-        // checked. `inferMemberApplication` is where a call to one of these
-        // still gets a type.
+        if (member.value.tag === "shape") {
+          const computed = typeComputedValue(member.value, context, level);
+          if (computed !== null) {
+            return instantiate(computed, level, context.staging.instances);
+          }
+        }
+        // A namespace closure with no recoverable defining scope has no arrow
+        // to read off the value. A variable would be the opposite claim,
+        // because every constraint on it is satisfiable and a `sig` naming any
+        // type at all would then be believed without being checked.
         return TOP;
       }
       const target = infer(expr.target, context, level, row);
@@ -1043,6 +1119,79 @@ function inferUnrecorded(
   }
 }
 
+function elementPropertyApplication(expr: Expr): Expr | null {
+  if (expr.tag !== "apply" || expr.fn.tag !== "apply") return null;
+  if (expr.fn.arg.tag !== "shape") return null;
+  if (
+    expr.fn.span.start !== expr.span.start || expr.fn.span.end !== expr.span.end
+  ) return null;
+  if (
+    expr.fn.arg.span.start !== expr.span.start ||
+    expr.fn.arg.span.end !== expr.span.end
+  ) return null;
+  return expr.fn.arg;
+}
+
+function requireClosedRecord(
+  callee: Expr,
+  functionType: SimpleType,
+  argumentType: SimpleType,
+  span: Span,
+): void {
+  const parameter = functionParameter(functionType);
+  if (parameter === null || argumentType.tag !== "record") return;
+  const requiredFields = closedRecordFields(parameter);
+  if (requiredFields === null) return;
+  let component = "This component";
+  if (callee.tag === "var") component = `Component \`${callee.name}\``;
+  for (const name of argumentType.fields.keys()) {
+    if (requiredFields.has(name)) continue;
+    fail(
+      "BLOT_ELEMENT_UNKNOWN_PROPERTY",
+      `${component} has no property \`.${name}\`.`,
+      span,
+    );
+  }
+  for (const [name, required] of requiredFields) {
+    if (argumentType.fields.has(name) || admitsOmission(required)) continue;
+    fail(
+      "BLOT_ELEMENT_MISSING_PROPERTY",
+      `${component} requires property \`.${name}\`.`,
+      span,
+    );
+  }
+}
+
+function closedRecordFields(
+  type: SimpleType,
+  seen = new Set<number>(),
+): ReadonlyMap<string, SimpleType> | null {
+  if (type.tag === "record") return type.fields;
+  if (type.tag === "forall") return closedRecordFields(type.body, seen);
+  if (type.tag !== "var" || seen.has(type.id)) return null;
+  seen.add(type.id);
+  for (const bound of [...type.lower, ...type.upper]) {
+    const fields = closedRecordFields(bound, seen);
+    if (fields !== null) return fields;
+  }
+  return null;
+}
+
+function functionParameter(
+  type: SimpleType,
+  seen = new Set<number>(),
+): SimpleType | null {
+  if (type.tag === "fun") return type.param;
+  if (type.tag === "forall") return functionParameter(type.body, seen);
+  if (type.tag !== "var" || seen.has(type.id)) return null;
+  seen.add(type.id);
+  for (const bound of [...type.lower, ...type.upper]) {
+    const parameter = functionParameter(bound, seen);
+    if (parameter !== null) return parameter;
+  }
+  return null;
+}
+
 /**
  * `@effect` and `@handle` depend on the shape of their arguments rather than on
  * a fixed scheme, so they are typed at the application site.
@@ -1056,6 +1205,26 @@ function inferSpecial(
   let head = spine(expr);
   if (head === null) return null;
   const callee = head.callee;
+  const resolvedPrimitive = primitiveName(callee, context);
+  if (resolvedPrimitive === "@i32x4.lane" && head.args.length === 2) {
+    const selector = head.args[1];
+    const lane = comptimeInt(selector, context.types);
+    if (lane === null) {
+      fail(
+        "BLOT_SIMD_IMMEDIATE_NOT_COMPTIME",
+        "An SIMD lane selector must be known at compile time. Bind it with `const`, or use `.x`, `.y`, `.z`, or `.w`.",
+        selector.span,
+      );
+    }
+    if (lane < 0n || lane > 3n) {
+      fail(
+        "BLOT_SIMD_IMMEDIATE_RANGE",
+        `I32x4 lane ${lane} is outside 0..3.`,
+        selector.span,
+      );
+    }
+    context.comptimeValues.set(selector, { tag: "int", value: lane });
+  }
   let handleTuple: (Expr & { tag: "tuple" }) | null = null;
   if (
     primitiveName(callee, context) === "@continuation.cancel" &&
@@ -1103,6 +1272,42 @@ function inferSpecial(
     return UNIT;
   }
   if (callee.tag !== "intrinsic") return null;
+
+  if (callee.name === "@include" && head.args.length >= 1) {
+    if (context.phase !== "comptime") {
+      fail(
+        "BLOT_INCLUDE_NOT_COMPTIME",
+        "`@include` is compile-time-only; bind its result with `const`.",
+        expr.span,
+      );
+    }
+    if (head.args[0].tag !== "text") {
+      fail(
+        "BLOT_INCLUDE_PATH",
+        "`@include` requires a literal text path.",
+        head.args[0].span,
+      );
+    }
+    if (head.args.length === 2) {
+      const included = comptime(expr, context, foldedEnv(context));
+      if (included === null) {
+        fail(
+          "BLOT_INCLUDE_NOT_COMPTIME",
+          "The `@include` parser and its result must be known at compile time.",
+          expr.span,
+        );
+      }
+      context.comptimeValues.set(expr, included);
+    }
+  }
+
+  if (callee.name === "@json.parse" && context.phase !== "comptime") {
+    fail(
+      "BLOT_JSON_NOT_COMPTIME",
+      "`@json.parse` is compile-time-only; bind its result with `const`.",
+      expr.span,
+    );
+  }
 
   const comptimeIntegerArity = COMPTIME_INTEGER_ARITIES.get(callee.name);
   if (
@@ -1591,25 +1796,50 @@ function recordFields(
 }
 
 /**
- * The compile-time member a projection names, when its target is a name bound to
- * a type value carrying a namespace.
+ * A member reached through a compile-time namespace or record.
+ *
+ * The whole path is followed because generated namespaces commonly attach an
+ * ordinary record of callable operations. Stopping after `World.Position`
+ * would discard the structural type needed to type
+ * `World.Position.insert entity`.
  *
  * Through `lookupComptime` rather than through the value environment, so a
- * runtime shadow of the name is declined instead of read as the compile-time
- * one. `let Point = { .new = fn r => r; };` after `const Point = struct ...;`
- * installs a fresh `Typing`, and answering with `struct`'s `.new` there would
- * prove facts about a function the program never calls.
+ * runtime shadow of the root name is declined instead of read as the
+ * compile-time one.
  */
-function memberOf(
+function compileTimeMemberOf(
   expr: Expr & { tag: "field" },
   context: Context,
-): Value | null {
-  if (expr.target.tag !== "var") return null;
-  const bound = lookupComptime(context.types, expr.target.name);
-  if (bound === null || bound.tag !== "extended") return null;
-  const member = bound.members.get(expr.name);
-  if (member === undefined) return null;
-  return member;
+): { readonly value: Value; readonly ordinary: boolean } | null {
+  const path: string[] = [];
+  let current: Expr = expr;
+  while (current.tag === "field") {
+    path.unshift(current.name);
+    current = current.target;
+  }
+  if (current.tag !== "var") return null;
+
+  let value = lookupComptime(context.types, current.name);
+  if (value === null) return null;
+  let ordinary = false;
+  for (const name of path) {
+    if (value.tag === "extended") {
+      const member = value.members.get(name);
+      if (member === undefined) return null;
+      value = member;
+      ordinary = false;
+      continue;
+    }
+    if (value.tag === "shape") {
+      const member = value.fields.get(name);
+      if (member === undefined) return null;
+      value = member;
+      ordinary = true;
+      continue;
+    }
+    return null;
+  }
+  return { value, ordinary };
 }
 
 /**
@@ -1638,21 +1868,86 @@ function inferMemberApplication(
   const head = spine(expr);
   if (head === null) return null;
   if (head.callee.tag !== "field") return null;
-  const member = memberOf(head.callee, context);
-  if (member === null) return null;
+  const found = compileTimeMemberOf(head.callee, context);
+  if (found === null) return null;
   // A member that bridges has a type of its own, and the ordinary application
   // rule is both more precise and more permissive about its arguments.
-  if (bridge(member) !== null) return null;
+  if (!found.ordinary && bridge(found.value) !== null) return null;
   // The arguments are checked whether or not the call can be evaluated. They
   // are ordinary expressions, and the field sets the backend reads are recorded
   // while inferring them.
-  for (const argument of head.args) infer(argument, context, level, row);
+  const argumentTypes = head.args.map((argument) =>
+    infer(argument, context, level, row)
+  );
+  let needsSpecialization = !found.ordinary;
+  let ordinaryResult: SimpleType | null = null;
+  if (found.ordinary) {
+    const applications: (Expr & { tag: "apply" })[] = [];
+    let current: Expr = expr;
+    while (current.tag === "apply") {
+      applications.unshift(current);
+      current = current.fn;
+    }
+    let target = infer(head.callee, context, level, row);
+    for (const [index, argument] of head.args.entries()) {
+      const argumentType = argumentTypes[index];
+      if (argumentType === undefined) {
+        throw new Error("member application omitted an argument type");
+      }
+      requireEvidencedRuntimeType(argumentType, argument, context);
+      const result = freshVar(level);
+      located(expr.span, () => {
+        constrain(target, {
+          tag: "fun",
+          param: argumentType,
+          effects: row,
+          result,
+        });
+      });
+      recordApplicationAdaptation(argument, target, argumentType, context);
+      const application = applications[index];
+      if (application === undefined) {
+        throw new Error("member application omitted an application node");
+      }
+      context.expressionTypes.set(application, result);
+      target = result;
+    }
+    ordinaryResult = target;
+    let structuralAlternatives = 0;
+    if (target.tag === "var") {
+      for (const bound of target.lower) {
+        if (bound.tag !== "record" && bound.tag !== "fun") continue;
+        structuralAlternatives += 1;
+        if (structuralAlternatives > 1) break;
+      }
+    }
+    needsSpecialization = containsUnevidencedType(target) ||
+      structuralAlternatives > 1 ||
+      containsTypeValue(target, new Set());
+  }
+  if (!needsSpecialization) return ordinaryResult;
   const value = comptime(expr, context, foldedEnv(context));
-  if (value === null) return TOP;
-  const bridged = bridge(value);
-  if (bridged === null) return TOP;
+  if (value === null) {
+    if (found.ordinary) return ordinaryResult;
+    return TOP;
+  }
+  const computed = typeComputedValue(value, context, level);
+  if (computed === null) {
+    if (found.ordinary) return ordinaryResult;
+    return TOP;
+  }
   context.memberValues.set(expr, value);
-  return bridged;
+  return instantiate(computed, level, context.staging.instances);
+}
+
+function containsTypeValue(
+  type: SimpleType,
+  seen: Set<number>,
+): boolean {
+  if (type.tag === "opaque") return type.name === "Type";
+  if (type.tag !== "var" || seen.has(type.id)) return false;
+  seen.add(type.id);
+  return type.lower.some((bound) => containsTypeValue(bound, seen));
 }
 
 interface Spine {
@@ -2072,8 +2367,7 @@ function recordedArrayLength(
   if (value !== null && value.tag === "array") {
     return { tag: "literal", value: BigInt(value.elements.length) };
   }
-  // A runtime binding reaches the relationship recorded beside its type. A
-  // nested path has no stable value identity of its own.
+  // A runtime binding reaches the relationship recorded beside its type.
   if (path.length !== 1) return null;
   return lookupArrayLength(scope, path[0]);
 }
@@ -2090,9 +2384,9 @@ function recordedArrayLength(
  * gives every comparison against `@array.len xs` the witness `3`, so the
  * ordinary literal machinery decides it and no identity term is needed.
  *
- * A plain name carries the identity, and a transparent alias keeps it. Fields
- * and call results are refused rather than given a symbol because no stable
- * identity for their value is in scope.
+ * A plain name carries the identity, and transparent aliases and immutable
+ * field projections keep it. Call results are refused because no stable value
+ * identity for them is in scope.
  */
 function arrayLength(expr: Expr, scope: TypeEnv): RefinementTerm | null {
   const decided = recordedArrayLength(expr, scope);
@@ -2110,6 +2404,22 @@ function arrayLength(expr: Expr, scope: TypeEnv): RefinementTerm | null {
       !scope.refinements.assume(nonnegative)
     ) {
       throw new Error(`array length for \`${expr.name}\` is inconsistent`);
+    }
+    return { tag: "variable", identity, offset: 0n };
+  }
+  if (expr.tag === "field") {
+    const identity = projectedBinding(expr, scope);
+    if (identity === null) return null;
+    const nonnegative: RefinementProposition = {
+      tag: "at-least",
+      variable: identity,
+      value: 0n,
+    };
+    if (
+      !scope.refinements.entails(nonnegative) &&
+      !scope.refinements.assume(nonnegative)
+    ) {
+      throw new Error(`array length for field .${expr.name} is inconsistent`);
     }
     return { tag: "variable", identity, offset: 0n };
   }
@@ -4125,7 +4435,372 @@ function recordPatternShapes(
   });
 }
 
-/** `let`-polymorphism: infer one level deeper, then quantify what stayed there. */
+/** The precise type of a value produced by compile-time specialization. */
+function typeComputedValue(
+  value: Value,
+  context: Context,
+  level: Level,
+  seen: ReadonlySet<Value> = new Set(),
+): Typing | null {
+  const bridged = bridge(value);
+  if (bridged !== null) return bridged;
+  if (value.tag === "closure") {
+    return typeClosure(value, context, level, seen);
+  }
+  if (value.tag === "extended") {
+    return typeComputedValue(value.inner, context, level, seen);
+  }
+  if (value.tag !== "shape") return null;
+
+  const fields: [string, SimpleType][] = [];
+  for (const [name, fieldValue] of value.fields) {
+    const fieldTyping = typeComputedValue(fieldValue, context, level, seen);
+    if (fieldTyping === null) return null;
+    fields.push([
+      name,
+      instantiate(fieldTyping, level, context.staging.instances),
+    ]);
+  }
+  return record(fields);
+}
+
+function snapshotSpecializationInterface(
+  context: Context,
+): SpecializationInterface | null {
+  if (context.values.module === null) {
+    throw new Error("specialization interface requires a module value scope");
+  }
+  const identity = context.values.module.identity;
+  const declarationIdentity = declarationIdentityOf(context);
+  const cached = specializationInterfaces.get(identity);
+  if (
+    cached !== undefined &&
+    cached.declarationIdentity === declarationIdentity
+  ) return cached;
+
+  for (const [name, typing] of context.types.names) {
+    if (context.moduleParameters.has(name)) continue;
+    if (hasUnquantifiedVariable(typing)) return null;
+  }
+
+  const types = new Map<SimpleType, SimpleType>();
+  const typings = new Map<Typing, Typing>();
+  const snapshot = snapshotTypeEnv(
+    context.types,
+    context.moduleParameters,
+    types,
+    typings,
+  );
+  const modules = new Map<string, SimpleType>();
+  for (const [specifier, type] of context.modules) {
+    modules.set(specifier, snapshotType(type, types));
+  }
+  const published = Object.freeze({
+    declarationIdentity,
+    types: snapshot,
+    values: context.values,
+    imports: context.imports,
+    modules,
+    parameterName: context.parameterName,
+  });
+  specializationInterfaces.set(identity, published);
+  return published;
+}
+
+function declarationIdentityOf(context: Context): string {
+  const labels = new Set<string>();
+  const seen = new Set<SimpleType>();
+  const collect = (type: SimpleType): void => {
+    if (seen.has(type)) return;
+    seen.add(type);
+    if (type.tag === "var") {
+      for (const bound of type.lower) collect(bound);
+      for (const bound of type.upper) collect(bound);
+      return;
+    }
+    if (type.tag === "fun") {
+      collect(type.param);
+      collect(type.effects);
+      collect(type.result);
+      return;
+    }
+    if (type.tag === "record") {
+      for (const field of type.fields.values()) collect(field);
+      return;
+    }
+    if (type.tag === "array") {
+      collect(type.element);
+      return;
+    }
+    if (type.tag === "variant") {
+      for (const payload of type.cases.values()) collect(payload);
+      return;
+    }
+    if (type.tag === "union") {
+      for (const member of type.members) collect(member);
+      return;
+    }
+    if (type.tag === "forall") {
+      collect(type.body);
+      return;
+    }
+    if (type.tag !== "effects") return;
+    for (const label of type.labels) labels.add(label);
+  };
+  for (const typing of context.types.names.values()) {
+    if (typing.tag === "scheme") collect(typing.body);
+    else collect(typing);
+  }
+  for (const module of context.modules.values()) collect(module);
+  return [...labels].sort().join("\u0000");
+}
+
+function hasUnquantifiedVariable(typing: Typing): boolean {
+  let limit: Level | null = null;
+  let type = typing as SimpleType;
+  if (typing.tag === "scheme") {
+    limit = typing.level;
+    type = typing.body;
+  }
+  const seen = new Set<SimpleType>();
+  const visit = (candidate: SimpleType): boolean => {
+    if (seen.has(candidate)) return false;
+    seen.add(candidate);
+    if (candidate.tag === "var") {
+      if (limit === null || candidate.level <= limit) return true;
+      return candidate.lower.some(visit) || candidate.upper.some(visit);
+    }
+    if (candidate.tag === "fun") {
+      return visit(candidate.param) || visit(candidate.effects) ||
+        visit(candidate.result);
+    }
+    if (candidate.tag === "record") {
+      return [...candidate.fields.values()].some(visit);
+    }
+    if (candidate.tag === "array") return visit(candidate.element);
+    if (candidate.tag === "variant") {
+      return [...candidate.cases.values()].some(visit);
+    }
+    if (candidate.tag === "union") return candidate.members.some(visit);
+    if (candidate.tag === "forall") return visit(candidate.body);
+    return false;
+  };
+  return visit(type);
+}
+
+function snapshotTypeEnv(
+  source: TypeEnv,
+  omittedNames: ReadonlySet<string>,
+  types: Map<SimpleType, SimpleType>,
+  typings: Map<Typing, Typing>,
+): TypeEnv {
+  let parent: TypeEnv | null = null;
+  if (source.parent !== null) {
+    parent = snapshotTypeEnv(source.parent, omittedNames, types, typings);
+  }
+  const snapshot: TypeEnv = {
+    names: new Map(),
+    literals: new Map(),
+    refinements: source.refinements.clone(),
+    comptime: new Map(),
+    arrayLengths: new Map(),
+    integerValues: new Map(),
+    relations: new Map(),
+    bindings: new Map(),
+    projections: new Map(),
+    folded: new Map(),
+    parent,
+  };
+  for (const [name, typing] of source.names) {
+    if (omittedNames.has(name)) continue;
+    snapshot.names.set(name, snapshotTyping(typing, types, typings));
+  }
+  for (const [name, literal] of source.literals) {
+    if (omittedNames.has(name)) continue;
+    snapshot.literals.set(name, literal);
+  }
+  for (const [name, entry] of source.comptime) {
+    if (omittedNames.has(name)) continue;
+    snapshot.comptime.set(name, {
+      value: entry.value,
+      typing: snapshotTyping(entry.typing, types, typings),
+    });
+  }
+  for (const [name, entry] of source.arrayLengths) {
+    if (omittedNames.has(name)) continue;
+    snapshot.arrayLengths.set(name, {
+      length: entry.length,
+      typing: snapshotTyping(entry.typing, types, typings),
+    });
+  }
+  for (const [name, entry] of source.integerValues) {
+    if (omittedNames.has(name)) continue;
+    snapshot.integerValues.set(name, {
+      value: entry.value,
+      typing: snapshotTyping(entry.typing, types, typings),
+    });
+  }
+  for (const [name, entry] of source.relations) {
+    if (omittedNames.has(name)) continue;
+    snapshot.relations.set(name, {
+      value: entry.value,
+      typing: snapshotTyping(entry.typing, types, typings),
+    });
+  }
+  for (const [name, entry] of source.bindings) {
+    if (omittedNames.has(name)) continue;
+    snapshot.bindings.set(name, {
+      id: entry.id,
+      typing: snapshotTyping(entry.typing, types, typings),
+    });
+  }
+  for (const [name, identity] of source.projections) {
+    if (omittedNames.has(name)) continue;
+    snapshot.projections.set(name, identity);
+  }
+  for (const [name, entry] of source.folded) {
+    if (omittedNames.has(name)) continue;
+    snapshot.folded.set(name, {
+      value: entry.value,
+      typing: snapshotTyping(entry.typing, types, typings),
+    });
+  }
+  return snapshot;
+}
+
+function snapshotTyping(
+  source: Typing,
+  types: Map<SimpleType, SimpleType>,
+  typings: Map<Typing, Typing>,
+): Typing {
+  const existing = typings.get(source);
+  if (existing !== undefined) return existing;
+  if (source.tag !== "scheme") {
+    const snapshot = snapshotType(source, types);
+    typings.set(source, snapshot);
+    return snapshot;
+  }
+  const snapshot = Object.freeze({
+    tag: "scheme" as const,
+    level: source.level,
+    body: snapshotType(source.body, types),
+  });
+  typings.set(source, snapshot);
+  return snapshot;
+}
+
+function snapshotType(
+  source: SimpleType,
+  snapshots: Map<SimpleType, SimpleType>,
+): SimpleType {
+  const existing = snapshots.get(source);
+  if (existing !== undefined) return existing;
+
+  if (source.tag === "var") {
+    const evidence = evidenceOf(source);
+    let snapshot: Variable;
+    if (evidence === null) snapshot = freshVar(source.level);
+    else snapshot = freshVar(source.level, evidence);
+    snapshots.set(source, snapshot);
+    snapshot.lower.push(
+      ...source.lower.map((bound) => snapshotType(bound, snapshots)),
+    );
+    snapshot.upper.push(
+      ...source.upper.map((bound) => snapshotType(bound, snapshots)),
+    );
+    Object.freeze(snapshot.lower);
+    Object.freeze(snapshot.upper);
+    return Object.freeze(snapshot);
+  }
+  if (source.tag === "rigid") {
+    const snapshot = Object.freeze({ ...source });
+    snapshots.set(source, snapshot);
+    return snapshot;
+  }
+  if (source.tag === "fun") {
+    const snapshot = {
+      tag: "fun" as const,
+      param: TOP,
+      effects: TOP,
+      result: TOP,
+    };
+    snapshots.set(source, snapshot);
+    snapshot.param = snapshotType(source.param, snapshots);
+    snapshot.effects = snapshotType(source.effects, snapshots);
+    snapshot.result = snapshotType(source.result, snapshots);
+    return Object.freeze(snapshot);
+  }
+  if (source.tag === "record") {
+    const fields = new Map<string, SimpleType>();
+    const snapshot: SimpleType = { tag: "record", fields };
+    snapshots.set(source, snapshot);
+    for (const [name, field] of source.fields) {
+      fields.set(name, snapshotType(field, snapshots));
+    }
+    return Object.freeze(snapshot);
+  }
+  if (source.tag === "array") {
+    const snapshot = { tag: "array" as const, element: TOP };
+    snapshots.set(source, snapshot);
+    snapshot.element = snapshotType(source.element, snapshots);
+    return Object.freeze(snapshot);
+  }
+  if (source.tag === "variant") {
+    const cases = new Map<string, SimpleType>();
+    const snapshot: SimpleType = {
+      tag: "variant",
+      cases,
+      open: source.open,
+    };
+    snapshots.set(source, snapshot);
+    for (const [name, payload] of source.cases) {
+      cases.set(name, snapshotType(payload, snapshots));
+    }
+    return Object.freeze(snapshot);
+  }
+  if (source.tag === "union") {
+    const members: SimpleType[] = [];
+    const snapshot: SimpleType = { tag: "union", members };
+    snapshots.set(source, snapshot);
+    members.push(
+      ...source.members.map((member) => snapshotType(member, snapshots)),
+    );
+    Object.freeze(members);
+    return Object.freeze(snapshot);
+  }
+  if (source.tag === "forall") {
+    const snapshot = {
+      tag: "forall" as const,
+      variables: Object.freeze([...source.variables]),
+      body: TOP,
+    };
+    snapshots.set(source, snapshot);
+    snapshot.body = snapshotType(source.body, snapshots);
+    return Object.freeze(snapshot);
+  }
+  if (source.tag === "effects") {
+    const snapshot: SimpleType = {
+      tag: "effects",
+      labels: new Set(source.labels),
+    };
+    snapshots.set(source, snapshot);
+    return Object.freeze(snapshot);
+  }
+  if (source.tag === "range") {
+    const snapshot = Object.freeze({ ...source });
+    snapshots.set(source, snapshot);
+    return snapshot;
+  }
+  if (source.tag === "opaque") {
+    const snapshot = Object.freeze({ ...source });
+    snapshots.set(source, snapshot);
+    return snapshot;
+  }
+  const snapshot = Object.freeze({ ...source });
+  snapshots.set(source, snapshot);
+  return snapshot;
+}
+
 /**
  * The type of the closure a `const` actually evaluated to.
  *
@@ -4148,9 +4823,13 @@ function typeClosure(
   seen: ReadonlySet<Value> = new Set(),
 ): Typing | null {
   if (value.tag !== "closure" || value.source === undefined) return null;
-  const scope = capturedScope(value.env, context, level, value, seen);
-  if (scope === null) return null;
-  const inner: Context = { ...context, types: scope };
+  const captured = capturedScope(value.env, context, level, value, seen);
+  if (captured === null) return null;
+  const inner: Context = {
+    ...captured.context,
+    phase: context.phase,
+    types: captured.types,
+  };
   // A lambda performs nothing when it is evaluated, so its own row is internal
   // to the arrow and a fresh one keeps the binding site's row out of it.
   const row = freshVar(level + 1);
@@ -4161,8 +4840,8 @@ function typeClosure(
   // constrained against, the knot `inferRecursiveGroup` ties for a group of
   // them.
   const placeholder = freshVar(level + 1);
-  scope.names.set(value.self, placeholder);
-  recordBinding(scope, value.self);
+  captured.types.names.set(value.self, placeholder);
+  recordBinding(captured.types, value.self);
   const inferred = infer(value.source, inner, level + 1, row);
   located(value.source.span, () => constrain(inferred, placeholder));
   return scheme(inferred, level);
@@ -4190,7 +4869,9 @@ function capturedScope(
   level: Level,
   self: Value,
   seen: ReadonlySet<Value>,
-): TypeEnv | null {
+): { readonly context: Context; readonly types: TypeEnv } | null {
+  if (self.tag !== "closure" || self.source === undefined) return null;
+  const captures = freeNames(self.source);
   const alreadyTyped = new Set<ValueEnv>();
   for (
     let scope: ValueEnv | null = context.values;
@@ -4200,27 +4881,59 @@ function capturedScope(
     alreadyTyped.add(scope);
   }
   const inner: ValueEnv[] = [];
-  let reached = false;
+  let origin: Context | null = null;
   for (
     let scope: ValueEnv | null = env;
     scope !== null;
     scope = scope.parent
   ) {
     if (alreadyTyped.has(scope)) {
-      reached = true;
+      origin = context;
+      const needsCapturedScope = [...scope.names].some(([name, value]) =>
+        captures.has(name) && lookupComptime(context.types, name) !== value
+      );
+      if (needsCapturedScope) inner.push(scope);
       break;
+    }
+    if (scope.module !== null && scope.module.scope === "body") {
+      const published = context.staging.interfaces.get(scope.module.identity);
+      if (published !== undefined) {
+        origin = {
+          ...context,
+          types: published.types,
+          values: published.values,
+          imports: published.imports,
+          modules: published.modules,
+          parameterName: published.parameterName,
+          moduleParameters: new Set(),
+          forward: new Set(),
+        };
+        const parameterScope = scope.parent;
+        if (
+          parameterScope !== null && parameterScope.module !== null &&
+          parameterScope.module.identity === scope.module.identity &&
+          parameterScope.module.scope === "parameter"
+        ) {
+          inner.push(parameterScope);
+        }
+        break;
+      }
+      const active = context.staging.activeOrigins.get(scope.module.identity);
+      if (active !== undefined) {
+        origin = active;
+        break;
+      }
     }
     inner.push(scope);
   }
-  // A closure whose chain never meets this module's was produced somewhere else
-  // — an imported module's own evaluation, most of the prelude. Its body is
-  // written against names this module never had, so there is nothing to extend
-  // and the ordinary path already types it from the import.
-  if (!reached) return null;
-  const built = childTypeEnv(context.types);
+  if (origin === null) return null;
+  const built = childTypeEnv(origin.types);
+  const values = childEnv(origin.values);
   // Outermost first, so a name bound twice ends up meaning the inner one.
   for (const scope of inner.reverse()) {
     for (const [name, captured] of scope.names) {
+      if (!captures.has(name)) continue;
+      values.names.set(name, captured);
       // A recursive closure is in the environment it captured, under the name
       // its body calls. That is not a capture to bridge — it is the binding
       // being typed, and `typeClosure` binds it to a placeholder — so skipping
@@ -4230,6 +4943,7 @@ function capturedScope(
       if (bridged !== null) {
         built.names.set(name, bridged);
         recordBinding(built, name);
+        recordComptimeBinding(built, name, captured);
         continue;
       }
       // A captured function has no type to bridge to, so it is typed the same
@@ -4238,18 +4952,19 @@ function capturedScope(
       // `seen` stops a cycle of closures that capture each other, which no
       // single knot can tie.
       if (seen.has(captured)) return null;
-      const captive = typeClosure(
+      const captive = typeComputedValue(
         captured,
-        context,
+        origin,
         level,
         new Set([...seen, captured]),
       );
       if (captive === null) return null;
       built.names.set(name, captive);
       recordBinding(built, name);
+      recordComptimeBinding(built, name, captured);
     }
   }
-  return built;
+  return { context: { ...origin, values }, types: built };
 }
 
 function generalize(
@@ -4494,6 +5209,7 @@ export function checkModule(
   const shapes = new Map<Expr, Shape>();
   const recordAdaptations = new Map<Expr, RecordAdaptation>();
   const optionalCases = new Set<Expr>();
+  const closedRecordArguments = new Set<Expr>();
   const expressionTypes = new Map<Expr, SimpleType>();
   const arrayProofs = new Map<Expr, ArrayIndexProof>();
   const expressionRelations = new Map<Expr, RelationalValue>();
@@ -4510,6 +5226,12 @@ export function checkModule(
   const memberValues = new Map<Expr, Value>();
   const declarationTags = new Map<Decl, TaggedDeclaration>();
   const pending: (() => void)[] = [];
+  const moduleParameters = new Set<string>();
+  if (module.parameter !== null) {
+    for (const name of patternNames(module.parameter)) {
+      moduleParameters.add(name);
+    }
+  }
   const context: Context = {
     phase: "runtime",
     expressionTypes,
@@ -4522,6 +5244,7 @@ export function checkModule(
     shapes,
     recordAdaptations,
     optionalCases,
+    closedRecordArguments,
     variants,
     patternShapes,
     pinnedPatterns,
@@ -4533,6 +5256,7 @@ export function checkModule(
     parameterName: module.parameter !== null && module.parameter.tag === "name"
       ? module.parameter.name
       : null,
+    moduleParameters,
     pending,
     types,
     values,
@@ -4541,6 +5265,10 @@ export function checkModule(
     declarationTags,
     forward: new Set(),
   };
+  if (values.module === null || values.module.scope !== "body") {
+    throw new Error("module checking requires a marked module value scope");
+  }
+  staging.activeOrigins.set(values.module.identity, context);
   const level = 0;
   const row = freshVar(level);
 
@@ -4576,6 +5304,11 @@ export function checkModule(
   // The module's own body has been inferred, so a constraint it owed can be
   // applied before anything reads its row at the boundary.
   for (const owed of pending) owed();
+  const published = snapshotSpecializationInterface(context);
+  staging.activeOrigins.delete(values.module.identity);
+  if (published !== null) {
+    staging.interfaces.set(values.module.identity, published);
+  }
   return {
     type: result,
     parameter,

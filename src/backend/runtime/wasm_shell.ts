@@ -2,7 +2,7 @@ import {
   wasmInstruction,
   type WasmModuleBuilder,
   wasmType,
-} from "../../../../gpupaper/src/wasm.ts";
+} from "@mewhhaha/gpupaper/wasm";
 
 export function addBlotAbiModuleShell(
   builder: WasmModuleBuilder,

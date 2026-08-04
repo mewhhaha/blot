@@ -1,10 +1,9 @@
-// Byte-parity check between baba's CPU frontend oracle and the WebGPU
-// frontend, over every example in the corpus.
+// Diagnostic byte comparison between Baba's authoritative CPU frontend and
+// its experimental general-profile WebGPU executor.
 //
-// The GPU frontend has no automatic CPU fallback and no partial program on
-// failure, so parity is the only thing that makes a grammar change safe: if
-// the two paths ever disagree on tokens, nodes, or edges, the grammar has
-// drifted out of the profile even though generation still succeeds.
+// General-profile executors may currently disagree on node order and nested
+// island selection. This command reports those differences; it is not a Blot
+// release gate.
 
 import {
   type CompactFrontendProgram,
@@ -27,10 +26,10 @@ if (cpuOnly) {
     const source = await Deno.readTextFile(path);
     const result = cpu.ingest(source);
     if (!result.ok) {
-      report(path, "CPU oracle", result.diagnostics);
+      report(path, "CPU frontend", result.diagnostics);
       Deno.exit(1);
     }
-    console.log(`${path}: CPU oracle accepted ${summarize(result.program)}.`);
+    console.log(`${path}: CPU frontend accepted ${summarize(result.program)}.`);
   }
   Deno.exit(0);
 }
@@ -48,7 +47,7 @@ try {
     const actual = await frontend.ingest(source);
 
     if (!expected.ok) {
-      report(path, "CPU oracle", expected.diagnostics);
+      report(path, "CPU frontend", expected.diagnostics);
       failed = true;
       continue;
     }

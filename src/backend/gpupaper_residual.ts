@@ -8,6 +8,14 @@ import type {
 import { PRIMITIVES } from "../comptime/primitives.ts";
 import {
   type Env as StaticEnv,
+  F32X4_MASK_NAME,
+  F32X4_NAME,
+  I16X8_MASK_NAME,
+  I16X8_NAME,
+  I32X4_MASK_NAME,
+  I32X4_NAME,
+  I8X16_MASK_NAME,
+  I8X16_NAME,
   lookup,
   type Value,
 } from "../comptime/value.ts";
@@ -23,7 +31,6 @@ import {
 } from "../core/computation.ts";
 import type { Expr, Pattern, Span } from "../syntax/ast.ts";
 import type { StagedExport } from "../stage.ts";
-import type { Lowered } from "./lower.ts";
 
 type TypeId = number;
 type ValueId = number;
@@ -91,7 +98,7 @@ export function exportResidualRuntimeHir(
   source: string,
   checked: CheckResult,
   stagedExports: readonly StagedExport[],
-  lowered: Lowered,
+  wasmName: string,
 ): BlotRuntimeModule {
   const runtimeExports = stagedExports.filter((exported) =>
     exported.phase === "runtime"
@@ -103,15 +110,8 @@ export function exportResidualRuntimeHir(
       `${source}: residual Runtime HIR currently requires one default runtime export`,
     );
   }
-  const loweredExport = lowered.exports.find((exported) =>
-    exported.sourceName === "default"
-  );
-  if (loweredExport === undefined) {
-    throw new Error(`${source}: lowering omitted runtime export default`);
-  }
-
   const builder = new ResidualHirBuilder(source, checked);
-  const function_ = builder.build(checked.core, loweredExport.wasmName);
+  const function_ = builder.build(checked.core, wasmName);
   return {
     format: "blot-runtime-hir",
     schemaVersion: 1,
@@ -126,7 +126,7 @@ export function exportResidualRuntimeHir(
         : {
           sourceName: exported.sourceName,
           phase: "runtime" as const,
-          wasmName: loweredExport.wasmName,
+          wasmName,
           function: 0,
           signature: function_.signature,
           ownership: "owned" as const,
@@ -174,12 +174,6 @@ class ResidualHirBuilder {
     const result = this.dynamic(
       this.evaluate(resultExpression, environment),
     );
-    const resultType = this.types[result.type];
-    if (resultType.kind !== "unit") {
-      throw new TypeError(
-        `${this.#source}: residual default export currently requires Unit, found ${resultType.kind}`,
-      );
-    }
     this.terminate({
       kind: "return",
       value: result.value,
@@ -397,7 +391,22 @@ class ResidualHirBuilder {
         );
         continue;
       }
-      const value = this.evaluate(definition.value, environment);
+      let value: ResidualValue;
+      if (definition.value.tag === "rec") {
+        if (definition.pattern.tag !== "name") {
+          throw this.outside(definition.span, "recursive non-name binding");
+        }
+        const recursive = this.evaluate(
+          definition.value.lambda,
+          environment,
+        );
+        if (recursive.kind !== "closure") {
+          throw this.outside(definition.span, "recursive non-closure binding");
+        }
+        value = { ...recursive, self: definition.pattern.name };
+      } else {
+        value = this.evaluate(definition.value, environment);
+      }
       this.bind(definition.pattern, value, environment, definition.span);
     }
   }
@@ -437,6 +446,18 @@ class ResidualHirBuilder {
           );
         }
         value = { kind: "static", value: known };
+      } else if (declaration.value.tag === "rec") {
+        if (declaration.pattern.tag !== "name") {
+          throw this.outside(declaration.span, "recursive non-name binding");
+        }
+        const recursive = this.evaluate(
+          declaration.value.lambda,
+          environment,
+        );
+        if (recursive.kind !== "closure") {
+          throw this.outside(declaration.span, "recursive non-closure binding");
+        }
+        value = { ...recursive, self: declaration.pattern.name };
       } else {
         value = this.evaluate(declaration.value, environment);
       }
@@ -508,6 +529,37 @@ class ResidualHirBuilder {
         ),
       };
     }
+    if (fn.name === "@shape.get") {
+      const name = this.staticValue(applied[1]);
+      if (name === undefined || name.tag !== "text") {
+        throw this.outside(span, "dynamic shape field name");
+      }
+      return this.project(applied[0], name.value, span);
+    }
+    if (fn.name === "@shape.set") {
+      const name = this.staticValue(applied[1]);
+      if (name === undefined || name.tag !== "text") {
+        throw this.outside(span, "dynamic shape field name");
+      }
+      if (applied[0].kind !== "shape") {
+        throw this.outside(span, "shape update of a non-record value");
+      }
+      const fields = new Map(applied[0].fields);
+      fields.set(name.value, applied[2]);
+      return { kind: "shape", fields };
+    }
+    if (fn.name === "@shape.remove") {
+      const name = this.staticValue(applied[1]);
+      if (name === undefined || name.tag !== "text") {
+        throw this.outside(span, "dynamic shape field name");
+      }
+      if (applied[0].kind !== "shape") {
+        throw this.outside(span, "shape removal from a non-record value");
+      }
+      const fields = new Map(applied[0].fields);
+      fields.delete(name.value);
+      return { kind: "shape", fields };
+    }
     const binaryIntegerOperators = new Map<string, BlotRuntimeScalarOperator>([
       ["@int.add", "add"],
       ["@int.sub", "subtract"],
@@ -576,6 +628,8 @@ class ResidualHirBuilder {
         "ordering",
       );
     }
+    const simd = this.simdPrimitive(fn.name, applied, span);
+    if (simd !== undefined) return simd;
     throw this.outside(span, `dynamic primitive ${fn.name}`);
   }
 
@@ -1269,7 +1323,7 @@ class ResidualHirBuilder {
     const staticValue = this.staticValue(value);
     if (staticValue === undefined) {
       throw new TypeError(
-        `${this.#source}: residual composite cannot enter Runtime HIR`,
+        `${this.#source}: residual ${value.kind} cannot enter Runtime HIR`,
       );
     }
     if (staticValue.tag === "unit") {
@@ -1301,6 +1355,12 @@ class ResidualHirBuilder {
         this.type("float-32"),
         { start: 0, end: 0 },
       );
+    }
+    if (staticValue.tag === "vector") {
+      return this.materializeVector(staticValue, { start: 0, end: 0 });
+    }
+    if (staticValue.tag === "vector-mask") {
+      return this.materializeMask(staticValue, { start: 0, end: 0 });
     }
     if (
       staticValue.tag === "tag" && staticValue.payload === null &&
@@ -1386,6 +1446,12 @@ class ResidualHirBuilder {
     if (staticValue.tag === "int") return this.type("signed-integer-64");
     if (staticValue.tag === "float") return this.type("float-64");
     if (staticValue.tag === "float32") return this.type("float-32");
+    if (staticValue.tag === "vector") {
+      return this.simdType(staticValue.element, false);
+    }
+    if (staticValue.tag === "vector-mask") {
+      return this.simdType(staticValue.element, true);
+    }
     if (staticValue.tag === "text") return this.type("text");
     if (
       staticValue.tag === "tag" && staticValue.payload === null &&
@@ -1487,6 +1553,367 @@ class ResidualHirBuilder {
     return { kind: "dynamic", value: result, type, meaning };
   }
 
+  private vectorOperation(
+    operator: Extract<
+      BlotRuntimeOperation,
+      { readonly kind: "vector" }
+    >["operator"],
+    type: TypeId,
+    operands: readonly ValueId[],
+    span: Span,
+    lane?: 0 | 1 | 2 | 3,
+  ): Extract<ResidualValue, { kind: "dynamic" }> {
+    const result = this.nextValue();
+    this.current().operations.push({
+      kind: "vector",
+      result,
+      type,
+      operands,
+      ownership: "plain",
+      operator,
+      lane,
+      span: this.span(span),
+    });
+    return { kind: "dynamic", value: result, type };
+  }
+
+  private materializeVector(
+    value: Extract<Value, { readonly tag: "vector" }>,
+    span: Span,
+  ): Extract<ResidualValue, { kind: "dynamic" }> {
+    const type = this.simdType(value.element, false);
+    if (value.element === "f32") {
+      const operands = value.lanes.map((lane) =>
+        this.constant(lane, this.type("float-32"), span).value
+      );
+      return this.vectorOperation("make", type, operands, span);
+    }
+    if (value.element === "i32") {
+      const operands = value.lanes.map((lane) =>
+        this.constant(lane, this.type("integer-32"), span).value
+      );
+      return this.vectorOperation("make", type, operands, span);
+    }
+    const first = value.lanes[0];
+    if (value.lanes.some((lane) => lane !== first)) {
+      throw this.outside(
+        span,
+        `non-uniform ${value.element} constant vector`,
+      );
+    }
+    const lane = this.constant(first, this.type("integer-32"), span);
+    return this.vectorOperation("splat", type, [lane.value], span);
+  }
+
+  private materializeMask(
+    value: Extract<Value, { readonly tag: "vector-mask" }>,
+    span: Span,
+  ): Extract<ResidualValue, { kind: "dynamic" }> {
+    const first = value.lanes[0];
+    if (value.lanes.some((lane) => lane !== first)) {
+      const bits = value.lanes.map((lane) => {
+        if (lane) return 1;
+        return 0;
+      });
+      const left = this.materializeVector({
+        tag: "vector",
+        element: value.element,
+        lanes: bits,
+      }, span);
+      const zero = this.materializeVector({
+        tag: "vector",
+        element: value.element,
+        lanes: bits.map(() => 0),
+      }, span);
+      return this.vectorOperation(
+        "not-equal",
+        this.simdType(value.element, true),
+        [left.value, zero.value],
+        span,
+      );
+    }
+    const zero = this.materializeVector({
+      tag: "vector",
+      element: value.element,
+      lanes: value.lanes.map(() => 0),
+    }, span);
+    let operator: Extract<
+      BlotRuntimeOperation,
+      { readonly kind: "vector" }
+    >["operator"] = "equal";
+    if (!first) operator = "not-equal";
+    return this.vectorOperation(
+      operator,
+      this.simdType(value.element, true),
+      [zero.value, zero.value],
+      span,
+    );
+  }
+
+  private simdPrimitive(
+    name: string,
+    inputs: readonly ResidualValue[],
+    span: Span,
+  ): ResidualValue | undefined {
+    const match = /^@(f32x4|i32x4|i16x8|i8x16)\.(.+)$/.exec(name);
+    if (match === null) return undefined;
+    const prefix = match[1];
+    let operation = match[2];
+    if (operation.endsWith("_wrapping")) {
+      operation = operation.slice(0, -"_wrapping".length);
+    }
+    let element: "f32" | "i32" | "i16" | "i8" = "f32";
+    if (prefix === "i32x4") element = "i32";
+    if (prefix === "i16x8") element = "i16";
+    if (prefix === "i8x16") element = "i8";
+    const vectorType = this.simdType(element, false);
+    const maskType = this.simdType(element, true);
+
+    if (operation === "of") {
+      const operands = inputs.map((argument) => {
+        if (element === "f32") return this.float32(argument, span, name).value;
+        return this.integer32(argument, span, name).value;
+      });
+      return this.vectorOperation("make", vectorType, operands, span);
+    }
+    if (operation === "splat") {
+      let lane = this.float32(inputs[0], span, name);
+      if (element !== "f32") lane = this.integer32(inputs[0], span, name);
+      return this.vectorOperation("splat", vectorType, [lane.value], span);
+    }
+    if (element === "i32" && operation === "lane") {
+      const selector = this.staticValue(inputs[1]);
+      if (
+        selector === undefined || selector.tag !== "int" ||
+        selector.value < 0n || selector.value > 3n
+      ) {
+        throw this.outside(span, `${name} without a certified lane in 0..3`);
+      }
+      const vector = this.simd(inputs[0], element, false, span, name);
+      const extracted = this.vectorOperation(
+        "extract",
+        this.type("integer-32"),
+        [vector.value],
+        span,
+        Number(selector.value) as 0 | 1 | 2 | 3,
+      );
+      return this.extendInteger32(extracted, span);
+    }
+    const floatLane = ["x", "y", "z", "w"].indexOf(operation);
+    if (element === "f32" && floatLane >= 0) {
+      const vector = this.simd(inputs[0], "f32", false, span, name);
+      return this.vectorOperation(
+        "extract",
+        this.type("float-32"),
+        [vector.value],
+        span,
+        floatLane as 0 | 1 | 2 | 3,
+      );
+    }
+    const laneMatch = /^(?:lane|with_lane)([0-3])$/.exec(operation);
+    if (laneMatch !== null) {
+      const lane = Number(laneMatch[1]) as 0 | 1 | 2 | 3;
+      const vector = this.simd(inputs[0], element, false, span, name);
+      if (operation.startsWith("lane")) {
+        const extracted = this.vectorOperation(
+          "extract",
+          this.type("integer-32"),
+          [vector.value],
+          span,
+          lane,
+        );
+        return this.extendInteger32(extracted, span);
+      }
+      let replacement = this.float32(inputs[1], span, name);
+      if (element !== "f32") {
+        replacement = this.integer32(inputs[1], span, name);
+      }
+      return this.vectorOperation(
+        "replace",
+        vectorType,
+        [vector.value, replacement.value],
+        span,
+        lane,
+      );
+    }
+    const reductions = new Map<
+      string,
+      Extract<BlotRuntimeOperation, { readonly kind: "vector" }>["operator"]
+    >([
+      ["mask_bitmask", "mask-bitmask"],
+      ["mask_all", "mask-all"],
+      ["mask_any", "mask-any"],
+    ]);
+    const reduction = reductions.get(operation);
+    if (reduction !== undefined) {
+      const mask = this.simd(inputs[0], element, true, span, name);
+      const reduced = this.vectorOperation(
+        reduction,
+        this.type("integer-32"),
+        [mask.value],
+        span,
+      );
+      return this.extendInteger32(reduced, span);
+    }
+    if (operation === "convert_i32_s" || operation === "convert_i32_u") {
+      const vector = this.simd(inputs[0], "i32", false, span, name);
+      let operator: "convert-i32-signed" | "convert-i32-unsigned" =
+        "convert-i32-signed";
+      if (operation.endsWith("_u")) operator = "convert-i32-unsigned";
+      return this.vectorOperation(operator, this.simdType("f32", false), [
+        vector.value,
+      ], span);
+    }
+    if (operation === "trunc_sat_f32_s" || operation === "trunc_sat_f32_u") {
+      const vector = this.simd(inputs[0], "f32", false, span, name);
+      let operator:
+        | "truncate-saturating-f32-signed"
+        | "truncate-saturating-f32-unsigned" = "truncate-saturating-f32-signed";
+      if (operation.endsWith("_u")) {
+        operator = "truncate-saturating-f32-unsigned";
+      }
+      return this.vectorOperation(operator, this.simdType("i32", false), [
+        vector.value,
+      ], span);
+    }
+    const operators = new Map<
+      string,
+      Extract<BlotRuntimeOperation, { readonly kind: "vector" }>["operator"]
+    >([
+      ["add", "add"],
+      ["sub", "subtract"],
+      ["mul", "multiply"],
+      ["div", "divide"],
+      ["eq", "equal"],
+      ["ne", "not-equal"],
+      ["less", "less-than"],
+      ["le", "less-than-or-equal"],
+      ["gt", "greater-than"],
+      ["ge", "greater-than-or-equal"],
+      ["select", "select"],
+      ["abs", "absolute"],
+      ["neg", "negate"],
+      ["sqrt", "square-root"],
+      ["ceil", "ceiling"],
+      ["floor", "floor"],
+      ["trunc", "truncate"],
+      ["nearest", "nearest"],
+      ["min", "minimum"],
+      ["max", "maximum"],
+      ["pmin", "pseudo-minimum"],
+      ["pmax", "pseudo-maximum"],
+      ["and", "bit-and"],
+      ["or", "bit-or"],
+      ["xor", "bit-xor"],
+      ["not", "bit-not"],
+      ["shl", "shift-left"],
+      ["shr_s", "shift-right-signed"],
+      ["shr_u", "shift-right-unsigned"],
+      ["min_s", "minimum-signed"],
+      ["min_u", "minimum-unsigned"],
+      ["max_s", "maximum-signed"],
+      ["max_u", "maximum-unsigned"],
+      ["lt_s", "less-than-signed"],
+      ["lt_u", "less-than-unsigned"],
+      ["gt_s", "greater-than-signed"],
+      ["gt_u", "greater-than-unsigned"],
+      ["le_s", "less-than-or-equal-signed"],
+      ["le_u", "less-than-or-equal-unsigned"],
+      ["ge_s", "greater-than-or-equal-signed"],
+      ["ge_u", "greater-than-or-equal-unsigned"],
+    ]);
+    const operator = operators.get(operation);
+    if (operator === undefined) return undefined;
+    let resultType = vectorType;
+    if (
+      operation === "eq" || operation === "ne" || operation === "less" ||
+      operation === "le" || operation === "gt" || operation === "ge" ||
+      operation.startsWith("lt_") || operation.startsWith("gt_") ||
+      operation.startsWith("le_") || operation.startsWith("ge_")
+    ) {
+      resultType = maskType;
+    }
+    const operands = inputs.map((argument, index) => {
+      if (
+        index === 1 &&
+        (operation === "shl" || operation === "shr_s" || operation === "shr_u")
+      ) {
+        return this.integer32(argument, span, name).value;
+      }
+      if (index === 0 && operation === "select") {
+        return this.simd(argument, element, true, span, name).value;
+      }
+      return this.simd(argument, element, false, span, name).value;
+    });
+    return this.vectorOperation(operator, resultType, operands, span);
+  }
+
+  private simd(
+    value: ResidualValue,
+    element: "f32" | "i32" | "i16" | "i8",
+    mask: boolean,
+    span: Span,
+    primitive: string,
+  ): Extract<ResidualValue, { kind: "dynamic" }> {
+    const dynamic = this.dynamic(value);
+    if (dynamic.type !== this.simdType(element, mask)) {
+      throw this.outside(span, `${primitive} over the wrong SIMD type`);
+    }
+    return dynamic;
+  }
+
+  private integer32(
+    value: ResidualValue,
+    span: Span,
+    primitive: string,
+  ): Extract<ResidualValue, { kind: "dynamic" }> {
+    const integer = this.integer(value, span, primitive);
+    const result = this.nextValue();
+    this.current().operations.push({
+      kind: "convert",
+      result,
+      type: this.type("integer-32"),
+      operands: [integer.value],
+      ownership: "plain",
+      conversion: "signed-integer-64-to-signed-integer-32",
+      span: this.span(span),
+    });
+    return { kind: "dynamic", value: result, type: this.type("integer-32") };
+  }
+
+  private extendInteger32(
+    value: Extract<ResidualValue, { kind: "dynamic" }>,
+    span: Span,
+  ): Extract<ResidualValue, { kind: "dynamic" }> {
+    const result = this.nextValue();
+    this.current().operations.push({
+      kind: "convert",
+      result,
+      type: this.type("signed-integer-64"),
+      operands: [value.value],
+      ownership: "plain",
+      conversion: "signed-integer-32-to-signed-integer-64",
+      span: this.span(span),
+    });
+    return {
+      kind: "dynamic",
+      value: result,
+      type: this.type("signed-integer-64"),
+    };
+  }
+
+  private float32(
+    value: ResidualValue,
+    span: Span,
+    primitive: string,
+  ): Extract<ResidualValue, { kind: "dynamic" }> {
+    const dynamic = this.dynamic(value);
+    if (this.types[dynamic.type].kind !== "float-32") {
+      throw this.outside(span, `${primitive} over non-F32 operand`);
+    }
+    return dynamic;
+  }
+
   private staticValue(value: ResidualValue): Value | undefined {
     if (value.kind === "static") return value.value;
     if (value.kind === "tuple") {
@@ -1552,6 +1979,10 @@ class ResidualHirBuilder {
       if (domain === "text") return this.type("text");
     }
     if (value.tag === "shape") return this.productType(value.fields, span);
+    if (value.tag === "opaque-type") {
+      const simd = this.simdTypeFromName(value.name);
+      if (simd !== undefined) return simd;
+    }
     throw this.outside(span, `host type ${value.tag}`);
   }
 
@@ -1617,6 +2048,51 @@ class ResidualHirBuilder {
     this.#typeByName.set(name, type);
     this.types.push({ kind: name });
     return type;
+  }
+
+  private simdType(
+    element: "f32" | "i32" | "i16" | "i8",
+    mask: boolean,
+  ): TypeId {
+    let kind: "vector" | "mask" = "vector";
+    if (mask) kind = "mask";
+    const name = `${kind}:${element}`;
+    const existing = this.#typeByName.get(name);
+    if (existing !== undefined) return existing;
+    let runtimeElement:
+      | "float-32"
+      | "integer-32"
+      | "integer-16"
+      | "integer-8" = "float-32";
+    if (element === "i32") runtimeElement = "integer-32";
+    if (element === "i16") runtimeElement = "integer-16";
+    if (element === "i8") runtimeElement = "integer-8";
+    let lanes: 4 | 8 | 16 = 4;
+    if (element === "i16") lanes = 8;
+    if (element === "i8") lanes = 16;
+    const type = this.types.length;
+    this.#typeByName.set(name, type);
+    this.types.push({ kind, element: runtimeElement, lanes });
+    return type;
+  }
+
+  private simdTypeFromName(name: string): TypeId | undefined {
+    const types = new Map<
+      string,
+      readonly ["f32" | "i32" | "i16" | "i8", boolean]
+    >([
+      [F32X4_NAME, ["f32", false]],
+      [F32X4_MASK_NAME, ["f32", true]],
+      [I32X4_NAME, ["i32", false]],
+      [I32X4_MASK_NAME, ["i32", true]],
+      [I16X8_NAME, ["i16", false]],
+      [I16X8_MASK_NAME, ["i16", true]],
+      [I8X16_NAME, ["i8", false]],
+      [I8X16_MASK_NAME, ["i8", true]],
+    ]);
+    const found = types.get(name);
+    if (found === undefined) return undefined;
+    return this.simdType(found[0], found[1]);
   }
 
   private sumType(cases: readonly string[]): TypeId {

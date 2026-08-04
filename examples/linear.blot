@@ -28,6 +28,17 @@ let !key = 40;
 let boxed = #Held (fn () => consume (!key));
 let held = case boxed of #Held use => use () end;
 
+// Record fields retain distinct paths. Moving one owned closure leaves its
+// sibling live, while the partially moved record itself is no longer usable.
+let !left = 19;
+let !right = 20;
+let pair = {
+  .left = fn () => consume (!left);
+  .right = fn () => consume (!right);
+};
+let first = pair.left ();
+let fields = first + pair.right ();
+
 // `?` is affine: at most once. Not a weaker `!` but a different rule, and the
 // right one for a continuation — spending it on one branch and not the other is
 // still at most once, so branches need not agree.
@@ -44,6 +55,7 @@ return {
   .borrowed = borrowed;
   .settled = settled;
   .held = held;
+  .fields = fields;
   .chosen = chosen;
   .flipped = flipped;
 };

@@ -1,8 +1,0 @@
-// `fn` is the only way to write a lambda. Without it the head is an ordinary
-// expression and `=>` is an ordinary operator, so the chain reaches the fixity
-// table and reports there rather than failing to parse.
-
-open {} = (@import "blot:prelude") ();
-
-let apply_twice = f => x => f (f x);
-return apply_twice;

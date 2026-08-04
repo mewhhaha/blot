@@ -6,28 +6,30 @@ The simplest language that keeps the reference feature set, fits baba's WebGPU
 frontend profile, and compiles without requiring WebGPU.
 
 ```txt
-source -> baba generated-Wasm frontend -> CST -> fixity fold -> AST
+source -> baba CPU frontend -> compact CST -> fixity fold -> AST
        -> comptime evaluation -> biunification -> linearity/ownership
        -> specialize -> Blot Runtime HIR -> gpupaper Core -> Rust/WebAssembly emission
 ```
 
 blot owns source elaboration, inference, comptime, and ownership. baba owns
 lexing and parsing; do not hand-write a lexer or parser. Compiler commands use
-baba's generated WebAssembly parser. The local-checkout gpupaper target exports
-validated Core and uses gpupaper's Rust/WebAssembly emitter. Blot owns Runtime
-HIR, ABI policy, the module shell, and the Runtime-HIR-to-Core adapter; do not
-move those language semantics into gpupaper. The GPU paths remain explicit
-conformance tools, not compiler targets.
+Baba's CPU frontend over the generated compact plan. The published gpupaper package exports
+validated Core and its Rust/WebAssembly emitter. Blot owns Runtime HIR, ABI
+policy, the module shell, and the Runtime-HIR-to-Core adapter; do not move those
+language semantics into gpupaper. The GPU paths remain explicit conformance
+tools, not compiler targets.
 
 ## Invariants
 
 These are the decisions a change must not silently reverse.
 
-**The GPU profile is a gate, not an aspiration.** `deno task generate` must
-succeed with `"throughput": "strict"` and the profile accepted. If a grammar
-change needs a `metadata.parser.resolutions` entry to generate, the grammar is
-wrong — every conflict so far had a design fix that made the language better,
-not a metadata override. Record counter changes in `docs/gpu-profile.md`.
+**The frontend profile is a gate, not an aspiration.** `deno task generate`
+must succeed with the version-3 general profile accepted and every grammar rule
+declared as an island, because the CPU frontend's compact CST preserves island
+nodes. If a grammar change needs a `metadata.parser.resolutions` entry to
+generate, the grammar is wrong — every conflict so far had a design fix that
+made the language better, not a metadata override. Record counter changes in
+`docs/gpu-profile.md`.
 
 **The language specification changes with the language.** `LANGUAGE.md` is the
 normative description of accepted source and its meaning. Any change to syntax,
@@ -36,9 +38,10 @@ boundaries, or the prelude's public API must update `LANGUAGE.md` in the same
 diff. Examples and implementation comments support the specification; they do
 not replace it.
 
-**Byte parity is the safety net.** The GPU frontend has no CPU fallback and no
-partial program on failure. `just parity` must hold across the whole corpus
-before a grammar change lands.
+**The CPU compact CST is the parser contract.** Every accepted corpus program
+must pass through Baba's `CpuFrontend` and Blot's CST materializer. The WebGPU
+executor is an experimental comparison target, not a compiler fallback or a
+release gate under the general profile.
 
 **Nothing is implicitly in scope.** The prelude is an ordinary module reached
 through `@import` and spread with `open`; it gets no seeding, no privileged
@@ -133,8 +136,8 @@ still contain a local compile-time binding. Do not re-derive them in the
 backend — that is a second type checker and, for effects, would mint a different
 identity. This is why `load` keeps one cache per process.
 
-**Compiler commands must not touch WebGPU.** Parsing uses baba's generated
-WebAssembly parser, inference is plain TypeScript, and building uses gpupaper's
+**Compiler commands must not touch WebGPU.** Parsing uses Baba's CPU frontend,
+inference is plain TypeScript, and building uses gpupaper's
 Rust/WebAssembly emitter. Keep the split structural so ordinary compiler,
 formatter, and language-server processes never initialize a device.
 

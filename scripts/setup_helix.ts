@@ -82,12 +82,13 @@ await runCommand("deno", [
   "tree-sitter",
 ], repository);
 
-// baba's tree-sitter target reserves no keywords, and tree-sitter's lexer is
-// context-dependent by design: in a state where `IDENT` is admissible but
-// `"return"` is not, it lexes `return` as an identifier, so
-// `let x = 1 return x;` parses cleanly as juxtaposition. The wasm parser and the
-// GPU frontend both treat keywords as globally reserved, so without this the
-// editor grammar would disagree with the compiler about what the language is.
+// baba's tree-sitter target does not reserve tokens against broader lexical
+// rules, and tree-sitter's lexer is context-dependent by design. In a state
+// where `IDENT` is admissible but `"return"` is not, it lexes `return` as an
+// identifier, so `let x = 1 return x;` parses cleanly as juxtaposition. The same
+// fallback lets OPERATOR consume the structural `=>` token outside a lambda or
+// case arm. The wasm parser and the GPU frontend reserve both globally, so
+// without this the editor grammar would disagree with the compiler.
 //
 // `word:` alone does not fix it — extraction still falls back to the word token.
 // A global `reserved` set does. Field names keep working, because `.return`
@@ -95,7 +96,7 @@ await runCommand("deno", [
 //
 // `scripts/check_grammar.ts` proves the two agree; it is the reason to trust
 // this patch rather than the patch itself.
-const KEYWORDS = [
+const RESERVED_TOKENS = [
   "module",
   "operators",
   "infixl",
@@ -120,6 +121,8 @@ const KEYWORDS = [
   "in",
   "break",
   "try",
+  "fn",
+  "=>",
 ];
 
 const grammarJsPath = join(grammarDirectory, "grammar.js");
@@ -130,14 +133,14 @@ if (at < 0) {
   throw new Error("grammar.js has no `name:` declaration to anchor to");
 }
 const cut = at + anchor.length;
-const spelled = KEYWORDS.map((keyword) => `"${keyword}"`).join(", ");
+const spelled = RESERVED_TOKENS.map((token) => `"${token}"`).join(", ");
 await Deno.writeTextFile(
   grammarJsPath,
   `${grammarJs.slice(0, cut)}
 
-  // Keywords are globally reserved, matching the wasm parser and the GPU
-  // frontend. Without this tree-sitter would accept programs the compiler does
-  // not, because its lexer resolves keyword-versus-identifier by parser state.
+  // Keywords and structural arrows are globally reserved, matching the wasm
+  // parser and the GPU frontend. Without this tree-sitter would accept programs
+  // the compiler does not, because its lexer resolves tokens by parser state.
   word: $ => $.IDENT,
   reserved: {
     global: _ => [${spelled}],

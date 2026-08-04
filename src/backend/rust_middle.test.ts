@@ -1,0 +1,552 @@
+import {
+  assertEquals,
+  assertNotStrictEquals,
+  assertRejects,
+  assertStrictEquals,
+} from "@std/assert";
+import { join } from "@std/path";
+import { BlotError } from "../diagnostic.ts";
+import { ExperimentalCompiler } from "../experimental.ts";
+import { prepareGpupaperHir } from "./compile.ts";
+import { buildGpupaperBatch } from "./gpupaper.ts";
+import { type BlotAbiManifest, buildBlotAbiManifest } from "./runtime/abi.ts";
+import { decodeBlotAbiResult } from "./runtime/abi_decode.ts";
+import { validateBlotRuntimeModule } from "./runtime/hir.ts";
+import { compileBlotRuntimeModulesOnRustWasm } from "./runtime/target.ts";
+import { prepareRustGpupaperHir, RustMiddleCompiler } from "./rust_middle.ts";
+
+Deno.test("experimental compiler is available from the public API", async () => {
+  const compiler = await ExperimentalCompiler.create();
+  try {
+    const artifact = await compiler.compile("examples/minimal.blot");
+    assertEquals([...artifact.wasm.slice(0, 4)], [0, 97, 115, 109]);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+Deno.test("Rust HIR emits the same ABI as the TypeScript middle", async () => {
+  const rust = validateBlotRuntimeModule(
+    await prepareRustGpupaperHir("examples/storage.blot"),
+  );
+  const typescript = validateBlotRuntimeModule(
+    await prepareGpupaperHir("examples/storage.blot"),
+  );
+  assertEquals(
+    buildBlotAbiManifest(rust),
+    buildBlotAbiManifest(typescript),
+  );
+});
+
+Deno.test("full Rust checker preserves explicit Rank-N subsumption", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    const checked = await compiler.check("examples/rank_n.blot");
+    assertEquals(checked.type, "{ .number = Int; .text = Str }");
+    await assertRejects(
+      () =>
+        compiler.check(
+          "examples/rejected/semantics/rank_n_monomorphic.blot",
+        ),
+      BlotError,
+    );
+  } finally {
+    compiler.destroy();
+  }
+});
+
+Deno.test("full Rust compiler emits a callable ABI-tagged module", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    const artifact = await compiler.compile("examples/minimal.blot");
+    const module = await WebAssembly.compile(
+      Uint8Array.from(artifact.wasm).buffer,
+    );
+    const sections = WebAssembly.Module.customSections(module, "blot:abi");
+    assertEquals(sections.length, 1);
+    assertEquals(new Uint8Array(sections[0]), artifact.manifestBytes);
+    const instance = await WebAssembly.instantiate(module);
+    const exported = instance.exports["blot:default"];
+    if (!(exported instanceof Function)) {
+      throw new Error("full Rust compiler omitted blot:default");
+    }
+    assertEquals(exported(), 42n);
+
+    const repeated = await compiler.compile("examples/minimal.blot");
+    assertEquals(repeated.artifactSource, "revision-cache");
+  } finally {
+    compiler.destroy();
+  }
+});
+
+Deno.test("full Rust compiler preserves canonical variant names", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    const artifact = await compiler.compile("examples/storage.blot");
+    const manifest = JSON.parse(
+      new TextDecoder().decode(artifact.manifestBytes),
+    ) as BlotAbiManifest;
+    const exportName = "blot:mode_at";
+    const exported = manifest.exports.find((candidate) =>
+      candidate.name === exportName
+    );
+    if (exported?.function === null || exported === undefined) {
+      throw new Error("storage manifest omitted blot:mode_at");
+    }
+    const instance = await WebAssembly.instantiate(
+      await WebAssembly.compile(Uint8Array.from(artifact.wasm).buffer),
+    );
+    const modeAt = instance.exports[exportName];
+    if (!(modeAt instanceof Function)) {
+      throw new Error("storage module omitted blot:mode_at");
+    }
+    const actual = decodeBlotAbiResult(
+      exported.function.result,
+      modeAt(),
+      instance.exports.memory,
+    );
+    assertEquals(actual, { case: "Some", payload: 16n });
+  } finally {
+    compiler.destroy();
+  }
+});
+
+Deno.test("full Rust compiler residualizes a text-returning host effect", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    const artifact = await compiler.compile("case-studies/terminal/main.blot");
+    for (
+      const [input, expected] of [
+        ["", ["What is your name?", "Hello, stranger."]],
+        ["Ada", ["What is your name?", "Hello, Ada"]],
+        ["Żółw 🦀", ["What is your name?", "Hello, Żółw 🦀"]],
+      ] as const
+    ) {
+      assertEquals(await runTerminal(artifact.wasm, input), expected);
+    }
+    await assertRejects(
+      () => runTerminalBytes(artifact.wasm, new Uint8Array([0xc0, 0xaf])),
+      WebAssembly.RuntimeError,
+    );
+  } finally {
+    compiler.destroy();
+  }
+});
+
+Deno.test("full Rust compiler matches dynamic record effects", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "record-effects.blot");
+  try {
+    await Deno.writeTextFile(
+      path,
+      `open {} = (@import "blot:prelude") ();
+const Host = @effect.host {
+  .read = Unit -> { .target = Int; .label = Str; .kind = Int; };
+  .write = { .label = Str; .active = Bool; .kind = Int; } -> Unit;
+};
+const ready = 1;
+event <- Host.read ();
+_ <- case event.kind of
+  #(ready) => Host.write {
+    .label = event.label;
+    .active = True;
+    .kind = event.target + 1;
+  },
+  _ => Host.write { .label = "idle"; .active = False; .kind = 0; }
+end;
+return ();`,
+    );
+    const rust = await compiler.compile(path);
+    const [reference] = await buildGpupaperBatch([path]);
+    if (reference.status === "failed") throw reference.cause;
+
+    const unicode = new TextEncoder().encode("Żółw 🦀");
+    const expected = [{ active: true, kind: -41n, label: "Żółw 🦀" }];
+    assertEquals(
+      await runDynamicRecordEffect(reference.wasm, 1n, -42n, unicode),
+      expected,
+    );
+    assertEquals(
+      await runDynamicRecordEffect(rust.wasm, 1n, -42n, unicode),
+      expected,
+    );
+
+    await assertRejects(
+      () =>
+        runDynamicRecordEffect(
+          rust.wasm,
+          1n,
+          0n,
+          new Uint8Array([0xc0, 0xaf]),
+        ),
+      WebAssembly.RuntimeError,
+    );
+    await assertRejects(
+      () =>
+        runDynamicRecordEffect(
+          rust.wasm,
+          1n,
+          9_223_372_036_854_775_807n,
+          unicode,
+        ),
+      WebAssembly.RuntimeError,
+    );
+  } finally {
+    compiler.destroy();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("Rust middle matches dynamic integer SIMD", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "integer-simd.blot");
+  try {
+    await Deno.writeTextFile(
+      path,
+      `open {} = (@import "blot:prelude") ();
+const Sample = @effect.host { .next = Int -> Int; };
+a <- Sample.next 0;
+b <- Sample.next 1;
+c <- Sample.next 2;
+d <- Sample.next 3;
+let values = Int32x4.of_wrapping (a, b, c, d);
+let shifted = Int32x4.shift_left values 1;
+let bounded = Int32x4.max_signed shifted (Int32x4.splat_wrapping (@int.neg 12));
+let negative = Int32x4.less_signed bounded (Int32x4.splat 0);
+const selected = 2;
+return @int.add (Int32x4.mask_bits negative) (Int32x4.lane values selected);`,
+    );
+    const rustModule = validateBlotRuntimeModule(await compiler.prepare(path));
+    const rustBatch = await compileBlotRuntimeModulesOnRustWasm([rustModule], {
+      target: "wasm-simd128",
+    });
+    const [reference] = await buildGpupaperBatch([path]);
+    if (reference.status === "failed") throw reference.cause;
+
+    for (const wasm of [reference.wasm, rustBatch.artifacts[0].wasm]) {
+      const module = await WebAssembly.compile(Uint8Array.from(wasm).buffer);
+      const lanes = [5n, 7n, -8n, 9n];
+      const instance = await WebAssembly.instantiate(module, {
+        "blot:host/Sample": {
+          next(index: bigint) {
+            const lane = lanes[Number(index)];
+            if (lane === undefined) {
+              throw new Error(`sample requested absent lane ${index}`);
+            }
+            return lane;
+          },
+        },
+      });
+      const run = instance.exports["blot:default"];
+      if (!(run instanceof Function)) {
+        throw new Error("integer SIMD module omitted blot:default");
+      }
+      assertEquals(run(), -4n);
+    }
+  } finally {
+    compiler.destroy();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("full Rust compiler traps every dynamic integer overflow family", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "integer-overflow.blot");
+  const maximum = 9_223_372_036_854_775_807n;
+  const minimum = -9_223_372_036_854_775_808n;
+  const scenarios = [
+    { expression: "pair.left + pair.right", left: maximum, right: 1n },
+    { expression: "pair.left - pair.right", left: minimum, right: 1n },
+    { expression: "pair.left * pair.right", left: maximum, right: 2n },
+    { expression: "pair.left / pair.right", left: minimum, right: -1n },
+    { expression: "pair.left % pair.right", left: 1n, right: 0n },
+    { expression: "@int.neg pair.left", left: minimum, right: 0n },
+  ];
+  try {
+    for (const scenario of scenarios) {
+      await Deno.writeTextFile(
+        path,
+        `open {} = (@import "blot:prelude") ();
+const Host = @effect.host {
+  .read = Unit -> { .left = Int; .right = Int; };
+  .write = Int -> Unit;
+};
+pair <- Host.read ();
+_ <- Host.write (${scenario.expression});
+return ();`,
+      );
+      const artifact = await compiler.compile(path);
+      await assertRejects(
+        () =>
+          runDynamicIntegerEffect(
+            artifact.wasm,
+            scenario.left,
+            scenario.right,
+          ),
+        WebAssembly.RuntimeError,
+      );
+    }
+  } finally {
+    compiler.destroy();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("Rust middle reuses an unchanged resident revision", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "resident.blot");
+  try {
+    await Deno.writeTextFile(path, "return 41;");
+    const first = await compiler.prepare(path);
+    const repeated = await compiler.prepare(path);
+    assertStrictEquals(repeated, first);
+
+    await Deno.writeTextFile(path, "return 42;");
+    const edited = await compiler.prepare(path);
+    assertNotStrictEquals(edited, first);
+    const operation = edited.functions[0].blocks[0].operations[0];
+    assertEquals(operation.kind, "constant");
+    if (operation.kind === "constant") assertEquals(operation.value, 42n);
+  } finally {
+    compiler.destroy();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("Rust middle invalidates an include revision", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "including.blot");
+  const included = join(directory, "message.txt");
+  try {
+    await Deno.writeTextFile(
+      path,
+      'const message = @include "./message.txt" (fn source => source.text); return message;',
+    );
+    await Deno.writeTextFile(included, "first");
+    const first = await compiler.prepare(path);
+
+    await Deno.writeTextFile(included, "second");
+    const edited = await compiler.prepare(path);
+    assertNotStrictEquals(edited, first);
+    const operation = edited.functions[0].blocks[0].operations[0];
+    assertEquals(operation.kind, "constant");
+    if (operation.kind === "constant") {
+      assertEquals(operation.value, "second");
+    }
+  } finally {
+    compiler.destroy();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("Rust middle invalidates importers after a dependency edit", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "entry.blot");
+  const dependency = join(directory, "dependency.blot");
+  try {
+    await Deno.writeTextFile(
+      path,
+      'open {} = (@import "./dependency.blot") (); return value;',
+    );
+    await Deno.writeTextFile(dependency, "return { .value = 41; };");
+    const first = await compiler.prepare(path);
+
+    await Deno.writeTextFile(dependency, "return { .value = 42; };");
+    const edited = await compiler.prepare(path);
+    assertNotStrictEquals(edited, first);
+    const operation = edited.functions[0].blocks[0].operations[0];
+    assertEquals(operation.kind, "constant");
+    if (operation.kind === "constant") assertEquals(operation.value, 42n);
+  } finally {
+    compiler.destroy();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("Rust middle reports source diagnostics with their origin", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "rejected.blot");
+  try {
+    await Deno.writeTextFile(path, 'return @int.add "no" 1;');
+    await assertRejects(
+      () => compiler.compile(path),
+      BlotError,
+      "BLOT_TYPE_ERROR",
+    );
+  } finally {
+    compiler.destroy();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("Rust middle preserves a dependency diagnostic origin", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "entry.blot");
+  const dependency = join(directory, "dependency.blot");
+  try {
+    await Deno.writeTextFile(
+      path,
+      'open {} = (@import "./dependency.blot") (); return 0;',
+    );
+    await Deno.writeTextFile(dependency, 'return @int.add "no" 1;');
+    try {
+      await compiler.compile(path);
+      throw new Error("Rust middle accepted an invalid dependency");
+    } catch (error) {
+      if (!(error instanceof BlotError)) throw error;
+      assertEquals(error.diagnostic.code, "BLOT_TYPE_ERROR");
+      assertEquals(error.origin?.path, dependency);
+    }
+  } finally {
+    compiler.destroy();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+async function runTerminal(
+  wasm: Uint8Array,
+  input: string,
+): Promise<readonly string[]> {
+  return await runTerminalBytes(wasm, new TextEncoder().encode(input));
+}
+
+async function runTerminalBytes(
+  wasm: Uint8Array,
+  input: Uint8Array,
+): Promise<readonly string[]> {
+  const writes: string[] = [];
+  const module = await WebAssembly.compile(Uint8Array.from(wasm).buffer);
+  const instance = await WebAssembly.instantiate(module, {
+    "blot:host/Terminal": {
+      write(pointer: number, length: number) {
+        const memory = instance.exports.memory;
+        if (!(memory instanceof WebAssembly.Memory)) {
+          throw new Error("terminal module omitted canonical memory");
+        }
+        writes.push(new TextDecoder("utf-8", { fatal: true }).decode(
+          new Uint8Array(memory.buffer, pointer, length),
+        ));
+      },
+      read_line(resultPointer: number) {
+        const memory = instance.exports.memory;
+        const realloc = instance.exports.cabi_realloc;
+        if (
+          !(memory instanceof WebAssembly.Memory) ||
+          !(realloc instanceof Function)
+        ) {
+          throw new Error("terminal module omitted its canonical ABI shell");
+        }
+        const pointer = realloc(0, 0, 1, input.length) as number;
+        new Uint8Array(memory.buffer, pointer, input.length).set(input);
+        const view = new DataView(memory.buffer);
+        view.setUint32(resultPointer, pointer, true);
+        view.setUint32(resultPointer + 4, input.length, true);
+      },
+    },
+  });
+  const run = instance.exports["blot:default"];
+  if (!(run instanceof Function)) {
+    throw new Error("terminal module omitted blot:default");
+  }
+  run();
+  return writes;
+}
+
+async function runDynamicRecordEffect(
+  wasm: Uint8Array,
+  kind: bigint,
+  target: bigint,
+  label: Uint8Array,
+): Promise<
+  readonly {
+    readonly active: boolean;
+    readonly kind: bigint;
+    readonly label: string;
+  }[]
+> {
+  const writes: Array<{ active: boolean; kind: bigint; label: string }> = [];
+  const module = await WebAssembly.compile(Uint8Array.from(wasm).buffer);
+  const runtime: { instance?: WebAssembly.Instance } = {};
+  const instance = await WebAssembly.instantiate(module, {
+    "blot:host/Host": {
+      read(resultPointer: number) {
+        const memory = runtime.instance?.exports.memory;
+        const realloc = runtime.instance?.exports.cabi_realloc;
+        if (
+          !(memory instanceof WebAssembly.Memory) ||
+          !(realloc instanceof Function)
+        ) {
+          throw new Error("record module omitted its canonical ABI shell");
+        }
+        const labelPointer = realloc(0, 0, 1, label.length) as number;
+        new Uint8Array(memory.buffer, labelPointer, label.length).set(label);
+        const view = new DataView(memory.buffer);
+        view.setBigInt64(resultPointer, kind, true);
+        view.setUint32(resultPointer + 8, labelPointer, true);
+        view.setUint32(resultPointer + 12, label.length, true);
+        view.setBigInt64(resultPointer + 16, target, true);
+      },
+      write(
+        active: number,
+        writtenKind: bigint,
+        pointer: number,
+        length: number,
+      ) {
+        const memory = runtime.instance?.exports.memory;
+        if (!(memory instanceof WebAssembly.Memory)) {
+          throw new Error("record module omitted canonical memory");
+        }
+        const writtenLabel = new TextDecoder("utf-8", { fatal: true }).decode(
+          new Uint8Array(memory.buffer, pointer, length),
+        );
+        writes.push({
+          active: active !== 0,
+          kind: writtenKind,
+          label: writtenLabel,
+        });
+      },
+    },
+  });
+  runtime.instance = instance;
+  const run = instance.exports["blot:default"];
+  if (!(run instanceof Function)) {
+    throw new Error("record module omitted blot:default");
+  }
+  run();
+  return writes;
+}
+
+async function runDynamicIntegerEffect(
+  wasm: Uint8Array,
+  left: bigint,
+  right: bigint,
+): Promise<void> {
+  const module = await WebAssembly.compile(Uint8Array.from(wasm).buffer);
+  const instance = await WebAssembly.instantiate(module, {
+    "blot:host/Host": {
+      read(resultPointer: number) {
+        const memory = instance.exports.memory;
+        if (!(memory instanceof WebAssembly.Memory)) {
+          throw new Error("integer module omitted canonical memory");
+        }
+        const view = new DataView(memory.buffer);
+        view.setBigInt64(resultPointer, left, true);
+        view.setBigInt64(resultPointer + 8, right, true);
+      },
+      write(_value: bigint) {},
+    },
+  });
+  const run = instance.exports["blot:default"];
+  if (!(run instanceof Function)) {
+    throw new Error("integer module omitted blot:default");
+  }
+  run();
+}

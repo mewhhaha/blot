@@ -27,13 +27,15 @@ import {
   scheduledResultExpression,
   type TypedCoreModule,
 } from "../core/computation.ts";
-import { expect, fail } from "../diagnostic.ts";
+import { BlotError, expect, fail } from "../diagnostic.ts";
 import {
   asTuple,
   childEnv,
   type Env,
   equal,
   lookup,
+  moduleEnv,
+  moduleParameterEnv,
   show,
   tupleOf,
   UNIT,
@@ -57,6 +59,13 @@ export type Eval = Generator<Perform, Value, Value>;
 
 /** Modules resolved before evaluation begins; `@import` never touches the disk. */
 export type Imports = ReadonlyMap<string, Value>;
+
+const INCLUDED_FILE_KEY_PREFIX = "\0include:";
+
+/** Keeps included source values private while sharing the module import table. */
+export function includedFileKey(specifier: string): string {
+  return `${INCLUDED_FILE_KEY_PREFIX}${specifier}`;
+}
 
 export type EvaluationPhase = "comptime" | "runtime";
 
@@ -341,7 +350,10 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
     }
 
     case "block": {
-      const scope = childEnv(env);
+      let scope = childEnv(env);
+      if (env.module !== null && env.module.scope === "parameter") {
+        scope = moduleEnv(env, env.module.identity);
+      }
       const computation = scheduleComputation(
         expr.declarations,
         expr.result,
@@ -1015,7 +1027,8 @@ export function* apply(
   }
 
   if (fn.tag === "closure") {
-    const scope = childEnv(fn.env);
+    let scope = childEnv(fn.env);
+    if (fn.imports !== undefined) scope = moduleParameterEnv(fn.env, fn);
     if (fn.self !== null) scope.names.set(fn.self, fn);
     if (!match(fn.parameter, argument, scope)) {
       fail(
@@ -1096,6 +1109,7 @@ const SPECIAL: ReadonlyMap<string, number> = new Map([
   ["@effect.host", 1],
   ["@forall", 1],
   ["@handle", 1],
+  ["@include", 2],
   ["@import", 1],
 ]);
 
@@ -1148,6 +1162,40 @@ function* runPrimitive(
       );
     }
     return module;
+  }
+
+  if (name === "@include") {
+    if (runtime.phase !== "comptime") {
+      fail(
+        "BLOT_INCLUDE_NOT_COMPTIME",
+        "`@include` can only be evaluated at compile time.",
+        span,
+      );
+    }
+    const specifier = args[0];
+    if (specifier.tag !== "text") {
+      fail("BLOT_INCLUDE_PATH", "`@include` takes a literal text path.", span);
+    }
+    const included = runtime.imports.get(includedFileKey(specifier.value));
+    if (included === undefined) {
+      fail(
+        "BLOT_INCLUDE_PATH",
+        `Included path \`${specifier.value}\` must be written as a literal at the \`@include\` call site.`,
+        span,
+      );
+    }
+    try {
+      return yield* apply(args[1], included, span, runtime);
+    } catch (error) {
+      if (
+        error instanceof BlotError &&
+        (error.diagnostic.code === "BLOT_JSON_PARSE" ||
+          error.diagnostic.code === "BLOT_JSON_NUMBER")
+      ) {
+        throw new BlotError({ ...error.diagnostic, span });
+      }
+      throw error;
+    }
   }
 
   if (name === "@forall") {

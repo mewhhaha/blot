@@ -4,19 +4,19 @@
   "targetKind": "javascript-hosted-core-wasm",
   "parserPlan": {
     "format": "baba-parser-plan",
-    "version": 2,
-    "runtimeMetadataVersion": 4,
-    "semantics": "baba-portable-v2",
+    "version": 5,
+    "runtimeMetadataVersion": 6,
+    "semantics": "baba-island-v5",
     "storage": "external-binary"
   },
   "runtimeImplementation": {
     "format": "baba-runtime-implementation",
-    "version": 3,
-    "semantics": "baba-runtime-portable-v3",
-    "hash": "fnv1a64:faad3af38e42ece0"
+    "version": 6,
+    "semantics": "baba-runtime-island-v6",
+    "hash": "fnv1a64:cd6f2b27c0c81459"
   },
   "core": {
-    "abiVersion": 12,
+    "abiVersion": 14,
     "memory": {
       "export": "memory",
       "pageBytes": 65536,
@@ -76,92 +76,47 @@
           "dependencyEnd"
         ]
       },
-      "parserSelection": {
-        "i32Count": 4,
-        "bytes": 16,
-        "fields": [
-          "checkedCandidateCount",
-          "selectedSpecIndex",
-          "selectedTerminal",
-          "encodedAction"
-        ]
-      },
-      "validateResult": {
-        "i32Count": 5,
-        "bytes": 20,
-        "fields": [
-          "parserActionCount",
-          "errorState",
-          "errorSpecIndex",
-          "errorStart",
-          "errorEnd"
-        ]
-      },
-      "parseCursorResult": {
+      "islandResult": {
         "i32Count": 10,
         "bytes": 40,
         "fields": [
-          "tokenRecordCount",
-          "ruleRecordCount",
-          "childRefCount",
-          "fieldRecordCount",
-          "valueRecordCount",
-          "valueItemCount",
+          "tokenCount",
+          "ruleCount",
+          "childCount",
+          "fieldCount",
+          "valueCount",
           "rootRef",
-          "errorOffset",
+          "errorRecord",
           "errorState",
-          "tokenReadCount"
+          "structuralTokenCount",
+          "regionCount"
         ]
       },
       "cursorRuleRecord": {
         "i32Count": 9,
-        "bytes": 36,
-        "fields": [
-          "ruleId",
-          "start",
-          "end",
-          "tokenStart",
-          "tokenEnd",
-          "childHead",
-          "childCount",
-          "fieldStart",
-          "fieldCount"
-        ]
-      },
-      "cursorFieldRecord": {
-        "i32Count": 2,
-        "bytes": 8,
-        "fields": [
-          "fieldId",
-          "valueId"
-        ]
-      },
-      "cursorValueRecord": {
-        "i32Count": 4,
-        "bytes": 16,
-        "fields": [
-          "kind",
-          "numberOrItemTail",
-          "itemHead",
-          "itemCount"
-        ]
+        "bytes": 36
       },
       "cursorChildRecord": {
         "i32Count": 2,
-        "bytes": 8,
-        "fields": [
-          "reference",
-          "nextNode"
-        ]
+        "bytes": 8
       },
-      "cursorValueItemRecord": {
+      "cursorFieldRecord": {
         "i32Count": 2,
-        "bytes": 8,
-        "fields": [
-          "valueId",
-          "nextNode"
-        ]
+        "bytes": 8
+      },
+      "cursorValueRecord": {
+        "i32Count": 4,
+        "bytes": 16
       }
+    },
+    "islandStatuses": {
+      "unexpected": 0,
+      "ok": 1,
+      "invalid": -1,
+      "lexical": -2,
+      "traceLimit": -3,
+      "capacity": -4,
+      "trailing": -5
     },
     "exports": [
       {
@@ -177,124 +132,6 @@
           "resultPtr"
         ],
         "result": "matchedFlag"
-      },
-      {
-        "name": "parser_action",
-        "params": [
-          "state",
-          "terminal"
-        ],
-        "result": "encodedAction"
-      },
-      {
-        "name": "parser_actions",
-        "params": [
-          "state",
-          "terminal",
-          "actionPtr",
-          "actionCapacity"
-        ],
-        "result": "actionCountOrMinusOne"
-      },
-      {
-        "name": "parser_select_action",
-        "params": [
-          "state",
-          "acceptingState",
-          "fallbackSpecIndex",
-          "selectionPtr"
-        ],
-        "result": "selectionStatusOneSelectedZeroUnexpectedTwoMultipleChoicesMinusOneInvalid"
-      },
-      {
-        "name": "parser_select_incremental",
-        "params": [
-          "state",
-          "acceptingState",
-          "fallbackSpecIndex",
-          "sourcePtr",
-          "sourceLength",
-          "tokenEnd",
-          "selectionPtr"
-        ],
-        "result": "selectionStatusOneSelectedZeroUnexpectedTwoTriviaMinusOneInvalid"
-      },
-      {
-        "name": "validate",
-        "params": [
-          "sourcePtr",
-          "sourceLength",
-          "resultPtr",
-          "stackPtr",
-          "stackCapacity",
-          "memoPtr",
-          "memoCapacity",
-          "maxParserActions"
-        ],
-        "result": "parseStatusZeroOkOneUnexpectedTwoInternalFourActionLimitFiveAmbiguousSixMemoRequired"
-      },
-      {
-        "name": "parse_cursor",
-        "params": [
-          "sourcePtr",
-          "sourceLength",
-          "tokenPtr",
-          "tokenCapacity",
-          "rulePtr",
-          "ruleCapacity",
-          "childPtr",
-          "childCapacity",
-          "fieldPtr",
-          "fieldCapacity",
-          "valuePtr",
-          "valueCapacity",
-          "valueItemPtr",
-          "valueItemCapacity",
-          "resultPtr",
-          "stateStackPtr",
-          "fragmentStackPtr",
-          "fragmentCapacity",
-          "memoPtr",
-          "memoCapacity",
-          "preserveTrivia",
-          "maxParserActions"
-        ],
-        "result": "cursorStatusZeroOkOneUnexpectedTwoInternalThreeCapacityFourTraceLimitFiveAmbiguous"
-      },
-      {
-        "name": "parse_cursor_records",
-        "params": [
-          "sourcePtr",
-          "sourceLength",
-          "tokenPtr",
-          "rawTokenCount",
-          "tokenCapacity",
-          "rulePtr",
-          "ruleCapacity",
-          "childPtr",
-          "childCapacity",
-          "fieldPtr",
-          "fieldCapacity",
-          "valuePtr",
-          "valueCapacity",
-          "valueItemPtr",
-          "valueItemCapacity",
-          "resultPtr",
-          "stateStackPtr",
-          "fragmentStackPtr",
-          "fragmentCapacity",
-          "preserveTrivia",
-          "maxParserActions"
-        ],
-        "result": "cursorStatusZeroOkOneUnexpectedTwoInternalThreeCapacityFourTraceLimitFiveAmbiguous"
-      },
-      {
-        "name": "parser_goto",
-        "params": [
-          "state",
-          "nonterminal"
-        ],
-        "result": "stateOrMinusOne"
       },
       {
         "name": "lex_all",
@@ -327,6 +164,35 @@
         "name": "lex_memo_i32_per_position",
         "params": [],
         "result": "memoI32CountPerSourcePosition"
+      },
+      {
+        "name": "analyze_island_records",
+        "params": [
+          "tokenPtr",
+          "rawTokenCount",
+          "maxParserActions",
+          "resultPtr"
+        ],
+        "result": "islandStatus"
+      },
+      {
+        "name": "materialize_island_records",
+        "params": [
+          "sourceLength",
+          "tokenPtr",
+          "rawTokenCount",
+          "preserveTrivia",
+          "rulePtr",
+          "ruleCapacity",
+          "childPtr",
+          "childCapacity",
+          "fieldPtr",
+          "fieldCapacity",
+          "valuePtr",
+          "valueCapacity",
+          "resultPtr"
+        ],
+        "result": "islandStatus"
       },
       {
         "name": "load_plan",
@@ -397,7 +263,7 @@
         "result": "i32"
       },
       {
-        "name": "validate_result_i32_count",
+        "name": "island_result_i32_count",
         "params": [],
         "result": "i32"
       },
@@ -426,15 +292,6 @@
         "writeSource(different source)"
       ]
     }
-  },
-  "parseStatuses": {
-    "ok": 0,
-    "unexpected": 1,
-    "internal": 2,
-    "cursorCapacity": 3,
-    "actionLimit": 4,
-    "ambiguous": 5,
-    "memoRequired": 6
   },
   "parserDiagnosticCodes": {
     "parseLexicalError": 1,

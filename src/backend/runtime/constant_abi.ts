@@ -9,7 +9,7 @@ import {
   wasmInstruction,
   WasmModuleBuilder,
   wasmType,
-} from "../../../../gpupaper/src/wasm.ts";
+} from "@mewhhaha/gpupaper/wasm";
 
 type ConstantValue =
   | bigint
@@ -167,12 +167,14 @@ export function compileBlotConstantAbi(
         );
       }
       const parameter = call.imported.function.parameters[0];
-      let argument = directConstant(parameter, call.call.argument);
+      let argument: readonly WasmInstruction[];
       if (call.text !== null) {
         argument = [
           ...wasmInstruction.i32Constant(call.text.offset),
           ...wasmInstruction.i32Constant(call.text.contents.byteLength),
         ];
+      } else {
+        argument = directConstant(parameter, call.call.argument);
       }
       return [...argument, ...wasmInstruction.call(importIndex)];
     });

@@ -150,6 +150,24 @@ check(
   "F32",
 );
 
+check(
+  "integer lane width is part of the vector type",
+  "return Int16x8.add (Int16x8.splat 1) (Int16x8.splat 2);",
+  "I16x8",
+);
+
+check(
+  "integer comparisons produce a width-specific mask",
+  "return Int8x16.less_unsigned (Int8x16.splat 1) (Int8x16.splat 2);",
+  "I8x16Mask",
+);
+
+rejects(
+  "integer vectors with different lane widths do not mix",
+  "return Int32x4.add (Int32x4.splat 1) (Int16x8.splat 2);",
+  "BLOT_TYPE_ERROR",
+);
+
 rejects(
   "literal arms cannot cover a vector",
   'open {} = (@import "blot:prelude") ();\n' +
@@ -1048,11 +1066,20 @@ rejects(
   "BLOT_OUT_OF_BOUNDS",
 );
 
-rejects(
-  "a field access with no stable identity cannot prove a direct read",
+check(
+  "an immutable field path preserves the array identity used by a proof",
   "sig at = { .values = [Int]; } -> Int -> Int;\n" +
     "let at = fn box => fn n =>\n" +
-    "  if n >= @array.len box.values then @array.get box.values n else 0 end;\n" +
+    "  if n >= 0 && n < @array.len box.values then @array.get box.values n else 0 end;\n" +
+    "return at;",
+  "{ .values = [Int]; } -> Int -> Int",
+);
+
+rejects(
+  "a field proof cannot access a different array field",
+  "sig at = { .left = [Int]; .right = [Int]; } -> Int -> Int;\n" +
+    "let at = fn box => fn n =>\n" +
+    "  if n >= 0 && n < @array.len box.left then @array.get box.right n else 0 end;\n" +
     "return at;",
   "BLOT_UNPROVEN_INDEX",
 );
@@ -1168,6 +1195,48 @@ let view = fn () => do
 end;
 return { .view = view; };`,
   "{ .view = () -> Int ~ { Draw }; }",
+);
+
+check(
+  "a compile-time SIMD lane selector produces an immediate-certified access",
+  `const lane = 2;
+let pick = fn vector => Int32x4.lane vector lane;
+return pick;`,
+  "I32x4 -> Int",
+);
+
+rejects(
+  "a runtime SIMD lane selector is not a target immediate",
+  `let pick = fn vector => fn lane => Int32x4.lane vector lane;
+return pick;`,
+  "BLOT_SIMD_IMMEDIATE_NOT_COMPTIME",
+);
+
+rejects(
+  "checked SIMD construction rejects an out-of-width lane",
+  "return Int8x16.splat 128;",
+  "BLOT_TYPE_ERROR",
+);
+
+check(
+  "wrapping SIMD construction names truncation explicitly",
+  "return Int8x16.splat_wrapping 128;",
+  "I8x16",
+);
+
+rejects(
+  "element property rows reject misspelled fields",
+  `sig Button = { .label = Str; } -> (Unit -> Unit) -> Unit;
+let Button = fn _ => fn _ => ();
+return <Button .lable="Save" />;`,
+  "BLOT_ELEMENT_UNKNOWN_PROPERTY",
+);
+
+rejects(
+  "inferred component property rows are closed too",
+  `let Button = fn properties => fn _ => @text.len properties.label;
+return <Button .lable="Save" />;`,
+  "BLOT_ELEMENT_UNKNOWN_PROPERTY",
 );
 
 check(
@@ -1526,6 +1595,27 @@ check(
   `const Money = #Money I32 <+ { .zero = #Money 0; };
 return Money.zero;`,
   "#Money 0",
+);
+
+check(
+  "a callable record attached to a namespace keeps its structural type",
+  `const World = seal ("World", Unit) <+ {
+  .Position = { .increment = fn value => value + 1; };
+};
+return fn value => World.Position.increment value;`,
+  "Int -> Int",
+);
+
+check(
+  "a generated namespace record keeps the values captured by its fields",
+  `const bind = fn field => seal ("World", Unit) <+ {
+  .Position = {
+    .read = fn value => @shape.get value field;
+  };
+};
+const World = bind "x";
+return fn value => World.Position.read value;`,
+  "{ .x = 'a; } -> 'a",
 );
 
 // --- a tuple target is covered by the cross-product of its columns ----------

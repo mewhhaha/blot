@@ -190,6 +190,8 @@ export interface Lowered {
   /** Structural declarations needed to publish the stable caller ABI. */
   readonly runtimeTypes: ReadonlyMap<string, RuntimeTypeDeclaration>;
   readonly exports: readonly LoweredExport[];
+  /** Integer vectors use tuple emulation only in the gpufuck conformance path. */
+  readonly usesIntegerVectors: boolean;
 }
 
 export type RuntimeTypeDeclaration =
@@ -259,6 +261,7 @@ class Lowering {
    * carries none of it.
    */
   vectors = false;
+  usesIntegerVectors = false;
   /** Hoisted prelude closures, by identity: one definition per closure. */
   readonly hoisted = new Map<Value, string>();
   /** One capability per host effect, and one definition per operation. */
@@ -550,7 +553,11 @@ function snapshotValueEnv(environment: ValueEnv): ValueEnv {
   if (environment.parent !== null) {
     parent = snapshotValueEnv(environment.parent);
   }
-  return { names: new Map(environment.names), parent };
+  return {
+    names: new Map(environment.names),
+    parent,
+    module: environment.module,
+  };
 }
 
 function snapshotScope(scope: Scope): Scope {
@@ -1128,6 +1135,7 @@ export function lowerModule(
         ] as const
       ),
     ]),
+    usesIntegerVectors: lowering.usesIntegerVectors,
   };
 }
 
@@ -3573,7 +3581,7 @@ function comptimeEffect(
 }
 
 /**
- * Folds a chain of projections off a compile-time shape.
+ * Folds a chain of projections off a compile-time shape or namespace.
  *
  * `prelude.Num.add` is `.add` off `.Num` off a name, and stopping at the first
  * projection would leave `Num` — a shape of closures — as a value to compile.
@@ -3594,8 +3602,16 @@ function comptimeShapeMember(
 
   let value = lookupValue(scope.values, current.name);
   for (const name of path) {
-    if (value === undefined || value.tag !== "shape") return null;
-    value = value.fields.get(name);
+    if (value === undefined) return null;
+    if (value.tag === "shape") {
+      value = value.fields.get(name);
+      continue;
+    }
+    if (value.tag === "extended") {
+      value = value.members.get(name);
+      continue;
+    }
+    return null;
   }
   return value ?? null;
 }
@@ -3624,6 +3640,16 @@ function lowerValue(
     case "float32":
       return at.float32(value.value);
     case "vector":
+      if (value.element !== "f32") {
+        lowering.usesIntegerVectors = true;
+        const nominal = lowering.nominal(
+          value.lanes.map((_, index) => String(index)),
+        );
+        return at.apply(
+          at.name(nominal.name),
+          ...value.lanes.map((lane) => at.signedInteger64(BigInt(lane))),
+        );
+      }
       lowering.vectors = true;
       return f32x4.make([
         at.float32(value.lanes[0]),
@@ -3632,6 +3658,16 @@ function lowerValue(
         at.float32(value.lanes[3]),
       ]);
     case "vector-mask":
+      if (value.element !== "f32") {
+        lowering.usesIntegerVectors = true;
+        const nominal = lowering.nominal(
+          value.lanes.map((_, index) => String(index)),
+        );
+        return at.apply(
+          at.name(nominal.name),
+          ...value.lanes.map((lane) => at.boolean(lane)),
+        );
+      }
       lowering.vectors = true;
       return f32x4.makeMask([
         at.boolean(value.lanes[0]),
@@ -4088,6 +4124,318 @@ function lowerRecordArgument(
   );
 }
 
+function lowerIntegerSimd(
+  name: string,
+  arguments_: readonly Expr[],
+  scope: Scope,
+  lowering: Lowering,
+  at: typeof surface,
+): SurfaceExpression | null {
+  const matched = /^@(i32x4|i16x8|i8x16)\.(.+)$/.exec(name);
+  if (matched === null) return null;
+  lowering.usesIntegerVectors = true;
+  const prefix = matched[1];
+  let operation = matched[2];
+  if (operation.endsWith("_wrapping")) {
+    operation = operation.slice(0, -"_wrapping".length);
+  }
+  let bits = 32;
+  let laneCount = 4;
+  if (prefix === "i16x8") {
+    bits = 16;
+    laneCount = 8;
+  }
+  if (prefix === "i8x16") {
+    bits = 8;
+    laneCount = 16;
+  }
+  const fields = Array.from({ length: laneCount }, (_, index) => String(index));
+  const nominal = lowering.nominal(fields);
+  const make = (lanes: readonly SurfaceExpression[]): SurfaceExpression =>
+    at.apply(at.name(nominal.name), ...lanes);
+  const destructure = (
+    value: SurfaceExpression,
+    hint: string,
+    body: (lanes: readonly SurfaceExpression[]) => SurfaceExpression,
+  ): SurfaceExpression => {
+    const binders = fields.map(() => lowering.fresh(hint));
+    return at.case(value, [{
+      constructor: nominal.name,
+      binders,
+      body: body(binders.map((binder) => at.name(binder))),
+    }]);
+  };
+  const binary = (
+    left: SurfaceExpression,
+    right: SurfaceExpression,
+    combine: (
+      left: SurfaceExpression,
+      right: SurfaceExpression,
+    ) => SurfaceExpression,
+  ): SurfaceExpression =>
+    destructure(
+      left,
+      "leftLane",
+      (leftLanes) =>
+        destructure(right, "rightLane", (rightLanes) =>
+          make(leftLanes.map((lane, index) =>
+            combine(lane, rightLanes[index])
+          ))),
+    );
+  const mask = (value: bigint): SurfaceExpression => at.signedInteger64(value);
+  const modulus = 1n << BigInt(bits);
+  const sign = modulus >> 1n;
+  const laneMask = modulus - 1n;
+  const normalize = (value: SurfaceExpression): SurfaceExpression => {
+    const wrapped = at.binary(
+      BinaryOperator.BitwiseAndSignedInteger64,
+      value,
+      mask(laneMask),
+    );
+    const saved = lowering.fresh("wrappedLane");
+    return surface.let(
+      saved,
+      wrapped,
+      at.if(
+        at.binary(
+          BinaryOperator.GreaterEqualSignedInteger64,
+          at.name(saved),
+          mask(sign),
+        ),
+        at.binary(
+          BinaryOperator.SubtractSignedInteger64,
+          at.name(saved),
+          mask(modulus),
+        ),
+        at.name(saved),
+      ),
+    );
+  };
+  const unsigned = (value: SurfaceExpression): SurfaceExpression =>
+    at.if(
+      at.binary(
+        BinaryOperator.LessSignedInteger64,
+        value,
+        mask(0n),
+      ),
+      at.binary(
+        BinaryOperator.AddSignedInteger64,
+        value,
+        mask(modulus),
+      ),
+      value,
+    );
+  if (operation === "lane" && arguments_.length === 2) {
+    const selector = lowering.facts.comptimeValues.get(arguments_[1]);
+    if (
+      selector === undefined || selector.tag !== "int" ||
+      selector.value < 0n || selector.value > 3n
+    ) {
+      throw new Error("certified I32x4 lane selector is missing");
+    }
+    return destructure(
+      lower(arguments_[0], scope, lowering),
+      "lane",
+      (lanes) => lanes[Number(selector.value)],
+    );
+  }
+  const lowered = arguments_.map((argument) =>
+    lower(argument, scope, lowering)
+  );
+  if (operation === "of" && lowered.length === laneCount) {
+    return make(lowered.map(normalize));
+  }
+  if (operation === "splat" && lowered.length === 1) {
+    const lane = lowering.fresh("splatLane");
+    return surface.let(
+      lane,
+      normalize(lowered[0]),
+      make(fields.map(() => at.name(lane))),
+    );
+  }
+  const extracted = /^(?:lane)([0-3])$/.exec(operation);
+  if (extracted !== null && lowered.length === 1) {
+    const lane = Number(extracted[1]);
+    return destructure(lowered[0], "lane", (lanes) => lanes[lane]);
+  }
+  const replaced = /^with_lane([0-3])$/.exec(operation);
+  if (replaced !== null && lowered.length === 2) {
+    const lane = Number(replaced[1]);
+    return destructure(
+      lowered[0],
+      "lane",
+      (lanes) =>
+        make(lanes.map((value, index) => {
+          if (index === lane) return normalize(lowered[1]);
+          return value;
+        })),
+    );
+  }
+  if (operation === "select" && lowered.length === 3) {
+    return destructure(
+      lowered[0],
+      "maskLane",
+      (maskLanes) =>
+        destructure(
+          lowered[1],
+          "trueLane",
+          (trueLanes) =>
+            destructure(lowered[2], "falseLane", (falseLanes) =>
+              make(maskLanes.map((lane, index) =>
+                at.if(lane, trueLanes[index], falseLanes[index])
+              ))),
+        ),
+    );
+  }
+  if (operation.startsWith("mask_") && lowered.length === 1) {
+    return destructure(lowered[0], "maskLane", (lanes) => {
+      if (operation === "mask_bitmask") {
+        return lanes.reduce((result, lane, index) =>
+          at.binary(
+            BinaryOperator.AddSignedInteger64,
+            result,
+            at.if(lane, mask(1n << BigInt(index)), mask(0n)),
+          ), mask(0n));
+      }
+      if (operation === "mask_all") {
+        return lanes.reduceRight(
+          (result, lane) => at.if(lane, result, mask(0n)),
+          mask(1n),
+        );
+      }
+      return lanes.reduceRight(
+        (result, lane) => at.if(lane, mask(1n), result),
+        mask(0n),
+      );
+    });
+  }
+  const unaryOperators = new Map<
+    string,
+    (lane: SurfaceExpression) => SurfaceExpression
+  >([
+    ["not", (lane) =>
+      normalize(at.binary(
+        BinaryOperator.BitwiseXorSignedInteger64,
+        lane,
+        mask(-1n),
+      ))],
+  ]);
+  const unary = unaryOperators.get(operation);
+  if (unary !== undefined && lowered.length === 1) {
+    return destructure(lowered[0], "lane", (lanes) => make(lanes.map(unary)));
+  }
+  if (
+    (operation === "shl" || operation === "shr_s" || operation === "shr_u") &&
+    lowered.length === 2
+  ) {
+    const amount = at.binary(
+      BinaryOperator.BitwiseAndSignedInteger64,
+      lowered[1],
+      mask(BigInt(bits - 1)),
+    );
+    return destructure(lowered[0], "lane", (lanes) =>
+      make(lanes.map((lane) => {
+        if (operation === "shl") {
+          return normalize(at.binary(
+            BinaryOperator.ShiftLeftSignedInteger64,
+            lane,
+            amount,
+          ));
+        }
+        if (operation === "shr_u") {
+          return normalize(at.binary(
+            BinaryOperator.ShiftRightUnsignedSignedInteger64,
+            unsigned(lane),
+            amount,
+          ));
+        }
+        return at.if(
+          at.binary(BinaryOperator.LessSignedInteger64, lane, mask(0n)),
+          normalize(at.binary(
+            BinaryOperator.BitwiseXorSignedInteger64,
+            at.binary(
+              BinaryOperator.ShiftRightUnsignedSignedInteger64,
+              at.binary(
+                BinaryOperator.BitwiseXorSignedInteger64,
+                lane,
+                mask(-1n),
+              ),
+              amount,
+            ),
+            mask(-1n),
+          )),
+          at.binary(
+            BinaryOperator.ShiftRightUnsignedSignedInteger64,
+            lane,
+            amount,
+          ),
+        );
+      })));
+  }
+  const arithmeticOperators = new Map<string, BinaryOperator>([
+    ["add", BinaryOperator.AddSignedInteger64],
+    ["sub", BinaryOperator.SubtractSignedInteger64],
+    ["mul", BinaryOperator.MultiplySignedInteger64],
+    ["and", BinaryOperator.BitwiseAndSignedInteger64],
+    ["or", BinaryOperator.BitwiseOrSignedInteger64],
+    ["xor", BinaryOperator.BitwiseXorSignedInteger64],
+  ]);
+  const arithmetic = arithmeticOperators.get(operation);
+  if (arithmetic !== undefined && lowered.length === 2) {
+    return binary(
+      lowered[0],
+      lowered[1],
+      (left, right) => normalize(at.binary(arithmetic, left, right)),
+    );
+  }
+  const comparisonOperators = new Map<string, BinaryOperator>([
+    ["eq", BinaryOperator.EqualSignedInteger64],
+    ["ne", BinaryOperator.NotEqualSignedInteger64],
+    ["lt_s", BinaryOperator.LessSignedInteger64],
+    ["gt_s", BinaryOperator.GreaterSignedInteger64],
+    ["le_s", BinaryOperator.LessEqualSignedInteger64],
+    ["ge_s", BinaryOperator.GreaterEqualSignedInteger64],
+    ["lt_u", BinaryOperator.LessSignedInteger64],
+    ["gt_u", BinaryOperator.GreaterSignedInteger64],
+    ["le_u", BinaryOperator.LessEqualSignedInteger64],
+    ["ge_u", BinaryOperator.GreaterEqualSignedInteger64],
+  ]);
+  const comparison = comparisonOperators.get(operation);
+  if (comparison !== undefined && lowered.length === 2) {
+    const isUnsigned = operation.endsWith("_u");
+    return binary(lowered[0], lowered[1], (left, right) => {
+      if (isUnsigned) {
+        return at.binary(comparison, unsigned(left), unsigned(right));
+      }
+      return at.binary(comparison, left, right);
+    });
+  }
+  if (
+    (operation === "min_s" || operation === "max_s" ||
+      operation === "min_u" || operation === "max_u") &&
+    lowered.length === 2
+  ) {
+    const chooseLeftOnLess = operation.startsWith("min_");
+    const isUnsigned = operation.endsWith("_u");
+    return binary(lowered[0], lowered[1], (left, right) => {
+      let comparedLeft = left;
+      let comparedRight = right;
+      if (isUnsigned) {
+        comparedLeft = unsigned(left);
+        comparedRight = unsigned(right);
+      }
+      let operator: BinaryOperator = BinaryOperator.GreaterSignedInteger64;
+      if (chooseLeftOnLess) operator = BinaryOperator.LessSignedInteger64;
+      return at.if(
+        at.binary(operator, comparedLeft, comparedRight),
+        left,
+        right,
+      );
+    });
+  }
+  return null;
+}
+
 function lowerApply(
   expr: Expr & { tag: "apply" },
   scope: Scope,
@@ -4206,6 +4554,17 @@ function lowerApply(
       at.name(constructorName(sum, spine.callee.name)),
       lower(spine.args[0], scope, lowering),
     );
+  }
+
+  if (spine.callee.tag === "intrinsic") {
+    const integerSimd = lowerIntegerSimd(
+      spine.callee.name,
+      spine.args,
+      scope,
+      lowering,
+      at,
+    );
+    if (integerSimd !== null) return integerSimd;
   }
 
   if (spine.callee.tag === "intrinsic") {

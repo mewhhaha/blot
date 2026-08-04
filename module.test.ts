@@ -81,6 +81,126 @@ Deno.test("transitive module result types reach the importer", async () => {
   assertEquals(checked.type, "42");
 });
 
+Deno.test("imported compile-time dispatchers specialize structured results", async () => {
+  const directory = await Deno.makeTempDir();
+  await writeModule(
+    directory,
+    "ecs",
+    'open {} = (@import "blot:prelude") ();\n' +
+      "const component_1 = fn _ => { .pack = fn value => value; };\n" +
+      "const component_2 = fn _ => { .pack = fn (left, right) => @int.add left right; };\n" +
+      "const component = fn definition => case @array.len (@shape.names definition.fields) of\n" +
+      "  1 => component_1 definition,\n" +
+      "  _ => component_2 definition\n" +
+      "end;\n" +
+      "return { .component = component; };",
+  );
+  await writeModule(
+    directory,
+    "components",
+    'const Ecs = (@import "./ecs.blot") ();\n' +
+      "return { .component = Ecs.component; };",
+  );
+  const root = await writeModule(
+    directory,
+    "root",
+    'open {} = (@import "blot:prelude") ();\n' +
+      'const Ecs = (@import "./ecs.blot") ();\n' +
+      'const Components = (@import "./components.blot") ();\n' +
+      "const Unary = Ecs.component { .fields = { .value = Int; }; };\n" +
+      "const Binary = Components.component { .fields = { .left = Int; .right = Int; }; };\n" +
+      "let unary_value = 7;\n" +
+      "let binary_value = (20, 22);\n" +
+      "return { .unary = Unary.pack unary_value; .binary = Binary.pack binary_value; };",
+  );
+
+  assertEquals(
+    (await checkFile(root)).type,
+    "{ .unary = 7; .binary = Int; }",
+  );
+});
+
+Deno.test("specialization capsules bind each module application's parameter", async () => {
+  const directory = await Deno.makeTempDir();
+  await writeModule(
+    directory,
+    "components",
+    "module settings;\n" +
+      'open {} = (@import "blot:prelude") ();\n' +
+      "const component_1 = fn _ => {\n" +
+      "  .pack = fn value => settings.offset + value;\n" +
+      "};\n" +
+      "const component_2 = fn _ => {\n" +
+      "  .pack = fn (left, right) => settings.offset + left + right;\n" +
+      "};\n" +
+      "const component = fn definition => case @array.len (@shape.names definition.fields) of\n" +
+      "  1 => component_1 definition,\n" +
+      "  _ => component_2 definition\n" +
+      "end;\n" +
+      "return { .component = component; };",
+  );
+  const root = await writeModule(
+    directory,
+    "root",
+    'open {} = (@import "blot:prelude") ();\n' +
+      'const Components = (@import "./components.blot") { .offset = 40; };\n' +
+      "const Position = Components.component { .fields = { .x = Int; }; };\n" +
+      "return Position.pack 2;",
+  );
+
+  assertEquals((await checkFile(root)).type, "Int");
+});
+
+Deno.test("specialization capsules freshen calls and follow dependency revisions", async () => {
+  const directory = await Deno.makeTempDir();
+  const library = await writeModule(
+    directory,
+    "components",
+    'open {} = (@import "blot:prelude") ();\n' +
+      "const component_1 = fn _ => { .pack = fn value => value; };\n" +
+      "const component_2 = fn _ => { .pack = fn (left, right) => left + right; };\n" +
+      "const component = fn definition => case @array.len (@shape.names definition.fields) of\n" +
+      "  1 => component_1 definition,\n" +
+      "  _ => component_2 definition\n" +
+      "end;\n" +
+      "return { .component = component; };",
+  );
+  const integerRoot = await writeModule(
+    directory,
+    "integer_root",
+    'open {} = (@import "blot:prelude") ();\n' +
+      'const Components = (@import "./components.blot") ();\n' +
+      "const One = Components.component { .fields = { .value = Int; }; };\n" +
+      "return One.pack 7;",
+  );
+  const textRoot = await writeModule(
+    directory,
+    "text_root",
+    'open {} = (@import "blot:prelude") ();\n' +
+      'const Components = (@import "./components.blot") ();\n' +
+      "const One = Components.component { .fields = { .value = Str; }; };\n" +
+      'return One.pack "seven";',
+  );
+
+  assertEquals((await checkFile(integerRoot)).type, "7");
+  assertEquals((await checkFile(textRoot)).type, '"seven"');
+
+  await Deno.writeTextFile(
+    library,
+    'open {} = (@import "blot:prelude") ();\n' +
+      'const component_1 = fn _ => { .pack = fn _ => "reloaded"; };\n' +
+      "const component_2 = fn _ => { .pack = fn (left, right) => left + right; };\n" +
+      "const component = fn definition => case @array.len (@shape.names definition.fields) of\n" +
+      "  1 => component_1 definition,\n" +
+      "  _ => component_2 definition\n" +
+      "end;\n" +
+      "return { .component = component; };",
+  );
+  await refreshLoadedModules();
+
+  assertEquals((await checkFile(integerRoot)).type, '"reloaded"');
+});
+
 Deno.test("checking observes an edited dependency after a cached build", async () => {
   const directory = await Deno.makeTempDir();
   const dependency = await writeModule(directory, "dependency", "return 1;");
@@ -95,6 +215,27 @@ Deno.test("checking observes an edited dependency after a cached build", async (
   await refreshLoadedModules();
 
   assertEquals((await checkFile(root)).type, "2");
+});
+
+Deno.test("JSON include parsers choose widened or literal inference", async () => {
+  const directory = await Deno.makeTempDir();
+  await Deno.writeTextFile(
+    `${directory}/config.json`,
+    '{"name":"blot","count":9007199254740993,"enabled":true}',
+  );
+  const root = await writeModule(
+    directory,
+    "root",
+    'open {} = (@import "blot:prelude") ();\n' +
+      'const normal = @include "./config.json" as_json;\n' +
+      'const exact = @include "./config.json" as_const_json;\n' +
+      "return { .normal = normal; .exact = exact; };",
+  );
+
+  assertEquals(
+    (await checkFile(root)).type,
+    '{ .normal = { .name = Str; .count = Int; .enabled = #True | #False; }; .exact = { .name = "blot"; .count = 9007199254740993; .enabled = #True; }; }',
+  );
 });
 
 Deno.test("a library reads a record with more fields than it projects", async () => {

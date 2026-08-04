@@ -15,6 +15,7 @@ import type {
   BlotAbiManifest,
   BlotAbiType,
 } from "../src/backend/runtime/abi.ts";
+import { RustMiddleCompiler } from "../src/backend/rust_middle.ts";
 
 type EffectObservation = {
   readonly capability: string;
@@ -23,6 +24,9 @@ type EffectObservation = {
 };
 
 const root = new URL("../examples/", import.meta.url);
+const useFullRustCompiler = Deno.args.includes("--full-rust");
+let rustCompiler: RustMiddleCompiler | undefined;
+if (useFullRustCompiler) rustCompiler = await RustMiddleCompiler.create();
 const files: string[] = [];
 for await (const entry of Deno.readDir(root)) {
   if (entry.isFile && entry.name.endsWith(".blot")) files.push(entry.name);
@@ -36,14 +40,27 @@ for (const file of files) {
   const path = new URL(file, root).pathname;
   try {
     const hir = await prepareGpupaperHir(path);
-    const compiledBatch = await compileBlotRuntimeModulesOnRustWasm([
-      validateBlotRuntimeModule(hir),
-    ]);
-    const artifact = compiledBatch.artifacts[0];
-    if (artifact === undefined) {
-      throw new Error(
-        `${file}: Rust/WebAssembly emission omitted its artifact`,
-      );
+    let artifact: {
+      readonly wasm: Uint8Array;
+      readonly manifest: BlotAbiManifest;
+    };
+    if (rustCompiler !== undefined) {
+      const compiled = await rustCompiler.compile(path);
+      artifact = {
+        wasm: compiled.wasm,
+        manifest: JSON.parse(new TextDecoder().decode(compiled.manifestBytes)),
+      };
+    } else {
+      const compiledBatch = await compileBlotRuntimeModulesOnRustWasm([
+        validateBlotRuntimeModule(hir),
+      ]);
+      const compiled = compiledBatch.artifacts[0];
+      if (compiled === undefined) {
+        throw new Error(
+          `${file}: Rust/WebAssembly emission omitted its artifact`,
+        );
+      }
+      artifact = compiled;
     }
     const oracleManifest = await validateLowering(path);
     if (JSON.stringify(artifact.manifest) !== JSON.stringify(oracleManifest)) {
@@ -234,10 +251,14 @@ function requireEqualEffects(
     throw new Error(`${sourceName} effect ${index} differs from the oracle`);
   }
 }
+if (rustCompiler !== undefined) rustCompiler.destroy();
+let compiler = "typescript-gpupaper";
+if (useFullRustCompiler) compiler = "full-rust";
 
 console.log(JSON.stringify(
   {
     corpus: "examples/*.blot",
+    compiler,
     files: files.length,
     admitted,
     observations,

@@ -18,7 +18,16 @@
 // keeping ownership and linearity out of the lattice entirely.
 
 import { expect } from "../diagnostic.ts";
-import { F32X4_MASK_NAME, F32X4_NAME } from "../comptime/value.ts";
+import {
+  F32X4_MASK_NAME,
+  F32X4_NAME,
+  I16X8_MASK_NAME,
+  I16X8_NAME,
+  I32X4_MASK_NAME,
+  I32X4_NAME,
+  I8X16_MASK_NAME,
+  I8X16_NAME,
+} from "../comptime/value.ts";
 
 export type Level = number;
 
@@ -133,6 +142,22 @@ export type Typing = SimpleType | Scheme;
 let nextId = 0;
 let nextRigidId = 0;
 
+export interface InferenceIdentityCheckpoint {
+  readonly nextVariable: number;
+  readonly nextRigid: number;
+}
+
+export function checkpointInferenceIdentities(): InferenceIdentityCheckpoint {
+  return { nextVariable: nextId, nextRigid: nextRigidId };
+}
+
+export function restoreInferenceIdentities(
+  checkpoint: InferenceIdentityCheckpoint,
+): void {
+  nextId = checkpoint.nextVariable;
+  nextRigidId = checkpoint.nextRigid;
+}
+
 export function freshVar(
   level: Level,
   evidence?: VariableEvidence,
@@ -227,6 +252,12 @@ export const FLOAT32: SimpleType = {
  */
 export const F32X4: SimpleType = { tag: "opaque", name: F32X4_NAME };
 export const F32X4_MASK: SimpleType = { tag: "opaque", name: F32X4_MASK_NAME };
+export const I32X4: SimpleType = { tag: "opaque", name: I32X4_NAME };
+export const I32X4_MASK: SimpleType = { tag: "opaque", name: I32X4_MASK_NAME };
+export const I16X8: SimpleType = { tag: "opaque", name: I16X8_NAME };
+export const I16X8_MASK: SimpleType = { tag: "opaque", name: I16X8_MASK_NAME };
+export const I8X16: SimpleType = { tag: "opaque", name: I8X16_NAME };
+export const I8X16_MASK: SimpleType = { tag: "opaque", name: I8X16_MASK_NAME };
 
 export function fun(
   param: SimpleType,

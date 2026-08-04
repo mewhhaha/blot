@@ -14,7 +14,7 @@ import {
   wasmInstruction,
   WasmModuleBuilder,
   wasmType,
-} from "../../../../gpupaper/src/wasm.ts";
+} from "@mewhhaha/gpupaper/wasm";
 
 export type BlotCanonicalTextAbiArtifact = {
   readonly wasmPlan: WasmBinaryPlan;

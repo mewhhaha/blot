@@ -144,17 +144,6 @@ export function foldChain(
   const lookup = (step: ChainStep): Fixity => {
     const fixity = table.infix(step.operator);
     if (fixity === undefined) {
-      // `=>` reaching the fixity table means a lambda was written without its
-      // keyword. Every character of `=>` is in the operator class, so it lexes
-      // as an ordinary operator and the chain lands here rather than failing to
-      // parse.
-      if (step.operator === "=>") {
-        fail(
-          "BLOT_LAMBDA_WITHOUT_FN",
-          "A lambda is written `fn pattern => body`.",
-          step.span,
-        );
-      }
       fail(
         "BLOT_UNKNOWN_OPERATOR",
         `No fixity is declared for the infix operator \`${step.operator}\`. Declare one in the module's \`operators\` header.`,

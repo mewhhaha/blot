@@ -9,8 +9,8 @@ import type { Diagnostic } from "../diagnostic.ts";
 import { BlotError } from "../diagnostic.ts";
 import { importExpressions, load, type Loaded } from "../load.ts";
 import {
-  childEnv,
   type Env as ValueEnv,
+  moduleEnv,
   type Value,
 } from "../comptime/value.ts";
 import {
@@ -179,7 +179,7 @@ function checkLoaded(
   // module, so its exports arrive as a dependency's type and `assemble` folds
   // its facts in the way it folds any other's — there is no branch here that
   // knows what a prelude is.
-  const values = childEnv(loaded.closure.env);
+  const values = moduleEnv(loaded.closure.env, loaded.closure);
 
   // Each dependency is checked before its importer, so a module's exports are
   // visible as types rather than as an opaque value.

@@ -1,0 +1,5 @@
+open {} = (@import "blot:prelude") ();
+
+let Button = fn properties => fn _ => @text.len properties.label;
+
+return <Button .lable="Save" />;

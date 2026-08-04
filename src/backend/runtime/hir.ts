@@ -19,8 +19,8 @@ export type BlotRuntimeType =
   }
   | {
     readonly kind: "vector" | "mask";
-    readonly element: "float-32";
-    readonly lanes: 4;
+    readonly element: "float-32" | "integer-32" | "integer-16" | "integer-8";
+    readonly lanes: 4 | 8 | 16;
   }
   | {
     readonly kind: "store";
@@ -117,7 +117,44 @@ export type BlotRuntimeOperation =
         | "less-than-or-equal"
         | "greater-than"
         | "greater-than-or-equal"
-        | "select";
+        | "select"
+        | "absolute"
+        | "negate"
+        | "square-root"
+        | "ceiling"
+        | "floor"
+        | "truncate"
+        | "nearest"
+        | "minimum"
+        | "maximum"
+        | "pseudo-minimum"
+        | "pseudo-maximum"
+        | "bit-and"
+        | "bit-or"
+        | "bit-xor"
+        | "bit-not"
+        | "shift-left"
+        | "shift-right-signed"
+        | "shift-right-unsigned"
+        | "minimum-signed"
+        | "minimum-unsigned"
+        | "maximum-signed"
+        | "maximum-unsigned"
+        | "less-than-signed"
+        | "less-than-unsigned"
+        | "greater-than-signed"
+        | "greater-than-unsigned"
+        | "less-than-or-equal-signed"
+        | "less-than-or-equal-unsigned"
+        | "greater-than-or-equal-signed"
+        | "greater-than-or-equal-unsigned"
+        | "mask-bitmask"
+        | "mask-all"
+        | "mask-any"
+        | "convert-i32-signed"
+        | "convert-i32-unsigned"
+        | "truncate-saturating-f32-signed"
+        | "truncate-saturating-f32-unsigned";
       readonly lane?: 0 | 1 | 2 | 3;
     }
     | {

@@ -638,9 +638,40 @@ async function prepare(path: string) {
 export async function prepareGpupaperHir(
   path: string,
 ): Promise<BlotRuntimeModule> {
-  const prepared = await prepare(path);
+  let prepared: PreparedModule;
+  try {
+    prepared = await prepare(path);
+  } catch (error) {
+    if (
+      !(error instanceof BlotError) ||
+      error.diagnostic.code !== "BLOT_UNSUPPORTED_LOWERING"
+    ) throw error;
+    const frontend = await prepareResidualFrontend(path);
+    const cached = gpupaperHirByLoadedRevision.get(frontend.loaded);
+    if (cached !== undefined) return cached;
+    const hir = exportResidualRuntimeHir(
+      frontend.loaded.path,
+      frontend.checked,
+      frontend.exports,
+      "blot:default",
+    );
+    const snapshot = freezeSnapshot(hir);
+    gpupaperHirByLoadedRevision.set(frontend.loaded, snapshot);
+    return snapshot;
+  }
   const cached = gpupaperHirByLoadedRevision.get(prepared.loaded);
   if (cached !== undefined) return cached;
+  if (prepared.lowered.usesIntegerVectors) {
+    const hir = exportResidualRuntimeHir(
+      prepared.loaded.path,
+      prepared.checked,
+      prepared.exports,
+      "blot:default",
+    );
+    const snapshot = freezeSnapshot(hir);
+    gpupaperHirByLoadedRevision.set(prepared.loaded, snapshot);
+    return snapshot;
+  }
   let moduleResidual: ResidualRuntimeExport;
   let hir: BlotRuntimeModule;
   try {
@@ -654,7 +685,7 @@ export async function prepareGpupaperHir(
       prepared.loaded.path,
       prepared.checked,
       prepared.exports,
-      prepared.lowered,
+      "blot:default",
     );
     const snapshot = freezeSnapshot(hir);
     gpupaperHirByLoadedRevision.set(prepared.loaded, snapshot);
@@ -677,6 +708,28 @@ export async function prepareGpupaperHir(
   const snapshot = freezeSnapshot(hir);
   gpupaperHirByLoadedRevision.set(prepared.loaded, snapshot);
   return snapshot;
+}
+
+async function prepareResidualFrontend(path: string): Promise<{
+  readonly loaded: Loaded;
+  readonly checked: Awaited<ReturnType<typeof checkFile>>;
+  readonly exports: readonly StagedExport[];
+}> {
+  const loaded = await load(path);
+  const checked = await checkFile(path);
+  if (loaded.closure.tag !== "closure") {
+    throw new Error("a module must load as a closure");
+  }
+  let imports: Imports = new Map();
+  if (loaded.closure.imports !== undefined) imports = loaded.closure.imports;
+  const staged = stageModule(
+    loaded.module,
+    checked.values,
+    imports,
+    checked.shapes,
+    checked.recordAdaptations,
+  );
+  return { loaded, checked, exports: staged.exports };
 }
 
 function freezeSnapshot<Value>(

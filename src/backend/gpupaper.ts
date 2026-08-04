@@ -5,6 +5,7 @@ import {
   type ValidatedBlotRuntimeModule,
 } from "./runtime/hir.ts";
 import { prepareGpupaperHir } from "./compile.ts";
+import { compileRustGpupaperArtifact } from "./rust_middle.ts";
 import { refreshLoadedModules } from "../load.ts";
 
 export type GpupaperBuildOutcome =
@@ -45,13 +46,43 @@ export async function buildGpupaperBatch(
   paths: readonly string[],
 ): Promise<readonly GpupaperBuildOutcome[]> {
   await refreshLoadedModules();
+  return await buildBatch(paths, prepareGpupaperHir);
+}
+
+export async function buildExperimentalBatch(
+  paths: readonly string[],
+): Promise<readonly GpupaperBuildOutcome[]> {
+  const outcomes: GpupaperBuildOutcome[] = [];
+  for (const path of paths) {
+    try {
+      const artifact = await compileRustGpupaperArtifact(path);
+      outcomes.push({
+        status: "built",
+        path,
+        wasm: artifact.wasm,
+        manifestBytes: artifact.manifestBytes,
+        capabilities: artifact.capabilities,
+        artifactSource: artifact.artifactSource,
+        wasmEmitter: "rust-wasm",
+      });
+    } catch (cause) {
+      outcomes.push({ status: "failed", path, cause });
+    }
+  }
+  return outcomes;
+}
+
+async function buildBatch(
+  paths: readonly string[],
+  prepare: (path: string) => Promise<BlotRuntimeModule>,
+): Promise<readonly GpupaperBuildOutcome[]> {
   const outcomes: Array<GpupaperBuildOutcome | undefined> = Array.from(
     { length: paths.length },
   );
   const prepared: PreparedGpupaperBuild[] = [];
   for (const [ordinal, path] of paths.entries()) {
     try {
-      const hir = await prepareGpupaperHir(path);
+      const hir = await prepare(path);
       const cached = artifactByHirRevision.get(hir);
       if (cached !== undefined) {
         outcomes[ordinal] = {
@@ -79,6 +110,7 @@ export async function buildGpupaperBatch(
     try {
       const batch = await compileBlotRuntimeModulesOnRustWasm(
         prepared.map((entry) => entry.module),
+        { target: "wasm-simd128" },
       );
       if (batch.artifacts.length !== prepared.length) {
         throw new Error(

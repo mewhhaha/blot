@@ -41,6 +41,97 @@ for (const name of await blotFiles("examples")) {
   });
 }
 
+Deno.test("imported structural folds residualize over runtime records", async () => {
+  const directory = await Deno.makeTempDir();
+  const library = join(directory, "components.blot");
+  const root = join(directory, "root.blot");
+  await Deno.writeTextFile(
+    library,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "const component = fn definition => do",
+      "  let names = @shape.names definition.fields;",
+      "  in {",
+      "    .pack = fn value => fold (names, 0, (fn (sum, name) =>",
+      "      @int.add sum (@shape.get value name)));",
+      "  }",
+      "end;",
+      "return { .component = component; };",
+    ].join("\n"),
+  );
+  await Deno.writeTextFile(
+    root,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      'const Components = (@import "./components.blot") ();',
+      "const Position = Components.component {",
+      "  .fields = { .x = Int; .y = Int; };",
+      "};",
+      "const Source = @effect.host { .x = Int -> Int; };",
+      "x <- Source.x 0;",
+      "sig packed = Int;",
+      "let packed = Position.pack { .x = x; .y = 2; };",
+      "return packed;",
+    ].join("\n"),
+  );
+
+  const hir = await prepareGpupaperHir(root);
+  assertEquals(hir.capabilities.map((capability) => capability.name), [
+    "Source",
+  ]);
+  const [outcome] = await buildGpupaperBatch([root]);
+  if (outcome.status !== "built") throw outcome.cause;
+  assertEquals(outcome.capabilities, ["Source"]);
+  const compiled = await WebAssembly.compile(outcome.wasm as BufferSource);
+  const instance = await WebAssembly.instantiate(compiled, {
+    "blot:host/Source": {
+      x(value: bigint) {
+        assertEquals(value, 0n);
+        return 40n;
+      },
+    },
+  });
+  const run = instance.exports["blot:default"];
+  if (!(run instanceof Function)) {
+    throw new Error("gpupaper omitted the default staged export");
+  }
+  assertEquals(run(), 42n);
+});
+
+Deno.test("static shape updates residualize over runtime records", async () => {
+  const directory = await Deno.makeTempDir();
+  const root = join(directory, "root.blot");
+  await Deno.writeTextFile(
+    root,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "const Source = @effect.host { .x = Int -> Int; };",
+      "x <- Source.x 0;",
+      "let original = { .x = x; .y = 1; };",
+      'let replaced = @shape.set original "y" (x + 2);',
+      'let trimmed = @shape.remove replaced "x";',
+      "return trimmed.y;",
+    ].join("\n"),
+  );
+
+  const [outcome] = await buildGpupaperBatch([root]);
+  if (outcome.status !== "built") throw outcome.cause;
+  const compiled = await WebAssembly.compile(outcome.wasm as BufferSource);
+  const instance = await WebAssembly.instantiate(compiled, {
+    "blot:host/Source": {
+      x(value: bigint) {
+        assertEquals(value, 0n);
+        return 40n;
+      },
+    },
+  });
+  const run = instance.exports["blot:default"];
+  if (!(run instanceof Function)) {
+    throw new Error("gpupaper omitted the default staged export");
+  }
+  assertEquals(run(), 42n);
+});
+
 Deno.test("staged scalar exports retain their checked values in gpupaper HIR", async () => {
   const hir = await prepareGpupaperHir("examples/breaking.blot");
   const exported = hir.exports.find((candidate) =>
@@ -1173,6 +1264,43 @@ Deno.test("four-lane operations become SIMD instructions", async () => {
   assert(opcodes.has(82), "expected v128.bitselect");
   assert(opcodes.has(13), "expected i8x16.shuffle");
   assert(opcodes.has(31), "expected f32x4.extract_lane");
+});
+
+Deno.test("integer vector operations become SIMD instructions", async () => {
+  const path = await fixture("integer-simd.blot", [
+    'open {} = (@import "blot:prelude") ();',
+    "const Sample = @effect.host { .next = Int -> Int; };",
+    "a <- Sample.next 0;",
+    "b <- Sample.next 1;",
+    "c <- Sample.next 2;",
+    "d <- Sample.next 3;",
+    "let values = Int32x4.of_wrapping (a, b, c, d);",
+    "let shifted = Int32x4.shift_left values 1;",
+    "let bounded = Int32x4.max_signed shifted (Int32x4.splat_wrapping (@int.neg 12));",
+    "let negative = Int32x4.less_signed bounded (Int32x4.splat 0);",
+    "const selected = 2;",
+    "return @int.add (Int32x4.mask_bits negative) (Int32x4.lane values selected);",
+  ]);
+  const hir = await prepareGpupaperHir(path);
+  const vectorOperators = hir.functions.flatMap((function_) =>
+    function_.blocks.flatMap((block) =>
+      block.operations.flatMap((operation) =>
+        operation.kind === "vector" ? [operation.operator] : []
+      )
+    )
+  );
+  const [outcome] = await buildGpupaperBatch([path]);
+  if (outcome.status !== "built") throw outcome.cause;
+  const opcodes = simdOpcodes(outcome.wasm);
+  const found = [...opcodes].sort((left, right) => left - right).join(", ");
+  assert(
+    opcodes.has(17),
+    `expected i32x4.splat, found ${found}; HIR ${vectorOperators.join(", ")}`,
+  );
+  assert(opcodes.has(171), `expected i32x4.shl, found ${found}`);
+  assert(opcodes.has(184), `expected i32x4.max_s, found ${found}`);
+  assert(opcodes.has(164), `expected i32x4.bitmask, found ${found}`);
+  assert(opcodes.has(27), `expected i32x4.extract_lane, found ${found}`);
 });
 
 Deno.test("unlikely conditions become Wasm branch metadata", async () => {

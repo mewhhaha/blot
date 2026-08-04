@@ -1,8 +1,8 @@
 // blot's command line.
 //
-// Every command parses through baba's generated WebAssembly parser. `build`
-// emits through gpupaper's Rust/WebAssembly emitter. WebGPU belongs only to
-// explicit conformance tools such as `just parity` and `just wasm`.
+// Every command parses through Baba's CPU frontend. `build` emits through
+// gpupaper's Rust/WebAssembly emitter. WebGPU belongs only to explicit
+// conformance tools such as `just parity` and `just wasm`.
 
 import { resolve } from "@std/path";
 import { BlotError, locate, render } from "./diagnostic.ts";
@@ -25,8 +25,8 @@ let failures = 0;
 let tests = 0;
 let failedTests = 0;
 
-if (command === "build") {
-  failures += await buildFiles(rest);
+if (command === "build" || command === "build-experimental") {
+  failures += await buildFiles(rest, command);
 } else {
   for (const path of rest) {
     try {
@@ -69,7 +69,7 @@ type BuiltFileArtifact = {
 
 function printUsage(): void {
   console.error("usage: blot <check|test|eval|ast|ownership> <file.blot>...");
-  console.error("       blot build <file.blot>...");
+  console.error("       blot <build|build-experimental> <file.blot>...");
 }
 
 function reportTestOutcomes(outcomes: readonly TestOutcome[]): number {
@@ -158,9 +158,17 @@ async function ownership(path: string): Promise<void> {
   }
 }
 
-async function buildFiles(paths: readonly string[]): Promise<number> {
+async function buildFiles(
+  paths: readonly string[],
+  command: "build" | "build-experimental",
+): Promise<number> {
   const backend = await import("./backend/gpupaper.ts");
-  const outcomes = await backend.buildGpupaperBatch(paths);
+  let outcomes;
+  if (command === "build") {
+    outcomes = await backend.buildGpupaperBatch(paths);
+  } else {
+    outcomes = await backend.buildExperimentalBatch(paths);
+  }
   let failures = 0;
   for (const outcome of outcomes) {
     if (outcome.status === "failed") {

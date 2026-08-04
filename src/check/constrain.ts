@@ -15,11 +15,13 @@ import {
   admitsOmission,
   boundAbove,
   boundBelow,
+  checkpointInferenceIdentities,
   evidenceOf,
   freshRigid,
   freshVar,
   type Level,
   levelOf,
+  restoreInferenceIdentities,
   type Scheme,
   type SimpleType,
   type Typing,
@@ -85,45 +87,74 @@ function describe(type: SimpleType): string {
   }
 }
 
-type Cache = Set<string>;
+class ConstraintCache {
+  readonly #pairs = new Map<SimpleType, Set<SimpleType>>();
 
-function key(lhs: SimpleType, rhs: SimpleType): string {
-  return `${identity(lhs)}<:${identity(rhs)}`;
+  constructor(readonly parent: ConstraintCache | null = null) {}
+
+  has(lhs: SimpleType, rhs: SimpleType): boolean {
+    if (this.#pairs.get(lhs)?.has(rhs) === true) return true;
+    if (this.parent === null) return false;
+    return this.parent.has(lhs, rhs);
+  }
+
+  add(lhs: SimpleType, rhs: SimpleType): void {
+    const rights = this.#pairs.get(lhs);
+    if (rights === undefined) {
+      this.#pairs.set(lhs, new Set([rhs]));
+      return;
+    }
+    rights.add(rhs);
+  }
+
+  fork(): ConstraintCache {
+    return new ConstraintCache(this);
+  }
 }
 
-const identities = new WeakMap<object, number>();
-let nextIdentity = 0;
+type BoundInsertion = {
+  readonly variable: Variable;
+  readonly direction: "lower" | "upper";
+};
 
-function identity(type: SimpleType): number {
-  const existing = identities.get(type);
-  if (existing !== undefined) return existing;
-  nextIdentity += 1;
-  identities.set(type, nextIdentity);
-  return nextIdentity;
-}
+type ConstraintState = {
+  readonly cache: ConstraintCache;
+  readonly insertions: BoundInsertion[];
+};
 
 export function constrain(
   lhs: SimpleType,
   rhs: SimpleType,
-  cache: Cache = new Set(),
+): void {
+  constrainWithState(lhs, rhs, {
+    cache: new ConstraintCache(),
+    insertions: [],
+  });
+}
+
+function constrainWithState(
+  lhs: SimpleType,
+  rhs: SimpleType,
+  state: ConstraintState,
 ): void {
   if (lhs === rhs) return;
-  const seen = key(lhs, rhs);
-  if (cache.has(seen)) return;
+  if (state.cache.has(lhs, rhs)) return;
   // Recursion is admitted rather than rejected: revisiting a pair means the
   // constraint is already being proved, which is what makes recursive types
   // fall out instead of tripping an occurs check.
-  if (lhs.tag === "var" || rhs.tag === "var") cache.add(seen);
+  if (lhs.tag === "var" || rhs.tag === "var") {
+    state.cache.add(lhs, rhs);
+  }
 
   if (rhs.tag === "top" || lhs.tag === "bottom") return;
 
   if (lhs.tag === "forall") {
-    constrain(instantiateForall(lhs, levelOf(rhs)), rhs, cache);
+    constrainWithState(instantiateForall(lhs, levelOf(rhs)), rhs, state);
     return;
   }
 
   if (rhs.tag === "forall") {
-    constrain(lhs, skolemize(rhs), cache);
+    constrainWithState(lhs, skolemize(rhs), state);
     return;
   }
 
@@ -132,9 +163,9 @@ export function constrain(
   }
 
   if (lhs.tag === "fun" && rhs.tag === "fun") {
-    constrain(rhs.param, lhs.param, cache);
-    constrain(lhs.result, rhs.result, cache);
-    constrain(lhs.effects, rhs.effects, cache);
+    constrainWithState(rhs.param, lhs.param, state);
+    constrainWithState(lhs.result, rhs.result, state);
+    constrainWithState(lhs.effects, rhs.effects, state);
     return;
   }
 
@@ -149,13 +180,13 @@ export function constrain(
           `no field \`.${name}\` on ${describe(lhs)}`,
         );
       }
-      constrain(present, required, cache);
+      constrainWithState(present, required, state);
     }
     return;
   }
 
   if (lhs.tag === "array" && rhs.tag === "array") {
-    constrain(lhs.element, rhs.element, cache);
+    constrainWithState(lhs.element, rhs.element, state);
     return;
   }
 
@@ -171,7 +202,7 @@ export function constrain(
           `\`#${name}\` is not one of ${describe(rhs)}`,
         );
       }
-      constrain(payload, accepted, cache);
+      constrainWithState(payload, accepted, state);
     }
     if (lhs.open && !rhs.open) {
       throw new TypeError_(
@@ -203,22 +234,10 @@ export function constrain(
   }
 
   if (lhs.tag === "union") {
-    for (const member of lhs.members) constrain(member, rhs, cache);
-    return;
-  }
-
-  if (rhs.tag === "union") {
-    // Members are ground by construction, so trying each is decidable and
-    // needs no backtracking through variable bounds.
-    for (const member of rhs.members) {
-      try {
-        constrain(lhs, member, new Set(cache));
-        return;
-      } catch (error) {
-        if (!(error instanceof TypeError_)) throw error;
-      }
+    for (const member of lhs.members) {
+      constrainWithState(member, rhs, state);
     }
-    throw new TypeError_(`${describe(lhs)} is not one of ${describe(rhs)}`);
+    return;
   }
 
   if (lhs.tag === "unit" && rhs.tag === "unit") return;
@@ -227,29 +246,86 @@ export function constrain(
   }
 
   if (lhs.tag === "var" && levelOf(rhs) <= lhs.level) {
-    lhs.upper.push(rhs);
-    for (const bound of [...lhs.lower]) constrain(bound, rhs, cache);
+    insertBound(lhs, "upper", rhs, state);
+    for (const bound of [...lhs.lower]) {
+      constrainWithState(bound, rhs, state);
+    }
     return;
   }
 
   if (rhs.tag === "var" && levelOf(lhs) <= rhs.level) {
-    rhs.lower.push(lhs);
-    for (const bound of [...rhs.upper]) constrain(lhs, bound, cache);
+    insertBound(rhs, "lower", lhs, state);
+    for (const bound of [...rhs.upper]) {
+      constrainWithState(lhs, bound, state);
+    }
     return;
+  }
+
+  if (rhs.tag === "union") {
+    for (const member of rhs.members) {
+      const insertionCount = state.insertions.length;
+      const identityCheckpoint = checkpointInferenceIdentities();
+      try {
+        constrainWithState(lhs, member, {
+          cache: state.cache.fork(),
+          insertions: state.insertions,
+        });
+        return;
+      } catch (error) {
+        if (!(error instanceof TypeError_)) throw error;
+        rollbackBounds(state.insertions, insertionCount);
+        restoreInferenceIdentities(identityCheckpoint);
+      }
+    }
+    throw new TypeError_(`${describe(lhs)} is not one of ${describe(rhs)}`);
   }
 
   // One side is a variable from a deeper level. Copy the other side down so the
   // constraint is recorded where the variable can see it.
   if (lhs.tag === "var") {
-    constrain(lhs, extrude(rhs, false, lhs.level, new Map()), cache);
+    constrainWithState(
+      lhs,
+      extrude(rhs, false, lhs.level, new Map(), state),
+      state,
+    );
     return;
   }
   if (rhs.tag === "var") {
-    constrain(extrude(lhs, true, rhs.level, new Map()), rhs, cache);
+    constrainWithState(
+      extrude(lhs, true, rhs.level, new Map(), state),
+      rhs,
+      state,
+    );
     return;
   }
 
   mismatch(lhs, rhs);
+}
+
+function insertBound(
+  variable: Variable,
+  direction: "lower" | "upper",
+  bound: SimpleType,
+  state: ConstraintState,
+): void {
+  variable[direction].push(bound);
+  state.insertions.push({ variable, direction });
+}
+
+function rollbackBounds(
+  insertions: BoundInsertion[],
+  insertionCount: number,
+): void {
+  while (insertions.length > insertionCount) {
+    const insertion = insertions.pop();
+    if (insertion === undefined) {
+      throw new Error("a rollback checkpoint preceded every bound insertion");
+    }
+    const removed = insertion.variable[insertion.direction].pop();
+    if (removed === undefined) {
+      throw new Error("a journalled bound insertion must still be present");
+    }
+  }
 }
 
 /** Copies a type down to `level`, freshening the variables that were deeper. */
@@ -258,6 +334,7 @@ function extrude(
   polarity: boolean,
   level: Level,
   seen: Map<Variable, Variable>,
+  state: ConstraintState,
 ): SimpleType {
   if (levelBelow(type, level)) return type;
 
@@ -269,30 +346,40 @@ function extrude(
       const copy = freshVar(level, evidence === null ? undefined : evidence);
       seen.set(type, copy);
       if (polarity) {
-        type.upper.push(copy);
-        copy.lower.push(
-          ...type.lower.map((b) => extrude(b, polarity, level, seen)),
-        );
+        insertBound(type, "upper", copy, state);
+        for (const bound of type.lower) {
+          insertBound(
+            copy,
+            "lower",
+            extrude(bound, polarity, level, seen, state),
+            state,
+          );
+        }
       } else {
-        type.lower.push(copy);
-        copy.upper.push(
-          ...type.upper.map((b) => extrude(b, polarity, level, seen)),
-        );
+        insertBound(type, "lower", copy, state);
+        for (const bound of type.upper) {
+          insertBound(
+            copy,
+            "upper",
+            extrude(bound, polarity, level, seen, state),
+            state,
+          );
+        }
       }
       return copy;
     }
     case "fun":
       return {
         tag: "fun",
-        param: extrude(type.param, !polarity, level, seen),
-        effects: extrude(type.effects, polarity, level, seen),
-        result: extrude(type.result, polarity, level, seen),
+        param: extrude(type.param, !polarity, level, seen, state),
+        effects: extrude(type.effects, polarity, level, seen, state),
+        result: extrude(type.result, polarity, level, seen, state),
       };
     case "forall":
       return {
         tag: "forall",
         variables: type.variables,
-        body: extrude(type.body, polarity, level, seen),
+        body: extrude(type.body, polarity, level, seen, state),
       };
     case "record":
       return {
@@ -300,7 +387,7 @@ function extrude(
         fields: new Map(
           [...type.fields].map((
             [n, t],
-          ) => [n, extrude(t, polarity, level, seen)]),
+          ) => [n, extrude(t, polarity, level, seen, state)]),
         ),
       };
     case "variant":
@@ -310,13 +397,13 @@ function extrude(
         cases: new Map(
           [...type.cases].map((
             [n, t],
-          ) => [n, extrude(t, polarity, level, seen)]),
+          ) => [n, extrude(t, polarity, level, seen, state)]),
         ),
       };
     case "array":
       return {
         tag: "array",
-        element: extrude(type.element, polarity, level, seen),
+        element: extrude(type.element, polarity, level, seen, state),
       };
     default:
       return type;
@@ -385,18 +472,18 @@ function freshenAbove(
   type: SimpleType,
   limit: Level,
   level: Level,
-  seen: Map<Variable, Variable>,
+  freshenedTypes: Map<SimpleType, SimpleType>,
   instances: Instances,
 ): SimpleType {
   if (levelBelow(type, limit)) return type;
+  const existing = freshenedTypes.get(type);
+  if (existing !== undefined) return existing;
 
   switch (type.tag) {
     case "var": {
-      const existing = seen.get(type);
-      if (existing !== undefined) return existing;
       const evidence = evidenceOf(type);
       const copy = freshVar(level, evidence === null ? undefined : evidence);
-      seen.set(type, copy);
+      freshenedTypes.set(type, copy);
       // Not a bound. The copy is where this use's constraints land, and the
       // edge is what lets a fact read at the definition find them again.
       const recorded = instances.get(type);
@@ -404,53 +491,104 @@ function freshenAbove(
       else recorded.push(copy);
       copy.lower.push(
         ...type.lower.map((b) =>
-          freshenAbove(b, limit, level, seen, instances)
+          freshenAbove(b, limit, level, freshenedTypes, instances)
         ),
       );
       copy.upper.push(
         ...type.upper.map((b) =>
-          freshenAbove(b, limit, level, seen, instances)
+          freshenAbove(b, limit, level, freshenedTypes, instances)
         ),
       );
       return copy;
     }
-    case "fun":
-      return {
+    case "fun": {
+      const freshened: SimpleType = {
         tag: "fun",
-        param: freshenAbove(type.param, limit, level, seen, instances),
-        effects: freshenAbove(type.effects, limit, level, seen, instances),
-        result: freshenAbove(type.result, limit, level, seen, instances),
+        param: freshenAbove(
+          type.param,
+          limit,
+          level,
+          freshenedTypes,
+          instances,
+        ),
+        effects: freshenAbove(
+          type.effects,
+          limit,
+          level,
+          freshenedTypes,
+          instances,
+        ),
+        result: freshenAbove(
+          type.result,
+          limit,
+          level,
+          freshenedTypes,
+          instances,
+        ),
       };
-    case "forall":
-      return {
+      freshenedTypes.set(type, freshened);
+      return freshened;
+    }
+    case "forall": {
+      const freshened: SimpleType = {
         tag: "forall",
         variables: type.variables,
-        body: freshenAbove(type.body, limit, level, seen, instances),
+        body: freshenAbove(
+          type.body,
+          limit,
+          level,
+          freshenedTypes,
+          instances,
+        ),
       };
-    case "record":
-      return {
+      freshenedTypes.set(type, freshened);
+      return freshened;
+    }
+    case "record": {
+      const freshened: SimpleType = {
         tag: "record",
         fields: new Map(
           [...type.fields].map((
             [n, t],
-          ) => [n, freshenAbove(t, limit, level, seen, instances)]),
+          ) => [
+            n,
+            freshenAbove(t, limit, level, freshenedTypes, instances),
+          ]),
         ),
       };
-    case "variant":
-      return {
+      freshenedTypes.set(type, freshened);
+      return freshened;
+    }
+    case "variant": {
+      const freshened: SimpleType = {
         tag: "variant",
         open: type.open,
         cases: new Map(
           [...type.cases].map((
             [n, t],
-          ) => [n, freshenAbove(t, limit, level, seen, instances)]),
+          ) => [
+            n,
+            freshenAbove(t, limit, level, freshenedTypes, instances),
+          ]),
         ),
       };
-    case "array":
-      return {
+      freshenedTypes.set(type, freshened);
+      return freshened;
+    }
+    case "array": {
+      const freshened: SimpleType = {
         tag: "array",
-        element: freshenAbove(type.element, limit, level, seen, instances),
+        element: freshenAbove(
+          type.element,
+          limit,
+          level,
+          freshenedTypes,
+          instances,
+        ),
       };
+      freshenedTypes.set(type, freshened);
+      return freshened;
+    }
     default:
       return type;
   }

@@ -157,8 +157,9 @@ those facts and fails as a compiler invariant if one is absent.
 sound for the language when it satisfies four properties:
 
 1. every byte accepted as part of a token has one terminal identity;
-2. every accepted token stream has one CST under the generated parser;
-3. CPU and GPU frontends produce byte-identical CSTs; and
+2. every accepted token stream has one compact CST under Baba's CPU frontend;
+3. compact CST materialization preserves the rule, field, token, and span
+   information required by elaboration; and
 4. elaboration is defined for every accepted CST.
 
 The GPU throughput profile is therefore part of the language's metatheory. It is
@@ -410,8 +411,9 @@ Run-time variables cannot occur in `Delta`. A `const`, signature, effect
 descriptor, fixity descriptor, declaration tag, or reflection request is
 accepted only if all of its free variables are available at compile time.
 Compile-time evaluation cannot invoke a source or host effect. Its only stateful
-operations are compiler-owned identity allocation and module loading, both
-recorded so later passes observe the same result.
+operations are compiler-owned identity allocation and dependency-resolved file
+loading, both recorded so later passes observe the same result. A decoder over
+loaded bytes, such as JSON decoding, is pure.
 
 Compile-time values include a family of well-formed type representations:
 
@@ -436,6 +438,14 @@ The representation need not be visibly tagged in source. In a type context,
 may produce a variant case, and a record whose fields all bridge may produce a
 record type. The bridge, rather than the general evaluator, is what gives those
 ordinary compile-time values their type-denoting interpretation.
+
+A compile-time decoder may deliberately choose a sound type wider than
+`bridge(w)`. Model its result as evidence `(w, A, p)` where `p` proves `w : A`.
+The value observed by evaluation and lowering remains `w`; inference reads `A`.
+This is an elaboration artifact rather than a second runtime value. Exact JSON
+decoding chooses `A = bridge(w)`, while ordinary JSON decoding recursively
+widens literal leaves and joins array element types. No decoder may attach a
+type without constructing the corresponding inhabitation evidence.
 
 ### 5.2 Predicativity and reflection
 
@@ -1370,7 +1380,7 @@ metatheory. Each soundness layer needs a different test oracle.
 
 | Property                | Practical oracle                                               |
 | ----------------------- | -------------------------------------------------------------- |
-| token/parse determinism | baba generation gate plus CPU/GPU byte parity                  |
+| token/parse determinism | Baba generation gate plus CPU compact-CST corpus tests         |
 | elaboration             | golden core plus surface/core differential evaluation          |
 | inference               | principal-type snapshots and generated declarative derivations |
 | coverage                | generated finite domains and mutation of missing rows          |
@@ -1426,7 +1436,8 @@ boundary consumes.
 
 Blot is a capability-safe, staged functional language in which:
 
-- syntax is parsed deterministically under a strict GPU grammar profile;
+- syntax is parsed deterministically under Baba's version-3 general frontend
+  profile;
 - dead pure declarations are absent and live ones evaluate once in source order;
 - computations are sequenced explicitly with `<-`;
 - types, effects, and layout descriptors are compile-time values with checked

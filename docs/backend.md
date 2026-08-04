@@ -1,20 +1,48 @@
 # The Backend
 
 ```bash
-just build examples/compiled.blot   # baba Wasm -> gpupaper Rust/Wasm
+just build examples/compiled.blot   # Baba CPU frontend -> gpupaper Rust/Wasm
 just wasm                           # interpreter vs GPU evaluator vs Wasm
 ```
 
-The compiler parses with baba's generated WebAssembly parser, constructs and
-validates Blot Runtime HIR, derives ABI 1 adapters, and lowers the result to
-gpupaper's language-independent Core. Gpupaper validates Core, plans the module,
-and emits that plan through its Rust/WebAssembly emitter. It has no Blot HIR,
-ABI, parser, or target policy of its own.
+The compiler parses with Baba's CPU frontend, constructs and validates Blot
+Runtime HIR, derives ABI 1 adapters, and lowers the result to gpupaper's
+language-independent Core. Gpupaper validates Core, plans the module, and emits
+that plan through its Rust/WebAssembly emitter. It has no Blot HIR, ABI, parser,
+or target policy of its own.
 
 Neither repository initializes a WebGPU device on the Blot build path or offers
 a GPU build target. The GPU frontend and evaluator remain independent
 conformance checks. `just parity` and `just wasm` exercise them without defining
 a second source-language meaning. There is no WAT route.
+
+## Full Rust compiler
+
+`blot build-experimental` runs the complete experimental compiler in one
+WebAssembly instance. The host supplies source modules and included file
+contents. Rust executes Baba's generated DFA and island plan, lowers the compact
+CST, evaluates comptime, infers and checks the program, performs ownership
+analysis and staging, constructs Runtime HIR and ABI 1, and emits the final
+WebAssembly binary. It does not return to TypeScript for ABI or gpupaper
+planning.
+
+The compiler is checked in as `generated/rust-middle/compiler.wasm`, so normal
+use and package consumers do not need Cargo. One process owns a resident Rust
+session. A revision consists of the entry source plus the revisions of every
+resolved import and included file; an unchanged revision returns the cached
+binary artifact. Changes invalidate the affected entry before compilation.
+
+This path is opt-in while its performance is evaluated. Its release gates
+compare the complete AST, rejection diagnostics, pure evaluation, staged export
+phases, exact ABI bytes, decoded Wasm values, and host-effect observations with
+the TypeScript implementation. The repository-wide HIR gate also covers the
+terminal application: a text-returning host effect feeds prelude comparison,
+dynamic branches, sum joins, and a later text effect without returning to
+TypeScript. Canonical text results are bounds-checked and UTF-8-checked before
+they enter that residual program, including text nested in structural host
+results. Structural fields use canonical ordering and dynamic signed arithmetic
+traps on overflow. The benchmark and current measurements are in
+[`docs/rust-middle.md`](rust-middle.md).
 
 ## Three executions, one language
 
