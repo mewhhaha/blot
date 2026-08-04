@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::ast::Span;
 use crate::diagnostic::Diagnostic;
@@ -406,6 +406,7 @@ fn execute_root_island(
         island: plan.root_island,
         state: 0,
     };
+    let mut active = Vec::new();
     let root = run_island(
         plan.root_island,
         0,
@@ -413,7 +414,7 @@ fn execute_root_island(
         &syntax_tokens,
         &syntax_matches,
         plan,
-        &HashSet::new(),
+        &mut active,
         &mut progress,
     );
     if let Some(root) = root {
@@ -457,19 +458,48 @@ fn run_island(
     tokens: &[Token],
     delimiter_matches: &HashMap<usize, usize>,
     plan: &FrontendPlan,
-    active: &HashSet<(usize, usize, usize)>,
+    active: &mut Vec<(usize, usize, usize)>,
     progress: &mut IslandProgress,
 ) -> Option<IslandMatch> {
     let key = (island_id, start, limit);
     if active.contains(&key) {
         return None;
     }
+    active.push(key);
+    let matched = run_active_island(
+        island_id,
+        start,
+        limit,
+        tokens,
+        delimiter_matches,
+        plan,
+        active,
+        progress,
+    );
+    let removed = active.pop();
+    assert_eq!(
+        removed,
+        Some(key),
+        "active island path lost its current call"
+    );
+    matched
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_active_island(
+    island_id: usize,
+    start: usize,
+    limit: usize,
+    tokens: &[Token],
+    delimiter_matches: &HashMap<usize, usize>,
+    plan: &FrontendPlan,
+    active: &mut Vec<(usize, usize, usize)>,
+    progress: &mut IslandProgress,
+) -> Option<IslandMatch> {
     let island = plan
         .islands
         .get(island_id)
         .expect("generated frontend references an unknown island");
-    let mut next_active = active.clone();
-    next_active.insert(key);
     let mut state = island.start_state;
     let mut cursor = start;
     let mut edges = Vec::new();
@@ -513,7 +543,7 @@ fn run_island(
                 tokens,
                 delimiter_matches,
                 plan,
-                &next_active,
+                active,
                 progress,
             ) else {
                 continue;

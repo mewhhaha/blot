@@ -9,8 +9,8 @@ use crate::ast::{
 use crate::diagnostic::Diagnostic;
 use crate::primitives::{constant, primitive_arity, run_primitive};
 use crate::value::{
-    Environment, OrderedFields, Resume, RuntimeMeaning, RuntimeValue, Value, as_tuple, child_env,
-    equal, lookup, lookup_signature, show, tuple,
+    Environment, OpenedValues, OrderedFields, Resume, RuntimeMeaning, RuntimeValue, Value,
+    as_tuple, child_env, equal, lookup, lookup_signature, show, tuple,
 };
 
 #[derive(Clone, Eq, PartialEq)]
@@ -1263,25 +1263,30 @@ fn evaluate_declarations(
                             span,
                         ));
                     };
-                    let mut names = open_environment.names.borrow_mut();
-                    for (source, value) in fields {
-                        let mapping = mappings.iter().find(|mapping| mapping.source == source);
+                    let mut sources_by_target = BTreeMap::new();
+                    for source in fields.keys() {
+                        let mapping = mappings.iter().find(|mapping| &mapping.source == source);
                         let target = match mapping {
                             Some(mapping) => mapping.target.clone(),
-                            None => Some(source),
+                            None => Some(source.clone()),
                         };
                         if let Some(target) = target {
-                            if names.contains_key(&target) {
+                            if lookup(&open_environment, &target).is_some()
+                                || sources_by_target.contains_key(&target)
+                            {
                                 return Computation::error(Diagnostic::new(
                                     "BLOT_OPEN_COLLISION",
                                     format!("`{target}` is already bound by this open."),
                                     span,
                                 ));
                             }
-                            names.insert(target, value);
+                            sources_by_target.insert(target, source.clone());
                         }
                     }
-                    drop(names);
+                    open_environment
+                        .opens
+                        .borrow_mut()
+                        .push(OpenedValues::new(fields, sources_by_target));
                     continue_with()
                 },
             )

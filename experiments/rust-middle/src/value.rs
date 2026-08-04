@@ -12,6 +12,7 @@ pub type Environment = Rc<Env>;
 #[derive(Debug, Default)]
 pub struct Env {
     pub names: RefCell<BTreeMap<String, Value>>,
+    pub opens: RefCell<Vec<OpenedValues>>,
     pub signatures: RefCell<BTreeMap<String, Value>>,
     pub parent: Option<Environment>,
 }
@@ -19,6 +20,7 @@ pub struct Env {
 pub fn child_env(parent: Option<Environment>) -> Environment {
     Rc::new(Env {
         names: RefCell::new(BTreeMap::new()),
+        opens: RefCell::new(Vec::new()),
         signatures: RefCell::new(BTreeMap::new()),
         parent,
     })
@@ -41,34 +43,79 @@ pub fn lookup(environment: &Environment, name: &str) -> Option<Value> {
         if let Some(value) = current.names.borrow().get(name) {
             return Some(value.clone());
         }
+        for opened in current.opens.borrow().iter().rev() {
+            if let Some(value) = opened.get(name) {
+                return Some(value.clone());
+            }
+        }
         scope = current.parent.clone();
     }
     None
 }
 
+#[derive(Clone, Debug)]
+pub struct OpenedValues {
+    fields: OrderedFields,
+    sources_by_target: Rc<BTreeMap<String, String>>,
+}
+
+impl OpenedValues {
+    pub fn new(fields: OrderedFields, sources_by_target: BTreeMap<String, String>) -> Self {
+        Self {
+            fields,
+            sources_by_target: Rc::new(sources_by_target),
+        }
+    }
+
+    pub fn get(&self, target: &str) -> Option<&Value> {
+        let source = self.sources_by_target.get(target)?;
+        self.fields.get(source)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &Value)> {
+        self.sources_by_target
+            .iter()
+            .filter_map(|(target, source)| self.fields.get(source).map(|value| (target, value)))
+    }
+}
+
 pub type Resume = Rc<RefCell<Option<Box<dyn FnOnce(Value) -> Computation>>>>;
 
-#[derive(Clone, Default)]
-pub struct OrderedFields(Vec<(String, Value)>);
+#[derive(Clone, Debug, Default)]
+pub struct OrderedFields(Rc<OrderedFieldStorage>);
+
+#[derive(Clone, Debug, Default)]
+struct OrderedFieldStorage {
+    entries: Vec<(String, Value)>,
+    positions: BTreeMap<String, usize>,
+}
 
 impl OrderedFields {
     pub fn get(&self, name: &str) -> Option<&Value> {
-        self.0
-            .iter()
-            .find_map(|(candidate, value)| (candidate == name).then_some(value))
+        let position = self.0.positions.get(name)?;
+        Some(&self.0.entries[*position].1)
     }
 
     pub fn insert(&mut self, name: String, value: Value) -> Option<Value> {
-        if let Some((_, existing)) = self.0.iter_mut().find(|(candidate, _)| candidate == &name) {
-            return Some(std::mem::replace(existing, value));
+        let fields = Rc::make_mut(&mut self.0);
+        if let Some(position) = fields.positions.get(&name) {
+            return Some(std::mem::replace(&mut fields.entries[*position].1, value));
         }
-        self.0.push((name, value));
+        fields.positions.insert(name.clone(), fields.entries.len());
+        fields.entries.push((name, value));
         None
     }
 
     pub fn remove(&mut self, name: &str) -> Option<Value> {
-        let index = self.0.iter().position(|(candidate, _)| candidate == name)?;
-        Some(self.0.remove(index).1)
+        let fields = Rc::make_mut(&mut self.0);
+        let position = fields.positions.remove(name)?;
+        let value = fields.entries.remove(position).1;
+        for index in position..fields.entries.len() {
+            fields
+                .positions
+                .insert(fields.entries[index].0.clone(), index);
+        }
+        Some(value)
     }
 
     pub fn contains_key(&self, name: &str) -> bool {
@@ -76,19 +123,19 @@ impl OrderedFields {
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &String> {
-        self.0.iter().map(|(name, _)| name)
+        self.0.entries.iter().map(|(name, _)| name)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Value)> {
-        self.0.iter().map(|(name, value)| (name, value))
+        self.0.entries.iter().map(|(name, value)| (name, value))
     }
 
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.0.entries.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.0.entries.is_empty()
     }
 
     pub fn extend(&mut self, fields: OrderedFields) {
@@ -119,7 +166,10 @@ impl IntoIterator for OrderedFields {
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
+        match Rc::try_unwrap(self.0) {
+            Ok(fields) => fields.entries.into_iter(),
+            Err(fields) => fields.entries.clone().into_iter(),
+        }
     }
 }
 
@@ -134,7 +184,7 @@ impl<'a> IntoIterator for &'a OrderedFields {
         fn pair(field: &(String, Value)) -> (&String, &Value) {
             (&field.0, &field.1)
         }
-        self.0.iter().map(pair)
+        self.0.entries.iter().map(pair)
     }
 }
 

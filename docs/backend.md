@@ -11,6 +11,11 @@ language-independent Core. Gpupaper validates Core, plans the module, and emits
 that plan through its Rust/WebAssembly emitter. It has no Blot HIR, ABI, parser,
 or target policy of its own.
 
+The mathematical pass contracts and lowering simulations are specified in
+[`spec/COMPILER.md`](../spec/COMPILER.md) and
+[`spec/RUNTIME.md`](../spec/RUNTIME.md). This document records the current
+implementation and its supported boundaries.
+
 Neither repository initializes a WebGPU device on the Blot build path or offers
 a GPU build target. The GPU frontend and evaluator remain independent
 conformance checks. `just parity` and `just wasm` exercise them without defining

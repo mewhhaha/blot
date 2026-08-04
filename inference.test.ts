@@ -1183,6 +1183,22 @@ return { .greet = greet; };`,
 );
 
 check(
+  "conditional rebinding stays local to its effect-bound scope",
+  `const Counter = @effect { .read = Unit -> Int; };
+let adjust = fn () => do
+  let result = 0;
+  if True then do
+    current <- Counter.read ();
+    if current > 0 then do current := current - 1; end;
+    result := current;
+  end;
+  in result
+end;
+return { .adjust = adjust; };`,
+  "{ .adjust = () -> (Int | 0) ~ { Counter }; }",
+);
+
+check(
   "an element expression preserves its component result in tail position",
   `const Draw = @effect { .create = Unit -> Int; };
 let div = fn _ => fn children => do
@@ -1261,6 +1277,19 @@ let stamped = fn name => do
 end;
 return { .stamped = stamped; };`,
   "{ .stamped = Str -> Int ~ { Clock, Console }; }",
+);
+
+check(
+  "a compile-time function exposes its inferred effects through type reflection",
+  "const Access = (@effect { .read = Unit -> Int; }) <+ { .ecs = 7; };\n" +
+    "const system = fn () => do value <- Access.read (); in value end;\n" +
+    "const metadata = case @type.reflect (@type.of system) of\n" +
+    "  #Arrow arrow => sum (map (arrow.effects, (fn effect =>\n" +
+    "    (@type.members effect).ecs))),\n" +
+    "  _ => -1\n" +
+    "end;\n" +
+    "return metadata;",
+  "7",
 );
 
 // A wrapper adds its own effect to whatever its callback performs, and the row

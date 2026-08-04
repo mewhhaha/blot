@@ -9,10 +9,11 @@ import { BlotError, locate, render } from "./diagnostic.ts";
 import { parse } from "./syntax/parse.ts";
 import { show } from "./comptime/value.ts";
 import { evaluateFile as run } from "./run.ts";
-import { LoadError } from "./load.ts";
+import { loadedSource, LoadError } from "./load.ts";
 import { checkFile, type OwnedBinding } from "./check/mod.ts";
 import type { NamePattern } from "./linear/check.ts";
 import { testFile, type TestOutcome } from "./test.ts";
+import { buildPackage } from "./package.ts";
 
 const [command, ...rest] = Deno.args;
 
@@ -27,6 +28,8 @@ let failedTests = 0;
 
 if (command === "build" || command === "build-experimental") {
   failures += await buildFiles(rest, command);
+} else if (command === "package") {
+  failures += await buildPackages(rest);
 } else {
   for (const path of rest) {
     try {
@@ -70,6 +73,7 @@ type BuiltFileArtifact = {
 function printUsage(): void {
   console.error("usage: blot <check|test|eval|ast|ownership> <file.blot>...");
   console.error("       blot <build|build-experimental> <file.blot>...");
+  console.error("       blot package <blot.json>...");
 }
 
 function reportTestOutcomes(outcomes: readonly TestOutcome[]): number {
@@ -138,7 +142,8 @@ async function ownership(path: string): Promise<void> {
   for (const contributor of paths) {
     const facts = byPath.get(contributor);
     if (facts === undefined) throw new Error("a grouped path lost its facts");
-    const source = await Deno.readTextFile(contributor);
+    let source = loadedSource(contributor);
+    if (source === undefined) source = await Deno.readTextFile(contributor);
     console.log(`${contributor}:`);
     const spent = facts
       .filter(([, fact]) => fact.spent)
@@ -156,6 +161,23 @@ async function ownership(path: string): Promise<void> {
       console.log(`  last use of \`${use.name}\` at ${line}:${column}`);
     }
   }
+}
+
+async function buildPackages(paths: readonly string[]): Promise<number> {
+  let failures = 0;
+  for (const path of paths) {
+    try {
+      for (const built of await buildPackage(path)) {
+        console.log(
+          `${built.name}: ${built.built}, ${built.bytes} bytes, ${built.modules} modules`,
+        );
+      }
+    } catch (error) {
+      failures += 1;
+      report(path, error);
+    }
+  }
+  return failures;
 }
 
 async function buildFiles(

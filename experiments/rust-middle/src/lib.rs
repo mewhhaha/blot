@@ -25,12 +25,29 @@ static LOWER_RESULT: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
 thread_local! {
     static SESSIONS: RefCell<Vec<Option<CompilerSession>>> = const { RefCell::new(Vec::new()) };
     static COMPILED_MODULE: RefCell<Option<backend::CompiledModule>> = const { RefCell::new(None) };
+    static MODULE_SNAPSHOT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn allocate_words(word_count: u32) -> *mut i32 {
     let words = vec![0_i32; word_count as usize].into_boxed_slice();
     Box::into_raw(words) as *mut i32
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn allocate_bytes(byte_count: u32) -> *mut u8 {
+    let bytes = vec![0_u8; byte_count as usize].into_boxed_slice();
+    Box::into_raw(bytes) as *mut u8
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `pointer` must come from `allocate_bytes`, and `byte_count` must be the same
+/// value passed to that allocation. The allocation must not have been freed.
+pub unsafe extern "C" fn deallocate_bytes(pointer: *mut u8, byte_count: u32) {
+    let slice = std::ptr::slice_from_raw_parts_mut(pointer, byte_count as usize);
+    drop(unsafe { Box::from_raw(slice) });
 }
 
 #[unsafe(no_mangle)]
@@ -136,6 +153,36 @@ pub unsafe extern "C" fn add_compiler_session_source(
         Err(message) => serde_json::json!({ "ok": false, "message": message }),
     };
     write_result(serde_json::to_vec(&result).expect("session source result serialization failed"))
+}
+
+#[unsafe(no_mangle)]
+/// Validates and adds or replaces one resident portable-AST module.
+///
+/// # Safety
+///
+/// Both pointers must address their declared number of initialized `i32`
+/// words in this module's linear memory for the duration of the call.
+pub unsafe extern "C" fn add_compiler_session_ast(
+    handle: u32,
+    path_pointer: *const i32,
+    path_unit_count: u32,
+    ast_pointer: *const i32,
+    ast_unit_count: u32,
+) -> u32 {
+    let path_words = unsafe { std::slice::from_raw_parts(path_pointer, path_unit_count as usize) };
+    let ast_words = unsafe { std::slice::from_raw_parts(ast_pointer, ast_unit_count as usize) };
+    let added = decode_utf16_words(path_words, "module path")
+        .and_then(|path| decode_utf16_words(ast_words, "portable AST").map(|ast| (path, ast)))
+        .and_then(|(path, encoded)| {
+            serde_json::from_str::<ast::Module>(&encoded)
+                .map_err(|error| format!("portable AST is not valid JSON: {error}"))
+                .map(|module| (path, module))
+        });
+    let result = match added {
+        Ok((path, module)) => add_session_module(handle, path, module),
+        Err(message) => serde_json::json!({ "ok": false, "message": message }),
+    };
+    write_result(serde_json::to_vec(&result).expect("session AST result serialization failed"))
 }
 
 #[unsafe(no_mangle)]
@@ -274,6 +321,89 @@ pub unsafe extern "C" fn check_compiler_session_module(
         Err(message) => serde_json::json!({ "ok": false, "message": message }),
     };
     write_result(serde_json::to_vec(&result).expect("check result serialization failed"))
+}
+
+#[unsafe(no_mangle)]
+/// Exports a binary AST and closed checked interface for one resident module.
+///
+/// # Safety
+///
+/// `path_pointer` must address `path_unit_count` initialized `i32` words in
+/// this module's linear memory for the duration of the call.
+pub unsafe extern "C" fn export_compiler_session_module_snapshot(
+    handle: u32,
+    path_pointer: *const i32,
+    path_unit_count: u32,
+) -> u32 {
+    let path_words = unsafe { std::slice::from_raw_parts(path_pointer, path_unit_count as usize) };
+    let snapshot = decode_utf16_words(path_words, "module path").and_then(|path| {
+        let index = session_index(handle)?;
+        SESSIONS.with(|sessions| {
+            let sessions = sessions.borrow();
+            let session = sessions
+                .get(index)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| format!("unknown compiler session {handle}"))?;
+            session.module_snapshot(&path)
+        })
+    });
+    let result = match snapshot {
+        Ok(snapshot) => {
+            MODULE_SNAPSHOT.with(|slot| *slot.borrow_mut() = snapshot);
+            serde_json::json!({ "ok": true })
+        }
+        Err(message) => {
+            MODULE_SNAPSHOT.with(|slot| slot.borrow_mut().clear());
+            serde_json::json!({ "ok": false, "message": message })
+        }
+    };
+    write_result(serde_json::to_vec(&result).expect("module snapshot result serialization failed"))
+}
+
+#[unsafe(no_mangle)]
+/// Installs a dependency-free binary module snapshot in one session.
+///
+/// # Safety
+///
+/// `path_pointer` must address `path_unit_count` initialized `i32` words and
+/// `snapshot_pointer` must address `snapshot_byte_count` initialized bytes in
+/// this module's linear memory for the duration of the call.
+pub unsafe extern "C" fn install_compiler_session_module_snapshot(
+    handle: u32,
+    path_pointer: *const i32,
+    path_unit_count: u32,
+    snapshot_pointer: *const u8,
+    snapshot_byte_count: u32,
+) -> u32 {
+    let path_words = unsafe { std::slice::from_raw_parts(path_pointer, path_unit_count as usize) };
+    let snapshot =
+        unsafe { std::slice::from_raw_parts(snapshot_pointer, snapshot_byte_count as usize) };
+    let installed = decode_utf16_words(path_words, "module path").and_then(|path| {
+        let index = session_index(handle)?;
+        SESSIONS.with(|sessions| {
+            let mut sessions = sessions.borrow_mut();
+            let session = sessions
+                .get_mut(index)
+                .and_then(Option::as_mut)
+                .ok_or_else(|| format!("unknown compiler session {handle}"))?;
+            session.install_module_snapshot(&path, snapshot)
+        })
+    });
+    let result = match installed {
+        Ok(()) => serde_json::json!({ "ok": true }),
+        Err(message) => serde_json::json!({ "ok": false, "message": message }),
+    };
+    write_result(serde_json::to_vec(&result).expect("module snapshot result serialization failed"))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn module_snapshot_pointer() -> *const u8 {
+    MODULE_SNAPSHOT.with(|slot| slot.borrow().as_ptr())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn module_snapshot_length() -> u32 {
+    MODULE_SNAPSHOT.with(|slot| slot.borrow().len() as u32)
 }
 
 #[unsafe(no_mangle)]
@@ -427,6 +557,26 @@ fn add_session_source(handle: u32, path: String, source: Vec<u16>) -> serde_json
             Err(AddSourceError::Lowering(message)) => {
                 serde_json::json!({ "ok": false, "message": message })
             }
+        }
+    })
+}
+
+fn add_session_module(handle: u32, path: String, module: ast::Module) -> serde_json::Value {
+    let index = match session_index(handle) {
+        Ok(index) => index,
+        Err(message) => return serde_json::json!({ "ok": false, "message": message }),
+    };
+    SESSIONS.with(|sessions| {
+        let mut sessions = sessions.borrow_mut();
+        let Some(session) = sessions.get_mut(index).and_then(Option::as_mut) else {
+            return serde_json::json!({
+                "ok": false,
+                "message": format!("unknown compiler session {handle}"),
+            });
+        };
+        match session.add_module(path, module) {
+            Ok(module) => serde_json::json!({ "ok": true, "module": module }),
+            Err(message) => serde_json::json!({ "ok": false, "message": message }),
         }
     })
 }

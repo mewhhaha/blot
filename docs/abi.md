@@ -9,6 +9,10 @@ manifest fields or exports that do not change an existing declaration. Changing
 a function signature, layout, ownership rule, import name, or value meaning
 requires a new ABI major.
 
+The source-to-caller representation relation and its proof obligations are in
+[`spec/RUNTIME.md`](../spec/RUNTIME.md); this document is the normative byte
+contract.
+
 ## Module contract
 
 Every artifact exports:

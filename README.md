@@ -4,7 +4,9 @@ Blot is a functional language built as one coherent system: compact CST parsing,
 comptime evaluation, algebraic subtyping, typed effects, ownership,
 specialization, and WebAssembly compilation all shape the source language.
 
-See [LANGUAGE.md](LANGUAGE.md) for the complete language specification.
+See [LANGUAGE.md](LANGUAGE.md) for the current language and the
+[specification map](spec/README.md) for the language model, compiler theorem,
+typechecking theory, staging, safety, lowering, incrementality, and cost model.
 Executable application studies live in [case-studies/](case-studies/): a
 grep-like file search, an interactive terminal program, an agent-style
 conversation loop, and a 3D engine with a browser host and hot reload.
@@ -18,6 +20,38 @@ const result = await parse("return 42;");
 ```
 
 Run `deno task publish:dry-run` to verify the package before publishing.
+
+Blot libraries can be distributed through an ordinary npm-linked package. The
+package owns a `blot.json` manifest and may ship both readable source and a
+checked module capsule:
+
+```json
+{
+  "schema": "blot-package",
+  "version": 3,
+  "exports": {
+    ".": {
+      "source": "./src/mod.blot",
+      "built": "./dist/mod.blotc"
+    }
+  }
+}
+```
+
+Build every declared export with:
+
+```bash
+deno run --allow-read --allow-write src/cli.ts package ./blot.json
+```
+
+An importer then writes `@import "@scope/package"`, or a declared package
+subpath, and Blot resolves the nearest `node_modules` package without executing
+its JavaScript. A valid `.blotc` is preferred and corrupt or unsupported built
+files fall back to the declared source. The capsule bundles the package-owned
+lowered AST graph and its includes without retaining source text, while package
+imports remain shared external edges. Consumer-specific typechecking and
+compile-time specialization still happen in the importer, so a reusable capsule
+is not final WebAssembly. See [spec/PACKAGES.md](spec/PACKAGES.md).
 
 The parser profile is a design tool, not an implementation afterthought. It
 rules out contextual lexing and recursive precedence grammar, keeping both the
@@ -37,7 +71,7 @@ annotations anywhere, enforces `sig` by subsumption, and rejects unhandled
 effects at the module boundary. See [docs/inference.md](docs/inference.md),
 including what it does _not_ yet prove. The declarative relation, solver lemmas,
 transactional implementation invariants, and performance gates are in
-[TYPECHECKING.md](TYPECHECKING.md).
+[spec/TYPECHECKING.md](spec/TYPECHECKING.md).
 
 A branch proves what its condition computes, and the proof is set algebra on
 types. `if n == 1` narrows `n` to `1` in the taken branch and to `T \\ 1` in the
@@ -103,6 +137,7 @@ just check-file examples/tour.blot  # infer its type and check ownership
 just ownership examples/tour.blot   # last-use and linearity facts
 just build examples/compiled.blot   # compile to WebAssembly
 just build-experimental examples/compiled.blot # use the experimental compiler
+deno task blot package ./blot.json # build distributable module capsules
 just wasm                           # interpreter vs GPU evaluator vs Wasm
 just test                     # corpus goldens, rejections, profile gate
 just generate                 # regenerate the frontend plan; fails if its profile regresses

@@ -3,9 +3,12 @@
 ## Status of this document
 
 This is a design paper for the language Blot intends to become. It is not the
-current language reference. [`LANGUAGE.md`](LANGUAGE.md) specifies the
+current language reference. [`LANGUAGE.md`](../LANGUAGE.md) specifies the
 implementation as it exists; this document specifies a coherent semantic model
 against which that implementation can be audited and changed.
+
+[`COMPILER.md`](COMPILER.md) turns the compilation boundaries used here into
+pass contracts and a whole-compiler theorem obligation.
 
 The distinction is intentional. An implemented behavior is not made sound by
 describing it here. When the implementation and this model disagree, the

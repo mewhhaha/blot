@@ -24,6 +24,7 @@ import {
   I8X16_MASK_NAME,
   I8X16_NAME,
   inferredTypeOf,
+  registerEffectExtension,
   show,
   tupleOf,
   UNIT,
@@ -1182,11 +1183,15 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
         );
       }
       members.set(key, member);
-      return {
+      const extended: Value = {
         tag: "extended",
         inner: target.tag === "extended" ? target.inner : target,
         members,
       };
+      if (extended.inner.tag === "effect") {
+        registerEffectExtension(extended.inner, extended);
+      }
+      return extended;
     },
   }],
   ["@type.members", {

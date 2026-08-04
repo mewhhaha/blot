@@ -1,10 +1,11 @@
 # Type checking
 
 This document specifies the mathematical model and implementation obligations of
-Blot's type checker. `LANGUAGE.md` remains the normative language specification.
-This document is the authority for deciding whether two checker implementations
-compute the same result, and for changing their internal representation without
-changing the language.
+Blot's type checker. [`LANGUAGE.md`](../LANGUAGE.md) remains the normative
+language specification, and [`COMPILER.md`](COMPILER.md) places this judgment in
+the whole compiler. This document is the authority for deciding whether two
+checker implementations compute the same result, and for changing their internal
+representation without changing the language.
 
 The checker is split into three parts:
 
@@ -236,6 +237,27 @@ copied map would replace. A name absent from the overlay is read from the
 unchanged parent. Both representations retain the same inference-variable
 identities into the one solver graph; structural sharing changes only how the
 name-to-type mapping is stored and introduces no new typing effect.
+
+### Lemma 7: an open frame is equivalent to eager field insertion
+
+Let `open(F, mu)` contain immutable fields `F` and an injective target-to-source
+mapping `mu`. Assume every target in `mu` is absent from the preceding lexical
+environment. Define lookup through the frame by:
+
+```txt
+lookup(open(F, mu) :: Gamma, x) = F[mu(x)]  when x in dom(mu)
+lookup(open(F, mu) :: Gamma, x) = lookup(Gamma, x) otherwise
+```
+
+This equals lookup after eagerly inserting every `x -> F[mu(x)]` into a copied
+map. Explicit bindings in a later overlay still shadow the frame, and rejecting
+non-injective or colliding `mu` preserves the eager representation's
+diagnostics.
+
+_Sketch._ Case on membership of `x` in `dom(mu)`. Membership selects the same
+source field in both representations. Absence leaves the preceding environment
+unchanged. Immutability of `F` makes sharing unobservable, while the collision
+premise prevents insertion order from choosing a different binding.
 
 ### Theorem obligation: principal inferred types
 
@@ -793,10 +815,13 @@ bound journal and variable-arena checkpoint. Both have executable rollback
 tests, including a candidate that mutates a nested variable before failing.
 
 Lexical environments in the Rust checker use persistent copy-on-write maps, as
-per Lemma 6. TypeScript scheme instantiation memoises immutable structural nodes
-within one freshening while still allocating distinct generalized variables.
-Neither change alters the lattice or lets mutable inference state cross a module
-boundary.
+per Lemma 6. Compile-time records opened into scope remain immutable open frames
+under Lemma 7; their ordered field storage and target indices are shared between
+the evaluator and checker, so importing a large module does not clone every
+recursive value and type merely to establish aliases. TypeScript scheme
+instantiation memoises immutable structural nodes within one freshening while
+still allocating distinct generalized variables. Neither change alters the
+lattice or lets mutable inference state cross a module boundary.
 
 The Rust resident boundary implements flat `TypeId` transport and in-process
 module reuse. Closed settled trees are encoded into flat arenas, and every cache
@@ -815,19 +840,26 @@ profiles identified allocation, recursive `Type` destruction, and lexical-map
 cloning as the hottest implementation costs. Persistent lexical maps reduced
 that cost without adding per-binding indirection.
 
-After flat constraint edges, incremental Baba frontend state, and the resident
-caches, repeated nine-sample runs on 2026-08-04 measured an unchanged Rust check
-at 0.241--0.348 ms. Edits that changed the lowered module took 17.4--17.8 ms. A
-trailing comment edit that preserved the lowered module took 1.22--1.30 ms.
-Keeping safely encodable checked dependency interfaces expanded reduced the
-changed module's check phase from about 16.9 ms to 15.6 ms; HIR preparation then
-took 1.6--1.7 ms and emission after preparation 0.47--0.49 ms. Cold end-to-end
-compilation took 95.9--103.6 ms including 3.6--3.7 ms of compiler-Wasm
-instantiation. The corresponding TypeScript changed-module edits took 39.6--39.7
-ms and cold compilations took 189.3--219.4 ms. These measurements do not justify
-stage 4, parallel checking, or vectorised row operations: no solver scan is
-currently a dominant frame. Further incremental gains require declaration-level
-checking certificates rather than another backend shortcut.
+After flat constraint edges, incremental Baba frontend state, resident caches,
+and persistent open frames, five independent nine-sample runs on 2026-08-04
+measured an unchanged Rust check at a 0.280 ms median. A changed lowered module
+took 14.4 ms, while a trailing comment edit that preserved the lowered module
+took 0.781 ms. The changed-module phase medians were 13.0 ms for loading and
+checking, 1.30 ms for HIR preparation, and 0.344 ms for emission after
+preparation. Cold end-to-end compilation took 73.6 ms including 3.4 ms of
+compiler-Wasm instantiation. The corresponding TypeScript medians were 29.7 ms
+for changed-module edits and 164.4 ms cold.
+
+A separate 30-sample native release profile isolated the two representation
+changes. Replacing copied active-island sets with one stack reduced prelude
+frontend work from about 8.69 ms to 6.27 ms; replacing the remaining hash set
+with the measured depth-bounded flat stack reduced an isolated 100-sample median
+from 6.95 ms to 5.47 ms. Sharing immutable opened records reduced the importing
+module's check from about 9.37 ms to 7.42 ms. These measurements do not justify
+parallel checking or vectorised row operations: no solver scan is currently a
+dominant frame. Further incremental gains require declaration-level checking
+certificates or a validated prelude snapshot rather than another backend
+shortcut.
 
 Storing every environment typing behind a separate reference-counted pointer was
 measured and rejected. It made map copies cheaper but moved the same cost to

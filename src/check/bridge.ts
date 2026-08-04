@@ -12,7 +12,13 @@
 // silently widening to "anything" would turn a missing case into a passing
 // check.
 
-import { equal, inferredTypeOf, show, type Value } from "../comptime/value.ts";
+import {
+  effectExtension,
+  equal,
+  inferredTypeOf,
+  show,
+  type Value,
+} from "../comptime/value.ts";
 import {
   type Bound,
   type Domain,
@@ -46,6 +52,7 @@ export function effectLabel(value: Value & { tag: "effect" }): string {
  * unique, so one registry is enough.
  */
 const hostLabels = new Set<string>();
+const effectValues = new Map<string, Value>();
 
 export function isHostEffect(label: string): boolean {
   return hostLabels.has(label);
@@ -151,6 +158,7 @@ function bridgeValue(
     // carry that effect. This is the whole mechanism behind effect inference.
     case "effect": {
       const label = effectLabel(value);
+      effectValues.set(label, effectExtension(value) ?? value);
       if (value.host) hostLabels.add(label);
       const operations: [string, SimpleType][] = [];
       for (const [name, signature] of value.operations) {
@@ -182,6 +190,9 @@ function bridgeValue(
     // Transparent: a struct's type is its storage. The members it carries are
     // a compile-time namespace and have no business in the lattice.
     case "extended":
+      if (value.inner.tag === "effect") {
+        effectValues.set(effectLabel(value.inner), value);
+      }
       return bridgeValue(value.inner, variables);
 
     case "type-variable": {
@@ -308,10 +319,14 @@ export function reify(type: SimpleType): Value | null {
       const domain = reify(type.param);
       const codomain = reify(type.result);
       if (domain === null || codomain === null) return null;
-      // The row is dropped, and that is a real loss rather than a rounding: a
-      // predicate cannot ask what a function performs. Saying so here is
-      // better than answering an arrow that claims purity.
-      return { tag: "arrow", domain, codomain, effects: [] };
+      const labels = reifiedEffectLabels(type.effects, new Set());
+      const effects: Value[] = [];
+      for (const label of labels) {
+        const effect = effectValues.get(label);
+        if (effect === undefined) return null;
+        effects.push(effect);
+      }
+      return { tag: "arrow", domain, codomain, effects };
     }
 
     case "union": {
@@ -340,6 +355,16 @@ export function reify(type: SimpleType): Value | null {
     default:
       return null;
   }
+}
+
+function reifiedEffectLabels(
+  type: SimpleType,
+  seen: Set<number>,
+): string[] {
+  if (type.tag === "effects") return [...type.labels];
+  if (type.tag !== "var" || seen.has(type.id)) return [];
+  seen.add(type.id);
+  return type.lower.flatMap((bound) => reifiedEffectLabels(bound, seen));
 }
 
 function reifyBound(bound: Bound, domain: Domain): Value | null {

@@ -1,6 +1,14 @@
 import { dirname, isAbsolute, relative, resolve } from "@std/path";
 import { BlotError } from "../diagnostic.ts";
 import { LoadError, resolvePath } from "../load.ts";
+import {
+  type CapsuleModule,
+  decodeModuleCapsuleForRust,
+  isPackageSpecifier,
+  type ModuleCapsule,
+  PackageArtifactError,
+  resolvePackageExport,
+} from "../package_format.ts";
 import type { BlotRuntimeModule } from "./runtime/hir.ts";
 import { RustMiddle } from "./rust_middle_wasm.ts";
 
@@ -8,8 +16,14 @@ const compilerUrl = new URL(
   "../../generated/rust-middle/compiler.wasm",
   import.meta.url,
 );
+const preludeSnapshotUrl = new URL(
+  "../../generated/rust-middle/prelude.snapshot",
+  import.meta.url,
+);
+const PRELUDE_MODULE_PATH = "blot:prelude";
 
 interface ResidentModule {
+  readonly inputRevision: string;
   readonly source: string;
   readonly imports: readonly string[];
   readonly includes: readonly string[];
@@ -44,12 +58,23 @@ interface LoadedRevision {
   readonly revision: string;
 }
 
+interface DistributedSnapshot {
+  readonly bytes: Uint8Array;
+  readonly revision: string;
+}
+
 export class RustMiddleCompiler {
   readonly #rust: RustMiddle;
   readonly #session: number;
   readonly #modules = new Map<string, ResidentModule>();
+  readonly #capsules = new Map<
+    string,
+    { readonly source: string; readonly capsule: ModuleCapsule }
+  >();
   readonly #prepared = new Map<string, PreparedRevision>();
   readonly #compiled = new Map<string, CompiledRevision>();
+  #preludeSnapshot?: DistributedSnapshot;
+  #preludeInstalled = false;
   #destroyed = false;
 
   private constructor(rust: RustMiddle) {
@@ -180,6 +205,7 @@ export class RustMiddleCompiler {
     this.#rust.destroyCompilerSession(this.#session);
     this.#destroyed = true;
     this.#modules.clear();
+    this.#capsules.clear();
     this.#prepared.clear();
     this.#compiled.clear();
   }
@@ -199,7 +225,7 @@ export class RustMiddleCompiler {
     }
     const source = await Deno.readTextFile(path);
     let resident = this.#modules.get(path);
-    if (resident === undefined || resident.source !== source) {
+    if (resident === undefined || resident.inputRevision !== source) {
       const added = this.#rust.addCompilerSessionModule(
         this.#session,
         path,
@@ -212,6 +238,7 @@ export class RustMiddleCompiler {
         throw loweringError(path, source, added.message);
       }
       resident = {
+        inputRevision: source,
         source,
         imports: added.module.imports,
         includes: added.module.includes,
@@ -223,9 +250,8 @@ export class RustMiddleCompiler {
     const imports: Record<string, string> = {};
     const dependencyRevisions: string[] = [];
     for (const specifier of resident.imports) {
-      const dependencyPath = resolvePath(specifier, path);
-      const dependency = await this.#load(dependencyPath, nextActive);
-      imports[specifier] = dependencyPath;
+      const dependency = await this.#loadImport(specifier, path, nextActive);
+      imports[specifier] = dependency.path;
       dependencyRevisions.push(`${specifier}:${dependency.revision}`);
     }
 
@@ -288,6 +314,268 @@ export class RustMiddleCompiler {
         ...includeRevisions,
       ]),
     };
+  }
+
+  async #loadImport(
+    specifier: string,
+    importer: string,
+    active: readonly string[],
+  ): Promise<LoadedRevision & { readonly path: string }> {
+    if (specifier === PRELUDE_MODULE_PATH) {
+      const snapshot = await this.#loadPreludeSnapshot();
+      if (!this.#preludeInstalled) {
+        this.#rust.installCompilerSessionModuleSnapshot(
+          this.#session,
+          PRELUDE_MODULE_PATH,
+          snapshot.bytes,
+        );
+        this.#preludeInstalled = true;
+      }
+      return {
+        path: PRELUDE_MODULE_PATH,
+        revision: snapshot.revision,
+      };
+    }
+    if (!isPackageSpecifier(specifier)) {
+      const path = resolvePath(specifier, importer);
+      if (path.endsWith(".blotc")) {
+        return await this.#loadCapsule(path, active);
+      }
+      return { path, ...await this.#load(path, active) };
+    }
+    const exported = await resolvePackageExport(specifier, importer);
+    if (exported.built !== undefined) {
+      try {
+        return await this.#loadCapsule(exported.built, active);
+      } catch (error) {
+        if (!(error instanceof PackageArtifactError)) throw error;
+      }
+    }
+    try {
+      return {
+        path: exported.source,
+        ...await this.#load(exported.source, active),
+      };
+    } catch (cause) {
+      if (!(cause instanceof Deno.errors.NotFound)) throw cause;
+      throw new PackageArtifactError(
+        `could not load Blot package ${
+          JSON.stringify(exported.packageName)
+        } export ${JSON.stringify(exported.exportName)} from source ${
+          JSON.stringify(exported.source)
+        }`,
+        { cause },
+      );
+    }
+  }
+
+  async #loadPreludeSnapshot(): Promise<DistributedSnapshot> {
+    if (this.#preludeSnapshot !== undefined) return this.#preludeSnapshot;
+    let bytes: Uint8Array;
+    try {
+      bytes = await Deno.readFile(preludeSnapshotUrl);
+    } catch (cause) {
+      throw new Error(
+        `could not read compiler-distributed module snapshot ${preludeSnapshotUrl}`,
+        { cause },
+      );
+    }
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      Uint8Array.from(bytes).buffer,
+    );
+    const hash = Array.from(
+      new Uint8Array(digest),
+      (byte) => byte.toString(16).padStart(2, "0"),
+    ).join("");
+    this.#preludeSnapshot = {
+      bytes,
+      revision: `module-snapshot:${hash}`,
+    };
+    return this.#preludeSnapshot;
+  }
+
+  async #loadCapsule(
+    path: string,
+    active: readonly string[],
+  ): Promise<LoadedRevision & { readonly path: string }> {
+    const cycleStart = active.indexOf(path);
+    if (cycleStart >= 0) {
+      const cycle = [...active.slice(cycleStart), path];
+      throw new BlotError({
+        code: "BLOT_IMPORT_CYCLE",
+        message: `Import cycle: ${cycle.join(" -> ")}.`,
+        span: { start: 0, end: 0 },
+      });
+    }
+    let source: string;
+    try {
+      source = await Deno.readTextFile(path);
+    } catch (cause) {
+      throw new PackageArtifactError(
+        `could not read Blot module capsule ${JSON.stringify(path)}`,
+        { cause },
+      );
+    }
+    const cachedCapsule = this.#capsules.get(path);
+    let capsule: ModuleCapsule;
+    if (cachedCapsule !== undefined && cachedCapsule.source === source) {
+      capsule = cachedCapsule.capsule;
+    } else {
+      capsule = await decodeModuleCapsuleForRust(source, path);
+      this.#capsules.set(path, { source, capsule });
+    }
+    const modules = new Map(
+      capsule.modules.map((module) => [module.id, module]),
+    );
+    const configured = new Map<
+      string,
+      LoadedRevision & { readonly path: string }
+    >();
+    const root = await this.#configureCapsuleModule(
+      path,
+      capsule,
+      modules,
+      configured,
+      capsule.root,
+      [],
+      [...active, path],
+    );
+    return root;
+  }
+
+  async #configureCapsuleModule(
+    path: string,
+    capsule: ModuleCapsule,
+    modules: ReadonlyMap<string, CapsuleModule>,
+    configured: Map<string, LoadedRevision & { readonly path: string }>,
+    identifier: string,
+    active: readonly string[],
+    importActive: readonly string[],
+  ): Promise<LoadedRevision & { readonly path: string }> {
+    const cached = configured.get(identifier);
+    if (cached !== undefined) return cached;
+    const cycleStart = active.indexOf(identifier);
+    if (cycleStart >= 0) {
+      const cycle = [...active.slice(cycleStart), identifier];
+      throw new PackageArtifactError(
+        `Blot module capsule ${JSON.stringify(path)} contains import cycle ${
+          cycle.join(" -> ")
+        }`,
+      );
+    }
+    const encoded = modules.get(identifier);
+    if (encoded === undefined) {
+      throw new Error(`validated module capsule lost ${identifier}`);
+    }
+    const modulePath = `${path}#${encoded.name}`;
+    const inputRevision = `${capsule.hash}:${identifier}`;
+    let resident = this.#modules.get(modulePath);
+    if (resident === undefined || resident.inputRevision !== inputRevision) {
+      const added = this.#rust.addCompilerSessionAst(
+        this.#session,
+        modulePath,
+        encoded.ast,
+      );
+      if (!added.ok) {
+        if (added.message === undefined) {
+          throw new Error(
+            `${modulePath}: Rust portable AST loading failed without a message`,
+          );
+        }
+        throw new PackageArtifactError(
+          `Blot module capsule ${
+            JSON.stringify(path)
+          } contains an invalid portable AST for ${
+            JSON.stringify(encoded.name)
+          }: ${added.message}`,
+        );
+      }
+      resident = {
+        inputRevision,
+        source: "",
+        imports: added.module.imports,
+        includes: added.module.includes,
+      };
+      this.#modules.set(modulePath, resident);
+    }
+    const sourceImports = [...resident.imports].sort();
+    const capsuleImports = encoded.imports.map((imported) => imported.specifier)
+      .sort();
+    const sourceIncludes = [...resident.includes].sort();
+    const capsuleIncludes = encoded.includes.map((included) =>
+      included.specifier
+    ).sort();
+    if (sourceImports.join("\0") !== capsuleImports.join("\0")) {
+      throw new PackageArtifactError(
+        `Blot module capsule ${JSON.stringify(path)} has import edges for ${
+          JSON.stringify(encoded.name)
+        } that do not match its source`,
+      );
+    }
+    if (sourceIncludes.join("\0") !== capsuleIncludes.join("\0")) {
+      throw new PackageArtifactError(
+        `Blot module capsule ${JSON.stringify(path)} has include edges for ${
+          JSON.stringify(encoded.name)
+        } that do not match its source`,
+      );
+    }
+
+    const imports: Record<string, string> = {};
+    const nextActive = [...active, identifier];
+    for (const imported of encoded.imports) {
+      let dependency: LoadedRevision & { readonly path: string };
+      if (imported.kind === "bundled") {
+        dependency = await this.#configureCapsuleModule(
+          path,
+          capsule,
+          modules,
+          configured,
+          imported.module,
+          nextActive,
+          importActive,
+        );
+      } else {
+        dependency = await this.#loadImport(
+          imported.specifier,
+          path,
+          importActive,
+        );
+      }
+      imports[imported.specifier] = dependency.path;
+    }
+    const includes: Record<
+      string,
+      { readonly path: string; readonly text: string }
+    > = {};
+    for (const included of encoded.includes) {
+      includes[included.specifier] = {
+        path: included.path,
+        text: included.text,
+      };
+    }
+    const configurationRevision = revision([
+      capsule.hash,
+      identifier,
+      ...Object.entries(imports).flatMap(([specifier, dependency]) => [
+        specifier,
+        dependency,
+      ]),
+    ]);
+    if (resident.configurationRevision !== configurationRevision) {
+      this.#rust.configureCompilerSessionModule(this.#session, modulePath, {
+        imports,
+        includes,
+      });
+      resident = { ...resident, configurationRevision };
+      this.#modules.set(modulePath, resident);
+    }
+    const loaded = {
+      path: modulePath,
+      revision: revision([path, capsule.hash, identifier]),
+    };
+    configured.set(identifier, loaded);
+    return loaded;
   }
 
   #requireActive(): void {

@@ -228,7 +228,24 @@ let exports = library ();
 does not call that function and has no implicit parentheses. Relative paths are
 resolved from the importing file. A `blot:name` specifier resolves to the
 corresponding compiler-supplied library module; `blot:prelude` is the standard
-prelude. Import cycles are rejected.
+prelude. A bare package specifier resolves through the nearest
+`node_modules/<package>/blot.json`; the package name selects export `.` and a
+package subpath selects the corresponding `./subpath` export. Package manifests
+may name both ordinary source and a built `.blotc` module capsule. A valid built
+capsule is preferred; a missing, corrupt, or unsupported capsule falls back to
+the manifest's source target. Import cycles are rejected.
+
+Package export paths are relative to and confined within their package
+directory. Package JavaScript is not evaluated during Blot resolution. A
+`.blotc` library capsule bundles its already checked package-owned lowered AST
+graph, relative import edges, and included files without retaining module source
+text. Package and `blot:` imports remain logical external edges so an
+installation can share and version those dependencies. Loading validates the
+compressed payload, every AST reference and span, graph acyclicity, and the
+declared dependency edges. The importing program still typechecks and
+specializes the graph at the call site, so a capsule is not final WebAssembly.
+The artifact schema version is internal to the file and does not appear in
+source specifiers or required directory names.
 
 Imports are resolved before evaluation. Importing a module grants it no
 authority: the imported module can observe only the value passed as its module

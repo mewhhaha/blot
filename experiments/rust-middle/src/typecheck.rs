@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
 use num_bigint::BigInt;
+use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     Declaration, DeclarationId, DeclarationKind, Expression, ExpressionId, Module, Pattern,
@@ -13,12 +14,12 @@ use crate::eval::{
     Context, Phase, Runtime, apply, evaluate_binding, evaluate_expression, match_pattern, run,
 };
 use crate::value::{
-    Domain as ValueDomain, Environment as ValueEnvironment, Value, child_env, lookup,
+    Domain as ValueDomain, Environment as ValueEnvironment, OpenedValues, Value, child_env, lookup,
 };
 
 type VariableId = u32;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum Domain {
     Int,
     Text,
@@ -58,7 +59,7 @@ pub enum Type {
     Bottom,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize)]
 pub enum Scalar {
     Int(BigInt),
     Text(String),
@@ -378,14 +379,29 @@ enum Typing {
 #[derive(Clone, Default)]
 struct TypeEnvironment {
     names: Rc<BTreeMap<String, Typing>>,
+    opens: Rc<Vec<OpenedTypes>>,
     forward: Rc<BTreeSet<String>>,
     parent: Option<Rc<TypeEnvironment>>,
+}
+
+#[derive(Clone)]
+struct OpenedTypes {
+    fields: Rc<Vec<(String, Type)>>,
+    positions_by_target: Rc<BTreeMap<String, usize>>,
+}
+
+impl OpenedTypes {
+    fn get(&self, target: &str) -> Option<Type> {
+        let position = self.positions_by_target.get(target)?;
+        Some(self.fields[*position].1.clone())
+    }
 }
 
 impl TypeEnvironment {
     fn child(parent: Rc<Self>) -> Self {
         Self {
             names: Rc::new(BTreeMap::new()),
+            opens: Rc::new(Vec::new()),
             forward: Rc::new(BTreeSet::new()),
             parent: Some(parent),
         }
@@ -394,6 +410,11 @@ impl TypeEnvironment {
     fn lookup(&self, name: &str) -> Option<Typing> {
         if let Some(typing) = self.names.get(name) {
             return Some(typing.clone());
+        }
+        for opened in self.opens.iter().rev() {
+            if let Some(type_) = opened.get(name) {
+                return Some(Typing::Mono(type_));
+            }
         }
         self.parent.as_ref()?.lookup(name)
     }
@@ -424,10 +445,21 @@ pub struct CachedModuleInterface {
     evaluated: Option<ValueEnvironment>,
 }
 
-#[derive(Clone, Copy)]
+pub const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 1;
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct CheckedModuleCertificate {
+    schema: u32,
+    types: Vec<FlatTypeNode>,
+    result: FlatTypeId,
+    effects: FlatTypeId,
+    parameter: Option<FlatTypeId>,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
 struct FlatTypeId(u32);
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 enum FlatTypeNode {
     Rigid(VariableId),
     Forall {
@@ -486,6 +518,122 @@ impl CachedModuleInterface {
             evaluated: checked.evaluated.clone(),
         })
     }
+
+    fn certificate(&self) -> CheckedModuleCertificate {
+        CheckedModuleCertificate {
+            schema: CHECKED_MODULE_CERTIFICATE_SCHEMA,
+            types: self.types.nodes.clone(),
+            result: self.result,
+            effects: self.effects,
+            parameter: self.parameter,
+        }
+    }
+
+    fn from_certificate(certificate: CheckedModuleCertificate) -> Result<Self, String> {
+        certificate.validate()?;
+        Ok(Self {
+            types: Rc::new(FlatTypeArena {
+                nodes: certificate.types,
+            }),
+            result: certificate.result,
+            effects: certificate.effects,
+            parameter: certificate.parameter,
+            evaluated: None,
+        })
+    }
+}
+
+impl CheckedModuleCertificate {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema != CHECKED_MODULE_CERTIFICATE_SCHEMA {
+            return Err(format!(
+                "checked-module certificate schema is {}, expected {}",
+                self.schema, CHECKED_MODULE_CERTIFICATE_SCHEMA
+            ));
+        }
+        let arena = FlatTypeArena {
+            nodes: self.types.clone(),
+        };
+        validate_certificate_type(&arena, self.result, &mut HashSet::new())?;
+        validate_certificate_type(&arena, self.effects, &mut HashSet::new())?;
+        if let Some(parameter) = self.parameter {
+            validate_certificate_type(&arena, parameter, &mut HashSet::new())?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_certificate_type(
+    arena: &FlatTypeArena,
+    type_: FlatTypeId,
+    bound: &mut HashSet<VariableId>,
+) -> Result<(), String> {
+    let index = type_.0 as usize;
+    let node = arena
+        .nodes
+        .get(index)
+        .ok_or_else(|| format!("checked-module certificate references missing type {index}"))?;
+    let validate_child =
+        |child: FlatTypeId, bound: &mut HashSet<VariableId>| -> Result<(), String> {
+            if child.0 >= type_.0 {
+                return Err(format!(
+                    "checked-module certificate type {} references non-prior type {}",
+                    type_.0, child.0
+                ));
+            }
+            validate_certificate_type(arena, child, bound)
+        };
+    match node {
+        FlatTypeNode::Rigid(variable) => {
+            if !bound.contains(variable) {
+                return Err(format!(
+                    "checked-module certificate contains free rigid variable {variable}"
+                ));
+            }
+        }
+        FlatTypeNode::Forall { variables, body } => {
+            let mut inserted = Vec::with_capacity(variables.len());
+            for variable in variables {
+                if !bound.insert(*variable) {
+                    return Err(format!(
+                        "checked-module certificate rebinds rigid variable {variable}"
+                    ));
+                }
+                inserted.push(*variable);
+            }
+            validate_child(*body, bound)?;
+            for variable in inserted {
+                bound.remove(&variable);
+            }
+        }
+        FlatTypeNode::Function {
+            parameter,
+            effects,
+            result,
+        } => {
+            validate_child(*parameter, bound)?;
+            validate_child(*effects, bound)?;
+            validate_child(*result, bound)?;
+        }
+        FlatTypeNode::Record(fields) | FlatTypeNode::Variant { cases: fields, .. } => {
+            for (_, field) in fields {
+                validate_child(*field, bound)?;
+            }
+        }
+        FlatTypeNode::Array(element) => validate_child(*element, bound)?,
+        FlatTypeNode::Union(members) => {
+            for member in members {
+                validate_child(*member, bound)?;
+            }
+        }
+        FlatTypeNode::Range { .. }
+        | FlatTypeNode::Unit
+        | FlatTypeNode::Effects(_)
+        | FlatTypeNode::Opaque(_)
+        | FlatTypeNode::Top
+        | FlatTypeNode::Bottom => {}
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -578,6 +726,36 @@ impl Checker {
         result
     }
 
+    pub fn certificate(&self, path: &str) -> Result<CheckedModuleCertificate, String> {
+        let checked = self.check(path).map_err(|diagnostic| {
+            format!(
+                "cannot certify module {path}: {} ({})",
+                diagnostic.message, diagnostic.code
+            )
+        })?;
+        let interface = CachedModuleInterface::from_checked(&checked)
+            .ok_or_else(|| format!("module {path} has no closed checked interface"))?;
+        Ok(interface.certificate())
+    }
+
+    pub fn install_certificate(
+        &self,
+        path: &str,
+        certificate: CheckedModuleCertificate,
+    ) -> Result<(), String> {
+        if !self.context.modules.borrow().contains_key(path) {
+            return Err(format!(
+                "cannot install checked-module certificate for unknown module {path}"
+            ));
+        }
+        let interface = CachedModuleInterface::from_certificate(certificate)?;
+        self.module_interfaces
+            .borrow_mut()
+            .insert(path.to_owned(), interface);
+        self.modules.borrow_mut().remove(path);
+        Ok(())
+    }
+
     pub fn begin_request(&self) {
         let interfaces = self.module_interfaces.borrow();
         self.modules
@@ -645,7 +823,6 @@ impl Checker {
                 },
             );
         }
-
         let mut types = TypeEnvironment::default();
         let values = child_env(None);
         let parameter = loaded.module.parameter.map(|pattern| {
@@ -1188,11 +1365,22 @@ impl Checker {
                     Type::Record(fields) => fields,
                     _ => Vec::new(),
                 };
+                let mut type_positions_by_source = inferred_fields
+                    .iter()
+                    .enumerate()
+                    .map(|(position, (name, _))| (name.clone(), position))
+                    .collect::<HashMap<_, _>>();
+                let mappings_by_source = mappings
+                    .iter()
+                    .map(|mapping| (mapping.source.as_str(), mapping))
+                    .collect::<HashMap<_, _>>();
                 let mut opened_targets = HashSet::new();
-                for (source, value) in fields {
-                    let target = mappings
-                        .iter()
-                        .find(|mapping| mapping.source == source)
+                let mut inferred_fields = inferred_fields;
+                let mut type_positions_by_target = BTreeMap::new();
+                let mut value_sources_by_target = BTreeMap::new();
+                for (source, value) in &fields {
+                    let target = mappings_by_source
+                        .get(source.as_str())
                         .map_or_else(|| Some(source.clone()), |mapping| mapping.target.clone());
                     let Some(target) = target else {
                         continue;
@@ -1204,13 +1392,27 @@ impl Checker {
                             span,
                         ));
                     }
-                    let type_ = inferred_fields
-                        .iter()
-                        .find_map(|(name, type_)| (name == &source).then(|| type_.clone()))
-                        .unwrap_or_else(|| self.bridge_runtime_value(&value));
-                    Rc::make_mut(&mut types.names).insert(target.clone(), Typing::Mono(type_));
-                    values.names.borrow_mut().insert(target, value);
+                    let type_position = match type_positions_by_source.get(source) {
+                        Some(position) => *position,
+                        None => {
+                            let position = inferred_fields.len();
+                            inferred_fields
+                                .push((source.clone(), self.bridge_runtime_value(value)));
+                            type_positions_by_source.insert(source.clone(), position);
+                            position
+                        }
+                    };
+                    type_positions_by_target.insert(target.clone(), type_position);
+                    value_sources_by_target.insert(target, source.clone());
                 }
+                Rc::make_mut(&mut types.opens).push(OpenedTypes {
+                    fields: Rc::new(inferred_fields),
+                    positions_by_target: Rc::new(type_positions_by_target),
+                });
+                values
+                    .opens
+                    .borrow_mut()
+                    .push(OpenedValues::new(fields, value_sources_by_target));
                 Ok(inferred.effects)
             }
         }
@@ -2069,6 +2271,15 @@ impl Checker {
                 }
                 let type_ = self.bridge(value).unwrap_or_else(|| self.fresh());
                 Rc::make_mut(&mut scope.names).insert(name.clone(), Typing::Mono(type_));
+            }
+            for opened in values.opens.borrow().iter() {
+                for (name, value) in opened.iter() {
+                    if scope.lookup(name).is_some() {
+                        continue;
+                    }
+                    let type_ = self.bridge(value).unwrap_or_else(|| self.fresh());
+                    Rc::make_mut(&mut scope.names).insert(name.clone(), Typing::Mono(type_));
+                }
             }
         }
         let recursive = self_name.map(|name| (name.to_owned(), self.fresh()));

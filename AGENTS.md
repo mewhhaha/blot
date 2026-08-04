@@ -38,6 +38,13 @@ boundaries, or the prelude's public API must update `LANGUAGE.md` in the same
 diff. Examples and implementation comments support the specification; they do
 not replace it.
 
+**The compiler specification changes with the compiler.** `spec/COMPILER.md`
+defines the artifact graph and whole-compiler obligation; its focused references
+own the detailed pass contracts. A change to a pass boundary, trusted fact,
+certificate, cache key, target relation, or benchmark boundary must update the
+corresponding specification in the same diff. Operational notes in `docs/` do
+not replace that contract.
+
 **The CPU compact CST is the parser contract.** Every accepted corpus program
 must pass through Baba's `CpuFrontend` and Blot's CST materializer. The WebGPU
 executor is an experimental comparison target, not a compiler fallback or a

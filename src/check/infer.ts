@@ -26,7 +26,12 @@ import { patternNames, recursiveGroups } from "../syntax/ast.ts";
 import { freeNames } from "../syntax/live.ts";
 import { BlotError, expect, fail } from "../diagnostic.ts";
 import type { Env as ValueEnv } from "../comptime/value.ts";
-import { childEnv, show, type Value } from "../comptime/value.ts";
+import {
+  childEnv,
+  show,
+  type Value,
+  withInferredType,
+} from "../comptime/value.ts";
 import {
   apply,
   bind,
@@ -967,7 +972,7 @@ function inferUnrecorded(
       // nothing becomes effectful because something else nearby was.
       const bodyRow = freshVar(level);
       let result: SimpleType;
-      if (expr.body.tag === "block") {
+      if (expr.body.tag === "block" || isFunctionReturnBoundary(expr.body)) {
         result = infer(expr.body, inner, level, bodyRow);
       } else {
         result = inferPure(
@@ -4017,6 +4022,13 @@ function inferDeclarations(
       pendingSig = null;
     }
 
+    if (bound?.tag === "closure") {
+      const inferred = reify(
+        instantiate(type, level, context.staging.instances),
+      );
+      if (inferred !== null) withInferredType(bound, inferred);
+    }
+
     const identity = aliasedBinding(declaration.value, context.types);
     const integerValue = witness(declaration.value, context.types);
     const knownArrayLength = arrayLength(declaration.value, context.types);
@@ -4326,7 +4338,7 @@ function checkAgainst(
   const inner: Context = { ...context, types: scope };
   bindPatternAgainst(expr.parameter, expected.param, inner, level + 1);
   const bodyRow = freshVar(level + 1);
-  if (expr.body.tag === "block") {
+  if (expr.body.tag === "block" || isFunctionReturnBoundary(expr.body)) {
     checkAgainst(
       expr.body,
       expected.result,
@@ -4346,6 +4358,13 @@ function checkAgainst(
   located(expr.span, () => constrain(bodyRow, expected.effects));
   context.expressionTypes.set(expr, expected);
   return expected;
+}
+
+function isFunctionReturnBoundary(expr: Expr): boolean {
+  return expr.tag === "case" && expr.arms.some((arm) =>
+    arm.pattern.tag === "constructor" &&
+    arm.pattern.name.startsWith("FunctionReturn$")
+  );
 }
 
 function checkAgainstPure(

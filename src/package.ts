@@ -1,0 +1,172 @@
+import { dirname, isAbsolute, relative, resolve } from "@std/path";
+import { checkFile } from "./check/mod.ts";
+import { load, type Loaded, refreshLoadedModules } from "./load.ts";
+import {
+  encodeModuleCapsule,
+  MODULE_CAPSULE_SCHEMA,
+  type ModuleCapsulePayload,
+  PACKAGE_FORMAT_VERSION,
+  readPackageManifest,
+} from "./package_format.ts";
+import { encodePortableModule } from "./syntax/portable.ts";
+
+export interface BuiltPackageExport {
+  readonly name: string;
+  readonly source: string;
+  readonly built: string;
+  readonly bytes: number;
+  readonly modules: number;
+}
+
+export async function buildPackage(
+  manifestPath: string,
+): Promise<readonly BuiltPackageExport[]> {
+  const absoluteManifest = resolve(manifestPath);
+  const packageRoot = dirname(absoluteManifest);
+  const manifest = await readPackageManifest(absoluteManifest);
+  await refreshLoadedModules();
+  const prepared: Array<BuiltPackageExport & { readonly contents: string }> =
+    [];
+  const builtTargets = new Set<string>();
+  for (
+    const [name, exported] of [...manifest.exports].sort(([left], [right]) =>
+      left.localeCompare(right)
+    )
+  ) {
+    if (exported.built === undefined) {
+      throw new Error(
+        `Blot package export ${JSON.stringify(name)} in ${
+          JSON.stringify(absoluteManifest)
+        } has no built target`,
+      );
+    }
+    if (builtTargets.has(exported.built)) {
+      throw new Error(
+        `Blot package manifest ${
+          JSON.stringify(absoluteManifest)
+        } repeats built target ${JSON.stringify(exported.built)}`,
+      );
+    }
+    builtTargets.add(exported.built);
+    await checkFile(exported.source);
+    const root = await load(exported.source);
+    const payload = moduleCapsule(root, packageRoot, exported.source);
+    const source = await encodeModuleCapsule(payload);
+    prepared.push({
+      name,
+      source: exported.source,
+      built: exported.built,
+      bytes: new TextEncoder().encode(source).byteLength,
+      modules: payload.modules.length,
+      contents: source,
+    });
+  }
+  for (const artifact of prepared) {
+    await Deno.mkdir(dirname(artifact.built), { recursive: true });
+    await Deno.writeTextFile(artifact.built, artifact.contents);
+  }
+  return prepared.map(({ contents: _contents, ...artifact }) => artifact);
+}
+
+function moduleCapsule(
+  root: Loaded,
+  packageRoot: string,
+  rootSource: string,
+): ModuleCapsulePayload {
+  const ordered: Loaded[] = [];
+  const identifiers = new Map<Loaded, string>();
+  const names = new Map<Loaded, string>();
+  names.set(root, packageRelativeName(packageRoot, rootSource));
+
+  const visit = (loaded: Loaded): void => {
+    if (identifiers.has(loaded)) return;
+    const identifier = `m${ordered.length}`;
+    identifiers.set(loaded, identifier);
+    ordered.push(loaded);
+    if (!names.has(loaded)) {
+      throw new Error(
+        `package graph module ${loaded.path} has no logical name`,
+      );
+    }
+    for (
+      const [specifier, dependency] of [...loaded.dependencies].sort(
+        ([left], [right]) => left.localeCompare(right),
+      )
+    ) {
+      if (isAbsolute(specifier)) {
+        throw new Error(
+          `package module ${
+            JSON.stringify(loaded.path)
+          } imports absolute path ${
+            JSON.stringify(specifier)
+          }, which has no portable package identity`,
+        );
+      }
+      if (!specifier.startsWith(".")) continue;
+      if (!names.has(dependency)) {
+        names.set(
+          dependency,
+          packageRelativeName(packageRoot, dependency.path),
+        );
+      }
+      visit(dependency);
+    }
+  };
+  visit(root);
+
+  const modules = ordered.map((loaded) => {
+    const id = identifiers.get(loaded);
+    const name = names.get(loaded);
+    if (id === undefined || name === undefined) {
+      throw new Error(`package graph lost module ${loaded.path}`);
+    }
+    const imports = [...loaded.dependencies].map(([specifier, dependency]) => {
+      const module = identifiers.get(dependency);
+      if (module === undefined) {
+        return { kind: "external" as const, specifier };
+      }
+      return { kind: "bundled" as const, specifier, module };
+    });
+    const includes = [...loaded.includedFiles].map(([specifier, included]) => {
+      if (loaded.storage.tag === "capsule") {
+        return { specifier, path: included.path, text: included.source };
+      }
+      let path = relative(dirname(loaded.path), included.path).replaceAll(
+        "\\",
+        "/",
+      );
+      if (!path.startsWith(".")) path = `./${path}`;
+      return { specifier, path, text: included.source };
+    });
+    return {
+      id,
+      name,
+      ast: JSON.stringify(encodePortableModule(loaded.module)),
+      imports,
+      includes,
+    };
+  });
+  const rootIdentifier = identifiers.get(root);
+  if (rootIdentifier === undefined) {
+    throw new Error(`package graph lost root module ${root.path}`);
+  }
+  return {
+    schema: MODULE_CAPSULE_SCHEMA,
+    version: PACKAGE_FORMAT_VERSION,
+    root: rootIdentifier,
+    modules,
+  };
+}
+
+function packageRelativeName(packageRoot: string, path: string): string {
+  const fromRoot = relative(packageRoot, path).replaceAll("\\", "/");
+  if (fromRoot.length === 0) return ".";
+  if (fromRoot !== ".." && !fromRoot.startsWith("../")) {
+    return `./${fromRoot}`;
+  }
+  throw new Error(
+    `package-owned module ${JSON.stringify(path)} is outside ${
+      JSON.stringify(packageRoot)
+    }`,
+  );
+}

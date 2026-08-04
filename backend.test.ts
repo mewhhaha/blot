@@ -132,6 +132,93 @@ Deno.test("static shape updates residualize over runtime records", async () => {
   assertEquals(run(), 42n);
 });
 
+Deno.test("runtime booleans survive local function results", async () => {
+  const directory = await Deno.makeTempDir();
+  const root = join(directory, "root.blot");
+  await Deno.writeTextFile(
+    root,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "const Source = @effect.host { .value = Int -> Int; };",
+      "let positive = fn () => do",
+      "  value <- Source.value 0;",
+      "  in value > 0",
+      "end;",
+      "present <- positive ();",
+      "return if present then 42 else 0 end;",
+    ].join("\n"),
+  );
+
+  const [outcome] = await buildGpupaperBatch([root]);
+  if (outcome.status !== "built") throw outcome.cause;
+  const compiled = await WebAssembly.compile(outcome.wasm as BufferSource);
+  const instance = await WebAssembly.instantiate(compiled, {
+    "blot:host/Source": {
+      value(input: bigint) {
+        assertEquals(input, 0n);
+        return 1n;
+      },
+    },
+  });
+  const run = instance.exports["blot:default"];
+  if (!(run instanceof Function)) {
+    throw new Error("gpupaper omitted the default staged export");
+  }
+  assertEquals(run(), 42n);
+});
+
+Deno.test("conditional shadows can destructure runtime join values", async () => {
+  const directory = await Deno.makeTempDir();
+  const root = join(directory, "root.blot");
+  await Deno.writeTextFile(
+    root,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "const Source = @effect.host { .value = Int -> Int; };",
+      "candidate <- Source.value 0;",
+      "let result = 0;",
+      "if candidate > 0 then do",
+      "  current <- Source.value candidate;",
+      "  if current > 0 then do current := current - 1; end;",
+      "  result := current;",
+      "end;",
+      "return result;",
+    ].join("\n"),
+  );
+
+  const [outcome] = await buildGpupaperBatch([root]);
+  if (outcome.status !== "built") throw outcome.cause;
+  assertEquals(outcome.capabilities, ["Source"]);
+});
+
+Deno.test("sealed runtime scalars erase to their checked representation", async () => {
+  const directory = await Deno.makeTempDir();
+  const root = join(directory, "root.blot");
+  await Deno.writeTextFile(
+    root,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "const Source = @effect.host { .value = Int -> Int; };",
+      'const Entity = seal ("test.Entity", Int);',
+      "value <- Source.value 0;",
+      'let entity = seal ("test.Entity", value);',
+      "return unseal entity;",
+    ].join("\n"),
+  );
+
+  const [outcome] = await buildGpupaperBatch([root]);
+  if (outcome.status !== "built") throw outcome.cause;
+  const compiled = await WebAssembly.compile(outcome.wasm as BufferSource);
+  const instance = await WebAssembly.instantiate(compiled, {
+    "blot:host/Source": { value: () => 42n },
+  });
+  const run = instance.exports["blot:default"];
+  if (!(run instanceof Function)) {
+    throw new Error("gpupaper omitted the default staged export");
+  }
+  assertEquals(run(), 42n);
+});
+
 Deno.test("staged scalar exports retain their checked values in gpupaper HIR", async () => {
   const hir = await prepareGpupaperHir("examples/breaking.blot");
   const exported = hir.exports.find((candidate) =>
@@ -241,6 +328,42 @@ for (const name of ["handler_aborts.blot", "handlers.blot"]) {
     compilation.module.destroy();
   });
 }
+
+Deno.test("an effect can carry its specialized handler into inferred reflection", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "handler-combinator.blot");
+  await Deno.writeTextFile(
+    path,
+    [
+      'open {} = (@import "blot:prelude") ();',
+      "const capability = fn () => do",
+      "  const Raw = @effect { .read = Unit -> Int; };",
+      "  const handle = fn selected => fn computation => @handle (",
+      "    Raw,",
+      "    computation,",
+      "    { .read = fn ((), ?resume) => resume selected; }",
+      "  );",
+      "  const Access = Raw <+ { .handler = handle; };",
+      "  in { .read = Access; }",
+      "end;",
+      "const Component = capability ();",
+      "const system = fn () => do value <- Component.read.read (); in value end;",
+      "const reflected = case @type.reflect (@type.of system) of",
+      "  #Arrow arrow => case Array.get (arrow.effects, 0) of",
+      "    #Some effect => effect,",
+      '    #None => @fail "missing effect"',
+      "  end,",
+      '  _ => @fail "system is not a function"',
+      "end;",
+      "return (@type.members reflected).handler 42 system;",
+    ].join("\n"),
+  );
+
+  assertEquals(await runLoweringExport(path, "default"), {
+    kind: "signed-integer-64",
+    value: 42n,
+  });
+});
 
 Deno.test("return control lowers without synthetic variant declarations", async () => {
   const path = join("examples", "returning.blot");

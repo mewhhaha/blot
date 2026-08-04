@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::ast::{AstArena, Declaration, Expression, ExpressionId, Module};
 use crate::backend::CompiledModule;
@@ -11,8 +11,18 @@ use crate::diagnostic::Diagnostic;
 use crate::eval::{Context, IncludedFile, LoadedModule, Phase, Runtime, evaluate_module, run};
 use crate::frontend::{FrontendState, ingest_incremental};
 use crate::hir::RuntimeModule;
-use crate::typecheck::{CachedModuleAnalyses, CachedModuleInterface, Checker};
+use crate::typecheck::{
+    CHECKED_MODULE_CERTIFICATE_SCHEMA, CachedModuleAnalyses, CachedModuleInterface,
+    CheckedModuleCertificate, Checker,
+};
 use crate::value::{Value, show};
+
+#[derive(Deserialize, Serialize)]
+struct ModuleSnapshot {
+    schema: u32,
+    ast: Module,
+    certificate: CheckedModuleCertificate,
+}
 
 pub struct CompilerSession {
     context: Rc<Context>,
@@ -59,6 +69,45 @@ pub enum AddSourceError {
 }
 
 impl CompilerSession {
+    pub fn install_module_snapshot(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
+        let snapshot: ModuleSnapshot = rmp_serde::from_slice(bytes)
+            .map_err(|error| format!("module snapshot for {path} is invalid: {error}"))?;
+        if snapshot.schema != CHECKED_MODULE_CERTIFICATE_SCHEMA {
+            return Err(format!(
+                "module snapshot for {path} has schema {}, expected {}",
+                snapshot.schema, CHECKED_MODULE_CERTIFICATE_SCHEMA,
+            ));
+        }
+        snapshot.ast.validate()?;
+        snapshot.certificate.validate()?;
+        let dependencies = module_dependencies(&snapshot.ast);
+        if !dependencies.imports.is_empty() || !dependencies.includes.is_empty() {
+            return Err(format!(
+                "module snapshot for {path} must be dependency-free"
+            ));
+        }
+        self.install_module(path.to_owned(), snapshot.ast)?;
+        self.checker
+            .install_certificate(path, snapshot.certificate)?;
+        let value = run(evaluate_module(
+            self.context.clone(),
+            path.to_owned(),
+            Value::Unit,
+            Runtime::new(Phase::Comptime, path.to_owned()),
+        ))
+        .map_err(|diagnostic| {
+            format!(
+                "module snapshot evaluation for {path} failed: {} ({})",
+                diagnostic.message, diagnostic.code,
+            )
+        })?;
+        self.context
+            .module_results
+            .borrow_mut()
+            .insert(path.to_owned(), value);
+        Ok(())
+    }
+
     pub fn add_source(
         &mut self,
         path: String,
@@ -75,6 +124,17 @@ impl CompilerSession {
         )
         .map_err(AddSourceError::Lowering)?;
         let module = crate::lower::lower_module(&cst).map_err(AddSourceError::Lowering)?;
+        self.frontends.insert(path.clone(), frontend);
+        self.install_module(path, module)
+            .map_err(AddSourceError::Lowering)
+    }
+
+    pub fn add_module(&mut self, path: String, module: Module) -> Result<AddedModule, String> {
+        module.validate()?;
+        self.install_module(path, module)
+    }
+
+    fn install_module(&mut self, path: String, module: Module) -> Result<AddedModule, String> {
         let dependencies = module_dependencies(&module);
         let unchanged = self
             .context
@@ -82,7 +142,6 @@ impl CompilerSession {
             .borrow()
             .get(&path)
             .is_some_and(|loaded| loaded.module.as_ref() == &module);
-        self.frontends.insert(path.clone(), frontend);
         if unchanged {
             return Ok(AddedModule {
                 imports: dependencies.imports,
@@ -154,6 +213,23 @@ impl CompilerSession {
     pub fn check_module(&self, path: &str) -> serde_json::Value {
         self.checker.begin_request();
         self.checker.check_json(path)
+    }
+
+    pub fn module_snapshot(&self, path: &str) -> Result<Vec<u8>, String> {
+        let ast = self
+            .context
+            .modules
+            .borrow()
+            .get(path)
+            .map(|loaded| loaded.module.as_ref().clone())
+            .ok_or_else(|| format!("cannot snapshot unknown module {path}"))?;
+        let certificate = self.checker.certificate(path)?;
+        rmp_serde::to_vec(&ModuleSnapshot {
+            schema: CHECKED_MODULE_CERTIFICATE_SCHEMA,
+            ast,
+            certificate,
+        })
+        .map_err(|error| format!("could not encode module snapshot: {error}"))
     }
 
     pub fn prepare_runtime_hir(&self, path: &str) -> serde_json::Value {
@@ -477,6 +553,37 @@ fn collect_expression_dependencies(
 mod tests {
     use super::*;
     use crate::ast::{AstArena, Expression, ResultEffects, Span};
+
+    #[test]
+    fn binary_module_snapshot_restores_interface_and_value() {
+        const MODULE_PATH: &str = "snapshot:library";
+        const MODULE_SOURCE: &str = "return { .answer = 42; };";
+        let mut builder = CompilerSession::default();
+        builder
+            .add_source(
+                MODULE_PATH.to_owned(),
+                MODULE_SOURCE.encode_utf16().collect(),
+            )
+            .expect("module source should load");
+        builder
+            .configure_module(MODULE_PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("module source should configure");
+        let bytes = builder
+            .module_snapshot(MODULE_PATH)
+            .expect("module snapshot should encode");
+        let mut consumer = CompilerSession::default();
+        consumer
+            .install_module_snapshot(MODULE_PATH, &bytes)
+            .expect("module snapshot should install");
+        assert!(
+            consumer
+                .context
+                .module_results
+                .borrow()
+                .contains_key(MODULE_PATH)
+        );
+        assert_eq!(consumer.check_module(MODULE_PATH)["ok"], true);
+    }
 
     #[test]
     fn comment_only_edit_preserves_resident_module() {

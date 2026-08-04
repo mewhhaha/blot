@@ -206,6 +206,21 @@ export type Value =
     readonly state: { used: boolean };
   };
 
+const effectExtensions = new Map<number, Value>();
+
+export function registerEffectExtension(
+  effect: Value & { readonly tag: "effect" },
+  extended: Value,
+): void {
+  effectExtensions.set(effect.id, extended);
+}
+
+export function effectExtension(
+  effect: Value & { readonly tag: "effect" },
+): Value | undefined {
+  return effectExtensions.get(effect.id);
+}
+
 /**
  * The name of the four-lane vector type, spelled once.
  *

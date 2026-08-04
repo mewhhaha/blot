@@ -4,6 +4,8 @@ interface RustMiddleExports {
   readonly memory: WebAssembly.Memory;
   allocate_words(wordCount: number): number;
   deallocate_words(pointer: number, wordCount: number): void;
+  allocate_bytes(byteCount: number): number;
+  deallocate_bytes(pointer: number, byteCount: number): void;
   lower_source(sourcePointer: number, sourceUnits: number): number;
   lower_result_pointer(): number;
   create_compiler_session(): number;
@@ -14,6 +16,13 @@ interface RustMiddleExports {
     pathUnits: number,
     sourcePointer: number,
     sourceUnits: number,
+  ): number;
+  add_compiler_session_ast(
+    handle: number,
+    pathPointer: number,
+    pathUnits: number,
+    astPointer: number,
+    astUnits: number,
   ): number;
   configure_compiler_session_module(
     handle: number,
@@ -32,6 +41,20 @@ interface RustMiddleExports {
     pathPointer: number,
     pathUnits: number,
   ): number;
+  export_compiler_session_module_snapshot(
+    handle: number,
+    pathPointer: number,
+    pathUnits: number,
+  ): number;
+  install_compiler_session_module_snapshot(
+    handle: number,
+    pathPointer: number,
+    pathUnits: number,
+    snapshotPointer: number,
+    snapshotBytes: number,
+  ): number;
+  module_snapshot_pointer(): number;
+  module_snapshot_length(): number;
   prepare_compiler_session_runtime_hir(
     handle: number,
     pathPointer: number,
@@ -198,6 +221,28 @@ export class RustMiddle {
     }
   }
 
+  addCompilerSessionAst(
+    handle: number,
+    path: string,
+    ast: string,
+  ): AddedRustModuleResult {
+    const pathAllocation = this.#allocate(textWords(path));
+    const astAllocation = this.#allocate(textWords(ast));
+    try {
+      const length = this.#exports.add_compiler_session_ast(
+        handle,
+        pathAllocation.pointer,
+        pathAllocation.wordCount,
+        astAllocation.pointer,
+        astAllocation.wordCount,
+      );
+      return this.#readResult(length) as AddedRustModuleResult;
+    } finally {
+      this.#free(astAllocation);
+      this.#free(pathAllocation);
+    }
+  }
+
   configureCompilerSessionModule(
     handle: number,
     path: string,
@@ -252,6 +297,56 @@ export class RustMiddle {
       );
       return this.#readResult(length) as RustCheckResult;
     } finally {
+      this.#free(pathAllocation);
+    }
+  }
+
+  exportCompilerSessionModuleSnapshot(
+    handle: number,
+    path: string,
+  ): Uint8Array {
+    const pathAllocation = this.#allocate(textWords(path));
+    try {
+      const length = this.#exports.export_compiler_session_module_snapshot(
+        handle,
+        pathAllocation.pointer,
+        pathAllocation.wordCount,
+      );
+      const result = this.#readResult(length) as
+        | { readonly ok: true }
+        | { readonly ok: false; readonly message: string };
+      if (!result.ok) throw new Error(result.message);
+      return new Uint8Array(
+        this.#exports.memory.buffer,
+        this.#exports.module_snapshot_pointer(),
+        this.#exports.module_snapshot_length(),
+      ).slice();
+    } finally {
+      this.#free(pathAllocation);
+    }
+  }
+
+  installCompilerSessionModuleSnapshot(
+    handle: number,
+    path: string,
+    snapshot: Uint8Array,
+  ): void {
+    const pathAllocation = this.#allocate(textWords(path));
+    const snapshotAllocation = this.#allocateBytes(snapshot);
+    try {
+      const length = this.#exports.install_compiler_session_module_snapshot(
+        handle,
+        pathAllocation.pointer,
+        pathAllocation.wordCount,
+        snapshotAllocation.pointer,
+        snapshotAllocation.byteCount,
+      );
+      const result = this.#readResult(length) as
+        | { readonly ok: true }
+        | { readonly ok: false; readonly message: string };
+      if (!result.ok) throw new Error(result.message);
+    } finally {
+      this.#freeBytes(snapshotAllocation);
       this.#free(pathAllocation);
     }
   }
@@ -325,6 +420,18 @@ export class RustMiddle {
     this.#exports.deallocate_words(allocation.pointer, allocation.wordCount);
   }
 
+  #allocateBytes(bytes: Uint8Array): ByteAllocation {
+    const pointer = this.#exports.allocate_bytes(bytes.length);
+    new Uint8Array(this.#exports.memory.buffer, pointer, bytes.length).set(
+      bytes,
+    );
+    return { pointer, byteCount: bytes.length };
+  }
+
+  #freeBytes(allocation: ByteAllocation): void {
+    this.#exports.deallocate_bytes(allocation.pointer, allocation.byteCount);
+  }
+
   #readResult(length: number): unknown {
     const bytes = new Uint8Array(
       this.#exports.memory.buffer,
@@ -338,6 +445,11 @@ export class RustMiddle {
 interface Allocation {
   readonly pointer: number;
   readonly wordCount: number;
+}
+
+interface ByteAllocation {
+  readonly pointer: number;
+  readonly byteCount: number;
 }
 
 function textWords(value: string): Int32Array {

@@ -560,6 +560,14 @@ class ResidualHirBuilder {
       fields.delete(name.value);
       return { kind: "shape", fields };
     }
+    if (fn.name === "@type.seal") {
+      const name = this.staticValue(applied[0]);
+      if (name === undefined || name.tag !== "text") {
+        throw this.outside(span, "dynamic sealed type name");
+      }
+      return applied[1];
+    }
+    if (fn.name === "@type.open") return applied[0];
     const binaryIntegerOperators = new Map<string, BlotRuntimeScalarOperator>([
       ["@int.add", "add"],
       ["@int.sub", "subtract"],
@@ -746,6 +754,12 @@ class ResidualHirBuilder {
       return this.sumCase(expr, target, target.meaning.cases, environment);
     }
     if (
+      target.kind === "dynamic" &&
+      this.types[target.type].kind === "boolean"
+    ) {
+      return this.booleanCase(expr, target, environment);
+    }
+    if (
       target.kind === "dynamic" && target.meaning === undefined &&
       this.types[target.type].kind === "signed-integer-64"
     ) {
@@ -822,6 +836,87 @@ class ResidualHirBuilder {
       undefined,
       operator,
     );
+  }
+
+  private booleanCase(
+    expr: ResidualCase,
+    target: Extract<ResidualValue, { kind: "dynamic" }>,
+    environment: ResidualEnvironment,
+  ): ResidualValue {
+    const source = this.current();
+    const trueBlock = this.block();
+    const falseBlock = this.block();
+    const join = this.block();
+    source.terminator = {
+      kind: "conditional",
+      condition: target.value,
+      consequent: trueBlock.id,
+      consequentArguments: [],
+      alternate: falseBlock.id,
+      alternateArguments: [],
+      span: this.span(expr.span),
+    };
+    const evaluateArm = (
+      name: "True" | "False",
+      block: MutableBlock,
+    ): {
+      readonly arm: ResidualCase["arms"][number];
+      readonly value: ResidualValue;
+    } => {
+      this.#currentBlock = block.id;
+      for (const arm of expr.arms) {
+        const scope = this.environment(environment, null);
+        const matched = this.match(
+          arm.pattern,
+          {
+            kind: "static",
+            value: { tag: "tag", name, payload: null },
+          },
+          scope,
+        );
+        if (matched) return { arm, value: this.evaluate(arm.body, scope) };
+      }
+      throw this.outside(expr.span, "non-exhaustive Boolean case");
+    };
+    const consequent = evaluateArm("True", trueBlock);
+    const consequenceEnd = this.#currentBlock;
+    const alternate = evaluateArm("False", falseBlock);
+    const alternateEnd = this.#currentBlock;
+    const joined = this.joinBranchValues(
+      consequent.value,
+      alternate.value,
+      consequenceEnd,
+      alternateEnd,
+      expr.span,
+    );
+    this.#currentBlock = consequenceEnd;
+    this.terminate({
+      kind: "branch",
+      target: join.id,
+      arguments: [joined.consequent.value],
+      span: this.span(consequent.arm.body.span),
+    });
+    this.#currentBlock = alternateEnd;
+    this.terminate({
+      kind: "branch",
+      target: join.id,
+      arguments: [joined.alternate.value],
+      span: this.span(alternate.arm.body.span),
+    });
+    const joinedValue = this.nextValue();
+    join.parameters.push({
+      value: joinedValue,
+      type: joined.type,
+      ownership: this.ownership(joined.type),
+      span: this.span(expr.span),
+    });
+    this.#currentBlock = join.id;
+    return {
+      kind: "dynamic",
+      value: joinedValue,
+      type: joined.type,
+      meaning: joined.meaning,
+    };
   }
 
   private integerCase(
@@ -1293,6 +1388,16 @@ class ResidualHirBuilder {
         );
       });
     }
+    if (pattern.tag === "shape" && value.kind === "dynamic") {
+      if (this.types[value.type].kind !== "product") return false;
+      return pattern.fields.every((field) =>
+        this.match(
+          field.pattern,
+          this.project(value, field.name, field.pattern.span),
+          environment,
+        )
+      );
+    }
     const staticValue = this.staticValue(value);
     if (staticValue === undefined) return false;
     if (pattern.tag === "unit") return staticValue.tag === "unit";
@@ -1371,6 +1476,9 @@ class ResidualHirBuilder {
         this.type("boolean"),
         { start: 0, end: 0 },
       );
+    }
+    if (staticValue.tag === "sealed") {
+      return this.dynamic({ kind: "static", value: staticValue.inner });
     }
     throw new TypeError(
       `${this.#source}: static ${staticValue.tag} is outside the residual Runtime-HIR calculus`,

@@ -1214,12 +1214,13 @@ function desugarLoop(
  * a possibly new type and must not escape its branch — a name bound only when a
  * condition happened to hold is exactly what must not leak.
  *
- * Which is why a `let` earlier in the stream takes the name out of the running.
- * After `let total = 100;` the name denotes that local, so `total := total + 1;`
- * rebinds the local and has nothing to hand outward — carrying it would publish
- * a value the outer binding never held, at a type it may not even have. The
- * shadow reaches the statements after the `let` and into the blocks nested in
- * them, and stops at the end of the stream that introduced it.
+ * Which is why a `let`, `const`, or `<-` binding earlier in the stream takes
+ * the name out of the running. After `current <- Counter.read ();`, the name
+ * denotes that local, so `current := current - 1;` rebinds the local and has
+ * nothing to hand outward — carrying it would publish a value the outer
+ * binding never held. The shadow reaches the statements after the binding and
+ * into the blocks nested in them, and stops at the end of the stream that
+ * introduced it.
  */
 function reboundNames(statements: readonly Cursor[]): readonly string[] {
   const rebound: string[] = [];
@@ -1236,6 +1237,13 @@ function reboundNames(statements: readonly Cursor[]): readonly string[] {
       ) {
         const name = tokenOf(required(declaration, "name")).text;
         if (!shadowed.has(name) && !rebound.includes(name)) rebound.push(name);
+        continue;
+      }
+      if (
+        declaration.name === "rebinding" &&
+        tokenOf(required(declaration, "arrow")).text === "<-"
+      ) {
+        shadowed.add(tokenOf(required(declaration, "name")).text);
         continue;
       }
       // Not into a nested `for`. Its own desugaring already threads what it
