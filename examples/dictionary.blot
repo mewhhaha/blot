@@ -1,4 +1,4 @@
-open {} = (@import "../src/prelude/prelude.blot") ();
+open @import "../src/prelude/prelude.blot" ();
 
 let empty = Dict.empty;
 let first = Dict.put (empty, "count", 1);

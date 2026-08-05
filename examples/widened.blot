@@ -12,7 +12,7 @@
 
 module init;
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 const camera = @import "./lib/camera.blot" ();
 

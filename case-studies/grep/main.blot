@@ -1,4 +1,4 @@
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 const Arguments = @effect.host {
   .pattern = Unit -> Str;
@@ -19,7 +19,7 @@ line_count <- File.line_count ();
 for index in Iter.range (0, line_count) do
   line <- File.line index;
   let matching = Text.contains line pattern;
-  if matching then do
+  if matching then
     _ <- Console.write line;
   end;
   count := if matching then count + 1 else count end;

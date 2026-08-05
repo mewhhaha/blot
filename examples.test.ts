@@ -259,12 +259,6 @@ const REJECTIONS: Record<
     code: "BLOT_BAD_HANDLER_COMPOSITION",
     stage: "check",
   },
-  "open_collision": { code: "BLOT_OPEN_COLLISION", stage: "check" },
-  "open_duplicate_field": {
-    code: "BLOT_DUPLICATE_OPEN_FIELD",
-    stage: "check",
-  },
-  "open_missing_field": { code: "BLOT_NO_FIELD", stage: "check" },
   "break_outside_loop": {
     code: "BLOT_BREAK_OUTSIDE_LOOP",
     stage: "check",

@@ -4,7 +4,7 @@ import { checkFile } from "./check/mod.ts";
 import { testFile } from "./test.ts";
 
 const scratch = await Deno.makeTempDir();
-const PRELUDE = 'open {} = (@import "blot:prelude") ();\n';
+const PRELUDE = 'open @import "blot:prelude" ();\n';
 
 async function sourceFile(source: string): Promise<string> {
   const path = `${scratch}/${crypto.randomUUID()}.blot`;

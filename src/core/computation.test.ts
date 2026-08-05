@@ -19,7 +19,7 @@ Deno.test("core distinguishes pure definitions from explicit binds", async () =>
 
 Deno.test("core marks an ambient block result as a tail computation", async () => {
   const parsed = await parse(
-    "if #True then do return (); end;\nreturn ();",
+    "if #True then return (); end;\nreturn ();",
   );
   if (!parsed.ok) throw new Error("tail-computation fixture did not parse");
   const core = scheduleComputation(

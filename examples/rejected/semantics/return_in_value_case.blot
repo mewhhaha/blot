@@ -1,4 +1,4 @@
-open {} = @import "blot:prelude" ();
+open @import "blot:prelude" ();
 
 let unwrap = fn option => do
   let value = case option of

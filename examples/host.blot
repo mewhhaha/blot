@@ -9,7 +9,7 @@
 // program's declared interface, so it is allowed to reach the module boundary
 // where an unhandled ordinary effect is an error.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 const Console = @effect.host {
   .write = Str -> Unit;

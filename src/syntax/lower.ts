@@ -547,7 +547,7 @@ function lowerControlOutcome(
     );
     // What a branch produces when it falls through. The names it rebound have
     // to ride across the rejoin, or the statements after the conditional read
-    // the value from before it — which is how `if c then do n := n + 1; end;`
+    // the value from before it — which is how `if c then n := n + 1; end;`
     // inside a `for` silently counted nothing.
     const rebound = reboundNames(nestedStatementLists(rule).flat());
     let branchContinue: Expr = loopState(rebound, rule.span);
@@ -1204,7 +1204,7 @@ function desugarLoop(
  * The names a statement stream rebinds with `:=`.
  *
  * Recursive through nested statement lists, because a statement branch is part
- * of the same stream: `if c then do n := n + 1; end;` rebinds `n` for
+ * of the same stream: `if c then n := n + 1; end;` rebinds `n` for
  * everything after it, and a loop containing that rebinds `n` per iteration.
  *
  * `:=` is the only form collected, and that is what makes this well defined.
@@ -1595,21 +1595,8 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     );
   }
   if (rule.name === "opening") {
-    const mask = asRule(required(rule, "mask"), "open_mask");
-    const mappings = fieldList(mask, "entries").map((cursor) => {
-      const mapping = asRule(cursor, "open_mapping");
-      const target = tokenOf(required(mapping, "target")).text;
-      let loweredTarget: string | null = target;
-      if (target === "_") loweredTarget = null;
-      return {
-        source: tokenOf(required(mapping, "source")).text,
-        target: loweredTarget,
-        span: mapping.span,
-      };
-    });
     return {
       tag: "open",
-      mappings,
       value: lowerValue(asRule(field(rule, "value"), "value"), context),
       span: rule.span,
     };

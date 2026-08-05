@@ -10,7 +10,7 @@
 // false. The arms that are left have to cover the scrutinee on their own, and
 // that is what the `_` arms below are doing.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 let describe = fn n => case n of
   0 => "zero",

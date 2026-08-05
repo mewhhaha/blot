@@ -1,0 +1,3 @@
+return try (fn () => ()) then do
+  @handle ((), {})
+end;

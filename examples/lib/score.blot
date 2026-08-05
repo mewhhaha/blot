@@ -2,7 +2,7 @@
 
 module capabilities;
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 return {
   .run = capabilities.base + capabilities.bonus;

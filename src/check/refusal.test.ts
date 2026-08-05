@@ -42,7 +42,7 @@ async function refusalAt(source: string): Promise<{
 
 Deno.test("a refusal from the prelude points at the caller, not the prelude", async () => {
   const found = await refusalAt(
-    `open {} = (@import "blot:prelude") ();\n` +
+    `open @import "blot:prelude" ();\n` +
       `const _ = expect (False, "nope");\n` +
       `return 1;\n`,
   );
@@ -54,7 +54,7 @@ Deno.test("a refusal from the prelude points at the caller, not the prelude", as
 
 Deno.test("a refusal from a `@type.satisfies` predicate points at the predicate", async () => {
   const found = await refusalAt(
-    `open {} = (@import "blot:prelude") ();\n` +
+    `open @import "blot:prelude" ();\n` +
       `let reading = { .value = 12; };\n` +
       `let _ = @type.satisfies (reading, fn t =>\n` +
       `  expect (refines (t, Has { .missing = Int; }), "needs .missing"));\n` +

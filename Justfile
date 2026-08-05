@@ -33,6 +33,18 @@ run file:
 check-file file:
   deno run --allow-read src/cli.ts check {{file}}
 
+# Run the editor language server over standard input/output.
+lsp:
+  deno run --allow-read src/cli.ts lsp
+
+# Format one Blot source file with the source formatter.
+format file:
+  deno run --allow-read --allow-write src/cli.ts fmt {{file}}
+
+# Refuse a Blot source file that is not formatted.
+format-check file:
+  deno run --allow-read src/cli.ts fmt --check {{file}}
+
 # Last-use and linearity facts, for the backend that will consume them.
 ownership file:
   deno run --allow-read src/cli.ts ownership {{file}}
@@ -45,7 +57,7 @@ build file:
 wasm:
   WGPU_BACKENDS=vulkan deno run --unstable-webgpu --allow-read --allow-write --allow-env scripts/wasm.ts
 
-# Install the Tree-sitter grammar, queries, and `.blot` association into Helix.
+# Install the Tree-sitter grammar, queries, LSP, and `.blot` association into Helix.
 # Re-running replaces the managed block rather than appending a second copy.
 install:
   deno run --allow-read --allow-write --allow-env --allow-run=deno,tree-sitter scripts/setup_helix.ts
@@ -60,7 +72,7 @@ grammar-check:
 
 check:
   deno run --allow-read scripts/generate_rust_middle_schema.ts --check
-  deno check mod.ts scripts/*.ts case-studies/*.ts experiments/rust-middle/*.ts src/cli.ts src/backend/rust_middle.test.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts
+  deno check mod.ts scripts/*.ts case-studies/*.ts experiments/rust-middle/*.ts src/cli.ts src/backend/rust_middle.test.ts src/language_service.test.ts src/tooling/*.test.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts
   deno fmt --check
   deno lint
   cargo fmt --manifest-path experiments/rust-middle/Cargo.toml --check

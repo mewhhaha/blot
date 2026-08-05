@@ -86,8 +86,8 @@ await runCommand("deno", [
 // rules, and tree-sitter's lexer is context-dependent by design. In a state
 // where `IDENT` is admissible but `"return"` is not, it lexes `return` as an
 // identifier, so `let x = 1 return x;` parses cleanly as juxtaposition. The same
-// fallback lets OPERATOR consume the structural `=>` token outside a lambda or
-// case arm. The wasm parser and the GPU frontend reserve both globally, so
+// fallback lets OPERATOR consume structural `=` and `=>` outside the rules
+// that use them. The wasm parser and the GPU frontend reserve both globally, so
 // without this the editor grammar would disagree with the compiler.
 //
 // `word:` alone does not fix it — extraction still falls back to the word token.
@@ -121,7 +121,9 @@ const RESERVED_TOKENS = [
   "in",
   "break",
   "try",
+  "with",
   "fn",
+  "=",
   "=>",
 ];
 
@@ -138,7 +140,7 @@ await Deno.writeTextFile(
   grammarJsPath,
   `${grammarJs.slice(0, cut)}
 
-  // Keywords and structural arrows are globally reserved, matching the wasm
+  // Keywords and structural operators are globally reserved, matching the wasm
   // parser and the GPU frontend. Without this tree-sitter would accept programs
   // the compiler does not, because its lexer resolves tokens by parser state.
   word: $ => $.IDENT,
@@ -188,6 +190,7 @@ const highlights = [
   await Deno.readTextFile(join(generatedQueries, "generated-highlights.scm")),
   await Deno.readTextFile(join(repositoryQueries, "keywords.scm")),
   await Deno.readTextFile(join(repositoryQueries, "elements.scm")),
+  await Deno.readTextFile(join(repositoryQueries, "calls.scm")),
 ].join("\n");
 
 await Deno.mkdir(generatedQueries, { recursive: true });
@@ -235,6 +238,10 @@ if (start >= 0) {
 }
 
 const block = `${beginMarker}
+[language-server.blot]
+command = "deno"
+args = ["run", "--allow-read", "${join(repository, "src", "cli.ts")}", "lsp"]
+
 [[language]]
 name = "blot"
 language-id = "blot"
@@ -244,6 +251,7 @@ file-types = ["blot"]
 roots = ["AGENTS.md", "deno.json", ".git"]
 comment-token = "//"
 grammar = "blot"
+language-servers = ["blot"]
 rainbow-brackets = true
 indent = { tab-width = 2, unit = "  " }
 

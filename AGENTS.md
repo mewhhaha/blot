@@ -76,7 +76,7 @@ while changing its type.
 becomes an unspellable compiler-local tagged result eliminated by a `case` at
 the source function boundary. A standalone `if` becomes an ordinary
 conditional over those results, and `x <- e` explicitly sequences the already
-applied expression `e`, all during CST lowering. `try program then do ... end`
+applied expression `e`, all during CST lowering. `try program with ... end`
 likewise becomes named nullary
 computations containing ordinary three-argument `@handle` calls; its bounded
 left-hand `<-` binds that computation rather than using the general declaration
@@ -89,12 +89,12 @@ already says, and every pass has to learn it.
 
 **Value conditionals do not transfer control.** An expression `if` or `case`
 produces one of its branch values and cannot `return` from an enclosing
-function or `break` an enclosing loop. A standalone `if ... then do ... end;`
+function or `break` an enclosing loop. A standalone `if ... then ... end;`
 inherits those surrounding control targets. Expression `if` requires `else`;
 statement `if` does not.
 
 **A deconstructing guard must leave on failure.**
-`if let pattern = value else do ... end;` binds the pattern in the statements
+`if let pattern = value else ... end;` binds the pattern in the statements
 that follow it. Its `else` path must `return` or `break`; allowing that path to
 continue would put names in scope that were never bound. There is no `then`
 because success continues after the guard rather than entering another block.

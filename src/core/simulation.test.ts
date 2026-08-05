@@ -259,7 +259,7 @@ Deno.test("typed Core preserves host effect order", async () => {
   const path = `${directory}/effects.blot`;
   await Deno.writeTextFile(
     path,
-    `open {} = (@import "blot:prelude") ();
+    `open @import "blot:prelude" ();
 const Console = @effect.host { .write = Str -> Unit; };
 _ <- Console.write "compiled";
 _ <- Console.write "linked";

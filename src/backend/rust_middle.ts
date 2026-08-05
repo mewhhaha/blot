@@ -91,16 +91,28 @@ export class RustMiddleCompiler {
     this.#requireActive();
     const absolute = resolve(path);
     await this.#load(absolute, []);
+    return this.#checkResidentModule(absolute);
+  }
+
+  /** Checks an in-memory revision while resolving its imports from disk. */
+  async checkSource(path: string, source: string): Promise<RustCheckedModule> {
+    this.#requireActive();
+    const absolute = resolve(path);
+    await this.#loadRevision(absolute, source, []);
+    return this.#checkResidentModule(absolute);
+  }
+
+  #checkResidentModule(path: string): RustCheckedModule {
     const checked = this.#rust.checkCompilerSessionModule(
       this.#session,
-      absolute,
+      path,
     );
     if (checked.ok) {
       return { type: checked.type, effects: checked.effects };
     }
     if (checked.diagnostic !== undefined) {
       let origin = checked.diagnostic.origin;
-      if (origin === undefined) origin = absolute;
+      if (origin === undefined) origin = path;
       const source = this.#modules.get(origin)?.source;
       if (source === undefined) {
         throw new Error(`${origin}: resident Rust module lost its source`);
@@ -108,7 +120,7 @@ export class RustMiddleCompiler {
       throw new BlotError(checked.diagnostic, { path: origin, source });
     }
     throw new Error(
-      `${absolute}: Rust compiler failed without a diagnostic: ${checked.message}`,
+      `${path}: Rust compiler failed without a diagnostic: ${checked.message}`,
     );
   }
 
@@ -214,6 +226,15 @@ export class RustMiddleCompiler {
     path: string,
     active: readonly string[],
   ): Promise<LoadedRevision> {
+    const source = await Deno.readTextFile(path);
+    return await this.#loadRevision(path, source, active);
+  }
+
+  async #loadRevision(
+    path: string,
+    source: string,
+    active: readonly string[],
+  ): Promise<LoadedRevision> {
     const cycleStart = active.indexOf(path);
     if (cycleStart >= 0) {
       const cycle = [...active.slice(cycleStart), path];
@@ -223,7 +244,6 @@ export class RustMiddleCompiler {
         span: { start: 0, end: 0 },
       });
     }
-    const source = await Deno.readTextFile(path);
     let resident = this.#modules.get(path);
     if (resident === undefined || resident.inputRevision !== source) {
       const added = this.#rust.addCompilerSessionModule(

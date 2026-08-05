@@ -5,7 +5,7 @@
 // the value, so a `case` with a default and an `if let` guard bind at the
 // payload's real type rather than at an unconstrained one.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 let unwrap_or = fn m => case m of
   #Some inner => inner,
@@ -13,7 +13,7 @@ let unwrap_or = fn m => case m of
 end;
 
 let shout = fn m => do
-  if let #Some inner = m else do
+  if let #Some inner = m else
     return "none";
   end;
   in Text.append inner "!"

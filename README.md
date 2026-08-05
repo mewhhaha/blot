@@ -141,7 +141,9 @@ just wasm                           # interpreter vs GPU evaluator vs Wasm
 just test                     # corpus goldens, rejections, profile gate
 just generate                 # regenerate the frontend plan; fails if its profile regresses
 just inspect                  # the counters recorded in docs/gpu-profile.md
-just install                  # Helix: grammar, queries, `.blot` association
+just install                  # Helix: grammar, queries, LSP, `.blot` association
+deno task blot fmt file.blot  # apply the source formatter
+deno task lsp                 # run the language server over stdio
 ```
 
 Compile one or several modules with the default Rust/WebAssembly backend:
@@ -163,7 +165,7 @@ input order. A source failure remains local to its path.
 
 `just install` builds the Tree-sitter grammar from the same grammar source as
 the GPU parser, installs highlight, indent, textobject, tag, and rainbow
-queries, and registers `.blot` in a managed block in
+queries, and registers `.blot` and the language server in a managed block in
 `~/.config/helix/languages.toml`. Re-running replaces that block rather than
 appending a second copy. It finishes by proving the editor grammar and the
 compiler agree about what the language is — see [docs/editor.md](docs/editor.md)
@@ -174,19 +176,18 @@ for why that check exists.
 Declarations are all `;`-terminated:
 
 ```blot
-let name = expr;      // runtime binding
-const name = expr;    // must evaluate at compile time
-sig name = expr;      // optional constraint on the following binding
-open {} = expr;      // spread every field into scope
-open { .a: b, .c: _ } = expr; // rename .a to b and suppress .c
-for src do … end;     // loop; see below
-for ever do … end;    // iterate the prelude's infinite iterator
-break;                // exit the nearest `for`
-if c then do … end;   // conditional control flow
-if let p = x else do … end; // bind p or leave through the else branch
-name := expr;         // shadow an existing binding, preserving its type
-name <- expr;         // sequence an effectful expression and bind its result
-return expr;          // exit the nearest function or module
+let name = expr;          // runtime binding
+const name = expr;        // must evaluate at compile time
+sig name = expr;          // constraint on the following binding
+open expr;                // spread every field into scope
+for src do … end;         // loop; see below
+for ever do … end;        // iterate the prelude's infinite iterator
+break;                    // exit the nearest `for`
+if c then … end;          // conditional control flow
+if let p = x else … end;  // bind p or leave through the else branch
+name := expr;             // shadow a name while preserving its type
+name <- expr;             // sequence an effect and bind its result
+return expr;              // exit the nearest function or module
 ```
 
 An expression `if` always has an `else` and produces one of its branch values:
@@ -202,7 +203,7 @@ optional `else`, and may transfer control:
 
 ```blot
 let describe = fn value => do
-  if value < 0 then do
+  if value < 0 then
     return "negative";
   end;
   in "non-negative"
@@ -212,7 +213,7 @@ end;
 A deconstructing guard binds its pattern on the path that follows:
 
 ```blot
-if let #Some value = candidate else do
+if let #Some value = candidate else
   return fallback;
 end;
 // value is in scope here
@@ -274,7 +275,7 @@ for #Some n in source do … end; // bind, and skip what does not match
 
 for ever do
   x := x + 1;
-  if done x then do
+  if done x then
     break;
   end;
 end;
@@ -327,13 +328,15 @@ Nothing is in scope that the module did not ask for. The prelude is an ordinary
 module with no privilege, so every file begins by opening it:
 
 ```blot
-open {} = @import "blot:prelude" ();
+open @import "blot:prelude" ();
 ```
 
-The empty mask keeps every field's name. A mask only describes exceptions:
-`.source: target` renames one field and `.value: _` suppresses one, while every
-unlisted field still enters scope unchanged. Renames may not collide with an
-unlisted field; suppress or rename that field explicitly when both exist.
+Selective binding and renaming use the ordinary record pattern instead:
+
+```blot
+const { .source = target; .value; } = exports;
+```
+
 `@import` returns the imported module function, and the final `()` supplies its
 empty module parameter.
 
@@ -344,7 +347,7 @@ compile-time function, so the program owns both parsing and representation:
 const as_raw = fn source => source.text;
 const shader = @include "./shaders/main.wgsl" as_raw;
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 const config = @include "./config.json" as_json;
 const fixed_config = @include "./config.json" as_const_json;
 ```
@@ -484,7 +487,7 @@ than a convention.
 Several handlers compose without manual nesting:
 
 ```blot
-let result = try program then do
+let result = try program with
   program_without_terminal <- @handle (Terminal, fake_terminal);
   program_without_clock <- @handle (Clock, fake_clock);
   @handle (Random, fake_random)

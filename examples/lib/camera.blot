@@ -5,7 +5,7 @@
 // one. Width subtyping is what lets the interface be the record rather than the
 // two numbers a caller would otherwise have to unpack for it.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 return {
   .zoom_of = fn camera => camera.zoom;

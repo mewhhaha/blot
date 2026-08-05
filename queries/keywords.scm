@@ -62,21 +62,17 @@
 
 (conditional_statement_guard
   "let" @keyword.storage.type
-  "else" @keyword.control.conditional
-  "do" @keyword.control)
+  "else" @keyword.control.conditional)
 
 (conditional_statement_branches
-  "then" @keyword.control.conditional
-  "do" @keyword.control)
+  "then" @keyword.control.conditional)
 
 (conditional_statement_else_if_clause
   (ELSE_IF) @keyword.control.conditional
-  "then" @keyword.control.conditional
-  "do" @keyword.control)
+  "then" @keyword.control.conditional)
 
 (conditional_statement_else_clause
-  "else" @keyword.control.conditional
-  "do" @keyword.control)
+  "else" @keyword.control.conditional)
 
 (case_expression
   "case" @keyword.control.exception
@@ -85,8 +81,7 @@
 
 (handler_composition
   "try" @keyword.control.exception
-  "then" @keyword.control.exception
-  "do" @keyword.control
+  "with" @keyword.control.exception
   "end" @keyword.control)
 
 (lambda_parameter

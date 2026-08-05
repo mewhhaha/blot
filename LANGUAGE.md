@@ -273,7 +273,7 @@ Nothing, including the prelude, is implicitly in scope. The conventional prelude
 opening is:
 
 ```blot
-open {} = @import "blot:prelude" ();
+open @import "blot:prelude" ();
 ```
 
 At compilation, imported module bodies are specialized and inlined. This does
@@ -663,21 +663,19 @@ indistinguishable from opening an element expression.
 ### 4.7 Opening a record
 
 ```blot
-open {} = record;
-open { .source: target, .hidden: _ } = record;
+open record;
 ```
 
-The opened value must be a compile-time record. Every field not named by the
-mask enters scope under its field name. A mask entry:
+The opened value must be a compile-time record. Every field enters scope under
+its existing name. Opening introduces ordinary lexical bindings and can shadow
+bindings from an outer scope.
 
-- `.source: target` renames `.source` to `target`; or
-- `.source: _` suppresses `.source`.
+Selective binding and renaming use an ordinary record pattern, which leaves
+unlisted fields out of scope:
 
-Every source named in the mask must exist. A source may appear only once, and
-two fields may not resolve to the same target. Opening introduces ordinary
-lexical bindings and can shadow bindings from an outer scope.
-
-The canonical empty mask is `{}`.
+```blot
+const { .source = target; .value; } = record;
+```
 
 ### 4.8 Return
 
@@ -1064,11 +1062,11 @@ There is no truthiness and no `yield`.
 ### 8.2 Statement `if`
 
 ```blot
-if condition then do
+if condition then
   statements
-else if other then do
+else if other then
   statements
-else do
+else
   statements
 end;
 ```
@@ -1083,12 +1081,12 @@ including a missing `else`, which passes the name through unchanged. A `let`
 inside a branch stays local to that branch, shadowing any outer binding of that
 name for the rest of the branch and escaping with nothing.
 
-`then do` begins the branch body; the final `end;` closes the whole conditional.
+`then` begins the branch body; the final `end;` closes the whole conditional.
 
 ### 8.3 Deconstructing guard
 
 ```blot
-if let #Some value = candidate else do
+if let #Some value = candidate else
   return fallback;
 end;
 
@@ -1533,7 +1531,7 @@ An unbounded loop is ordinary iteration over the prelude's infinite iterator:
 
 ```blot
 for ever do
-  if finished then do
+  if finished then
     break;
   end;
 end;
@@ -1953,7 +1951,7 @@ statically visible. gpufuck has no runtime handler representation.
 `try` composes several statically known handlers around one nullary computation:
 
 ```blot
-let result = try program then do
+let result = try program with
   program_without_terminal <- @handle (Terminal, fake_terminal);
   program_without_clock <- @handle (Clock, fake_clock);
   @handle (Random, fake_random)
@@ -2600,7 +2598,7 @@ operators {
   infixl 65 (++) = Text.append;
 };
 
-open {} = @import "blot:prelude" ();
+open @import "blot:prelude" ();
 
 const Console = @effect.host {
   .write = Str -> Unit;
@@ -2616,7 +2614,7 @@ end;
 let attempts = 0;
 for ever do
   attempts := attempts + 1;
-  if attempts >= 3 then do
+  if attempts >= 3 then
     break;
   end;
 end;

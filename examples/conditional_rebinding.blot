@@ -10,25 +10,25 @@
 // `for`. A loop's accumulator is the set of names its body rebinds, and a name
 // rebound only inside a branch is still one of them.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 // One branch, last statement of the loop. The missing `else` is the
 // pass-through: it hands `counted` back as it already is.
 let counted = 0;
 for x in Iter.range (0, 5) do
-  if x > 2 then do counted := counted + 1; end;
+  if x > 2 then counted := counted + 1; end;
 end;
 
 // Both branches rebind, still last.
 let scored = 0;
 for x in Iter.range (0, 5) do
-  if x > 2 then do scored := scored + 1; else do scored := scored + 10; end;
+  if x > 2 then scored := scored + 1; else scored := scored + 10; end;
 end;
 
 // The conditional in the middle of a body, with an ordinary rebinding after it.
 let mixed = 0;
 for x in Iter.range (0, 5) do
-  if x > 2 then do mixed := mixed + 1; end;
+  if x > 2 then mixed := mixed + 1; end;
   mixed := mixed * 2;
 end;
 
@@ -37,7 +37,7 @@ let evens = 0;
 let seen = 0;
 for x in Iter.range (0, 6) do
   seen := seen + 1;
-  if x % 2 == 0 then do evens := evens + 1; end;
+  if x % 2 == 0 then evens := evens + 1; end;
 end;
 
 // A `let` inside the branch stays branch-local: it is a new name with a
@@ -45,7 +45,7 @@ end;
 // is exactly what must not leak.
 let scaled = 0;
 for x in Iter.range (0, 4) do
-  if x > 0 then do
+  if x > 0 then
     let step = x * 3;
     scaled := scaled + step;
   end;
@@ -53,7 +53,7 @@ end;
 
 // The same threading outside a loop.
 let flagged = 0;
-if 1 < 2 then do flagged := flagged + 1; end;
+if 1 < 2 then flagged := flagged + 1; end;
 
 return {
   .counted = counted;

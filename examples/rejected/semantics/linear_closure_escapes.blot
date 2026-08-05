@@ -1,7 +1,7 @@
 // A module cannot return an owned aggregate without an explicit ABI ownership
 // contract.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 let consume = fn !value => @int.add value 1;
 let !token = 41;

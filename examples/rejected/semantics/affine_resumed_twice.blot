@@ -1,7 +1,7 @@
 // `?` is affine: at most once. Never resuming is an abort and is fine; resuming
 // twice would run the rest of the computation twice, and that is not.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 let handler = fn ?resume => do
   first <- resume 1;

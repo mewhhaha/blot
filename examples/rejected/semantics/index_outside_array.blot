@@ -10,7 +10,7 @@
 // *typed* as one integer are all refused by name: they say nothing here and
 // still trap at run time.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 let xs = [1, 2, 3];
 return @array.get xs 99;

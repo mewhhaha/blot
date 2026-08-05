@@ -4,18 +4,45 @@
 just install
 ```
 
-That builds the Tree-sitter grammar, installs the queries, registers `.blot`,
-and then runs `just grammar-check`. Helix should report six green checks:
+That builds the Tree-sitter grammar, installs the queries, registers `.blot` and
+the Blot language server, and then runs `just grammar-check`. Helix should
+report six green checks:
 
 ```
 Tree-sitter parser: ✓   Highlight queries: ✓   Textobject queries: ✓
 Indent queries: ✓       Tags queries: ✓        Rainbow queries: ✓
 ```
 
-There is no language server. Inference has landed, so what is missing is the
-server rather than anything for it to report: `blot check` already produces
-spans, and it initializes no WebGPU device, which is the property a server would
-need.
+The server publishes syntax and compiler diagnostics for the open editor
+revision, finds local lexical definitions, formats documents, and publishes
+style lints. It runs the checked-in compiler Wasm and Baba's CPU frontend; it
+does not initialize WebGPU. Run it outside Helix with:
+
+```bash
+deno task lsp
+```
+
+Go-to-definition intentionally stops at the current source module. Local
+bindings, lambda parameters, case patterns, rebindings, and their shadowing are
+resolved. Definitions introduced dynamically by `open`, imported module fields,
+and package sources do not yet have cross-file locations.
+
+The formatter is biased but conservative. It applies two-space structural
+indentation, removes trailing whitespace, writes LF line endings, and leaves one
+final newline. It also removes parentheses made redundant by postfix precedence
+or left-associative application, while retaining groupings that affect the AST.
+It does not otherwise reflow expressions. Comments remain source text in the
+gaps between Baba CST nodes, so formatting cannot discard them. Use it from the
+command line with:
+
+```bash
+deno task blot fmt source.blot
+deno task blot fmt --check source.blot
+```
+
+The initial lints prefer one `case` over a chain of equality `if` branches and
+remove conditionals whose branches all produce the same expression. Lints are
+LSP hints, separate from compiler errors.
 
 ## What gets written
 
@@ -43,7 +70,8 @@ editor grammar that accepts programs the compiler refuses is an editor grammar
 that lies.
 
 Adding `word: $ => $.IDENT` is not enough; keyword extraction still falls back
-to the word token. A global `reserved` set is, and `scripts/setup_helix.ts`
+to the word token, and OPERATOR can absorb structural `=` and `=>` outside their
+grammar rules. A global `reserved` set fixes both, and `scripts/setup_helix.ts`
 patches one into the generated `grammar.js`. Field names keep working, because
 `.return` matches the reserved keyword token and `field_name` admits `keyword`.
 
@@ -70,7 +98,9 @@ token. That scoping matters: blot lets field names be keywords, and a bare
 `queries/elements.scm` applies the same rule to element delimiters and property
 fields: exact `<` and `>` tokens are brackets inside an element but remain
 operators elsewhere, while a shape field's optional `?` is punctuation rather
-than an operator.
+than an operator. `queries/calls.scm` captures the called binding in `render x`
+and `draw` in `Canvas.draw x` as `function.call`; values that are only
+referenced retain their ordinary variable, type, or member colour.
 
 `queries/indents.scm` is unusually short. Every variable-width region in blot
 carries an explicit terminator — the GPU profile requires a locatable boundary —

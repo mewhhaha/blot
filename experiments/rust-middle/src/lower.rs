@@ -4,8 +4,8 @@ use num_bigint::BigInt;
 
 use crate::ast::{
     Arm, ArrayElement, Associativity, AstArena, Branch, Declaration, DeclarationId,
-    DeclarationKind, DeclarationTag, Expression, ExpressionId, Fixity, Module, OpenMapping,
-    Pattern, PatternId, Qualifier, ResultEffects, ShapeMember, ShapePatternField, Span,
+    DeclarationKind, DeclarationTag, Expression, ExpressionId, Fixity, Module, Pattern, PatternId,
+    Qualifier, ResultEffects, ShapeMember, ShapePatternField, Span,
 };
 use crate::cst::{CompactCst, Cursor};
 use crate::fixity::{ChainStep, FixityTable, target_expression};
@@ -208,23 +208,8 @@ fn lower_declaration(
             }))
         }
         "opening" => {
-            let mask = as_rule(required(cst, rule, "mask")?)?;
-            let mut mappings = Vec::new();
-            for mapping in cst.field_list(mask, "entries")? {
-                let mapping = as_rule(mapping)?;
-                let target = token_text(cst, required(cst, mapping, "target")?)?;
-                mappings.push(OpenMapping {
-                    source: token_text(cst, required(cst, mapping, "source")?)?,
-                    target: if target == "_" { None } else { Some(target) },
-                    span: cst.span(Cursor::Rule(mapping))?,
-                });
-            }
             let value = lower_value(cst, required(cst, rule, "value")?, context, arena)?;
-            Ok(arena.declaration(Declaration::Open {
-                mappings,
-                value,
-                span,
-            }))
+            Ok(arena.declaration(Declaration::Open { value, span }))
         }
         "rebinding" => {
             let name = token_text(cst, required(cst, rule, "name")?)?;

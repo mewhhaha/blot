@@ -13,7 +13,7 @@ operators {
   infix 40 (===) = Eq.eq;
 };
 
-open {} = @import "blot:prelude" ();
+open @import "blot:prelude" ();
 
 // --- types are values -------------------------------------------------------
 
@@ -81,7 +81,7 @@ end;
 let repeated = 0;
 for ever do
   repeated := repeated + 1;
-  if repeated >= 3 then do
+  if repeated >= 3 then
     break;
   end;
 end;

@@ -172,30 +172,14 @@ breaking = (
   ";"
 ) ;
 
-// Spreading a module's exports into scope, with an optional rename/ignore mask.
-// Fields absent from the mask keep their names, `.source: target` renames one,
-// and `.source: _` suppresses one. The prelude is an ordinary module with no
-// privilege, so this is how `+` finds `Num.add` — a default fixity whose target
-// is not in scope is useless, and `open` is what puts it there.
+// Spreading a module's exports into scope. Selective binding and renaming use
+// an ordinary record pattern instead. The prelude is an ordinary module with
+// no privilege, so this is how `+` finds `Num.add` — a default fixity whose
+// target is not in scope is useless, and `open` is what puts it there.
 opening = (
   "open"
-  mask:open_mask
-  "="
   value:value
   ";"
-) ;
-
-open_mask = (
-  "{"
-  entries:(open_mapping % ",")?
-  "}"
-) ;
-
-open_mapping = (
-  "."
-  source:field_name
-  ":"
-  target:(IDENT | TYPE_IDENT)
 ) ;
 
 result = (
@@ -328,7 +312,7 @@ keyword = (
   "module" | "operators" | "infixl" | "infixr" | "infix" | "prefix"
   | "let" | "const" | "sig" | "return" | "do" | "end"
   | "if" | "then" | "else" | "case" | "of" | "rec" | "comptime" | "open"
-  | "for" | "in" | "break" | "try" | "fn"
+  | "for" | "in" | "break" | "try" | "with" | "fn"
 ) ;
 
 primary_expression = (
@@ -525,10 +509,10 @@ else_clause = (
 // target the surrounding function or loop. `else` is optional because the
 // normal result is always `()`.
 //
-// `then do` introduces the branch body rather than nesting an expression block,
-// so one `end;` closes the whole statement:
+// `then` introduces the statement body directly, so one `end;` closes the
+// whole conditional without a nested expression block:
 //
-//   if ready then do
+//   if ready then
 //     return ();
 //   end;
 conditional_statement = (
@@ -541,7 +525,7 @@ conditional_statement = (
 // A deconstructing guard has no success block: matching binds the pattern for
 // the statements that follow it, while the `else` body must transfer control.
 //
-//   if let #Some value = option else do
+//   if let #Some value = option else
 //     return fallback;
 //   end;
 //   // value is in scope here
@@ -551,14 +535,12 @@ conditional_statement_guard = (
   "="
   value:value
   "else"
-  "do"
   alternative:statement*
 ) ;
 
 conditional_statement_branches = (
   condition:expression
   "then"
-  "do"
   consequence:statement*
   alternatives:conditional_statement_else_if_clause*
   fallback:conditional_statement_else_clause?
@@ -568,13 +550,11 @@ conditional_statement_else_if_clause = (
   ELSE_IF
   condition:expression
   "then"
-  "do"
   consequence:statement*
 ) ;
 
 conditional_statement_else_clause = (
   "else"
-  "do"
   alternative:statement*
 ) ;
 
@@ -613,8 +593,7 @@ case_guard = ( "if" condition:expression ) ;
 handler_composition = (
   "try"
   program:value
-  "then"
-  "do"
+  "with"
   steps:handler_composition_step*
   result:handler_composition_action
   "end"

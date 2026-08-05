@@ -1,5 +1,4 @@
-// Opening brings every unlisted field into scope under its existing name.
-// A mask can rename a field or suppress it with `_`.
+// Opening brings every field into scope under its existing name.
 
 const exports = {
   .source = 10;
@@ -7,6 +6,6 @@ const exports = {
   .rest = 30;
 };
 
-open { .source: target, .value: _ } = exports;
+open exports;
 
-return { .target = target; .rest = rest; };
+return { .source = source; .value = value; .rest = rest; };

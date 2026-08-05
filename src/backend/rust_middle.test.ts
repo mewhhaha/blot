@@ -150,7 +150,7 @@ Deno.test("full Rust compiler matches dynamic record effects", async () => {
   try {
     await Deno.writeTextFile(
       path,
-      `open {} = (@import "blot:prelude") ();
+      `open @import "blot:prelude" ();
 const Host = @effect.host {
   .read = Unit -> { .target = Int; .label = Str; .kind = Int; };
   .write = { .label = Str; .active = Bool; .kind = Int; } -> Unit;
@@ -215,7 +215,7 @@ Deno.test("Rust middle matches dynamic integer SIMD", async () => {
   try {
     await Deno.writeTextFile(
       path,
-      `open {} = (@import "blot:prelude") ();
+      `open @import "blot:prelude" ();
 const Sample = @effect.host { .next = Int -> Int; };
 a <- Sample.next 0;
 b <- Sample.next 1;
@@ -279,7 +279,7 @@ Deno.test("full Rust compiler traps every dynamic integer overflow family", asyn
     for (const scenario of scenarios) {
       await Deno.writeTextFile(
         path,
-        `open {} = (@import "blot:prelude") ();
+        `open @import "blot:prelude" ();
 const Host = @effect.host {
   .read = Unit -> { .left = Int; .right = Int; };
   .write = Int -> Unit;
@@ -354,6 +354,21 @@ Deno.test("Rust middle invalidates an include revision", async () => {
   }
 });
 
+Deno.test("Rust middle checks an in-memory root revision", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "editor.blot");
+  try {
+    await Deno.writeTextFile(path, "return missing;");
+    const checked = await compiler.checkSource(path, "return 42;");
+    assertEquals(checked.type, "42..42");
+    await assertRejects(() => compiler.check(path), BlotError, "BLOT_UNBOUND");
+  } finally {
+    compiler.destroy();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
 Deno.test("Rust middle invalidates importers after a dependency edit", async () => {
   const compiler = await RustMiddleCompiler.create();
   const directory = await Deno.makeTempDir();
@@ -362,7 +377,7 @@ Deno.test("Rust middle invalidates importers after a dependency edit", async () 
   try {
     await Deno.writeTextFile(
       path,
-      'open {} = (@import "./dependency.blot") (); return value;',
+      'open @import "./dependency.blot" (); return value;',
     );
     await Deno.writeTextFile(dependency, "return { .value = 41; };");
     const first = await compiler.prepare(path);
@@ -404,7 +419,7 @@ Deno.test("Rust middle preserves a dependency diagnostic origin", async () => {
   try {
     await Deno.writeTextFile(
       path,
-      'open {} = (@import "./dependency.blot") (); return 0;',
+      'open @import "./dependency.blot" (); return 0;',
     );
     await Deno.writeTextFile(dependency, 'return @int.add "no" 1;');
     try {

@@ -375,10 +375,10 @@ not an optimization here — it is what makes it mean anything. The computation
 and the handler both have to be written in the module, which is what "a handler
 known at compile time" always required.
 
-`try program then do ... end` adds no backend path. CST lowering turns each
-bound two-argument `@handle (effect, handler)` step into a named nullary
-computation containing the ordinary three-argument call, then emits one final
-three-argument call that executes the composition.
+`try program with ... end` adds no backend path. CST lowering turns each bound
+two-argument `@handle (effect, handler)` step into a named nullary computation
+containing the ordinary three-argument call, then emits one final three-argument
+call that executes the composition.
 
 ## Names, and what may not be mangled
 

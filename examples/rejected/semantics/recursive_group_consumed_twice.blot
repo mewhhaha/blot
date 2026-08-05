@@ -3,7 +3,7 @@
 // it captured, and `start` spends it — so the call in the result is a second
 // spend, whichever of the two the block walks first.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 let consume = fn !value => @int.add value 1;
 let !token = 41;

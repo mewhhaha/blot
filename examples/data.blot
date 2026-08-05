@@ -3,7 +3,7 @@
 // One structural aggregate. A tuple is a shape with integer labels, so there is
 // no stored-tuple versus transient-pack distinction to learn.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 const Point = struct {
   .x = I32;

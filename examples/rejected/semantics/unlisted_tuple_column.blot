@@ -7,7 +7,7 @@
 // The single-column reading of this is `unbounded_case.blot`. Writing `(_, _)`
 // as the last arm accepts it.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 sig pick = (Int, Option Int) -> Int;
 let pick = fn pair => case pair of

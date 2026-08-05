@@ -1,6 +1,6 @@
 // An operator with no fixity is an error. Precedence is never guessed.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 let x = 1 <?> 2;
 return x;

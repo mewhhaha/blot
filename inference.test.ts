@@ -14,7 +14,7 @@ const scratch = await Deno.makeTempDir();
 // Every snippet opens the prelude, because every module does: it has no
 // privilege, and a fixture that skipped it would be testing a language where
 // `+` is unbound.
-const PRELUDE = 'open {} = (@import "blot:prelude") ();\n';
+const PRELUDE = 'open @import "blot:prelude" ();\n';
 
 async function typeOf(source: string): Promise<string> {
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
@@ -125,27 +125,27 @@ return same;`,
 
 check(
   "float arithmetic stays in the one float type",
-  'open {} = (@import "blot:prelude") ();\nreturn Float.add 1.5 2.5;',
+  'open @import "blot:prelude" ();\nreturn Float.add 1.5 2.5;',
   "F64",
 );
 
 check(
   "a float has no equality, only an ordering that refuses NaN",
-  'open {} = (@import "blot:prelude") ();\n' +
+  'open @import "blot:prelude" ();\n' +
     "return { .same = is_equal (Float.cmp 0.5 0.5); .nan = Float.is_nan 1.0; };",
   "{ .same = (#True | #False); .nan = #True | #False; }",
 );
 
 check(
   "a four-lane vector is an opaque type, not a range",
-  'open {} = (@import "blot:prelude") ();\n' +
+  'open @import "blot:prelude" ();\n' +
     "return Vec4.splat (Float32.of_int 1);",
   "F32x4",
 );
 
 check(
   "a lane read leaves the vector for the scalar type",
-  'open {} = (@import "blot:prelude") ();\n' +
+  'open @import "blot:prelude" ();\n' +
     "return Vec4.x (Vec4.splat (Float32.of_int 1));",
   "F32",
 );
@@ -170,7 +170,7 @@ rejects(
 
 rejects(
   "literal arms cannot cover a vector",
-  'open {} = (@import "blot:prelude") ();\n' +
+  'open @import "blot:prelude" ();\n' +
     "sig f = F32x4 -> Int;\nlet f = fn v => case v of 1 => 1 end;\n" +
     "return f (Vec4.splat (Float32.of_int 1));",
   "BLOT_INCOMPLETE_CASE",
@@ -178,28 +178,28 @@ rejects(
 
 check(
   "single precision is its own type",
-  'open {} = (@import "blot:prelude") ();\n' +
+  'open @import "blot:prelude" ();\n' +
     "return Float32.mul (Float32.of_int 2) (Float32.of_float 1.5);",
   "F32",
 );
 
 rejects(
   "the two float precisions do not mix",
-  'open {} = (@import "blot:prelude") ();\n' +
+  'open @import "blot:prelude" ();\n' +
     "return Float.add 1.5 (Float32.of_int 1);",
   "BLOT_TYPE_ERROR",
 );
 
 check(
   "crossing between the numeric types is explicit and exact",
-  'open {} = (@import "blot:prelude") ();\n' +
+  'open @import "blot:prelude" ();\n' +
     "return { .up = Float.of_int 7; .down = Float.truncate 3.75; };",
   "{ .up = F64; .down = Int; }",
 );
 
 rejects(
   "a float case is never exhaustive on its own",
-  'open {} = (@import "blot:prelude") ();\n' +
+  'open @import "blot:prelude" ();\n' +
     "sig pick = F64 -> Int;\nlet pick = fn x => case x of 1.5 => 1 end;\n" +
     "return pick 1.5;",
   "BLOT_INCOMPLETE_CASE",
@@ -207,7 +207,7 @@ rejects(
 
 rejects(
   "the two numeric types do not mix",
-  'open {} = (@import "blot:prelude") ();\nreturn Float.add 1.5 2;',
+  'open @import "blot:prelude" ();\nreturn Float.add 1.5 2;',
   "BLOT_TYPE_ERROR",
 );
 
@@ -316,19 +316,19 @@ check(
 
 check(
   "a statement conditional returns from its function",
-  'let describe = fn value => do\n  if value < 0 then do\n    return "negative";\n  end;\n  in "positive"\nend;\nreturn describe;',
+  'let describe = fn value => do\n  if value < 0 then\n    return "negative";\n  end;\n  in "positive"\nend;\nreturn describe;',
   'Int -> ("negative" | "positive")',
 );
 
 check(
   "a return crosses a for loop",
-  "let find = fn wanted => do\n  for value in Iter.range (0, 5) do\n    if value == wanted then do\n      return value;\n    end;\n  end;\n  in -1\nend;\nreturn find;",
+  "let find = fn wanted => do\n  for value in Iter.range (0, 5) do\n    if value == wanted then\n      return value;\n    end;\n  end;\n  in -1\nend;\nreturn find;",
   "Int -> (Int | 0 | -1)",
 );
 
 check(
   "a return crosses an unbounded loop",
-  "let count_to = fn limit => do\n  let count = 0;\n  for ever do\n    count := count + 1;\n    if count >= limit then do\n      return count;\n    end;\n  end;\n  in 0\nend;\nreturn count_to;",
+  "let count_to = fn limit => do\n  let count = 0;\n  for ever do\n    count := count + 1;\n    if count >= limit then\n      return count;\n    end;\n  end;\n  in 0\nend;\nreturn count_to;",
   "Int -> (Int | 0)",
 );
 
@@ -475,13 +475,13 @@ check(
 
 check(
   "a guard types what it binds",
-  'let f = fn m => do\n  if let #Some inner = m else do\n    return "none";\n  end;\n  in inner\nend;\nreturn f (#Some 7);',
+  'let f = fn m => do\n  if let #Some inner = m else\n    return "none";\n  end;\n  in inner\nend;\nreturn f (#Some 7);',
   '("none" | 7)',
 );
 
 rejects(
   "a guard rejects a payload used at the wrong type",
-  'let f = fn m => do\n  if let #Some inner = m else do\n    return "none";\n  end;\n  in Text.append inner "!"\nend;\nreturn f (#Some 3);',
+  'let f = fn m => do\n  if let #Some inner = m else\n    return "none";\n  end;\n  in Text.append inner "!"\nend;\nreturn f (#Some 3);',
   "`3` is not `Str`",
 );
 
@@ -727,7 +727,7 @@ check(
 
 check(
   "a statement conditional proves it too",
-  'sig h = 1 -> Str;\nlet h = fn k => "one";\nsig f = 1 | 2 | 3 -> Str;\nlet f = fn n => do\n  if n == 1 then do\n    return h n;\n  end;\n  in "rest"\nend;\nreturn f;',
+  'sig h = 1 -> Str;\nlet h = fn k => "one";\nsig f = 1 | 2 | 3 -> Str;\nlet f = fn n => do\n  if n == 1 then\n    return h n;\n  end;\n  in "rest"\nend;\nreturn f;',
   "1 | 2 | 3 -> Str",
 );
 
@@ -1187,9 +1187,9 @@ check(
   `const Counter = @effect { .read = Unit -> Int; };
 let adjust = fn () => do
   let result = 0;
-  if True then do
+  if True then
     current <- Counter.read ();
-    if current > 0 then do current := current - 1; end;
+    if current > 0 then current := current - 1; end;
     result := current;
   end;
   in result

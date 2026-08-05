@@ -274,6 +274,7 @@ impl CompilerSession {
     }
 
     fn invalidate(&self, changed: &str) {
+        self.context.module_cache.borrow_mut().take();
         let modules = self.context.modules.borrow();
         let mut invalidated = HashSet::from([changed.to_owned()]);
         loop {
@@ -292,6 +293,10 @@ impl CompilerSession {
             }
         }
         drop(modules);
+        self.context
+            .live_declarations
+            .borrow_mut()
+            .retain(|(path, _), _| !invalidated.contains(path));
         self.module_interfaces
             .borrow_mut()
             .retain(|path, _| !invalidated.contains(path));

@@ -2,12 +2,12 @@
 // appending text to `inner` is a type error at `blot check` rather than a
 // surprise at run time.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 const counted = #Some 3;
 
 let shout = fn () => do
-  if let #Some inner = counted else do
+  if let #Some inner = counted else
     return "none";
   end;
   in Text.append inner "!"

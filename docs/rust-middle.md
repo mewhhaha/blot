@@ -43,6 +43,11 @@ token prefix and runs the lexer from the first token whose decision observed the
 edited position. Island parsing and CST materialisation then run over the
 resulting complete token stream.
 
+`checkSource(path, source)` installs an in-memory revision for the named root
+while resolving imports and includes normally. This is the language-server entry
+point: unsaved text passes through the same frontend, checker, and revision
+invalidation as `check(path)` without writing an editor buffer to disk.
+
 Closing is the semantic revision boundary. If an edit produces the same AST,
 including source spans, the session keeps its compile-time result, inferred
 interface, ownership and safety certificates, `ClosedProgram`, and final

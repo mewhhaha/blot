@@ -223,6 +223,34 @@ impl ConstraintTypeArena {
         }
     }
 
+    fn level_of(&self, id: ConstraintTypeId, variables: &[Variable]) -> u32 {
+        match &self.nodes[id.0 as usize] {
+            ConstraintTypeNode::Variable(id) => variables[*id as usize].level,
+            ConstraintTypeNode::Forall { body, .. } => self.level_of(*body, variables),
+            ConstraintTypeNode::Function {
+                parameter,
+                effects,
+                result,
+            } => self
+                .level_of(*parameter, variables)
+                .max(self.level_of(*effects, variables))
+                .max(self.level_of(*result, variables)),
+            ConstraintTypeNode::Record(fields)
+            | ConstraintTypeNode::Variant { cases: fields, .. } => fields
+                .iter()
+                .map(|(_, field)| self.level_of(*field, variables))
+                .max()
+                .unwrap_or(0),
+            ConstraintTypeNode::Array(element) => self.level_of(*element, variables),
+            ConstraintTypeNode::Union(members) => members
+                .iter()
+                .map(|member| self.level_of(*member, variables))
+                .max()
+                .unwrap_or(0),
+            _ => 0,
+        }
+    }
+
     fn same(&self, left: ConstraintTypeId, right: ConstraintTypeId) -> bool {
         self.same_with_rigids(left, right, &mut Vec::new())
     }
@@ -960,7 +988,7 @@ impl Checker {
         };
         let result = run(evaluate_expression(
             self.context.clone(),
-            path.to_owned(),
+            Rc::new(path.to_owned()),
             module.result,
             environment.clone(),
             Runtime::new(Phase::Comptime, path.to_owned()),
@@ -1372,21 +1400,7 @@ impl Checker {
                 }
                 Ok(inferred.effects)
             }
-            Declaration::Open {
-                mappings,
-                value,
-                span,
-            } => {
-                let mut mapped_sources = HashSet::new();
-                for mapping in &mappings {
-                    if !mapped_sources.insert(mapping.source.clone()) {
-                        return Err(Diagnostic::new(
-                            "BLOT_DUPLICATE_OPEN_FIELD",
-                            format!("Open field `{}` is listed more than once.", mapping.source),
-                            mapping.span,
-                        ));
-                    }
-                }
+            Declaration::Open { value, span } => {
                 let inferred = self.infer(path, module, value, types, values, dependencies)?;
                 let opened = self.evaluate(path, value, values, Phase::Comptime)?;
                 let Value::Shape(fields) = opened else {
@@ -1396,15 +1410,6 @@ impl Checker {
                         span,
                     ));
                 };
-                for mapping in &mappings {
-                    if !fields.contains_key(&mapping.source) {
-                        return Err(Diagnostic::new(
-                            "BLOT_NO_FIELD",
-                            format!("The opened record has no field `{}`.", mapping.source),
-                            mapping.span,
-                        ));
-                    }
-                }
                 let inferred_fields = match self.settle(inferred.type_.clone(), true) {
                     Type::Record(fields) => fields,
                     _ => Vec::new(),
@@ -1414,28 +1419,10 @@ impl Checker {
                     .enumerate()
                     .map(|(position, (name, _))| (name.clone(), position))
                     .collect::<HashMap<_, _>>();
-                let mappings_by_source = mappings
-                    .iter()
-                    .map(|mapping| (mapping.source.as_str(), mapping))
-                    .collect::<HashMap<_, _>>();
-                let mut opened_targets = HashSet::new();
                 let mut inferred_fields = inferred_fields;
                 let mut type_positions_by_target = BTreeMap::new();
                 let mut value_sources_by_target = BTreeMap::new();
                 for (source, value) in &fields {
-                    let target = mappings_by_source
-                        .get(source.as_str())
-                        .map_or_else(|| Some(source.clone()), |mapping| mapping.target.clone());
-                    let Some(target) = target else {
-                        continue;
-                    };
-                    if types.lookup(&target).is_some() || !opened_targets.insert(target.clone()) {
-                        return Err(Diagnostic::new(
-                            "BLOT_OPEN_COLLISION",
-                            format!("Open would bind `{target}` more than once."),
-                            span,
-                        ));
-                    }
                     let type_position = match type_positions_by_source.get(source) {
                         Some(position) => *position,
                         None => {
@@ -1446,8 +1433,8 @@ impl Checker {
                             position
                         }
                     };
-                    type_positions_by_target.insert(target.clone(), type_position);
-                    value_sources_by_target.insert(target, source.clone());
+                    type_positions_by_target.insert(source.clone(), type_position);
+                    value_sources_by_target.insert(source.clone(), source.clone());
                 }
                 Rc::make_mut(&mut types.opens).push(OpenedTypes {
                     fields: Rc::new(inferred_fields),
@@ -2855,7 +2842,9 @@ impl Checker {
 
     fn constrain(&self, left: Type, right: Type, span: Span) -> Result<(), Diagnostic> {
         debug_assert!(self.bound_insertions.borrow().is_empty());
-        let result = self.constrain_seen(left, right, span, &mut HashSet::new());
+        let left = self.constraint_type(&left);
+        let right = self.constraint_type(&right);
+        let result = self.constrain_ids(left, right, span, &mut HashSet::new());
         self.bound_insertions.borrow_mut().clear();
         result
     }
@@ -2894,11 +2883,10 @@ impl Checker {
     fn add_upper_bound(
         &self,
         variable: VariableId,
-        bound: Type,
+        bound: ConstraintTypeId,
         span: Span,
         seen: &mut HashSet<(VariableId, VariableId)>,
     ) -> Result<(), Diagnostic> {
-        let bound_id = self.constraint_type(&bound);
         let mut pending = vec![variable];
         let mut visited = HashSet::new();
         while let Some(variable) = pending.pop() {
@@ -2908,9 +2896,9 @@ impl Checker {
             let (inserted, lowers) = {
                 let mut variables = self.variables.borrow_mut();
                 let inserted =
-                    !self.contains_constraint(&variables[variable as usize].upper, bound_id);
+                    !self.contains_constraint(&variables[variable as usize].upper, bound);
                 if inserted {
-                    variables[variable as usize].upper.push(bound_id);
+                    variables[variable as usize].upper.push(bound);
                 }
                 (inserted, variables[variable as usize].lower.clone())
             };
@@ -2922,8 +2910,7 @@ impl Checker {
                 if let Some(predecessor) = self.constraint_variable(lower) {
                     pending.push(predecessor);
                 } else {
-                    let lower = self.expand_constraint(lower);
-                    self.constrain_seen(lower, bound.clone(), span, seen)?;
+                    self.constrain_ids(lower, bound, span, seen)?;
                 }
             }
         }
@@ -2933,11 +2920,10 @@ impl Checker {
     fn add_lower_bound(
         &self,
         variable: VariableId,
-        bound: Type,
+        bound: ConstraintTypeId,
         span: Span,
         seen: &mut HashSet<(VariableId, VariableId)>,
     ) -> Result<(), Diagnostic> {
-        let bound_id = self.constraint_type(&bound);
         let mut pending = vec![variable];
         let mut visited = HashSet::new();
         while let Some(variable) = pending.pop() {
@@ -2947,9 +2933,9 @@ impl Checker {
             let (inserted, uppers) = {
                 let mut variables = self.variables.borrow_mut();
                 let inserted =
-                    !self.contains_constraint(&variables[variable as usize].lower, bound_id);
+                    !self.contains_constraint(&variables[variable as usize].lower, bound);
                 if inserted {
-                    variables[variable as usize].lower.push(bound_id);
+                    variables[variable as usize].lower.push(bound);
                 }
                 (inserted, variables[variable as usize].upper.clone())
             };
@@ -2961,46 +2947,54 @@ impl Checker {
                 if let Some(successor) = self.constraint_variable(upper) {
                     pending.push(successor);
                 } else {
-                    let upper = self.expand_constraint(upper);
-                    self.constrain_seen(bound.clone(), upper, span, seen)?;
+                    self.constrain_ids(bound, upper, span, seen)?;
                 }
             }
         }
         Ok(())
     }
 
-    fn constrain_seen(
+    fn constrain_ids(
         &self,
-        left: Type,
-        right: Type,
+        left: ConstraintTypeId,
+        right: ConstraintTypeId,
         span: Span,
         seen: &mut HashSet<(VariableId, VariableId)>,
     ) -> Result<(), Diagnostic> {
-        let left_id = self.constraint_type(&left);
-        let right_id = self.constraint_type(&right);
-        if self.constraint_types.borrow().same(left_id, right_id) {
+        if self.constraint_types.borrow().same(left, right) {
             return Ok(());
         }
-        let compatible = match (left.clone(), right.clone()) {
-            (_, Type::Top) | (Type::Bottom, _) => true,
-            (Type::Forall { variables, body }, right) => {
-                let instantiated = self.instantiate_forall(variables, *body);
-                self.constrain_seen(instantiated, right, span, seen)?;
-                true
-            }
-            (left, Type::Forall { variables, body }) => {
-                let rigid = self.skolemize(variables, *body);
-                self.constrain_seen(left, rigid, span, seen)?;
-                true
-            }
-            (Type::Unit, Type::Unit) => true,
+        let (left_node, right_node) = {
+            let types = self.constraint_types.borrow();
             (
-                Type::Range {
+                types.nodes[left.0 as usize].clone(),
+                types.nodes[right.0 as usize].clone(),
+            )
+        };
+        let compatible = match (left_node, right_node) {
+            (_, ConstraintTypeNode::Top) | (ConstraintTypeNode::Bottom, _) => true,
+            (ConstraintTypeNode::Forall { variables, body }, _) => {
+                let body = self.expand_constraint(body);
+                let instantiated = self.instantiate_forall(variables, body);
+                let instantiated = self.constraint_type(&instantiated);
+                self.constrain_ids(instantiated, right, span, seen)?;
+                true
+            }
+            (_, ConstraintTypeNode::Forall { variables, body }) => {
+                let body = self.expand_constraint(body);
+                let rigid = self.skolemize(variables, body);
+                let rigid = self.constraint_type(&rigid);
+                self.constrain_ids(left, rigid, span, seen)?;
+                true
+            }
+            (ConstraintTypeNode::Unit, ConstraintTypeNode::Unit) => true,
+            (
+                ConstraintTypeNode::Range {
                     domain: left_domain,
                     low: left_low,
                     high: left_high,
                 },
-                Type::Range {
+                ConstraintTypeNode::Range {
                     domain: right_domain,
                     low: right_low,
                     high: right_high,
@@ -3011,49 +3005,51 @@ impl Checker {
                     && upper_within(&left_high, &right_high)
             }
             (
-                Type::Function {
+                ConstraintTypeNode::Function {
                     parameter: left_parameter,
                     effects: left_effects,
                     result: left_result,
                 },
-                Type::Function {
+                ConstraintTypeNode::Function {
                     parameter: right_parameter,
                     effects: right_effects,
                     result: right_result,
                 },
             ) => {
-                self.constrain_seen(*right_parameter, *left_parameter, span, seen)?;
-                self.constrain_seen(*left_effects, *right_effects, span, seen)?;
-                self.constrain_seen(*left_result, *right_result, span, seen)?;
+                self.constrain_ids(right_parameter, left_parameter, span, seen)?;
+                self.constrain_ids(left_effects, right_effects, span, seen)?;
+                self.constrain_ids(left_result, right_result, span, seen)?;
                 true
             }
-            (Type::Record(left), Type::Record(right)) => {
-                for (name, right) in right {
-                    let Some((_, left)) = left.iter().find(|(candidate, _)| candidate == &name)
+            (ConstraintTypeNode::Record(left_fields), ConstraintTypeNode::Record(right_fields)) => {
+                for (name, right_field) in right_fields {
+                    let Some((_, left_field)) =
+                        left_fields.iter().find(|(candidate, _)| candidate == &name)
                     else {
-                        if admits_omission(&right) {
+                        let right_type = self.expand_constraint(right_field);
+                        if admits_omission(&right_type) {
                             continue;
                         }
                         return self.type_error(
-                            Type::Record(left),
-                            Type::Record(vec![(name, right)]),
+                            self.expand_constraint(left),
+                            Type::Record(vec![(name, right_type)]),
                             span,
                         );
                     };
-                    self.constrain_seen(left.clone(), right, span, seen)?;
+                    self.constrain_ids(*left_field, right_field, span, seen)?;
                 }
                 true
             }
-            (Type::Array(left), Type::Array(right)) => {
-                self.constrain_seen(*left, *right, span, seen)?;
+            (ConstraintTypeNode::Array(left), ConstraintTypeNode::Array(right)) => {
+                self.constrain_ids(left, right, span, seen)?;
                 true
             }
             (
-                Type::Variant {
+                ConstraintTypeNode::Variant {
                     cases: left,
                     open: left_open,
                 },
-                Type::Variant {
+                ConstraintTypeNode::Variant {
                     cases: right,
                     open: right_open,
                 },
@@ -3070,36 +3066,40 @@ impl Checker {
                         if let Some((_, right)) =
                             right.iter().find(|(candidate, _)| candidate == &name)
                         {
-                            self.constrain_seen(left, right.clone(), span, seen)?;
+                            self.constrain_ids(left, *right, span, seen)?;
                         }
                     }
                     true
                 }
             }
-            (Type::Effects(left), Type::Effects(right)) => left.is_subset(&right),
-            (Type::Variable(left_id), Type::Variable(right_id)) => {
-                if left_id == right_id || !seen.insert((left_id, right_id)) {
+            (ConstraintTypeNode::Effects(left), ConstraintTypeNode::Effects(right)) => {
+                left.is_subset(&right)
+            }
+            (
+                ConstraintTypeNode::Variable(left_variable),
+                ConstraintTypeNode::Variable(right_variable),
+            ) => {
+                if left_variable == right_variable || !seen.insert((left_variable, right_variable))
+                {
                     return Ok(());
                 }
-                let left_type = self.constraint_type(&left);
-                let right_type = self.constraint_type(&right);
                 let (inserted, lowers, uppers) = {
                     let mut variables = self.variables.borrow_mut();
                     let inserted =
-                        !self.contains_constraint(&variables[left_id as usize].upper, right_type);
+                        !self.contains_constraint(&variables[left_variable as usize].upper, right);
                     if inserted {
-                        variables[left_id as usize].upper.push(right_type);
-                        variables[right_id as usize].lower.push(left_type);
+                        variables[left_variable as usize].upper.push(right);
+                        variables[right_variable as usize].lower.push(left);
                     }
                     (
                         inserted,
-                        variables[left_id as usize]
+                        variables[left_variable as usize]
                             .lower
                             .iter()
                             .filter(|bound| self.constraint_variable(**bound).is_none())
                             .cloned()
                             .collect::<Vec<_>>(),
-                        variables[right_id as usize]
+                        variables[right_variable as usize]
                             .upper
                             .iter()
                             .filter(|bound| self.constraint_variable(**bound).is_none())
@@ -3110,61 +3110,87 @@ impl Checker {
                 if !inserted {
                     return Ok(());
                 }
-                self.record_bound_insertion(left_id, BoundDirection::Upper);
-                self.record_bound_insertion(right_id, BoundDirection::Lower);
+                self.record_bound_insertion(left_variable, BoundDirection::Upper);
+                self.record_bound_insertion(right_variable, BoundDirection::Lower);
                 for lower in lowers {
-                    let lower = self.expand_constraint(lower);
-                    self.add_lower_bound(right_id, lower, span, seen)?;
+                    self.add_lower_bound(right_variable, lower, span, seen)?;
                 }
                 for upper in uppers {
-                    let upper = self.expand_constraint(upper);
-                    self.add_upper_bound(left_id, upper, span, seen)?;
+                    self.add_upper_bound(left_variable, upper, span, seen)?;
                 }
                 true
             }
-            (Type::Variable(id), right) => {
-                if self.level_of(&right) <= self.variables.borrow()[id as usize].level {
-                    self.add_upper_bound(id, right, span, seen)?;
+            (ConstraintTypeNode::Variable(variable), _) => {
+                let bound_level = {
+                    let variables = self.variables.borrow();
+                    self.constraint_types.borrow().level_of(right, &variables)
+                };
+                let variable_level = self.variables.borrow()[variable as usize].level;
+                if bound_level <= variable_level {
+                    self.add_upper_bound(variable, right, span, seen)?;
                 } else {
-                    let level = self.variables.borrow()[id as usize].level;
-                    let extruded = self.extrude(right, false, level, &mut HashMap::new());
-                    self.constrain_seen(Type::Variable(id), extruded, span, seen)?;
+                    let bound = self.expand_constraint(right);
+                    let extruded = self.extrude(bound, false, variable_level, &mut HashMap::new());
+                    let extruded = self.constraint_type(&extruded);
+                    self.constrain_ids(left, extruded, span, seen)?;
                 }
                 true
             }
-            (left, Type::Variable(id)) => {
-                if self.level_of(&left) <= self.variables.borrow()[id as usize].level {
-                    self.add_lower_bound(id, left, span, seen)?;
+            (_, ConstraintTypeNode::Variable(variable)) => {
+                let bound_level = {
+                    let variables = self.variables.borrow();
+                    self.constraint_types.borrow().level_of(left, &variables)
+                };
+                let variable_level = self.variables.borrow()[variable as usize].level;
+                if bound_level <= variable_level {
+                    self.add_lower_bound(variable, left, span, seen)?;
                 } else {
-                    let level = self.variables.borrow()[id as usize].level;
-                    let extruded = self.extrude(left, true, level, &mut HashMap::new());
-                    self.constrain_seen(extruded, Type::Variable(id), span, seen)?;
+                    let bound = self.expand_constraint(left);
+                    let extruded = self.extrude(bound, true, variable_level, &mut HashMap::new());
+                    let extruded = self.constraint_type(&extruded);
+                    self.constrain_ids(extruded, right, span, seen)?;
                 }
                 true
             }
-            (Type::Union(members), right) => members
+            (ConstraintTypeNode::Union(members), _) => members
                 .into_iter()
-                .all(|member| self.can_constrain(member, right.clone(), span)),
-            (left, Type::Union(members)) => members
+                .all(|member| self.can_constrain_ids(member, right, span)),
+            (_, ConstraintTypeNode::Union(members)) => members
                 .into_iter()
-                .any(|member| self.can_constrain(left.clone(), member, span)),
-            (Type::Opaque(left), Type::Opaque(right)) => left == right,
-            (Type::Rigid(left), Type::Rigid(right)) => left == right,
+                .any(|member| self.can_constrain_ids(left, member, span)),
+            (ConstraintTypeNode::Opaque(left), ConstraintTypeNode::Opaque(right)) => left == right,
+            (ConstraintTypeNode::Rigid(left), ConstraintTypeNode::Rigid(right)) => left == right,
             _ => false,
         };
         if compatible {
             Ok(())
         } else {
-            self.type_error(left, right, span)
+            self.type_error(
+                self.expand_constraint(left),
+                self.expand_constraint(right),
+                span,
+            )
         }
     }
 
+    #[cfg(test)]
     fn can_constrain(&self, left: Type, right: Type, span: Span) -> bool {
+        let left = self.constraint_type(&left);
+        let right = self.constraint_type(&right);
+        self.can_constrain_ids(left, right, span)
+    }
+
+    fn can_constrain_ids(
+        &self,
+        left: ConstraintTypeId,
+        right: ConstraintTypeId,
+        span: Span,
+    ) -> bool {
         let insertion_count = self.bound_insertions.borrow().len();
         let variable_count = self.variables.borrow().len();
         let next_skolem = self.next_skolem.get();
         let result = self
-            .constrain_seen(left, right, span, &mut HashSet::new())
+            .constrain_ids(left, right, span, &mut HashSet::new())
             .is_ok();
         if !result {
             self.rollback_bounds(insertion_count, variable_count, next_skolem);
@@ -3654,7 +3680,7 @@ impl Checker {
     ) -> Result<Value, Diagnostic> {
         run(evaluate_expression(
             self.context.clone(),
-            path.to_owned(),
+            Rc::new(path.to_owned()),
             expression,
             environment.clone(),
             Runtime::new(phase, path.to_owned()),
@@ -3672,7 +3698,7 @@ impl Checker {
     ) -> Result<Value, Diagnostic> {
         run(evaluate_binding(
             self.context.clone(),
-            path.to_owned(),
+            Rc::new(path.to_owned()),
             pattern,
             expression,
             environment.clone(),

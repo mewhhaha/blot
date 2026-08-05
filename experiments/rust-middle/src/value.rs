@@ -291,7 +291,7 @@ pub enum Value {
         payload: Option<Box<Value>>,
     },
     Closure {
-        module: String,
+        module: Rc<String>,
         parameter: PatternId,
         body: ExpressionId,
         environment: Environment,

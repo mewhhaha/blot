@@ -148,13 +148,6 @@ export interface DeclarationTag {
   readonly span: Span;
 }
 
-export interface OpenMapping {
-  readonly source: string;
-  /** `null` suppresses the source field instead of binding it. */
-  readonly target: string | null;
-  readonly span: Span;
-}
-
 export type Decl =
   | {
     readonly tag: "binding";
@@ -170,17 +163,9 @@ export type Decl =
     readonly value: Expr;
     readonly span: Span;
   }
-  /**
-   * `open { .source: target, .hidden: _ } = expr;` spreads a record's fields
-   * into scope while renaming or suppressing the listed fields.
-   *
-   * The prelude is an ordinary module with no privilege, so this is how `+`
-   * reaches `Num.add`: a default fixity whose target is not in scope is
-   * useless, and `open` is what puts it there.
-   */
+  /** Spreads a compile-time record's fields into scope. */
   | {
     readonly tag: "open";
-    readonly mappings: readonly OpenMapping[];
     readonly value: Expr;
     readonly span: Span;
   };

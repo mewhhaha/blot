@@ -6,7 +6,6 @@ import type {
   Expr,
   Fixity,
   Module,
-  OpenMapping,
   Pattern,
   ShapeMember,
   ShapePatternField,
@@ -286,11 +285,6 @@ export function encodePortableModule(module: Module): PortableModule {
       case "open":
         encoded = {
           tag: declaration.tag,
-          mappings: declaration.mappings.map((mapping) => ({
-            source: mapping.source,
-            target: mapping.target,
-            span: mapping.span,
-          })),
           value: expressionId(declaration.value),
           span: declaration.span,
         };
@@ -891,33 +885,6 @@ export function decodePortableModule(
       case "open":
         decoded = {
           tag,
-          mappings: list(
-            node.mappings,
-            `${location} declaration ${index} mappings`,
-          ).map((encodedMapping, ordinal): OpenMapping => {
-            const mapping = record(
-              encodedMapping,
-              `${location} declaration ${index} mapping ${ordinal}`,
-            );
-            let target: string | null = null;
-            if (mapping.target !== null) {
-              target = text(
-                mapping.target,
-                `${location} declaration ${index} mapping ${ordinal} target`,
-              );
-            }
-            return {
-              source: text(
-                mapping.source,
-                `${location} declaration ${index} mapping ${ordinal} source`,
-              ),
-              target,
-              span: decodeSpan(
-                mapping.span,
-                `${location} declaration ${index} mapping ${ordinal} span`,
-              ),
-            };
-          }),
           value: expression(
             reference(
               node.value,

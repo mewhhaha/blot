@@ -35,10 +35,15 @@ struct EffectIdentity {
     host: bool,
 }
 
+type LiveDeclarations = Rc<Vec<DeclarationId>>;
+type LivenessCache = HashMap<(String, Option<ExpressionId>), LiveDeclarations>;
+
 #[derive(Default)]
 pub struct Context {
     pub modules: RefCell<HashMap<String, LoadedModule>>,
     pub module_results: RefCell<HashMap<String, Value>>,
+    pub(crate) module_cache: RefCell<Option<(String, Rc<Module>)>>,
+    pub(crate) live_declarations: RefCell<LivenessCache>,
     next_effect: Cell<u32>,
     effect_ids: RefCell<HashMap<EffectIdentity, u32>>,
     named_effects: RefCell<HashMap<(String, String, bool), u32>>,
@@ -54,10 +59,15 @@ impl Context {
 
     fn effect_id(&self, runtime: &Runtime, span: Span, host: bool) -> u32 {
         let key = EffectIdentity {
-            module: runtime.module.clone(),
+            module: runtime.module.as_ref().clone(),
             span_start: span.start,
             span_end: span.end,
-            scope: runtime.effect_scope.join("\u{1f}"),
+            scope: runtime
+                .effect_scope
+                .iter()
+                .map(|argument| show(argument))
+                .collect::<Vec<_>>()
+                .join("\u{1f}"),
             host,
         };
         if let Some(id) = self.effect_ids.borrow().get(&key) {
@@ -96,9 +106,9 @@ pub struct Runtime {
     pub phase: Phase,
     pub fuel: Rc<Cell<i64>>,
     pub limit: i64,
-    pub module: String,
+    pub module: Rc<String>,
     pub residual: Option<Rc<RefCell<crate::hir::ResidualTrace>>>,
-    effect_scope: Vec<String>,
+    effect_scope: Rc<Vec<Rc<Value>>>,
 }
 
 struct ArrayProgress {
@@ -129,9 +139,9 @@ impl Runtime {
             phase,
             fuel: Rc::new(Cell::new(limit)),
             limit,
-            module,
+            module: Rc::new(module),
             residual: None,
-            effect_scope: Vec::new(),
+            effect_scope: Rc::new(Vec::new()),
         }
     }
 
@@ -217,8 +227,9 @@ pub fn evaluate_module(
     argument: Value,
     mut runtime: Runtime,
 ) -> Computation {
+    let path = Rc::new(path);
     runtime.module = path.clone();
-    let loaded = match context.modules.borrow().get(&path).cloned() {
+    let loaded = match context.modules.borrow().get(path.as_str()).cloned() {
         Some(loaded) => loaded,
         None => {
             return Computation::error(Diagnostic::new(
@@ -239,10 +250,18 @@ pub fn evaluate_module(
             loaded.module.span,
         ));
     }
+    let live_declarations = live_declarations_for(
+        &context,
+        &path,
+        &loaded.module,
+        None,
+        &loaded.module.declarations,
+        loaded.module.result,
+    );
     evaluate_declarations(
         context,
         path,
-        live_declarations(&loaded.module),
+        live_declarations,
         0,
         environment,
         runtime,
@@ -265,18 +284,35 @@ pub fn module_closure(context: &Rc<Context>, path: &str) -> Result<Value, Diagno
 
 pub fn evaluate_expression(
     context: Rc<Context>,
-    module_path: String,
+    module_path: Rc<String>,
     expression_id: ExpressionId,
     environment: Environment,
     runtime: Runtime,
 ) -> Computation {
     let remaining = runtime.fuel.get() - 1;
     runtime.fuel.set(remaining);
-    let expression = match module_expression(&context, &module_path, expression_id) {
-        Ok(expression) => expression,
+    let loaded_module = match module(&context, &module_path) {
+        Ok(module) => module,
         Err(error) => return Computation::error(error),
     };
-    let span = expression_span(&expression);
+    let expression = match loaded_module
+        .arena
+        .expressions
+        .get(expression_id.0 as usize)
+    {
+        Some(expression) => expression,
+        None => {
+            return Computation::error(Diagnostic::new(
+                "BLOT_RUST_INVARIANT",
+                format!(
+                    "Expression {} is outside module `{module_path}`.",
+                    expression_id.0
+                ),
+                loaded_module.span,
+            ));
+        }
+    };
+    let span = expression_span(expression);
     if remaining < 0 {
         return Computation::error(Diagnostic::new(
             "BLOT_EVALUATION_LIMIT",
@@ -291,7 +327,7 @@ pub fn evaluate_expression(
     match expression {
         Expression::Int { value, .. } => {
             if runtime.phase == Phase::Runtime
-                && (value < (-BigIntExt::two_to_63()) || value > BigIntExt::two_to_63_minus_one())
+                && (value < &(-BigIntExt::two_to_63()) || value > &BigIntExt::two_to_63_minus_one())
             {
                 return Computation::error(Diagnostic::new(
                     "BLOT_INTEGER_OVERFLOW",
@@ -299,20 +335,20 @@ pub fn evaluate_expression(
                     span,
                 ));
             }
-            Computation::value(Value::Int(value))
+            Computation::value(Value::Int(value.clone()))
         }
-        Expression::Float { value, .. } => Computation::value(Value::Float(value)),
-        Expression::Text { value, .. } => Computation::value(Value::Text(value)),
+        Expression::Float { value, .. } => Computation::value(Value::Float(*value)),
+        Expression::Text { value, .. } => Computation::value(Value::Text(value.clone())),
         Expression::Unit { .. } => Computation::value(Value::Unit),
         Expression::Tag { name, .. } => Computation::value(Value::Tag {
-            name,
+            name: name.clone(),
             payload: None,
         }),
-        Expression::Var { name, .. } => match lookup(&environment, &name) {
+        Expression::Var { name, .. } => match lookup(&environment, name) {
             Some(mut value) => {
                 if let Value::Closure { signature, .. } = &mut value
                     && signature.is_none()
-                    && let Some(inferred) = lookup_signature(&environment, &name)
+                    && let Some(inferred) = lookup_signature(&environment, name)
                 {
                     *signature = Some(Box::new(inferred));
                 }
@@ -324,10 +360,12 @@ pub fn evaluate_expression(
                 span,
             )),
         },
-        Expression::Intrinsic { name, .. } => intrinsic(name, span),
+        Expression::Intrinsic { name, .. } => intrinsic(name.clone(), span),
         Expression::Apply {
             function, argument, ..
         } => {
+            let function = *function;
+            let argument = *argument;
             let argument_context = context.clone();
             let argument_module = module_path.clone();
             let argument_environment = environment.clone();
@@ -353,15 +391,16 @@ pub fn evaluate_expression(
             })
         }
         Expression::Field { target, name, .. } => {
-            evaluate_expression(context, module_path, target, environment, runtime)
+            let name = name.clone();
+            evaluate_expression(context, module_path, *target, environment, runtime)
                 .and_then(move |target| project(target, &name, span))
         }
         Expression::Lambda {
             parameter, body, ..
         } => Computation::value(Value::Closure {
             module: module_path,
-            parameter,
-            body,
+            parameter: *parameter,
+            body: *body,
             environment,
             self_name: None,
             imports: None,
@@ -370,7 +409,7 @@ pub fn evaluate_expression(
         Expression::Tuple { elements, .. } => evaluate_many(
             context,
             module_path,
-            elements,
+            elements.clone(),
             environment,
             runtime,
             Vec::new(),
@@ -385,7 +424,7 @@ pub fn evaluate_expression(
             environment,
             runtime,
             ArrayProgress {
-                elements,
+                elements: elements.clone(),
                 index: 0,
                 values: Vec::new(),
                 span,
@@ -397,7 +436,7 @@ pub fn evaluate_expression(
             environment,
             runtime,
             ShapeProgress {
-                members,
+                members: members.clone(),
                 index: 0,
                 fields: OrderedFields::default(),
                 span,
@@ -411,8 +450,8 @@ pub fn evaluate_expression(
             environment,
             runtime,
             BranchProgress {
-                branches,
-                fallback,
+                branches: branches.clone(),
+                fallback: *fallback,
                 index: 0,
                 span,
             },
@@ -422,7 +461,8 @@ pub fn evaluate_expression(
             let target_module = module_path.clone();
             let target_environment = environment.clone();
             let target_runtime = runtime.clone();
-            evaluate_expression(context, module_path, target, environment, runtime).and_then(
+            let arms = arms.clone();
+            evaluate_expression(context, module_path, *target, environment, runtime).and_then(
                 move |target| {
                     if let Value::Runtime(target) = &target {
                         return evaluate_dynamic_case(
@@ -470,7 +510,14 @@ pub fn evaluate_expression(
                 Ok(module) => module,
                 Err(error) => return Computation::error(error),
             };
-            let declarations = live_declarations_for(&module, &declarations, result);
+            let declarations = live_declarations_for(
+                &context,
+                &module_path,
+                &module,
+                Some(expression_id),
+                declarations,
+                *result,
+            );
             evaluate_declarations(
                 context,
                 module_path,
@@ -478,7 +525,7 @@ pub fn evaluate_expression(
                 0,
                 scope,
                 runtime,
-                result,
+                *result,
             )
         }
         Expression::Rec { .. } => Computation::error(Diagnostic::new(
@@ -487,14 +534,14 @@ pub fn evaluate_expression(
             span,
         )),
         Expression::Comptime { body, .. } => {
-            evaluate_expression(context, module_path, body, environment, runtime.comptime())
+            evaluate_expression(context, module_path, *body, environment, runtime.comptime())
         }
     }
 }
 
 fn evaluate_many(
     context: Rc<Context>,
-    module_path: String,
+    module_path: Rc<String>,
     expressions: Vec<ExpressionId>,
     environment: Environment,
     runtime: Runtime,
@@ -527,7 +574,7 @@ fn evaluate_many(
 
 fn evaluate_dynamic_case(
     context: Rc<Context>,
-    module_path: String,
+    module_path: Rc<String>,
     environment: Environment,
     runtime: Runtime,
     target: RuntimeValue,
@@ -621,7 +668,7 @@ fn evaluate_dynamic_case(
 
 fn evaluate_boolean_case(
     context: Rc<Context>,
-    module_path: String,
+    module_path: Rc<String>,
     environment: Environment,
     runtime: Runtime,
     target: RuntimeValue,
@@ -716,7 +763,7 @@ fn evaluate_boolean_case(
 #[allow(clippy::too_many_arguments)]
 fn evaluate_integer_case(
     context: Rc<Context>,
-    module_path: String,
+    module_path: Rc<String>,
     environment: Environment,
     runtime: Runtime,
     target: RuntimeValue,
@@ -823,7 +870,7 @@ fn evaluate_integer_case(
 #[allow(clippy::too_many_arguments)]
 fn evaluate_ordering_arms(
     context: Rc<Context>,
-    module_path: String,
+    module_path: Rc<String>,
     environment: Environment,
     runtime: Runtime,
     target: RuntimeValue,
@@ -924,7 +971,7 @@ fn evaluate_ordering_arms(
 #[allow(clippy::too_many_arguments)]
 fn evaluate_sum_case(
     context: Rc<Context>,
-    module_path: String,
+    module_path: Rc<String>,
     environment: Environment,
     runtime: Runtime,
     target: RuntimeValue,
@@ -1102,7 +1149,7 @@ fn compiler_tag_value(name: String, payload: Value) -> Value {
 
 fn evaluate_array(
     context: Rc<Context>,
-    module_path: String,
+    module_path: Rc<String>,
     environment: Environment,
     runtime: Runtime,
     progress: ArrayProgress,
@@ -1147,7 +1194,7 @@ fn evaluate_array(
 
 fn evaluate_shape(
     context: Rc<Context>,
-    module_path: String,
+    module_path: Rc<String>,
     environment: Environment,
     runtime: Runtime,
     progress: ShapeProgress,
@@ -1198,7 +1245,7 @@ fn evaluate_shape(
 
 fn evaluate_if(
     context: Rc<Context>,
-    module_path: String,
+    module_path: Rc<String>,
     environment: Environment,
     runtime: Runtime,
     progress: BranchProgress,
@@ -1258,7 +1305,7 @@ fn evaluate_if(
 
 fn evaluate_dynamic_if(
     context: Rc<Context>,
-    module_path: String,
+    module_path: Rc<String>,
     environment: Environment,
     runtime: Runtime,
     progress: BranchProgress,
@@ -1329,8 +1376,8 @@ fn evaluate_dynamic_if(
 
 fn evaluate_declarations(
     context: Rc<Context>,
-    module_path: String,
-    declarations: Vec<DeclarationId>,
+    module_path: Rc<String>,
+    declarations: LiveDeclarations,
     index: usize,
     environment: Environment,
     runtime: Runtime,
@@ -1452,9 +1499,7 @@ fn evaluate_declarations(
                 },
             )
         }
-        Declaration::Open {
-            mappings, value, ..
-        } => {
+        Declaration::Open { value, .. } => {
             let open_environment = environment.clone();
             evaluate_expression(context, module_path, value, environment, runtime).and_then(
                 move |value| {
@@ -1467,23 +1512,7 @@ fn evaluate_declarations(
                     };
                     let mut sources_by_target = BTreeMap::new();
                     for source in fields.keys() {
-                        let mapping = mappings.iter().find(|mapping| &mapping.source == source);
-                        let target = match mapping {
-                            Some(mapping) => mapping.target.clone(),
-                            None => Some(source.clone()),
-                        };
-                        if let Some(target) = target {
-                            if lookup(&open_environment, &target).is_some()
-                                || sources_by_target.contains_key(&target)
-                            {
-                                return Computation::error(Diagnostic::new(
-                                    "BLOT_OPEN_COLLISION",
-                                    format!("`{target}` is already bound by this open."),
-                                    span,
-                                ));
-                            }
-                            sources_by_target.insert(target, source.clone());
-                        }
+                        sources_by_target.insert(source.clone(), source.clone());
                     }
                     open_environment
                         .opens
@@ -1498,7 +1527,7 @@ fn evaluate_declarations(
 
 pub(crate) fn evaluate_binding(
     context: Rc<Context>,
-    module_path: String,
+    module_path: Rc<String>,
     pattern: PatternId,
     value: ExpressionId,
     environment: Environment,
@@ -1679,7 +1708,7 @@ pub fn apply(
             }
             let mut closure_runtime = runtime;
             closure_runtime.module = closure_module.clone();
-            closure_runtime.effect_scope.push(show(&argument));
+            Rc::make_mut(&mut closure_runtime.effect_scope).push(Rc::new(argument));
             evaluate_expression(context, closure_module, body, scope, closure_runtime).and_then(
                 move |mut value| {
                     if let Some(Value::Arrow { codomain, .. }) = signature.as_deref() {
@@ -1872,7 +1901,7 @@ fn run_special_or_primitive(
         let included = context
             .modules
             .borrow()
-            .get(&runtime.module)
+            .get(runtime.module.as_str())
             .and_then(|loaded| loaded.includes.get(specifier))
             .cloned();
         let Some(included) = included else {
@@ -2213,7 +2242,12 @@ pub(crate) fn match_pattern(
 }
 
 fn module(context: &Context, path: &str) -> Result<Rc<Module>, Diagnostic> {
-    context
+    if let Some((cached_path, module)) = context.module_cache.borrow().as_ref()
+        && cached_path == path
+    {
+        return Ok(module.clone());
+    }
+    let module = context
         .modules
         .borrow()
         .get(path)
@@ -2224,7 +2258,9 @@ fn module(context: &Context, path: &str) -> Result<Rc<Module>, Diagnostic> {
                 format!("Module `{path}` was not loaded."),
                 Span { start: 0, end: 0 },
             )
-        })
+        })?;
+    *context.module_cache.borrow_mut() = Some((path.to_owned(), module.clone()));
+    Ok(module)
 }
 
 fn module_expression(
@@ -2298,15 +2334,18 @@ fn declaration_span(declaration: &Declaration) -> Span {
     }
 }
 
-fn live_declarations(module: &Module) -> Vec<DeclarationId> {
-    live_declarations_for(module, &module.declarations, module.result)
-}
-
 fn live_declarations_for(
+    context: &Context,
+    module_path: &str,
     module: &Module,
+    block: Option<ExpressionId>,
     declarations: &[DeclarationId],
     result: ExpressionId,
-) -> Vec<DeclarationId> {
+) -> LiveDeclarations {
+    let key = (module_path.to_owned(), block);
+    if let Some(live) = context.live_declarations.borrow().get(&key) {
+        return live.clone();
+    }
     let mut needed = free_names_expression(module, result);
     let mut live = Vec::new();
     for declaration_id in declarations.iter().rev() {
@@ -2321,6 +2360,11 @@ fn live_declarations_for(
         }
     }
     live.reverse();
+    let live = Rc::new(live);
+    context
+        .live_declarations
+        .borrow_mut()
+        .insert(key, live.clone());
     live
 }
 

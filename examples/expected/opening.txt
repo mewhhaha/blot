@@ -1,1 +1,1 @@
-{ .target = 10; .rest = 30; }
+{ .source = 10; .value = 20; .rest = 30; }

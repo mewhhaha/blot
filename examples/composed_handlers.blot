@@ -2,7 +2,7 @@
 // bound step names the program with that effect discharged; the final step
 // executes the fully handled program.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 const Terminal = @effect { .read = Unit -> Int; };
 const Clock = @effect { .now = Unit -> Int; };
@@ -34,13 +34,13 @@ let fake_random = {
   end;
 };
 
-let result = try program then do
+let result = try program with
   program_without_terminal <- @handle (Terminal, fake_terminal);
   program_without_clock <- @handle (Clock, fake_clock);
   @handle (Random, fake_random)
 end;
 
-let discarded = try program then do
+let discarded = try program with
   _ <- @handle (Terminal, fake_terminal);
   _ <- @handle (Clock, fake_clock);
   @handle (Random, fake_random)

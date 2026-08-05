@@ -10,7 +10,7 @@
 // function over arrays, so the module argument is unit and the importer's
 // effect row is unchanged by using it.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 // One slot per entity. The slot is an `Option` because a join has to answer
 // what happens where a component is absent, and `#None` is that answer — but

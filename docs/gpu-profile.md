@@ -19,19 +19,19 @@ in a benchmark months later.
 
 | counter                    |              blot | note                                               |
 | -------------------------- | ----------------: | -------------------------------------------------- |
-| `lexerStates`              |               122 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`              |               126 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity` |                21 | worst-case island candidates allocated per token   |
-| `islandCount`              |                74 | one island for every grammar rule                  |
-| `islandStates`             |               425 |                                                    |
-| `islandTransitions`        |               428 |                                                    |
+| `islandCount`              |                72 | one island for every grammar rule                  |
+| `islandStates`             |               408 |                                                    |
+| `islandTransitions`        |               411 |                                                    |
 | `contractionRounds`        |                33 | fixed dispatch bound                               |
-| `denseTransitionBytes`     |           663,000 | immutable device table                             |
-| `packedBytes`              |           514,619 | version-3 runtime section                          |
+| `denseTransitionBytes`     |           626,688 | immutable device table                             |
+| `packedBytes`              |           487,910 | version-3 runtime section                          |
 | `rootLoopIsland`           | 5 (`declaration`) | root loop still proven under general throughput    |
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
-and edge arrays directly. Declaring all 74 rules as islands is what preserves
+and edge arrays directly. Declaring all 72 rules as islands is what preserves
 the full CST shape needed by source lowering.
 
 ## Historical strict-profile measurements
@@ -134,29 +134,26 @@ bytes. `for ever do` needs no replacement grammar: `ever` is an ordinary prelude
 iterator in the existing `for source do` form. `break` remains its own
 declaration and targets the nearest `for` during CST lowering.
 
-Standalone `if` adds thirty-three island states without changing lexer states,
-candidate multiplicity, or contraction rounds. Its `then do` branch is
-semicolon-bounded control flow; expression `if` keeps value branches and now
-requires `else`. Factoring the standalone form's shared `if` opener to admit
-`if let pattern = value else do` adds another sixteen island states, again
-without moving those three bounds. A bare trailing value after block statements
+Standalone `if` uses `then` as the boundary of its semicolon-bounded statement
+body; expression `if` keeps value branches and requires `else`. Factoring the
+standalone form's shared `if` opener also admits `if let pattern = value else`
+without another branch opener. A bare trailing value after block statements
 conflicted with the shared `IDENT` prefix of `name := ...;`, so
 `do statements in value end` uses the existing `in` token as the structural
 boundary instead of adding a parser resolution.
 
-The original `open value;` cost one lexer state and twenty-one island states —
-one keyword and one declaration alternative. Adding its `{ .source: target }`
-rename/ignore mask added sixty-six island states without changing `lexerStates`,
-`maxCandidateMultiplicity`, or `contractionRounds`. The mask is bounded by
-braces and commas, so the additional structure increases the static table
-without increasing per-token ambiguity.
+`open value;` costs one lexer state and twenty-one island states — one keyword
+and one declaration alternative. A former rename/ignore mask added two rules and
+sixty-six island states. Removing it, removing `do` from statement branches, and
+spelling handler composition with `with` moved the current general-profile plan
+from 74 to 72 islands and from 514,619 to 487,910 packed bytes. Candidate
+multiplicity and contraction rounds remain fixed.
 
-`try program then do ... end` adds two lexer states, one bounded island,
-forty-seven island states, 57,720 dense-transition bytes, and 62,107 packed
-bytes. Its body is a repeated semicolon-terminated handler step followed by one
-final step, so candidate multiplicity and contraction rounds remain fixed. The
-two-argument `@handle` spelling is parsed only inside this region and becomes
-the existing three-argument primitive during CST lowering.
+`try program with ... end` is one bounded island whose body is a repeated
+semicolon-terminated handler step followed by one final step, so candidate
+multiplicity and contraction rounds remain fixed. The two-argument `@handle`
+spelling is parsed only inside this region and becomes the existing
+three-argument primitive during CST lowering.
 
 `fn` is the largest reduction the grammar has taken. Before it a lambda was
 `postfix_expression "=>" expression`, sharing its opening tokens with an

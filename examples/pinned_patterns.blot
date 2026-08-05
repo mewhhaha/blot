@@ -1,6 +1,6 @@
 // A pin tests a value against an existing binding without shadowing it.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 let wanted = 2;
 

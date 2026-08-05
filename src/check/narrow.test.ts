@@ -24,7 +24,7 @@ import { show } from "./print.ts";
 const scratch = await Deno.makeTempDir();
 
 /** The operators this file interrogates, as one module's compile-time values. */
-const FIXTURE = `open {} = (@import "blot:prelude") ();
+const FIXTURE = `open @import "blot:prelude" ();
 
 const Sneaky = { .right = 0; };
 
@@ -35,7 +35,7 @@ const Probes = {
   // \`open\` binds \`right\` from a compile-time value, so no node in the body
   // carries the name. This function is \`fn a => fn b => a == 0\`.
   .opened = fn left => fn right => do
-      open {} = Sneaky;
+      open Sneaky;
     in is_equal (@int.cmp left right) end;
 
   // \`left\` occurs once as a \`var\`, but a binder rebinds it first.

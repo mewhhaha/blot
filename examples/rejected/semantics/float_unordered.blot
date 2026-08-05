@@ -11,7 +11,7 @@
 // reason: comparing is what refuses, so nothing written over `Float.cmp` could
 // have reported it.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 let nothing = Float.div 0.0 0.0;
 

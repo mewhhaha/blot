@@ -222,13 +222,6 @@ pub struct DeclarationTag {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct OpenMapping {
-    pub source: String,
-    pub target: Option<String>,
-    pub span: Span,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "tag", rename_all = "lowercase")]
 pub enum Declaration {
     Binding {
@@ -244,7 +237,6 @@ pub enum Declaration {
         span: Span,
     },
     Open {
-        mappings: Vec<OpenMapping>,
         value: ExpressionId,
         span: Span,
     },
@@ -523,15 +515,8 @@ impl Module {
                     validate_span(*span, &location)?;
                     targets.push(expression_index(*value, &location)?);
                 }
-                Declaration::Open {
-                    mappings,
-                    value,
-                    span,
-                } => {
+                Declaration::Open { value, span } => {
                     validate_span(*span, &location)?;
-                    for mapping in mappings {
-                        validate_span(mapping.span, &location)?;
-                    }
                     targets.push(expression_index(*value, &location)?);
                 }
             }

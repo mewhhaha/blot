@@ -19,7 +19,6 @@ import type {
   Decl,
   DeclarationTag,
   Expr,
-  OpenMapping,
   Pattern,
   Span,
 } from "../syntax/ast.ts";
@@ -173,7 +172,6 @@ export type CoreDefinition =
   }
   | {
     readonly tag: "open";
-    readonly mappings: readonly OpenMapping[];
     readonly bindings: ReadonlyMap<string, Value>;
     readonly span: Span;
     readonly origin: Decl;
@@ -432,7 +430,6 @@ class Elaborator {
     }
     return {
       tag: "open",
-      mappings: declaration.mappings,
       bindings,
       span: declaration.span,
       origin: declaration,

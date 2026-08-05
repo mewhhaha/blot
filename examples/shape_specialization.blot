@@ -1,6 +1,6 @@
 // Structural functions specialize at each concrete call shape.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 let get_x = fn value => value.x;
 

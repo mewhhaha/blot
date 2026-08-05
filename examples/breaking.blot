@@ -1,13 +1,13 @@
 // An unbounded loop is still a fold. Its direct `:=` rebindings are the
 // accumulator, and `break` returns the accumulator as it exists at that point.
 
-open {} = @import "blot:prelude" ();
+open @import "blot:prelude" ();
 
 let iterations = 0;
 let completed = 0;
 for ever do
   iterations := iterations + 1;
-  if iterations >= 5 then do
+  if iterations >= 5 then
     break;
   end;
   completed := completed + 1;
@@ -21,12 +21,12 @@ for ever do
   let inner = 0;
   for ever do
     inner := inner + 1;
-    if inner >= 2 then do
+    if inner >= 2 then
       break;
     end;
   end;
   inner_total := inner_total + inner;
-  if outer >= 3 then do
+  if outer >= 3 then
     break;
   end;
 end;
@@ -35,7 +35,7 @@ end;
 let finite = 0;
 for value in Iter.range (0, 10) do
   finite := finite + value;
-  if value >= 3 then do
+  if value >= 3 then
     break;
   end;
 end;
@@ -52,7 +52,7 @@ let guard_total = 0;
 for ever do
   guard_steps := guard_steps + 1;
   let candidate = if guard_steps < 3 then Some guard_steps else None end;
-  if let #Some value = candidate else do
+  if let #Some value = candidate else
     break;
   end;
   guard_total := guard_total + value;

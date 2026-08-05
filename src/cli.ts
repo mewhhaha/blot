@@ -15,10 +15,26 @@ import type { NamePattern } from "./linear/check.ts";
 import { testFile, type TestOutcome } from "./test.ts";
 import { buildPackage } from "./package.ts";
 import { Compiler } from "./compiler.ts";
+import { formatSource } from "./tooling/formatter.ts";
+import { runLanguageServer } from "./lsp.ts";
 
 const [command, ...rest] = Deno.args;
 
-if (command === undefined || rest.length === 0) {
+if (command === undefined) {
+  printUsage();
+  Deno.exit(2);
+}
+
+if (command === "lsp") {
+  if (rest.length > 0) {
+    printUsage();
+    Deno.exit(2);
+  }
+  await runLanguageServer();
+  Deno.exit(0);
+}
+
+if (rest.length === 0) {
   printUsage();
   Deno.exit(2);
 }
@@ -32,6 +48,8 @@ if (command === "build") {
   failures += await buildFiles(rest);
 } else if (command === "package") {
   failures += await buildPackages(rest);
+} else if (command === "fmt") {
+  failures += await formatFiles(rest);
 } else {
   for (const path of rest) {
     try {
@@ -73,9 +91,43 @@ type BuiltFileArtifact = {
 };
 
 function printUsage(): void {
-  console.error("usage: blot <check|test|eval|ast|ownership> <file.blot>...");
+  console.error(
+    "usage: blot <check|test|eval|ast|ownership|fmt> <file.blot>...",
+  );
+  console.error("       blot fmt [--check] <file.blot>...");
   console.error("       blot build <file.blot>...");
   console.error("       blot package <blot.json>...");
+  console.error("       blot lsp");
+}
+
+async function formatFiles(arguments_: readonly string[]): Promise<number> {
+  const checkOnly = arguments_.includes("--check");
+  const paths = arguments_.filter((argument) => argument !== "--check");
+  if (paths.length === 0) {
+    console.error("blot fmt requires at least one .blot file");
+    return 1;
+  }
+  let failures = 0;
+  for (const path of paths) {
+    const source = await Deno.readTextFile(path);
+    const formatted = await formatSource(source);
+    if (!formatted.ok) {
+      failures += 1;
+      for (const diagnostic of formatted.diagnostics) {
+        console.error(render(path, source, diagnostic));
+      }
+      continue;
+    }
+    if (formatted.source === source) continue;
+    if (checkOnly) {
+      failures += 1;
+      console.error(`${path}: needs formatting`);
+      continue;
+    }
+    await Deno.writeTextFile(path, formatted.source);
+    console.log(path);
+  }
+  return failures;
 }
 
 function reportTestOutcomes(outcomes: readonly TestOutcome[]): number {

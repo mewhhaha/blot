@@ -1811,7 +1811,7 @@ fn evaluate_checked_module(
         };
         return evaluate_expression(
             context,
-            path.to_owned(),
+            Rc::new(path.to_owned()),
             result,
             environment.clone(),
             runtime,

@@ -22,7 +22,7 @@
 // module boundary at all: the scene and the camera arrive as thousandths and
 // the screen leaves as pixels, and everything between them is a lane.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 const M = (@import "./math.blot") ();
 

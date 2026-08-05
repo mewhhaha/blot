@@ -1,9 +1,9 @@
 // A module is a function, so its standalone control flow has the same return
 // target as any other function body.
 
-open {} = @import "blot:prelude" ();
+open @import "blot:prelude" ();
 
-if 1 < 2 then do
+if 1 < 2 then
   return 42;
 end;
 

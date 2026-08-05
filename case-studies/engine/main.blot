@@ -37,7 +37,7 @@ operators {
   infix 40 (!=) = Eq.ne;
 };
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 const E = (@import "./lib/ecs.blot") ();
 const M = (@import "./lib/math.blot") ();
@@ -178,14 +178,14 @@ let frames = 0;
 
 for ever do
   remaining <- Host.frame ();
-  if remaining <= 0 then do
+  if remaining <= 0 then
     break;
   end;
 
   // Hot reload. The host bumps its generation when a watched file changes, and
   // the world is rebuilt from the new scene; nothing else has to know.
   current <- Assets.generation ();
-  if current != generation then do
+  if current != generation then
     transforms <- load_transforms ();
     models <- load_models ();
     generation := current;

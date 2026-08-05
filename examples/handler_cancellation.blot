@@ -1,7 +1,7 @@
 // Cancelling a continuation is an explicit sequenced operation. It consumes
 // the suspended continuation without running the rest of the computation.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 const Ask = @effect { .ask = Unit -> Unit; };
 

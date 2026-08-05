@@ -1,20 +1,20 @@
 // `return` exits the nearest source function. A standalone `if` inherits that
 // target, while the normal path reaches the block value after `in`.
 
-open {} = @import "blot:prelude" ();
+open @import "blot:prelude" ();
 
 let describe = fn value => do
-  if value < 0 then do
+  if value < 0 then
     return "negative";
   end;
-  if value == 0 then do
+  if value == 0 then
     return "zero";
   end;
   in "positive"
 end;
 
 let unwrap = fn option => do
-  if let #Some value = option else do
+  if let #Some value = option else
     return -1;
   end;
   in value
@@ -22,7 +22,7 @@ end;
 
 let find = fn wanted => do
   for value in Iter.range (0, 5) do
-    if value == wanted then do
+    if value == wanted then
       return value;
     end;
   end;
@@ -33,7 +33,7 @@ let count_to = fn limit => do
   let count = 0;
   for ever do
     count := count + 1;
-    if count >= limit then do
+    if count >= limit then
       return count;
     end;
   end;
@@ -44,10 +44,10 @@ let count_or_stop = fn limit => do
   let count = 0;
   for ever do
     count := count + 1;
-    if count >= limit then do
+    if count >= limit then
       return count;
     end;
-    if count >= 5 then do
+    if count >= 5 then
       break;
     end;
   end;

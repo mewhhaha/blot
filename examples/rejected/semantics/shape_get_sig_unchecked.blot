@@ -10,7 +10,7 @@
 // `member_sig_unchecked.blot` is the same mistake and the same fix for a
 // namespace member.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 let r = { .a = 7; };
 sig z = 0;

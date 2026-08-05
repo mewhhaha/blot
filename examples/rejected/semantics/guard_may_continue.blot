@@ -1,7 +1,7 @@
-open {} = @import "blot:prelude" ();
+open @import "blot:prelude" ();
 
 let unwrap = fn option => do
-  if let #Some value = option else do
+  if let #Some value = option else
     let ignored = ();
   end;
   in value

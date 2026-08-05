@@ -15,7 +15,7 @@
 // The same refusal covers the case no analysis of a value could ever handle:
 // `Eq` arriving as a function parameter, chosen by the caller.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 let Eq = { .eq = fn a => fn b => True; .ne = fn a => fn b => False; };
 

@@ -31,7 +31,7 @@ function zoomShapes(checked: CheckResult): string[] {
 }
 
 /** A library that reads one field of a record its callers build. */
-const READS_ONE_FIELD = 'open {} = (@import "blot:prelude") ();\n' +
+const READS_ONE_FIELD = 'open @import "blot:prelude" ();\n' +
   "return { .zoom_of = fn c => c.zoom; };";
 
 Deno.test("checking includes ownership errors in transitive dependencies", async () => {
@@ -86,7 +86,7 @@ Deno.test("imported compile-time dispatchers specialize structured results", asy
   await writeModule(
     directory,
     "ecs",
-    'open {} = (@import "blot:prelude") ();\n' +
+    'open @import "blot:prelude" ();\n' +
       "const component_1 = fn _ => { .pack = fn value => value; };\n" +
       "const component_2 = fn _ => { .pack = fn (left, right) => @int.add left right; };\n" +
       "const component = fn definition => case @array.len (@shape.names definition.fields) of\n" +
@@ -104,7 +104,7 @@ Deno.test("imported compile-time dispatchers specialize structured results", asy
   const root = await writeModule(
     directory,
     "root",
-    'open {} = (@import "blot:prelude") ();\n' +
+    'open @import "blot:prelude" ();\n' +
       'const Ecs = (@import "./ecs.blot") ();\n' +
       'const Components = (@import "./components.blot") ();\n' +
       "const Unary = Ecs.component { .fields = { .value = Int; }; };\n" +
@@ -126,7 +126,7 @@ Deno.test("specialization capsules bind each module application's parameter", as
     directory,
     "components",
     "module settings;\n" +
-      'open {} = (@import "blot:prelude") ();\n' +
+      'open @import "blot:prelude" ();\n' +
       "const component_1 = fn _ => {\n" +
       "  .pack = fn value => settings.offset + value;\n" +
       "};\n" +
@@ -142,7 +142,7 @@ Deno.test("specialization capsules bind each module application's parameter", as
   const root = await writeModule(
     directory,
     "root",
-    'open {} = (@import "blot:prelude") ();\n' +
+    'open @import "blot:prelude" ();\n' +
       'const Components = (@import "./components.blot") { .offset = 40; };\n' +
       "const Position = Components.component { .fields = { .x = Int; }; };\n" +
       "return Position.pack 2;",
@@ -156,7 +156,7 @@ Deno.test("specialization capsules freshen calls and follow dependency revisions
   const library = await writeModule(
     directory,
     "components",
-    'open {} = (@import "blot:prelude") ();\n' +
+    'open @import "blot:prelude" ();\n' +
       "const component_1 = fn _ => { .pack = fn value => value; };\n" +
       "const component_2 = fn _ => { .pack = fn (left, right) => left + right; };\n" +
       "const component = fn definition => case @array.len (@shape.names definition.fields) of\n" +
@@ -168,7 +168,7 @@ Deno.test("specialization capsules freshen calls and follow dependency revisions
   const integerRoot = await writeModule(
     directory,
     "integer_root",
-    'open {} = (@import "blot:prelude") ();\n' +
+    'open @import "blot:prelude" ();\n' +
       'const Components = (@import "./components.blot") ();\n' +
       "const One = Components.component { .fields = { .value = Int; }; };\n" +
       "return One.pack 7;",
@@ -176,7 +176,7 @@ Deno.test("specialization capsules freshen calls and follow dependency revisions
   const textRoot = await writeModule(
     directory,
     "text_root",
-    'open {} = (@import "blot:prelude") ();\n' +
+    'open @import "blot:prelude" ();\n' +
       'const Components = (@import "./components.blot") ();\n' +
       "const One = Components.component { .fields = { .value = Str; }; };\n" +
       'return One.pack "seven";',
@@ -187,7 +187,7 @@ Deno.test("specialization capsules freshen calls and follow dependency revisions
 
   await Deno.writeTextFile(
     library,
-    'open {} = (@import "blot:prelude") ();\n' +
+    'open @import "blot:prelude" ();\n' +
       'const component_1 = fn _ => { .pack = fn _ => "reloaded"; };\n' +
       "const component_2 = fn _ => { .pack = fn (left, right) => left + right; };\n" +
       "const component = fn definition => case @array.len (@shape.names definition.fields) of\n" +
@@ -226,7 +226,7 @@ Deno.test("JSON include parsers choose widened or literal inference", async () =
   const root = await writeModule(
     directory,
     "root",
-    'open {} = (@import "blot:prelude") ();\n' +
+    'open @import "blot:prelude" ();\n' +
       'const normal = @include "./config.json" as_json;\n' +
       'const exact = @include "./config.json" as_const_json;\n' +
       "return { .normal = normal; .exact = exact; };",
@@ -244,7 +244,7 @@ Deno.test("a library reads a record with more fields than it projects", async ()
   const root = await writeModule(
     directory,
     "root",
-    'open {} = (@import "blot:prelude") ();\n' +
+    'open @import "blot:prelude" ();\n' +
       'const lib = @import "./lib.blot" ();\n' +
       "return lib.zoom_of { .zoom = 3; .angle = 7; };",
   );
@@ -280,14 +280,14 @@ Deno.test("two programs sharing a library each get their own field sets", async 
   const narrow = await writeModule(
     directory,
     "narrow",
-    'open {} = (@import "blot:prelude") ();\n' +
+    'open @import "blot:prelude" ();\n' +
       'const lib = @import "./lib.blot" ();\n' +
       "return lib.zoom_of { .zoom = 3; .angle = 7; };",
   );
   const wide = await writeModule(
     directory,
     "wide",
-    'open {} = (@import "blot:prelude") ();\n' +
+    'open @import "blot:prelude" ();\n' +
       'const lib = @import "./lib.blot" ();\n' +
       "return lib.zoom_of { .zoom = 3; .scale = 1; .tint = 2; };",
   );
@@ -310,7 +310,7 @@ Deno.test("a field set found two modules down reaches the root's facts", async (
   await writeModule(
     directory,
     "middle",
-    'open {} = (@import "blot:prelude") ();\n' +
+    'open @import "blot:prelude" ();\n' +
       'const lib = @import "./lib.blot" ();\n' +
       "return { .v = lib.zoom_of { .zoom = 3; .angle = 7; }; };",
   );
@@ -331,21 +331,21 @@ Deno.test("two records reaching one library retain both representation facts", a
   await writeModule(
     directory,
     "left",
-    'open {} = (@import "blot:prelude") ();\n' +
+    'open @import "blot:prelude" ();\n' +
       'const lib = @import "./lib.blot" ();\n' +
       "return { .v = lib.zoom_of { .zoom = 3; .angle = 7; }; };",
   );
   await writeModule(
     directory,
     "right",
-    'open {} = (@import "blot:prelude") ();\n' +
+    'open @import "blot:prelude" ();\n' +
       'const lib = @import "./lib.blot" ();\n' +
       "return { .v = lib.zoom_of { .zoom = 3; .scale = 1; }; };",
   );
   const root = await writeModule(
     directory,
     "root",
-    'open {} = (@import "blot:prelude") ();\n' +
+    'open @import "blot:prelude" ();\n' +
       'const left = @import "./left.blot" ();\n' +
       'const right = @import "./right.blot" ();\n' +
       "return left.v + right.v;",
@@ -368,7 +368,7 @@ Deno.test("checking one program twice records the same field sets", async () => 
   const root = await writeModule(
     directory,
     "root",
-    'open {} = (@import "blot:prelude") ();\n' +
+    'open @import "blot:prelude" ();\n' +
       'const lib = @import "./lib.blot" ();\n' +
       "return lib.zoom_of { .zoom = 3; .angle = 7; };",
   );

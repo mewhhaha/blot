@@ -1,0 +1,3 @@
+const exports = { .value = 1; };
+open {} = exports;
+return value;

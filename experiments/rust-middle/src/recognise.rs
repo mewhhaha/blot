@@ -65,7 +65,7 @@ fn factored(context: &Rc<Context>, value: &Value) -> bool {
     let Some(module) = context
         .modules
         .borrow()
-        .get(module)
+        .get(module.as_str())
         .map(|loaded| loaded.module.clone())
     else {
         return false;
@@ -318,7 +318,7 @@ fn probe_bool(context: &Rc<Context>, value: &Value, left: bool, right: bool) -> 
 
 fn probe_runtime(value: &Value) -> Runtime {
     let module = match value {
-        Value::Closure { module, .. } => module.clone(),
+        Value::Closure { module, .. } => module.as_ref().clone(),
         _ => String::new(),
     };
     let runtime = Runtime::new(Phase::Comptime, module);

@@ -93,7 +93,7 @@ constant-folds every `let` it can before lowering, and the corpus was almost
 entirely foldable.
 
 ```blot
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 const Source = @effect.host { .value = Unit -> Int; };
 let get_x = fn v => v.x;
 n <- Source.value ();
@@ -114,11 +114,11 @@ boundaries" in `docs/backend.md`: a spread whose member type is still a variable
 **Three places blot disagrees with itself.** Each verified by running `check`
 and `eval` on the same file.
 
-| program                                                                                   | `blot check`       | `blot eval`                                      |
-| ----------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------ |
-| `let f = fn c => case c of #Some v => v, _ => 0 end; f (#Some "hi")`                      | `0`                | `"hi"`                                           |
-| `if let #Some v = c else do return 999; end; return v;`                                   | `999`              | `3`                                              |
-| `if let #Some v = c else do return "none"; end; in Text.append v "!"` applied to `Some 3` | `(Text \| "none")` | `BLOT_TYPE: @text.concat expects text, found 3.` |
+| program                                                                                | `blot check`       | `blot eval`                                      |
+| -------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------ |
+| `let f = fn c => case c of #Some v => v, _ => 0 end; f (#Some "hi")`                   | `0`                | `"hi"`                                           |
+| `if let #Some v = c else return 999; end; return v;`                                   | `999`              | `3`                                              |
+| `if let #Some v = c else return "none"; end; in Text.append v "!"` applied to `Some 3` | `(Text \| "none")` | `BLOT_TYPE: @text.concat expects text, found 3.` |
 
 The third is the important one: the checker accepts a program the evaluator
 rejects on type grounds. `if let` is the flagship guard form in `LANGUAGE.md`
@@ -130,7 +130,7 @@ rejects on type grounds. `if let` is the flagship guard form in `LANGUAGE.md`
 ```blot
 let n = 0;
 for x in Iter.range (0, 5) do
-  if x > 2 then do n := n + 1; end;
+  if x > 2 then n := n + 1; end;
 end;
 return n;                                  // should be 2
 ```
@@ -609,23 +609,16 @@ is much easier after M3a (the same `fieldsOf` polarity split).
 
 ## M7 — Tooling: a formatter, and diagnostics an editor can consume
 
-**What it unlocks.** `docs/editor.md:15` says "There is no language server yet;
-that arrives with the inference milestone." Inference arrived. The line is
-stale, `blot fmt` is not a command, and `parse()` cannot feed a formatter today:
-it returns `{ ok, module }` only, the baba cursor is a local at
-`src/syntax/parse.ts:46`, and nothing in `src/syntax/ast.ts` carries comments or
-trivia — so a formatter reconstructed from the AST would delete every comment in
-the file, including the 700 lines of design commentary in the prelude.
+**What it unlocks.** A first formatter and language server now provide
+structural indentation, compiler diagnostics, local definitions, and lints.
+`parseConcrete()` exposes Baba's CST beside the AST, so source tooling can keep
+comments in their original gaps instead of reconstructing source from an AST
+that carries no trivia.
 
-**Work.** Export a second entry point from `src/syntax/parse.ts` returning the
-cursor alongside the module, and attach comment tokens as leading/trailing
-trivia during `lowerModule`. Every node already carries an exact `span`, so a
-printer can reprint from spans; what it cannot do is find the comments. Then the
-printer. The language server needs nothing else that M2's diagnostic
-accumulation does not already provide: `CheckResult` already carries `opens`,
-`values`, `shapes`, `variants`, and `grants` keyed by AST node identity, which
-is what hover and go-to-definition want, and `blot check` is verified
-device-free.
+**Remaining work.** The formatter deliberately does not reflow expressions.
+Cross-module definitions and hover need durable binding facts from the compiler,
+and parse recovery still needs the admissible-token work below. Compiler
+diagnostics use the open root revision directly and remain device-free.
 
 Also here, because it is the same complaint from the other end: parse
 diagnostics carry no expectation. Every syntax mistake reports
@@ -638,20 +631,18 @@ admissible-token set at the failure state is the real fix and a baba question; a
 table of recovery patterns keyed on (failing rule, unexpected token) needs no
 baba change.
 
-**Corpus.** `deno fmt --check` gains `blot fmt --check` over the whole corpus,
-which is a stronger parity statement than `just parity` alone: reprinting every
-program and reparsing it must give the same AST _and_ the same comment
-placement.
+**Remaining corpus gate.** Add `blot fmt --check` over the whole corpus beside
+`deno fmt --check`. This is a stronger parity statement than `just parity`
+alone: reprinting every program and reparsing it must give the same AST and the
+same comment placement.
 
-**Gate.** A round-trip test: `blot fmt` every `.blot` file in the repo, reparse,
-assert the module is structurally identical and no comment was lost.
+**Remaining gate.** `blot fmt` every `.blot` file in the repo, reparse, assert
+the module is structurally identical and no comment was lost.
 `just
 grammar-check` and `just parity` unchanged, since none of this touches
 `grammar.baba`.
 
-**Size.** ~80 lines for trivia capture, ~400 for a printer, ~100 for parse
-recovery patterns. The LSP itself is a separate project on top of `checkFile`
-and is out of scope for this repo.
+**Size.** Parse recovery and a full expression printer remain separate work.
 
 ---
 
@@ -809,9 +800,9 @@ on a branch is the beginning of one.
 declaration forms; no type namespace. If a feature seems to need one it belongs
 in the comptime evaluator.
 
-**No implicit prelude scope.** `open {} = (@import "blot:prelude") ();` stays on
-the first line of every program. A default fixity naming a binding by string is
-the mechanism, and it is not going to be hidden.
+**No implicit prelude scope.** `open @import "blot:prelude" ();` stays on the
+first line of every program. A default fixity naming a binding by string is the
+mechanism, and it is not going to be hidden.
 
 **No equi-recursive types in the lattice.**
 `const Json = #Null | #Num Int |
@@ -896,11 +887,11 @@ deliberate limit in `LANGUAGE.md` §10.3. `@array.get` emits a checked read
 whatever a comparison proved, and a text-slicing primitive, when there is one,
 will do the same.
 
-**No language server in this repository.** `checkFile` will expose everything an
-LSP needs — a diagnostic _list_ with exact spans, plus the fact maps keyed by
-node identity — and the LSP itself is somebody else's project. The invariant
-that matters here is that `blot check` never initializes a device, and that is
-verified to hold today.
+**The language server is not a semantic authority.** Its diagnostics come from
+the checked-in compiler, and its formatter, local definitions, and lints use the
+Baba CST and elaborated AST. It never initializes a device. Cross-module
+definitions and hover remain future tooling work rather than a second name or
+type checker in the server.
 
 **No fixing `../gpufuck`.** File the bug.
 

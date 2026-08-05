@@ -15,7 +15,7 @@
 // `examples/narrowing.blot` is the sibling rule for `case`, where the arm's own
 // pattern is the proof.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 sig name = 1 | 2 | 3 -> Str;
 let name = fn n => if n == 1

@@ -38,7 +38,6 @@ import {
   evaluate,
   evaluationRuntime,
   type Imports,
-  resolveOpenBindings,
   run,
 } from "../comptime/eval.ts";
 import { bridge, effectLabel, reify } from "./bridge.ts";
@@ -3711,14 +3710,9 @@ function inferDeclarations(
           declaration.span,
         );
       }
-      const bindings = resolveOpenBindings(
-        value.fields,
-        declaration.mappings,
-        declaration.span,
-      );
       context.opens.set(
         declaration.value,
-        new Map(bindings.map((binding) => [binding.target, binding.value])),
+        new Map(value.fields),
       );
       const target = inferPure(
         declaration.value,
@@ -3726,19 +3720,19 @@ function inferDeclarations(
         level,
         "An `open` value",
       );
-      for (const binding of bindings) {
-        context.values.names.set(binding.target, binding.value);
+      for (const [name, fieldValue] of value.fields) {
+        context.values.names.set(name, fieldValue);
         const field = freshVar(level);
         located(declaration.span, () => {
-          constrain(target, record([[binding.source, field]]));
+          constrain(target, record([[name, field]]));
         });
         // Quantified below ground level, for the reason the module scope is:
         // these variables are already at level 0, and generalizing at 0 would
         // make every use share them — `fold` used once on text could then
         // never be used on integers.
-        context.types.names.set(binding.target, scheme(field, -1));
-        recordBinding(context.types, binding.target);
-        recordComptimeBinding(context.types, binding.target, binding.value);
+        context.types.names.set(name, scheme(field, -1));
+        recordBinding(context.types, name);
+        recordComptimeBinding(context.types, name, fieldValue);
       }
       continue;
     }

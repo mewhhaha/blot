@@ -6,7 +6,7 @@
 // A type variable would be believed for any `sig` at all, which is why one is
 // not what "the checker knows nothing" means here.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 const Money = #Money I32 <+ { .of = fn n => #Money n; };
 

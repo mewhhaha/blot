@@ -149,11 +149,10 @@ export type LiteralKind =
   | "in"
   | "break"
   | "open"
-  | ","
-  | "."
-  | ":"
   | "return"
   | "#"
+  | ","
+  | "."
   | "comptime"
   | "rec"
   | "if"
@@ -162,6 +161,7 @@ export type LiteralKind =
   | "case"
   | "of"
   | "try"
+  | "with"
   | "fn"
   | "..."
   | "=>";
@@ -237,8 +237,6 @@ export type RuleName =
   | "iteration_source"
   | "breaking"
   | "opening"
-  | "open_mask"
-  | "open_mapping"
   | "result"
   | "binding_pattern"
   | "pattern_core"
@@ -408,21 +406,7 @@ export interface BreakingCursor extends RuleCursorBase<"breaking"> {
 }
 
 export interface OpeningCursor extends RuleCursorBase<"opening"> {
-  field(name: "mask"): OpenMaskCursor;
   field(name: "value"): ValueCursor;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
-export interface OpenMaskCursor extends RuleCursorBase<"open_mask"> {
-  field(name: "entries"): ReadonlyArray<OpenMappingCursor> | null;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
-export interface OpenMappingCursor extends RuleCursorBase<"open_mapping"> {
-  field(name: "source"): FieldNameCursor;
-  field(name: "target"): TokenCursor<"named", "IDENT"> | TokenCursor<"named", "TYPE_IDENT">;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -792,8 +776,6 @@ export type AnyRuleCursor =
   | IterationSourceCursor
   | BreakingCursor
   | OpeningCursor
-  | OpenMaskCursor
-  | OpenMappingCursor
   | ResultCursor
   | BindingPatternCursor
   | PatternCoreCursor

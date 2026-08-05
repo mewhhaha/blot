@@ -1,4 +1,4 @@
-open {} = (@import "../src/prelude/prelude.blot") ();
+open @import "../src/prelude/prelude.blot" ();
 
 let taken = Array.take ([10, 20, 30], 1);
 let missed = Array.take ([10, 20, 30], 9);

@@ -40,7 +40,7 @@
 // WHAT IS REFUSED
 //
 //   * A body containing `open`. Its names come from a compile-time value, not
-//     from the syntax, so `open {} = Sneaky;` can rebind `p1` without the name
+//     from the syntax, so `open Sneaky;` can rebind `p1` without the name
 //     `p1` appearing in any node — defeating the occurrence count. Nothing in the
 //     prelude opens inside an operator, so refusing outright costs nothing. The
 //     principled version enumerates the names every declaration form binds,

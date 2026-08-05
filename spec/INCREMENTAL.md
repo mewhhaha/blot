@@ -36,6 +36,12 @@ texts produces equal ASTs including source origins, downstream semantic phases
 may share a revision. If an edit moves a diagnostic span, that equality does not
 hold.
 
+An editor buffer is another supplier of the root module's exact source bytes,
+not a weaker checking mode. Checking an in-memory root revision replaces that
+module's source component while its imports and includes retain their resolved
+filesystem revisions. The resident compiler applies the same invalidation and
+fresh-compilation judgment as it does after a disk edit.
+
 ## 3. Dependency invalidation
 
 The source graph carries import and include edges. Changing a node invalidates
@@ -82,6 +88,10 @@ Runtime HIR, and emitted artifacts may be retained only under the strongest
 revision of any input they observe. A complete checked environment may replace a
 second module evaluation only under the `checked-environment` premise in
 [`TYPECHECKING.md`](TYPECHECKING.md).
+
+Declaration liveness is derived from a lowered module and may be cached by module
+path plus the enclosing block's expression identity. Replacing that module
+invalidates every such entry before evaluation can observe the replacement AST.
 
 ## 6. Prelude snapshots
 

@@ -1,4 +1,4 @@
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 let values = Int32x4.of_wrapping (5, 7, -8, 9);
 let shifted = Int32x4.shift_left values 1;

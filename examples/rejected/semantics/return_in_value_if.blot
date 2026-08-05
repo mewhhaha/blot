@@ -1,4 +1,4 @@
-open {} = @import "blot:prelude" ();
+open @import "blot:prelude" ();
 
 let choose = fn () => do
   let value = if 1 < 2 then do

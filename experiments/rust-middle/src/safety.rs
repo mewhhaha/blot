@@ -234,17 +234,8 @@ impl Analysis<'_> {
                         scope.relations.insert(name, relation);
                     }
                 }
-                Declaration::Open {
-                    mappings, value, ..
-                } => {
+                Declaration::Open { value, .. } => {
                     self.walk(value, scope, false)?;
-                    for mapping in mappings {
-                        if let Some(target) = mapping.target
-                            && (!scope.top_level || lookup(self.values, &target).is_none())
-                        {
-                            scope.shadowed.insert(target);
-                        }
-                    }
                 }
             }
         }

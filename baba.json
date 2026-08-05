@@ -93,18 +93,6 @@
         }
       },
       {
-        "rule": "open_mask",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "open_mapping",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
         "rule": "result",
         "boundary": {
           "kind": "root"

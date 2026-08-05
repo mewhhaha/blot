@@ -8,7 +8,7 @@
 // `sig` would be *believed* rather than checked and the program would export
 // the type `0` for a value that is `7`.
 
-open {} = (@import "blot:prelude") ();
+open @import "blot:prelude" ();
 
 const T = { .x = Int; } <+ { .make = fn n => #Some { .x = n; }; };
 

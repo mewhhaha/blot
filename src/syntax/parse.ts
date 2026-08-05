@@ -5,7 +5,7 @@ import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
 import type { Diagnostic } from "../diagnostic.ts";
 import { BlotError } from "../diagnostic.ts";
 import type { Module } from "./ast.ts";
-import { lowerModule } from "./lower.ts";
+import { lowerModule, type Rule } from "./lower.ts";
 import { materializeCpuCst } from "./cpu_cst.ts";
 
 const planUrl = new URL("../../generated/wasm/parser.plan", import.meta.url);
@@ -23,6 +23,19 @@ export type ParseResult =
   | { readonly ok: false; readonly diagnostics: readonly Diagnostic[] };
 
 export async function parse(source: string): Promise<ParseResult> {
+  const result = await parseConcrete(source);
+  if (!result.ok) return result;
+  return { ok: true, module: result.module };
+}
+
+export type ConcreteParseResult =
+  | { readonly ok: true; readonly module: Module; readonly cst: Rule }
+  | { readonly ok: false; readonly diagnostics: readonly Diagnostic[] };
+
+/** Parses source while retaining Baba's concrete tree for source tooling. */
+export async function parseConcrete(
+  source: string,
+): Promise<ConcreteParseResult> {
   const instance = await parser();
   const result = ingestCpuSource(instance, source);
   if (!result.ok) {
@@ -37,12 +50,11 @@ export async function parse(source: string): Promise<ParseResult> {
   }
 
   try {
+    const cst = materializeCpuCst(instance, result.program, source);
     return {
       ok: true,
-      module: lowerModule(
-        materializeCpuCst(instance, result.program, source),
-        source,
-      ),
+      module: lowerModule(cst, source),
+      cst,
     };
   } catch (error) {
     if (error instanceof BlotError) {

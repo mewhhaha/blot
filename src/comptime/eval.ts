@@ -10,13 +10,7 @@
 // an approximation: `resume` is affine and calling it twice is an error, not a
 // convention.
 
-import type {
-  Expr,
-  Module,
-  OpenMapping,
-  Pattern,
-  Span,
-} from "../syntax/ast.ts";
+import type { Expr, Module, Pattern, Span } from "../syntax/ast.ts";
 import type { RecordAdaptation } from "../check/infer.ts";
 import {
   type ComputationSchedule,
@@ -84,59 +78,6 @@ export interface Runtime {
 }
 
 const DEFAULT_EVALUATION_FUEL = 1_000_000;
-
-export interface OpenBinding {
-  readonly source: string;
-  readonly target: string;
-  readonly value: Value;
-}
-
-export function resolveOpenBindings(
-  fields: ReadonlyMap<string, Value>,
-  mappings: readonly OpenMapping[],
-  span: Span,
-): readonly OpenBinding[] {
-  const mappingsBySource = new Map<string, OpenMapping>();
-  for (const mapping of mappings) {
-    const previous = mappingsBySource.get(mapping.source);
-    if (previous !== undefined) {
-      fail(
-        "BLOT_DUPLICATE_OPEN_FIELD",
-        `The open mask maps field \`.${mapping.source}\` more than once.`,
-        mapping.span,
-      );
-    }
-    if (!fields.has(mapping.source)) {
-      fail(
-        "BLOT_NO_FIELD",
-        `The open mask names field \`.${mapping.source}\`, but the opened record has no such field.`,
-        mapping.span,
-      );
-    }
-    mappingsBySource.set(mapping.source, mapping);
-  }
-
-  const bindingsByTarget = new Map<string, OpenBinding>();
-  for (const [source, value] of fields) {
-    const mapping = mappingsBySource.get(source);
-    let target: string | null = source;
-    if (mapping !== undefined) target = mapping.target;
-    if (target === null) continue;
-
-    const previous = bindingsByTarget.get(target);
-    if (previous !== undefined) {
-      let collisionSpan = span;
-      if (mapping !== undefined) collisionSpan = mapping.span;
-      fail(
-        "BLOT_OPEN_COLLISION",
-        `Fields \`.${previous.source}\` and \`.${source}\` would both enter scope as \`${target}\`. Rename or suppress one of them.`,
-        collisionSpan,
-      );
-    }
-    bindingsByTarget.set(target, { source, target, value });
-  }
-  return [...bindingsByTarget.values()];
-}
 
 export function evaluationRuntime(
   imports: Imports,
@@ -853,13 +794,8 @@ function* runDeclarations(
           declaration.span,
         );
       }
-      const bindings = resolveOpenBindings(
-        value.fields,
-        declaration.mappings,
-        declaration.span,
-      );
-      for (const binding of bindings) {
-        scope.names.set(binding.target, binding.value);
+      for (const [name, field] of value.fields) {
+        scope.names.set(name, field);
       }
       continue;
     }
