@@ -1,6 +1,5 @@
 let stop = fn () => do
   break;
-  in ()
 end;
 
 return stop ();

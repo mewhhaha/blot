@@ -9,13 +9,13 @@ const Clock = @effect { .now = Unit -> Int; };
 
 let logging = { .write = fn (m, ?resume) => do
   result <- resume ();
-  in result
+  break result;
 end; .return = fn v => v; };
 
 let stamped = fn () => do
   _ <- Console.write "start";
   time <- Clock.now ();
-  in time
+  break time;
 end;
 
 result <- @handle (Console, stamped, logging);

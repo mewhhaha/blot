@@ -1,23 +1,23 @@
-// `return` exits the nearest source function. A standalone `if` inherits that
-// target, while the normal path reaches the block value after `in`.
+// `return` exits the nearest source function. `break value` exits the nearest
+// `do` block, including from a statement branch or across a loop.
 
 open @import "blot:prelude" ();
 
 let describe = fn value => do
   if value < 0 then
-    return "negative";
+    break "negative";
   end;
   if value == 0 then
-    return "zero";
+    break "zero";
   end;
-  in "positive"
+  break "positive";
 end;
 
 let unwrap = fn option => do
   if let #Some value = option else
     return -1;
   end;
-  in value
+  break value;
 end;
 
 let find = fn wanted => do
@@ -26,7 +26,7 @@ let find = fn wanted => do
       return value;
     end;
   end;
-  in -1
+  break -1;
 end;
 
 let count_to = fn limit => do
@@ -34,10 +34,10 @@ let count_to = fn limit => do
   for ever do
     count := count + 1;
     if count >= limit then
-      return count;
+      break count;
     end;
   end;
-  in 0
+  break 0;
 end;
 
 let count_or_stop = fn limit => do
@@ -51,7 +51,7 @@ let count_or_stop = fn limit => do
       break;
     end;
   end;
-  in -1
+  break -1;
 end;
 
 return {

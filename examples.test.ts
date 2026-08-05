@@ -271,6 +271,10 @@ const REJECTIONS: Record<
     code: "BLOT_BREAK_IN_VALUE_CONDITION",
     stage: "check",
   },
+  "block_break_outside_block": {
+    code: "BLOT_BLOCK_BREAK_OUTSIDE_BLOCK",
+    stage: "check",
+  },
   "return_in_value_if": {
     code: "BLOT_RETURN_IN_VALUE_CONDITION",
     stage: "check",

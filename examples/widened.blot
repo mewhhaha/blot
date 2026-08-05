@@ -20,7 +20,7 @@ const camera = @import "./lib/camera.blot" ();
 // backend instead of being folded away before it can be lowered.
 let observed = fn zoom => do
   _ <- init.print "framing";
-  in { .zoom = zoom; .angle = 7; .scale = 3; }
+  break { .zoom = zoom; .angle = 7; .scale = 3; };
 end;
 
 seen <- observed 4;

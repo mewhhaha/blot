@@ -7,7 +7,7 @@ let choose = fn selected => do
     1 => Console.write "one",
     _ => Console.write "other"
   end;
-  in ()
+
 end;
 
 let recording = {
@@ -18,10 +18,10 @@ let recording = {
 return {
   .first = @handle (Console, (fn () => do
     result <- choose 1;
-    in result
+    break result;
   end), recording);
   .other = @handle (Console, (fn () => do
     result <- choose 2;
-    in result
+    break result;
   end), recording);
 };

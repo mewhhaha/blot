@@ -143,8 +143,9 @@ rebinding = (
 //   for x in source do … end;         binds each element
 //   for #Some x in source do … end;   binds, and skips what does not match
 //
-// `break` stops the nearest `for` with its accumulator as it exists at that
-// point. An unbounded loop is an ordinary iteration over an infinite iterator:
+// `break;` stops the nearest `for` with its accumulator as it exists at that
+// point. `break value;` instead exits the nearest `do` block with that value.
+// An unbounded loop is an ordinary iteration over an infinite iterator:
 // `for ever do … end;`.
 iteration = (
   "for"
@@ -169,6 +170,7 @@ iteration_source = ( "in" source:value ) ;
 
 breaking = (
   "break"
+  value:value?
   ";"
 ) ;
 
@@ -615,14 +617,12 @@ handler_composition_action = (
   ")"
 ) ;
 
-// `in` separates a block's value from its semicolon-terminated statements.
-// Without it, an IDENT after a statement could be either the tail value or the
-// beginning of `name := value;`, which is an LR conflict and therefore not a
-// deterministic frontend region. A block without `in` produces `()`.
+// A block normally produces `()`. `break value;` is a statement, so it can
+// leave the block from a nested statement branch without making a bare tail
+// expression compete with `name := value;` on IDENT.
 block = (
   "do"
   statements:statement*
-  result:("in" value)?
   "end"
 ) ;
 

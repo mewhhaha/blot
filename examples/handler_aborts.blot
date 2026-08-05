@@ -7,6 +7,6 @@ const Ask = @effect { .ask = Int -> Int; };
 let quiet = { .ask = fn (n, ?resume) => 0; };
 let work = fn () => do
   result <- Ask.ask 1;
-  in result
+  break result;
 end;
 return @handle (Ask, work, quiet);

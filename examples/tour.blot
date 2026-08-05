@@ -64,7 +64,7 @@ let staged = do
   let scaled = base + right;
   // `:=` rebinds at the same stable type; there is no assignment anywhere.
   scaled := scaled + 1;
-  in scaled
+  break scaled;
 end;
 
 // A repeated `let` is explicit shadowing and may change the type.
@@ -93,13 +93,13 @@ const Console = @effect { .write = Str -> Unit; };
 let report = fn () => do
   _ <- Console.write "one";
   _ <- Console.write "two";
-  in "done"
+  break "done";
 end;
 
 let joining = {
   .write = fn (message, ?resume) => do
     rest <- resume ();
-    in message ++ rest
+    break message ++ rest;
   end;
   .return = fn value => value;
 };
@@ -110,7 +110,7 @@ let printing = {
   .write = fn (message, ?resume) => do
     _ <- init.print message;
     result <- resume ();
-    in result
+    break result;
   end;
   .return = fn value => value;
 };

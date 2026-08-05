@@ -113,15 +113,15 @@ let render = fn (transforms, models) => do
     _ <- E.visit_2 (transforms, models, (fn (transform, model) => do
       _ <- if model.kind == KIND_MESH
         then draw.mesh (
-          transform.position, transform.angle, transform.scale, model.colour
+        transform.position, transform.angle, transform.scale, model.colour
         )
         else draw.sprite (transform.position, transform.scale, model.colour)
-        end;
-      in ()
+      end;
+
     end));
-    in ()
+
   end);
-  in ()
+
 end;
 
 // --- loading ----------------------------------------------------------------
@@ -137,33 +137,33 @@ sig load_transforms = Unit -> Store Transform ~ { Assets };
 let load_transforms = fn () => do
   count <- Assets.count ();
   store <- fold (
-    upto (0, count),
-    @array.empty,
-    (fn (store, id) => do
-      entry <- Assets.entry id;
-      in E.attach (store, {
-        .position = R.point (entry.x, entry.y, entry.z);
-        .angle = 0;
-        .spin = entry.spin;
-        .scale = R.unit entry.scale;
-      })
-    end)
+  upto (0, count),
+  @array.empty,
+  (fn (store, id) => do
+    entry <- Assets.entry id;
+    break E.attach (store, {
+      .position = R.point (entry.x, entry.y, entry.z);
+      .angle = 0;
+      .spin = entry.spin;
+      .scale = R.unit entry.scale;
+    });
+  end)
   );
-  in store
+  break store;
 end;
 
 sig load_models = Unit -> Store Model ~ { Assets };
 let load_models = fn () => do
   count <- Assets.count ();
   store <- fold (
-    upto (0, count),
-    @array.empty,
-    (fn (store, id) => do
-      entry <- Assets.entry id;
-      in E.attach (store, { .kind = entry.kind; .colour = entry.colour; })
-    end)
+  upto (0, count),
+  @array.empty,
+  (fn (store, id) => do
+    entry <- Assets.entry id;
+    break E.attach (store, { .kind = entry.kind; .colour = entry.colour; });
+  end)
   );
-  in store
+  break store;
 end;
 
 // --- the frame loop ---------------------------------------------------------

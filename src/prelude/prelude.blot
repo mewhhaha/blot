@@ -178,21 +178,21 @@ const text_eq = fn (left, right) => is_equal (@text.cmp left right);
 
 const array_get = fn (&values, index) =>
   if index >= 0
-  then (if index < @array.len (&values)
-    then #Some (@array.get (&values) index)
+    then (if index < @array.len (&values)
+      then #Some (@array.get (&values) index)
+      else #None
+    end)
     else #None
-  end)
-  else #None
-  end;
+end;
 
 const array_set = fn (values, index, value) =>
   if index >= 0
-  then (if index < @array.len values
-    then #Some (@array.set values index value)
+    then (if index < @array.len values
+      then #Some (@array.set values index value)
+      else #None
+    end)
     else #None
-  end)
-  else #None
-  end;
+end;
 
 const Array = {
   .empty = @array.empty;
@@ -216,22 +216,22 @@ const fold = fn (values, state, step) => do
       #Some value => do
         next <- step (current, value);
         continued <- go (@int.add index 1, next);
-        in continued
+        break continued;
       end,
       #None => current
     end;
-    in result
+    break result;
   end);
   result <- go (0, state);
-  in result
+  break result;
 end;
 
 const each = fn (values, visit) => do
   result <- fold (values, (), (fn (_, value) => do
     _ <- visit value;
-    in ()
+
   end));
-  in result
+  break result;
 end;
 
 const map = fn (values, f) =>
@@ -242,7 +242,7 @@ const filter = fn (values, keep) =>
     case keep value of
       #True => @array.push state value,
       #False => state
-    end));
+end));
 
 const sum = fn values => fold (values, 0, (fn (state, value) => @int.add state value));
 
@@ -255,10 +255,10 @@ const every = fn (values, holds) =>
 const upto = fn (low, high) => do
   let build = rec (fn (index, state) =>
     if is_less (@int.cmp index high)
-    then build (@int.add index 1, @array.push state index)
-    else state
-    end);
-  in build (low, @array.empty)
+      then build (@int.add index 1, @array.push state index)
+      else state
+  end);
+  break build (low, @array.empty);
 end;
 
 // --- floats -----------------------------------------------------------------
@@ -296,13 +296,13 @@ const Float = {
   // and a primitive is for what blot cannot write, which this is not.
   .sqrt = fn value =>
     if is_equal (@float.cmp value 0.0) then 0.0
-    else if is_less (@float.cmp value 0.0) then @float.div 0.0 0.0
-    else fold (
+      else if is_less (@float.cmp value 0.0) then @float.div 0.0 0.0
+      else fold (
       upto (0, 24),
       value,
       (fn (guess, _) => @float.mul 0.5 (@float.add guess (@float.div value guess)))
-    )
-    end;
+      )
+  end;
 };
 
 // --- single precision -------------------------------------------------------
@@ -326,9 +326,9 @@ const Float32 = {
   .truncate = fn value => @int.of_float (@float.of_f32 value);
   .abs = fn value =>
     if is_less (@f32.cmp value (@f32.of_float 0.0))
-    then @f32.neg value
-    else value
-    end;
+      then @f32.neg value
+      else value
+  end;
 
   // Core has no f32 remainder and no f32 square root, so both are computed in
   // double precision and narrowed once at the end. Rounding after every step
@@ -542,9 +542,9 @@ const iter_range = fn (from, to) => {
   .state = from;
   .step = fn index =>
     if is_less (@int.cmp index to)
-    then Some (index, @int.add index 1)
-    else None
-    end;
+      then Some (index, @int.add index 1)
+      else None
+  end;
 };
 
 const iter_items = fn values => {
@@ -552,7 +552,7 @@ const iter_items = fn values => {
   .step = fn index => case array_get (values, index) of
     #Some value => Some (value, @int.add index 1),
     #None => None
-    end;
+  end;
 };
 
 // Draining one. `for` is this loop with the accumulator inferred from the names
@@ -562,7 +562,7 @@ const iterate = fn (iterator, initial, visit) => do
     #None => carried,
     #Some pair => go (pair.1, visit (carried, pair.0))
   end);
-  in go (iterator.state, initial)
+  break go (iterator.state, initial);
 end;
 
 const collect = fn iterator => do
@@ -570,7 +570,7 @@ const collect = fn iterator => do
   for value in iterator do
     values := @array.push values value;
   end;
-  in values
+  break values;
 end;
 
 // Namespaced because `range` is already the type constructor — `I32` is a
@@ -596,35 +596,35 @@ const dict_get = fn (entries, key) => do
     end,
     #None => None
   end);
-  in go 0
+  break go 0;
 end;
 
 const dict_put = fn (entries, key, value) => do
   let replaced = fold (entries, (@array.empty, None, False),
   (fn (state, entry) =>
     if state.2
-    then (@array.push state.0 entry, state.1, state.2)
-    else if text_eq (entry.0, key)
-    then (@array.push state.0 (key, value), Some entry.1, True)
-    else (@array.push state.0 entry, state.1, state.2)
-    end));
+      then (@array.push state.0 entry, state.1, state.2)
+      else if text_eq (entry.0, key)
+      then (@array.push state.0 (key, value), Some entry.1, True)
+      else (@array.push state.0 entry, state.1, state.2)
+  end));
   let entries = if replaced.2
     then replaced.0
     else @array.push replaced.0 (key, value)
   end;
-  in (replaced.1, entries)
+  break (replaced.1, entries);
 end;
 
 const dict_remove = fn (entries, key) => do
   let removed = fold (entries, (@array.empty, None, False),
   (fn (state, entry) =>
     if state.2
-    then (@array.push state.0 entry, state.1, state.2)
-    else if text_eq (entry.0, key)
-    then (state.0, Some entry.1, True)
-    else (@array.push state.0 entry, state.1, state.2)
-    end));
-  in (removed.1, removed.0)
+      then (@array.push state.0 entry, state.1, state.2)
+      else if text_eq (entry.0, key)
+      then (state.0, Some entry.1, True)
+      else (@array.push state.0 entry, state.1, state.2)
+  end));
+  break (removed.1, removed.0);
 end;
 
 const Dict = {
@@ -656,12 +656,12 @@ const sort_by = fn (values, before) => do
       out := if goes_first
         then @array.push (@array.push out value) existing
         else @array.push out existing
-        end;
+      end;
       placed := placed || goes_first;
     end;
     sorted := if placed then out else @array.push out value end;
   end;
-  in sorted
+  break sorted;
 end;
 
 // --- types ------------------------------------------------------------------
@@ -713,19 +713,19 @@ const unlikely = fn condition => @branch.unlikely condition;
 // uses `Int` and has to prove a narrower result when a signature asks for one.
 const integer_width = fn bits =>
   if is_greater (@int.cmp bits 0)
-  then bits
-  else @fail (Text.append "integer bit width must be positive, found " (Text.of_int bits))
-  end;
+    then bits
+    else @fail (Text.append "integer bit width must be positive, found " (Text.of_int bits))
+end;
 
 const U = fn bits => do
   let width = integer_width bits;
-  in range (0, @int.sub (pow2 width) 1) <+ { .bit_width = width; }
+  break range (0, @int.sub (pow2 width) 1) <+ { .bit_width = width; };
 end;
 
 const I = fn bits => do
   let width = integer_width bits;
   let magnitude = pow2 (@int.sub width 1);
-  in range (@int.neg magnitude, @int.sub magnitude 1) <+ { .bit_width = width; }
+  break range (@int.neg magnitude, @int.sub magnitude 1) <+ { .bit_width = width; };
 end;
 
 const I8 = I 8;
@@ -750,7 +750,7 @@ const layout = fn (shape, width_of) => do
     fields := @array.push fields { .name = name; .offset = offset; .width = width; };
     offset := @int.add offset width;
   end;
-  in { .size = offset; .fields = fields; }
+  break { .size = offset; .fields = fields; };
 end;
 
 // --- reflection -------------------------------------------------------------
@@ -853,29 +853,29 @@ const refines = rec (fn (narrow, wide) => case reflect wide of
     // Same ordered domain first: an unbounded text range and an unbounded
     // integer range have identical bounds and are not each other.
     #Range s => same_domain (s.domain, r.domain)
-      && above_low (s.low, r.low) && below_high (s.high, r.high),
+    && above_low (s.low, r.low) && below_high (s.high, r.high),
     _ => above_low (narrow, r.low) && below_high (narrow, r.high)
   end,
   #Shape wide_fields => case reflect narrow of
     // Width and depth: a wider record refines a narrower one.
     #Shape narrow_fields => every (@shape.names wide_fields, (fn name =>
       if @shape.has narrow_fields name
-      then refines (@shape.get narrow_fields name, @shape.get wide_fields name)
-      else admits_omission (@shape.get wide_fields name)
-      end)),
+        then refines (@shape.get narrow_fields name, @shape.get wide_fields name)
+        else admits_omission (@shape.get wide_fields name)
+    end)),
     _ => False
   end,
   #Array wide_elements => case reflect narrow of
     #Array narrow_elements =>
-      if Ord.eq (@array.len narrow_elements) (@array.len wide_elements)
+    if Ord.eq (@array.len narrow_elements) (@array.len wide_elements)
       then every (upto (0, @int.sub (@array.len wide_elements) 1), (fn index =>
         case (array_get (narrow_elements, index), array_get (wide_elements, index)) of
           (#Some narrow_element, #Some wide_element) =>
-            refines (narrow_element, wide_element),
+          refines (narrow_element, wide_element),
           _ => False
-        end))
+      end))
       else False
-      end,
+    end,
     _ => False
   end,
   #Arrow w => case reflect narrow of
@@ -885,7 +885,7 @@ const refines = rec (fn (narrow, wide) => case reflect wide of
     // performs is therefore refused rather than guessed at — the checker
     // decides rows, at the `sig`, where both of them are known.
     #Arrow n => refines (w.domain, n.domain) && refines (n.codomain, w.codomain)
-      && Ord.eq (@array.len n.effects) 0,
+    && Ord.eq (@array.len n.effects) 0,
     _ => False
   end,
   #Tag w => case reflect narrow of
@@ -901,7 +901,7 @@ const refines = rec (fn (narrow, wide) => case reflect wide of
   // A seal is invariant: same name, and carriers that refine each other.
   #Sealed w => case reflect narrow of
     #Sealed n => text_eq (n.name, w.name)
-      && refines (n.inner, w.inner) && refines (w.inner, n.inner),
+    && refines (n.inner, w.inner) && refines (w.inner, n.inner),
     _ => False
   end,
   #Int v => refines_literal (narrow, v),
@@ -1012,7 +1012,7 @@ const struct = fn shape => do
     product := @type.attach product name (fn value => @shape.get value (key name));
   end;
 
-  in product <+ {
+  break product <+ {
     // Named record in, positional storage out. The call site writes the fields
     // in whatever order reads well; the order decides where they land. A field
     // the shape does not declare is refused here rather than stored, and a
@@ -1022,9 +1022,9 @@ const struct = fn shape => do
       let product = @shape.empty;
       for name in Iter.items order do
         product := @shape.set product (key name)
-          (@satisfies (@shape.get record name) (@shape.get shape name));
+        (@satisfies (@shape.get record name) (@shape.get shape name));
       end;
-      in product
+      break product;
     end;
 
     // ...and back, so storage can be read by name without knowing the order.
@@ -1033,14 +1033,14 @@ const struct = fn shape => do
       for name in Iter.items order do
         record := @shape.set record name (@shape.get value (key name));
       end;
-      in record
+      break record;
     end;
 
     .shape = shape;
     .fields = order;
     .size = @array.len order;
     .slot = fn name => @shape.get at name;
-  }
+  };
 end;
 
 // --- packing ----------------------------------------------------------------
@@ -1066,7 +1066,7 @@ const aligned = fn (shape, order, width_of) => do
     padding := @int.add padding pad;
     offset := @int.add start width;
   end;
-  in { .size = offset; .padding = padding; .fields = fields; }
+  break { .size = offset; .padding = padding; .fields = fields; };
 end;
 
 // Fields keep declaration order and occupy consecutive bits. The mask is the
@@ -1083,7 +1083,7 @@ const packed = fn shape => do
     .mask = @int.sub (pow2 field.width) 1;
   }));
   let byte_size = @int.div (@int.add bits.size 7) 8;
-  in {
+  break {
     .order = order;
     .bit_size = bits.size;
     .byte_size = byte_size;
@@ -1091,7 +1091,7 @@ const packed = fn shape => do
     .fields = fields;
     .bit_offset = fn name => fold (fields, None,
       (fn (found, field) => if text_eq (field.name, name) then Some field.bit_offset else found end));
-  }
+  };
 end;
 
 

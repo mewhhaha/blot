@@ -49,23 +49,23 @@ const sin_quarter = fn k => do
   let x9 = Float.mul x7 x2;
   let x11 = Float.mul x9 x2;
   let x13 = Float.mul x11 x2;
-  in Float.add
-    (Float.sub
-      (Float.add
-        (Float.sub
-          (Float.add
-            (Float.sub x (Float.div x3 6.0))
-            (Float.div x5 120.0))
-          (Float.div x7 5040.0))
-        (Float.div x9 362880.0))
-      (Float.div x11 39916800.0))
-    (Float.div x13 6227020800.0)
+  break Float.add
+  (Float.sub
+  (Float.add
+  (Float.sub
+  (Float.add
+  (Float.sub x (Float.div x3 6.0))
+  (Float.div x5 120.0))
+  (Float.div x7 5040.0))
+  (Float.div x9 362880.0))
+  (Float.div x11 39916800.0))
+  (Float.div x13 6227020800.0);
 end;
 
 const table = fold (
-  upto (0, QUARTER + 1),
-  @array.empty,
-  (fn (built, k) => @array.push built (Float32.of_float (sin_quarter k)))
+upto (0, QUARTER + 1),
+@array.empty,
+(fn (built, k) => @array.push built (Float32.of_float (sin_quarter k)))
 );
 
 const table_at = fn index => case Array.get (table, index) of
@@ -79,11 +79,11 @@ const sin_steps = fn steps => do
   let a = @int.rem (@int.rem steps TURN + TURN) TURN;
   let quadrant = a / QUARTER;
   let step = @int.rem a QUARTER;
-  in if quadrant == 0 then table_at step
-  else if quadrant == 1 then table_at (QUARTER - step)
-  else if quadrant == 2 then Float32.negate (table_at step)
-  else Float32.negate (table_at (QUARTER - step))
-  end
+  break if quadrant == 0 then table_at step
+    else if quadrant == 1 then table_at (QUARTER - step)
+    else if quadrant == 2 then Float32.negate (table_at step)
+    else Float32.negate (table_at (QUARTER - step))
+  end;
 end;
 
 const cos_steps = fn steps => sin_steps (steps + QUARTER);

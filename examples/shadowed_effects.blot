@@ -12,11 +12,11 @@ open @import "blot:prelude" ();
 const Log = @effect { .write = Int -> Int; };
 let doubling = { .write = fn (n, ?resume) => do
   result <- resume (n * 2);
-  in result
+  break result;
 end; };
 let work = fn () => do
   result <- Log.write 20;
-  in result
+  break result;
 end;
 let first = @handle (Log, work, doubling);
 
@@ -26,11 +26,11 @@ let first = @handle (Log, work, doubling);
 const Log = @effect { .write = Int -> Int; };
 let tripling = { .write = fn (n, ?resume) => do
   result <- resume (n * 3);
-  in result
+  break result;
 end; };
 let other = fn () => do
   result <- Log.write 1;
-  in result
+  break result;
 end;
 let second = @handle (Log, other, tripling);
 

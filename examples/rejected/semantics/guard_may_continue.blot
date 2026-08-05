@@ -4,7 +4,7 @@ let unwrap = fn option => do
   if let #Some value = option else
     let ignored = ();
   end;
-  in value
+  break value;
 end;
 
 return unwrap (Some 1);

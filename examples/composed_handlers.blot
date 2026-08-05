@@ -12,25 +12,25 @@ let program = fn () => do
   input <- Terminal.read ();
   time <- Clock.now ();
   result <- Random.add (input + time);
-  in result
+  break result;
 end;
 
 let fake_terminal = {
   .read = fn ((), ?resume) => do
     result <- resume 10;
-    in result
+    break result;
   end;
 };
 let fake_clock = {
   .now = fn ((), ?resume) => do
     result <- resume 20;
-    in result
+    break result;
   end;
 };
 let fake_random = {
   .add = fn (value, ?resume) => do
     result <- resume (value + 12);
-    in result
+    break result;
   end;
 };
 

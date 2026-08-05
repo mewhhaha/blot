@@ -67,6 +67,26 @@ Deno.test("formatting retains interacting parentheses when flattening changes ap
   assertEquals(formatted.source, `${source}\n`);
 });
 
+Deno.test("formatting indents block breaks as statements", async () => {
+  const source = "return do\n" +
+    "if 1 == 1 then\n" +
+    "break 1;\n" +
+    "end;\n" +
+    "break 2;\n" +
+    "end;";
+  const formatted = await formatSource(source);
+  if (!formatted.ok) throw new Error("valid source did not format");
+  assertEquals(
+    formatted.source,
+    "return do\n" +
+      "  if 1 == 1 then\n" +
+      "    break 1;\n" +
+      "  end;\n" +
+      "  break 2;\n" +
+      "end;\n",
+  );
+});
+
 function semanticTree(value: unknown): unknown {
   return JSON.parse(JSON.stringify(value, (key, field) => {
     if (key === "span") return undefined;

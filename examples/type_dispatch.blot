@@ -45,7 +45,7 @@ let int_itself = measure_int 41;
 // evaluator's answer.
 const adding = fn T => do
   let _ = expect (refines (T, Int), "adding is integers only, and this is not one");
-  in fn (a, b) => a + b
+  break fn (a, b) => a + b;
 end;
 
 const add = adding Int;
@@ -58,7 +58,7 @@ const add = adding Int;
 // selected here by a compile-time conditional.
 const counting = fn T => do
   const down = rec (fn n => if n <= 0 then 0 else 1 + down (n - 1) end);
-  in if refines (T, Int) then down else fn _ => 0 end
+  break if refines (T, Int) then down else fn _ => 0 end;
 end;
 
 const count = counting Int;

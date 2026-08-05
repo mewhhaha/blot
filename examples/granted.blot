@@ -20,14 +20,14 @@ const to_host = {
   .write = fn (message, ?resume) => do
     _ <- init.print message;
     result <- resume ();
-    in result
+    break result;
   end;
 };
 
 const report = fn () => do
   _ <- Console.write "compiled";
   _ <- Console.write "linked";
-  in 42
+  break 42;
 end;
 
 return @handle (Console, report, to_host);

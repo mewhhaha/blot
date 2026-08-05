@@ -30,15 +30,15 @@ const aligned_layout = layout (Header.shape, word_width);
 const derive_show = fn names => fn value =>
   fold (names, "", (fn (state, name) => do
     let rendered = @text.of_int (@shape.get value name);
-    in @text.concat state (@text.concat name (@text.concat "=" (@text.concat rendered " ")))
-  end));
+    break @text.concat state (@text.concat name (@text.concat "=" (@text.concat rendered " ")));
+end));
 
-const show_header = comptime (derive_show Header.fields);
+const show_header = comptime derive_show Header.fields;
 
 const derive_sum = fn names => fn value =>
   fold (names, 0, (fn (state, name) => @int.add state (@shape.get value name)));
 
-const sum_header = comptime (derive_sum Header.fields);
+const sum_header = comptime derive_sum Header.fields;
 
 let sample = { .kind = 5; .urgent = 1; .length = 120; };
 

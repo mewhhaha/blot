@@ -159,6 +159,7 @@ export function lowerModule(root: Rule, source: string): Module {
     source,
     table,
     loop: null,
+    block: null,
     escapeBoundary: "none",
   };
 
@@ -212,6 +213,9 @@ interface Context {
   readonly loop: {
     readonly tag: "control";
     readonly carried: readonly string[];
+    readonly breakConstructor: string;
+  } | null;
+  readonly block: {
     readonly breakConstructor: string;
   } | null;
   readonly escapeBoundary: "none" | "value-condition";
@@ -280,7 +284,10 @@ function statementsNeedControlLowering(cursors: readonly Cursor[]): boolean {
       return true;
     }
     if (rule.name === "iteration") {
-      if (statementsContainReturn(fieldList(rule, "body"))) return true;
+      const body = fieldList(rule, "body");
+      if (
+        statementsContainReturn(body) || statementsContainBlockBreak(body)
+      ) return true;
       continue;
     }
     for (const nested of nestedStatementLists(rule)) {
@@ -317,13 +324,24 @@ function statementsContainEffect(cursors: readonly Cursor[]): boolean {
   return false;
 }
 
-function statementsContainBreak(cursors: readonly Cursor[]): boolean {
+function statementsContainLoopBreak(cursors: readonly Cursor[]): boolean {
   for (const cursor of cursors) {
     const rule = statementRule(cursor);
-    if (rule.name === "breaking") return true;
+    if (rule.name === "breaking" && field(rule, "value") === null) return true;
     if (rule.name === "iteration") continue;
     for (const nested of nestedStatementLists(rule)) {
-      if (statementsContainBreak(nested)) return true;
+      if (statementsContainLoopBreak(nested)) return true;
+    }
+  }
+  return false;
+}
+
+function statementsContainBlockBreak(cursors: readonly Cursor[]): boolean {
+  for (const cursor of cursors) {
+    const rule = statementRule(cursor);
+    if (rule.name === "breaking" && field(rule, "value") !== null) return true;
+    for (const nested of nestedStatementLists(rule)) {
+      if (statementsContainBlockBreak(nested)) return true;
     }
   }
   return false;
@@ -442,6 +460,17 @@ function resolveControlSequence(
       body: { tag: "var", name: "returned$", span },
     });
   }
+  if (context.block !== null && statementsContainBlockBreak(cursors)) {
+    arms.push({
+      pattern: {
+        tag: "constructor",
+        name: context.block.breakConstructor,
+        payload: controlPayloadPattern("blockResult$", span),
+        span,
+      },
+      body: { tag: "var", name: "blockResult$", span },
+    });
+  }
   if (statementsCanContinue(cursors)) {
     arms.push({
       pattern: {
@@ -487,11 +516,43 @@ function lowerControlOutcome(
       rule.span,
     );
   }
-  if (
-    rule.name === "breaking" &&
-    context.loop !== null &&
-    context.loop.tag === "control"
-  ) {
+  if (rule.name === "breaking") {
+    const value = field(rule, "value");
+    if (value !== null) {
+      if (context.block === null) {
+        if (context.escapeBoundary === "value-condition") {
+          fail(
+            "BLOT_BLOCK_BREAK_IN_VALUE_CONDITION",
+            "`break value` cannot escape a value-producing `if` or `case`.",
+            rule.span,
+          );
+        }
+        fail(
+          "BLOT_BLOCK_BREAK_OUTSIDE_BLOCK",
+          "`break value` has no enclosing `do` block.",
+          rule.span,
+        );
+      }
+      return controlOutcome(
+        context.block.breakConstructor,
+        lowerValue(asRule(value, "break value"), context),
+        rule.span,
+      );
+    }
+    if (context.loop === null || context.loop.tag !== "control") {
+      if (context.escapeBoundary === "value-condition") {
+        fail(
+          "BLOT_BREAK_IN_VALUE_CONDITION",
+          "`break` cannot escape a value-producing `if` or `case`.",
+          rule.span,
+        );
+      }
+      fail(
+        "BLOT_BREAK_OUTSIDE_LOOP",
+        "`break` has no enclosing `for`.",
+        rule.span,
+      );
+    }
     return controlOutcome(
       context.loop.breakConstructor,
       loopState(context.loop.carried, rule.span),
@@ -571,6 +632,17 @@ function lowerControlOutcome(
           },
         };
       }
+      if (context.block !== null) {
+        branchContext = {
+          ...branchContext,
+          block: {
+            breakConstructor: syntheticConstructor(
+              "ConditionalBlockBreak",
+              rule.span,
+            ),
+          },
+        };
+      }
     }
     const conditional = lowerControlConditional(
       body,
@@ -617,7 +689,7 @@ function lowerControlOutcome(
       context.loop.tag === "control" &&
       branchContext.loop !== null &&
       branchContext.loop.tag === "control" &&
-      statementsContainBreak([rule])
+      statementsContainLoopBreak([rule])
     ) {
       arms.push({
         pattern: {
@@ -629,6 +701,25 @@ function lowerControlOutcome(
         body: controlOutcome(
           context.loop.breakConstructor,
           { tag: "var", name: "stopped$", span: rule.span },
+          rule.span,
+        ),
+      });
+    }
+    if (
+      context.block !== null &&
+      branchContext.block !== null &&
+      statementsContainBlockBreak([rule])
+    ) {
+      arms.push({
+        pattern: {
+          tag: "constructor",
+          name: branchContext.block.breakConstructor,
+          payload: controlPayloadPattern("blockResult$", rule.span),
+          span: rule.span,
+        },
+        body: controlOutcome(
+          context.block.breakConstructor,
+          { tag: "var", name: "blockResult$", span: rule.span },
           rule.span,
         ),
       });
@@ -654,6 +745,25 @@ function lowerControlOutcome(
         body: controlOutcome(
           constructors.return,
           { tag: "var", name: "returned$", span: rule.span },
+          rule.span,
+        ),
+      });
+    }
+    if (
+      loop.blockBreaks &&
+      loop.blockBreakConstructor !== null &&
+      context.block !== null
+    ) {
+      arms.push({
+        pattern: {
+          tag: "constructor",
+          name: loop.blockBreakConstructor,
+          payload: controlPayloadPattern("blockResult$", rule.span),
+          span: rule.span,
+        },
+        body: controlOutcome(
+          context.block.breakConstructor,
+          { tag: "var", name: "blockResult$", span: rule.span },
           rule.span,
         ),
       });
@@ -698,11 +808,26 @@ function lowerControlOutcome(
     };
   }
 
+  const declarations: Decl[] = [lowerDecl(rule, context)];
+  let nextControl = remaining;
+  while (nextControl.length > 0) {
+    const nextRule = statementRule(nextControl[0]);
+    if (
+      nextRule.name === "result" ||
+      nextRule.name === "breaking" ||
+      nextRule.name === "conditional_statement" ||
+      nextRule.name === "iteration"
+    ) {
+      break;
+    }
+    declarations.push(lowerDecl(nextRule, context));
+    nextControl = nextControl.slice(1);
+  }
   return {
     tag: "block",
-    declarations: [lowerDecl(rule, context)],
+    declarations,
     result: lowerControlOutcome(
-      remaining,
+      nextControl,
       context,
       span,
       continueValue,
@@ -861,6 +986,9 @@ type LoopBody =
     readonly returns: boolean;
     readonly continues: boolean;
     readonly breaks: boolean;
+    readonly blockBreaks: boolean;
+    readonly blockBreakConstructor: string | null;
+    readonly resultBlockBreakConstructor: string | null;
   };
 
 interface LoweredLoop {
@@ -871,6 +999,8 @@ interface LoweredLoop {
 interface LoweredControlLoop extends LoweredLoop {
   readonly constructors: ControlConstructors;
   readonly returns: boolean;
+  readonly blockBreaks: boolean;
+  readonly blockBreakConstructor: string | null;
 }
 
 /** The destructuring counterpart of `loopState`. */
@@ -1077,6 +1207,25 @@ function desugarLoop(
         body: controlOutcome(
           body.resultConstructors.continue,
           name("stopped$"),
+          span,
+        ),
+      });
+    }
+    if (
+      body.blockBreaks &&
+      body.blockBreakConstructor !== null &&
+      body.resultBlockBreakConstructor !== null
+    ) {
+      arms.push({
+        pattern: {
+          tag: "constructor",
+          name: body.blockBreakConstructor,
+          payload: controlPayloadPattern("blockResult$", span),
+          span,
+        },
+        body: controlOutcome(
+          body.resultBlockBreakConstructor,
+          name("blockResult$"),
           span,
         ),
       });
@@ -1304,11 +1453,27 @@ function lowerControlLoop(
   const breakConstructor = syntheticConstructor("LoopBreak", rule.span);
   const returns = statementsContainReturn(statements);
   const continues = statementsCanContinue(statements);
-  const breaks = statementsContainBreak(statements);
-  const bodyContext: Context = {
+  const breaks = statementsContainLoopBreak(statements);
+  const blockBreaks = statementsContainBlockBreak(statements);
+  let blockBreakConstructor: string | null = null;
+  let bodyBlockBreakConstructor: string | null = null;
+  if (blockBreaks && context.block !== null) {
+    blockBreakConstructor = syntheticConstructor("LoopBlockBreak", rule.span);
+    bodyBlockBreakConstructor = syntheticConstructor(
+      "LoopBodyBlockBreak",
+      rule.span,
+    );
+  }
+  let bodyContext: Context = {
     ...context,
     loop: { tag: "control", carried, breakConstructor },
   };
+  if (bodyBlockBreakConstructor !== null) {
+    bodyContext = {
+      ...bodyContext,
+      block: { breakConstructor: bodyBlockBreakConstructor },
+    };
+  }
   const outcome = lowerControlOutcome(
     statements,
     bodyContext,
@@ -1334,12 +1499,21 @@ function lowerControlLoop(
         returns,
         continues,
         breaks,
+        blockBreaks,
+        blockBreakConstructor: bodyBlockBreakConstructor,
+        resultBlockBreakConstructor: blockBreakConstructor,
       },
       statementsContainEffect(statements),
       { tag: "control" },
       rule.span,
     );
-    return { ...loop, constructors, returns };
+    return {
+      ...loop,
+      constructors,
+      returns,
+      blockBreaks,
+      blockBreakConstructor,
+    };
   }
   const loop = desugarLoop(
     patternFromExpr(head),
@@ -1360,12 +1534,21 @@ function lowerControlLoop(
       returns,
       continues,
       breaks,
+      blockBreaks,
+      blockBreakConstructor: bodyBlockBreakConstructor,
+      resultBlockBreakConstructor: blockBreakConstructor,
     },
     statementsContainEffect(statements),
     { tag: "control" },
     rule.span,
   );
-  return { ...loop, constructors, returns };
+  return {
+    ...loop,
+    constructors,
+    returns,
+    blockBreaks,
+    blockBreakConstructor,
+  };
 }
 
 function lowerDecl(rule: Rule, context: Context): Decl {
@@ -1479,7 +1662,22 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     };
   }
   if (rule.name === "breaking") {
-    if (context.loop === null) {
+    const value = field(rule, "value");
+    if (value !== null && context.block === null) {
+      if (context.escapeBoundary === "value-condition") {
+        fail(
+          "BLOT_BLOCK_BREAK_IN_VALUE_CONDITION",
+          "`break value` cannot escape a value-producing `if` or `case`.",
+          rule.span,
+        );
+      }
+      fail(
+        "BLOT_BLOCK_BREAK_OUTSIDE_BLOCK",
+        "`break value` has no enclosing `do` block.",
+        rule.span,
+      );
+    }
+    if (value === null && context.loop === null) {
       if (context.escapeBoundary === "value-condition") {
         fail(
           "BLOT_BREAK_IN_VALUE_CONDITION",
@@ -1951,6 +2149,7 @@ function lowerLambda(rule: Rule, context: Context): Expr {
     {
       ...context,
       loop: null,
+      block: null,
       escapeBoundary: "none",
     },
   );
@@ -2134,6 +2333,7 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
       const childContext: Context = {
         ...context,
         loop: null,
+        block: null,
         escapeBoundary: "none",
       };
       if (statementsNeedControlLowering(children)) {
@@ -2261,6 +2461,7 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     const closed: Context = {
       ...context,
       loop: null,
+      block: null,
       escapeBoundary: "value-condition",
     };
     const branches: Branch[] = [{
@@ -2304,6 +2505,7 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     const closed: Context = {
       ...context,
       loop: null,
+      block: null,
       escapeBoundary: "value-condition",
     };
     const arms: GuardedArm[] = [
@@ -2410,21 +2612,43 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
   }
 
   if (rule.name === "block") {
-    const statements = fieldList(rule, "statements");
+    let statements = fieldList(rule, "statements");
     let result: Expr = { tag: "unit", span: rule.span };
     let resultEffects: "pure" | "ambient" = "pure";
-    const resultPair = rule.field("result");
-    if (resultPair !== null && resultPair !== undefined) {
-      expect(Array.isArray(resultPair), "block result is not an `in` pair");
-      const valueCursor = resultPair[1] as Cursor;
-      result = lowerValue(asRule(valueCursor, "block result"), context);
-      resultEffects = "ambient";
+    const blockContext: Context = {
+      ...context,
+      block: {
+        breakConstructor: syntheticConstructor("BlockBreak", rule.span),
+      },
+    };
+    const last = statements.at(-1);
+    if (last !== undefined) {
+      const ending = statementRule(last);
+      if (ending.name === "breaking") {
+        const value = field(ending, "value");
+        if (value !== null) {
+          result = lowerValue(asRule(value, "block result"), blockContext);
+          resultEffects = "ambient";
+          statements = statements.slice(0, -1);
+        }
+      }
     }
     if (statementsNeedControlLowering(statements)) {
-      return resolveControlSequence(statements, result, context, rule.span);
+      return {
+        tag: "block",
+        declarations: [],
+        result: resolveControlSequence(
+          statements,
+          result,
+          blockContext,
+          rule.span,
+        ),
+        resultEffects: "ambient",
+        span: rule.span,
+      };
     }
     const declarations = statements.map((statement) =>
-      lowerDecl(asRule(unwrap(statement), "statement"), context)
+      lowerDecl(asRule(unwrap(statement), "statement"), blockContext)
     );
     return {
       tag: "block",

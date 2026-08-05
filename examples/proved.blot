@@ -9,12 +9,12 @@ open @import "blot:prelude" ();
 sig classify = Int -> Str;
 let classify = fn i =>
   if i < 3
-  then (if i > 0
-    then case i of 1 => "one", 2 => "two" end   // i is 1..2 here; complete
-    else "zero or less"
+    then (if i > 0
+      then case i of 1 => "one", 2 => "two" end   // i is 1..2 here; complete
+      else "zero or less"
     end)
-  else "three or more"
-  end;
+    else "three or more"
+end;
 
 // An unbounded domain cannot be covered by arms, so it says so. `@panic` is how
 // an arm records why reaching it is impossible.

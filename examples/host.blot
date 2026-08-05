@@ -21,7 +21,7 @@ let report = fn () => do
   _ <- Console.write "compiled";
   _ <- Console.write "linked";
   _ <- Console.write "done";
-  in ()
+
 end;
 
 result <- report ();

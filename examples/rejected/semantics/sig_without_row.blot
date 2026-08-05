@@ -16,6 +16,6 @@ const Console = @effect {
 sig notify = Str -> Unit;
 let notify = fn message => do
   result <- Console.write message;
-  in result
+  break result;
 end;
 return notify;

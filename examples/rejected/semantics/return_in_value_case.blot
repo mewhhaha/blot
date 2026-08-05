@@ -7,7 +7,7 @@ let unwrap = fn option => do
     end,
     #None => 0
   end;
-  in value
+  break value;
 end;
 
 return unwrap (Some 1);

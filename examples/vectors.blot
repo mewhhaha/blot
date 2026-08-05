@@ -76,8 +76,8 @@ let total = Float32.truncate (Vec4.sum scaled);
 // needs more than 24 bits of mantissa says so here as much as anywhere.
 sig thirds = Int;
 let thirds = Float32.truncate (Vec4.dot
-  (Vec4.splat (Float32.of_float (Float.div 1.0 3.0)))
-  (Vec4.splat (lane 3)));
+(Vec4.splat (Float32.of_float (Float.div 1.0 3.0)))
+(Vec4.splat (lane 3)));
 
 return {
   .first = first;

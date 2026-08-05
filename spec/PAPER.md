@@ -370,14 +370,15 @@ bind request <- elaborate(Runtime.request ()) in ...
 `let x = c` is rejected when `c` has a non-empty effect row. It creates neither
 an implicit bind nor an effect thunk.
 
-An explicit block result is a tail computation rather than an intermediate
-definition. It contributes its effects and result directly to the enclosing
-function, so no redundant bind is required around the final computation:
+The value carried by a block break is a tail computation rather than an
+intermediate definition. It contributes its effects and result directly to the
+enclosing function, so no redundant bind is required around the final
+computation:
 
 ```blot
 fn () => do
   _ <- first_effect ();
-  in final_effect ()
+  break final_effect ();
 end
 ```
 
@@ -756,9 +757,10 @@ does not count as match failure.
 ### 8.2 Value conditionals do not transfer control
 
 Expression `if` and `case` produce values or computations selected from their
-branches. They cannot `return` from an enclosing function or `break` an
-enclosing loop. Statement conditionals elaborate with compiler-local control
-sums whose cases are eliminated at the nearest function or loop boundary.
+branches. They cannot `return` from an enclosing function, `break;` from an
+enclosing loop, or `break value;` from an enclosing block. Statement
+conditionals elaborate with compiler-local control sums whose cases are
+eliminated at the corresponding function, loop, or block boundary.
 
 This keeps non-local control explicit in core and prevents a value expression
 from having a hidden continuation target.
@@ -766,9 +768,9 @@ from having a hidden continuation target.
 ### 8.3 Loops are folds
 
 `for` elaborates to recursion over an iterator protocol. Names rebound by `:=`
-form an accumulator record. `break` returns that record from the nearest loop;
-early `return` carries a separate compiler-local result to the source-function
-boundary.
+form an accumulator record. `break;` returns that record from the nearest loop;
+`break value;` carries a compiler-local result to the nearest block, and early
+`return` carries a separate result to the source-function boundary.
 
 Downstream passes see recursion, cases, records, and computations. They do not
 contain a second loop semantics. The elaboration must preserve relational

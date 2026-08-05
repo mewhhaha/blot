@@ -167,7 +167,7 @@ let first = holder.first ();
 let consume_holder = fn !value => do
   let { .first; .second; } = !value;
   let _ = first ();
-  in second ()
+  break second ();
 end;
 return @int.add first (consume_holder holder);`,
   "BLOT_LINEAR_PARTIAL_REUSE",
@@ -329,10 +329,10 @@ let values = [fn () => consume (!token)];
 let index = if 1 < 2 then 0 else 1 end;
 return case @array.take values index of
   #Taken (selected, remainder) => do
-    in case remainder of _ => selected () end
+    break case remainder of _ => selected () end;
   end,
   #TakeOutOfBounds original => do
-    in case original of _ => 0 end
+    break case original of _ => 0 end;
   end
 end;`,
 );
@@ -425,7 +425,6 @@ rejects(
 sig send = Int -> Unit ~ { Sink };
 let send = fn &value => do
   _ <- Sink.write (&value);
-  in ()
 end;
 return send;`,
   "BLOT_BORROW_ARGUMENT_ESCAPES",
@@ -445,7 +444,7 @@ rejects(
   "a closure carrying a borrow cannot be stored",
   `let inspect = fn &point => do
   let later = fn () => @int.add point.x 0;
-  in later ()
+  break later ();
 end;
 return inspect { .x = 41; };`,
   "BLOT_BORROW_STORED",
@@ -486,7 +485,7 @@ rejects(
 let !token = 41;
 let work = fn () => do
   _ <- Ask.ask ();
-  in consume (!token)
+  break consume (!token);
 end;
 let aborting = { .ask = fn (_, ?resume) => 0; };
 return @handle (Ask, work, aborting);`,
@@ -499,7 +498,7 @@ accepts(
 let !token = 41;
 let work = fn () => do
   _ <- Ask.ask ();
-  in consume (!token)
+  break consume (!token);
 end;
 let resuming = { .ask = fn (_, !resume) => resume (); };
 return @handle (Ask, work, resuming);`,
@@ -511,11 +510,11 @@ accepts(
 let !token = 41;
 let work = fn () => do
   _ <- Ask.ask ();
-  in consume (!token)
+  break consume (!token);
 end;
 let cancelling = { .ask = fn (_, !resume) => do
   _ <- Continuation.cancel resume;
-  in 0
+  break 0;
 end; };
 return @handle (Ask, work, cancelling);`,
 );
@@ -525,12 +524,10 @@ rejects(
   `const Ask = @effect { .ask = Unit -> Unit; };
 let work = fn () => do
   _ <- Ask.ask ();
-  in ()
 end;
 let cancelling = { .ask = fn (_, !resume) => do
   _ <- Continuation.cancel resume;
   _ <- Continuation.cancel resume;
-  in ()
 end; };
 return @handle (Ask, work, cancelling);`,
   "BLOT_LINEAR_CONSUMED_TWICE",
@@ -541,7 +538,6 @@ rejects(
   `let ordinary = fn value => value;
 return do
   _ <- Continuation.cancel ordinary;
-  in ()
 end;`,
   "BLOT_CANCEL_NOT_CONTINUATION",
 );
@@ -551,11 +547,10 @@ rejects(
   `const Ask = @effect { .ask = Unit -> Unit; };
 let work = fn () => do
   _ <- Ask.ask ();
-  in ()
 end;
 let cancelling = { .ask = fn (_, !resume) => do
   let cancelled = Continuation.cancel resume;
-  in cancelled
+  break cancelled;
 end; };
 return @handle (Ask, work, cancelling);`,
   "BLOT_UNSEQUENCED_EFFECT",

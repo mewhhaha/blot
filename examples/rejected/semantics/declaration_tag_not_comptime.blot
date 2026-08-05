@@ -3,7 +3,7 @@ open @import "blot:prelude" ();
 let tagged = fn descriptor => do
   @[descriptor]
   let value = 1;
-  in value
+  break value;
 end;
 
 return tagged test;

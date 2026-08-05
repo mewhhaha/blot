@@ -547,11 +547,11 @@ request <- Runtime.request ();
 ```
 
 `let`, `const`, `:=`, `open`, function results written without a block, and
-module results are pure value positions. An explicit `in` expression is the tail
-computation of its block and may contribute effects to the enclosing function.
-Pure `let` bindings may be reordered, inlined, or discarded when their values
-are not demanded; sequencing an effect before the tail therefore requires `<-`
-even when its result is ignored.
+module results are pure value positions. The expression in `break value;` is a
+tail computation of its `do` block and may contribute effects to the enclosing
+function. Pure `let` bindings may be reordered, inlined, or discarded when their
+values are not demanded; sequencing an effect before the tail therefore requires
+`<-` even when its result is ignored.
 
 The left-hand binding in a `try` handler step is a separate bounded surface
 form. Section 12.2 specifies how it binds the newly handled computation without
@@ -633,7 +633,7 @@ becomes the block's tail computation:
 ```blot
 let draw_twice = fn () => do
   _ <- <div />;
-  in <div />
+  break <div />;
 end;
 ```
 
@@ -912,15 +912,18 @@ without `fn` is therefore a syntax error rather than an operator chain.
 ```blot
 do
   declarations
-  in value
+  break value;
 end
 ```
 
-A block evaluates its declarations in a nested scope and returns the value after
-`in`. If `in value` is absent, the block returns `()`.
+A block evaluates its statements in a nested scope. Reaching `end` returns `()`;
+`break value;` exits the nearest `do` block with `value`. It may leave from a
+nested statement conditional, guard, or loop, but does not cross a lambda or a
+value-producing `if` or `case`.
 
-The `in` marker is mandatory when a block has a result; a bare trailing
-expression is not permitted.
+A bare trailing expression is not permitted. The semicolon makes `break value;`
+an ordinary bounded statement, so a result beginning with a name does not
+conflict with `name := value;`.
 
 ### 6.5 Recursion
 
@@ -1522,10 +1525,14 @@ or the backend.
 break;
 ```
 
-`break` exits the nearest `for` with its accumulator as it exists at that point.
-It may appear inside statement conditionals and guards. It cannot cross a lambda
-or a value-producing `if` or `case`, and using it without an enclosing `for` is
-an error.
+`break;` exits the nearest `for` with its accumulator as it exists at that
+point. It may appear inside statement conditionals and guards. It cannot cross a
+lambda or a value-producing `if` or `case`, and using it without an enclosing
+`for` is an error.
+
+`break value;` is the block form specified in §6.4. The value distinguishes it
+from a loop break: even inside a loop, it exits the nearest enclosing `do`
+block, carrying its value across the loop.
 
 An unbounded loop is ordinary iteration over the prelude's infinite iterator:
 
@@ -1901,7 +1908,7 @@ WebAssembly imports and therefore constitute part of the module interface.
 let logging = {
   .write = fn (message, ?resume) => do
     rest <- resume ();
-    in message <> rest
+    break message <> rest;
   end;
   .return = fn value => value;
 };
@@ -1929,7 +1936,7 @@ continuation:
 let cancelling = {
   .write = fn (_, !resume) => do
     _ <- Continuation.cancel resume;
-    in replacement
+    break replacement;
   end;
 };
 ```
@@ -2004,7 +2011,7 @@ const Console = @effect { .write = Str -> Unit; };
 sig greet = Str -> Unit ~ { Console };
 let greet = fn name => do
   result <- Console.write name;
-  in result
+  break result;
 end;
 ```
 
@@ -2622,7 +2629,7 @@ end;
 let report = fn () => do
   let text = describe #Ready ++ Text.of_int attempts;
   _ <- Console.write text;
-  in text
+  break text;
 end;
 
 return {

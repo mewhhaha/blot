@@ -32,13 +32,13 @@ const Terminal = @effect {
 sig ask = Unit -> Str ~ { Terminal };
 let ask = fn () => do
   answer <- Terminal.read ();
-  in answer <> "!"
+  break answer <> "!";
 end;
 
 let answering = {
   .read = fn ((), ?resume) => do
     answer <- resume "42";
-    in answer
+    break answer;
   end;
   .return = fn value => value;
 };
@@ -49,7 +49,7 @@ sig greet = Unit -> Str ~ { Console };
 let greet = fn () => do
   _ <- Console.write "hello";
   _ <- Console.write "world";
-  in "done"
+  break "done";
 end;
 
 // A handler is a shape: one field per operation taking `(argument, ?resume)`,
@@ -61,7 +61,7 @@ end;
 let collecting = {
   .write = fn (message, ?resume) => do
     rest <- resume ();
-    in @text.concat (@text.concat message "|") rest
+    break @text.concat (@text.concat message "|") rest;
   end;
   .return = fn value => value;
 };
@@ -69,7 +69,7 @@ let collecting = {
 let counting = {
   .write = fn (_, ?resume) => do
     rest <- resume ();
-    in @int.add 1 rest
+    break @int.add 1 rest;
   end;
   .return = fn _ => 0;
 };
@@ -77,7 +77,7 @@ let counting = {
 let passing = {
   .write = fn (_, ?resume) => do
     value <- resume ();
-    in value
+    break value;
   end;
   .return = fn value => value;
 };

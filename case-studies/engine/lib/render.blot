@@ -148,10 +148,10 @@ const LIGHT = Vec4.of (lane 0.53, lane 0.76, lane 0.38, ZERO);
 const rotation_of = fn angle => do
   let s = M.sin angle;
   let c = M.cos angle;
-  in {
+  break {
     .to_x = Vec4.of (c, ZERO, s, ZERO);
     .to_z = Vec4.of (Float32.negate s, ZERO, c, ZERO);
-  }
+  };
 end;
 
 const turn_y = fn (point, rotation) => Vec4.of (
@@ -174,11 +174,11 @@ const to_view = fn (point, camera) => Vec4.of (
 // That is the whole of "2D is an orthographic camera".
 const to_screen = fn (view, camera) =>
   if camera.lens == 0
-  then Vec4.add
+    then Vec4.add
     SCREEN_CENTRE
     (Vec4.div (Vec4.mul view FOCAL_AXES) (Vec4.splat (Vec4.z view)))
-  else Vec4.add SCREEN_CENTRE (Vec4.mul view camera.zoom_axes)
-  end;
+    else Vec4.add SCREEN_CENTRE (Vec4.mul view camera.zoom_axes)
+end;
 
 // Where the camera sits, and the three rows that take a world point to it.
 // Built once a frame rather than per vertex, because every vertex wants the
@@ -192,22 +192,22 @@ const camera_of = fn (yaw, pitch, distance, lens) => do
   // out to at the camera's own distance — so switching lenses holds the scene
   // at roughly the size it already was, and pulling back still zooms out.
   let zoom = Float32.div FOCAL distance;
-  in {
+  break {
     .eye = Vec4.of (
-      Float32.mul distance (Float32.mul cos_pitch sin_yaw),
-      Float32.mul distance sin_pitch,
-      Float32.mul distance (Float32.mul cos_pitch cos_yaw),
-      ONE
+    Float32.mul distance (Float32.mul cos_pitch sin_yaw),
+    Float32.mul distance sin_pitch,
+    Float32.mul distance (Float32.mul cos_pitch cos_yaw),
+    ONE
     );
     // `right` and `up` span the screen and `forward` grows away from the eye,
     // which is the sign the divide, the near test, and the host's sort all
     // want — so it is settled here rather than three times downstream.
     .right = Vec4.of (cos_yaw, ZERO, Float32.negate sin_yaw, ZERO);
     .up = Vec4.of (
-      Float32.negate (Float32.mul sin_pitch sin_yaw),
-      cos_pitch,
-      Float32.negate (Float32.mul sin_pitch cos_yaw),
-      ZERO
+    Float32.negate (Float32.mul sin_pitch sin_yaw),
+    cos_pitch,
+    Float32.negate (Float32.mul sin_pitch cos_yaw),
+    ZERO
     );
     // A row's fourth lane is its translation, and the eye is the whole of it.
     // Because the camera orbits the origin, that translation collapses: the eye
@@ -215,15 +215,15 @@ const camera_of = fn (yaw, pitch, distance, lens) => do
     // nothing and the depth row translates by the orbit radius. Subtracting the
     // eye per vertex would arrive at these same three numbers.
     .forward = Vec4.of (
-      Float32.negate (Float32.mul cos_pitch sin_yaw),
-      Float32.negate sin_pitch,
-      Float32.negate (Float32.mul cos_pitch cos_yaw),
-      distance
+    Float32.negate (Float32.mul cos_pitch sin_yaw),
+    Float32.negate sin_pitch,
+    Float32.negate (Float32.mul cos_pitch cos_yaw),
+    distance
     );
     .lens = lens;
     .zoom = zoom;
     .zoom_axes = Vec4.of (zoom, Float32.negate zoom, ZERO, ZERO);
-  }
+  };
 end;
 
 // --- drawing ----------------------------------------------------------------
@@ -234,7 +234,7 @@ end;
 const shade_of = fn normal => do
   let dot = Vec4.dot normal LIGHT;
   let lit = if is_less (Float32.cmp dot ZERO) then ZERO else dot end;
-  in 60 + Float32.truncate (Float32.mul lit (lane 195.0))
+  break 60 + Float32.truncate (Float32.mul lit (lane 195.0));
 end;
 
 // One face of one box: place its corners, project them, and hand the host two
@@ -254,7 +254,7 @@ const draw_face = fn (position, angle, scale, colour, camera, face) => do
       #None => Vec4.splat ZERO
     end;
     let spun = turn_y (Vec4.scale (local, scale), rotation);
-    in to_view (Vec4.add spun position, camera)
+    break to_view (Vec4.add spun position, camera);
   end;
 
   let a = corner face.a;
@@ -281,39 +281,39 @@ const draw_face = fn (position, angle, scale, colour, camera, face) => do
   let hidden = is_greater (Float32.cmp outward ZERO);
 
   _ <- if behind || hidden then ()
-  else do
-    // Pixels, and the last place a float exists in this function. `Canvas` is
-    // a module import, so its record is the boundary a float cannot cross.
-    let pixel = fn point => {
-      .x = Float32.truncate (Vec4.x point);
-      .y = Float32.truncate (Vec4.y point);
-    };
-    let pa = pixel (to_screen (a, camera));
-    let pb = pixel (to_screen (b, camera));
-    let pc = pixel (to_screen (c, camera));
-    let pd = pixel (to_screen (d, camera));
-    // Millimetres of depth, so the host's sort keeps its resolution across an
-    // integer boundary. The mean of four and the millimetre scale are one
-    // constant — a quarter of a thousand — after the horizontal sum.
-    let depth = Float32.truncate
+    else do
+      // Pixels, and the last place a float exists in this function. `Canvas` is
+      // a module import, so its record is the boundary a float cannot cross.
+      let pixel = fn point => {
+        .x = Float32.truncate (Vec4.x point);
+        .y = Float32.truncate (Vec4.y point);
+      };
+      let pa = pixel (to_screen (a, camera));
+      let pb = pixel (to_screen (b, camera));
+      let pc = pixel (to_screen (c, camera));
+      let pd = pixel (to_screen (d, camera));
+      // Millimetres of depth, so the host's sort keeps its resolution across an
+      // integer boundary. The mean of four and the millimetre scale are one
+      // constant — a quarter of a thousand — after the horizontal sum.
+      let depth = Float32.truncate
       (Float32.mul (Vec4.sum (Vec4.of (za, zb, zc, zd))) (lane 250.0));
-    let shade = shade_of normal;
-    _ <- Canvas.tri {
-      .ax = pa.x; .ay = pa.y;
-      .bx = pb.x; .by = pb.y;
-      .cx = pc.x; .cy = pc.y;
-      .depth = depth; .shade = shade; .colour = colour;
-    };
-    _ <- Canvas.tri {
-      .ax = pa.x; .ay = pa.y;
-      .bx = pc.x; .by = pc.y;
-      .cx = pd.x; .cy = pd.y;
-      .depth = depth; .shade = shade; .colour = colour;
-    };
-    in ()
-  end
+      let shade = shade_of normal;
+      _ <- Canvas.tri {
+        .ax = pa.x; .ay = pa.y;
+        .bx = pb.x; .by = pb.y;
+        .cx = pc.x; .cy = pc.y;
+        .depth = depth; .shade = shade; .colour = colour;
+      };
+      _ <- Canvas.tri {
+        .ax = pa.x; .ay = pa.y;
+        .bx = pc.x; .by = pc.y;
+        .cx = pd.x; .cy = pd.y;
+        .depth = depth; .shade = shade; .colour = colour;
+      };
+
+    end
   end;
-  in ()
+
 end;
 
 // A box. Six faces, each culled on its own, which is the whole of the mesh
@@ -321,13 +321,13 @@ end;
 // than a second renderer.
 const draw_mesh = fn (position, angle, scale, colour, camera) => do
   _ <- each (
-    faces,
-    (fn face => do
-      _ <- draw_face (position, angle, scale, colour, camera, face);
-      in ()
-    end)
+  faces,
+  (fn face => do
+    _ <- draw_face (position, angle, scale, colour, camera, face);
+
+  end)
   );
-  in ()
+
 end;
 
 // A 2D texture placed in the 3D world. Its size divides by depth under a
@@ -337,23 +337,23 @@ const draw_sprite = fn (position, scale, texture, camera) => do
   let view = to_view (position, camera);
   let depth = Vec4.z view;
   _ <- if is_less (Float32.cmp depth NEAR) then ()
-  else do
-    let point = to_screen (view, camera);
-    let size = if camera.lens == 0
-      then Float32.div (Float32.mul scale FOCAL) depth
-      else Float32.mul scale camera.zoom
+    else do
+      let point = to_screen (view, camera);
+      let size = if camera.lens == 0
+        then Float32.div (Float32.mul scale FOCAL) depth
+        else Float32.mul scale camera.zoom
       end;
-    _ <- Canvas.sprite {
-      .x = Float32.truncate (Vec4.x point);
-      .y = Float32.truncate (Vec4.y point);
-      .size = Float32.truncate size;
-      .depth = Float32.truncate (Float32.mul depth (lane 1000.0));
-      .texture = texture;
-    };
-    in ()
-  end
+      _ <- Canvas.sprite {
+        .x = Float32.truncate (Vec4.x point);
+        .y = Float32.truncate (Vec4.y point);
+        .size = Float32.truncate size;
+        .depth = Float32.truncate (Float32.mul depth (lane 1000.0));
+        .texture = texture;
+      };
+
+    end
   end;
-  in ()
+
 end;
 
 // A frame: clear, read the camera the host is holding, let the application say
@@ -377,23 +377,23 @@ let frame = fn paint => do
   distance <- View.distance ();
   lens <- View.lens ();
   let camera = camera_of (
-    yaw,
-    pitch,
-    unit distance,
-    lens
+  yaw,
+  pitch,
+  unit distance,
+  lens
   );
   _ <- paint {
     .mesh = (fn (position, angle, scale, colour) => do
       _ <- draw_mesh (position, angle, scale, colour, camera);
-      in ()
+
     end);
     .sprite = (fn (position, scale, texture) => do
       _ <- draw_sprite (position, scale, texture, camera);
-      in ()
+
     end);
   };
   _ <- Canvas.present ();
-  in ()
+
 end;
 
 // `Canvas` and `View` are not exported. An effect is a compile-time value and a

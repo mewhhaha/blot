@@ -22,9 +22,9 @@ const halving = fn start => {
   .state = start;
   .step = fn value =>
     if is_less (@int.cmp value 1)
-    then None
-    else Some (value, @int.div value 2)
-    end;
+      then None
+      else Some (value, @int.div value 2)
+  end;
 };
 
 let shrunk = 0;

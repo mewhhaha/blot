@@ -403,6 +403,9 @@ export interface IterationSourceCursor extends RuleCursorBase<"iteration_source"
 }
 
 export interface BreakingCursor extends RuleCursorBase<"breaking"> {
+  field(name: "value"): ValueCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
 }
 
 export interface OpeningCursor extends RuleCursorBase<"opening"> {
@@ -742,7 +745,6 @@ export interface HandlerCompositionActionCursor extends RuleCursorBase<"handler_
 }
 
 export interface BlockCursor extends RuleCursorBase<"block"> {
-  field(name: "result"): readonly [TokenCursor<"literal", "in">, ValueCursor] | null;
   field(name: "statements"): ReadonlyArray<StatementCursor>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];

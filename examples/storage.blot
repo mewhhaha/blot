@@ -36,9 +36,9 @@ const Record = { .flag = U8; .id = I32; .code = U8; .name = Str; };
 
 const byte_width = fn t =>
   if refines (t, U8)
-  then 1
-  else (if refines (t, I32) then 4 else 8 end)
-  end;
+    then 1
+    else (if refines (t, I32) then 4 else 8 end)
+end;
 
 const Declared = struct Record;
 
@@ -73,8 +73,8 @@ const raw = layout (Record, byte_width);
 // as nested calls.
 
 const Meters = seal ("Meters", I32)
-  <+ { .of = fn n => seal ("Meters", n); }
-  <+ { .unit = "m"; };
+<+ { .of = fn n => seal ("Meters", n); }
+<+ { .unit = "m"; };
 
 const Located = Point <+ { .origin = { .x = 0; .y = 0; }; };
 

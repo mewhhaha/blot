@@ -206,7 +206,7 @@ let describe = fn value => do
   if value < 0 then
     return "negative";
   end;
-  in "non-negative"
+  break "non-negative";
 end;
 ```
 
@@ -223,10 +223,10 @@ This form has no `then`: its success path is the following statements, not a
 second block. The `else` body must leave that path with `return` or `break`, so
 every name in the pattern is known to exist afterward.
 
-`do` is an expression block. Its semicolon-terminated statements are separated
-from its value by `in`; without `in`, its value is `()`. The marker is required
-by the frontend grammar because a bare trailing name and the start of
-`name := ...;` have the same one-token prefix.
+`do` is an expression block. Reaching `end` produces `()`; `break value;` exits
+the nearest block with `value`, including from a statement branch or across a
+loop. A bare trailing expression remains invalid because a trailing name and the
+start of `name := ...;` have the same one-token prefix.
 
 Element expressions are ordinary component calls with property records and a
 nullary child computation:
@@ -303,9 +303,9 @@ Guards desugar during CST lowering like every other surface form, so what
 reaches coverage, the evaluator, and the backend is ordinary arms.
 
 `for` desugars to `rec`/`case` recursion during CST lowering, so there is no
-loop in the AST, none in the evaluator, and none in the backend. `break` carries
-the accumulator as it exists at that point; it can appear inside a standalone
-`if`, targets the nearest `for`, and cannot cross a function or
+loop in the AST, none in the evaluator, and none in the backend. `break;`
+carries the accumulator as it exists at that point; it can appear inside a
+standalone `if`, targets the nearest `for`, and cannot cross a function or
 value-conditional boundary. `return` instead crosses a `for` and exits the
 nearest function. A `for` names nothing, so a module that loops over an iterator
 it wrote itself needs nothing in scope. Looping over an _array_ needs
@@ -455,7 +455,7 @@ const Terminal = @effect { .read = Unit -> Str; };
 
 let ask = fn () => do
   answer <- Terminal.read ();
-  in answer <> "!"
+  break answer <> "!";
 end;
 ```
 
@@ -464,13 +464,13 @@ const Console = @effect { .write = Str -> Unit; };
 
 let report = fn () => do
   _ <- Console.write "one";
-  in "done"
+  break "done";
 end;
 
 let joining = {
   .write = fn (message, ?resume) => do
     rest <- resume ();
-    in message ++ rest
+    break message ++ rest;
   end;
   .return = fn value => value;
 };
@@ -506,7 +506,7 @@ is the program's declared interface rather than something left unhandled:
 const Console = @effect.host { .write = Str -> Unit; };
 let report = fn () => do
   result <- Console.write "compiled";
-  in result
+  break result;
 end; // () -> () ~ { Console }
 ```
 
@@ -521,7 +521,7 @@ let printing = {
   .write = fn (message, resume) => do
     _ <- init.print message;     // opaque; the program can only call it
     result <- resume ();
-    in result
+    break result;
   end;
   .return = fn value => value;
 };

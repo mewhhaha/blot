@@ -36,7 +36,7 @@ consume (!token)
 let collecting = {
   .write = fn (message, ?resume) => do
     rest <- resume ();
-    in message ++ rest
+    break message ++ rest;
   end;
   .return = fn value => value;
 };
