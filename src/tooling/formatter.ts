@@ -87,7 +87,26 @@ export async function formatSource(source: string): Promise<FormatResult> {
     }
     return `${"  ".repeat(openingLines.size)}${content}`;
   });
-  return { ok: true, source: `${formatted.join("\n").trimEnd()}\n` };
+  const formattedSource = `${formatted.join("\n").trimEnd()}\n`;
+  const reparsed = await parseConcrete(formattedSource);
+  if (
+    reparsed.ok &&
+    moduleWithoutSpans(reparsed.module) === moduleWithoutSpans(parsed.module)
+  ) {
+    return { ok: true, source: formattedSource };
+  }
+
+  const preservedLayout = `${
+    lines.map((line) => line.trimEnd()).join("\n").trimEnd()
+  }\n`;
+  const preserved = await parseConcrete(preservedLayout);
+  if (
+    !preserved.ok ||
+    moduleWithoutSpans(preserved.module) !== moduleWithoutSpans(parsed.module)
+  ) {
+    throw new Error("formatter could not preserve the parsed module");
+  }
+  return { ok: true, source: preservedLayout };
 }
 
 function collectRedundantParentheses(
@@ -217,6 +236,9 @@ function moduleWithoutSpans(module: Module): string {
   return JSON.stringify(module, (key, value) => {
     if (key === "span") return undefined;
     if (typeof value === "bigint") return `${value}n`;
+    if (key === "name" && typeof value === "string") {
+      return value.replace(/\$[0-9]+/g, "$span");
+    }
     return value;
   });
 }

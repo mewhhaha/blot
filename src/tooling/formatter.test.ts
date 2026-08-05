@@ -90,6 +90,34 @@ return result
   );
 });
 
+Deno.test("formatting preserves layout-significant continuation indentation", async () => {
+  const source = `const sum = fn (left, right) => left
+  + right
+if sum (1, 2) == 3 then
+  _ <- effect ()
+return ()
+`;
+  const formatted = await formatSource(source);
+  if (!formatted.ok) throw new Error("valid source did not format");
+  assertEquals(formatted.source, source);
+  assertEquals(await formatSource(formatted.source), formatted);
+});
+
+Deno.test("formatting does not extend a nested function over following statements", async () => {
+  const source = `let outer = fn values =>
+  let inner = fn () =>
+    return ()
+  for value in values:
+    let selected = value
+  return inner
+return outer
+`;
+  const formatted = await formatSource(source);
+  if (!formatted.ok) throw new Error("valid source did not format");
+  assertEquals(formatted.source, source);
+  assertEquals(await formatSource(formatted.source), formatted);
+});
+
 function semanticTree(value: unknown): unknown {
   return JSON.parse(JSON.stringify(value, (key, field) => {
     if (key === "span") return undefined;
