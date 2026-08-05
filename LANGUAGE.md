@@ -360,7 +360,11 @@ next physical line starts with a statement form. A suite may use any indentation
 width, but every line at that depth must agree; a dedent must return to an
 active suite width or to the introducer's width. Other indentation is expression
 continuation and does not silently create a scope. The formatter writes the
-accepted structure with two-space indentation.
+accepted structure with two-space indentation, keeping short lambdas and value
+conditionals on one line and expanding long ones toward 80 columns. When one
+conditional branch is a block, every branch body starts on its own indented
+line. Arrays use one line when they fit and otherwise place one element on each
+line.
 
 ### 4.1 Runtime and compile-time bindings
 
@@ -1073,11 +1077,11 @@ There is no truthiness and no `yield`.
 ### 8.2 Statement `if`
 
 ```blot
-if condition then
+if condition:
   statements
-else if other then
+else if other:
   statements
-else
+else:
   statements
 ```
 
@@ -1097,7 +1101,7 @@ The suite ends at the first dedent. `else` aligns with its `if`.
 ### 8.3 Deconstructing guard
 
 ```blot
-if let #Some value = candidate else
+if let #Some value = candidate else:
   return fallback
 
 // value is in scope here
@@ -1533,7 +1537,7 @@ An unbounded loop is ordinary iteration over the prelude's infinite iterator:
 
 ```blot
 for ever:
-  if finished then
+  if finished:
     break
 ```
 
@@ -2608,7 +2612,7 @@ let describe = fn message => case message of
 let attempts = 0
 for ever:
   attempts := attempts + 1
-  if attempts >= 3 then
+  if attempts >= 3:
     break
 
 let report = fn () =>

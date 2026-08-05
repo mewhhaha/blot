@@ -170,9 +170,9 @@ Deno.test("conditional shadows can destructure runtime join values", async () =>
 const Source = @effect.host { .value = Int -> Int; }
 candidate <- Source.value 0
 let result = 0
-if candidate > 0 then
+if candidate > 0:
   current <- Source.value candidate
-  if current > 0 then
+  if current > 0:
     current := current - 1
   result := current
 return result

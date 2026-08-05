@@ -3,7 +3,7 @@
 
 open @import "blot:prelude" ()
 
-if 1 < 2 then
+if 1 < 2:
   return 42
 
 return 0

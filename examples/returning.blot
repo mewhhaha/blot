@@ -4,20 +4,20 @@
 open @import "blot:prelude" ()
 
 let describe = fn value =>
-  if value < 0 then
+  if value < 0:
     return "negative"
-  if value == 0 then
+  if value == 0:
     return "zero"
   return "positive"
 
 let unwrap = fn option =>
-  if let #Some value = option else
+  if let #Some value = option else:
     return -1
   return value
 
 let find = fn wanted =>
   for value in Iter.range (0, 5):
-    if value == wanted then
+    if value == wanted:
       return value
   return -1
 
@@ -25,7 +25,7 @@ let count_to = fn limit =>
   let count = 0
   for ever:
     count := count + 1
-    if count >= limit then
+    if count >= limit:
       return count
   return 0
 
@@ -33,9 +33,9 @@ let count_or_stop = fn limit =>
   let count = 0
   for ever:
     count := count + 1
-    if count >= limit then
+    if count >= limit:
       return count
-    if count >= 5 then
+    if count >= 5:
       break
   return -1
 

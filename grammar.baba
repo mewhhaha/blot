@@ -525,7 +525,7 @@ conditional_statement = (
 // A deconstructing guard has no success block: matching binds the pattern for
 // the statements that follow it, while the `else` body must transfer control.
 //
-//   if let #Some value = option else
+//   if let #Some value = option else:
 //     return fallback;
 //   end;
 //   // value is in scope here
@@ -535,12 +535,13 @@ conditional_statement_guard = (
   "="
   value:value
   "else"
+  ":"
   alternative:statement_suite
 ) ;
 
 conditional_statement_branches = (
   condition:expression
-  "then"
+  ":"
   consequence:statement_suite
   alternatives:conditional_statement_else_if_clause*
   fallback:conditional_statement_else_clause?
@@ -550,13 +551,14 @@ conditional_statement_else_if_clause = (
   LAYOUT_NEWLINE?
   ELSE_IF
   condition:expression
-  "then"
+  ":"
   consequence:statement_suite
 ) ;
 
 conditional_statement_else_clause = (
   LAYOUT_NEWLINE?
   "else"
+  ":"
   alternative:statement_suite
 ) ;
 

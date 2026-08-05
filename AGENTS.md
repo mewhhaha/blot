@@ -92,11 +92,11 @@ already says, and every pass has to learn it.
 produces one of its branch values in a separate result scope that does not
 inherit surrounding control targets. An explicit `do` branch's return supplies
 the expression result; `break;` cannot escape it to reach an enclosing loop. A
-standalone `if ... then ... end;` inherits the surrounding return and loop
+standalone `if condition:` suite inherits the surrounding return and loop
 targets. Expression `if` requires `else`; statement `if` does not.
 
 **A deconstructing guard must leave on failure.**
-`if let pattern = value else ... end;` binds the pattern in the statements
+`if let pattern = value else:` binds the pattern in the statements
 that follow it. Its `else` path must `return` or `break`; allowing that path to
 continue would put names in scope that were never bound. There is no `then`
 because success continues after the guard rather than entering another block.

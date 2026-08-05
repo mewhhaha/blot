@@ -375,7 +375,7 @@ return answer
 check(
   "a statement conditional returns from its surrounding block",
   `let describe = fn value =>
-  if value < 0 then
+  if value < 0:
     return "negative"
   return "positive"
 return describe
@@ -387,7 +387,7 @@ check(
   "a return crosses a for loop",
   `let find = fn wanted =>
   for value in Iter.range (0, 5):
-    if value == wanted then
+    if value == wanted:
       return value
   return -1
 return find
@@ -401,7 +401,7 @@ check(
   let count = 0
   for ever:
     count := count + 1
-    if count >= limit then
+    if count >= limit:
       return count
   return 0
 return count_to
@@ -640,7 +640,7 @@ return f
 check(
   "a guard types what it binds",
   `let f = fn m =>
-  if let #Some inner = m else
+  if let #Some inner = m else:
     return "none"
   return inner
 return f (#Some 7)
@@ -651,7 +651,7 @@ return f (#Some 7)
 rejects(
   "a guard rejects a payload used at the wrong type",
   `let f = fn m =>
-  if let #Some inner = m else
+  if let #Some inner = m else:
     return "none"
   return Text.append inner "!"
 return f (#Some 3)
@@ -1059,7 +1059,7 @@ check(
 let h = fn k => "one"
 sig f = 1 | 2 | 3 -> Str
 let f = fn n =>
-  if n == 1 then
+  if n == 1:
     return h n
   return "rest"
 return f
@@ -1688,9 +1688,9 @@ check(
   `const Counter = @effect { .read = Unit -> Int; }
 let adjust = fn () =>
   let result = 0
-  if True then
+  if True:
     current <- Counter.read ()
-    if current > 0 then
+    if current > 0:
       current := current - 1
     result := current
   return result

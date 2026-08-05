@@ -78,7 +78,7 @@ for n in Iter.range (1, 4):
 let repeated = 0
 for ever:
   repeated := repeated + 1
-  if repeated >= 3 then
+  if repeated >= 3:
     break
 
 // --- effects ----------------------------------------------------------------

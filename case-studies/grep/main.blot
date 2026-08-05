@@ -19,7 +19,7 @@ line_count <- File.line_count ()
 for index in Iter.range (0, line_count):
   line <- File.line index
   let matching = Text.contains line pattern
-  if matching then
+  if matching:
     _ <- Console.write line
   count := if matching then count + 1
   else count

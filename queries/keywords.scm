@@ -55,12 +55,8 @@
   "let" @keyword.storage.type
   "else" @keyword.control.conditional)
 
-(conditional_statement_branches
-  "then" @keyword.control.conditional)
-
 (conditional_statement_else_if_clause
-  (ELSE_IF) @keyword.control.conditional
-  "then" @keyword.control.conditional)
+  (ELSE_IF) @keyword.control.conditional)
 
 (conditional_statement_else_clause
   "else" @keyword.control.conditional)

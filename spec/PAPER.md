@@ -707,11 +707,10 @@ length, capacity, and backing Store. A slice may carry
 Conditions refine `Phi`, not mutable inference variables. For example:
 
 ```blot
-if i >= 0 && i < Array.length values then
+if i >= 0 && i < Array.length values:
   @array.get values i
-else
+else:
   fallback
-end
 ```
 
 checks the first branch under:

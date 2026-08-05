@@ -113,20 +113,19 @@ What the language adds is that the world does not have to be a value. A `for`
 body's `:=` names are its accumulator, so the frame loop _is_ the world:
 
 ```blot
-for ever do
-  remaining <- Host.frame ();
-  if remaining <= 0 then break; end;
+for ever:
+  remaining <- Host.frame ()
+  if remaining <= 0:
+    break
 
-  current <- Assets.generation ();
-  if current != generation then
-    transforms <- load_transforms ();
-    models <- load_models ();
-    generation := current;
-  end;
+  current <- Assets.generation ()
+  if current != generation:
+    transforms <- load_transforms ()
+    models <- load_models ()
+    generation := current
 
-  transforms := advance transforms;
-  _ <- render (transforms, models);
-end;
+  transforms := advance transforms
+  _ <- render (transforms, models)
 ```
 
 A system that does not rebind a name provably cannot affect it — the property an

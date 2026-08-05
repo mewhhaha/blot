@@ -28,12 +28,17 @@ resolved. Definitions introduced dynamically by `open`, imported module fields,
 and package sources do not yet have cross-file locations.
 
 The formatter is biased but conservative. It applies two-space structural
-indentation, removes trailing whitespace, writes LF line endings, and leaves one
-final newline. It also removes parentheses made redundant by postfix precedence
-or left-associative application, while retaining groupings that affect the AST.
-It does not otherwise reflow expressions. Comments remain source text in the
-gaps between Baba CST nodes, so formatting cannot discard them. Use it from the
-command line with:
+indentation and targets 80-column lines. Short lambdas and value conditionals
+stay on one line; long lambdas and conditional branches expand vertically
+according to their scopes. Once one conditional branch is a block, every branch
+body starts on its own indented line. Arrays stay on one line when the complete
+expression fits; otherwise every element gets its own line. Long tuple arguments
+likewise expand when that removes an overlong line. It also removes trailing
+whitespace, writes LF line endings, leaves one final newline, and removes
+parentheses made redundant by postfix precedence or left-associative application
+while retaining groupings that affect the AST. Comments remain source text in
+the gaps between Baba CST nodes, so formatting cannot discard them. Use it from
+the command line with:
 
 ```bash
 deno task blot fmt source.blot

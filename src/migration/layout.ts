@@ -270,28 +270,37 @@ function migrateConditionalStatement(
   const end = requiredToken(rule, "end");
   const branches: {
     readonly introducer: TokenCursor;
+    readonly startsAt: number;
     readonly body: Rule[];
   }[] = [];
   if (body.name === "conditional_statement_guard") {
+    const introducer = requiredToken(body, "else");
     branches.push({
-      introducer: requiredToken(body, "else"),
+      introducer,
+      startsAt: introducer.span.start,
       body: fieldRules(body, "alternative"),
     });
   } else {
+    const introducer = requiredToken(body, "then");
     branches.push({
-      introducer: requiredToken(body, "then"),
+      introducer,
+      startsAt: introducer.span.start,
       body: fieldRules(body, "consequence"),
     });
     for (const alternative of fieldRules(body, "alternatives")) {
+      const alternativeStart = requiredNamedToken(alternative, "ELSE_IF");
       branches.push({
         introducer: requiredToken(alternative, "then"),
+        startsAt: alternativeStart.span.start,
         body: fieldRules(alternative, "consequence"),
       });
     }
     const fallback = optionalRule(body, "fallback");
     if (fallback !== null) {
+      const fallbackStart = requiredToken(fallback, "else");
       branches.push({
-        introducer: requiredToken(fallback, "else"),
+        introducer: fallbackStart,
+        startsAt: fallbackStart.span.start,
         body: fieldRules(fallback, "alternative"),
       });
     }
@@ -302,6 +311,18 @@ function migrateConditionalStatement(
       throw new Error(
         "An empty legacy `if` branch has no layout-suite spelling.",
       );
+    }
+    if (branch.introducer.text === "else") {
+      replaceToken(branch.introducer, "else:", edits);
+    } else {
+      edits.push({
+        start: precedingHorizontalWhitespace(
+          source,
+          branch.introducer.span.start,
+        ),
+        end: branch.introducer.span.end,
+        text: ":",
+      });
     }
     replaceGap(
       source,
@@ -314,7 +335,7 @@ function migrateConditionalStatement(
     const next = branches[index + 1];
     const endOffset = next === undefined
       ? end.span.end
-      : clauseStart(next.introducer, source);
+      : next.startsAt;
     if (next === undefined) {
       removeClosingGap(
         source,
@@ -652,14 +673,6 @@ function removeClosingGap(
     }`;
   }
   edits.push({ start, end, text });
-}
-
-function clauseStart(token: TokenCursor, source: string): number {
-  if (token.kind !== "ELSE_IF") return token.span.start;
-  const text = source.slice(token.span.start, token.span.end);
-  const thenOffset = text.indexOf("then");
-  if (thenOffset < 0) return token.span.start;
-  return token.span.start;
 }
 
 function lineIndent(source: string, offset: number): number {

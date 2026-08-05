@@ -22,7 +22,7 @@ return result
 
 Deno.test("core marks an ambient block result as a tail computation", async () => {
   const parsed = await parse(
-    `if #True then
+    `if #True:
   return ()
 return ()
 `,

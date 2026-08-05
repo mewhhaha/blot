@@ -7,7 +7,7 @@ open @import "blot:prelude" ()
 const counted = #Some 3
 
 let shout = fn () =>
-  if let #Some inner = counted else
+  if let #Some inner = counted else:
     return "none"
   return Text.append inner "!"
 

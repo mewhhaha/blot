@@ -128,11 +128,11 @@ rejects on type grounds. `if let` is the flagship guard form in `LANGUAGE.md`
 `0`:
 
 ```blot
-let n = 0;
-for x in Iter.range (0, 5) do
-  if x > 2 then n := n + 1; end;
-end;
-return n;                                  // should be 2
+let n = 0
+for x in Iter.range (0, 5):
+  if x > 2:
+    n := n + 1
+return n                                  // should be 2
 ```
 
 `carriedNames` (`src/syntax/lower.ts:1111`) only walks the loop body's top-level
@@ -233,8 +233,7 @@ the lattice stays polynomial.
 `src/syntax/lower.ts` over the loop body's nested statement scopes for a `:=`
 naming something not in `carried` and not `let`-bound in that scope; report
 `BLOT_REBINDING_NOT_CARRIED` with the fix
-(`n := if cond then n + 1 else n
-end;`). Same check at module and block level.
+(`n := if cond then n + 1 else n`). Same check at module and block level.
 Refuse rather than extend `carriedNames`: carrying a conditional rebinding out
 of a branch is a real language design question and this milestone is not the
 place to answer it.
@@ -348,7 +347,7 @@ judged three ways.
 
 _Design 2, coercion insertion at the instantiation edge, is rejected outright._
 All three judges ranked it last and one demonstrated a silent miscompile: for
-`let orDefault = fn v => if v.x > 0 then v else { .x = 0; } end;` applied to
+`let orDefault = fn v => if v.x > 0 then v else { .x = 0; }` applied to
 `{.x=5;
 .y=6;}`, the design's own `coreLabels` collapses to `{x}` on both sides
 of the instantiation edge, so its `BLOT_UNCOERCIBLE_SHAPE` refusal cannot fire,
@@ -615,10 +614,12 @@ structural indentation, compiler diagnostics, local definitions, and lints.
 comments in their original gaps instead of reconstructing source from an AST
 that carries no trivia.
 
-**Remaining work.** The formatter deliberately does not reflow expressions.
-Cross-module definitions and hover need durable binding facts from the compiler,
-and parse recovery still needs the admissible-token work below. Compiler
-diagnostics use the open root revision directly and remain device-free.
+**Remaining work.** The formatter reflows lambdas, value conditionals, arrays,
+and long tuple arguments toward 80 columns. A complete expression printer
+remains separate work. Cross-module definitions and hover need durable binding
+facts from the compiler, and parse recovery still needs the admissible-token
+work below. Compiler diagnostics use the open root revision directly and remain
+device-free.
 
 Also here, because it is the same complaint from the other end: parse
 diagnostics carry no expectation. Every syntax mistake reports
@@ -714,7 +715,7 @@ at all.
 
     let !once = 42;
     let user = rec (fn n => holder n + holder n);
-    let holder = rec (fn n => if n == 0 then once else user (n - 1) end);
+    let holder = rec (fn n => if n == 0 then once else user (n - 1))
 
 reported `holder` is never consumed, for a value it consumes twice. The
 rejection was right by accident and the reason was wrong, which is the shape

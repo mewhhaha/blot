@@ -7,7 +7,7 @@ let iterations = 0
 let completed = 0
 for ever:
   iterations := iterations + 1
-  if iterations >= 5 then
+  if iterations >= 5:
     break
   completed := completed + 1
 
@@ -19,17 +19,17 @@ for ever:
   let inner = 0
   for ever:
     inner := inner + 1
-    if inner >= 2 then
+    if inner >= 2:
       break
   inner_total := inner_total + inner
-  if outer >= 3 then
+  if outer >= 3:
     break
 
 // A finite iterator can stop before it is exhausted.
 let finite = 0
 for value in Iter.range (0, 10):
   finite := finite + value
-  if value >= 3 then
+  if value >= 3:
     break
 
 // A `for` with no accumulator exits with `()`.
@@ -44,7 +44,7 @@ for ever:
   guard_steps := guard_steps + 1
   let candidate = if guard_steps < 3 then Some guard_steps
   else None
-  if let #Some value = candidate else
+  if let #Some value = candidate else:
     break
   guard_total := guard_total + value
 

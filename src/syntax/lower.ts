@@ -575,7 +575,7 @@ function lowerControlOutcome(
     );
     // What a branch produces when it falls through. The names it rebound have
     // to ride across the rejoin, or the statements after the conditional read
-    // the value from before it — which is how a rebinding under `if c then`
+    // the value from before it — which is how a rebinding under `if c:`
     // inside a `for` silently counted nothing.
     const rebound = reboundNames(nestedStatementLists(rule).flat());
     let branchContinue: Expr = loopState(rebound, rule.span);
@@ -1247,7 +1247,7 @@ function desugarLoop(
  * The names a statement stream rebinds with `:=`.
  *
  * Recursive through nested statement lists, because a statement branch is part
- * of the same stream: a `n := n + 1` suite under `if c then` rebinds `n` for
+ * of the same stream: a `n := n + 1` suite under `if c:` rebinds `n` for
  * everything after it, and a loop containing that rebinds `n` per iteration.
  *
  * `:=` is the only form collected, and that is what makes this well defined.

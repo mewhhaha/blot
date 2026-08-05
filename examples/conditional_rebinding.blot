@@ -16,21 +16,21 @@ open @import "blot:prelude" ()
 // pass-through: it hands `counted` back as it already is.
 let counted = 0
 for x in Iter.range (0, 5):
-  if x > 2 then
+  if x > 2:
     counted := counted + 1
 
 // Both branches rebind, still last.
 let scored = 0
 for x in Iter.range (0, 5):
-  if x > 2 then
+  if x > 2:
     scored := scored + 1
-  else
+  else:
     scored := scored + 10
 
 // The conditional in the middle of a body, with an ordinary rebinding after it.
 let mixed = 0
 for x in Iter.range (0, 5):
-  if x > 2 then
+  if x > 2:
     mixed := mixed + 1
   mixed := mixed * 2
 
@@ -39,7 +39,7 @@ let evens = 0
 let seen = 0
 for x in Iter.range (0, 6):
   seen := seen + 1
-  if x % 2 == 0 then
+  if x % 2 == 0:
     evens := evens + 1
 
 // A `let` inside the branch stays branch-local: it is a new name with a
@@ -47,13 +47,13 @@ for x in Iter.range (0, 6):
 // is exactly what must not leak.
 let scaled = 0
 for x in Iter.range (0, 4):
-  if x > 0 then
+  if x > 0:
     let step = x * 3
     scaled := scaled + step
 
 // The same threading outside a loop.
 let flagged = 0
-if 1 < 2 then
+if 1 < 2:
   flagged := flagged + 1
 
 return {

@@ -12,7 +12,7 @@ let unwrap_or = fn m => case m of
   _ => "none"
 
 let shout = fn m =>
-  if let #Some inner = m else
+  if let #Some inner = m else:
     return "none"
   return Text.append inner "!"
 

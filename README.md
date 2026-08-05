@@ -197,9 +197,9 @@ for src:                 // loop; see below
 for ever:                // iterate the prelude's infinite iterator
   ...
 break                    // exit the nearest `for`
-if c then                // conditional control flow
+if c:                    // conditional control flow
   ...
-if let p = x else        // bind p or leave through the else branch
+if let p = x else:       // bind p or leave through the else branch
   return fallback
 name := expr             // shadow a name while preserving its type
 name <- expr             // sequence an effect and bind its result
@@ -221,7 +221,7 @@ transfer control:
 
 ```blot
 let describe = fn value =>
-  if value < 0 then
+  if value < 0:
     return "negative"
   return "non-negative"
 ```
@@ -229,7 +229,7 @@ let describe = fn value =>
 A deconstructing guard binds its pattern on the path that follows:
 
 ```blot
-if let #Some value = candidate else
+if let #Some value = candidate else:
   return fallback
 // value is in scope here
 ```
@@ -292,7 +292,7 @@ for #Some n in source:          // bind, and skip what does not match
 
 for ever:
   x := x + 1
-  if done x then
+  if done x:
     break
 ```
 

@@ -19,7 +19,7 @@ let turns = 0
 for ever:
   _ <- Terminal.write "You:"
   prompt <- Terminal.read_line ()
-  if text_eq (prompt, "") then
+  if text_eq (prompt, ""):
     break
   let request = transcript ++ "\nUser: " ++ prompt ++ "\nAssistant:"
   reply <- Model.complete request
