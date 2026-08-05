@@ -197,10 +197,11 @@ let label = if ready then "ready" else "waiting" end;
 ```
 
 There is no `yield`: the selected branch expression is the conditional's value.
-It does not establish a statement control target. An explicit `do` branch
-catches its own `return`, while `break;` cannot escape the value conditional to
-an enclosing loop. A standalone conditional is surrounding control flow, has an
-optional `else`, and may transfer control:
+It is a separate result scope and does not inherit surrounding control targets.
+An explicit `do` branch's `return` supplies the conditional result, while
+`break;` cannot escape the value conditional to an enclosing loop. A standalone
+conditional is surrounding control flow, has an optional `else`, and may
+transfer control:
 
 ```blot
 let describe = fn value => do

@@ -89,11 +89,11 @@ say what it means — otherwise it is a second way to say something the language
 already says, and every pass has to learn it.
 
 **Value conditionals do not transfer control.** An expression `if` or `case`
-produces one of its branch values and does not itself establish a statement
-control target. An explicit `do` branch is its own return scope; `break;` cannot
-escape it to reach an enclosing loop. A standalone `if ... then ... end;`
-inherits the surrounding return and loop targets. Expression `if` requires
-`else`; statement `if` does not.
+produces one of its branch values in a separate result scope that does not
+inherit surrounding control targets. An explicit `do` branch's return supplies
+the expression result; `break;` cannot escape it to reach an enclosing loop. A
+standalone `if ... then ... end;` inherits the surrounding return and loop
+targets. Expression `if` requires `else`; statement `if` does not.
 
 **A deconstructing guard must leave on failure.**
 `if let pattern = value else ... end;` binds the pattern in the statements

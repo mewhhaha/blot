@@ -41,7 +41,6 @@
 
 (block
   "do" @keyword.control
-  "in" @keyword.control
   "end" @keyword.control)
 
 (conditional

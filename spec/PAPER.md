@@ -757,11 +757,11 @@ does not count as match failure.
 ### 8.2 Value conditionals do not transfer control
 
 Expression `if` and `case` produce values or computations selected from their
-branches and do not establish statement control targets. An explicit `do` branch
-is a local return scope, while `break;` cannot cross the value expression to
-reach an enclosing loop. Statement conditionals elaborate with compiler-local
-control sums whose cases are eliminated at the corresponding loop or
-return-scope boundary.
+branches in separate result scopes that do not inherit surrounding control
+targets. An explicit `do` branch's return supplies the expression result, while
+`break;` cannot cross the value expression to reach an enclosing loop. Statement
+conditionals elaborate with compiler-local control sums whose cases are
+eliminated at the corresponding loop or return-scope boundary.
 
 This keeps non-local control explicit in core and prevents a value expression
 from having a hidden continuation target.

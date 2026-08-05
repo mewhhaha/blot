@@ -194,7 +194,24 @@ const highlights = [
 ].join("\n");
 
 await Deno.mkdir(generatedQueries, { recursive: true });
-await Deno.writeTextFile(join(generatedQueries, "highlights.scm"), highlights);
+const generatedHighlights = join(generatedQueries, "highlights.scm");
+await Deno.writeTextFile(generatedHighlights, highlights);
+const queryConfig = join(grammarDirectory, "query-config.json");
+await Deno.writeTextFile(
+  queryConfig,
+  `${JSON.stringify({ "parser-directories": [repository] }, null, 2)}\n`,
+);
+
+await runCommand("tree-sitter", [
+  "query",
+  "--config-path",
+  queryConfig,
+  "--grammar-path",
+  grammarDirectory,
+  "--quiet",
+  generatedHighlights,
+  join(repository, "examples", "minimal.blot"),
+]);
 
 await Deno.mkdir(queryTarget, { recursive: true });
 await Deno.writeTextFile(join(queryTarget, "highlights.scm"), highlights);

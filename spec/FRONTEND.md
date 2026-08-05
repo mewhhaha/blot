@@ -105,7 +105,8 @@ bindings determine lexical lookup. The prelude is an ordinary imported module.
 Elaboration preserves the source order of live computation bindings. Pure
 bindings may later be erased when unused, but the frontend does not reorder a
 computation or turn `let` into sequencing. A control translation must preserve
-the nearest enclosing `for` and module-or-explicit-`do` return targets.
+the nearest enclosing `for` and module-or-explicit-`do` return targets, while
+isolating both at value-producing `if` and `case` result scopes.
 
 ## 6. Frontend theorem obligation
 

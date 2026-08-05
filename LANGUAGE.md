@@ -685,9 +685,11 @@ return value;
 
 `return` exits the nearest enclosing module or explicit `do` block with its
 value. Statement conditionals and `for` bodies do not establish return scopes,
-so a return crosses them. A nested `do` does establish a scope, even when it is
-the branch of a value-producing `if` or `case`; a return in that block supplies
-the block's value rather than escaping farther.
+so a return crosses them. Value-producing `if` and `case` expressions are
+separate result scopes and do not inherit that surrounding target. Their
+branches are values, so a branch that needs statements uses `do`; a return in
+that block supplies the branch, and therefore the expression, rather than
+escaping farther.
 
 ## 5. Patterns
 
@@ -1059,11 +1061,12 @@ An expression `if`:
 - requires an `else`;
 - requires every condition to be `#True` or `#False`;
 - evaluates and returns exactly one branch value; and
-- does not itself establish a statement control target.
+- is a result-scope boundary that does not inherit surrounding control targets.
 
-A `do` used as a branch is an ordinary explicit scope. Its `return` supplies
-that block's branch value. A bare `break;` inside such a branch still cannot
-escape the value expression to reach an enclosing loop.
+Branches are values rather than statement lists. A branch that needs statements
+uses `do`; its `return` supplies that branch and therefore the conditional's
+result. A bare `break;` inside such a branch cannot escape the value expression
+to reach an enclosing loop.
 
 There is no truthiness and no `yield`.
 
@@ -1265,9 +1268,9 @@ the same way when a `sig` says what they hold. Where nothing does, an inner
 column carries no requirement — only a column of the scrutinee's own tuple is
 closed by its arms.
 
-Like expression `if`, `case` does not establish a statement control target. An
-explicit `do` arm catches its own `return`; `break;` cannot escape an arm to
-reach an enclosing loop.
+Like expression `if`, `case` is a separate result scope. An explicit `do` arm's
+`return` supplies the selected arm and therefore the case result; `break;`
+cannot escape an arm to reach an enclosing loop.
 
 An effectful `case` remains a value expression. Select the effectful branch and
 sequence the selected expression once at the surrounding scope:

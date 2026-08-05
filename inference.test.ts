@@ -333,8 +333,14 @@ check(
 );
 
 check(
-  "a nested do catches its own return",
+  "a value if keeps a nested return inside its result scope",
   "let answer = fn () => do\n  let inner = if 1 < 2 then do\n    return 41;\n  end else 0 end;\n  return inner + 1;\nend;\nreturn answer;",
+  "() -> Int",
+);
+
+check(
+  "a value case keeps a nested return inside its result scope",
+  "let answer = fn () => do\n  let inner = case Some 41 of\n    #Some value => do\n      return value;\n    end,\n    #None => 0\n  end;\n  return inner + 1;\nend;\nreturn answer;",
   "() -> Int",
 );
 
