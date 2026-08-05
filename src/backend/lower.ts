@@ -87,6 +87,7 @@ import {
   type Env as ValueEnv,
   F32X4_MASK_NAME,
   F32X4_NAME,
+  inferredTypeOf,
   lookup as lookupValue,
   type Value,
 } from "../comptime/value.ts";
@@ -459,6 +460,7 @@ class Lowering {
 interface RuntimeLambda {
   readonly expression: Expr & { readonly tag: "lambda" };
   readonly environment: Scope;
+  readonly inferredEffects?: ReadonlySet<number>;
 }
 
 interface RuntimeLambdaChoice {
@@ -723,6 +725,135 @@ function specializableLambda(expr: Expr, scope: Scope): RuntimeLambda | null {
     identity.expression.body.name !== identity.expression.parameter.name
   ) return null;
   return specializableLambda(expr.arg, scope);
+}
+
+function handledLambda(expr: Expr, scope: Scope): RuntimeLambda | null {
+  const runtime = specializableLambda(expr, scope);
+  if (runtime !== null) return runtime;
+
+  let value: Value | null = null;
+  if (expr.tag === "var" && resolve(scope, expr.name) === null) {
+    value = lookupValue(scope.values, expr.name) ?? null;
+  } else if (expr.tag === "field") {
+    value = comptimeShapeMember(expr, scope);
+  }
+  if (value === null || value.tag !== "closure" || value.self !== null) {
+    return null;
+  }
+
+  const inferredEffects = closureEffectIds(value);
+
+  if (value.source?.tag === "lambda") {
+    return {
+      expression: value.source,
+      environment: childScope(null, value.env),
+      inferredEffects,
+    };
+  }
+
+  const span = value.body.span;
+  return {
+    expression: {
+      tag: "lambda",
+      parameter: value.parameter,
+      body: value.body,
+      span,
+    },
+    environment: childScope(null, value.env),
+    inferredEffects,
+  };
+}
+
+function closureEffectIds(
+  closure: Value & { readonly tag: "closure" },
+): ReadonlySet<number> | undefined {
+  let inferred = inferredTypeOf(closure);
+  while (inferred?.tag === "forall") inferred = inferred.body;
+  if (inferred?.tag !== "arrow") return undefined;
+  const ids = new Set<number>();
+  for (const performed of inferred.effects) {
+    let selected = performed;
+    if (selected.tag === "extended") selected = selected.inner;
+    if (selected.tag === "effect") ids.add(selected.id);
+  }
+  return ids;
+}
+
+function lambdaMayPerform(
+  lambda: RuntimeLambda,
+  effect: Value & { readonly tag: "effect" },
+  lowering: Lowering,
+): boolean {
+  if (containsIntrinsic(lambda.expression.body, "@handle")) return true;
+  if (lambda.inferredEffects !== undefined) {
+    return lambda.inferredEffects.has(effect.id);
+  }
+  const inferred = lowering.facts.expressionTypes.get(lambda.expression);
+  if (inferred === undefined || inferred.tag !== "fun") return true;
+  return effectRowMayContain(
+    inferred.effects,
+    `${effect.name}#${effect.id}`,
+    new Set(),
+  );
+}
+
+function containsIntrinsic(expr: Expr, name: string): boolean {
+  switch (expr.tag) {
+    case "intrinsic":
+      return expr.name === name;
+    case "apply":
+      return containsIntrinsic(expr.fn, name) ||
+        containsIntrinsic(expr.arg, name);
+    case "field":
+      return containsIntrinsic(expr.target, name);
+    case "lambda":
+      return containsIntrinsic(expr.body, name);
+    case "rec":
+      return containsIntrinsic(expr.lambda, name);
+    case "comptime":
+      return containsIntrinsic(expr.body, name);
+    case "tuple":
+      return expr.elements.some((element) => containsIntrinsic(element, name));
+    case "array":
+      return expr.elements.some((element) =>
+        containsIntrinsic(element.value, name)
+      );
+    case "shape":
+      return expr.members.some((member) =>
+        containsIntrinsic(member.value, name)
+      );
+    case "if":
+      return expr.branches.some((branch) =>
+        containsIntrinsic(branch.condition, name) ||
+        containsIntrinsic(branch.consequence, name)
+      ) || (expr.fallback !== null && containsIntrinsic(expr.fallback, name));
+    case "case":
+      return containsIntrinsic(expr.target, name) ||
+        expr.arms.some((arm) => containsIntrinsic(arm.body, name));
+    case "block":
+      return expr.declarations.some((declaration) =>
+        containsIntrinsic(declaration.value, name)
+      ) || containsIntrinsic(expr.result, name);
+    default:
+      return false;
+  }
+}
+
+function effectRowMayContain(
+  row: SimpleType,
+  label: string,
+  seen: Set<number>,
+): boolean {
+  if (row.tag === "effects") return row.labels.has(label);
+  if (row.tag === "forall") {
+    return effectRowMayContain(row.body, label, seen);
+  }
+  if (row.tag !== "var") return true;
+  if (seen.has(row.id)) return false;
+  seen.add(row.id);
+  const bounds = [...row.lower, ...row.upper];
+  if (bounds.length === 0) return false;
+  return bounds.some((bound) => effectRowMayContain(bound, label, seen));
 }
 
 function aggregateRuntimeLambdas(
@@ -5545,52 +5676,84 @@ function lowerHandle(
     );
   }
 
-  let returnClause: Expr | null = null;
-  const clauses = new Map<string, Expr>();
+  let returnClause: RuntimeLambda | null = null;
+  const clauses = new Map<string, RuntimeLambda>();
   for (const member of handler.members) {
     if (member.tag !== "field") {
       return unsupported("a spread in a handler", span);
     }
     if (member.name === "return") {
-      returnClause = member.value;
+      returnClause = specializableLambda(member.value, scope);
+      if (returnClause === null) {
+        return unsupported(
+          "a handler return clause that is not a function",
+          span,
+        );
+      }
       continue;
     }
-    clauses.set(member.name, member.value);
+    const clause = specializableLambda(member.value, scope);
+    if (clause === null) {
+      return unsupported(
+        `a handler clause \`.${member.name}\` that is not a function`,
+        span,
+      );
+    }
+    clauses.set(member.name, clause);
   }
 
-  const thunk = computation.tag === "lambda"
-    ? computation
-    : computation.tag === "var"
-    ? resolveLiteral(scope, computation.name)
-    : null;
-  if (thunk === null || thunk.tag !== "lambda") {
+  const thunk = handledLambda(computation, scope);
+  if (thunk === null) {
     return unsupported(
       "a `@handle` whose computation is not a lambda written in this module",
       span,
     );
   }
-  if (thunk.parameter.tag !== "unit" && thunk.parameter.tag !== "wildcard") {
+  if (
+    thunk.expression.parameter.tag !== "unit" &&
+    thunk.expression.parameter.tag !== "wildcard"
+  ) {
     return unsupported("a handled computation that takes an argument", span);
+  }
+
+  const transformedScope = childScope(thunk.environment);
+  const clauseNames = new Map<string, string>();
+  for (const [operation, clause] of clauses) {
+    const name = lowering.fresh(`handler$${operation}`);
+    clauseNames.set(operation, name);
+    transformedScope.runtimeLambdas.set(name, {
+      expression: clause.expression,
+      environment: snapshotScope(clause.environment),
+    });
+  }
+  let returnClauseName: string | null = null;
+  if (returnClause !== null) {
+    returnClauseName = lowering.fresh("handler$return");
+    transformedScope.runtimeLambdas.set(returnClauseName, {
+      expression: returnClause.expression,
+      environment: snapshotScope(returnClause.environment),
+    });
   }
 
   const cps = (
     expr: Expr,
+    activeScope: Scope,
     continuation: (value: Expr) => Expr,
   ): Expr => {
     if (expr.tag === "apply") {
       const performed = flatten(expr);
       if (performed.callee.tag === "field" && performed.args.length === 1) {
-        const performedEffect = comptimeEffect(performed.callee, scope);
+        const performedEffect = comptimeEffect(performed.callee, activeScope);
         if (performedEffect !== null && performedEffect.id === effect.id) {
-          const clause = clauses.get(performed.callee.name);
-          if (clause === undefined) {
+          const clauseName = clauseNames.get(performed.callee.name);
+          if (clauseName === undefined) {
             fail(
               "BLOT_TYPE_ERROR",
               `Handler for \`${effect.name}\` has no \`.${performed.callee.name}\` clause.`,
               expr.span,
             );
           }
-          return cps(performed.args[0], (operationArgument) => {
+          return cps(performed.args[0], activeScope, (operationArgument) => {
             const resumed = lowering.fresh("resumed");
             const resume: Expr = {
               tag: "lambda",
@@ -5609,7 +5772,11 @@ function lowerHandle(
             };
             return {
               tag: "apply",
-              fn: clause,
+              fn: {
+                tag: "var",
+                name: clauseName,
+                span: expr.span,
+              },
               arg: {
                 tag: "tuple",
                 elements: [operationArgument, resume],
@@ -5620,18 +5787,80 @@ function lowerHandle(
           });
         }
       }
+
+      const specialized = handledLambda(expr.fn, activeScope);
+      if (
+        specialized !== null && lambdaMayPerform(specialized, effect, lowering)
+      ) {
+        return cps(expr.arg, activeScope, (argument) => {
+          const calleeScope = childScope(specialized.environment);
+          const continuationName = lowering.fresh("handler$continuation");
+          const resumed = lowering.fresh("handler$result");
+          const continued = continuation({
+            tag: "var",
+            name: resumed,
+            span: expr.span,
+          });
+          calleeScope.runtimeLambdas.set(continuationName, {
+            expression: {
+              tag: "lambda",
+              parameter: {
+                tag: "name",
+                name: resumed,
+                qualifier: "none",
+                span: expr.span,
+              },
+              body: continued,
+              span: expr.span,
+            },
+            environment: snapshotScope(activeScope),
+          });
+          const body = cps(
+            specialized.expression.body,
+            calleeScope,
+            (value) => ({
+              tag: "apply",
+              fn: {
+                tag: "var",
+                name: continuationName,
+                span: expr.span,
+              },
+              arg: value,
+              span: expr.span,
+            }),
+          );
+          const calleeName = lowering.fresh("handler$callee");
+          activeScope.runtimeLambdas.set(calleeName, {
+            expression: { ...specialized.expression, body },
+            environment: calleeScope,
+          });
+          return {
+            tag: "apply",
+            fn: { tag: "var", name: calleeName, span: expr.span },
+            arg: argument,
+            span: expr.span,
+          };
+        });
+      }
+
       return cps(
         expr.fn,
+        activeScope,
         (fn) =>
           cps(
             expr.arg,
+            activeScope,
             (arg) => continuation({ tag: "apply", fn, arg, span: expr.span }),
           ),
       );
     }
 
     if (expr.tag === "field") {
-      return cps(expr.target, (target) => continuation({ ...expr, target }));
+      return cps(
+        expr.target,
+        activeScope,
+        (target) => continuation({ ...expr, target }),
+      );
     }
 
     if (expr.tag === "tuple") {
@@ -5640,7 +5869,7 @@ function lowerHandle(
         if (index === expr.elements.length) {
           return continuation({ ...expr, elements });
         }
-        return cps(expr.elements[index], (element) => {
+        return cps(expr.elements[index], activeScope, (element) => {
           elements.push(element);
           return sequence(index + 1);
         });
@@ -5655,7 +5884,7 @@ function lowerHandle(
           return continuation({ ...expr, elements });
         }
         const element = expr.elements[index];
-        return cps(element.value, (value) => {
+        return cps(element.value, activeScope, (value) => {
           elements.push({ spread: element.spread, value });
           return sequence(index + 1);
         });
@@ -5670,7 +5899,7 @@ function lowerHandle(
           return continuation({ ...expr, members });
         }
         const member = expr.members[index];
-        return cps(member.value, (value) => {
+        return cps(member.value, activeScope, (value) => {
           if (member.tag === "field") {
             members.push({ tag: "field", name: member.name, value });
           } else {
@@ -5686,14 +5915,14 @@ function lowerHandle(
       const branch = (index: number): Expr | null => {
         if (index === expr.branches.length) {
           if (expr.fallback === null) return null;
-          return cps(expr.fallback, continuation);
+          return cps(expr.fallback, activeScope, continuation);
         }
         const current = expr.branches[index];
-        return cps(current.condition, (condition) => ({
+        return cps(current.condition, activeScope, (condition) => ({
           tag: "if",
           branches: [{
             condition,
-            consequence: cps(current.consequence, continuation),
+            consequence: cps(current.consequence, activeScope, continuation),
           }],
           fallback: branch(index + 1),
           span: expr.span,
@@ -5711,12 +5940,12 @@ function lowerHandle(
     }
 
     if (expr.tag === "case") {
-      return cps(expr.target, (target) => ({
+      return cps(expr.target, activeScope, (target) => ({
         ...expr,
         target,
         arms: expr.arms.map((arm) => ({
           ...arm,
-          body: cps(arm.body, continuation),
+          body: cps(arm.body, activeScope, continuation),
         })),
       }));
     }
@@ -5724,13 +5953,13 @@ function lowerHandle(
     if (expr.tag === "block") {
       const sequence = (index: number): Expr => {
         if (index === expr.declarations.length) {
-          return cps(expr.result, continuation);
+          return cps(expr.result, activeScope, continuation);
         }
         const declaration = expr.declarations[index];
         if (declaration.tag === "binding" && declaration.kind === "sig") {
           return sequence(index + 1);
         }
-        return cps(declaration.value, (value) => {
+        return cps(declaration.value, activeScope, (value) => {
           const rewritten = { ...declaration, value } as Decl;
           return {
             tag: "block",
@@ -5747,16 +5976,16 @@ function lowerHandle(
     return continuation(expr);
   };
 
-  const transformed = cps(thunk.body, (value) => {
-    if (returnClause === null) return value;
+  const transformed = cps(thunk.expression.body, transformedScope, (value) => {
+    if (returnClauseName === null) return value;
     return {
       tag: "apply",
-      fn: returnClause,
+      fn: { tag: "var", name: returnClauseName, span },
       arg: value,
       span,
     };
   });
-  return lower(transformed, childScope(scope), lowering);
+  return lower(transformed, transformedScope, lowering);
 }
 
 /**

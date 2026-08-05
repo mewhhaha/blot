@@ -228,6 +228,7 @@ pub(crate) struct ResidualTrace {
     blocks: Vec<ResidualBlock>,
     current_block: usize,
     next_value: usize,
+    active_primitive: Option<String>,
 }
 
 fn integer_simd_layout(name: &str) -> (&'static str, u8) {
@@ -263,6 +264,7 @@ impl ResidualTrace {
             blocks: Vec::new(),
             current_block: 0,
             next_value: 0,
+            active_primitive: None,
         };
         trace.insert_type("unit", RuntimeType::Unit);
         trace.insert_type("boolean", RuntimeType::Boolean);
@@ -345,6 +347,29 @@ impl ResidualTrace {
     ) -> Result<Option<Value>, Diagnostic> {
         if !arguments.iter().any(contains_runtime) {
             return Ok(None);
+        }
+        self.active_primitive = Some(name.to_owned());
+        if matches!(
+            name,
+            "@type.seal"
+                | "@type.open"
+                | "@type.attach"
+                | "@shape.get"
+                | "@shape.set"
+                | "@shape.remove"
+                | "@shape.names"
+                | "@shape.has"
+        ) {
+            return crate::primitives::run_primitive(
+                name,
+                arguments.to_vec(),
+                crate::ast::Span {
+                    start: span.start,
+                    end: span.end,
+                },
+                Phase::Runtime,
+            )
+            .map(Some);
         }
         if name.starts_with("@i32x4.") || name.starts_with("@i16x8.") || name.starts_with("@i8x16.")
         {
@@ -649,6 +674,49 @@ impl ResidualTrace {
         matches!(self.types[value.type_id], RuntimeType::SignedInteger64)
     }
 
+    pub(crate) fn is_boolean(&self, value: &RuntimeValue) -> bool {
+        matches!(self.types[value.type_id], RuntimeType::Boolean)
+    }
+
+    pub(crate) fn sum_cases(&self, value: &RuntimeValue) -> Option<Vec<String>> {
+        let RuntimeType::Sum { cases, .. } = &self.types[value.type_id] else {
+            return None;
+        };
+        Some(cases.iter().map(|case_| case_.name.clone()).collect())
+    }
+
+    pub(crate) fn type_name(&self, value: &RuntimeValue) -> &'static str {
+        match self.types[value.type_id] {
+            RuntimeType::Unit => "Unit",
+            RuntimeType::Boolean => "Bool",
+            RuntimeType::Integer32 => "I32",
+            RuntimeType::SignedInteger64 => "Int",
+            RuntimeType::Float32 => "F32",
+            RuntimeType::Float64 => "F64",
+            RuntimeType::Text => "Str",
+            RuntimeType::Vector { .. } => "Vector",
+            RuntimeType::Mask { .. } => "Mask",
+            RuntimeType::Store { .. } => "Store",
+            RuntimeType::Product { .. } => "Record",
+            RuntimeType::Sum { .. } => "Sum",
+            RuntimeType::Sealed { .. } => "Sealed",
+        }
+    }
+
+    fn type_description(&self, value: &RuntimeValue) -> String {
+        match &self.types[value.type_id] {
+            RuntimeType::Product { fields, .. } => format!(
+                "record {{{}}}",
+                fields
+                    .iter()
+                    .map(|field| field.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            _ => self.type_name(value).to_owned(),
+        }
+    }
+
     pub(crate) fn integer_equal(
         &mut self,
         target: &RuntimeValue,
@@ -678,7 +746,10 @@ impl ResidualTrace {
         if condition.type_id != 1 {
             return Err(Diagnostic::new(
                 "BLOT_UNSUPPORTED_LOWERING",
-                "A dynamic condition must be Boolean.",
+                format!(
+                    "A dynamic condition must be Boolean, found {}.",
+                    self.type_name(condition)
+                ),
                 span,
             ));
         }
@@ -748,11 +819,12 @@ impl ResidualTrace {
         };
         self.blocks[branches.join].parameters.push(parameter);
         self.current_block = branches.join;
-        Ok(Value::Runtime(RuntimeValue {
+        let joined = RuntimeValue {
             id: joined,
             type_id: consequent.type_id,
             meaning,
-        }))
+        };
+        self.symbolic_value(joined, span)
     }
 
     pub(crate) fn sum_condition(
@@ -914,6 +986,26 @@ impl ResidualTrace {
         alternate: Value,
         span: crate::ast::Span,
     ) -> Result<(RuntimeValue, RuntimeValue), Diagnostic> {
+        if matches!(
+            (&consequent, &alternate),
+            (
+                Value::Tag {
+                    name: consequent,
+                    payload: None
+                },
+                Value::Tag {
+                    name: alternate,
+                    payload: None
+                }
+            ) if (consequent == "True" || consequent == "False")
+                && (alternate == "True" || alternate == "False")
+        ) {
+            self.current_block = consequent_block;
+            let consequent = self.lower_value(&consequent, span)?;
+            self.current_block = alternate_block;
+            let alternate = self.lower_value(&alternate, span)?;
+            return Ok((consequent, alternate));
+        }
         if let Value::Tag {
             name: consequent_name,
             payload: consequent_payload,
@@ -929,10 +1021,8 @@ impl ResidualTrace {
             let alternate_payload = compiler_tag_payload(alternate_payload.as_deref());
             let consequent_payload_type = self.value_type(&consequent_payload)?;
             let alternate_payload_type = self.value_type(&alternate_payload)?;
-            if consequent_payload_type != alternate_payload_type {
-                return Err(hir_error("Dynamic sum payload types do not agree."));
-            }
-            let sum_type = self.sum_type(&cases, consequent_payload_type);
+            let sum_type =
+                self.sum_type(&cases, &[consequent_payload_type, alternate_payload_type]);
             self.current_block = consequent_block;
             let consequent_payload = self.lower_value(&consequent_payload, span)?;
             let consequent = self.operation_with_case(
@@ -983,7 +1073,11 @@ impl ResidualTrace {
         if lowered.type_id != type_id {
             return Err(Diagnostic::new(
                 "BLOT_UNSUPPORTED_LOWERING",
-                format!("A dynamic primitive expected {expected}."),
+                format!(
+                    "Dynamic primitive {} expected {expected}, found {}.",
+                    self.active_primitive.as_deref().unwrap_or("<unknown>"),
+                    self.type_description(&lowered)
+                ),
                 span,
             ));
         }
@@ -1098,6 +1192,18 @@ impl ResidualTrace {
                 payload: None,
             } if name == "True" || name == "False" => {
                 Ok(self.constant(WireConstant::Boolean(name == "True"), 1, span))
+            }
+            Value::Tag { name, payload } => {
+                let payload = compiler_tag_payload(payload.as_deref());
+                let payload_type = self.value_type(&payload)?;
+                let sum_type = self.sum_type(std::slice::from_ref(name), &[payload_type]);
+                let payload = self.lower_value(&payload, span)?;
+                let mut tagged =
+                    self.operation_with_case("sum.make", sum_type, vec![payload.id], span, 0);
+                tagged.meaning = RuntimeMeaning::Sum {
+                    cases: vec![name.clone()],
+                };
+                Ok(tagged)
             }
             Value::Shape(fields) => {
                 let type_id = self.product_type(fields)?;
@@ -1390,17 +1496,26 @@ impl ResidualTrace {
         result
     }
 
-    fn sum_type(&mut self, cases: &[String], payload_type: usize) -> usize {
-        let key = format!("residual-sum:{}:{payload_type}", cases.join("|"));
+    fn sum_type(&mut self, cases: &[String], payload_types: &[usize]) -> usize {
+        let key = format!(
+            "residual-sum:{}:{}",
+            cases.join("|"),
+            payload_types
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join("|")
+        );
         self.insert_type(
             &key,
             RuntimeType::Sum {
                 name: format!("residual${}", self.types.len()),
                 cases: cases
                     .iter()
-                    .map(|name| RuntimeCase {
+                    .zip(payload_types)
+                    .map(|(name, payload_type)| RuntimeCase {
                         name: name.clone(),
-                        payload_type,
+                        payload_type: *payload_type,
                     })
                     .collect(),
             },
@@ -1440,9 +1555,15 @@ impl ResidualTrace {
 
     fn symbolic_value(
         &mut self,
-        value: RuntimeValue,
+        mut value: RuntimeValue,
         span: crate::ast::Span,
     ) -> Result<Value, Diagnostic> {
+        if let RuntimeType::Sum { cases, .. } = &self.types[value.type_id] {
+            value.meaning = RuntimeMeaning::Sum {
+                cases: cases.iter().map(|case_| case_.name.clone()).collect(),
+            };
+            return Ok(Value::Runtime(value));
+        }
         let RuntimeType::Product { fields, .. } = self.types[value.type_id].clone() else {
             return Ok(Value::Runtime(value));
         };
@@ -1585,7 +1706,7 @@ struct StagedExport {
     runtime: Option<(Value, Type)>,
 }
 
-pub fn prepare(
+pub fn elaborate(
     context: Rc<Context>,
     path: &str,
     checked: CheckedModule,

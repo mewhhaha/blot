@@ -10,7 +10,7 @@ use crate::diagnostic::Diagnostic;
 use crate::primitives::{constant, primitive_arity, run_primitive};
 use crate::value::{
     Environment, OpenedValues, OrderedFields, Resume, RuntimeMeaning, RuntimeValue, Value,
-    as_tuple, child_env, equal, lookup, lookup_signature, show, tuple,
+    as_tuple, attach_signature, child_env, equal, lookup, lookup_signature, show, tuple,
 };
 
 #[derive(Clone, Eq, PartialEq)]
@@ -26,18 +26,55 @@ pub struct LoadedModule {
     pub includes: BTreeMap<String, IncludedFile>,
 }
 
+#[derive(Eq, Hash, PartialEq)]
+struct EffectIdentity {
+    module: String,
+    span_start: u32,
+    span_end: u32,
+    scope: String,
+    host: bool,
+}
+
 #[derive(Default)]
 pub struct Context {
     pub modules: RefCell<HashMap<String, LoadedModule>>,
     pub module_results: RefCell<HashMap<String, Value>>,
     next_effect: Cell<u32>,
+    effect_ids: RefCell<HashMap<EffectIdentity, u32>>,
+    named_effects: RefCell<HashMap<(String, String, bool), u32>>,
     next_type_variable: Cell<u32>,
 }
 
 impl Context {
-    fn effect_id(&self) -> u32 {
+    fn fresh_effect_id(&self) -> u32 {
         let id = self.next_effect.get() + 1;
         self.next_effect.set(id);
+        id
+    }
+
+    fn effect_id(&self, runtime: &Runtime, span: Span, host: bool) -> u32 {
+        let key = EffectIdentity {
+            module: runtime.module.clone(),
+            span_start: span.start,
+            span_end: span.end,
+            scope: runtime.effect_scope.join("\u{1f}"),
+            host,
+        };
+        if let Some(id) = self.effect_ids.borrow().get(&key) {
+            return *id;
+        }
+        let id = self.fresh_effect_id();
+        self.effect_ids.borrow_mut().insert(key, id);
+        id
+    }
+
+    fn named_effect_id(&self, module: &str, name: &str, host: bool) -> u32 {
+        let key = (module.to_owned(), name.to_owned(), host);
+        if let Some(id) = self.named_effects.borrow().get(&key) {
+            return *id;
+        }
+        let id = self.fresh_effect_id();
+        self.named_effects.borrow_mut().insert(key, id);
         id
     }
 
@@ -61,6 +98,7 @@ pub struct Runtime {
     pub limit: i64,
     pub module: String,
     pub residual: Option<Rc<RefCell<crate::hir::ResidualTrace>>>,
+    effect_scope: Vec<String>,
 }
 
 struct ArrayProgress {
@@ -93,6 +131,7 @@ impl Runtime {
             limit,
             module,
             residual: None,
+            effect_scope: Vec::new(),
         }
     }
 
@@ -113,6 +152,7 @@ impl Runtime {
             limit: self.limit,
             module: self.module.clone(),
             residual: self.residual.clone(),
+            effect_scope: self.effect_scope.clone(),
         }
     }
 }
@@ -269,7 +309,15 @@ pub fn evaluate_expression(
             payload: None,
         }),
         Expression::Var { name, .. } => match lookup(&environment, &name) {
-            Some(value) => Computation::value(value),
+            Some(mut value) => {
+                if let Value::Closure { signature, .. } = &mut value
+                    && signature.is_none()
+                    && let Some(inferred) = lookup_signature(&environment, &name)
+                {
+                    *signature = Some(Box::new(inferred));
+                }
+                Computation::value(value)
+            }
             None => Computation::error(Diagnostic::new(
                 "BLOT_UNBOUND",
                 format!("`{name}` is not in scope."),
@@ -511,14 +559,50 @@ fn evaluate_dynamic_case(
             span,
         ),
         RuntimeMeaning::Plain => {
+            let boolean = runtime
+                .residual
+                .as_ref()
+                .is_some_and(|trace| trace.borrow().is_boolean(&target));
+            if boolean {
+                return evaluate_boolean_case(
+                    context,
+                    module_path,
+                    environment,
+                    runtime,
+                    target,
+                    arms,
+                    span,
+                );
+            }
+            let sum_cases = runtime
+                .residual
+                .as_ref()
+                .and_then(|trace| trace.borrow().sum_cases(&target));
+            if let Some(cases) = sum_cases {
+                return evaluate_sum_case(
+                    context,
+                    module_path,
+                    environment,
+                    runtime,
+                    target,
+                    cases,
+                    arms,
+                    span,
+                );
+            }
             let integer = runtime
                 .residual
                 .as_ref()
                 .is_some_and(|trace| trace.borrow().is_integer(&target));
             if !integer {
+                let type_name = runtime
+                    .residual
+                    .as_ref()
+                    .map(|trace| trace.borrow().type_name(&target))
+                    .unwrap_or("unknown");
                 return Computation::error(Diagnostic::new(
                     "BLOT_UNSUPPORTED_LOWERING",
-                    "A dynamic non-sum case is outside the Rust residual calculus.",
+                    format!("A dynamic {type_name} case is outside the Rust residual calculus."),
                     span,
                 ));
             }
@@ -533,6 +617,100 @@ fn evaluate_dynamic_case(
             )
         }
     }
+}
+
+fn evaluate_boolean_case(
+    context: Rc<Context>,
+    module_path: String,
+    environment: Environment,
+    runtime: Runtime,
+    target: RuntimeValue,
+    arms: Vec<crate::ast::Arm>,
+    span: Span,
+) -> Computation {
+    let loaded = match module(&context, &module_path) {
+        Ok(module) => module,
+        Err(error) => return Computation::error(error),
+    };
+    let select = |name: &str| {
+        arms.iter()
+            .find(|arm| {
+                matches!(
+                    &loaded.arena.patterns[arm.pattern.0 as usize],
+                    Pattern::Constructor { name: candidate, .. } if candidate == name
+                )
+            })
+            .cloned()
+            .or_else(|| {
+                arms.iter()
+                    .find(|arm| {
+                        matches!(
+                            loaded.arena.patterns[arm.pattern.0 as usize],
+                            Pattern::Wildcard { .. }
+                        )
+                    })
+                    .cloned()
+            })
+    };
+    let (Some(consequent_arm), Some(alternate_arm)) = (select("True"), select("False")) else {
+        return Computation::error(Diagnostic::new(
+            "BLOT_UNSUPPORTED_LOWERING",
+            "A dynamic Boolean case must cover True and False.",
+            span,
+        ));
+    };
+    let Some(trace) = runtime.residual.clone() else {
+        return Computation::error(Diagnostic::new(
+            "BLOT_RUST_INVARIANT",
+            "A runtime Boolean exists without a residual trace.",
+            span,
+        ));
+    };
+    let branches = match trace.borrow_mut().begin_conditional(&target, span) {
+        Ok(branches) => branches,
+        Err(error) => return Computation::error(error),
+    };
+    trace.borrow_mut().select_block(branches.consequent);
+    let alternate_context = context.clone();
+    let alternate_module = module_path.clone();
+    let alternate_environment = environment.clone();
+    let alternate_runtime = runtime.clone();
+    let alternate_trace = trace.clone();
+    evaluate_expression(
+        context,
+        module_path,
+        consequent_arm.body,
+        child_env(Some(environment)),
+        runtime,
+    )
+    .and_then(move |consequent| {
+        let consequent_end = alternate_trace.borrow().current_block();
+        alternate_trace
+            .borrow_mut()
+            .select_block(branches.alternate);
+        let join_trace = alternate_trace.clone();
+        evaluate_expression(
+            alternate_context,
+            alternate_module,
+            alternate_arm.body,
+            child_env(Some(alternate_environment)),
+            alternate_runtime,
+        )
+        .and_then(move |alternate| {
+            let alternate_end = join_trace.borrow().current_block();
+            match join_trace.borrow_mut().join_conditional(
+                branches,
+                consequent_end,
+                consequent,
+                alternate_end,
+                alternate,
+                span,
+            ) {
+                Ok(value) => Computation::value(value),
+                Err(error) => Computation::error(error),
+            }
+        })
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -754,10 +932,10 @@ fn evaluate_sum_case(
     arms: Vec<crate::ast::Arm>,
     span: Span,
 ) -> Computation {
-    if cases.len() != 2 {
+    if cases.is_empty() || cases.len() > 2 {
         return Computation::error(Diagnostic::new(
             "BLOT_UNSUPPORTED_LOWERING",
-            "The Rust residual calculus currently lowers binary sums.",
+            "The Rust residual calculus currently lowers sums with one or two cases.",
             span,
         ));
     }
@@ -792,6 +970,22 @@ fn evaluate_sum_case(
             span,
         ));
     };
+    if cases.len() == 1 {
+        let scope = child_env(Some(environment));
+        let payload = match trace.borrow_mut().sum_payload(&target, 0, span) {
+            Ok(payload) => payload,
+            Err(error) => return Computation::error(error),
+        };
+        let tagged = compiler_tag_value(cases[0].clone(), payload);
+        if !match_pattern(&loaded, selected[0].pattern, &tagged, &scope) {
+            return Computation::error(Diagnostic::new(
+                "BLOT_UNSUPPORTED_LOWERING",
+                "The dynamic sum pattern cannot bind its payload.",
+                span,
+            ));
+        }
+        return evaluate_expression(context, module_path, selected[0].body, scope, runtime);
+    }
     let condition = match trace.borrow_mut().sum_condition(&target, span) {
         Ok(condition) => condition,
         Err(error) => return Computation::error(error),
@@ -889,6 +1083,14 @@ fn evaluate_sum_case(
 }
 
 fn compiler_tag_value(name: String, payload: Value) -> Value {
+    if !name.contains('$') {
+        let payload = if name == "None" && matches!(payload, Value::Unit) {
+            None
+        } else {
+            Some(Box::new(payload))
+        };
+        return Value::Tag { name, payload };
+    }
     Value::Tag {
         name,
         payload: Some(Box::new(Value::Shape(OrderedFields::from([(
@@ -1477,15 +1679,11 @@ pub fn apply(
             }
             let mut closure_runtime = runtime;
             closure_runtime.module = closure_module.clone();
+            closure_runtime.effect_scope.push(show(&argument));
             evaluate_expression(context, closure_module, body, scope, closure_runtime).and_then(
                 move |mut value| {
-                    if let Some(Value::Arrow { codomain, .. }) = signature.as_deref()
-                        && let Value::Closure {
-                            signature: result_signature,
-                            ..
-                        } = &mut value
-                    {
-                        *result_signature = Some(codomain.clone());
+                    if let Some(Value::Arrow { codomain, .. }) = signature.as_deref() {
+                        attach_signature(&mut value, codomain);
                     }
                     Computation::value(value)
                 },
@@ -1583,19 +1781,60 @@ fn run_special_or_primitive(
     span: Span,
     runtime: Runtime,
 ) -> Computation {
-    if name == "@effect" || name == "@effect.host" {
-        let Some(Value::Shape(operations)) = arguments.first() else {
+    if name == "@effect" || name == "@effect.host" || name == "@effect.named" {
+        let (effect_name, operations, host) = if name == "@effect.named" {
+            let Some(parts) = arguments.first().and_then(|value| as_tuple(value, 2)) else {
+                return Computation::error(Diagnostic::new(
+                    "BLOT_TYPE",
+                    "`@effect.named` takes `(name, operations)`.",
+                    span,
+                ));
+            };
+            let Value::Text(effect_name) = &parts[0] else {
+                return Computation::error(Diagnostic::new(
+                    "BLOT_TYPE",
+                    "The first `@effect.named` value must be text.",
+                    span,
+                ));
+            };
+            let Value::Shape(operations) = &parts[1] else {
+                return Computation::error(Diagnostic::new(
+                    "BLOT_TYPE",
+                    "The second `@effect.named` value must be an operation shape.",
+                    span,
+                ));
+            };
+            (effect_name.clone(), operations.clone(), false)
+        } else {
+            let Some(Value::Shape(operations)) = arguments.first() else {
+                return Computation::error(Diagnostic::new(
+                    "BLOT_TYPE",
+                    format!("`{name}` takes a shape of operation types."),
+                    span,
+                ));
+            };
+            (
+                "Effect".to_owned(),
+                operations.clone(),
+                name == "@effect.host",
+            )
+        };
+        if effect_name.is_empty() {
             return Computation::error(Diagnostic::new(
                 "BLOT_TYPE",
-                format!("`{name}` takes a shape of operation types."),
+                "An effect name must not be empty.",
                 span,
             ));
-        };
+        }
         return Computation::value(Value::Effect {
-            id: context.effect_id(),
-            name: "Effect".to_owned(),
-            operations: operations.clone(),
-            host: name == "@effect.host",
+            id: if name == "@effect.named" {
+                context.named_effect_id(&runtime.module, &effect_name, host)
+            } else {
+                context.effect_id(&runtime, span, host)
+            },
+            name: effect_name,
+            operations,
+            host,
         });
     }
     if name == "@forall" {

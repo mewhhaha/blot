@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
 use serde::Serialize;
@@ -26,11 +27,38 @@ struct DynamicHelpers {
     i64_to_text: u32,
 }
 
+#[derive(Clone, Copy)]
+struct CanonicalResult<'a> {
+    type_: &'a AbiType,
+    runtime_type: usize,
+    pointer: u32,
+    realloc: u32,
+}
+
+#[derive(Clone, Copy)]
+struct PublicExport<'a> {
+    result_type: &'a AbiType,
+    result_runtime_type: usize,
+    call_id: u32,
+}
+
 #[derive(Clone)]
 pub struct CompiledModule {
     pub wasm: Vec<u8>,
     pub manifest: Vec<u8>,
     pub capabilities: Vec<String>,
+}
+
+pub struct ClosedProgram {
+    runtime: RuntimeModule,
+    public_layout: PublicLayout,
+    compiled: RefCell<Option<CompiledModule>>,
+}
+
+struct PublicLayout {
+    manifest: AbiManifest,
+    bytes: Vec<u8>,
+    capabilities: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -128,90 +156,12 @@ struct AbiManifest {
     imports: Vec<AbiImport>,
 }
 
-#[derive(Clone)]
-enum ConstantValue {
-    Unit,
-    Integer(i64),
-    Float32(f32),
-    Float64(f64),
-    Boolean(bool),
-    Text(String),
-    Product(BTreeMap<String, ConstantValue>),
-    Sum {
-        case: String,
-        payload: Box<ConstantValue>,
-    },
-    Store(Vec<ConstantValue>),
-}
-
-struct ConstantHostCall {
-    capability: String,
-    operation: String,
-    argument: ConstantValue,
-}
-
-struct Evaluation {
-    value: ConstantValue,
-    calls: Vec<ConstantHostCall>,
-}
-
-struct PlannedTemplate {
-    contents: Vec<u8>,
-    relocations: Vec<Relocation>,
-}
-
-struct Relocation {
-    field_offset: u32,
-    target_offset: u32,
-}
-
-struct PlannedExport {
-    wasm_name: String,
-    post_return: Option<String>,
-    abi_type: AbiType,
-    evaluation: Evaluation,
-    template: Option<PlannedTemplate>,
-    template_offset: u32,
-    host_calls: Vec<PlannedHostCall>,
-}
-
-struct PlannedHostCall {
-    import_index: u32,
-    parameter: AbiType,
-    argument: ConstantValue,
-    text: Option<(u32, Vec<u8>)>,
-}
-
-pub fn compile(module: &RuntimeModule) -> Result<CompiledModule, String> {
-    let manifest = build_manifest(module)?;
+pub fn close(runtime: RuntimeModule) -> Result<ClosedProgram, String> {
+    let manifest = build_manifest(&runtime)?;
     let mut manifest_text = serde_json::to_string_pretty(&manifest)
         .map_err(|error| format!("could not serialize Blot ABI manifest: {error}"))?;
     manifest_text.push('\n');
-    let manifest_bytes = manifest_text.into_bytes();
-    let dynamic = module.functions.iter().any(|function| {
-        if function.blocks.len() != 1 || !function.blocks[0].parameters.is_empty() {
-            return true;
-        }
-        let block = &function.blocks[0];
-        if !matches!(block.terminator, RuntimeTerminator::Return { .. }) {
-            return true;
-        }
-        block
-            .operations
-            .iter()
-            .any(|operation| match operation.kind {
-                "constant" | "product.make" | "sum.make" | "store.empty" | "store.new"
-                | "store.write" | "store.grow" | "seal.wrap" | "seal.unwrap" | "resource.move"
-                | "resource.borrow" | "resource.freeze" => false,
-                "host.call" => !matches!(module.types[operation.type_id], RuntimeType::Unit),
-                _ => true,
-            })
-    });
-    let wasm = if dynamic {
-        emit_dynamic_module(module, &manifest, &manifest_bytes)?
-    } else {
-        emit_constant_module(module, &manifest, &manifest_bytes)?
-    };
+    let bytes = manifest_text.into_bytes();
     let mut capabilities = manifest
         .imports
         .iter()
@@ -219,11 +169,39 @@ pub fn compile(module: &RuntimeModule) -> Result<CompiledModule, String> {
         .collect::<Vec<_>>();
     capabilities.sort();
     capabilities.dedup();
-    Ok(CompiledModule {
-        wasm,
-        manifest: manifest_bytes,
-        capabilities,
+    Ok(ClosedProgram {
+        runtime,
+        public_layout: PublicLayout {
+            manifest,
+            bytes,
+            capabilities,
+        },
+        compiled: RefCell::new(None),
     })
+}
+
+impl ClosedProgram {
+    pub fn runtime(&self) -> &RuntimeModule {
+        &self.runtime
+    }
+
+    pub fn compile(&self) -> Result<CompiledModule, String> {
+        if let Some(compiled) = self.compiled.borrow().as_ref() {
+            return Ok(compiled.clone());
+        }
+        let wasm = emit_dynamic_module(
+            &self.runtime,
+            &self.public_layout.manifest,
+            &self.public_layout.bytes,
+        )?;
+        let compiled = CompiledModule {
+            wasm,
+            manifest: self.public_layout.bytes.clone(),
+            capabilities: self.public_layout.capabilities.clone(),
+        };
+        *self.compiled.borrow_mut() = Some(compiled.clone());
+        Ok(compiled)
+    }
 }
 
 fn build_manifest(module: &RuntimeModule) -> Result<AbiManifest, String> {
@@ -470,438 +448,6 @@ fn join_flat_types(left: Option<&ValType>, right: Option<&ValType>) -> ValType {
     }
 }
 
-fn evaluate_constant_function(
-    module: &RuntimeModule,
-    function: &RuntimeFunction,
-) -> Result<Evaluation, String> {
-    if function.blocks.len() != 1 || !function.blocks[0].parameters.is_empty() {
-        return Err(format!(
-            "{}: {} is not a closed constant function",
-            module.source, function.name
-        ));
-    }
-    let block = &function.blocks[0];
-    let mut values = HashMap::new();
-    let mut calls = Vec::new();
-    for operation in &block.operations {
-        let operands = operation
-            .operands
-            .iter()
-            .map(|operand| {
-                values.get(operand).cloned().ok_or_else(|| {
-                    format!(
-                        "{}: constant operation reads value {operand}",
-                        module.source
-                    )
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let result = evaluate_operation(module, operation, &operands, &mut calls)?;
-        values.insert(operation.result, result);
-    }
-    let crate::hir::RuntimeTerminator::Return { value, .. } = &block.terminator else {
-        return Err(format!(
-            "{}: {} does not directly return",
-            module.source, function.name
-        ));
-    };
-    let value = values.get(value).cloned().ok_or_else(|| {
-        format!(
-            "{}: {} omitted its constant result",
-            module.source, function.name
-        )
-    })?;
-    Ok(Evaluation { value, calls })
-}
-
-fn evaluate_operation(
-    module: &RuntimeModule,
-    operation: &RuntimeOperation,
-    operands: &[ConstantValue],
-    calls: &mut Vec<ConstantHostCall>,
-) -> Result<ConstantValue, String> {
-    match operation.kind {
-        "constant" => {
-            wire_constant(operation.value.as_ref().ok_or_else(|| {
-                format!("{}: constant operation omitted its value", module.source)
-            })?)
-        }
-        "product.make" => {
-            let RuntimeType::Product { fields, .. } = &module.types[operation.type_id] else {
-                return Err(format!(
-                    "{}: product.make has type {}",
-                    module.source, operation.type_id
-                ));
-            };
-            Ok(ConstantValue::Product(
-                fields
-                    .iter()
-                    .zip(operands)
-                    .map(|(field, value)| (field.name.clone(), value.clone()))
-                    .collect(),
-            ))
-        }
-        "sum.make" => {
-            let case = operation
-                .case
-                .ok_or_else(|| format!("{}: sum.make omitted its case", module.source))?;
-            let RuntimeType::Sum { cases, .. } = &module.types[operation.type_id] else {
-                return Err(format!(
-                    "{}: sum.make has type {}",
-                    module.source, operation.type_id
-                ));
-            };
-            let case = cases
-                .get(case)
-                .ok_or_else(|| format!("{}: sum.make has unknown case {case}", module.source))?;
-            Ok(ConstantValue::Sum {
-                case: case.name.clone(),
-                payload: Box::new(
-                    operands.first().cloned().ok_or_else(|| {
-                        format!("{}: sum.make omitted its payload", module.source)
-                    })?,
-                ),
-            })
-        }
-        "store.empty" => Ok(ConstantValue::Store(Vec::new())),
-        "store.new" => {
-            let length = integer_operand(module, operands.first(), "Store length")?;
-            if !(0..=16_777_216).contains(&length) {
-                return Err(format!(
-                    "{}: invalid constant Store length {length}",
-                    module.source
-                ));
-            }
-            let initial = operands
-                .get(1)
-                .cloned()
-                .ok_or_else(|| format!("{}: Store.new omitted its initial value", module.source))?;
-            Ok(ConstantValue::Store(vec![initial; length as usize]))
-        }
-        "store.write" => {
-            let ConstantValue::Store(elements) = &operands[0] else {
-                return Err(format!("{}: invalid constant Store write", module.source));
-            };
-            let index = integer_operand(module, operands.get(1), "Store index")?;
-            if index < 0 || index as usize >= elements.len() {
-                return Err(format!(
-                    "{}: constant Store index {index} is out of bounds",
-                    module.source
-                ));
-            }
-            let mut elements = elements.clone();
-            elements[index as usize] = operands[2].clone();
-            Ok(ConstantValue::Store(elements))
-        }
-        "store.grow" => {
-            let ConstantValue::Store(elements) = &operands[0] else {
-                return Err(format!("{}: invalid constant Store grow", module.source));
-            };
-            let length = integer_operand(module, operands.get(1), "Store length")?;
-            if length < 0 {
-                return Err(format!("{}: invalid constant Store grow", module.source));
-            }
-            let mut elements = elements[..elements.len().min(length as usize)].to_vec();
-            elements.resize(length as usize, operands[2].clone());
-            Ok(ConstantValue::Store(elements))
-        }
-        "seal.wrap" | "seal.unwrap" | "resource.move" | "resource.borrow" | "resource.freeze" => {
-            operands
-                .first()
-                .cloned()
-                .ok_or_else(|| format!("{}: {} omitted its operand", module.source, operation.kind))
-        }
-        "host.call" => {
-            calls.push(ConstantHostCall {
-                capability: operation.capability.clone().ok_or_else(|| {
-                    format!("{}: host.call omitted its capability", module.source)
-                })?,
-                operation: operation
-                    .operation
-                    .clone()
-                    .ok_or_else(|| format!("{}: host.call omitted its operation", module.source))?,
-                argument: operands
-                    .first()
-                    .cloned()
-                    .ok_or_else(|| format!("{}: host.call omitted its argument", module.source))?,
-            });
-            Ok(ConstantValue::Unit)
-        }
-        kind => Err(format!(
-            "{}: constant function contains non-constant {kind}",
-            module.source
-        )),
-    }
-}
-
-fn wire_constant(value: &WireConstant) -> Result<ConstantValue, String> {
-    match value {
-        WireConstant::Unit => Ok(ConstantValue::Unit),
-        WireConstant::SignedInteger32(value) => Ok(ConstantValue::Integer(i64::from(*value))),
-        WireConstant::SignedInteger64(value) => value
-            .parse()
-            .map(ConstantValue::Integer)
-            .map_err(|error| format!("invalid signed 64-bit integer constant {value}: {error}")),
-        WireConstant::Float32(value) => Ok(ConstantValue::Float32(*value)),
-        WireConstant::Float64(value) => Ok(ConstantValue::Float64(*value)),
-        WireConstant::Boolean(value) => Ok(ConstantValue::Boolean(*value)),
-        WireConstant::Text(value) => Ok(ConstantValue::Text(value.clone())),
-    }
-}
-
-fn integer_operand(
-    module: &RuntimeModule,
-    value: Option<&ConstantValue>,
-    label: &str,
-) -> Result<i64, String> {
-    let Some(ConstantValue::Integer(value)) = value else {
-        return Err(format!("{}: invalid constant {label}", module.source));
-    };
-    Ok(*value)
-}
-
-fn emit_constant_module(
-    module: &RuntimeModule,
-    manifest: &AbiManifest,
-    manifest_bytes: &[u8],
-) -> Result<Vec<u8>, String> {
-    let runtime_exports = module
-        .exports
-        .iter()
-        .filter_map(|exported| match exported {
-            RuntimeExport::Runtime {
-                wasm_name,
-                function,
-                ..
-            } => Some((wasm_name, *function)),
-            RuntimeExport::Comptime { .. } => None,
-        })
-        .collect::<Vec<_>>();
-    let mut static_end = 1_024_u32;
-    let mut planned_exports = Vec::new();
-    for (wasm_name, function_id) in runtime_exports {
-        let function = module.functions.get(function_id).ok_or_else(|| {
-            format!(
-                "{}: runtime export references unknown function {function_id}",
-                module.source
-            )
-        })?;
-        let evaluation = evaluate_constant_function(module, function)?;
-        let manifest_export = manifest
-            .exports
-            .iter()
-            .find(|exported| exported.name.as_deref() == Some(wasm_name))
-            .ok_or_else(|| format!("manifest omitted runtime export {wasm_name}"))?;
-        let abi_type = manifest_export
-            .function
-            .as_ref()
-            .ok_or_else(|| format!("manifest export {wasm_name} has no function"))?
-            .result
-            .clone();
-        let template = if flattened_type(&abi_type).len() > 1 {
-            Some(CanonicalTemplate::new(&abi_type, &evaluation.value).finish()?)
-        } else {
-            None
-        };
-        let template_offset = if let Some(template) = &template {
-            let offset = static_end;
-            static_end = align_to(
-                static_end
-                    .checked_add(template.contents.len() as u32)
-                    .ok_or_else(|| {
-                        format!("{}: canonical template exceeds memory32", module.source)
-                    })?,
-                8,
-            );
-            offset
-        } else {
-            0
-        };
-        planned_exports.push(PlannedExport {
-            wasm_name: wasm_name.clone(),
-            post_return: manifest_export.post_return.clone(),
-            abi_type,
-            evaluation,
-            template,
-            template_offset,
-            host_calls: Vec::new(),
-        });
-    }
-
-    for exported in &mut planned_exports {
-        for call in &exported.evaluation.calls {
-            let (import_index, imported) = manifest
-                .imports
-                .iter()
-                .enumerate()
-                .find(|(_, imported)| {
-                    imported.capability == call.capability && imported.operation == call.operation
-                })
-                .ok_or_else(|| {
-                    format!(
-                        "manifest omitted host import {}.{}",
-                        call.capability, call.operation
-                    )
-                })?;
-            if imported.function.parameters.len() != 1 {
-                return Err(format!(
-                    "{}: constant host call {}.{} requires one parameter",
-                    module.source, call.capability, call.operation
-                ));
-            }
-            if !flattened_type(&imported.function.result).is_empty() {
-                return Err(format!(
-                    "{}: constant host call {}.{} does not return unit",
-                    module.source, call.capability, call.operation
-                ));
-            }
-            let parameter = imported.function.parameters[0].clone();
-            let text = if matches!(parameter, AbiType::Text) {
-                let ConstantValue::Text(value) = &call.argument else {
-                    return Err("canonical text cannot encode non-text constant".to_owned());
-                };
-                let contents = value.as_bytes().to_vec();
-                let offset = static_end;
-                static_end = static_end
-                    .checked_add(contents.len() as u32)
-                    .ok_or_else(|| format!("{}: host text exceeds memory32", module.source))?;
-                Some((offset, contents))
-            } else {
-                None
-            };
-            exported.host_calls.push(PlannedHostCall {
-                import_index: import_index as u32,
-                parameter,
-                argument: call.argument.clone(),
-                text,
-            });
-        }
-    }
-    let heap_start = align_to(static_end, 8);
-    let minimum_pages = u64::from(heap_start).div_ceil(65_536).max(1);
-
-    let mut types = TypeSection::new();
-    let mut imports = ImportSection::new();
-    for imported in &manifest.imports {
-        let parameters = imported
-            .function
-            .parameters
-            .iter()
-            .flat_map(flattened_type)
-            .collect::<Vec<_>>();
-        let results = flattened_type(&imported.function.result);
-        if parameters.len() > 16 || !results.is_empty() {
-            return Err(format!(
-                "{}: constant host import {}.{} exceeds the direct unit-result subset",
-                module.source, imported.module, imported.name
-            ));
-        }
-        let type_index = add_function_type(&mut types, parameters, Vec::new());
-        imports.import(
-            &imported.module,
-            &imported.name,
-            EntityType::Function(type_index),
-        );
-    }
-
-    let mut functions = FunctionSection::new();
-    let mut code = CodeSection::new();
-    let imported_function_count = manifest.imports.len() as u32;
-    let realloc_type = add_function_type(
-        &mut types,
-        vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
-        vec![ValType::I32],
-    );
-    let realloc_index = imported_function_count;
-    functions.function(realloc_type);
-    code.function(&realloc_function());
-
-    let mut function_exports = Vec::new();
-    let mut data_segments = Vec::new();
-    for (ordinal, exported) in planned_exports.iter().enumerate() {
-        for call in &exported.host_calls {
-            if let Some((offset, contents)) = &call.text {
-                data_segments.push((*offset, contents.clone()));
-            }
-        }
-        let flattened = flattened_type(&exported.abi_type);
-        let result_types = if flattened.len() <= 1 {
-            flattened.clone()
-        } else {
-            vec![ValType::I32]
-        };
-        let type_index = add_function_type(&mut types, Vec::new(), result_types);
-        let function_index = imported_function_count + functions.len();
-        functions.function(type_index);
-        code.function(&export_function(
-            exported,
-            ordinal as u32 + 1,
-            realloc_index,
-        )?);
-        function_exports.push((exported.wasm_name.clone(), function_index));
-        if let Some(template) = &exported.template {
-            data_segments.push((exported.template_offset, template.contents.clone()));
-            let post_type = add_function_type(&mut types, vec![ValType::I32], Vec::new());
-            let post_index = imported_function_count + functions.len();
-            functions.function(post_type);
-            code.function(&post_return_function(ordinal as u32 + 1));
-            let post_name = exported.post_return.clone().ok_or_else(|| {
-                format!("manifest omitted post-return for {}", exported.wasm_name)
-            })?;
-            function_exports.push((post_name, post_index));
-        }
-    }
-
-    let mut memories = MemorySection::new();
-    memories.memory(MemoryType {
-        minimum: minimum_pages,
-        maximum: None,
-        memory64: false,
-        shared: false,
-        page_size_log2: None,
-    });
-    let mut globals = GlobalSection::new();
-    add_i32_global(&mut globals, heap_start as i32, true);
-    add_i32_global(&mut globals, 1, false);
-    add_i32_global(&mut globals, 0, false);
-    add_i32_global(&mut globals, 0, true);
-    add_i32_global(&mut globals, 0, true);
-    add_i32_global(&mut globals, heap_start as i32, true);
-
-    let mut exports = ExportSection::new();
-    exports.export("memory", ExportKind::Memory, 0);
-    exports.export("cabi_realloc", ExportKind::Func, realloc_index);
-    exports.export("blot:abi-major", ExportKind::Global, 1);
-    exports.export("blot:abi-minor", ExportKind::Global, 2);
-    for (name, function) in function_exports {
-        exports.export(&name, ExportKind::Func, function);
-    }
-
-    let mut data = DataSection::new();
-    for (offset, contents) in data_segments {
-        data.active(0, &ConstExpr::i32_const(offset as i32), contents);
-    }
-
-    let mut wasm = Module::new();
-    wasm.section(&types);
-    if !manifest.imports.is_empty() {
-        wasm.section(&imports);
-    }
-    wasm.section(&functions)
-        .section(&memories)
-        .section(&globals)
-        .section(&exports)
-        .section(&code);
-    if !data.is_empty() {
-        wasm.section(&data);
-    }
-    wasm.section(&CustomSection {
-        name: Cow::Borrowed("blot:abi"),
-        data: Cow::Borrowed(manifest_bytes),
-    });
-    Ok(wasm.finish())
-}
-
 fn emit_dynamic_module(
     module: &RuntimeModule,
     manifest: &AbiManifest,
@@ -994,7 +540,7 @@ fn emit_dynamic_module(
     };
 
     let mut function_exports = Vec::new();
-    for exported in &module.exports {
+    for (export_ordinal, exported) in module.exports.iter().enumerate() {
         let RuntimeExport::Runtime {
             wasm_name,
             function,
@@ -1016,25 +562,51 @@ fn emit_dynamic_module(
                 module.source
             )
         })?;
-        if !signature.parameters.is_empty()
-            || !matches!(module.types[signature.result], RuntimeType::Unit)
-        {
+        if !signature.parameters.is_empty() {
             return Err(format!(
-                "{}: residual Rust emission currently requires a Unit -> Unit export",
+                "{}: residual Rust emission currently requires a nullary export",
                 module.source
             ));
         }
-        let type_index = add_function_type(&mut types, Vec::new(), Vec::new());
+        let manifest_export = manifest
+            .exports
+            .iter()
+            .find(|candidate| candidate.name.as_deref() == Some(wasm_name))
+            .ok_or_else(|| format!("manifest omitted runtime export {wasm_name}"))?;
+        let result = &manifest_export
+            .function
+            .as_ref()
+            .ok_or_else(|| format!("manifest export {wasm_name} has no function"))?
+            .result;
+        let flattened_result = flattened_type(result);
+        let wasm_results = if flattened_result.len() <= 1 {
+            flattened_result
+        } else {
+            vec![ValType::I32]
+        };
+        let type_index = add_function_type(&mut types, Vec::new(), wasm_results);
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
         code.function(&dynamic_export_function(
             module,
             runtime_function,
             manifest,
+            PublicExport {
+                result_type: result,
+                result_runtime_type: signature.result,
+                call_id: export_ordinal as u32 + 1,
+            },
             dynamic_helpers,
             &text_offsets,
         )?);
         function_exports.push((wasm_name.clone(), function_index));
+        if let Some(post_return) = &manifest_export.post_return {
+            let post_type = add_function_type(&mut types, vec![ValType::I32], Vec::new());
+            let post_index = imported_function_count + functions.len();
+            functions.function(post_type);
+            code.function(&post_return_function(export_ordinal as u32 + 1));
+            function_exports.push((post_return.clone(), post_index));
+        }
     }
 
     let minimum_pages = u64::from(heap_start).div_ceil(65_536).max(1);
@@ -1091,6 +663,7 @@ fn dynamic_export_function(
     module: &RuntimeModule,
     function: &RuntimeFunction,
     manifest: &AbiManifest,
+    public_export: PublicExport<'_>,
     helpers: DynamicHelpers,
     text_offsets: &HashMap<(usize, usize), u32>,
 ) -> Result<Function, String> {
@@ -1120,9 +693,11 @@ fn dynamic_export_function(
     local_types.push(ValType::I32);
     let scratch_length = local_types.len() as u32;
     local_types.push(ValType::I32);
+    let scratch_index = local_types.len() as u32;
+    local_types.push(ValType::I32);
     let mut wasm_function = Function::new(local_types.into_iter().map(|type_| (1, type_)));
     let mut instructions = wasm_function.instructions();
-    begin_call(&mut instructions, 1);
+    begin_call(&mut instructions, public_export.call_id);
     instructions
         .i32_const(function.entry_block as i32)
         .local_set(dispatcher)
@@ -1145,6 +720,7 @@ fn dynamic_export_function(
                 &value_locals,
                 scratch_pointer,
                 scratch_length,
+                scratch_index,
             )?;
         }
         emit_dynamic_terminator(
@@ -1154,6 +730,12 @@ fn dynamic_export_function(
             &block.terminator,
             &value_locals,
             dispatcher,
+            CanonicalResult {
+                type_: public_export.result_type,
+                runtime_type: public_export.result_runtime_type,
+                pointer: scratch_pointer,
+                realloc: helpers.realloc,
+            },
         )?;
         instructions.end();
     }
@@ -1173,6 +755,7 @@ fn emit_dynamic_operation(
     value_locals: &HashMap<usize, Vec<u32>>,
     scratch_pointer: u32,
     scratch_length: u32,
+    scratch_index: u32,
 ) -> Result<(), String> {
     let result = locals_for(module, value_locals, operation.result)?;
     match operation.kind {
@@ -1208,11 +791,15 @@ fn emit_dynamic_operation(
                     .i32_const(value.len() as i32)
                     .local_set(result[1]);
             }
-            WireConstant::Float32(_) | WireConstant::Float64(_) => {
-                return Err(format!(
-                    "{}: dynamic float constants are not emitted yet",
-                    module.source
-                ));
+            WireConstant::Float32(value) => {
+                instructions
+                    .f32_const(Ieee32::new(value.to_bits()))
+                    .local_set(result[0]);
+            }
+            WireConstant::Float64(value) => {
+                instructions
+                    .f64_const(Ieee64::new(value.to_bits()))
+                    .local_set(result[0]);
             }
         },
         "host.call" => {
@@ -1337,6 +924,35 @@ fn emit_dynamic_operation(
                 instructions.local_set(result[0]);
             }
         }
+        "convert" => {
+            let operand = locals_for(module, value_locals, operation.operands[0])?;
+            instructions.local_get(operand[0]);
+            match operation.conversion {
+                Some("signed-integer-64-to-signed-integer-32") => {
+                    instructions.i32_wrap_i64();
+                }
+                Some("signed-integer-32-to-signed-integer-64") => {
+                    instructions.i64_extend_i32_s();
+                }
+                conversion => {
+                    return Err(format!(
+                        "{}: dynamic conversion {conversion:?} is not emitted yet",
+                        module.source
+                    ));
+                }
+            }
+            instructions.local_set(result[0]);
+        }
+        "vector" => {
+            emit_dynamic_vector_operation(
+                instructions,
+                module,
+                function,
+                operation,
+                value_locals,
+                result[0],
+            )?;
+        }
         "product.make" => {
             let mut destination = 0;
             for operand in &operation.operands {
@@ -1378,7 +994,14 @@ fn emit_dynamic_operation(
                 )
                 .local_set(result[0]);
             let payload = locals_for(module, value_locals, operation.operands[0])?;
-            assign_locals(instructions, &result[1..], payload)?;
+            assign_locals(instructions, &result[1..1 + payload.len()], payload)?;
+            let flattened = flattened_runtime_type(module, operation.type_id)?;
+            for (local, type_) in result[1 + payload.len()..]
+                .iter()
+                .zip(flattened[1 + payload.len()..].iter())
+            {
+                emit_zero_local(instructions, *type_, *local)?;
+            }
         }
         "sum.tag" => {
             let sum = locals_for(module, value_locals, operation.operands[0])?;
@@ -1386,7 +1009,143 @@ fn emit_dynamic_operation(
         }
         "sum.payload" => {
             let sum = locals_for(module, value_locals, operation.operands[0])?;
-            assign_locals(instructions, result, &sum[1..])?;
+            assign_locals(instructions, result, &sum[1..1 + result.len()])?;
+        }
+        "store.empty" => {
+            instructions
+                .i32_const(0)
+                .local_set(result[0])
+                .i32_const(0)
+                .local_set(result[1]);
+        }
+        "store.new" => {
+            let RuntimeType::Store { element_type } = module
+                .types
+                .get(operation.type_id)
+                .ok_or_else(|| format!("{}: store.new has no Store type", module.source))?
+            else {
+                return Err(format!(
+                    "{}: store.new result is not a Store",
+                    module.source
+                ));
+            };
+            let length = locals_for(module, value_locals, operation.operands[0])?;
+            let initial = locals_for(module, value_locals, operation.operands[1])?;
+            let element_type_id = *element_type;
+            let element_type = canonical_type(module, element_type_id, &mut Vec::new())?;
+            let element_layout = memory_layout(&element_type);
+            let maximum_length = u32::MAX
+                .checked_div(element_layout.size)
+                .unwrap_or(u32::MAX);
+            instructions
+                .local_get(length[0])
+                .i64_const(0)
+                .i64_lt_s()
+                .if_(BlockType::Empty)
+                .unreachable()
+                .end()
+                .local_get(length[0])
+                .i64_const(i64::from(maximum_length))
+                .i64_gt_u()
+                .if_(BlockType::Empty)
+                .unreachable()
+                .end()
+                .local_get(length[0])
+                .i32_wrap_i64()
+                .local_tee(scratch_length)
+                .local_set(result[1])
+                .i32_const(0)
+                .i32_const(0)
+                .i32_const(element_layout.alignment as i32)
+                .local_get(scratch_length)
+                .i32_const(element_layout.size as i32)
+                .i32_mul()
+                .call(helpers.realloc)
+                .local_set(result[0])
+                .i32_const(0)
+                .local_set(scratch_index)
+                .block(BlockType::Empty)
+                .loop_(BlockType::Empty)
+                .local_get(scratch_index)
+                .local_get(scratch_length)
+                .i32_ge_u()
+                .br_if(1)
+                .local_get(result[0])
+                .local_get(scratch_index)
+                .i32_const(element_layout.size as i32)
+                .i32_mul()
+                .i32_add()
+                .local_set(scratch_pointer);
+            emit_store_public_result(
+                instructions,
+                module,
+                element_type_id,
+                &element_type,
+                initial,
+                scratch_pointer,
+                0,
+            )?;
+            instructions
+                .local_get(scratch_index)
+                .i32_const(1)
+                .i32_add()
+                .local_set(scratch_index)
+                .br(0)
+                .end()
+                .end();
+        }
+        "store.write" => {
+            let RuntimeType::Store { element_type } = module
+                .types
+                .get(operation.type_id)
+                .ok_or_else(|| format!("{}: store.write has no Store type", module.source))?
+            else {
+                return Err(format!(
+                    "{}: store.write result is not a Store",
+                    module.source
+                ));
+            };
+            let store = locals_for(module, value_locals, operation.operands[0])?;
+            let index = locals_for(module, value_locals, operation.operands[1])?;
+            let value = locals_for(module, value_locals, operation.operands[2])?;
+            let element_type_id = *element_type;
+            let element_type = canonical_type(module, element_type_id, &mut Vec::new())?;
+            let element_layout = memory_layout(&element_type);
+            assign_locals(instructions, result, store)?;
+            instructions
+                .local_get(index[0])
+                .i64_const(0)
+                .i64_lt_s()
+                .if_(BlockType::Empty)
+                .unreachable()
+                .end()
+                .local_get(index[0])
+                .i32_wrap_i64()
+                .local_tee(scratch_index)
+                .local_get(store[1])
+                .i32_ge_u()
+                .if_(BlockType::Empty)
+                .unreachable()
+                .end()
+                .local_get(store[0])
+                .local_get(scratch_index)
+                .i32_const(element_layout.size as i32)
+                .i32_mul()
+                .i32_add()
+                .local_set(scratch_pointer);
+            emit_store_public_result(
+                instructions,
+                module,
+                element_type_id,
+                &element_type,
+                value,
+                scratch_pointer,
+                0,
+            )?;
+        }
+        "seal.wrap" | "seal.unwrap" | "resource.move" | "resource.borrow" | "resource.freeze" => {
+            let operand = locals_for(module, value_locals, operation.operands[0])?;
+            assign_locals(instructions, result, operand)?;
         }
         kind => {
             return Err(format!(
@@ -1405,6 +1164,7 @@ fn emit_dynamic_terminator(
     terminator: &RuntimeTerminator,
     value_locals: &HashMap<usize, Vec<u32>>,
     dispatcher: u32,
+    canonical_result: CanonicalResult<'_>,
 ) -> Result<(), String> {
     match terminator {
         RuntimeTerminator::Branch {
@@ -1461,13 +1221,31 @@ fn emit_dynamic_terminator(
         }
         RuntimeTerminator::Return { value, .. } => {
             let result = locals_for(module, value_locals, *value)?;
-            if !result.is_empty() {
-                return Err(format!(
-                    "{}: dynamic non-Unit return is not emitted yet",
-                    module.source
-                ));
+            let flattened = flattened_type(canonical_result.type_);
+            if flattened.len() <= 1 {
+                finish_call(instructions);
+                emit_local_values(instructions, result);
+            } else {
+                let layout = memory_layout(canonical_result.type_);
+                instructions
+                    .i32_const(0)
+                    .i32_const(0)
+                    .i32_const(layout.alignment as i32)
+                    .i32_const(layout.size as i32)
+                    .call(canonical_result.realloc)
+                    .local_tee(canonical_result.pointer)
+                    .global_set(RESULT_POINTER_GLOBAL);
+                emit_store_public_result(
+                    instructions,
+                    module,
+                    canonical_result.runtime_type,
+                    canonical_result.type_,
+                    result,
+                    canonical_result.pointer,
+                    0,
+                )?;
+                instructions.local_get(canonical_result.pointer);
             }
-            finish_call(instructions);
             instructions.return_();
         }
     }
@@ -1497,6 +1275,28 @@ fn assign_block_arguments(
     for (parameter, argument) in block.parameters.iter().zip(arguments) {
         let destination = locals_for(module, value_locals, parameter.value)?;
         let source = locals_for(module, value_locals, *argument)?;
+        if destination.len() != source.len() {
+            let argument_type = runtime_value_type(function, *argument)?;
+            let argument_kind = module
+                .types
+                .get(argument_type)
+                .map(runtime_kind)
+                .unwrap_or("unknown");
+            let parameter_kind = module
+                .types
+                .get(parameter.type_id)
+                .map(runtime_kind)
+                .unwrap_or("unknown");
+            return Err(format!(
+                "{}: function {} branches to block {target} with value {} ({argument_kind}, {} locals) for parameter {} ({parameter_kind}, {} locals)",
+                module.source,
+                function.name,
+                argument,
+                source.len(),
+                parameter.value,
+                destination.len(),
+            ));
+        }
         assign_locals(instructions, destination, source)?;
     }
     Ok(())
@@ -1522,6 +1322,23 @@ fn emit_local_values(instructions: &mut InstructionSink<'_>, locals: &[u32]) {
     }
 }
 
+fn emit_zero_local(
+    instructions: &mut InstructionSink<'_>,
+    type_: ValType,
+    local: u32,
+) -> Result<(), String> {
+    match type_ {
+        ValType::I32 => instructions.i32_const(0),
+        ValType::I64 => instructions.i64_const(0),
+        ValType::F32 => instructions.f32_const(Ieee32::new(0)),
+        ValType::F64 => instructions.f64_const(Ieee64::new(0)),
+        ValType::V128 => instructions.v128_const(0),
+        other => return Err(format!("cannot initialize a {other:?} sum payload local")),
+    };
+    instructions.local_set(local);
+    Ok(())
+}
+
 fn locals_for<'a>(
     module: &RuntimeModule,
     value_locals: &'a HashMap<usize, Vec<u32>>,
@@ -1531,6 +1348,194 @@ fn locals_for<'a>(
         .get(&value)
         .map(Vec::as_slice)
         .ok_or_else(|| format!("{}: runtime value {value} has no locals", module.source))
+}
+
+fn emit_dynamic_vector_operation(
+    instructions: &mut InstructionSink<'_>,
+    module: &RuntimeModule,
+    function: &RuntimeFunction,
+    operation: &RuntimeOperation,
+    value_locals: &HashMap<usize, Vec<u32>>,
+    result: u32,
+) -> Result<(), String> {
+    let vector_type_id = match module.types.get(operation.type_id) {
+        Some(RuntimeType::Vector { .. } | RuntimeType::Mask { .. }) => operation.type_id,
+        _ => runtime_value_type(function, operation.operands[0])?,
+    };
+    let (element, lanes) = match &module.types[vector_type_id] {
+        RuntimeType::Vector { element, lanes } | RuntimeType::Mask { element, lanes } => {
+            (*element, *lanes)
+        }
+        type_ => {
+            return Err(format!(
+                "{}: vector operation reads a {}",
+                module.source,
+                runtime_kind(type_)
+            ));
+        }
+    };
+    if element != "integer-32" || lanes != 4 {
+        return Err(format!(
+            "{}: dynamic {element}x{lanes} operation is not emitted yet",
+            module.source
+        ));
+    }
+    let operands = operation
+        .operands
+        .iter()
+        .map(|operand| locals_for(module, value_locals, *operand).map(|locals| locals[0]))
+        .collect::<Result<Vec<_>, _>>()?;
+    match operation.operator {
+        Some("make") => {
+            instructions.local_get(operands[0]).i32x4_splat();
+            for (lane, operand) in operands.iter().enumerate().skip(1) {
+                instructions
+                    .local_get(*operand)
+                    .i32x4_replace_lane(lane as u8);
+            }
+        }
+        Some("splat") => {
+            instructions.local_get(operands[0]).i32x4_splat();
+        }
+        Some("extract") => {
+            let lane = operation
+                .lane
+                .ok_or_else(|| format!("{}: vector extract omitted its lane", module.source))?;
+            instructions.local_get(operands[0]).i32x4_extract_lane(lane);
+        }
+        Some("replace") => {
+            let lane = operation
+                .lane
+                .ok_or_else(|| format!("{}: vector replace omitted its lane", module.source))?;
+            instructions
+                .local_get(operands[0])
+                .local_get(operands[1])
+                .i32x4_replace_lane(lane);
+        }
+        Some("add") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_add();
+        }
+        Some("subtract") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_sub();
+        }
+        Some("multiply") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_mul();
+        }
+        Some("bit-and") => {
+            emit_local_pair(instructions, &operands);
+            instructions.v128_and();
+        }
+        Some("bit-or") => {
+            emit_local_pair(instructions, &operands);
+            instructions.v128_or();
+        }
+        Some("bit-xor") => {
+            emit_local_pair(instructions, &operands);
+            instructions.v128_xor();
+        }
+        Some("bit-not") => {
+            instructions.local_get(operands[0]).v128_not();
+        }
+        Some("shift-left") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_shl();
+        }
+        Some("shift-right-signed") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_shr_s();
+        }
+        Some("shift-right-unsigned") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_shr_u();
+        }
+        Some("equal") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_eq();
+        }
+        Some("not-equal") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_ne();
+        }
+        Some("less-than-signed") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_lt_s();
+        }
+        Some("less-than-unsigned") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_lt_u();
+        }
+        Some("greater-than-signed") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_gt_s();
+        }
+        Some("greater-than-unsigned") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_gt_u();
+        }
+        Some("less-than-or-equal-signed") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_le_s();
+        }
+        Some("less-than-or-equal-unsigned") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_le_u();
+        }
+        Some("greater-than-or-equal-signed") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_ge_s();
+        }
+        Some("greater-than-or-equal-unsigned") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_ge_u();
+        }
+        Some("minimum-signed") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_min_s();
+        }
+        Some("minimum-unsigned") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_min_u();
+        }
+        Some("maximum-signed") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_max_s();
+        }
+        Some("maximum-unsigned") => {
+            emit_local_pair(instructions, &operands);
+            instructions.i32x4_max_u();
+        }
+        Some("select") => {
+            instructions
+                .local_get(operands[1])
+                .local_get(operands[2])
+                .local_get(operands[0])
+                .v128_bitselect();
+        }
+        Some("mask-bitmask") => {
+            instructions.local_get(operands[0]).i32x4_bitmask();
+        }
+        Some("mask-all") => {
+            instructions.local_get(operands[0]).i32x4_all_true();
+        }
+        Some("mask-any") => {
+            instructions.local_get(operands[0]).v128_any_true();
+        }
+        operator => {
+            return Err(format!(
+                "{}: dynamic i32x4 operator {operator:?} is not emitted yet",
+                module.source
+            ));
+        }
+    }
+    instructions.local_set(result);
+    Ok(())
+}
+
+fn emit_local_pair(instructions: &mut InstructionSink<'_>, operands: &[u32]) {
+    instructions.local_get(operands[0]).local_get(operands[1]);
 }
 
 fn flattened_runtime_type(module: &RuntimeModule, type_id: usize) -> Result<Vec<ValType>, String> {
@@ -1544,7 +1549,8 @@ fn flattened_runtime_type(module: &RuntimeModule, type_id: usize) -> Result<Vec<
         RuntimeType::SignedInteger64 => Ok(vec![ValType::I64]),
         RuntimeType::Float32 => Ok(vec![ValType::F32]),
         RuntimeType::Float64 => Ok(vec![ValType::F64]),
-        RuntimeType::Text => Ok(vec![ValType::I32, ValType::I32]),
+        RuntimeType::Text | RuntimeType::Store { .. } => Ok(vec![ValType::I32, ValType::I32]),
+        RuntimeType::Vector { .. } | RuntimeType::Mask { .. } => Ok(vec![ValType::V128]),
         RuntimeType::Product { fields, .. } => {
             let mut result = Vec::new();
             for field in fields {
@@ -1556,6 +1562,9 @@ fn flattened_runtime_type(module: &RuntimeModule, type_id: usize) -> Result<Vec<
             let mut payload = Vec::new();
             for case_ in cases {
                 let flattened = flattened_runtime_type(module, case_.payload_type)?;
+                if flattened.is_empty() {
+                    continue;
+                }
                 if payload.is_empty() {
                     payload = flattened;
                 } else if payload != flattened {
@@ -1569,11 +1578,10 @@ fn flattened_runtime_type(module: &RuntimeModule, type_id: usize) -> Result<Vec<
             result.extend(payload);
             Ok(result)
         }
-        _ => Err(format!(
-            "{}: dynamic {} values are not emitted yet",
-            module.source,
-            runtime_kind(type_)
-        )),
+        RuntimeType::Sealed {
+            representation_type,
+            ..
+        } => flattened_runtime_type(module, *representation_type),
     }
 }
 
@@ -1886,6 +1894,297 @@ fn emit_load_canonical_result(
             abi_kind(type_)
         )),
     }
+}
+
+fn emit_store_public_result(
+    instructions: &mut InstructionSink<'_>,
+    module: &RuntimeModule,
+    runtime_type_id: usize,
+    public_type: &AbiType,
+    source: &[u32],
+    pointer: u32,
+    offset: u32,
+) -> Result<(), String> {
+    let runtime_type = module.types.get(runtime_type_id).ok_or_else(|| {
+        format!(
+            "{}: public result references unknown runtime type {runtime_type_id}",
+            module.source
+        )
+    })?;
+    match (runtime_type, public_type) {
+        (
+            RuntimeType::Unit
+            | RuntimeType::SignedInteger64
+            | RuntimeType::Float32
+            | RuntimeType::Float64
+            | RuntimeType::Boolean
+            | RuntimeType::Text
+            | RuntimeType::Store { .. },
+            AbiType::Unit
+            | AbiType::SignedInteger64
+            | AbiType::Float32
+            | AbiType::Float64
+            | AbiType::Boolean
+            | AbiType::Text
+            | AbiType::Array { .. },
+        ) => {
+            let mut flat_index = 0;
+            emit_store_canonical_result(
+                instructions,
+                public_type,
+                source,
+                &mut flat_index,
+                pointer,
+                offset,
+            )?;
+            if flat_index != source.len() {
+                return Err(format!(
+                    "{}: public {} consumed {flat_index} of {} runtime values",
+                    module.source,
+                    abi_kind(public_type),
+                    source.len()
+                ));
+            }
+        }
+        (
+            RuntimeType::Sealed {
+                representation_type,
+                ..
+            },
+            AbiType::Sealed { inner, .. },
+        ) => emit_store_public_result(
+            instructions,
+            module,
+            *representation_type,
+            inner,
+            source,
+            pointer,
+            offset,
+        )?,
+        (
+            RuntimeType::Product { fields, .. },
+            AbiType::Record {
+                fields: public_fields,
+            },
+        ) => {
+            let mut runtime_offsets = BTreeMap::new();
+            let mut runtime_offset = 0;
+            for field in fields {
+                let width = flattened_runtime_type(module, field.type_id)?.len();
+                runtime_offsets.insert(field.name.as_str(), (field.type_id, runtime_offset, width));
+                runtime_offset += width;
+            }
+            if runtime_offset != source.len() {
+                return Err(format!(
+                    "{}: runtime record has {runtime_offset} flattened values, received {}",
+                    module.source,
+                    source.len()
+                ));
+            }
+            for field in record_layout(public_fields) {
+                let (field_type_id, field_offset, field_width) =
+                    runtime_offsets.get(field.name.as_str()).ok_or_else(|| {
+                        format!(
+                            "{}: runtime record omitted public field {}",
+                            module.source, field.name
+                        )
+                    })?;
+                emit_store_public_result(
+                    instructions,
+                    module,
+                    *field_type_id,
+                    &field.type_,
+                    &source[*field_offset..*field_offset + *field_width],
+                    pointer,
+                    offset + field.offset,
+                )?;
+            }
+        }
+        (
+            RuntimeType::Sum { cases, .. },
+            AbiType::Variant {
+                cases: public_cases,
+            },
+        ) => {
+            let tag = source
+                .first()
+                .ok_or_else(|| format!("{}: runtime variant omitted its tag", module.source))?;
+            let layout = variant_layout(public_cases);
+            for (runtime_case_index, runtime_case) in cases.iter().enumerate() {
+                let public_case_index = public_cases
+                    .iter()
+                    .position(|candidate| candidate.name == runtime_case.name)
+                    .ok_or_else(|| {
+                        format!(
+                            "{}: public variant omitted runtime case {}",
+                            module.source, runtime_case.name
+                        )
+                    })?;
+                instructions
+                    .local_get(*tag)
+                    .i32_const(runtime_case_index as i32)
+                    .i32_eq()
+                    .if_(BlockType::Empty)
+                    .local_get(pointer)
+                    .i32_const(public_case_index as i32);
+                let memory_argument = wasm_encoder::MemArg {
+                    offset: u64::from(offset),
+                    align: layout.discriminant_size.trailing_zeros(),
+                    memory_index: 0,
+                };
+                match layout.discriminant_size {
+                    1 => {
+                        instructions.i32_store8(memory_argument);
+                    }
+                    2 => {
+                        instructions.i32_store16(memory_argument);
+                    }
+                    4 => {
+                        instructions.i32_store(memory_argument);
+                    }
+                    size => return Err(format!("unsupported variant discriminant size {size}")),
+                }
+                if let Some(payload) = &public_cases[public_case_index].payload {
+                    let payload_width =
+                        flattened_runtime_type(module, runtime_case.payload_type)?.len();
+                    emit_store_public_result(
+                        instructions,
+                        module,
+                        runtime_case.payload_type,
+                        payload,
+                        &source[1..1 + payload_width],
+                        pointer,
+                        offset + layout.payload_offset,
+                    )?;
+                }
+                instructions.end();
+            }
+        }
+        _ => {
+            return Err(format!(
+                "{}: runtime {} cannot use public {} layout",
+                module.source,
+                runtime_kind(runtime_type),
+                abi_kind(public_type)
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn emit_store_canonical_result(
+    instructions: &mut InstructionSink<'_>,
+    type_: &AbiType,
+    source: &[u32],
+    flat_index: &mut usize,
+    pointer: u32,
+    offset: u32,
+) -> Result<(), String> {
+    let memory_argument = |offset, align| wasm_encoder::MemArg {
+        offset: u64::from(offset),
+        align,
+        memory_index: 0,
+    };
+    match type_ {
+        AbiType::Unit => {}
+        AbiType::SignedInteger64 => {
+            instructions
+                .local_get(pointer)
+                .local_get(source[*flat_index])
+                .i64_store(memory_argument(offset, 3));
+            *flat_index += 1;
+        }
+        AbiType::Float32 => {
+            instructions
+                .local_get(pointer)
+                .local_get(source[*flat_index])
+                .f32_store(memory_argument(offset, 2));
+            *flat_index += 1;
+        }
+        AbiType::Float64 => {
+            instructions
+                .local_get(pointer)
+                .local_get(source[*flat_index])
+                .f64_store(memory_argument(offset, 3));
+            *flat_index += 1;
+        }
+        AbiType::Boolean => {
+            instructions
+                .local_get(pointer)
+                .local_get(source[*flat_index])
+                .i32_store8(memory_argument(offset, 0));
+            *flat_index += 1;
+        }
+        AbiType::Text | AbiType::Array { .. } => {
+            instructions
+                .local_get(pointer)
+                .local_get(source[*flat_index])
+                .i32_store(memory_argument(offset, 2))
+                .local_get(pointer)
+                .local_get(source[*flat_index + 1])
+                .i32_store(memory_argument(offset + 4, 2));
+            *flat_index += 2;
+        }
+        AbiType::Record { fields } => {
+            for field in record_layout(fields) {
+                emit_store_canonical_result(
+                    instructions,
+                    &field.type_,
+                    source,
+                    flat_index,
+                    pointer,
+                    offset + field.offset,
+                )?;
+            }
+        }
+        AbiType::Variant { cases } => {
+            let layout = variant_layout(cases);
+            let tag = source[*flat_index];
+            instructions.local_get(pointer).local_get(tag);
+            match layout.discriminant_size {
+                1 => {
+                    instructions.i32_store8(memory_argument(offset, 0));
+                }
+                2 => {
+                    instructions.i32_store16(memory_argument(offset, 1));
+                }
+                4 => {
+                    instructions.i32_store(memory_argument(offset, 2));
+                }
+                size => return Err(format!("unsupported variant discriminant size {size}")),
+            }
+            *flat_index += 1;
+            let payload_start = *flat_index;
+            let mut payload_width = 0;
+            for (case_index, case_) in cases.iter().enumerate() {
+                let Some(payload) = &case_.payload else {
+                    continue;
+                };
+                let case_width = flattened_type(payload).len();
+                payload_width = payload_width.max(case_width);
+                instructions
+                    .local_get(tag)
+                    .i32_const(case_index as i32)
+                    .i32_eq()
+                    .if_(BlockType::Empty);
+                let mut case_flat_index = payload_start;
+                emit_store_canonical_result(
+                    instructions,
+                    payload,
+                    source,
+                    &mut case_flat_index,
+                    pointer,
+                    offset + layout.payload_offset,
+                )?;
+                instructions.end();
+            }
+            *flat_index = payload_start + payload_width;
+        }
+        AbiType::Sealed { inner, .. } => {
+            emit_store_canonical_result(instructions, inner, source, flat_index, pointer, offset)?;
+        }
+    }
+    Ok(())
 }
 
 fn emit_validate_canonical_texts(
@@ -2422,81 +2721,6 @@ fn realloc_function() -> Function {
     function
 }
 
-fn export_function(
-    exported: &PlannedExport,
-    call_id: u32,
-    realloc: u32,
-) -> Result<Function, String> {
-    let flattened = flattened_type(&exported.abi_type);
-    let locals = if flattened.len() == 1 {
-        vec![(1, flattened[0])]
-    } else if flattened.len() > 1 {
-        vec![(1, ValType::I32)]
-    } else {
-        Vec::new()
-    };
-    let mut function = Function::new(locals);
-    let mut instructions = function.instructions();
-    begin_call(&mut instructions, call_id);
-    for call in &exported.host_calls {
-        if let Some((offset, contents)) = &call.text {
-            instructions
-                .i32_const(*offset as i32)
-                .i32_const(contents.len() as i32);
-        } else {
-            emit_direct_constant(&mut instructions, &call.parameter, &call.argument)?;
-        }
-        instructions.call(call.import_index);
-    }
-    if flattened.is_empty() {
-        finish_call(&mut instructions);
-    } else if flattened.len() == 1 {
-        emit_direct_constant(
-            &mut instructions,
-            &exported.abi_type,
-            &exported.evaluation.value,
-        )?;
-        instructions.local_set(0);
-        finish_call(&mut instructions);
-        instructions.local_get(0);
-    } else {
-        let template = exported
-            .template
-            .as_ref()
-            .ok_or_else(|| format!("{} has no canonical result template", exported.wasm_name))?;
-        instructions
-            .i32_const(0)
-            .i32_const(0)
-            .i32_const(8)
-            .i32_const(template.contents.len() as i32)
-            .call(realloc)
-            .local_tee(0)
-            .i32_const(exported.template_offset as i32)
-            .i32_const(template.contents.len() as i32)
-            .memory_copy(0, 0);
-        for relocation in &template.relocations {
-            instructions
-                .local_get(0)
-                .i32_const(relocation.field_offset as i32)
-                .i32_add()
-                .local_get(0)
-                .i32_const(relocation.target_offset as i32)
-                .i32_add()
-                .i32_store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 2,
-                    memory_index: 0,
-                });
-        }
-        instructions
-            .local_get(0)
-            .global_set(RESULT_POINTER_GLOBAL)
-            .local_get(0);
-    }
-    instructions.end();
-    Ok(function)
-}
-
 fn post_return_function(call_id: u32) -> Function {
     let mut function = Function::new(Vec::new());
     function
@@ -2544,62 +2768,6 @@ fn finish_call(instructions: &mut InstructionSink<'_>) {
         .global_set(ACTIVE_EXPORT_GLOBAL);
 }
 
-fn emit_direct_constant(
-    instructions: &mut InstructionSink<'_>,
-    type_: &AbiType,
-    value: &ConstantValue,
-) -> Result<(), String> {
-    match (type_, value) {
-        (AbiType::Unit, ConstantValue::Unit) => Ok(()),
-        (AbiType::SignedInteger64, ConstantValue::Integer(value)) => {
-            instructions.i64_const(*value);
-            Ok(())
-        }
-        (AbiType::Float32, ConstantValue::Float32(value)) => {
-            instructions.f32_const(Ieee32::new(value.to_bits()));
-            Ok(())
-        }
-        (AbiType::Float64, ConstantValue::Float64(value)) => {
-            instructions.f64_const(Ieee64::new(value.to_bits()));
-            Ok(())
-        }
-        (AbiType::Boolean, ConstantValue::Boolean(value)) => {
-            instructions.i32_const(i32::from(*value));
-            Ok(())
-        }
-        (AbiType::Sealed { inner, .. }, value) => emit_direct_constant(instructions, inner, value),
-        (AbiType::Record { fields }, ConstantValue::Product(values)) => {
-            let present = fields
-                .iter()
-                .filter(|field| !flattened_type(&field.type_).is_empty())
-                .collect::<Vec<_>>();
-            if present.len() != 1 {
-                return Err("canonical record is not a direct constant".to_owned());
-            }
-            let field = present[0];
-            let value = values
-                .get(&field.name)
-                .ok_or_else(|| format!("constant record omitted field {}", field.name))?;
-            emit_direct_constant(instructions, &field.type_, value)
-        }
-        (AbiType::Variant { cases }, ConstantValue::Sum { case, .. })
-            if flattened_type(type_).len() == 1 =>
-        {
-            let case = cases
-                .iter()
-                .position(|candidate| candidate.name == *case)
-                .ok_or_else(|| format!("constant variant has unknown case {case}"))?;
-            instructions.i32_const(case as i32);
-            Ok(())
-        }
-        _ => Err(format!(
-            "canonical {} cannot encode constant {}",
-            abi_kind(type_),
-            constant_kind(value)
-        )),
-    }
-}
-
 fn abi_kind(type_: &AbiType) -> &'static str {
     match type_ {
         AbiType::Unit => "unit",
@@ -2612,143 +2780,6 @@ fn abi_kind(type_: &AbiType) -> &'static str {
         AbiType::Record { .. } => "record",
         AbiType::Variant { .. } => "variant",
         AbiType::Sealed { .. } => "sealed",
-    }
-}
-
-fn constant_kind(value: &ConstantValue) -> &'static str {
-    match value {
-        ConstantValue::Unit => "unit",
-        ConstantValue::Integer(_) => "integer",
-        ConstantValue::Float32(_) => "float32",
-        ConstantValue::Float64(_) => "float64",
-        ConstantValue::Boolean(_) => "boolean",
-        ConstantValue::Text(_) => "text",
-        ConstantValue::Product(_) => "product",
-        ConstantValue::Sum { .. } => "sum",
-        ConstantValue::Store(_) => "store",
-    }
-}
-
-struct CanonicalTemplate<'a> {
-    bytes: Vec<u8>,
-    relocations: Vec<Relocation>,
-    type_: &'a AbiType,
-    value: &'a ConstantValue,
-}
-
-impl<'a> CanonicalTemplate<'a> {
-    fn new(type_: &'a AbiType, value: &'a ConstantValue) -> Self {
-        Self {
-            bytes: Vec::new(),
-            relocations: Vec::new(),
-            type_,
-            value,
-        }
-    }
-
-    fn finish(mut self) -> Result<PlannedTemplate, String> {
-        let layout = memory_layout(self.type_);
-        let root = self.allocate(layout.size, layout.alignment);
-        if root != 0 {
-            return Err(format!("canonical template root began at {root}"));
-        }
-        self.write(self.type_, self.value, root)?;
-        Ok(PlannedTemplate {
-            contents: self.bytes,
-            relocations: self.relocations,
-        })
-    }
-
-    fn write(&mut self, type_: &AbiType, value: &ConstantValue, offset: u32) -> Result<(), String> {
-        match (type_, value) {
-            (AbiType::Unit, ConstantValue::Unit) => Ok(()),
-            (AbiType::SignedInteger64, ConstantValue::Integer(value)) => {
-                self.set(offset, &value.to_le_bytes());
-                Ok(())
-            }
-            (AbiType::Float32, ConstantValue::Float32(value)) => {
-                self.set(offset, &value.to_le_bytes());
-                Ok(())
-            }
-            (AbiType::Float64, ConstantValue::Float64(value)) => {
-                self.set(offset, &value.to_le_bytes());
-                Ok(())
-            }
-            (AbiType::Boolean, ConstantValue::Boolean(value)) => {
-                self.bytes[offset as usize] = u8::from(*value);
-                Ok(())
-            }
-            (AbiType::Text, ConstantValue::Text(value)) => {
-                let encoded = value.as_bytes();
-                let target = self.allocate(encoded.len() as u32, 1);
-                self.set(target, encoded);
-                self.pointer(offset, target);
-                self.set(offset + 4, &(encoded.len() as u32).to_le_bytes());
-                Ok(())
-            }
-            (AbiType::Array { element }, ConstantValue::Store(elements)) => {
-                let layout = memory_layout(element);
-                let target = self.allocate(layout.size * elements.len() as u32, layout.alignment);
-                for (index, element_value) in elements.iter().enumerate() {
-                    self.write(element, element_value, target + index as u32 * layout.size)?;
-                }
-                self.pointer(offset, target);
-                self.set(offset + 4, &(elements.len() as u32).to_le_bytes());
-                Ok(())
-            }
-            (AbiType::Sealed { inner, .. }, value) => self.write(inner, value, offset),
-            (AbiType::Record { fields }, ConstantValue::Product(values)) => {
-                for field in record_layout(fields) {
-                    let value = values
-                        .get(&field.name)
-                        .ok_or_else(|| format!("constant record omitted field {}", field.name))?;
-                    self.write(&field.type_, value, offset + field.offset)?;
-                }
-                Ok(())
-            }
-            (AbiType::Variant { cases }, ConstantValue::Sum { case, payload }) => {
-                let source_case = cases
-                    .iter()
-                    .find(|candidate| candidate.name == *case)
-                    .ok_or_else(|| format!("constant variant has unknown case {case}"))?;
-                let tag = cases
-                    .iter()
-                    .position(|candidate| candidate.name == source_case.name)
-                    .expect("ABI cases omitted their source case");
-                let layout = variant_layout(cases);
-                let tag_bytes = (tag as u32).to_le_bytes();
-                self.set(offset, &tag_bytes[..layout.discriminant_size as usize]);
-                if let Some(payload_type) = &source_case.payload {
-                    self.write(payload_type, payload, offset + layout.payload_offset)?;
-                }
-                Ok(())
-            }
-            _ => Err(format!(
-                "canonical {} cannot encode constant {}",
-                abi_kind(type_),
-                constant_kind(value)
-            )),
-        }
-    }
-
-    fn pointer(&mut self, field_offset: u32, target_offset: u32) {
-        self.set(field_offset, &target_offset.to_le_bytes());
-        self.relocations.push(Relocation {
-            field_offset,
-            target_offset,
-        });
-    }
-
-    fn allocate(&mut self, size: u32, alignment: u32) -> u32 {
-        let offset = align_to(self.bytes.len() as u32, alignment);
-        self.bytes.resize((offset + size) as usize, 0);
-        offset
-    }
-
-    fn set(&mut self, offset: u32, encoded: &[u8]) {
-        let start = offset as usize;
-        let end = start + encoded.len();
-        self.bytes[start..end].copy_from_slice(encoded);
     }
 }
 

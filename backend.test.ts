@@ -21,7 +21,7 @@ import {
   runLoweringExport,
   validateLowering,
 } from "./src/backend/compile.ts";
-import { buildGpupaperBatch } from "./src/backend/gpupaper.ts";
+import { buildBatch } from "./src/backend/build.ts";
 import { lowerModule } from "./src/backend/lower.ts";
 import { checkFile } from "./src/check/mod.ts";
 import { BlotError } from "./src/diagnostic.ts";
@@ -79,7 +79,7 @@ Deno.test("imported structural folds residualize over runtime records", async ()
   assertEquals(hir.capabilities.map((capability) => capability.name), [
     "Source",
   ]);
-  const [outcome] = await buildGpupaperBatch([root]);
+  const [outcome] = await buildBatch([root]);
   if (outcome.status !== "built") throw outcome.cause;
   assertEquals(outcome.capabilities, ["Source"]);
   const compiled = await WebAssembly.compile(outcome.wasm as BufferSource);
@@ -114,7 +114,7 @@ Deno.test("static shape updates residualize over runtime records", async () => {
     ].join("\n"),
   );
 
-  const [outcome] = await buildGpupaperBatch([root]);
+  const [outcome] = await buildBatch([root]);
   if (outcome.status !== "built") throw outcome.cause;
   const compiled = await WebAssembly.compile(outcome.wasm as BufferSource);
   const instance = await WebAssembly.instantiate(compiled, {
@@ -149,7 +149,7 @@ Deno.test("runtime booleans survive local function results", async () => {
     ].join("\n"),
   );
 
-  const [outcome] = await buildGpupaperBatch([root]);
+  const [outcome] = await buildBatch([root]);
   if (outcome.status !== "built") throw outcome.cause;
   const compiled = await WebAssembly.compile(outcome.wasm as BufferSource);
   const instance = await WebAssembly.instantiate(compiled, {
@@ -186,7 +186,7 @@ Deno.test("conditional shadows can destructure runtime join values", async () =>
     ].join("\n"),
   );
 
-  const [outcome] = await buildGpupaperBatch([root]);
+  const [outcome] = await buildBatch([root]);
   if (outcome.status !== "built") throw outcome.cause;
   assertEquals(outcome.capabilities, ["Source"]);
 });
@@ -206,7 +206,7 @@ Deno.test("sealed runtime scalars erase to their checked representation", async 
     ].join("\n"),
   );
 
-  const [outcome] = await buildGpupaperBatch([root]);
+  const [outcome] = await buildBatch([root]);
   if (outcome.status !== "built") throw outcome.cause;
   const compiled = await WebAssembly.compile(outcome.wasm as BufferSource);
   const instance = await WebAssembly.instantiate(compiled, {
@@ -1185,7 +1185,7 @@ Deno.test("residual Wasm lowers integer control and structural host effects", as
     ].join("\n"),
   );
 
-  const [outcome] = await buildGpupaperBatch([path]);
+  const [outcome] = await buildBatch([path]);
   if (outcome.status === "failed") throw outcome.cause;
   assertEquals(WebAssembly.validate(Uint8Array.from(outcome.wasm)), true);
   assertEquals(outcome.capabilities, ["Host"]);
@@ -1412,7 +1412,7 @@ Deno.test("integer vector operations become SIMD instructions", async () => {
       )
     )
   );
-  const [outcome] = await buildGpupaperBatch([path]);
+  const [outcome] = await buildBatch([path]);
   if (outcome.status !== "built") throw outcome.cause;
   const opcodes = simdOpcodes(outcome.wasm);
   const found = [...opcodes].sort((left, right) => left - right).join(", ");

@@ -6,11 +6,9 @@ The runtime boundary begins after staging and specialization. Its input is a
 closed program with settled types, explicit effects, safety evidence, and
 ownership permissions. Its output is validated Blot Runtime HIR.
 
-Blot owns Runtime HIR, its validator, ABI policy, the module shell, and the
-Runtime-HIR-to-Core adapter. Gpupaper owns language-independent Core validation,
-planning, and Rust/WebAssembly emission. The experimental full Rust compiler may
-encode the final WebAssembly directly, but it must implement the same Runtime
-HIR and ABI judgments.
+Blot owns Runtime HIR, its validator, ABI policy, the module shell, and direct
+Rust/WebAssembly emission. Gpupaper is an independent conformance oracle and is
+not part of the production runtime boundary.
 
 ## 2. Runtime HIR
 
@@ -34,22 +32,22 @@ Validation does not infer a missing source fact. A well-typed internal program
 that reaches an open shape or polymorphic operation exposes a specialization or
 lowering bug.
 
-## 3. Core adapter
+## 3. Closed program and public layout
 
-The adapter maps Runtime HIR to gpupaper Core:
+Closing maps Runtime HIR and its public boundary to one artifact:
 
 ```text
-adapter(h, tau) = (core, manifest, adapters)
+close(h, tau) = ClosedProgram(h, PublicLayout(manifest, adapters))
 ```
 
-Records, tuples, and variants receive deterministic nominal declarations. Source
-effects become explicit Core capabilities or specialized control. Canonical
-adapters surround the private runtime representation. Core validation must
-accept the result; a Hindley--Milner failure here is a Blot lowering invariant
-failure because Blot inference is authoritative.
+Records, tuples, and variants receive deterministic layouts. Source effects
+become explicit capabilities or specialized control. Canonical adapters surround
+the private runtime representation. The manifest and adapters are projections of
+the same `PublicLayout`; neither may independently infer field order, variant
+tags, flattening, or post-return ownership.
 
-The adapter preserves evaluation order and host request order. It may erase
-types, certificates, and compile-time fields only after their last compiler use.
+Closing preserves evaluation order and host request order. It may erase types,
+certificates, and compile-time fields only after their last compiler use.
 
 ## 4. Public representation relation
 
@@ -77,16 +75,15 @@ lengths, alignment, UTF-8, booleans, and discriminants before constructing a
 source value. Lowering obeys post-return ownership. The exact layouts are
 normative in [`docs/abi.md`](../docs/abi.md).
 
-Gpufuck tagged words, heap headers, nominal numbers, and object addresses are
-private and never satisfy `R_A` directly.
+Private heap headers, internal tags, and object addresses never satisfy `R_A`
+directly.
 
 ## 5. Emission
 
-Gpupaper validation produces a deterministic Core plan; its emitter produces a
-WebAssembly module. The direct Rust emitter must be observationally equivalent
-to that plan, not byte-identical unless a release gate explicitly requires it.
+The direct Rust emitter consumes only validated Runtime HIR and its
+`PublicLayout`. It deterministically produces a WebAssembly module.
 
-For each validated Core step, emitted WebAssembly takes zero or more
+For each validated Runtime-HIR step, emitted WebAssembly takes zero or more
 administrative steps and reaches a related state. A target trap is permitted
 only when it corresponds to a specified language trap, malformed ABI input, or
 an unreachable defensive check. Integer arithmetic uses the source trapping or
@@ -97,8 +94,7 @@ wrapping rule chosen before Runtime HIR.
 Successful lowering and emission establish:
 
 - Runtime HIR execution simulates specialized source execution;
-- Core execution simulates Runtime HIR execution;
-- WebAssembly execution simulates Core execution;
+- WebAssembly execution simulates Runtime HIR execution;
 - public lifting rejects malformed representations before observation;
 - public lowering and lifting round-trip valid values; and
 - the sidecar and embedded manifest bytes are identical.

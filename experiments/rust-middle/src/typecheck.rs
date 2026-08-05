@@ -14,7 +14,8 @@ use crate::eval::{
     Context, Phase, Runtime, apply, evaluate_binding, evaluate_expression, match_pattern, run,
 };
 use crate::value::{
-    Domain as ValueDomain, Environment as ValueEnvironment, OpenedValues, Value, child_env, lookup,
+    Domain as ValueDomain, Environment as ValueEnvironment, OpenedValues, Value, attach_signature,
+    child_env, lookup, register_closure_signature,
 };
 
 type VariableId = u32;
@@ -379,6 +380,7 @@ enum Typing {
 #[derive(Clone, Default)]
 struct TypeEnvironment {
     names: Rc<BTreeMap<String, Typing>>,
+    stable_names: Rc<BTreeMap<String, Typing>>,
     opens: Rc<Vec<OpenedTypes>>,
     forward: Rc<BTreeSet<String>>,
     parent: Option<Rc<TypeEnvironment>>,
@@ -401,6 +403,7 @@ impl TypeEnvironment {
     fn child(parent: Rc<Self>) -> Self {
         Self {
             names: Rc::new(BTreeMap::new()),
+            stable_names: Rc::new(BTreeMap::new()),
             opens: Rc::new(Vec::new()),
             forward: Rc::new(BTreeSet::new()),
             parent: Some(parent),
@@ -417,6 +420,21 @@ impl TypeEnvironment {
             }
         }
         self.parent.as_ref()?.lookup(name)
+    }
+
+    fn lookup_stable(&self, name: &str) -> Option<Typing> {
+        if let Some(typing) = self.stable_names.get(name) {
+            return Some(typing.clone());
+        }
+        if let Some(typing) = self.names.get(name) {
+            return Some(typing.clone());
+        }
+        for opened in self.opens.iter().rev() {
+            if let Some(type_) = opened.get(name) {
+                return Some(Typing::Mono(type_));
+            }
+        }
+        self.parent.as_ref()?.lookup_stable(name)
     }
 
     fn is_forward(&self, name: &str) -> bool {
@@ -650,6 +668,7 @@ pub struct Checker {
     next_skolem: Cell<VariableId>,
     level: Cell<u32>,
     phase: Cell<Phase>,
+    specialization_depth: Cell<u32>,
     modules: RefCell<HashMap<String, Result<CheckedModule, Diagnostic>>>,
     active: RefCell<Vec<String>>,
     closed_record_arguments: RefCell<HashSet<(String, ExpressionId)>>,
@@ -681,6 +700,7 @@ impl Checker {
             next_skolem: Cell::new(0x8000_0000),
             level: Cell::new(0),
             phase: Cell::new(Phase::Runtime),
+            specialization_depth: Cell::new(0),
             modules: RefCell::new(HashMap::new()),
             active: RefCell::new(Vec::new()),
             closed_record_arguments: RefCell::new(HashSet::new()),
@@ -777,11 +797,14 @@ impl Checker {
 
     pub fn check_json(&self, path: &str) -> serde_json::Value {
         match self.check(path) {
-            Ok(checked) => serde_json::json!({
-                "ok": true,
-                "type": self.show(&checked.result),
-                "effects": self.show(&checked.effects),
-            }),
+            Ok(checked) => {
+                let effects = self.settle(checked.effects.clone(), true);
+                serde_json::json!({
+                    "ok": true,
+                    "type": self.show(&checked.result),
+                    "effects": show_effects(&effects),
+                })
+            }
             Err(diagnostic) => serde_json::json!({
                 "ok": false,
                 "diagnostic": {
@@ -1192,14 +1215,23 @@ impl Checker {
                     inferred.effects = Type::Effects(BTreeSet::new());
                 }
                 let evaluated = if kind == DeclarationKind::Const {
-                    Some(self.evaluate_binding(
+                    match self.evaluate_binding(
                         path,
                         module,
                         pattern,
                         value,
                         values,
                         Phase::Comptime,
-                    )?)
+                    ) {
+                        Ok(value) => Some(value),
+                        Err(error) if error.code == "BLOT_UNBOUND" => {
+                            self.incomplete_evaluations
+                                .borrow_mut()
+                                .insert(path.to_owned());
+                            None
+                        }
+                        Err(error) => return Err(error),
+                    }
                 } else {
                     match self.evaluate_binding(
                         path,
@@ -1220,6 +1252,10 @@ impl Checker {
                 };
                 if signature.is_none()
                     && kind == DeclarationKind::Const
+                    && !matches!(
+                        module.arena.expressions[value.0 as usize],
+                        Expression::Lambda { .. } | Expression::Rec { .. }
+                    )
                     && let Some(exact) = evaluated.as_ref().and_then(|value| self.bridge(value))
                 {
                     inferred.type_ = exact;
@@ -1271,6 +1307,11 @@ impl Checker {
                     self.constrain(inferred.type_.clone(), bound, span)?;
                 }
                 self.bind_pattern(module, pattern, inferred.type_.clone(), types);
+                let settled_signature = self.settle(inferred.type_.clone(), true);
+                let inferred_signature = reify_type(&settled_signature);
+                if let (Some(value), Some(signature)) = (&evaluated, &inferred_signature) {
+                    register_closure_signature(value, signature.clone());
+                }
                 for name in names {
                     let body = match types.lookup(&name) {
                         Some(Typing::Mono(type_)) => type_,
@@ -1284,26 +1325,32 @@ impl Checker {
                         }
                     };
                     Rc::make_mut(&mut types.names).insert(
-                        name,
+                        name.clone(),
                         Typing::Scheme {
                             level: self.level.get(),
                             body,
                         },
                     );
+                    if let Some(signature) = inferred_signature.clone() {
+                        values.signatures.borrow_mut().insert(name, signature);
+                    }
                 }
-                if let Some(value_) = evaluated
-                    && !match_pattern(module, pattern, &value_, values)
-                {
-                    return Err(Diagnostic::new(
-                        "BLOT_BINDING_MISMATCH",
-                        "The declaration value does not match its pattern.",
-                        span,
-                    ));
+                if let Some(mut value_) = evaluated {
+                    if let Some(signature) = &inferred_signature {
+                        attach_signature(&mut value_, signature);
+                    }
+                    if !match_pattern(module, pattern, &value_, values) {
+                        return Err(Diagnostic::new(
+                            "BLOT_BINDING_MISMATCH",
+                            "The declaration value does not match its pattern.",
+                            span,
+                        ));
+                    }
                 }
                 Ok(inferred.effects)
             }
             Declaration::Shadow { name, value, span } => {
-                let previous = types.lookup(&name).ok_or_else(|| {
+                let previous = types.lookup_stable(&name).ok_or_else(|| {
                     Diagnostic::new(
                         "BLOT_UNBOUND",
                         format!("`{name} := ...` cannot shadow an unbound name."),
@@ -1541,7 +1588,11 @@ impl Checker {
                         effects = self.join_effects(effects, inferred.effects)?;
                         arguments.push(inferred.type_);
                     }
-                    if let Ok(value) = self.evaluate(path, expression_id, values, Phase::Comptime) {
+                    if matches!(target_value, Value::Extended { .. })
+                        && let Ok(value) =
+                            self.evaluate(path, expression_id, values, Phase::Comptime)
+                        && !matches!(value, Value::Closure { .. })
+                    {
                         return Ok(Inferred {
                             type_: self.bridge_runtime_value(&value),
                             effects,
@@ -1581,6 +1632,7 @@ impl Checker {
                 if let Expression::Field { target, name, .. } =
                     &module.arena.expressions[function.0 as usize]
                     && let Ok(target_value) = self.evaluate(path, *target, values, Phase::Comptime)
+                    && (matches!(target_value, Value::Extended { .. }) || name == "transform")
                     && let Some(Value::Closure {
                         module: closure_module,
                         parameter,
@@ -1589,65 +1641,45 @@ impl Checker {
                         self_name,
                         ..
                     }) = static_member(&target_value, name)
-                    && (matches!(target_value, Value::Extended { .. }) || name == "transform")
                 {
                     let argument_type =
                         self.infer(path, module, argument, environment, values, dependencies)?;
-                    if let Ok(value) = self.evaluate(path, expression_id, values, Phase::Comptime) {
-                        let type_ = match &value {
-                            Value::Closure {
-                                module: closure_module,
-                                parameter,
-                                body,
-                                environment: closure_values,
-                                self_name,
-                                ..
-                            } => self.infer_evaluated_closure(
-                                path,
-                                module,
-                                closure_module,
-                                *parameter,
-                                *body,
-                                closure_values,
-                                self_name.as_deref(),
-                                environment,
-                                dependencies,
-                            )?,
-                            _ => self.bridge_runtime_value(&value),
-                        };
+                    if matches!(target_value, Value::Extended { .. })
+                        && let Ok(value) =
+                            self.evaluate(path, expression_id, values, Phase::Comptime)
+                        && !matches!(value, Value::Closure { .. })
+                    {
                         return Ok(Inferred {
-                            type_,
+                            type_: self.bridge_runtime_value(&value),
                             effects: argument_type.effects,
                         });
                     }
-                    if matches!(target_value, Value::Extended { .. }) {
-                        let function_type = self.infer_evaluated_closure(
-                            path,
-                            module,
-                            &closure_module,
-                            parameter,
-                            body,
-                            &closure_values,
-                            self_name.as_deref(),
-                            environment,
-                            dependencies,
-                        )?;
-                        let result = self.fresh();
-                        let performed = self.fresh();
-                        self.constrain(
-                            function_type,
-                            Type::Function {
-                                parameter: Box::new(argument_type.type_),
-                                effects: Box::new(performed.clone()),
-                                result: Box::new(result.clone()),
-                            },
-                            span,
-                        )?;
-                        return Ok(Inferred {
-                            type_: result,
-                            effects: self.join_effects(argument_type.effects, performed)?,
-                        });
-                    }
+                    let function_type = self.infer_evaluated_closure(
+                        path,
+                        module,
+                        &closure_module,
+                        parameter,
+                        body,
+                        &closure_values,
+                        self_name.as_deref(),
+                        environment,
+                        dependencies,
+                    )?;
+                    let result = self.fresh();
+                    let performed = self.fresh();
+                    self.constrain(
+                        function_type,
+                        Type::Function {
+                            parameter: Box::new(argument_type.type_),
+                            effects: Box::new(performed.clone()),
+                            result: Box::new(result.clone()),
+                        },
+                        span,
+                    )?;
+                    return Ok(Inferred {
+                        type_: result,
+                        effects: self.join_effects(argument_type.effects, performed)?,
+                    });
                 }
                 if let Expression::Apply {
                     function: projection,
@@ -1678,7 +1710,9 @@ impl Checker {
                             Type::Record(vec![(name, field.clone())]),
                             span,
                         )?;
-                    } else if self.phase.get() == Phase::Runtime {
+                    } else if self.phase.get() == Phase::Runtime
+                        && self.specialization_depth.get() == 0
+                    {
                         return Err(Diagnostic::new(
                             "BLOT_DYNAMIC_SHAPE_FIELD",
                             "A runtime shape projection needs a statically known field name.",
@@ -1997,6 +2031,16 @@ impl Checker {
                         comparison_refinements(module, branch.condition, &remaining, values, self);
                     let mut consequence_scope = TypeEnvironment::child(Rc::new(remaining.clone()));
                     if let Some((name, consequence, alternate)) = refinements {
+                        let stable = remaining.lookup_stable(&name).ok_or_else(|| {
+                            Diagnostic::new(
+                                "BLOT_RUST_INVARIANT",
+                                format!("A refinement references unbound `{name}`."),
+                                span,
+                            )
+                        })?;
+                        Rc::make_mut(&mut consequence_scope.stable_names)
+                            .insert(name.clone(), stable.clone());
+                        Rc::make_mut(&mut remaining.stable_names).insert(name.clone(), stable);
                         Rc::make_mut(&mut consequence_scope.names)
                             .insert(name.clone(), Typing::Mono(consequence));
                         Rc::make_mut(&mut remaining.names).insert(name, Typing::Mono(alternate));
@@ -2244,7 +2288,7 @@ impl Checker {
     #[allow(clippy::too_many_arguments)]
     fn infer_evaluated_closure(
         &self,
-        path: &str,
+        _path: &str,
         module: &Module,
         closure_module: &str,
         parameter: PatternId,
@@ -2254,9 +2298,20 @@ impl Checker {
         environment: &TypeEnvironment,
         dependencies: &BTreeMap<String, Type>,
     ) -> Result<Type, Diagnostic> {
-        if closure_module != path {
-            return Ok(self.fresh());
-        }
+        let closure_loaded = self
+            .context
+            .modules
+            .borrow()
+            .get(closure_module)
+            .cloned()
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    "BLOT_UNRESOLVED_IMPORT",
+                    format!("Module `{closure_module}` was not loaded."),
+                    module.span,
+                )
+            })?;
+        let closure_ast = closure_loaded.module;
         let mut scope = TypeEnvironment::child(Rc::new(environment.clone()));
         let mut captured = Vec::new();
         let mut value_scope = Some(closure_values.clone());
@@ -2266,17 +2321,11 @@ impl Checker {
         }
         for values in captured.into_iter().rev() {
             for (name, value) in values.names.borrow().iter() {
-                if scope.lookup(name).is_some() {
-                    continue;
-                }
                 let type_ = self.bridge(value).unwrap_or_else(|| self.fresh());
                 Rc::make_mut(&mut scope.names).insert(name.clone(), Typing::Mono(type_));
             }
             for opened in values.opens.borrow().iter() {
                 for (name, value) in opened.iter() {
-                    if scope.lookup(name).is_some() {
-                        continue;
-                    }
                     let type_ = self.bridge(value).unwrap_or_else(|| self.fresh());
                     Rc::make_mut(&mut scope.names).insert(name.clone(), Typing::Mono(type_));
                 }
@@ -2287,15 +2336,27 @@ impl Checker {
             Rc::make_mut(&mut scope.names).insert(name.clone(), Typing::Mono(type_.clone()));
         }
         let parameter_type = self.fresh();
-        self.bind_pattern(module, parameter, parameter_type.clone(), &mut scope);
-        let inferred = self.infer(path, module, body, &scope, closure_values, dependencies)?;
+        self.bind_pattern(&closure_ast, parameter, parameter_type.clone(), &mut scope);
+        let previous_specialization_depth = self.specialization_depth.get();
+        self.specialization_depth
+            .set(previous_specialization_depth + 1);
+        let inferred = self.infer(
+            closure_module,
+            &closure_ast,
+            body,
+            &scope,
+            closure_values,
+            dependencies,
+        );
+        self.specialization_depth.set(previous_specialization_depth);
+        let inferred = inferred?;
         let function = Type::Function {
             parameter: Box::new(parameter_type),
             effects: Box::new(inferred.effects),
             result: Box::new(inferred.type_),
         };
         if let Some((_, recursive)) = recursive {
-            self.constrain(function.clone(), recursive, module.span)?;
+            self.constrain(function.clone(), recursive, closure_ast.span)?;
         }
         Ok(function)
     }
@@ -2390,7 +2451,13 @@ impl Checker {
         let effect_expression = elements[0];
         let thunk_expression = elements[1];
         let handler_expression = elements[2];
-        let effect_value = self.evaluate(path, effect_expression, values, Phase::Comptime)?;
+        let effect_value = match self.evaluate(path, effect_expression, values, Phase::Comptime) {
+            Ok(value) => value,
+            Err(error) if error.code == "BLOT_UNBOUND" => {
+                return Ok(Inferred::pure(self.fresh()));
+            }
+            Err(error) => return Err(error),
+        };
         let label = effect_label(&effect_value).ok_or_else(|| {
             Diagnostic::new(
                 "BLOT_TYPE_ERROR",
@@ -3194,10 +3261,7 @@ impl Checker {
     }
 
     fn join_effects(&self, left: Type, right: Type) -> Result<Type, Diagnostic> {
-        match (
-            self.settle(left.clone(), true),
-            self.settle(right.clone(), true),
-        ) {
+        match (left.clone(), right.clone()) {
             (Type::Effects(mut left), Type::Effects(right)) => {
                 left.extend(right);
                 Ok(Type::Effects(left))
@@ -4088,7 +4152,7 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             )
         }
         "@fail" | "@panic" => curried(vec![text], Type::Bottom),
-        "@effect" | "@effect.host" | "@forall" | "@import" => {
+        "@effect" | "@effect.host" | "@effect.named" | "@forall" | "@import" => {
             curried(vec![checker.fresh()], checker.fresh())
         }
         "@include" => {
@@ -5057,11 +5121,19 @@ pub(crate) fn reify_type(type_: &Type) -> Option<Value> {
                 .collect::<Option<Vec<_>>>()?,
         )),
         Type::Function {
-            parameter, result, ..
+            parameter,
+            effects,
+            result,
         } => Some(Value::Arrow {
             domain: Box::new(reify_type(parameter)?),
             codomain: Box::new(reify_type(result)?),
-            effects: Vec::new(),
+            effects: match effects.as_ref() {
+                Type::Effects(labels) => labels
+                    .iter()
+                    .map(|label| crate::primitives::effect_value(label))
+                    .collect::<Option<Vec<_>>>()?,
+                _ => return None,
+            },
         }),
         Type::Union(members) => Some(Value::Union(
             members.iter().map(reify_type).collect::<Option<Vec<_>>>()?,
@@ -5598,6 +5670,7 @@ fn show_bound(bound: Option<Scalar>) -> String {
 
 fn show_effects(effects: &Type) -> String {
     match effects {
+        Type::Bottom => String::new(),
         Type::Effects(labels) if labels.is_empty() => String::new(),
         Type::Effects(labels) => format!(
             " ~ {{ {} }}",
@@ -5608,7 +5681,7 @@ fn show_effects(effects: &Type) -> String {
 }
 
 fn empty_effects(type_: &Type) -> bool {
-    matches!(type_, Type::Effects(labels) if labels.is_empty())
+    matches!(type_, Type::Bottom) || matches!(type_, Type::Effects(labels) if labels.is_empty())
 }
 
 fn flatten_interface_type(
@@ -5868,6 +5941,72 @@ mod tests {
                 .map(|bound| checker.expand_constraint(*bound))
                 .any(|bound| same_type(&bound, &Type::Variable(copy_id)))
         );
+    }
+
+    #[test]
+    fn effectful_callback_contributes_to_wrapper_effects() {
+        let checker = Checker::new(Rc::new(Context::default()));
+        checker.level.set(1);
+        let parameter = checker.fresh();
+        let callback = checker.fresh();
+        let callback_effects = checker.fresh();
+        let wrapper_effects = checker.fresh();
+        checker
+            .constrain(
+                callback.clone(),
+                Type::Function {
+                    parameter: Box::new(Type::Unit),
+                    effects: Box::new(callback_effects.clone()),
+                    result: Box::new(Type::Unit),
+                },
+                Span { start: 0, end: 0 },
+            )
+            .expect("the callback parameter is callable");
+        checker
+            .constrain(
+                parameter.clone(),
+                Type::Record(vec![("0".to_owned(), callback)]),
+                Span { start: 0, end: 0 },
+            )
+            .expect("the wrapper parameter contains its callback");
+        checker
+            .constrain(
+                callback_effects,
+                wrapper_effects.clone(),
+                Span { start: 0, end: 0 },
+            )
+            .expect("the wrapper performs its callback effects");
+        let wrapper = Type::Function {
+            parameter: Box::new(parameter),
+            effects: Box::new(wrapper_effects),
+            result: Box::new(Type::Unit),
+        };
+        checker.level.set(0);
+        let wrapper = checker.freshen(wrapper, 0, &mut HashMap::new());
+        let performed = checker.fresh();
+        checker
+            .constrain(
+                wrapper,
+                Type::Function {
+                    parameter: Box::new(Type::Record(vec![(
+                        "0".to_owned(),
+                        Type::Function {
+                            parameter: Box::new(Type::Unit),
+                            effects: Box::new(Type::Effects(BTreeSet::from(["Access".to_owned()]))),
+                            result: Box::new(Type::Unit),
+                        },
+                    )])),
+                    effects: Box::new(performed.clone()),
+                    result: Box::new(Type::Unit),
+                },
+                Span { start: 0, end: 0 },
+            )
+            .expect("the wrapper accepts an effectful callback");
+
+        assert!(same_type(
+            &checker.settle(performed, true),
+            &Type::Effects(BTreeSet::from(["Access".to_owned()])),
+        ));
     }
 
     #[test]

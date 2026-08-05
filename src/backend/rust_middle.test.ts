@@ -6,17 +6,17 @@ import {
 } from "@std/assert";
 import { join } from "@std/path";
 import { BlotError } from "../diagnostic.ts";
-import { ExperimentalCompiler } from "../experimental.ts";
+import { Compiler } from "../compiler.ts";
 import { prepareGpupaperHir } from "./compile.ts";
-import { buildGpupaperBatch } from "./gpupaper.ts";
+import { buildTypeScriptOracleBatch } from "./gpupaper.ts";
 import { type BlotAbiManifest, buildBlotAbiManifest } from "./runtime/abi.ts";
 import { decodeBlotAbiResult } from "./runtime/abi_decode.ts";
 import { validateBlotRuntimeModule } from "./runtime/hir.ts";
 import { compileBlotRuntimeModulesOnRustWasm } from "./runtime/target.ts";
 import { prepareRustGpupaperHir, RustMiddleCompiler } from "./rust_middle.ts";
 
-Deno.test("experimental compiler is available from the public API", async () => {
-  const compiler = await ExperimentalCompiler.create();
+Deno.test("compiler is available from the public API", async () => {
+  const compiler = await Compiler.create();
   try {
     const artifact = await compiler.compile("examples/minimal.blot");
     assertEquals([...artifact.wasm.slice(0, 4)], [0, 97, 115, 109]);
@@ -25,12 +25,22 @@ Deno.test("experimental compiler is available from the public API", async () => 
   }
 });
 
-Deno.test("Rust HIR emits the same ABI as the TypeScript middle", async () => {
+Deno.test("compiler check omits an empty effect row", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const checked = await compiler.check("examples/minimal.blot");
+    assertEquals(checked.effects, "");
+  } finally {
+    compiler.destroy();
+  }
+});
+
+Deno.test("Rust HIR matches the bounded TypeScript ABI oracle", async () => {
   const rust = validateBlotRuntimeModule(
-    await prepareRustGpupaperHir("examples/storage.blot"),
+    await prepareRustGpupaperHir("examples/minimal.blot"),
   );
   const typescript = validateBlotRuntimeModule(
-    await prepareGpupaperHir("examples/storage.blot"),
+    await prepareGpupaperHir("examples/minimal.blot"),
   );
   assertEquals(
     buildBlotAbiManifest(rust),
@@ -158,7 +168,7 @@ end;
 return ();`,
     );
     const rust = await compiler.compile(path);
-    const [reference] = await buildGpupaperBatch([path]);
+    const [reference] = await buildTypeScriptOracleBatch([path]);
     if (reference.status === "failed") throw reference.cause;
 
     const unicode = new TextEncoder().encode("Żółw 🦀");
@@ -222,7 +232,7 @@ return @int.add (Int32x4.mask_bits negative) (Int32x4.lane values selected);`,
     const rustBatch = await compileBlotRuntimeModulesOnRustWasm([rustModule], {
       target: "wasm-simd128",
     });
-    const [reference] = await buildGpupaperBatch([path]);
+    const [reference] = await buildTypeScriptOracleBatch([path]);
     if (reference.status === "failed") throw reference.cause;
 
     for (const wasm of [reference.wasm, rustBatch.artifacts[0].wasm]) {

@@ -11,7 +11,8 @@ Executable application studies live in [case-studies/](case-studies/): a
 grep-like file search, an interactive terminal program, an agent-style
 conversation loop, and a 3D engine with a browser host and hot reload.
 
-The TypeScript frontend is published as `@mewhhaha/blot`:
+The package is published as `@mewhhaha/blot`. Its TypeScript surface is a thin
+filesystem and package host around the checked-in Rust/WebAssembly compiler:
 
 ```ts
 import { parse } from "@mewhhaha/blot";
@@ -98,31 +99,30 @@ backend consumes. A final `@array.set` or `@array.push` on a proved linear array
 reuses its Store allocation; ordinary shared arrays remain persistent. See
 [docs/ownership.md](docs/ownership.md).
 
-The compiler (M4) lowers every accepted catalog program. `blot build` uses the
-checked Rust/WebAssembly emitter and produces stable Core WebAssembly plus a
-JSON ABI manifest without executing the program. The identical manifest is
-embedded in the `blot:abi` custom section. See [docs/abi.md](docs/abi.md).
-`just wasm` checks the interpreter, the independent conformance evaluator, and
-emitted Wasm against the same staged runtime result. The CPU test suite sends
-the entire catalog through lowering as well, so backend coverage does not
-require a WebGPU adapter. Compile-time-only result fields are erased, runtime
-fields become named Wasm exports, host effects become typed imports, and
-one-shot handlers are specialized through non-tail resume and abort. See
+The compiler (M4) lowers every accepted catalog program. `blot check` and
+`blot build` use one checked Rust/WebAssembly compiler; building produces
+caller-facing WebAssembly plus a JSON ABI manifest without executing the
+program. The identical manifest is embedded in the `blot:abi` custom section.
+See [docs/abi.md](docs/abi.md). `just wasm` checks the interpreter, the
+independent conformance evaluator, and emitted Wasm against the same staged
+runtime result. The production corpus gate sends the entire catalog through the
+Rust compiler, so backend coverage does not require a WebGPU adapter.
+Compile-time-only result fields are erased, runtime fields become named Wasm
+exports, host effects become typed imports, and one-shot handlers are
+specialized through non-tail resume and abort. See
 [docs/backend.md](docs/backend.md).
 
-An experimental, full Rust/WebAssembly implementation of the compiler is
-available through `blot build-experimental` and the public
-`ExperimentalCompiler` API. Its single checked-in Wasm parses source, checks and
-stages the program, constructs the caller ABI, and emits the final WebAssembly
-module. Baba generates the parser tables embedded at build time; normal
-compilation does not load Baba or gpupaper. The conformance gates and fair
-end-to-end benchmark are documented in
+The public `Compiler` API runs the same compiler as `blot build`. Its single
+checked-in Wasm parses source, checks and stages the program, constructs the
+caller ABI, and emits the final WebAssembly module. Baba generates the parser
+tables embedded at build time; normal compilation loads neither Baba nor
+gpupaper. The conformance gates and end-to-end benchmark are documented in
 [docs/rust-middle.md](docs/rust-middle.md).
 
 ```ts
-import { ExperimentalCompiler } from "@mewhhaha/blot";
+import { Compiler } from "@mewhhaha/blot";
 
-const compiler = await ExperimentalCompiler.create();
+const compiler = await Compiler.create();
 try {
   const artifact = await compiler.compile("examples/minimal.blot");
   console.log(artifact.wasm.byteLength);
@@ -136,7 +136,6 @@ just run examples/tour.blot   # evaluate a program
 just check-file examples/tour.blot  # infer its type and check ownership
 just ownership examples/tour.blot   # last-use and linearity facts
 just build examples/compiled.blot   # compile to WebAssembly
-just build-experimental examples/compiled.blot # use the experimental compiler
 deno task blot package ./blot.json # build distributable module capsules
 just wasm                           # interpreter vs GPU evaluator vs Wasm
 just test                     # corpus goldens, rejections, profile gate
@@ -153,18 +152,14 @@ deno run --allow-read --allow-write \
   examples/minimal.blot examples/arithmetic.blot
 ```
 
-Use `build-experimental` in place of `build` to compare the single-Wasm Rust
-compiler while retaining the same Wasm and ABI output contract.
-
 Blot owns parsing policy, checking, staging, specialization, Runtime HIR,
-canonical ABI adapters, and target orchestration. The default implementation
-uses Baba's CPU frontend and the language-independent gpupaper Core and emitter.
-The alternative implements those Blot-owned stages and its binary encoder in the
-checked-in Rust compiler Wasm while consuming Baba-generated parser tables. No
-compiler command initializes WebGPU. Multiple paths are prepared independently
-and cache misses retain stable input order. A source failure remains local to
-its path; an emitter failure rejects every admitted miss rather than returning
-partially trusted artifacts.
+canonical ABI adapters, target orchestration, and its direct binary emitter. The
+production compiler consumes Baba-generated parser tables inside the checked-in
+Rust compiler Wasm. TypeScript supplies external files and package resolution;
+it does not repeat semantic compilation. Gpupaper is a bounded conformance
+oracle, not a production dependency path. No compiler command initializes
+WebGPU. Multiple paths are prepared independently and cache misses retain stable
+input order. A source failure remains local to its path.
 
 `just install` builds the Tree-sitter grammar from the same grammar source as
 the GPU parser, installs highlight, indent, textobject, tag, and rainbow

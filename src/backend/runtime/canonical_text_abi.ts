@@ -37,11 +37,10 @@ export function supportsBlotCanonicalTextAbi(
   ]);
   if (
     module.types.some((type) =>
-      !admittedTypes.has(type.kind) &&
-      (type.kind !== "sum" ||
-        type.cases.some((case_) =>
-          module.types[case_.payloadType].kind !== "unit"
-        ))
+      !admittedTypes.has(type.kind) && type.kind !== "sum"
+    ) ||
+    module.types.some((_, type) =>
+      !admittedRuntimeType(module, type, new Set())
     )
   ) return false;
   for (const exported of manifest.exports) {
@@ -560,19 +559,49 @@ function emitOperation(
     operation.kind === "sum.make" || operation.kind === "sum.tag" ||
     operation.kind === "sum.payload"
   ) {
-    let instructions: readonly WasmInstruction[];
     if (operation.kind === "sum.tag") {
-      instructions = wasmInstruction.localGet(
-        requiredScalarLocal(values, function_, operation.operands[0]),
+      const source = requiredLocals(
+        values,
+        function_,
+        operation.operands[0],
       );
-    } else {
-      let caseIndex = 0;
-      if (operation.kind === "sum.make") caseIndex = operation.case;
-      instructions = wasmInstruction.i32Constant(caseIndex);
+      return [
+        ...wasmInstruction.localGet(source[0]),
+        ...wasmInstruction.localSet(result[0]),
+      ];
     }
+    const sumType = operation.kind === "sum.make"
+      ? module.types[operation.type]
+      : module.types[valueType(module, function_, operation.operands[0])];
+    if (sumType.kind !== "sum") {
+      throw new TypeError(
+        `${module.source}: ${operation.kind} has no sum layout`,
+      );
+    }
+    const caseOffset = sumCaseOffset(module, sumType, operation.case);
+    if (operation.kind === "sum.payload") {
+      const source = requiredLocals(
+        values,
+        function_,
+        operation.operands[0],
+      );
+      return result.flatMap((local, index) => [
+        ...wasmInstruction.localGet(source[caseOffset + index]),
+        ...wasmInstruction.localSet(local),
+      ]);
+    }
+    const payload = requiredLocals(
+      values,
+      function_,
+      operation.operands[0],
+    );
     return [
-      ...instructions,
+      ...wasmInstruction.i32Constant(operation.case),
       ...wasmInstruction.localSet(result[0]),
+      ...payload.flatMap((local, index) => [
+        ...wasmInstruction.localGet(local),
+        ...wasmInstruction.localSet(result[caseOffset + index]),
+      ]),
     ];
   }
   throw new TypeError(
@@ -674,7 +703,7 @@ function runtimeLocalTypes(
   const type = module.types[typeId];
   if (
     type.kind === "unit" || type.kind === "boolean" ||
-    type.kind === "integer-32" || type.kind === "sum"
+    type.kind === "integer-32"
   ) return ["i32"];
   if (type.kind === "signed-integer-64") return ["i64"];
   if (type.kind === "text") return ["i32", "i32"];
@@ -683,8 +712,33 @@ function runtimeLocalTypes(
       runtimeLocalTypes(module, field.type)
     );
   }
+  if (type.kind === "sum") {
+    return [
+      "i32",
+      ...type.cases.flatMap((case_) =>
+        runtimeLocalTypes(module, case_.payloadType)
+      ),
+    ];
+  }
   throw new TypeError(
     `${module.source}: ${type.kind} has no canonical first-order local layout`,
+  );
+}
+
+function sumCaseOffset(
+  module: BlotRuntimeModule,
+  type: Extract<BlotRuntimeType, { readonly kind: "sum" }>,
+  caseIndex: number,
+): number {
+  if (type.cases[caseIndex] === undefined) {
+    throw new TypeError(
+      `${module.source}: sum ${type.name} has no case ${caseIndex}`,
+    );
+  }
+  return 1 + type.cases.slice(0, caseIndex).reduce(
+    (offset, case_) =>
+      offset + runtimeLocalTypes(module, case_.payloadType).length,
+    0,
   );
 }
 
@@ -1194,6 +1248,33 @@ function admittedOperation(operation: BlotRuntimeOperation): boolean {
     operation.kind === "sum.tag" || operation.kind === "sum.payload" ||
     operation.kind === "product.make" || operation.kind === "product.project" ||
     operation.kind === "text.from-i64";
+}
+
+function admittedRuntimeType(
+  module: BlotRuntimeModule,
+  typeId: number,
+  visiting: Set<number>,
+): boolean {
+  if (visiting.has(typeId)) return false;
+  const type = module.types[typeId];
+  if (
+    type.kind === "unit" || type.kind === "boolean" ||
+    type.kind === "integer-32" || type.kind === "signed-integer-64" ||
+    type.kind === "text"
+  ) return true;
+  visiting.add(typeId);
+  let admitted = false;
+  if (type.kind === "product") {
+    admitted = type.fields.every((field) =>
+      admittedRuntimeType(module, field.type, visiting)
+    );
+  } else if (type.kind === "sum") {
+    admitted = type.cases.every((case_) =>
+      admittedRuntimeType(module, case_.payloadType, visiting)
+    );
+  }
+  visiting.delete(typeId);
+  return admitted;
 }
 
 function admittedAbiType(type: BlotAbiType): boolean {

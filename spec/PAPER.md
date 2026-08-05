@@ -119,8 +119,8 @@ UTF-8 source
   -> ownership checking
   -> staging and specialization
   -> validated Runtime HIR
-  -> Blot canonical ABI and Core lowering
-  -> gpupaper Core validation and Rust/WebAssembly emission
+  -> closed Blot public layout
+  -> direct Rust/WebAssembly emission
   -> WebAssembly plus canonical adapters
 ```
 
@@ -143,8 +143,8 @@ Each arrow has a contract.
 | safe core to owned core      | linear and affine obligations are discharged on every path   |
 | owned core to runtime core   | erased compile-time terms cannot affect residual behavior    |
 | runtime core to Runtime HIR  | structural uses are specialized and representation is closed |
-| Runtime HIR to gpupaper Core | Blot's representations and ABI policy are closed             |
-| gpupaper Core to Wasm        | validation succeeds and generated code simulates the core    |
+| Runtime HIR to public layout | Blot's representations and ABI policy are closed             |
+| Runtime HIR to Wasm          | validation succeeds and generated code simulates the runtime |
 | private values to ABI        | lifting and lowering validate and preserve public values     |
 
 No later stage may reconstruct a fact owned by an earlier stage. Inference
@@ -1068,11 +1068,11 @@ representations. Therefore Blot must make every residual use representable:
 A Runtime HIR validation failure for a well-typed closed Blot program is a Blot
 lowering bug. It is not resolved by weakening the source type claim.
 
-Runtime HIR, its validator, ABI manifests, canonical adapters, and module shell
-are language definitions and therefore live in Blot. The external compiler
-boundary is the language-independent monomorphic `CoreModule`. Gpupaper checks
-that Core and emits its deterministic Wasm plan; it does not infer or recreate
-any Blot representation, effect identity, or ABI rule.
+Runtime HIR, its validator, ABI manifests, canonical adapters, module shell, and
+direct emitter live in Blot. One closed public layout supplies both the manifest
+and adapter representation. Gpupaper is an external conformance oracle; it does
+not infer or recreate any production Blot representation, effect identity, or
+ABI rule.
 
 ### 13.3 Public ABI
 

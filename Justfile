@@ -37,13 +37,9 @@ check-file file:
 ownership file:
   deno run --allow-read src/cli.ts ownership {{file}}
 
-# Compile one program through gpupaper's Rust/WebAssembly emitter.
+# Compile one program through the checked-in Rust/WebAssembly compiler.
 build file:
   deno run --allow-read --allow-write src/cli.ts build {{file}}
-
-# Compile from source to the final artifact in one Rust/WebAssembly instance.
-build-experimental file:
-  deno run --allow-read --allow-write src/cli.ts build-experimental {{file}}
 
 # Do the interpreter, the GPU evaluator, and the emitted Wasm agree?
 wasm:

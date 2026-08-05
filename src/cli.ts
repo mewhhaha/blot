@@ -1,8 +1,8 @@
 // blot's command line.
 //
-// Every command parses through Baba's CPU frontend. `build` emits through
-// gpupaper's Rust/WebAssembly emitter. WebGPU belongs only to explicit
-// conformance tools such as `just parity` and `just wasm`.
+// `build` runs the checked-in Rust compiler Wasm over Baba-generated parser
+// tables. WebGPU belongs only to explicit conformance tools such as `just
+// parity` and `just wasm`.
 
 import { resolve } from "@std/path";
 import { BlotError, locate, render } from "./diagnostic.ts";
@@ -14,6 +14,7 @@ import { checkFile, type OwnedBinding } from "./check/mod.ts";
 import type { NamePattern } from "./linear/check.ts";
 import { testFile, type TestOutcome } from "./test.ts";
 import { buildPackage } from "./package.ts";
+import { Compiler } from "./compiler.ts";
 
 const [command, ...rest] = Deno.args;
 
@@ -25,9 +26,10 @@ if (command === undefined || rest.length === 0) {
 let failures = 0;
 let tests = 0;
 let failedTests = 0;
+let compiler: Promise<Compiler> | undefined;
 
-if (command === "build" || command === "build-experimental") {
-  failures += await buildFiles(rest, command);
+if (command === "build") {
+  failures += await buildFiles(rest);
 } else if (command === "package") {
   failures += await buildPackages(rest);
 } else {
@@ -72,7 +74,7 @@ type BuiltFileArtifact = {
 
 function printUsage(): void {
   console.error("usage: blot <check|test|eval|ast|ownership> <file.blot>...");
-  console.error("       blot <build|build-experimental> <file.blot>...");
+  console.error("       blot build <file.blot>...");
   console.error("       blot package <blot.json>...");
 }
 
@@ -92,17 +94,9 @@ function reportTestOutcomes(outcomes: readonly TestOutcome[]): number {
 }
 
 async function check(path: string): Promise<void> {
-  const source = await Deno.readTextFile(path);
-  const parsed = await parse(source);
-  if (!parsed.ok) {
-    for (const diagnostic of parsed.diagnostics) {
-      console.error(render(path, source, diagnostic));
-    }
-    throw new Error("check failed");
-  }
-  const checked = await checkFile(path);
-  const row = checked.effects === "" ? "" : ` ~ ${checked.effects}`;
-  console.log(`${path}: ${checked.type}${row}`);
+  if (compiler === undefined) compiler = Compiler.create();
+  const checked = await (await compiler).check(path);
+  console.log(`${path}: ${checked.type}${checked.effects}`);
 }
 
 async function evaluateFile(path: string): Promise<void> {
@@ -182,15 +176,9 @@ async function buildPackages(paths: readonly string[]): Promise<number> {
 
 async function buildFiles(
   paths: readonly string[],
-  command: "build" | "build-experimental",
 ): Promise<number> {
-  const backend = await import("./backend/gpupaper.ts");
-  let outcomes;
-  if (command === "build") {
-    outcomes = await backend.buildGpupaperBatch(paths);
-  } else {
-    outcomes = await backend.buildExperimentalBatch(paths);
-  }
+  const backend = await import("./backend/build.ts");
+  const outcomes = await backend.buildBatch(paths);
   let failures = 0;
   for (const outcome of outcomes) {
     if (outcome.status === "failed") {

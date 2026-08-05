@@ -304,11 +304,18 @@ function canonicalType(
 
 function requireDirectAbiType(type: BlotAbiType, position: string): void {
   if (
+    type.kind === "unit" ||
     type.kind === "signed-integer-64" || type.kind === "float-32" ||
     type.kind === "float-64" || type.kind === "boolean"
   ) return;
+  if (type.kind === "record") {
+    for (const field of type.fields) {
+      requireDirectAbiType(field.type, `${position}.${field.name}`);
+    }
+    return;
+  }
   throw new TypeError(
-    `${position} uses ${type.kind}; the direct Blot ABI 1 path currently admits only scalar values`,
+    `${position} uses ${type.kind}; the direct Blot ABI 1 path currently admits only flat values`,
   );
 }
 

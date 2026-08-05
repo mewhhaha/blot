@@ -28,6 +28,7 @@ import {
   type TypedCoreModule,
 } from "../core/computation.ts";
 import { BlotError, expect, fail } from "../diagnostic.ts";
+import { reify } from "../check/bridge.ts";
 import {
   asTuple,
   childEnv,
@@ -40,6 +41,7 @@ import {
   tupleOf,
   UNIT,
   type Value,
+  withInferredType,
 } from "./value.ts";
 import { makeEffect, PRIMITIVE_VALUES, PRIMITIVES } from "./primitives.ts";
 
@@ -684,14 +686,18 @@ function* evaluateCoreExpression(
       );
       return project(target, expression.name, expression.span);
     }
-    case "lambda":
-      return {
+    case "lambda": {
+      const closure: Value = {
         tag: "core-closure",
         parameter: expression.parameter,
         body: expression.body,
         env,
         self: null,
       };
+      const inferred = reify(expression.type);
+      if (inferred === null) return closure;
+      return withInferredType(closure, inferred);
+    }
     case "array": {
       const elements: Value[] = [];
       for (const element of expression.elements) {

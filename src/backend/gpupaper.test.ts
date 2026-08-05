@@ -1,4 +1,4 @@
-import { buildGpupaperBatch } from "./gpupaper.ts";
+import { buildBatch } from "./build.ts";
 
 Deno.test("Blot gpupaper batches admitted modules around a local source failure", async () => {
   const paths = [
@@ -9,7 +9,7 @@ Deno.test("Blot gpupaper batches admitted modules around a local source failure"
     ).pathname,
     new URL("../../examples/arithmetic.blot", import.meta.url).pathname,
   ];
-  const outcomes = await buildGpupaperBatch(paths);
+  const outcomes = await buildBatch(paths);
 
   assertEquals(
     outcomes.map((outcome) => outcome.status).join(","),
@@ -31,7 +31,7 @@ Deno.test("Blot gpupaper artifact reuse owns its published bytes", async () => {
   const path = `${await Deno.makeTempDir({ dir: "/tmp" })}/stable.blot`;
   await Deno.writeTextFile(path, "return 41;");
 
-  const [first] = await buildGpupaperBatch([path]);
+  const [first] = await buildBatch([path]);
   if (first === undefined || first.status !== "built") {
     throw new Error("initial stable module did not compile");
   }
@@ -42,7 +42,7 @@ Deno.test("Blot gpupaper artifact reuse owns its published bytes", async () => {
   first.manifestBytes[0] = 0;
   (first.capabilities as string[]).push("caller-mutation");
 
-  const [repeated] = await buildGpupaperBatch([path]);
+  const [repeated] = await buildBatch([path]);
   if (repeated === undefined || repeated.status !== "built") {
     throw new Error("repeated stable module did not compile");
   }
@@ -60,20 +60,20 @@ Deno.test("Blot gpupaper artifact reuse owns its published bytes", async () => {
 Deno.test("Blot gpupaper artifact reuse misses after a direct edit", async () => {
   const path = `${await Deno.makeTempDir({ dir: "/tmp" })}/direct-edit.blot`;
   await Deno.writeTextFile(path, "return 41;");
-  const [first] = await buildGpupaperBatch([path]);
+  const [first] = await buildBatch([path]);
   if (first === undefined || first.status !== "built") {
     throw new Error("initial direct-edit module did not compile");
   }
 
   await Deno.writeTextFile(path, "return 42;");
-  const [edited] = await buildGpupaperBatch([path]);
+  const [edited] = await buildBatch([path]);
   if (edited === undefined || edited.status !== "built") {
     throw new Error("edited direct-edit module did not compile");
   }
   assertEquals(edited.artifactSource, "compiled");
   assertByteArraysDiffer(edited.wasm, first.wasm);
 
-  const [repeated] = await buildGpupaperBatch([path]);
+  const [repeated] = await buildBatch([path]);
   if (repeated === undefined || repeated.status !== "built") {
     throw new Error("repeated edited module did not compile");
   }
@@ -93,7 +93,7 @@ Deno.test("Blot gpupaper artifact reuse misses after a dependency edit", async (
     root,
     'const dependency = @import "./dependency.blot"; let application = dependency { .base = 41; }; return application.run;',
   );
-  const [first] = await buildGpupaperBatch([root]);
+  const [first] = await buildBatch([root]);
   if (first === undefined || first.status !== "built") {
     let cause = "missing outcome";
     if (first !== undefined) cause = String(first.cause);
@@ -106,7 +106,7 @@ Deno.test("Blot gpupaper artifact reuse misses after a dependency edit", async (
     dependency,
     "module capabilities; return { .run = 42; };",
   );
-  const [edited] = await buildGpupaperBatch([root]);
+  const [edited] = await buildBatch([root]);
   if (edited === undefined || edited.status !== "built") {
     throw new Error("edited importing module did not compile");
   }
@@ -120,7 +120,7 @@ Deno.test("Blot gpupaper compiles only misses in stable mixed batches", async ()
   const editedPath = `${directory}/edited.blot`;
   await Deno.writeTextFile(stablePath, "return 1;");
   await Deno.writeTextFile(editedPath, "return 2;");
-  const warmed = await buildGpupaperBatch([stablePath, editedPath]);
+  const warmed = await buildBatch([stablePath, editedPath]);
   assertEquals(
     warmed.map((outcome) => {
       if (outcome.status === "built") return outcome.artifactSource;
@@ -130,7 +130,7 @@ Deno.test("Blot gpupaper compiles only misses in stable mixed batches", async ()
   );
 
   await Deno.writeTextFile(editedPath, "return 3;");
-  const mixed = await buildGpupaperBatch([editedPath, stablePath]);
+  const mixed = await buildBatch([editedPath, stablePath]);
   assertEquals(
     mixed.map((outcome) => outcome.path).join(","),
     [
@@ -150,13 +150,13 @@ Deno.test("Blot gpupaper compiles only misses in stable mixed batches", async ()
 Deno.test("Blot gpupaper does not cache a failed source revision", async () => {
   const path = `${await Deno.makeTempDir({ dir: "/tmp" })}/repaired.blot`;
   await Deno.writeTextFile(path, "return ;");
-  const [failed] = await buildGpupaperBatch([path]);
+  const [failed] = await buildBatch([path]);
   let failedStatus: string | undefined;
   if (failed !== undefined) failedStatus = failed.status;
   assertEquals(failedStatus, "failed");
 
   await Deno.writeTextFile(path, "return 42;");
-  const [repaired] = await buildGpupaperBatch([path]);
+  const [repaired] = await buildBatch([path]);
   if (repaired === undefined || repaired.status !== "built") {
     throw new Error("repaired module did not compile");
   }

@@ -1752,6 +1752,12 @@ fn collect_rebound_names(
             }
             continue;
         }
+        if cst.rule_name(statement)? == "rebinding"
+            && token_text(cst, required(cst, statement, "arrow")?)? == "<-"
+        {
+            shadowed.push(token_text(cst, required(cst, statement, "name")?)?);
+            continue;
+        }
         if cst.rule_name(statement)? != "iteration" {
             for nested in nested_statement_lists(cst, statement)? {
                 collect_rebound_names(cst, &nested, &shadowed, rebound)?;

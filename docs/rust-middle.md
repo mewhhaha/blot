@@ -1,7 +1,7 @@
-# Full Rust/WebAssembly Compiler
+# Rust/WebAssembly Compiler
 
-Blot has an opt-in compiler that runs from source text to caller-facing
-WebAssembly inside one Rust-built WebAssembly instance:
+Blot compiles source text to caller-facing WebAssembly inside one Rust-built
+WebAssembly instance:
 
 ```text
 source bundle -> embedded Baba DFA/island plan -> compact CST -> fixity -> AST
@@ -15,11 +15,11 @@ translates its lexer and island tables into checked-in typed Rust slices. The
 shipped compiler executes those tables directly: it does not parse JSON, load
 Baba at runtime, or implement a second grammar.
 
-The alternative also owns its final backend. It builds the same ABI 1 manifest,
-canonical constant layouts, host imports, allocator shell, post-return protocol,
-and `blot:abi` custom section as the TypeScript/gpupaper path. It uses the
-pinned `wasm-encoder` crate to encode the standardized binary format. No
-compiler command initializes WebGPU.
+The compiler also owns its final backend. One `PublicLayout` builds the ABI 1
+manifest, canonical layouts, host imports, allocator shell, post-return
+protocol, and `blot:abi` custom section. One Runtime-HIR emitter uses the pinned
+`wasm-encoder` crate to encode the standardized binary format. No compiler
+command initializes WebGPU.
 
 The checked-in compiler distribution consists of
 [`generated/rust-middle/compiler.wasm`](../generated/rust-middle/compiler.wasm)
@@ -30,30 +30,30 @@ Cargo is needed to rebuild or verify them, not to compile a Blot program.
 ## Use it
 
 ```bash
-deno task blot build-experimental examples/storage.blot
-just build-experimental examples/storage.blot
+deno task blot build examples/storage.blot
+just build examples/storage.blot
 ```
 
-`build-experimental` writes the same `.wasm` and `.wasm.json` outputs as
-`build`. Library consumers can create an `ExperimentalCompiler` from the package
-root. The TypeScript host performs filesystem reads, path and package
-resolution, and module-capsule hash and graph validation. It passes source or a
-validated portable AST to the resident Rust session, which owns compiler state.
-Each source module retains its UTF-16 text and dependency-aware token stream; an
-edit reuses the unaffected token prefix and runs the lexer from the first token
-whose decision observed the edited position. Island parsing and CST
-materialisation then run over the resulting complete token stream.
+Library consumers create a `Compiler` from the package root. The TypeScript host
+performs filesystem reads, path and package resolution, and module-capsule hash
+and graph validation. It passes source or a validated portable AST to the
+resident Rust session, which owns compiler state. Each source module retains its
+UTF-16 text and dependency-aware token stream; an edit reuses the unaffected
+token prefix and runs the lexer from the first token whose decision observed the
+edited position. Island parsing and CST materialisation then run over the
+resulting complete token stream.
 
-Lowering is the semantic revision boundary. If an edit produces the same AST,
+Closing is the semantic revision boundary. If an edit produces the same AST,
 including source spans, the session keeps its compile-time result, inferred
-interface, ownership and safety certificates, Runtime HIR, and final artifact. A
-changed AST, resolved import, or included file invalidates all of those for the
-module and its transitive importers. `prepare` and `compile` consequently share
-one cached Runtime HIR instead of staging the module twice.
+interface, ownership and safety certificates, `ClosedProgram`, and final
+artifact. A changed AST, resolved import, or included file invalidates all of
+those for the module and its transitive importers. `prepare` and `compile`
+consequently share one cached `ClosedProgram` instead of staging or planning the
+module twice.
 
-## Production gates
+## Release gates
 
-The alternative compiler is checked at each observable boundary:
+The compiler is checked at each observable boundary:
 
 - its generated schema and embedded frontend plan must match `parser.plan`;
 - Cargo formatting, clippy with warnings denied, and Rust tests pass;
@@ -64,8 +64,11 @@ The alternative compiler is checked at each observable boundary:
 - 54 repository programs have equal staged phases and ABI manifests, while the
   same eight programs are rejected by both implementations;
 - all 61 examples compile to valid Wasm with byte-identical ABI manifests;
-- 330 decoded runtime exports and their host-effect observations agree with the
-  independent language oracle;
+- 271 decoded runtime exports and their host-effect observations agree with the
+  independent language oracle across 56 programs;
+- the five programs outside the bounded TypeScript oracle are named explicitly
+  by the differential gate and still compile and execute through the production
+  compiler;
 - the terminal application residualizes a text-returning host effect, agrees on
   both control-flow branches and non-ASCII text, and traps malformed UTF-8 at
   the canonical ABI boundary;

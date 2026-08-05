@@ -596,7 +596,7 @@ export async function prepareRustGpupaperHir(
   return await (await sharedCompiler).prepare(path);
 }
 
-export async function compileRustGpupaperArtifact(
+export async function compileRustArtifact(
   path: string,
 ): Promise<RustCompilerArtifact> {
   if (sharedCompiler === undefined) {

@@ -9,7 +9,7 @@ import {
 } from "./package_format.ts";
 import { load } from "./load.ts";
 import { evaluateFile } from "./run.ts";
-import { buildGpupaperBatch } from "./backend/gpupaper.ts";
+import { buildBatch } from "./backend/build.ts";
 import { RustMiddleCompiler } from "./backend/rust_middle.ts";
 
 Deno.test("a built package loads its bundled module graph after source removal", async () => {
@@ -49,7 +49,7 @@ Deno.test("a built package loads its bundled module graph after source removal",
     await evaluateFile(entryPath, { write: () => {} }),
     { tag: "int", value: 41n },
   );
-  const compiled = await buildGpupaperBatch([entryPath]);
+  const compiled = await buildBatch([entryPath]);
   assertEquals(compiled[0]?.status, "built");
   await assertRustCompiles(entryPath);
 });

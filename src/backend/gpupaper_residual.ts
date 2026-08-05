@@ -48,6 +48,7 @@ type ResidualCase =
 
 type ResidualValue =
   | { readonly kind: "static"; readonly value: Value }
+  | { readonly kind: "empty-store"; elementType?: TypeId }
   | {
     readonly kind: "dynamic";
     readonly value: ValueId;
@@ -55,7 +56,12 @@ type ResidualValue =
     readonly meaning?:
       | "ordering"
       | { readonly kind: "integer-ordering"; readonly right: ValueId }
-      | { readonly kind: "sum"; readonly cases: readonly string[] };
+      | {
+        readonly kind: "sum";
+        readonly cases: readonly string[];
+        readonly payloadTypes: readonly TypeId[];
+        readonly wrappedPayloads: readonly boolean[];
+      };
   }
   | { readonly kind: "tuple"; readonly elements: readonly ResidualValue[] }
   | {
@@ -148,6 +154,10 @@ class ResidualHirBuilder {
     Map<string, { readonly signature: number; readonly key: string }>
   >();
   readonly #checked: CheckResult;
+  readonly #sourceHandlers: {
+    readonly effect: number;
+    readonly handler: ResidualValue;
+  }[] = [];
   readonly #source: string;
   readonly #typeByName = new Map<string, TypeId>();
   #currentBlock = 0;
@@ -249,6 +259,9 @@ class ResidualHirBuilder {
       return value;
     }
     if (expr.tag === "intrinsic") {
+      if (expr.name === "@array.empty") {
+        return { kind: "empty-store" };
+      }
       const primitive = PRIMITIVES.get(expr.name);
       if (primitive === undefined) {
         throw new TypeError(
@@ -263,11 +276,31 @@ class ResidualHirBuilder {
       };
     }
     if (expr.tag === "apply") {
+      if (
+        expr.fn.tag === "intrinsic" && expr.fn.name === "@handle" &&
+        expr.arg.tag === "tuple" && expr.arg.elements.length === 3
+      ) {
+        return this.handleSourceEffect(
+          expr.arg.elements,
+          environment,
+          expr.span,
+        );
+      }
       const fn = this.evaluate(expr.fn, environment);
       const argument = this.evaluate(expr.arg, environment);
       return this.apply(fn, argument, expr.span);
     }
     if (expr.tag === "intrinsic-apply") {
+      if (
+        expr.name === "@handle" && expr.args.length === 1 &&
+        expr.args[0].tag === "tuple" && expr.args[0].elements.length === 3
+      ) {
+        return this.handleSourceEffect(
+          expr.args[0].elements,
+          environment,
+          expr.span,
+        );
+      }
       const primitive = PRIMITIVES.get(expr.name);
       if (primitive === undefined) {
         throw this.outside(expr.span, `intrinsic ${expr.name}`);
@@ -500,7 +533,12 @@ class ResidualHirBuilder {
         );
       }
       if (value.tag === "operation") {
-        return this.hostCall(value, argument, span);
+        if (value.effect.tag !== "effect") {
+          throw this.outside(span, "operation without an effect");
+        }
+        return value.effect.host
+          ? this.hostCall(value, argument, span)
+          : this.sourceCall(value, argument, span);
       }
       if (value.tag === "tag" && value.payload === null) {
         return { kind: "tag", name: value.name, payload: argument };
@@ -568,6 +606,85 @@ class ResidualHirBuilder {
       return applied[1];
     }
     if (fn.name === "@type.open") return applied[0];
+    if (fn.name === "@linear.own" || fn.name === "@linear.borrow") {
+      return applied[0];
+    }
+    if (fn.name === "@array.len") {
+      const store = this.store(applied[0], span, fn.name);
+      const result = this.nextValue();
+      this.current().operations.push({
+        kind: "store.length",
+        result,
+        type: this.type("signed-integer-64"),
+        operands: [store.value],
+        ownership: "plain",
+        span: this.span(span),
+      });
+      return {
+        kind: "dynamic",
+        value: result,
+        type: this.type("signed-integer-64"),
+      };
+    }
+    if (fn.name === "@array.get") {
+      const store = this.store(applied[0], span, fn.name);
+      const storeType = this.types[store.type];
+      if (storeType.kind !== "store") {
+        throw this.outside(span, `${fn.name} over a non-store`);
+      }
+      const index = this.integer(applied[1], span, fn.name);
+      const result = this.nextValue();
+      this.current().operations.push({
+        kind: "store.read",
+        result,
+        type: storeType.elementType,
+        operands: [store.value, index.value],
+        ownership: this.ownership(storeType.elementType),
+        span: this.span(span),
+      });
+      return { kind: "dynamic", value: result, type: storeType.elementType };
+    }
+    if (fn.name === "@array.push") {
+      const elementType = this.typeForResidualValue(applied[1], span);
+      if (applied[0].kind === "empty-store") {
+        applied[0].elementType = elementType;
+      }
+      const store = this.store(applied[0], span, fn.name);
+      const storeType = this.types[store.type];
+      if (storeType.kind !== "store" || storeType.elementType !== elementType) {
+        throw this.outside(span, `${fn.name} element type disagreement`);
+      }
+      const length = this.nextValue();
+      this.current().operations.push({
+        kind: "store.length",
+        result: length,
+        type: this.type("signed-integer-64"),
+        operands: [store.value],
+        ownership: "plain",
+        span: this.span(span),
+      });
+      const one = this.constant(1n, this.type("signed-integer-64"), span);
+      const grownLength = this.operation(
+        "scalar",
+        this.type("signed-integer-64"),
+        [length, one.value],
+        span,
+        undefined,
+        "add",
+      );
+      const element = this.materialize(applied[1], elementType, span);
+      const result = this.nextValue();
+      this.current().operations.push({
+        kind: "store.grow",
+        result,
+        type: store.type,
+        operands: [store.value, grownLength.value, element.value],
+        ownership: "owned",
+        update: "persistent",
+        span: this.span(span),
+      });
+      return { kind: "dynamic", value: result, type: store.type };
+    }
     const binaryIntegerOperators = new Map<string, BlotRuntimeScalarOperator>([
       ["@int.add", "add"],
       ["@int.sub", "subtract"],
@@ -731,6 +848,15 @@ class ResidualHirBuilder {
     environment: ResidualEnvironment,
   ): ResidualValue {
     const target = this.evaluate(expr.target, environment);
+    if (target.kind === "tag") {
+      for (const arm of expr.arms) {
+        const scope = this.environment(environment, null);
+        if (this.match(arm.pattern, target, scope)) {
+          return this.evaluate(arm.body, scope);
+        }
+      }
+      throw this.outside(expr.span, "non-exhaustive known-constructor case");
+    }
     const staticTarget = this.staticValue(target);
     if (staticTarget !== undefined) {
       for (const arm of expr.arms) {
@@ -751,7 +877,7 @@ class ResidualHirBuilder {
       target.kind === "dynamic" && typeof target.meaning === "object" &&
       target.meaning.kind === "sum"
     ) {
-      return this.sumCase(expr, target, target.meaning.cases, environment);
+      return this.sumCase(expr, target, target.meaning, environment);
     }
     if (
       target.kind === "dynamic" &&
@@ -1031,9 +1157,51 @@ class ResidualHirBuilder {
   private sumCase(
     expr: ResidualCase,
     target: Extract<ResidualValue, { kind: "dynamic" }>,
-    cases: readonly string[],
+    sum: {
+      readonly cases: readonly string[];
+      readonly payloadTypes: readonly TypeId[];
+      readonly wrappedPayloads: readonly boolean[];
+    },
     environment: ResidualEnvironment,
   ): ResidualValue {
+    const cases = sum.cases;
+    if (cases.length === 1) {
+      const arm = expr.arms.find((candidate) =>
+        candidate.pattern.tag === "constructor" &&
+        candidate.pattern.name === cases[0]
+      );
+      if (arm === undefined) {
+        throw this.outside(expr.span, "non-exhaustive dynamic sum case");
+      }
+      const payload = this.nextValue();
+      this.current().operations.push({
+        kind: "sum.payload",
+        result: payload,
+        type: sum.payloadTypes[0],
+        operands: [target.value],
+        ownership: this.ownership(sum.payloadTypes[0]),
+        case: 0,
+        span: this.span(expr.span),
+      });
+      const scope = this.environment(environment, null);
+      const tagged: ResidualValue = {
+        kind: "tag",
+        name: cases[0],
+        payload: sum.wrappedPayloads[0]
+          ? {
+            kind: "shape",
+            fields: new Map([[
+              "value",
+              { kind: "dynamic", value: payload, type: sum.payloadTypes[0] },
+            ]]),
+          }
+          : { kind: "dynamic", value: payload, type: sum.payloadTypes[0] },
+      };
+      if (!this.match(arm.pattern, tagged, scope)) {
+        throw this.outside(arm.pattern.span, `sum pattern ${cases[0]}`);
+      }
+      return this.evaluate(arm.body, scope);
+    }
     if (cases.length !== 2) {
       throw this.outside(expr.span, "sum case with more than two constructors");
     }
@@ -1082,7 +1250,7 @@ class ResidualHirBuilder {
       this.current().operations.push({
         kind: "sum.payload",
         result: payload,
-        type: this.type("unit"),
+        type: sum.payloadTypes[index],
         operands: [target.value],
         ownership: "plain",
         case: index,
@@ -1091,14 +1259,20 @@ class ResidualHirBuilder {
       const tagged: ResidualValue = {
         kind: "tag",
         name: cases[index],
-        payload: {
-          kind: "shape",
-          fields: new Map([["value", {
+        payload: sum.wrappedPayloads[index]
+          ? {
+            kind: "shape",
+            fields: new Map([["value", {
+              kind: "dynamic",
+              value: payload,
+              type: sum.payloadTypes[index],
+            }]]),
+          }
+          : {
             kind: "dynamic",
             value: payload,
-            type: this.type("unit"),
-          }]]),
-        },
+            type: sum.payloadTypes[index],
+          },
       };
       const scope = this.environment(environment, null);
       const arm = arms[index]!;
@@ -1160,23 +1334,120 @@ class ResidualHirBuilder {
     readonly type: TypeId;
     readonly meaning?: Extract<ResidualValue, { kind: "dynamic" }>["meaning"];
   } {
-    if (consequent.kind === "tag" && alternate.kind === "tag") {
-      const cases = [...new Set([consequent.name, alternate.name])];
-      const type = this.sumType(cases);
+    if (
+      consequent.kind === "empty-store" && alternate.kind === "dynamic" &&
+      this.types[alternate.type].kind === "store"
+    ) {
+      const selected = this.types[alternate.type];
+      if (selected.kind !== "store") {
+        throw new Error("a checked store type changed while joining branches");
+      }
+      this.#currentBlock = consequenceEnd;
+      return {
+        consequent: this.emptyStore(selected.elementType, span),
+        alternate,
+        type: alternate.type,
+      };
+    }
+    if (
+      consequent.kind === "dynamic" && alternate.kind === "empty-store" &&
+      this.types[consequent.type].kind === "store"
+    ) {
+      const selected = this.types[consequent.type];
+      if (selected.kind !== "store") {
+        throw new Error("a checked store type changed while joining branches");
+      }
+      this.#currentBlock = alternateEnd;
+      return {
+        consequent,
+        alternate: this.emptyStore(selected.elementType, span),
+        type: consequent.type,
+      };
+    }
+    const consequentTag = this.residualTag(consequent);
+    const alternateTag = this.residualTag(alternate);
+    if (
+      consequentTag !== null && alternate.kind === "dynamic" &&
+      typeof alternate.meaning === "object" &&
+      alternate.meaning.kind === "sum" &&
+      alternate.meaning.cases.includes(consequentTag.name)
+    ) {
       this.#currentBlock = consequenceEnd;
       const consequentValue = this.materializeTag(
+        consequentTag,
+        alternate.type,
+        alternate.meaning.cases,
+        alternate.meaning.wrappedPayloads,
+        span,
+      );
+      return {
+        consequent: consequentValue,
+        alternate,
+        type: alternate.type,
+        meaning: alternate.meaning,
+      };
+    }
+    if (
+      consequent.kind === "dynamic" && alternateTag !== null &&
+      typeof consequent.meaning === "object" &&
+      consequent.meaning.kind === "sum" &&
+      consequent.meaning.cases.includes(alternateTag.name)
+    ) {
+      this.#currentBlock = alternateEnd;
+      const alternateValue = this.materializeTag(
+        alternateTag,
+        consequent.type,
+        consequent.meaning.cases,
+        consequent.meaning.wrappedPayloads,
+        span,
+      );
+      return {
         consequent,
+        alternate: alternateValue,
+        type: consequent.type,
+        meaning: consequent.meaning,
+      };
+    }
+    if (consequentTag !== null && alternateTag !== null) {
+      const cases = [...new Set([consequentTag.name, alternateTag.name])];
+      const tagged = [consequentTag, alternateTag];
+      const wrappedPayloads = cases.map((name) => {
+        const selected = tagged.find((value) => value.name === name)!;
+        return selected.payload.kind === "shape" &&
+          selected.payload.fields.has("value");
+      });
+      const payloadTypes = cases.map((name) => {
+        const selected = tagged.find((value) => value.name === name)!;
+        const payload = selected.payload.kind === "shape"
+          ? selected.payload.fields.get("value")
+          : selected.payload;
+        if (payload === undefined) {
+          throw this.outside(span, `tag ${name} without value payload`);
+        }
+        return this.typeForResidualValue(payload, span);
+      });
+      const type = this.sumType(cases, payloadTypes);
+      this.#currentBlock = consequenceEnd;
+      const consequentValue = this.materializeTag(
+        consequentTag,
         type,
         cases,
+        wrappedPayloads,
         span,
       );
       this.#currentBlock = alternateEnd;
-      const alternateValue = this.materializeTag(alternate, type, cases, span);
+      const alternateValue = this.materializeTag(
+        alternateTag,
+        type,
+        cases,
+        wrappedPayloads,
+        span,
+      );
       return {
         consequent: consequentValue,
         alternate: alternateValue,
         type,
-        meaning: { kind: "sum", cases },
+        meaning: { kind: "sum", cases, payloadTypes, wrappedPayloads },
       };
     }
     if (consequent.kind === "shape" && alternate.kind === "shape") {
@@ -1208,10 +1479,31 @@ class ResidualHirBuilder {
     };
   }
 
+  private residualTag(
+    value: ResidualValue,
+  ): Extract<ResidualValue, { readonly kind: "tag" }> | null {
+    if (value.kind === "tag") return value;
+    const known = this.staticValue(value);
+    if (
+      known?.tag !== "tag" ||
+      (known.payload === null &&
+        (known.name === "True" || known.name === "False"))
+    ) return null;
+    return {
+      kind: "tag",
+      name: known.name,
+      payload: {
+        kind: "static",
+        value: known.payload ?? { tag: "unit" },
+      },
+    };
+  }
+
   private materializeTag(
     tagged: Extract<ResidualValue, { kind: "tag" }>,
     type: TypeId,
     cases: readonly string[],
+    wrappedPayloads: readonly boolean[],
     span: Span,
   ): Extract<ResidualValue, { kind: "dynamic" }> {
     const payload = tagged.payload.kind === "shape"
@@ -1220,10 +1512,16 @@ class ResidualHirBuilder {
     if (payload === undefined) {
       throw this.outside(span, `tag ${tagged.name} without value payload`);
     }
-    const dynamicPayload = this.dynamic(payload);
-    if (this.types[dynamicPayload.type].kind !== "unit") {
-      throw this.outside(span, `non-Unit tag payload for ${tagged.name}`);
+    const selectedCase = cases.indexOf(tagged.name);
+    const selectedType = this.types[type];
+    if (selectedType.kind !== "sum" || selectedCase < 0) {
+      throw this.outside(span, `tag ${tagged.name} outside its sum`);
     }
+    const dynamicPayload = this.materialize(
+      payload,
+      selectedType.cases[selectedCase].payloadType,
+      span,
+    );
     const result = this.nextValue();
     this.current().operations.push({
       kind: "sum.make",
@@ -1231,14 +1529,21 @@ class ResidualHirBuilder {
       type,
       operands: [dynamicPayload.value],
       ownership: "plain",
-      case: cases.indexOf(tagged.name),
+      case: selectedCase,
       span: this.span(span),
     });
     return {
       kind: "dynamic",
       value: result,
       type,
-      meaning: { kind: "sum", cases },
+      meaning: {
+        kind: "sum",
+        cases,
+        payloadTypes: selectedType.cases.map((candidate) =>
+          candidate.payloadType
+        ),
+        wrappedPayloads,
+      },
     };
   }
 
@@ -1292,11 +1597,105 @@ class ResidualHirBuilder {
     return { kind: "dynamic", value: result, type: resultType };
   }
 
+  private handleSourceEffect(
+    arguments_: readonly ResidualExpression[],
+    environment: ResidualEnvironment,
+    span: Span,
+  ): ResidualValue {
+    const selected = this.evaluate(arguments_[0], environment);
+    if (selected.kind !== "static") {
+      throw this.outside(span, "dynamic handled effect");
+    }
+    let effect = selected.value;
+    while (effect.tag === "extended") effect = effect.inner;
+    if (effect.tag !== "effect" || effect.host) {
+      throw this.outside(span, "handled value that is not a source effect");
+    }
+
+    const computation = this.evaluate(arguments_[1], environment);
+    const handler = this.evaluate(arguments_[2], environment);
+    if (handler.kind !== "shape") {
+      throw this.outside(span, "dynamic source effect handler");
+    }
+
+    this.#sourceHandlers.push({ effect: effect.id, handler });
+    let result: ResidualValue;
+    try {
+      result = this.apply(
+        computation,
+        { kind: "static", value: { tag: "unit" } },
+        span,
+      );
+    } finally {
+      this.#sourceHandlers.pop();
+    }
+
+    const returnClause = handler.fields.get("return");
+    return returnClause === undefined
+      ? result
+      : this.apply(returnClause, result, span);
+  }
+
+  private sourceCall(
+    operation: Extract<Value, { readonly tag: "operation" }>,
+    argument: ResidualValue,
+    span: Span,
+  ): ResidualValue {
+    if (operation.effect.tag !== "effect") {
+      throw this.outside(span, "source operation without an effect");
+    }
+    let index = this.#sourceHandlers.length - 1;
+    while (
+      index >= 0 &&
+      this.#sourceHandlers[index].effect !== operation.effect.id
+    ) index -= 1;
+    if (index < 0) {
+      throw this.outside(
+        span,
+        `unhandled source effect ${operation.effect.name}.${operation.name}`,
+      );
+    }
+
+    const selected = this.#sourceHandlers[index];
+    const clause = this.project(selected.handler, operation.name, span);
+    const resumed = `resumed$${span.start}$${this.#nextValue}`;
+    const resume: ResidualValue = {
+      kind: "closure",
+      parameter: {
+        tag: "name",
+        name: resumed,
+        qualifier: "affine",
+        span,
+      },
+      body: { tag: "var", name: resumed, span },
+      environment: this.environment(null, null),
+      self: null,
+    };
+
+    this.#sourceHandlers.splice(index, 1);
+    try {
+      return this.apply(
+        clause,
+        { kind: "tuple", elements: [argument, resume] },
+        span,
+      );
+    } finally {
+      this.#sourceHandlers.splice(index, 0, selected);
+    }
+  }
+
   private project(
     value: ResidualValue,
     name: string,
     span: Span,
   ): ResidualValue {
+    if (value.kind === "tuple") {
+      const index = Number(name);
+      if (Number.isSafeInteger(index) && index >= 0) {
+        const element = value.elements[index];
+        if (element !== undefined) return element;
+      }
+    }
     if (value.kind === "shape") {
       const field = value.fields.get(name);
       if (field !== undefined) return field;
@@ -1326,7 +1725,9 @@ class ResidualHirBuilder {
         type: type.fields[field].type,
       };
     }
-    if (value.kind !== "static") throw this.outside(span, "dynamic projection");
+    if (value.kind !== "static") {
+      throw this.outside(span, `dynamic projection from ${value.kind}`);
+    }
     let target = value.value;
     while (target.tag === "extended") {
       const member = target.members.get(name);
@@ -1425,6 +1826,9 @@ class ResidualHirBuilder {
     value: ResidualValue,
   ): Extract<ResidualValue, { kind: "dynamic" }> {
     if (value.kind === "dynamic") return value;
+    if (value.kind === "empty-store" && value.elementType !== undefined) {
+      return this.emptyStore(value.elementType, { start: 0, end: 0 });
+    }
     const staticValue = this.staticValue(value);
     if (staticValue === undefined) {
       throw new TypeError(
@@ -1507,6 +1911,11 @@ class ResidualHirBuilder {
 
     let fields: ReadonlyMap<string, ResidualValue> | undefined;
     if (value.kind === "shape") fields = value.fields;
+    if (value.kind === "tuple") {
+      fields = new Map(
+        value.elements.map((element, index) => [String(index), element]),
+      );
+    }
     if (value.kind === "static" && value.value.tag === "shape") {
       fields = new Map(
         [...value.value.fields].map(([name, field]) => [
@@ -1539,12 +1948,25 @@ class ResidualHirBuilder {
 
   private typeForResidualValue(value: ResidualValue, span: Span): TypeId {
     if (value.kind === "dynamic") return value.type;
+    if (value.kind === "empty-store" && value.elementType !== undefined) {
+      return this.storeType(value.elementType);
+    }
     if (value.kind === "shape") {
       const fields = new Map<string, TypeId>();
       for (const [name, field] of value.fields) {
         fields.set(name, this.typeForResidualValue(field, span));
       }
       return this.productTypeFromRuntimeFields(fields);
+    }
+    if (value.kind === "tuple") {
+      return this.productTypeFromRuntimeFields(
+        new Map(
+          value.elements.map((element, index) => [
+            String(index),
+            this.typeForResidualValue(element, span),
+          ]),
+        ),
+      );
     }
     const staticValue = this.staticValue(value);
     if (staticValue === undefined) {
@@ -2134,6 +2556,54 @@ class ResidualHirBuilder {
     return type;
   }
 
+  private storeType(elementType: TypeId): TypeId {
+    const key = `store:${elementType}`;
+    const existing = this.#typeByName.get(key);
+    if (existing !== undefined) return existing;
+    const type = this.types.length;
+    this.#typeByName.set(key, type);
+    this.types.push({ kind: "store", elementType });
+    return type;
+  }
+
+  private emptyStore(
+    elementType: TypeId,
+    span: Span,
+  ): Extract<ResidualValue, { readonly kind: "dynamic" }> {
+    const type = this.storeType(elementType);
+    const result = this.nextValue();
+    this.current().operations.push({
+      kind: "store.empty",
+      result,
+      type,
+      operands: [],
+      ownership: "owned",
+      span: this.span(span),
+    });
+    return { kind: "dynamic", value: result, type };
+  }
+
+  private store(
+    value: ResidualValue,
+    span: Span,
+    primitive: string,
+  ): Extract<ResidualValue, { readonly kind: "dynamic" }> {
+    if (value.kind === "empty-store") {
+      if (value.elementType === undefined) {
+        throw this.outside(
+          span,
+          `${primitive} cannot infer an empty Store type`,
+        );
+      }
+      return this.emptyStore(value.elementType, span);
+    }
+    const dynamic = this.dynamic(value);
+    if (this.types[dynamic.type].kind !== "store") {
+      throw this.outside(span, `${primitive} over a non-store`);
+    }
+    return dynamic;
+  }
+
   private ownership(type: TypeId): "plain" | "owned" {
     const kind = this.types[type].kind;
     if (kind === "text" || kind === "product") return "owned";
@@ -2203,17 +2673,24 @@ class ResidualHirBuilder {
     return this.simdType(found[0], found[1]);
   }
 
-  private sumType(cases: readonly string[]): TypeId {
-    const key = `sum:${cases.join("|")}`;
+  private sumType(
+    cases: readonly string[],
+    payloadTypes: readonly TypeId[],
+  ): TypeId {
+    const key = `sum:${
+      cases.map((name, index) => `${name}:${payloadTypes[index]}`).join("|")
+    }`;
     const existing = this.#typeByName.get(key);
     if (existing !== undefined) return existing;
     const type = this.types.length;
-    const unit = this.type("unit");
     this.#typeByName.set(key, type);
     this.types.push({
       kind: "sum",
       name: `residual$${type}`,
-      cases: cases.map((name) => ({ name, payloadType: unit })),
+      cases: cases.map((name, index) => ({
+        name,
+        payloadType: payloadTypes[index],
+      })),
     });
     return type;
   }

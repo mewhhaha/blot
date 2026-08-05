@@ -67,8 +67,7 @@ Each translation needs preservation plus simulation:
 | surface to AST                     | surface sugar and compiler-local control tags | scope, order, and control targets agree                  |
 | staged AST to residual program     | compile-time-only values                      | erasure cannot change a demanded observation             |
 | specialized program to Runtime HIR | structural polymorphism and proof terms       | every residual value has a related closed representation |
-| Runtime HIR to Core                | Blot-specific node organization               | effects, Store ownership, and nominal layouts agree      |
-| Core to Wasm                       | administrative machine state                  | returns, requests, traps, and divergence agree           |
+| Runtime HIR to Wasm                | administrative machine state                  | returns, requests, traps, and divergence agree           |
 | private value to ABI               | private allocation identity                   | caller-visible values and ownership agree                |
 
 ## 5. Trusted base
@@ -79,8 +78,7 @@ The current trusted base contains:
 - the generated Baba plan schema and Baba CPU frontend contract;
 - compile-time input resolution;
 - certificate replay and Runtime HIR validation;
-- gpupaper Core validation and emitter correctness, or the corresponding direct
-  Rust emitter;
+- the direct Rust emitter and canonical public-layout implementation;
 - the WebAssembly Core engine; and
 - the caller's conformance to the declared ABI.
 

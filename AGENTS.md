@@ -8,16 +8,15 @@ frontend profile, and compiles without requiring WebGPU.
 ```txt
 source -> baba CPU frontend -> compact CST -> fixity fold -> AST
        -> comptime evaluation -> biunification -> linearity/ownership
-       -> specialize -> Blot Runtime HIR -> gpupaper Core -> Rust/WebAssembly emission
+       -> specialize -> ClosedProgram -> direct Rust/WebAssembly emission
 ```
 
-blot owns source elaboration, inference, comptime, and ownership. baba owns
-lexing and parsing; do not hand-write a lexer or parser. Compiler commands use
-Baba's CPU frontend over the generated compact plan. The published gpupaper package exports
-validated Core and its Rust/WebAssembly emitter. Blot owns Runtime HIR, ABI
-policy, the module shell, and the Runtime-HIR-to-Core adapter; do not move those
-language semantics into gpupaper. The GPU paths remain explicit conformance
-tools, not compiler targets.
+blot owns source elaboration, inference, comptime, ownership, Runtime HIR, ABI
+policy, the module shell, and direct Rust/WebAssembly emission. baba owns lexing
+and parsing; do not hand-write a lexer or parser. The compiler executes Baba's
+generated compact plan inside its checked-in Rust-built Wasm. Gpupaper remains
+an independent bounded conformance oracle, not a production compiler path. The
+GPU paths remain explicit conformance tools, not compiler targets.
 
 ## Invariants
 
@@ -118,11 +117,11 @@ an `@`-primitive only when it cannot be written in blot at all. `struct`,
 **Linearity is not in the type lattice.** Biunification stays polynomial only
 if ownership and linearity remain a separate flow analysis over Core.
 
-**Monomorphize before gpufuck.** gpufuck re-runs Hindley-Milner on what blot
-emits. blot's algebraic-subtyping result is the authority; anything that
-reaches gpufuck must be specialized enough for HM to re-check. A gpufuck
-inference failure on a well-typed blot program is a lowering bug, never a
-type-system disagreement to paper over.
+**Monomorphize before any conformance lowering.** blot's algebraic-subtyping
+result is the authority. Anything sent to the gpufuck/gpupaper oracle must be
+specialized enough for its independent checker to accept. An oracle inference
+failure on a well-typed blot program is a lowering bug, never a type-system
+disagreement to paper over.
 
 **The three executions agree.** The comptime evaluator, gpufuck's GPU
 evaluator, and the emitted Wasm run the same language. `just wasm` requires all
@@ -143,10 +142,10 @@ still contain a local compile-time binding. Do not re-derive them in the
 backend — that is a second type checker and, for effects, would mint a different
 identity. This is why `load` keeps one cache per process.
 
-**Compiler commands must not touch WebGPU.** Parsing uses Baba's CPU frontend,
-inference is plain TypeScript, and building uses gpupaper's
-Rust/WebAssembly emitter. Keep the split structural so ordinary compiler,
-formatter, and language-server processes never initialize a device.
+**Compiler commands must not touch WebGPU.** Parsing executes Baba-generated
+tables and compilation runs inside the checked-in Rust compiler Wasm. Keep the
+split structural so ordinary compiler, formatter, and language-server processes
+never initialize a device.
 
 ## Style
 

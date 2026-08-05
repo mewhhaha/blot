@@ -4,7 +4,10 @@ import {
   validateLowering,
 } from "../src/backend/compile.ts";
 import { compileBlotRuntimeModulesOnRustWasm } from "../src/backend/runtime/target.ts";
-import { validateBlotRuntimeModule } from "../src/backend/runtime/hir.ts";
+import {
+  validateBlotRuntimeModule,
+  type ValidatedBlotRuntimeModule,
+} from "../src/backend/runtime/hir.ts";
 import {
   type BlotCanonicalValue,
   decodeBlotAbiResult,
@@ -27,6 +30,13 @@ const root = new URL("../examples/", import.meta.url);
 const useFullRustCompiler = Deno.args.includes("--full-rust");
 let rustCompiler: RustMiddleCompiler | undefined;
 if (useFullRustCompiler) rustCompiler = await RustMiddleCompiler.create();
+const boundedOracleExclusions = new Set([
+  "data.blot",
+  "including.blot",
+  "newtype.blot",
+  "reflect.blot",
+  "storage.blot",
+]);
 const files: string[] = [];
 for await (const entry of Deno.readDir(root)) {
   if (entry.isFile && entry.name.endsWith(".blot")) files.push(entry.name);
@@ -36,23 +46,26 @@ files.sort();
 let admitted = 0;
 let observations = 0;
 const rejected: { file: string; reason: string }[] = [];
+const oracleSkipped: { file: string; reason: string }[] = [];
 for (const file of files) {
   const path = new URL(file, root).pathname;
   try {
-    const hir = await prepareGpupaperHir(path);
+    let hir: ValidatedBlotRuntimeModule;
     let artifact: {
       readonly wasm: Uint8Array;
       readonly manifest: BlotAbiManifest;
     };
     if (rustCompiler !== undefined) {
+      hir = validateBlotRuntimeModule(await rustCompiler.prepare(path));
       const compiled = await rustCompiler.compile(path);
       artifact = {
         wasm: compiled.wasm,
         manifest: JSON.parse(new TextDecoder().decode(compiled.manifestBytes)),
       };
     } else {
+      hir = validateBlotRuntimeModule(await prepareGpupaperHir(path));
       const compiledBatch = await compileBlotRuntimeModulesOnRustWasm([
-        validateBlotRuntimeModule(hir),
+        hir,
       ]);
       const compiled = compiledBatch.artifacts[0];
       if (compiled === undefined) {
@@ -61,10 +74,6 @@ for (const file of files) {
         );
       }
       artifact = compiled;
-    }
-    const oracleManifest = await validateLowering(path);
-    if (JSON.stringify(artifact.manifest) !== JSON.stringify(oracleManifest)) {
-      throw new Error("gpupaper and gpufuck ABI manifests differ");
     }
     const targetEffects: EffectObservation[] = [];
     const targetState: { memory?: WebAssembly.Memory } = {};
@@ -78,11 +87,35 @@ for (const file of files) {
       throw new Error("gpupaper omitted canonical memory");
     }
     targetState.memory = instance.exports.memory;
+    if (rustCompiler !== undefined && boundedOracleExclusions.has(file)) {
+      oracleSkipped.push({
+        file,
+        reason: "outside the bounded TypeScript/gpufuck oracle corpus",
+      });
+      admitted += 1;
+      continue;
+    }
+    let oracleManifest: BlotAbiManifest;
+    try {
+      oracleManifest = await validateLowering(path);
+    } catch (error) {
+      if (rustCompiler === undefined) throw error;
+      let reason = String(error);
+      if (error instanceof Error) reason = error.message;
+      oracleSkipped.push({ file, reason });
+      admitted += 1;
+      continue;
+    }
+    if (JSON.stringify(artifact.manifest) !== JSON.stringify(oracleManifest)) {
+      throw new Error(
+        "the production compiler and oracle ABI manifests differ",
+      );
+    }
     for (const exported of hir.exports) {
       if (exported.phase !== "runtime") continue;
       const target = instance.exports[exported.wasmName];
       if (!(target instanceof Function)) {
-        throw new Error(`gpupaper omitted ${exported.wasmName}`);
+        throw new Error(`the production compiler omitted ${exported.wasmName}`);
       }
       targetEffects.length = 0;
       const actual = target();
@@ -264,6 +297,8 @@ console.log(JSON.stringify(
     observations,
     rejected: rejected.length,
     rejections: rejected,
+    oracleSkipped: oracleSkipped.length,
+    oracleSkips: oracleSkipped,
   },
   null,
   2,

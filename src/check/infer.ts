@@ -4361,10 +4361,11 @@ function checkAgainst(
 }
 
 function isFunctionReturnBoundary(expr: Expr): boolean {
-  return expr.tag === "case" && expr.arms.some((arm) =>
-    arm.pattern.tag === "constructor" &&
-    arm.pattern.name.startsWith("FunctionReturn$")
-  );
+  return expr.tag === "case" &&
+    expr.arms.some((arm) =>
+      arm.pattern.tag === "constructor" &&
+      arm.pattern.name.startsWith("FunctionReturn$")
+    );
 }
 
 function checkAgainstPure(

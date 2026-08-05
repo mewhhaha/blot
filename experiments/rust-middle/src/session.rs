@@ -5,12 +5,11 @@ use std::rc::Rc;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{AstArena, Declaration, Expression, ExpressionId, Module};
-use crate::backend::CompiledModule;
+use crate::backend::{ClosedProgram, CompiledModule};
 use crate::cst::{CompactCst, RULE_NAMES};
 use crate::diagnostic::Diagnostic;
 use crate::eval::{Context, IncludedFile, LoadedModule, Phase, Runtime, evaluate_module, run};
 use crate::frontend::{FrontendState, ingest_incremental};
-use crate::hir::RuntimeModule;
 use crate::typecheck::{
     CHECKED_MODULE_CERTIFICATE_SCHEMA, CachedModuleAnalyses, CachedModuleInterface,
     CheckedModuleCertificate, Checker,
@@ -30,8 +29,7 @@ pub struct CompilerSession {
     module_interfaces: Rc<RefCell<HashMap<String, CachedModuleInterface>>>,
     module_analyses: Rc<RefCell<HashMap<String, CachedModuleAnalyses>>>,
     checker: Checker,
-    runtime_modules: RefCell<HashMap<String, Rc<RuntimeModule>>>,
-    compiled_modules: RefCell<HashMap<String, CompiledModule>>,
+    closed_programs: RefCell<HashMap<String, Rc<ClosedProgram>>>,
 }
 
 impl Default for CompilerSession {
@@ -50,8 +48,7 @@ impl Default for CompilerSession {
             module_interfaces,
             module_analyses,
             checker,
-            runtime_modules: RefCell::new(HashMap::new()),
-            compiled_modules: RefCell::new(HashMap::new()),
+            closed_programs: RefCell::new(HashMap::new()),
         }
     }
 }
@@ -233,48 +230,47 @@ impl CompilerSession {
     }
 
     pub fn prepare_runtime_hir(&self, path: &str) -> serde_json::Value {
-        match self.runtime_hir(path) {
-            Ok(module) => serde_json::json!({ "ok": true, "module": module.as_ref() }),
+        match self.close_program(path) {
+            Ok(program) => serde_json::json!({ "ok": true, "module": program.runtime() }),
             Err(diagnostic) => diagnostic_json(diagnostic),
         }
     }
 
     pub fn compile_module(&self, path: &str) -> Result<CompiledModule, Diagnostic> {
-        if let Some(compiled) = self.compiled_modules.borrow().get(path) {
-            return Ok(compiled.clone());
-        }
-        let module = self.runtime_hir(path)?;
-        let compiled = crate::backend::compile(module.as_ref()).map_err(|message| {
+        let program = self.close_program(path)?;
+        program.compile().map_err(|message| {
             Diagnostic::new(
                 "BLOT_BACKEND_ERROR",
                 message,
                 crate::ast::Span { start: 0, end: 0 },
             )
             .at(path)
-        })?;
-        self.compiled_modules
-            .borrow_mut()
-            .insert(path.to_owned(), compiled.clone());
-        Ok(compiled)
+        })
     }
 
-    fn runtime_hir(&self, path: &str) -> Result<Rc<RuntimeModule>, Diagnostic> {
-        if let Some(module) = self.runtime_modules.borrow().get(path) {
-            return Ok(module.clone());
+    fn close_program(&self, path: &str) -> Result<Rc<ClosedProgram>, Diagnostic> {
+        if let Some(program) = self.closed_programs.borrow().get(path) {
+            return Ok(program.clone());
         }
         self.checker.begin_request();
         let checked = self
             .checker
             .check(path)
             .map_err(|diagnostic| diagnostic.at(path))?;
-        let module = Rc::new(
-            crate::hir::prepare(self.context.clone(), path, checked)
-                .map_err(|diagnostic| diagnostic.at(path))?,
-        );
-        self.runtime_modules
+        let runtime = crate::hir::elaborate(self.context.clone(), path, checked)
+            .map_err(|diagnostic| diagnostic.at(path))?;
+        let program = Rc::new(crate::backend::close(runtime).map_err(|message| {
+            Diagnostic::new(
+                "BLOT_BACKEND_ERROR",
+                message,
+                crate::ast::Span { start: 0, end: 0 },
+            )
+            .at(path)
+        })?);
+        self.closed_programs
             .borrow_mut()
-            .insert(path.to_owned(), module.clone());
-        Ok(module)
+            .insert(path.to_owned(), program.clone());
+        Ok(program)
     }
 
     fn invalidate(&self, changed: &str) {
@@ -307,10 +303,7 @@ impl CompilerSession {
             .module_results
             .borrow_mut()
             .retain(|path, _| !invalidated.contains(path));
-        self.runtime_modules
-            .borrow_mut()
-            .retain(|path, _| !invalidated.contains(path));
-        self.compiled_modules
+        self.closed_programs
             .borrow_mut()
             .retain(|path, _| !invalidated.contains(path));
     }
@@ -602,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_hir_and_artifact_follow_semantic_revision() {
+    fn closed_program_and_artifact_follow_semantic_revision() {
         let mut session = CompilerSession::default();
         session
             .add_source("main.blot".to_owned(), source("return 1;"))
@@ -613,8 +606,7 @@ mod tests {
 
         let prepared = session.prepare_runtime_hir("main.blot");
         assert_eq!(prepared["ok"], true);
-        assert_eq!(session.runtime_modules.borrow().len(), 1);
-        assert!(session.compiled_modules.borrow().is_empty());
+        assert_eq!(session.closed_programs.borrow().len(), 1);
 
         let first = session
             .compile_module("main.blot")
@@ -623,19 +615,17 @@ mod tests {
             .compile_module("main.blot")
             .expect("unchanged source should compile");
         assert_eq!(first.wasm, second.wasm);
-        assert_eq!(session.compiled_modules.borrow().len(), 1);
+        assert_eq!(session.closed_programs.borrow().len(), 1);
 
         session
             .add_source("main.blot".to_owned(), source("return 1; // changed"))
             .expect("comment edit should load");
-        assert_eq!(session.runtime_modules.borrow().len(), 1);
-        assert_eq!(session.compiled_modules.borrow().len(), 1);
+        assert_eq!(session.closed_programs.borrow().len(), 1);
 
         session
             .add_source("main.blot".to_owned(), source("return 2;"))
             .expect("semantic edit should load");
-        assert!(session.runtime_modules.borrow().is_empty());
-        assert!(session.compiled_modules.borrow().is_empty());
+        assert!(session.closed_programs.borrow().is_empty());
     }
 
     #[test]

@@ -406,6 +406,16 @@ namespace has no such runtime field type and therefore retains the existing
 derivation, so two call sites never share an instantiation merely because they
 selected the same source lambda.
 
+While deriving `VType` for a selected closure, a structural projection whose
+label is not yet a value introduces a staged projection obligation rather than
+an ordinary dynamic lookup. Its result may participate in the local inference
+graph, but the obligation is not part of the inferred runtime arrow and cannot
+cross the `ClosedProgram` boundary. Structural-fold residualization must replace
+it with projections at static labels; otherwise closing fails. Outside a `VType`
+derivation the same unknown label is rejected immediately. Thus generic
+structural source can be checked before unrolling without admitting a runtime
+operation over heterogeneous record keys.
+
 `M(v)` is invariant under aliasing and re-export. This yields the coherence
 property
 

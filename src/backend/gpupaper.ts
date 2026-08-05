@@ -5,24 +5,8 @@ import {
   type ValidatedBlotRuntimeModule,
 } from "./runtime/hir.ts";
 import { prepareGpupaperHir } from "./compile.ts";
-import { compileRustGpupaperArtifact } from "./rust_middle.ts";
 import { refreshLoadedModules } from "../load.ts";
-
-export type GpupaperBuildOutcome =
-  | {
-    readonly status: "built";
-    readonly path: string;
-    readonly wasm: Uint8Array;
-    readonly manifestBytes: Uint8Array;
-    readonly capabilities: readonly string[];
-    readonly artifactSource: "compiled" | "revision-cache";
-    readonly wasmEmitter: "rust-wasm";
-  }
-  | {
-    readonly status: "failed";
-    readonly path: string;
-    readonly cause: unknown;
-  };
+import type { BuildOutcome } from "./build.ts";
 
 type PreparedGpupaperBuild = {
   readonly ordinal: number;
@@ -42,41 +26,18 @@ const artifactByHirRevision = new WeakMap<
   CachedGpupaperArtifact
 >();
 
-export async function buildGpupaperBatch(
+export async function buildTypeScriptOracleBatch(
   paths: readonly string[],
-): Promise<readonly GpupaperBuildOutcome[]> {
+): Promise<readonly BuildOutcome[]> {
   await refreshLoadedModules();
   return await buildBatch(paths, prepareGpupaperHir);
-}
-
-export async function buildExperimentalBatch(
-  paths: readonly string[],
-): Promise<readonly GpupaperBuildOutcome[]> {
-  const outcomes: GpupaperBuildOutcome[] = [];
-  for (const path of paths) {
-    try {
-      const artifact = await compileRustGpupaperArtifact(path);
-      outcomes.push({
-        status: "built",
-        path,
-        wasm: artifact.wasm,
-        manifestBytes: artifact.manifestBytes,
-        capabilities: artifact.capabilities,
-        artifactSource: artifact.artifactSource,
-        wasmEmitter: "rust-wasm",
-      });
-    } catch (cause) {
-      outcomes.push({ status: "failed", path, cause });
-    }
-  }
-  return outcomes;
 }
 
 async function buildBatch(
   paths: readonly string[],
   prepare: (path: string) => Promise<BlotRuntimeModule>,
-): Promise<readonly GpupaperBuildOutcome[]> {
-  const outcomes: Array<GpupaperBuildOutcome | undefined> = Array.from(
+): Promise<readonly BuildOutcome[]> {
+  const outcomes: Array<BuildOutcome | undefined> = Array.from(
     { length: paths.length },
   );
   const prepared: PreparedGpupaperBuild[] = [];

@@ -9,7 +9,124 @@ use crate::eval::Computation;
 
 pub type Environment = Rc<Env>;
 
-#[derive(Debug, Default)]
+thread_local! {
+    static CLOSURE_SIGNATURES: RefCell<BTreeMap<(String, u32, u32), Value>> = const {
+        RefCell::new(BTreeMap::new())
+    };
+}
+
+pub(crate) fn register_closure_signature(value: &Value, signature: Value) {
+    let Value::Closure {
+        module,
+        parameter,
+        body,
+        ..
+    } = value
+    else {
+        return;
+    };
+    CLOSURE_SIGNATURES.with(|signatures| {
+        signatures
+            .borrow_mut()
+            .insert((module.clone(), parameter.0, body.0), signature);
+    });
+}
+
+pub(crate) fn closure_signature(value: &Value) -> Option<Value> {
+    let Value::Closure {
+        module,
+        parameter,
+        body,
+        signature,
+        ..
+    } = value
+    else {
+        return None;
+    };
+    if let Some(signature) = signature {
+        return Some((**signature).clone());
+    }
+    CLOSURE_SIGNATURES.with(|signatures| {
+        signatures
+            .borrow()
+            .get(&(module.clone(), parameter.0, body.0))
+            .cloned()
+    })
+}
+
+pub(crate) fn attach_signature(value: &mut Value, signature: &Value) {
+    let signature = match signature {
+        Value::Forall { body, .. } => body.as_ref(),
+        signature => signature,
+    };
+    match (value, signature) {
+        (
+            Value::Closure {
+                signature: closure_signature,
+                ..
+            },
+            Value::Arrow { .. },
+        ) => {
+            *closure_signature = Some(Box::new(signature.clone()));
+        }
+        (Value::Shape(values), Value::Shape(signatures)) => {
+            let values = Rc::make_mut(&mut values.0);
+            for (name, value) in &mut values.entries {
+                if let Some(signature) = signatures.get(name) {
+                    attach_signature(value, signature);
+                }
+            }
+        }
+        (Value::Array(values), Value::Array(signatures)) => {
+            for (value, signature) in values.iter_mut().zip(signatures) {
+                attach_signature(value, signature);
+            }
+        }
+        (
+            Value::Tag {
+                payload: Some(value),
+                ..
+            },
+            Value::Tag {
+                payload: Some(signature),
+                ..
+            },
+        ) => attach_signature(value, signature),
+        (
+            Value::Extended {
+                inner: value_inner,
+                members: value_members,
+            },
+            Value::Extended {
+                inner: signature_inner,
+                members: signature_members,
+            },
+        ) => {
+            attach_signature(value_inner, signature_inner);
+            let values = Rc::make_mut(&mut value_members.0);
+            for (name, value) in &mut values.entries {
+                if let Some(signature) = signature_members.get(name) {
+                    attach_signature(value, signature);
+                }
+            }
+        }
+        (
+            Value::Sealed {
+                inner: value_inner, ..
+            },
+            Value::Sealed {
+                inner: signature_inner,
+                ..
+            },
+        ) => attach_signature(value_inner, signature_inner),
+        (Value::Extended { inner, .. }, signature) | (Value::Sealed { inner, .. }, signature) => {
+            attach_signature(inner, signature)
+        }
+        _ => {}
+    }
+}
+
+#[derive(Debug)]
 pub struct Env {
     pub names: RefCell<BTreeMap<String, Value>>,
     pub opens: RefCell<Vec<OpenedValues>>,
