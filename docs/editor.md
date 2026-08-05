@@ -64,10 +64,10 @@ the targets do not lex alike.
 
 **Tree-sitter does not reserve keywords.** Its lexer resolves tokens by parser
 state: where `IDENT` is admissible and `"return"` is not, it lexes `return` as
-an identifier. So `let x = 1 return x;` — a missing `;` — parsed cleanly as
-juxtaposition, while the wasm parser and the GPU frontend both rejected it. An
-editor grammar that accepts programs the compiler refuses is an editor grammar
-that lies.
+an identifier. So `let x = 1 return x` — two declarations without a newline —
+parsed cleanly as juxtaposition, while the wasm parser and the GPU frontend both
+rejected it. An editor grammar that accepts programs the compiler refuses is an
+editor grammar that lies.
 
 Adding `word: $ => $.IDENT` is not enough; keyword extraction still falls back
 to the word token, and OPERATOR can absorb structural `=` and `=>` outside their
@@ -102,6 +102,8 @@ than an operator. `queries/calls.scm` captures the called binding in `render x`
 and `draw` in `Canvas.draw x` as `function.call`; values that are only
 referenced retain their ordinary variable, type, or member colour.
 
-`queries/indents.scm` is unusually short. Every variable-width region in blot
-carries an explicit terminator — the GPU profile requires a locatable boundary —
-so indentation is just "indent inside each region, outdent on its terminator".
+`queries/indents.scm` is unusually short. Layout suites are explicit CST nodes,
+so indentation is just "indent the suite." The generated Tree-sitter parser uses
+`editor/scanner.c` to derive the same newline, indent, and dedent tokens that
+the compiler derives with Baba's lexer; no private layout character is written
+to a source file.

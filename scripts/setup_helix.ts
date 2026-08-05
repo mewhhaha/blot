@@ -107,8 +107,6 @@ const RESERVED_TOKENS = [
   "const",
   "sig",
   "return",
-  "do",
-  "end",
   "if",
   "then",
   "else",
@@ -136,9 +134,24 @@ if (at < 0) {
 }
 const cut = at + anchor.length;
 const spelled = RESERVED_TOKENS.map((token) => `"${token}"`).join(", ");
-await Deno.writeTextFile(
-  grammarJsPath,
-  `${grammarJs.slice(0, cut)}
+const externalLayout = `
+
+  externals: $ => [
+    $.LAYOUT_NEWLINE,
+    $.LAYOUT_INDENT,
+    $.LAYOUT_DEDENT,
+  ],`;
+const layoutConflicts = `
+
+  conflicts: $ => [
+    [$.conditional_statement_branches],
+    [$.expression],
+    [$.postfix_expression],
+    [$.application_argument],
+  ],`;
+const editorGrammar = `${
+  grammarJs.slice(0, cut)
+}${externalLayout}${layoutConflicts}
 
   // Keywords and structural operators are globally reserved, matching the wasm
   // parser and the GPU frontend. Without this tree-sitter would accept programs
@@ -147,7 +160,16 @@ await Deno.writeTextFile(
   reserved: {
     global: _ => [${spelled}],
   },
-${grammarJs.slice(cut)}`,
+${grammarJs.slice(cut)}`
+  .replace(/^\s*LAYOUT_(?:NEWLINE|INDENT|DEDENT):.*\n/gm, "");
+await Deno.writeTextFile(
+  grammarJsPath,
+  editorGrammar,
+);
+await Deno.mkdir(join(grammarDirectory, "src"), { recursive: true });
+await Deno.copyFile(
+  join(repository, "editor", "scanner.c"),
+  join(grammarDirectory, "src", "scanner.c"),
 );
 
 await Deno.writeTextFile(

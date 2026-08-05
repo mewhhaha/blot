@@ -12,26 +12,27 @@
 // both, so that program is refused rather than compiled against a shape nobody
 // writes.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 const Console = @effect.host {
   .write = Str -> Unit;
-};
+  }
 
 // A `let` is generalized, so nothing here fixes the shape of `v`.
-let get_x = fn v => v.x;
+let get_x = fn v => v.x
 // Reached through a forwarder, so the shape survives two instantiations.
-let twice = fn p => get_x p + get_x p;
+let twice = fn p => get_x p + get_x p
 // Destructured rather than projected, which reads the same fact.
-let first = fn p => do let { .x = a; } = p; return a; end;
+let first = fn p =>
+  let { .x = a; } = p
+  return a
 
 // Writing is the host's, so the compiler cannot run this: `point` is built
 // while the program runs rather than folded away while it compiles, and the
 // projections above are what reaches WebAssembly.
-point <- do
-  _ <- Console.write "projected";
-  return { .x = 7; .y = 0; };
-end;
+point <-
+  _ <- Console.write "projected"
+  return { .x = 7; .y = 0; }
 
 return {
   .direct = get_x point;
@@ -40,4 +41,4 @@ return {
   // A second call site is free as long as it agrees: one shape reaches the
   // projection, so one Core record answers for both.
   .agreeing = get_x { .x = 8; .y = 9; };
-};
+  }

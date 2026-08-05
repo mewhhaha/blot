@@ -32,3 +32,6 @@
 
 (block
   statements: (_) @block.inside) @block.around
+
+(statement_suite
+  statements: (_) @block.inside) @block.around

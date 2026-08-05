@@ -1,9 +1,8 @@
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-let tagged = fn descriptor => do
+let tagged = fn descriptor =>
   @[descriptor]
-  let value = 1;
-  return value;
-end;
+  let value = 1
+  return value
 
-return tagged test;
+return tagged test

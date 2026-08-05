@@ -11,45 +11,38 @@
 // be followed by the binding it constrains, so a `sig` inside a run belongs to
 // a member of that run.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 // One expression tree, flattened into prefix order. `0` is a sum node and `1`
 // a product node; every larger token is the literal `token - 2`. So this is
 // `(2 + 3) * (4 + 5)`, and the answer is 45.
-let program = [1, 0, 4, 5, 0, 6, 7];
+let program = [1, 0, 4, 5, 0, 6, 7]
 
 // A read past the end is a malformed tree rather than a trap. The guard is
 // what proves the index, exactly as in `indexed.blot`.
-sig token = [Int] -> Int -> Int;
-let token = fn source => fn at =>
-  if at >= 0 && at < @array.len source
-    then @array.get source at
-    else 0
-end;
+sig token = [Int] -> Int -> Int
+let token = fn source => fn at => if at >= 0 && at < @array.len source then @array.get source at
+else 0
 
 // Each walker returns the value it read and the position after it, so the
 // caller knows where its next child begins.
-sig walk = [Int] -> Int -> (Int, Int);
-let walk = rec (fn source => fn at => do
-  let head = token source at;
-  return if head < 2
-    then combine source (at + 1) head
-    else (head - 2, at + 1)
-  end;
-end);
+sig walk = [Int] -> Int -> (Int, Int)
+let walk = rec (fn source => fn at =>
+  let head = token source at
+  return if head < 2 then combine source (at + 1) head
+  else (head - 2, at + 1)
+)
 
-sig combine = [Int] -> Int -> Int -> (Int, Int);
-let combine = rec (fn source => fn at => fn operator => do
-  let (left, after_left) = walk source at;
-  let (right, after_right) = walk source after_left;
-  return if operator == 0
-    then (left + right, after_right)
-    else (left * right, after_right)
-  end;
-end);
+sig combine = [Int] -> Int -> Int -> (Int, Int)
+let combine = rec (fn source => fn at => fn operator =>
+  let (left, after_left) = walk source at
+  let (right, after_right) = walk source after_left
+  return if operator == 0 then (left + right, after_right)
+  else (left * right, after_right)
+)
 
-let (value, consumed) = walk program 0;
+let (value, consumed) = walk program 0
 
 // A well-formed tree consumes the whole array; anything left over means the
 // walk stopped early.
-return { .value = value; .whole = consumed == @array.len program; };
+return { .value = value; .whole = consumed == @array.len program; }

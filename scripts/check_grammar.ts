@@ -11,6 +11,7 @@
 
 import { basename } from "@std/path";
 import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
+import { elaborateLayout } from "../src/syntax/layout.ts";
 
 const ACCEPTED = [
   "examples",
@@ -48,7 +49,10 @@ let disagreements = 0;
 
 for (const directory of ACCEPTED) {
   for (const path of await blotFiles(directory)) {
-    const compiler = frontend.ingest(await Deno.readTextFile(path)).ok;
+    const source = await Deno.readTextFile(path);
+    const elaborated = await elaborateLayout(source);
+    const compiler = elaborated.ok &&
+      frontend.ingest(elaborated.layout.source).ok;
     const editor = await treeSitterAccepts(`../${path}`);
     if (compiler !== editor) {
       disagreements += 1;
@@ -64,7 +68,10 @@ for (const directory of ACCEPTED) {
 }
 
 for (const path of await blotFiles(REJECTED)) {
-  const compiler = frontend.ingest(await Deno.readTextFile(path)).ok;
+  const source = await Deno.readTextFile(path);
+  const elaborated = await elaborateLayout(source);
+  const compiler = elaborated.ok &&
+    frontend.ingest(elaborated.layout.source).ok;
   const editor = await treeSitterAccepts(`../${path}`);
   if (compiler || editor) {
     disagreements += 1;

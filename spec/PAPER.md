@@ -215,17 +215,17 @@ An element has no built-in DOM, renderer, node type, or text operation.
 
 ```blot
 _ <- <Button .label="Save">
-  _ <- text "ready";
-</Button>;
+  _ <- text "ready"
+</Button>
 ```
 
 The element expression itself elaborates to an ordinary component call whose
 second argument is a nullary child computation:
 
 ```blot
-Button { .label = "Save"; } (fn () => do
-  _ <- text "ready";
-end)
+Button { .label = "Save"; } (fn () =>
+  _ <- text "ready"
+)
 ```
 
 The surrounding `_ <-` is what sequences and discards that application. A named
@@ -358,7 +358,7 @@ definition receives a fresh value identity for refinement and ownership facts.
 into the current computation. The expression on the right is already applied:
 
 ```blot
-request <- Runtime.request ();
+request <- Runtime.request ()
 ```
 
 does not elaborate by adding `()`. It elaborates as:
@@ -376,10 +376,9 @@ enclosing module or explicit block, so no redundant bind is required around the
 final computation:
 
 ```blot
-fn () => do
-  _ <- first_effect ();
-  return final_effect ();
-end
+fn () =>
+  _ <- first_effect ()
+  return final_effect ()
 ```
 
 A conditional can select a computation branch without sequencing it into the
@@ -387,14 +386,13 @@ surrounding scope. Thus the clean form for effectful branching is:
 
 ```blot
 _ <- case x of
-  1 => effect,
+  1 => effect
   _ => other_effect
-end;
 ```
 
 The `case` is itself a computation term; the outer `<-` sequences the selected
-branch. If `do _ <- effect; end` is admitted as a convenience, it elaborates to
-the same computation form and does not alter this rule.
+branch. An indented branch containing `_ <- effect` elaborates to the same
+computation form and does not alter this rule.
 
 ## 5. Phases and “types are values”
 
@@ -758,10 +756,10 @@ does not count as match failure.
 
 Expression `if` and `case` produce values or computations selected from their
 branches in separate result scopes that do not inherit surrounding control
-targets. An explicit `do` branch's return supplies the expression result, while
-`break;` cannot cross the value expression to reach an enclosing loop. Statement
-conditionals elaborate with compiler-local control sums whose cases are
-eliminated at the corresponding loop or return-scope boundary.
+targets. An explicit indented branch's return supplies the expression result,
+while `break` cannot cross the value expression to reach an enclosing loop.
+Statement conditionals elaborate with compiler-local control sums whose cases
+are eliminated at the corresponding loop or return-scope boundary.
 
 This keeps non-local control explicit in core and prevents a value expression
 from having a hidden continuation target.
@@ -769,9 +767,9 @@ from having a hidden continuation target.
 ### 8.3 Loops are folds
 
 `for` elaborates to recursion over an iterator protocol. Names rebound by `:=`
-form an accumulator record. `break;` returns that record from the nearest loop;
+form an accumulator record. `break` returns that record from the nearest loop;
 `return` carries a compiler-local result through the repeated body to the
-nearest enclosing module or explicit `do` boundary.
+nearest enclosing module or explicit block boundary.
 
 Downstream passes see recursion, cases, records, and computations. They do not
 contain a second loop semantics. The elaboration must preserve relational

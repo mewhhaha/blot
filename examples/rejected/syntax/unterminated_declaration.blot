@@ -1,4 +1,3 @@
-// Every declaration terminates with `;`. The boundary is not cosmetic: it is
-// the structural terminal that bounds the repeated root island.
-let x = 1
-return x;
+// A physical newline is the declaration boundary. Whitespace on one line
+// cannot separate two declarations.
+let x = 1 return x

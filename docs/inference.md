@@ -38,7 +38,7 @@ The one place subtyping is strictly _more_ general than Hindley-Milner is worth
 seeing:
 
 ```blot
-let twice = fn f => fn x => f (f x);
+let twice = fn f => fn x => f (f x)
 ```
 
 HM must unify the two uses of `f` and produces `('a -> 'a) -> 'a -> 'a`. blot
@@ -54,14 +54,14 @@ row and puts it in its own type. Joining two rows is the join `constrain`
 already knows how to compute, because a row is a lattice element like any other.
 
 ```blot
-const Console = @effect { .write = Str -> Unit; };
-const Clock = @effect { .now = Unit -> Int; };
+const Console = @effect { .write = Str -> Unit; }
+const Clock = @effect { .now = Unit -> Int; }
 
-let greet = fn name => do
-  result <- Console.write name;
-  return result;
-end; // Str -> () ~ { Console }
-let quiet = fn n => @int.add n 1;            // Int -> Int
+let greet = fn name =>
+  result <- Console.write name
+  return result
+// Str -> () ~ { Console }
+let quiet = fn n => @int.add n 1            // Int -> Int
 ```
 
 A row is written `~ { … }`: braces without a leading `.` on each member, because
@@ -70,18 +70,17 @@ pairs, and the two should not look alike. `e` is the rest of the row — a row
 variable — and it is what makes a wrapper effect-polymorphic without saying so:
 
 ```blot
-let logged = fn f => fn x => do
-  _ <- Console.write "call";
-  result <- f x;
-  return result;
-end;
+let logged = fn f => fn x =>
+  _ <- Console.write "call"
+  result <- f x
+  return result
 // ('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }
 ```
 
 `logged` adds `Console` to whatever its callback performs. Nothing there is
 annotated.
 
-A row is also source: `sig greet = Str -> Unit ~ { Console };` is checked like
+A row is also source: `sig greet = Str -> Unit ~ { Console }` is checked like
 any other signature, by subsumption — so a body may perform fewer effects than
 its signature names, and a bare `->` is the empty row rather than an unwritten
 one. What cannot be written is the `e`. A signature is an upper bound, and an
@@ -123,9 +122,9 @@ the result into the lattice — there is no type-level sublanguage to translate
 from. The same is true of a `const` whose value _is_ a type:
 
 ```blot
-const Bit = 0 | 1;      // an ordinary union of two integers
-sig b = Bit;
-let b = 1;
+const Bit = 0 | 1      // an ordinary union of two integers
+sig b = Bit
+let b = 1
 ```
 
 `src/check/bridge.ts` is where that conversion lives. It returns `null` for a

@@ -116,7 +116,7 @@ function lintEqualityChain(
   diagnostics.push({
     code: "BLOT_LINT_IF_CHAIN",
     message:
-      `Match ${subject} once with \`case ${subject} of ... end\` instead of repeating equality tests.`,
+      `Match ${subject} once with an indented \`case ${subject} of\` instead of repeating equality tests.`,
     span: expression.span,
   });
 }

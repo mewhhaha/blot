@@ -150,22 +150,22 @@ Deno.test("full Rust compiler matches dynamic record effects", async () => {
   try {
     await Deno.writeTextFile(
       path,
-      `open @import "blot:prelude" ();
+      `open @import "blot:prelude" ()
 const Host = @effect.host {
   .read = Unit -> { .target = Int; .label = Str; .kind = Int; };
   .write = { .label = Str; .active = Bool; .kind = Int; } -> Unit;
-};
-const ready = 1;
-event <- Host.read ();
+  }
+const ready = 1
+event <- Host.read ()
 _ <- case event.kind of
   #(ready) => Host.write {
     .label = event.label;
     .active = True;
     .kind = event.target + 1;
-  },
+    }
   _ => Host.write { .label = "idle"; .active = False; .kind = 0; }
-end;
-return ();`,
+return ()
+`,
     );
     const rust = await compiler.compile(path);
     const [reference] = await buildTypeScriptOracleBatch([path]);
@@ -215,18 +215,19 @@ Deno.test("Rust middle matches dynamic integer SIMD", async () => {
   try {
     await Deno.writeTextFile(
       path,
-      `open @import "blot:prelude" ();
-const Sample = @effect.host { .next = Int -> Int; };
-a <- Sample.next 0;
-b <- Sample.next 1;
-c <- Sample.next 2;
-d <- Sample.next 3;
-let values = Int32x4.of_wrapping (a, b, c, d);
-let shifted = Int32x4.shift_left values 1;
-let bounded = Int32x4.max_signed shifted (Int32x4.splat_wrapping (@int.neg 12));
-let negative = Int32x4.less_signed bounded (Int32x4.splat 0);
-const selected = 2;
-return @int.add (Int32x4.mask_bits negative) (Int32x4.lane values selected);`,
+      `open @import "blot:prelude" ()
+const Sample = @effect.host { .next = Int -> Int; }
+a <- Sample.next 0
+b <- Sample.next 1
+c <- Sample.next 2
+d <- Sample.next 3
+let values = Int32x4.of_wrapping (a, b, c, d)
+let shifted = Int32x4.shift_left values 1
+let bounded = Int32x4.max_signed shifted (Int32x4.splat_wrapping (@int.neg 12))
+let negative = Int32x4.less_signed bounded (Int32x4.splat 0)
+const selected = 2
+return @int.add (Int32x4.mask_bits negative) (Int32x4.lane values selected)
+`,
     );
     const rustModule = validateBlotRuntimeModule(await compiler.prepare(path));
     const rustBatch = await compileBlotRuntimeModulesOnRustWasm([rustModule], {
@@ -279,14 +280,15 @@ Deno.test("full Rust compiler traps every dynamic integer overflow family", asyn
     for (const scenario of scenarios) {
       await Deno.writeTextFile(
         path,
-        `open @import "blot:prelude" ();
+        `open @import "blot:prelude" ()
 const Host = @effect.host {
   .read = Unit -> { .left = Int; .right = Int; };
   .write = Int -> Unit;
-};
-pair <- Host.read ();
-_ <- Host.write (${scenario.expression});
-return ();`,
+}
+pair <- Host.read ()
+_ <- Host.write (${scenario.expression})
+return ()
+`,
       );
       const artifact = await compiler.compile(path);
       await assertRejects(
@@ -310,12 +312,20 @@ Deno.test("Rust middle reuses an unchanged resident revision", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "resident.blot");
   try {
-    await Deno.writeTextFile(path, "return 41;");
+    await Deno.writeTextFile(
+      path,
+      `return 41
+`,
+    );
     const first = await compiler.prepare(path);
     const repeated = await compiler.prepare(path);
     assertStrictEquals(repeated, first);
 
-    await Deno.writeTextFile(path, "return 42;");
+    await Deno.writeTextFile(
+      path,
+      `return 42
+`,
+    );
     const edited = await compiler.prepare(path);
     assertNotStrictEquals(edited, first);
     const operation = edited.functions[0].blocks[0].operations[0];
@@ -335,7 +345,9 @@ Deno.test("Rust middle invalidates an include revision", async () => {
   try {
     await Deno.writeTextFile(
       path,
-      'const message = @include "./message.txt" (fn source => source.text); return message;',
+      `const message = @include "./message.txt" (fn source => source.text)
+return message
+`,
     );
     await Deno.writeTextFile(included, "first");
     const first = await compiler.prepare(path);
@@ -359,8 +371,16 @@ Deno.test("Rust middle checks an in-memory root revision", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "editor.blot");
   try {
-    await Deno.writeTextFile(path, "return missing;");
-    const checked = await compiler.checkSource(path, "return 42;");
+    await Deno.writeTextFile(
+      path,
+      `return missing
+`,
+    );
+    const checked = await compiler.checkSource(
+      path,
+      `return 42
+`,
+    );
     assertEquals(checked.type, "42..42");
     await assertRejects(() => compiler.check(path), BlotError, "BLOT_UNBOUND");
   } finally {
@@ -377,12 +397,22 @@ Deno.test("Rust middle invalidates importers after a dependency edit", async () 
   try {
     await Deno.writeTextFile(
       path,
-      'open @import "./dependency.blot" (); return value;',
+      `open @import "./dependency.blot" ()
+return value
+`,
     );
-    await Deno.writeTextFile(dependency, "return { .value = 41; };");
+    await Deno.writeTextFile(
+      dependency,
+      `return { .value = 41; }
+`,
+    );
     const first = await compiler.prepare(path);
 
-    await Deno.writeTextFile(dependency, "return { .value = 42; };");
+    await Deno.writeTextFile(
+      dependency,
+      `return { .value = 42; }
+`,
+    );
     const edited = await compiler.prepare(path);
     assertNotStrictEquals(edited, first);
     const operation = edited.functions[0].blocks[0].operations[0];
@@ -399,7 +429,11 @@ Deno.test("Rust middle reports source diagnostics with their origin", async () =
   const directory = await Deno.makeTempDir();
   const path = join(directory, "rejected.blot");
   try {
-    await Deno.writeTextFile(path, 'return @int.add "no" 1;');
+    await Deno.writeTextFile(
+      path,
+      `return @int.add "no" 1
+`,
+    );
     await assertRejects(
       () => compiler.compile(path),
       BlotError,
@@ -419,9 +453,15 @@ Deno.test("Rust middle preserves a dependency diagnostic origin", async () => {
   try {
     await Deno.writeTextFile(
       path,
-      'open @import "./dependency.blot" (); return 0;',
+      `open @import "./dependency.blot" ()
+return 0
+`,
     );
-    await Deno.writeTextFile(dependency, 'return @int.add "no" 1;');
+    await Deno.writeTextFile(
+      dependency,
+      `return @int.add "no" 1
+`,
+    );
     try {
       await compiler.compile(path);
       throw new Error("Rust middle accepted an invalid dependency");

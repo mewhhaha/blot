@@ -169,7 +169,7 @@ export function lowerModule(root: Rule, source: string): Module {
   if (last === undefined || asRule(last, "declaration").name !== "result") {
     fail(
       "BLOT_MISSING_RESULT",
-      "A module ends with `return expr;`.",
+      "A module ends with `return expr`.",
       root.span,
     );
   }
@@ -231,26 +231,41 @@ function conditionalStatementBody(rule: Rule): Rule {
   return asRule(field(rule, "body"), "conditional statement");
 }
 
+function statementSuite(rule: Rule, name: string): readonly Cursor[] {
+  const value = rule.field(name);
+  if (Array.isArray(value)) {
+    return (value as readonly (Cursor | null)[]).filter((entry) =>
+      entry !== null && entry !== undefined
+    ) as readonly Cursor[];
+  }
+  const suite = asRule(value as Cursor | null | undefined, "statement_suite");
+  expect(
+    suite.name === "statement_suite",
+    `${rule.name}.${name} is not a suite`,
+  );
+  return fieldList(suite, "statements");
+}
+
 function nestedStatementLists(rule: Rule): readonly (readonly Cursor[])[] {
   if (rule.name === "iteration") {
-    return [fieldList(rule, "body")];
+    return [statementSuite(rule, "body")];
   }
   if (rule.name !== "conditional_statement") return [];
 
   const body = conditionalStatementBody(rule);
   if (body.name === "conditional_statement_guard") {
-    return [fieldList(body, "alternative")];
+    return [statementSuite(body, "alternative")];
   }
   expect(
     body.name === "conditional_statement_branches",
     `unknown conditional statement ${body.name}`,
   );
   const nested: (readonly Cursor[])[] = [
-    fieldList(body, "consequence"),
+    statementSuite(body, "consequence"),
   ];
   for (const alternative of fieldList(body, "alternatives")) {
     nested.push(
-      fieldList(
+      statementSuite(
         asRule(
           alternative,
           "conditional_statement_else_if_clause",
@@ -262,7 +277,7 @@ function nestedStatementLists(rule: Rule): readonly (readonly Cursor[])[] {
   const fallback = field(body, "fallback");
   if (fallback !== null) {
     nested.push(
-      fieldList(
+      statementSuite(
         asRule(fallback, "conditional_statement_else_clause"),
         "alternative",
       ),
@@ -282,7 +297,7 @@ function statementsNeedControlLowering(cursors: readonly Cursor[]): boolean {
       return true;
     }
     if (rule.name === "iteration") {
-      const body = fieldList(rule, "body");
+      const body = statementSuite(rule, "body");
       if (statementsContainReturn(body)) return true;
       continue;
     }
@@ -480,7 +495,7 @@ function lowerControlOutcome(
     if (!context.returnScope) {
       fail(
         "BLOT_RETURN_OUTSIDE_SCOPE",
-        "`return` has no enclosing module or `do` block.",
+        "`return` has no enclosing module or explicit block.",
         rule.span,
       );
     }
@@ -516,7 +531,7 @@ function lowerControlOutcome(
   if (rule.name === "conditional_statement") {
     const body = conditionalStatementBody(rule);
     if (body.name === "conditional_statement_guard") {
-      const alternative = fieldList(body, "alternative");
+      const alternative = statementSuite(body, "alternative");
       if (statementsCanContinue(alternative)) {
         fail(
           "BLOT_GUARD_MAY_CONTINUE",
@@ -560,7 +575,7 @@ function lowerControlOutcome(
     );
     // What a branch produces when it falls through. The names it rebound have
     // to ride across the rejoin, or the statements after the conditional read
-    // the value from before it — which is how `if c then n := n + 1; end;`
+    // the value from before it — which is how a rebinding under `if c then`
     // inside a `for` silently counted nothing.
     const rebound = reboundNames(nestedStatementLists(rule).flat());
     let branchContinue: Expr = loopState(rebound, rule.span);
@@ -756,7 +771,7 @@ function lowerControlConditional(
       context,
     ),
     consequence: lowerControlOutcome(
-      fieldList(body, "consequence"),
+      statementSuite(body, "consequence"),
       context,
       body.span,
       continueValue,
@@ -774,7 +789,7 @@ function lowerControlConditional(
         context,
       ),
       consequence: lowerControlOutcome(
-        fieldList(clause, "consequence"),
+        statementSuite(clause, "consequence"),
         context,
         clause.span,
         continueValue,
@@ -794,7 +809,7 @@ function lowerControlConditional(
       "conditional_statement_else_clause",
     );
     fallback = lowerControlOutcome(
-      fieldList(clause, "alternative"),
+      statementSuite(clause, "alternative"),
       context,
       clause.span,
       continueValue,
@@ -835,7 +850,7 @@ function lowerQualifiedName(rule: Rule, _source: string): readonly string[] {
 }
 
 /**
- * `for source do … end;` becomes the recursion behind `iterate`.
+ * `for source:` followed by an indented body becomes the recursion behind `iterate`.
  *
  * There is no loop in the AST, no loop in the evaluator, and no loop in the
  * backend, because a loop is a fold and `rec`/`case` already express the fold.
@@ -1232,7 +1247,7 @@ function desugarLoop(
  * The names a statement stream rebinds with `:=`.
  *
  * Recursive through nested statement lists, because a statement branch is part
- * of the same stream: `if c then n := n + 1; end;` rebinds `n` for
+ * of the same stream: a `n := n + 1` suite under `if c then` rebinds `n` for
  * everything after it, and a loop containing that rebinds `n` per iteration.
  *
  * `:=` is the only form collected, and that is what makes this well defined.
@@ -1243,8 +1258,8 @@ function desugarLoop(
  * condition happened to hold is exactly what must not leak.
  *
  * Which is why a `let`, `const`, or `<-` binding earlier in the stream takes
- * the name out of the running. After `current <- Counter.read ();`, the name
- * denotes that local, so `current := current - 1;` rebinds the local and has
+ * the name out of the running. After `current <- Counter.read ()`, the name
+ * denotes that local, so `current := current - 1` rebinds the local and has
  * nothing to hand outward — carrying it would publish a value the outer
  * binding never held. The shadow reaches the statements after the binding and
  * into the blocks nested in them, and stops at the end of the stream that
@@ -1319,7 +1334,7 @@ function lowerControlLoop(
   rule: Rule,
   context: Context,
 ): LoweredControlLoop {
-  const statements = fieldList(rule, "body");
+  const statements = statementSuite(rule, "body");
   const carried = carriedNames(statements);
   const constructors: ControlConstructors = {
     return: syntheticConstructor("LoopReturn", rule.span),
@@ -1444,7 +1459,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     };
   }
   if (rule.name === "iteration") {
-    const statements = fieldList(rule, "body");
+    const statements = statementSuite(rule, "body");
     let kind: "let" | "effect" = "let";
     if (statementsContainEffect(statements)) kind = "effect";
     if (statementsNeedControlLowering(statements)) {
@@ -1549,7 +1564,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       ),
       consequence: {
         tag: "block",
-        declarations: fieldList(body, "consequence").map((statement) =>
+        declarations: statementSuite(body, "consequence").map((statement) =>
           lowerDecl(asRule(unwrap(statement), "statement"), context)
         ),
         result: loopState(rebound, rule.span),
@@ -1569,7 +1584,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
         ),
         consequence: {
           tag: "block",
-          declarations: fieldList(clause, "consequence").map((statement) =>
+          declarations: statementSuite(clause, "consequence").map((statement) =>
             lowerDecl(asRule(unwrap(statement), "statement"), context)
           ),
           result: loopState(rebound, clause.span),
@@ -1590,7 +1605,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       );
       fallback = {
         tag: "block",
-        declarations: fieldList(clause, "alternative").map((statement) =>
+        declarations: statementSuite(clause, "alternative").map((statement) =>
           lowerDecl(asRule(unwrap(statement), "statement"), context)
         ),
         result: loopState(rebound, clause.span),
@@ -1619,7 +1634,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
   if (rule.name === "result") {
     fail(
       "BLOT_RETURN_OUTSIDE_SCOPE",
-      "`return` has no enclosing module or `do` block.",
+      "`return` has no enclosing module or explicit block.",
       rule.span,
     );
   }
@@ -2559,7 +2574,8 @@ function plainArm(arm: GuardedArm): Arm {
  *
  * The arms above the guarded one stay at that level, with their binders erased
  * and their bodies replaced by the same call. They are what keeps the order the
- * arms were written in — `case n of 5 => "five", m if m > 0 => "positive" end`
+ * arms were written in — `case n of` followed by the arms `5 => "five"` and
+ * `m if m > 0 => "positive"`
  * answers `"five"` for 5 — while the body each of them runs is the one the
  * fall-through holds. Every body is therefore written exactly once, at the
  * level that dropped the guard it stood after, and a chain of guards costs a

@@ -1,6 +1,6 @@
-let wanted = 1;
+let wanted = 1
 
-for #(wanted) in [] do
-end;
+for #(wanted) in []:
+  break
 
-return ();
+return ()

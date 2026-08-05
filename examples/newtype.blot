@@ -9,27 +9,27 @@
 // operations on it, and a bound the checker enforces — with no instances, no
 // coherence rules, and no dispatch at run time.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 // Declared first, then rebound with its table. `:=` requires the new value to
 // keep the binding's type, and `<+` is transparent — so attaching members is
 // precisely the kind of rebinding `:=` exists for, and the table can mention
 // the name it is being attached to.
-const Money = #Money I32;
+const Money = #Money I32
 
 Money := Money <+ {
   .of = fn n => #Money n;
   .zero = #Money 0;
   .eq = fn left => fn right => case (left, right) of
     (#Money a, #Money b) => Ord.eq a b
-  end;
+  ;
   .add = fn left => fn right => case (left, right) of
     (#Money a, #Money b) => #Money (a + b)
-  end;
-};
+  ;
+}
 
-sig price = Money;
-let price = Money.of 42;
+sig price = Money
+let price = Money.of 42
 
 // The table is reached through the *name*, not through a parameter. A type's
 // members are invisible to typing, so `fn (table, a, b) => table.eq a b` applied
@@ -51,14 +51,14 @@ let price = Money.of 42;
 // be believed for a `⊤`, and that is the whole point of answering with one. A
 // type variable is the join of nothing, so every constraint on it holds and
 // every `sig` naming any type at all would pass.
-sig same = Bool;
-let same = Money.eq price (Money.of 42);
+sig same = Bool
+let same = Money.eq price (Money.of 42)
 
-sig differs = Bool;
-let differs = Money.eq price Money.zero;
+sig differs = Bool
+let differs = Money.eq price Money.zero
 
-sig summed = Money;
-let summed = Money.add price (Money.of 8);
+sig summed = Money
+let summed = Money.add price (Money.of 8)
 
 return {
   .type = Money;
@@ -69,4 +69,4 @@ return {
   .differs = differs;
   .summed = summed;
 
-};
+  }

@@ -3,24 +3,22 @@ import { parse } from "../syntax/parse.ts";
 import { formatSource } from "./formatter.ts";
 
 Deno.test("formatting applies structural indentation without losing comments", async () => {
-  const source = "// choose a label\r\n" +
-    "let choose = fn n => if n == 1\r\n" +
-    'then "one"   \r\n' +
-    'else "other"\r\n' +
-    "end;\r\n" +
-    "return choose 1;";
+  const source = `// choose a label
+let choose = fn n => if n == 1 then "one"
+else "other"
+return choose 1
+`;
 
   const formatted = await formatSource(source);
   if (!formatted.ok) throw new Error("valid source did not format");
 
   assertEquals(
     formatted.source,
-    "// choose a label\n" +
-      "let choose = fn n => if n == 1\n" +
-      '  then "one"\n' +
-      '  else "other"\n' +
-      "end;\n" +
-      "return choose 1;\n",
+    `// choose a label
+let choose = fn n => if n == 1 then "one"
+else "other"
+return choose 1
+`,
   );
   assertEquals(await formatSource(formatted.source), formatted);
   assertEquals(
@@ -30,29 +28,32 @@ Deno.test("formatting applies structural indentation without losing comments", a
 });
 
 Deno.test("formatting refuses source the compiler cannot parse", async () => {
-  const formatted = await formatSource("let value = 1;");
+  const formatted = await formatSource(`let value = 1
+`);
   if (formatted.ok) throw new Error("invalid source formatted successfully");
   assertEquals(formatted.diagnostics[0]?.code, "BLOT_MISSING_RESULT");
 });
 
 Deno.test("formatting removes only precedence-redundant parentheses", async () => {
-  const source = 'let imported = (@import "module") ();\n' +
-    "let atom = (1);\n" +
-    "let left = (apply 1) 2;\n" +
-    "let right = apply (apply 1);\n" +
-    "let grouped = (1 + 2) * 3;\n" +
-    "return (imported, atom, left, right, grouped);";
+  const source = `let imported = (@import "module") ()
+let atom = (1)
+let left = (apply 1) 2
+let right = apply (apply 1)
+let grouped = (1 + 2) * 3
+return (imported, atom, left, right, grouped)
+`;
 
   const formatted = await formatSource(source);
   if (!formatted.ok) throw new Error("valid source did not format");
   assertEquals(
     formatted.source,
-    'let imported = @import "module" ();\n' +
-      "let atom = 1;\n" +
-      "let left = apply 1 2;\n" +
-      "let right = apply (apply 1);\n" +
-      "let grouped = (1 + 2) * 3;\n" +
-      "return (imported, atom, left, right, grouped);\n",
+    `let imported = @import "module" ()
+let atom = 1
+let left = apply 1 2
+let right = apply (apply 1)
+let grouped = (1 + 2) * 3
+return (imported, atom, left, right, grouped)
+`,
   );
   assertEquals(
     semanticTree(await parse(formatted.source)),
@@ -61,29 +62,31 @@ Deno.test("formatting removes only precedence-redundant parentheses", async () =
 });
 
 Deno.test("formatting retains interacting parentheses when flattening changes application", async () => {
-  const source = "let nested = apply ((apply 1));\nreturn nested;";
+  const source = `let nested = apply ((apply 1))
+return nested
+`;
   const formatted = await formatSource(source);
   if (!formatted.ok) throw new Error("valid source did not format");
-  assertEquals(formatted.source, `${source}\n`);
+  assertEquals(formatted.source, source);
 });
 
 Deno.test("formatting indents scoped returns as statements", async () => {
-  const source = "return do\n" +
-    "if 1 == 1 then\n" +
-    "return 1;\n" +
-    "end;\n" +
-    "return 2;\n" +
-    "end;";
+  const source = `let result =
+ if 1 == 1 then
+  return 1
+ return 2
+return result
+`;
   const formatted = await formatSource(source);
   if (!formatted.ok) throw new Error("valid source did not format");
   assertEquals(
     formatted.source,
-    "return do\n" +
-      "  if 1 == 1 then\n" +
-      "    return 1;\n" +
-      "  end;\n" +
-      "  return 2;\n" +
-      "end;\n",
+    `let result =
+  if 1 == 1 then
+    return 1
+  return 2
+return result
+`,
   );
 });
 

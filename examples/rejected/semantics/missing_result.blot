@@ -1,7 +1,7 @@
 // Every body ends with `return`. It is a declaration form rather than a
 // trailing bare expression so the strict root loop stays one repeated island.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-let x = 1;
-let y = 2;
+let x = 1
+let y = 2

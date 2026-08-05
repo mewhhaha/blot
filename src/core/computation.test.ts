@@ -5,7 +5,10 @@ import { elaborateModule, scheduleComputation } from "./computation.ts";
 
 Deno.test("core distinguishes pure definitions from explicit binds", async () => {
   const parsed = await parse(
-    "let value = 1;\nresult <- perform value;\nreturn result;",
+    `let value = 1
+result <- perform value
+return result
+`,
   );
   if (!parsed.ok) throw new Error("core fixture did not parse");
   const core = scheduleComputation(
@@ -19,7 +22,10 @@ Deno.test("core distinguishes pure definitions from explicit binds", async () =>
 
 Deno.test("core marks an ambient block result as a tail computation", async () => {
   const parsed = await parse(
-    "if #True then return (); end;\nreturn ();",
+    `if #True then
+  return ()
+return ()
+`,
   );
   if (!parsed.ok) throw new Error("tail-computation fixture did not parse");
   const core = scheduleComputation(
@@ -32,7 +38,9 @@ Deno.test("core marks an ambient block result as a tail computation", async () =
 
 Deno.test("core retains an explicit bind whose result is unused", async () => {
   const parsed = await parse(
-    "_ <- perform ();\nreturn ();",
+    `_ <- perform ()
+return ()
+`,
   );
   if (!parsed.ok) throw new Error("unused-bind fixture did not parse");
   const core = scheduleComputation(
@@ -44,7 +52,9 @@ Deno.test("core retains an explicit bind whose result is unused", async () => {
 });
 
 Deno.test("typed core contains settled types and independent expression structure", async () => {
-  const parsed = await parse("let value = ();\nreturn value;");
+  const parsed = await parse(`let value = ()
+return value
+`);
   if (!parsed.ok) throw new Error("typed-core fixture did not parse");
   const declaration = parsed.module.declarations[0];
   if (declaration?.tag !== "binding") {

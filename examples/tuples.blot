@@ -8,7 +8,7 @@
 //
 // `examples/matching.blot` is the same rule with one column.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 // The join that motivates the form: two options, one arm for the case where
 // both are present.
@@ -18,48 +18,42 @@ open @import "blot:prelude" ();
 // is `BLOT_INCOMPLETE_CASE` naming the combination that is left —
 // `examples/rejected/semantics/missing_tuple_case.blot`.
 let combine = fn (left, right) => case (left, right) of
-  (#Some a, #Some b) => a + b,
-  (#Some a, #None) => a,
-  (#None, #Some b) => b,
+  (#Some a, #Some b) => a + b
+  (#Some a, #None) => a
+  (#None, #Some b) => b
   (#None, #None) => 0
-end;
 
 // Both elements have the same type, so reading the wrong column is a wrong
 // answer rather than a type error. `9 - 4` is not `4 - 9`.
 let difference = fn pair => case pair of
   (a, b) => a - b
-end;
 
 // Overlapping arms, so their order is what decides. `(0, 0)` matches the first
 // two arms and the third; only the first runs. The columns are integers, which
 // no arm list exhausts, so the last arm is what covers them.
 let quadrant = fn point => case point of
-  (0, 0) => 1,
-  (0, _) => 2,
-  (_, 0) => 3,
+  (0, 0) => 1
+  (0, _) => 2
+  (_, 0) => 3
   (x, y) => 4 + x * y
-end;
 
 // Four columns, a literal in one and a name in another.
 let score = fn roll => case roll of
-  (1, 1, 1, 1) => 100,
-  (a, 2, c, d) => a + c + d,
+  (1, 1, 1, 1) => 100
+  (a, 2, c, d) => a + c + d
   (a, b, c, d) => a * 1000 + b * 100 + c * 10 + d
-end;
 
 // A tuple inside a tuple, with a constructor under it.
 let nested = fn value => case value of
-  ((#Some a, b), #None) => a * b,
-  ((#None, b), #Some c) => b + c,
+  ((#Some a, b), #None) => a * b
+  ((#None, b), #Some c) => b + c
   _ => 0
-end;
 
 // An arm that names the whole tuple rather than taking it apart, which is what
 // a fall-through with a use for the scrutinee looks like.
 let rest = fn pair => case pair of
-  (0, y) => y,
+  (0, y) => y
   whole => difference whole
-end;
 
 return {
   .both = combine (Some 3, Some 4);
@@ -79,4 +73,4 @@ return {
   .no_nested = nested ((Some 5, 6), Some 7);
   .named = rest (0, 8);
   .whole = rest (9, 4);
-};
+  }

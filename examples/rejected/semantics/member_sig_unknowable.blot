@@ -6,14 +6,13 @@
 // A type variable would be believed for any `sig` at all, which is why one is
 // not what "the checker knows nothing" means here.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-const Money = #Money I32 <+ { .of = fn n => #Money n; };
+const Money = #Money I32 <+ { .of = fn n => #Money n; }
 
-const priced = fn amount => do
-  sig converted = Money;
-  let converted = Money.of amount;
-  return converted;
-end;
+const priced = fn amount =>
+  sig converted = Money
+  let converted = Money.of amount
+  return converted
 
-return priced 42;
+return priced 42

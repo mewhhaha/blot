@@ -171,7 +171,7 @@ export type Value =
    * This is what makes `struct` return the storage type itself rather than a
    * record beside it. `extended` is *transparent* everywhere that matters —
    * equality, inhabitation, and the bridge into inference all see straight
-   * through to `inner`, so `sig p = Point;` means `p` is the tuple `Point`
+   * through to `inner`, so `sig p = Point` means `p` is the tuple `Point`
    * describes. The members are reachable by field access and invisible to
    * typing, which is the only way one binding can be both the type and the
    * namespace of its accessors.

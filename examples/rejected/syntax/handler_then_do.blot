@@ -1,3 +1,2 @@
-return try (fn () => ()) then do
+return try (fn () => ()) then
   @handle ((), {})
-end;

@@ -1,4 +1,3 @@
 if #True then do
-  return ();
-end;
-return ();
+  return ()
+return ()

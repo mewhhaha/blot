@@ -1,6 +1,6 @@
 // `rec` makes a binding's own name visible inside its lambda, so it needs a
 // binding with a single name to refer to.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-return rec (fn n => n);
+return rec (fn n => n)

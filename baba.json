@@ -20,14 +20,14 @@
         "rule": "module_header",
         "boundary": {
           "kind": "terminated",
-          "terminal": ";"
+          "terminal": "LAYOUT_NEWLINE"
         }
       },
       {
         "rule": "operator_section",
         "boundary": {
           "kind": "terminated",
-          "terminal": ";"
+          "terminal": "LAYOUT_NEWLINE"
         }
       },
       {
@@ -40,14 +40,14 @@
         "rule": "declaration",
         "boundary": {
           "kind": "terminated",
-          "terminal": ";"
+          "terminal": "LAYOUT_NEWLINE"
         }
       },
       {
         "rule": "statement",
         "boundary": {
           "kind": "terminated",
-          "terminal": ";"
+          "terminal": "LAYOUT_NEWLINE"
         }
       },
       {
@@ -359,8 +359,7 @@
       {
         "rule": "conditional",
         "boundary": {
-          "kind": "terminated",
-          "terminal": "end"
+          "kind": "root"
         }
       },
       {
@@ -409,7 +408,7 @@
         "rule": "case_expression",
         "boundary": {
           "kind": "terminated",
-          "terminal": "end"
+          "terminal": "LAYOUT_DEDENT"
         }
       },
       {
@@ -428,7 +427,7 @@
         "rule": "handler_composition",
         "boundary": {
           "kind": "terminated",
-          "terminal": "end"
+          "terminal": "LAYOUT_DEDENT"
         }
       },
       {
@@ -447,7 +446,14 @@
         "rule": "block",
         "boundary": {
           "kind": "terminated",
-          "terminal": "end"
+          "terminal": "LAYOUT_DEDENT"
+        }
+      },
+      {
+        "rule": "statement_suite",
+        "boundary": {
+          "kind": "terminated",
+          "terminal": "LAYOUT_DEDENT"
         }
       },
       {

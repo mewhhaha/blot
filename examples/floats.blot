@@ -11,7 +11,7 @@
 // meaning there. So a float literal inhabits `F64` and the narrowing machinery
 // never has to answer a question about reals.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 // --- arithmetic -------------------------------------------------------------
 //
@@ -20,28 +20,28 @@ open @import "blot:prelude" ();
 // type at run time, which is the typeclass machinery this language does not
 // have. A module that wants an operator for these says so in its own header.
 
-sig quarter = F64;
-let quarter = Float.div 1.0 4.0;
+sig quarter = F64
+let quarter = Float.div 1.0 4.0
 
-sig sum = F64;
-let sum = Float.add 1.5 2.25;
+sig sum = F64
+let sum = Float.add 1.5 2.25
 
-sig scaled = F64;
-let scaled = Float.mul quarter 8.0;
+sig scaled = F64
+let scaled = Float.mul quarter 8.0
 
 // --- crossing between the two -----------------------------------------------
 //
 // Explicitly, in both directions. `truncate` rounds toward zero, which is what
 // WebAssembly's saturating conversion does.
 
-sig widened = F64;
-let widened = Float.of_int 7;
+sig widened = F64
+let widened = Float.of_int 7
 
-sig narrowed = Int;
-let narrowed = Float.truncate 3.75;
+sig narrowed = Int
+let narrowed = Float.truncate 3.75
 
-sig negative = Int;
-let negative = Float.truncate (Float.negate 3.75);
+sig negative = Int
+let negative = Float.truncate (Float.negate 3.75)
 
 // --- comparison, and the value no ordering accepts --------------------------
 //
@@ -56,20 +56,20 @@ let negative = Float.truncate (Float.negate 3.75);
 // A program that might hold one asks `Float.is_nan` first, and that question
 // needs a primitive precisely because comparing is what refuses.
 
-sig ordered = Bool;
-let ordered = is_less (Float.cmp 1.5 2.5);
+sig ordered = Bool
+let ordered = is_less (Float.cmp 1.5 2.5)
 
-sig same = Bool;
-let same = is_equal (Float.cmp 0.5 (Float.div 1.0 2.0));
+sig same = Bool
+let same = is_equal (Float.cmp 0.5 (Float.div 1.0 2.0))
 
-sig tenth_is_exact = Bool;
-let tenth_is_exact = is_equal (Float.cmp (Float.add 0.1 0.2) 0.3);
+sig tenth_is_exact = Bool
+let tenth_is_exact = is_equal (Float.cmp (Float.add 0.1 0.2) 0.3)
 
-sig nan_is_nan = Bool;
-let nan_is_nan = Float.is_nan (Float.div 0.0 0.0);
+sig nan_is_nan = Bool
+let nan_is_nan = Float.is_nan (Float.div 0.0 0.0)
 
-sig ordinary_is_not = Bool;
-let ordinary_is_not = Float.is_nan 1.0;
+sig ordinary_is_not = Bool
+let ordinary_is_not = Float.is_nan 1.0
 
 // --- a root, written in blot ------------------------------------------------
 //
@@ -77,8 +77,8 @@ let ordinary_is_not = Float.is_nan 1.0;
 // would have been open-coded at lowering — and a primitive is for what blot
 // cannot write, which this is not.
 
-sig root = Int;
-let root = Float.truncate (Float.mul (Float.sqrt 2.0) 1000.0);
+sig root = Int
+let root = Float.truncate (Float.mul (Float.sqrt 2.0) 1000.0)
 
 // --- the narrower one -------------------------------------------------------
 //
@@ -90,27 +90,27 @@ let root = Float.truncate (Float.mul (Float.sqrt 2.0) 1000.0);
 // them is an error rather than a rounding nobody wrote down — and because it is
 // the lane type a four-wide vector needs.
 
-sig third_64 = Int;
-let third_64 = Float.truncate (Float.mul (Float.div 1.0 3.0) 1000000000.0);
+sig third_64 = Int
+let third_64 = Float.truncate (Float.mul (Float.div 1.0 3.0) 1000000000.0)
 
 // The same division, in single precision, widened back to compare. The digits
 // stop earlier, which is the whole difference between the two types.
-sig third_32 = Int;
+sig third_32 = Int
 let third_32 = Float.truncate (Float.mul
-(Float32.widen (Float32.div (Float32.of_int 1) (Float32.of_int 3)))
-1000000000.0);
+  (Float32.widen (Float32.div (Float32.of_int 1) (Float32.of_int 3)))
+  1000000000.0)
 
 // A double that is exact in f32 survives the round trip; one that is not does
 // not. This is the pair that shows the narrowing is real rather than a label.
-sig exact_round_trip = Bool;
+sig exact_round_trip = Bool
 let exact_round_trip = is_equal (Float.cmp
-(Float32.widen (Float32.of_float 0.5))
-0.5);
+  (Float32.widen (Float32.of_float 0.5))
+  0.5)
 
-sig lossy_round_trip = Bool;
+sig lossy_round_trip = Bool
 let lossy_round_trip = is_equal (Float.cmp
-(Float32.widen (Float32.of_float 0.1))
-0.1);
+  (Float32.widen (Float32.of_float 0.1))
+  0.1)
 
 // --- the boundary -----------------------------------------------------------
 //
@@ -144,4 +144,4 @@ return {
   .third_32 = third_32;
   .exact_round_trip = exact_round_trip;
   .lossy_round_trip = lossy_round_trip;
-};
+  }

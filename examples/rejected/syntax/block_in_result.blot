@@ -1,3 +1,2 @@
-return do
-  in 1
-end;
+// `return` always carries a value; an empty result is not an implicit unit.
+return

@@ -2,21 +2,20 @@
 // the computation performs *beyond* that effect is still owed, and reaching the
 // module boundary with it is an error.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-const Console = @effect { .write = Str -> Unit; };
-const Clock = @effect { .now = Unit -> Int; };
+const Console = @effect { .write = Str -> Unit; }
+const Clock = @effect { .now = Unit -> Int; }
 
-let logging = { .write = fn (m, ?resume) => do
-  result <- resume ();
-  return result;
-end; .return = fn v => v; };
+let logging = { .write = fn (m, ?resume) =>
+  result <- resume ()
+  return result
+; .return = fn v => v; }
 
-let stamped = fn () => do
-  _ <- Console.write "start";
-  time <- Clock.now ();
-  return time;
-end;
+let stamped = fn () =>
+  _ <- Console.write "start"
+  time <- Clock.now ()
+  return time
 
-result <- @handle (Console, stamped, logging);
-return result;
+result <- @handle (Console, stamped, logging)
+return result

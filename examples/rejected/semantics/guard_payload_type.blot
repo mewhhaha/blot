@@ -2,15 +2,13 @@
 // appending text to `inner` is a type error at `blot check` rather than a
 // surprise at run time.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-const counted = #Some 3;
+const counted = #Some 3
 
-let shout = fn () => do
+let shout = fn () =>
   if let #Some inner = counted else
-    return "none";
-  end;
-  return Text.append inner "!";
-end;
+    return "none"
+  return Text.append inner "!"
 
-return shout ();
+return shout ()

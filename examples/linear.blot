@@ -4,51 +4,54 @@
 // Neither is in the type lattice — they are a separate flow analysis, which is
 // what keeps biunification polynomial.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-let consume = fn !value => value + 1;
-let peek = fn &point => point.x + point.y;
+let consume = fn !value => value + 1
+let peek = fn &point => point.x + point.y
 
-let !token = 41;
-let owned = consume (!token);
+let !token = 41
+let owned = consume (!token)
 
-let borrowed = peek { .x = 20; .y = 22; };
+let borrowed = peek { .x = 20; .y = 22; }
 
 // A closure that captures a linear value becomes linear itself: the obligation
 // moves into it rather than being refused. `deferred` is linear even though
 // nothing here says `!` — it is linear because of what it holds — so it must be
 // called exactly once.
-let !ticket = 7;
-let deferred = fn () => consume (!ticket);
-let settled = deferred ();
+let !ticket = 7
+let deferred = fn () => consume (!ticket)
+let settled = deferred ()
 
 // Aggregate ownership is structural. The constructor carries the closure's
 // obligation until matching transfers it into `use`.
-let !key = 40;
-let boxed = #Held (fn () => consume (!key));
-let held = case boxed of #Held use => use () end;
+let !key = 40
+let boxed = #Held (fn () => consume (!key))
+let held = case boxed of
+  #Held use => use ()
 
 // Record fields retain distinct paths. Moving one owned closure leaves its
 // sibling live, while the partially moved record itself is no longer usable.
-let !left = 19;
-let !right = 20;
+let !left = 19
+let !right = 20
 let pair = {
   .left = fn () => consume (!left);
   .right = fn () => consume (!right);
-};
-let first = pair.left ();
-let fields = first + pair.right ();
+  }
+let first = pair.left ()
+let fields = first + pair.right ()
 
 // `?` is affine: at most once. Not a weaker `!` but a different rule, and the
 // right one for a continuation — spending it on one branch and not the other is
 // still at most once, so branches need not agree.
-let choose = fn ?resume => if 1 < 2 then resume 10 else 0 end;
-let chosen = choose (fn n => n);
+let choose = fn ?resume => if 1 < 2 then resume 10
+else 0
+let chosen = choose (fn n => n)
 
 // Branches have to agree about what a *linear* value spent, so this consumes on
 // both.
-let !coin = 1;
-let flipped = if 1 < 2 then consume (!coin) else consume (!coin) end;
+let !coin = 1
+let flipped = if 1 < 2 then consume (!coin)
+else consume (!coin)
 
 return {
   .owned = owned;
@@ -58,4 +61,4 @@ return {
   .fields = fields;
   .chosen = chosen;
   .flipped = flipped;
-};
+  }

@@ -58,6 +58,7 @@ order, operation arguments, return values, and classified traps are.
 ```text
 SourceGraph
   -> TokenGraph
+  -> LayoutTokenGraph
   -> CompactCST
   -> SurfaceAST
   -> TypedAST + InferenceFacts
@@ -83,16 +84,17 @@ boundary increases compiler surface without strengthening the theorem.
 The source pipeline is:
 
 ```text
-source -> Baba CPU frontend -> compact CST -> fixity fold -> AST
+source -> Baba lexer -> layout elaboration -> Baba CPU frontend -> compact CST -> fixity fold -> AST
        -> comptime evaluation -> biunification -> safety -> ownership
        -> staging and specialization -> ClosedProgram
        -> direct Rust/WebAssembly emission
 ```
 
-Baba owns lexing and parsing. Blot owns elaboration, inference, compile-time
-evaluation, safety, ownership, specialization, Runtime HIR, ABI policy, the
-module shell, and direct WebAssembly emission. Gpupaper owns its independent
-Core and emitter, which Blot uses only for bounded conformance comparisons.
+Baba owns lexing and parsing. Blot owns deterministic layout-token insertion,
+source-offset recovery, elaboration, inference, compile-time evaluation, safety,
+ownership, specialization, Runtime HIR, ABI policy, the module shell, and direct
+WebAssembly emission. Gpupaper owns its independent Core and emitter, which Blot
+uses only for bounded conformance comparisons.
 
 ## 3. Pass contract
 

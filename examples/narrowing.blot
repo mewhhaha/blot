@@ -5,19 +5,16 @@
 // the value, so a `case` with a default and an `if let` guard bind at the
 // payload's real type rather than at an unconstrained one.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 let unwrap_or = fn m => case m of
-  #Some inner => inner,
+  #Some inner => inner
   _ => "none"
-end;
 
-let shout = fn m => do
+let shout = fn m =>
   if let #Some inner = m else
-    return "none";
-  end;
-  return Text.append inner "!";
-end;
+    return "none"
+  return Text.append inner "!"
 
 // The default arm keeps the union open: `#Missing` is not one of the arms and
 // is still accepted.
@@ -26,4 +23,4 @@ return {
   .absent = unwrap_or #Missing;
   .shouted = shout (#Some "hi");
   .silent = shout #None;
-};
+  }

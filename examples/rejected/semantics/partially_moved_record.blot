@@ -1,17 +1,16 @@
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-let consume = fn !value => value + 1;
-let !left = 40;
-let !right = 41;
+let consume = fn !value => value + 1
+let !left = 40
+let !right = 41
 let holder = {
   .first = fn () => consume (!left);
   .second = fn () => consume (!right);
-};
-let first = holder.first ();
-let consume_holder = fn !value => do
-  let { .first; .second; } = !value;
-  let first_value = first ();
-  return first_value + second ();
-end;
+  }
+let first = holder.first ()
+let consume_holder = fn !value =>
+  let { .first; .second; } = !value
+  let first_value = first ()
+  return first_value + second ()
 
-return first + consume_holder holder;
+return first + consume_holder holder

@@ -13,34 +13,33 @@
 // fixity declaration, and nothing added to the compiler. Structural width
 // subtyping is the entire dispatch mechanism.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-const Method = "GET" | "POST" | "PUT" | "DELETE";
-const Safe = Method \ "PUT" \ "DELETE";
-const Tag = (#X | #Y | #Z) & (#Y | #Z | #W);
+const Method = "GET" | "POST" | "PUT" | "DELETE"
+const Safe = Method \ "PUT" \ "DELETE"
+const Tag = (#X | #Y | #Z) & (#Y | #Z | #W)
 
 // A field is a function, so an operator is a function. `Set.diff Method` is the
 // section "everything in Method except", which is not a special form either.
-const without = Set.diff Method;
-const readonly = without "PUT";
+const without = Set.diff Method
+const readonly = without "PUT"
 
 // --- a second implementation ------------------------------------------------
 //
 // Three fields with the right names is the whole contract. Shadowing `Set`
 // rebinds `|`, `&`, and `\` for the rest of the module.
 
-const member = fn (values, needle) =>
-  fold (values, False, (fn (seen, value) => seen || Ord.eq value needle));
+const member = fn (values, needle) => fold (values, False, (fn (seen, value) => seen || Ord.eq value needle))
 
 const Set = {
-  .union = fn left => fn right => fold (right, left, (fn (all, value) =>
-    if member (all, value) then all else @array.push all value end));
+  .union = fn left => fn right => fold (right, left, (fn (all, value) => if member (all, value) then all
+  else @array.push all value));
   .intersect = fn left => fn right => filter (left, (fn value => member (right, value)));
   .diff = fn left => fn right => filter (left, (fn value => not (member (right, value))));
-};
+}
 
-const evens = [2, 4, 6];
-const small = [1, 2, 3, 4];
+const evens = [2, 4, 6]
+const small = [1, 2, 3, 4]
 
 return {
   .safe = Safe;
@@ -49,4 +48,4 @@ return {
   .union = evens | small;
   .intersect = evens & small;
   .diff = small \ evens;
-};
+  }

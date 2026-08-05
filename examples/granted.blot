@@ -8,26 +8,25 @@
 // `init` has no runtime representation of its own. Nothing is passed in, and a
 // program that never asked for `print` cannot reach it.
 
-module init;
+module init
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-const Console = @effect { .write = Str -> Unit; };
+const Console = @effect { .write = Str -> Unit; }
 
 // The handler discharges the blot effect by forwarding it to the granted
 // capability, then resumes the rest of the computation.
 const to_host = {
-  .write = fn (message, ?resume) => do
-    _ <- init.print message;
-    result <- resume ();
-    return result;
-  end;
-};
+  .write = fn (message, ?resume) =>
+    _ <- init.print message
+    result <- resume ()
+    return result
+  ;
+}
 
-const report = fn () => do
-  _ <- Console.write "compiled";
-  _ <- Console.write "linked";
-  return 42;
-end;
+const report = fn () =>
+  _ <- Console.write "compiled"
+  _ <- Console.write "linked"
+  return 42
 
-return @handle (Console, report, to_host);
+return @handle (Console, report, to_host)

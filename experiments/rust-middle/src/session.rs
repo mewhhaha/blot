@@ -555,7 +555,7 @@ mod tests {
     #[test]
     fn binary_module_snapshot_restores_interface_and_value() {
         const MODULE_PATH: &str = "snapshot:library";
-        const MODULE_SOURCE: &str = "return { .answer = 42; };";
+        const MODULE_SOURCE: &str = "return { .answer = 42; }\u{e000}";
         let mut builder = CompilerSession::default();
         builder
             .add_source(
@@ -587,12 +587,15 @@ mod tests {
     fn comment_only_edit_preserves_resident_module() {
         let mut session = CompilerSession::default();
         session
-            .add_source("main.blot".to_owned(), source("return 1;"))
+            .add_source("main.blot".to_owned(), source("return 1\u{e000}"))
             .expect("initial source should load");
         let initial = session.context.modules.borrow()["main.blot"].module.clone();
 
         session
-            .add_source("main.blot".to_owned(), source("return 1; // changed"))
+            .add_source(
+                "main.blot".to_owned(),
+                source("return 1\u{e000} // changed"),
+            )
             .expect("edited source should load");
         let edited = session.context.modules.borrow()["main.blot"].module.clone();
 
@@ -603,7 +606,7 @@ mod tests {
     fn closed_program_and_artifact_follow_semantic_revision() {
         let mut session = CompilerSession::default();
         session
-            .add_source("main.blot".to_owned(), source("return 1;"))
+            .add_source("main.blot".to_owned(), source("return 1\u{e000}"))
             .expect("initial source should load");
         session
             .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
@@ -623,12 +626,15 @@ mod tests {
         assert_eq!(session.closed_programs.borrow().len(), 1);
 
         session
-            .add_source("main.blot".to_owned(), source("return 1; // changed"))
+            .add_source(
+                "main.blot".to_owned(),
+                source("return 1\u{e000} // changed"),
+            )
             .expect("comment edit should load");
         assert_eq!(session.closed_programs.borrow().len(), 1);
 
         session
-            .add_source("main.blot".to_owned(), source("return 2;"))
+            .add_source("main.blot".to_owned(), source("return 2\u{e000}"))
             .expect("semantic edit should load");
         assert!(session.closed_programs.borrow().is_empty());
     }

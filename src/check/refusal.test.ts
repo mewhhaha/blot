@@ -42,9 +42,12 @@ async function refusalAt(source: string): Promise<{
 
 Deno.test("a refusal from the prelude points at the caller, not the prelude", async () => {
   const found = await refusalAt(
-    `open @import "blot:prelude" ();\n` +
-      `const _ = expect (False, "nope");\n` +
-      `return 1;\n`,
+    `open @import "blot:prelude" ()
+` +
+      `const _ = expect (False, "nope")
+` +
+      `return 1
+`,
   );
   assertEquals(found.message, "nope");
   // The `expect` call, not an offset into `prelude.blot`.
@@ -54,11 +57,15 @@ Deno.test("a refusal from the prelude points at the caller, not the prelude", as
 
 Deno.test("a refusal from a `@type.satisfies` predicate points at the predicate", async () => {
   const found = await refusalAt(
-    `open @import "blot:prelude" ();\n` +
-      `let reading = { .value = 12; };\n` +
+    `open @import "blot:prelude" ()
+` +
+      `let reading = { .value = 12; }
+` +
       `let _ = @type.satisfies (reading, fn t =>\n` +
-      `  expect (refines (t, Has { .missing = Int; }), "needs .missing"));\n` +
-      `return reading.value;\n`,
+      `  return expect (refines (t, Has { .missing = Int; }), "needs .missing")\n` +
+      `)\n` +
+      `return reading.value
+`,
   );
   assertEquals(found.message, "needs .missing");
   assertEquals(found.line, 3);

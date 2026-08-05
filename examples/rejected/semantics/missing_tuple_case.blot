@@ -8,12 +8,11 @@
 // because neither of those can state it: no single column is missing anything,
 // and it is the combination the arms never reach.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-sig join = (Option Int, Option Int) -> Int;
+sig join = (Option Int, Option Int) -> Int
 let join = fn pair => case pair of
-  (#Some a, #Some b) => a + b,
-  (#Some a, #None) => a,
+  (#Some a, #Some b) => a + b
+  (#Some a, #None) => a
   (#None, #Some b) => b
-end;
-return join (None, None);
+return join (None, None)

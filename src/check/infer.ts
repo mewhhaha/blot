@@ -3813,7 +3813,7 @@ function inferDeclarations(
       // A rebinding whose value is not known at compile time erases the one the
       // name had.
       context.types.comptime.delete(declaration.name);
-      // And the length, for the same reason: after `xs := f ();` the name holds
+      // And the length, for the same reason: after `xs := f ()` the name holds
       // an array of unknown size, and the literal it was declared with says
       // nothing about it. A rebinding to another literal records that one.
       context.types.arrayLengths.delete(declaration.name);
@@ -4821,7 +4821,7 @@ function snapshotType(
  * `bridge` answers `null` for a closure because a closure's type comes from its
  * body — but nothing then goes and infers that body, so the declaration falls
  * back to inferring the expression that *produced* the closure. For
- * `const on_int = pick Int;` that expression is a `case`/`if` over types, and
+ * `const on_int = pick Int` that expression is a `case`/`if` over types, and
  * inferring it joins every arm: `on_int` ends up with the arrow of the branch
  * that lost as well as the one that won.
  *
@@ -5027,7 +5027,7 @@ function requirePure(
     fail(
       "BLOT_UNSEQUENCED_EFFECT",
       `${description} performs an effect. Sequence it with ` +
-        "`name <- expression;` instead.",
+        "`name <- expression` instead.",
       span,
     );
   }
@@ -5160,7 +5160,7 @@ export interface Checked {
   /**
    * The field set of the *value* a shape pattern destructures.
    *
-   * blot has width subtyping, so `let { .x; } = point;` names fewer fields than
+   * blot has width subtyping, so `let { .x; } = point` names fewer fields than
    * the value has. Core records are nominal, so the backend needs the value's
    * set rather than the pattern's — the pattern says what is wanted, not what
    * arrives.

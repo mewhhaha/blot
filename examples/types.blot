@@ -4,58 +4,57 @@
 // so type algebra is function application and `const` is the only declaration
 // form involved. This is what removes twelve rules from the grammar.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 // Literals are singleton types: the type of `1` is `1`, never `Int`.
 
-const One = @type.of 1;
-const Method = "GET" | "POST" | "PUT";
-const Bit = 0 | 1;
-const Small = 1 | 2 | 3 | #Woop | "hello";
+const One = @type.of 1
+const Method = "GET" | "POST" | "PUT"
+const Bit = 0 | 1
+const Small = 1 | 2 | 3 | #Woop | "hello"
 
 // Set algebra is by containment, not by equality: a type is a set, so the
 // question is what it *contains*. Removing a point from an integer range splits
 // it, which is exact because integers are discrete. Text is dense — there is no
 // least string above `"a"` — so `Str \\ "a"` is refused rather than approximated.
-const NonZero = Int \ 0;
-const JustOne = Int & 1;
+const NonZero = Int \ 0
+const JustOne = Int & 1
 
 // Set algebra over unions. `|` and `\` are `Set.union` and `Set.diff` — no
 // more built in than `+` is.
-const Value = I32 | Str;
-const Verb = Method \ "PUT";
-const Digit = range (0, 9);
+const Value = I32 | Str
+const Verb = Method \ "PUT"
+const Digit = range (0, 9)
 
 // Arrows are values too, so a signature is an expression.
-const Predicate = I32 -> (#True | #False);
+const Predicate = I32 -> (#True | #False)
 
 // A nominal type. Invariant, and never confused with its carrier.
-const Centimeter = @type.seal "Centimeter" 42;
+const Centimeter = @type.seal "Centimeter" 42
 
 // Type constructors are ordinary functions, which is where higher-kinded
 // abstraction lives in blot: staged, not in the inference lattice.
-const Pair = fn (a, b) => { .first = a; .second = b; };
-const Boxed = fn a => { .value = a; };
-const Compose = fn (f, g) => fn a => f (g a);
+const Pair = fn (a, b) => { .first = a; .second = b; }
+const Boxed = fn a => { .value = a; }
+const Compose = fn (f, g) => fn a => f (g a)
 
-const BoxedPair = Compose (Boxed, (fn a => Pair (a, a)));
+const BoxedPair = Compose (Boxed, (fn a => Pair (a, a)))
 
 // Reflection is a normal call, so `derive` is a function rather than a macro,
 // an attribute, or a compiler builtin.
 const Record = struct {
   .code = I32;
   .label = Str;
-};
+  }
 
 // Derivation takes the field names, not the struct. A struct's namespace is
 // compile-time and does not appear in its type — `Record` *is* the storage
 // tuple — so a function that wanted `.fields` off its parameter would have no
 // type to ask for. Handing it `Record.fields` is both what type checks and
 // what the derivation actually needs.
-const derive_names = fn names => map (names, (fn name => @text.concat "." name));
+const derive_names = fn names => map (names, (fn name => @text.concat "." name))
 
-const describe = fn names => fold (names, "", (fn (state, name) =>
-  @text.concat state (@text.concat name " ")));
+const describe = fn names => fold (names, "", (fn (state, name) => @text.concat state (@text.concat name " ")))
 
 return {
   .one = One;
@@ -82,4 +81,4 @@ return {
   // runs at compile time because everything here does.
   .in_range = @satisfies 7 Digit;
   .typed = @type.of { .x = 1; .y = "two"; };
-};
+  }

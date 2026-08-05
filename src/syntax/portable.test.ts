@@ -4,7 +4,9 @@ import { decodePortableModule, encodePortableModule } from "./portable.ts";
 
 Deno.test("a portable AST round trip preserves the lowered module", async () => {
   const parsed = await parse(
-    "const answer = 41; return fn offset => answer + offset;",
+    `const answer = 41
+return fn offset => answer + offset
+`,
   );
   if (!parsed.ok) throw new Error("portable AST fixture did not parse");
 
@@ -18,7 +20,8 @@ Deno.test("a portable AST round trip preserves the lowered module", async () => 
 });
 
 Deno.test("a portable AST rejects references outside its arenas", async () => {
-  const parsed = await parse("return 41;");
+  const parsed = await parse(`return 41
+`);
   if (!parsed.ok) throw new Error("portable AST fixture did not parse");
   const encoded = JSON.parse(
     JSON.stringify(encodePortableModule(parsed.module)),
@@ -36,7 +39,8 @@ Deno.test("a portable AST rejects references outside its arenas", async () => {
 });
 
 Deno.test("a portable AST rejects cyclic expression references", async () => {
-  const parsed = await parse("return fn value => value;");
+  const parsed = await parse(`return fn value => value
+`);
   if (!parsed.ok) throw new Error("portable AST fixture did not parse");
   const encoded = JSON.parse(
     JSON.stringify(encodePortableModule(parsed.module)),

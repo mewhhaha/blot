@@ -4,9 +4,10 @@
 // guess. Any declaration between them ends the group and restores the ordinary
 // shadowing rule.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-let step = rec (fn n => if n == 0 then 0 else step (n - 1) end);
-let step = rec (fn n => n + 1);
+let step = rec (fn n => if n == 0 then 0
+else step (n - 1))
+let step = rec (fn n => n + 1)
 
-return step 3;
+return step 3

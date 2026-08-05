@@ -24,9 +24,9 @@ import { show } from "./print.ts";
 const scratch = await Deno.makeTempDir();
 
 /** The operators this file interrogates, as one module's compile-time values. */
-const FIXTURE = `open @import "blot:prelude" ();
+const FIXTURE = `open @import "blot:prelude" ()
 
-const Sneaky = { .right = 0; };
+const Sneaky = { .right = 0; }
 
 const Probes = {
   // The prelude shapes, reached by name below rather than restated here.
@@ -34,46 +34,46 @@ const Probes = {
   // Every free occurrence of a parameter is inside the one comparison, but
   // \`open\` binds \`right\` from a compile-time value, so no node in the body
   // carries the name. This function is \`fn a => fn b => a == 0\`.
-  .opened = fn left => fn right => do
-    open Sneaky;
-    return is_equal (@int.cmp left right);
-  end;
+  .opened = fn left => fn right =>
+    open Sneaky
+    return is_equal (@int.cmp left right)
+  ;
 
   // \`left\` occurs once as a \`var\`, but a binder rebinds it first.
-  .rebound = fn left => fn right => do
-    let left = 5;
-    return is_equal (@int.cmp left right);
-  end;
+  .rebound = fn left => fn right =>
+    let left = 5
+    return is_equal (@int.cmp left right)
+  ;
 
   // Reversed arguments are still one comparison of both parameters.
   .reversed = fn l => fn r => is_equal (@int.cmp r l);
 
   // The same equality, spelled with two comparisons. Refused: the occurrence
   // count is what licenses the factorization, and this body has four.
-  .twice = fn l => fn r => if is_less (@int.cmp l r)
-      then False
-      else not (is_less (@int.cmp r l))
-    end;
+  .twice = fn l => fn r => if is_less (@int.cmp l r) then False
+  else not (is_less (@int.cmp r l));
 
   // Hand-written, in terms of the intrinsic rather than the prelude's helpers.
   .handwritten = fn l => fn r => case @int.cmp l r of
-    #Equal => True,
-    #Less => False,
+    #Equal => True
+    #Less => False
     #Greater => False
-  end;
+  ;
 
   .constantly = fn a => fn b => True;
   .never = fn a => fn b => False;
   // A parameter used outside the comparison.
-  .leaks = fn l => fn r => if is_equal (@int.cmp l r) then l == l else False end;
+  .leaks = fn l => fn r => if is_equal (@int.cmp l r) then l == l
+  else False;
   // The right domain, the wrong answer type.
   .ordering = fn l => fn r => @int.cmp l r;
   // Unary.
   .unary = fn l => is_equal (@int.cmp l l);
   // Refuses on one probe. \`blot check\` must survive it.
-  .refusing = fn l => fn r => if is_less (@int.cmp l r) then @fail "no" else True end;
-};
-return 0;
+  .refusing = fn l => fn r => if is_less (@int.cmp l r) then @fail "no"
+  else True;
+}
+return 0
 `;
 
 const path = `${scratch}/probes.blot`;

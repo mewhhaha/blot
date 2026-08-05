@@ -1,35 +1,30 @@
 operators {
   infixl 65 (++) = Text.append;
-};
+}
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 const Terminal = @effect.host {
   .read_line = Unit -> Str;
   .write = Str -> Unit;
-};
+  }
 
 const Model = @effect.host {
   .complete = Str -> Str;
-};
+  }
 
-let transcript = "";
-let turns = 0;
+let transcript = ""
+let turns = 0
 
-for ever do
-  _ <- Terminal.write "You:";
-  prompt <- Terminal.read_line ();
-
+for ever:
+  _ <- Terminal.write "You:"
+  prompt <- Terminal.read_line ()
   if text_eq (prompt, "") then
-    break;
-  end;
+    break
+  let request = transcript ++ "\nUser: " ++ prompt ++ "\nAssistant:"
+  reply <- Model.complete request
+  _ <- Terminal.write (Text.append "Agent: " reply)
+  transcript := request ++ " " ++ reply
+  turns := turns + 1
 
-  let request = transcript ++ "\nUser: " ++ prompt ++ "\nAssistant:";
-  reply <- Model.complete request;
-  _ <- Terminal.write (Text.append "Agent: " reply);
-
-  transcript := request ++ " " ++ reply;
-  turns := turns + 1;
-end;
-
-return turns;
+return turns

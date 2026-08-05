@@ -14,7 +14,8 @@ const scratch = await Deno.makeTempDir();
 // Every snippet opens the prelude, because every module does: it has no
 // privilege, and a fixture that skipped it would be testing a language where
 // `+` is unbound.
-const PRELUDE = 'open @import "blot:prelude" ();\n';
+const PRELUDE = `open @import "blot:prelude" ()
+`;
 
 async function typeOf(source: string): Promise<string> {
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
@@ -51,7 +52,9 @@ Deno.test("checking retains expression types for backend lowering", async () => 
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
   await Deno.writeTextFile(
     path,
-    `${PRELUDE}let answer = 40 + 2; return answer;`,
+    `${PRELUDE}let answer = 40 + 2
+return answer
+`,
   );
   const checked = await checkFile(path);
   if (checked.expressionTypes.size === 0) {
@@ -63,7 +66,9 @@ Deno.test("direct array access carries an explicit proof certificate", async () 
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
   await Deno.writeTextFile(
     path,
-    `${PRELUDE}let values = [42];\nreturn @array.get values 0;`,
+    `${PRELUDE}let values = [42]
+return @array.get values 0
+`,
   );
   const checked = await checkFile(path);
   assertEquals(checked.arrayProofs.size > 0, true);
@@ -103,123 +108,148 @@ Deno.test("generative effect identities are recorded once per declaration", asyn
 
 check(
   "an integer literal is its own type",
-  "return 42;",
+  `return 42
+`,
   "42",
 );
 
 check(
   "a float literal is not a singleton",
-  "return 1.5;",
+  `return 1.5
+`,
   "F64",
 );
 
 check(
   "a seal is applicative in its name and carrier",
-  `const First = seal ("Token", I32);
-const Second = seal ("Token", I32);
-sig same = #True;
-const same = refines (First, Second);
-return same;`,
+  `const First = seal ("Token", I32)
+const Second = seal ("Token", I32)
+sig same = #True
+const same = refines (First, Second)
+return same
+`,
   "#True",
 );
 
 check(
   "float arithmetic stays in the one float type",
-  'open @import "blot:prelude" ();\nreturn Float.add 1.5 2.5;',
+  `open @import "blot:prelude" ()
+return Float.add 1.5 2.5
+`,
   "F64",
 );
 
 check(
   "a float has no equality, only an ordering that refuses NaN",
-  'open @import "blot:prelude" ();\n' +
-    "return { .same = is_equal (Float.cmp 0.5 0.5); .nan = Float.is_nan 1.0; };",
+  `open @import "blot:prelude" ()
+return { .same = is_equal (Float.cmp 0.5 0.5); .nan = Float.is_nan 1.0; }
+`,
   "{ .same = (#True | #False); .nan = #True | #False; }",
 );
 
 check(
   "a four-lane vector is an opaque type, not a range",
-  'open @import "blot:prelude" ();\n' +
-    "return Vec4.splat (Float32.of_int 1);",
+  `open @import "blot:prelude" ()
+return Vec4.splat (Float32.of_int 1)
+`,
   "F32x4",
 );
 
 check(
   "a lane read leaves the vector for the scalar type",
-  'open @import "blot:prelude" ();\n' +
-    "return Vec4.x (Vec4.splat (Float32.of_int 1));",
+  `open @import "blot:prelude" ()
+return Vec4.x (Vec4.splat (Float32.of_int 1))
+`,
   "F32",
 );
 
 check(
   "integer lane width is part of the vector type",
-  "return Int16x8.add (Int16x8.splat 1) (Int16x8.splat 2);",
+  `return Int16x8.add (Int16x8.splat 1) (Int16x8.splat 2)
+`,
   "I16x8",
 );
 
 check(
   "integer comparisons produce a width-specific mask",
-  "return Int8x16.less_unsigned (Int8x16.splat 1) (Int8x16.splat 2);",
+  `return Int8x16.less_unsigned (Int8x16.splat 1) (Int8x16.splat 2)
+`,
   "I8x16Mask",
 );
 
 rejects(
   "integer vectors with different lane widths do not mix",
-  "return Int32x4.add (Int32x4.splat 1) (Int16x8.splat 2);",
+  `return Int32x4.add (Int32x4.splat 1) (Int16x8.splat 2)
+`,
   "BLOT_TYPE_ERROR",
 );
 
 rejects(
   "literal arms cannot cover a vector",
-  'open @import "blot:prelude" ();\n' +
-    "sig f = F32x4 -> Int;\nlet f = fn v => case v of 1 => 1 end;\n" +
-    "return f (Vec4.splat (Float32.of_int 1));",
+  `open @import "blot:prelude" ()
+sig f = F32x4 -> Int
+let f = fn v => case v of
+  1 => 1
+return f (Vec4.splat (Float32.of_int 1))
+`,
   "BLOT_INCOMPLETE_CASE",
 );
 
 check(
   "single precision is its own type",
-  'open @import "blot:prelude" ();\n' +
-    "return Float32.mul (Float32.of_int 2) (Float32.of_float 1.5);",
+  `open @import "blot:prelude" ()
+return Float32.mul (Float32.of_int 2) (Float32.of_float 1.5)
+`,
   "F32",
 );
 
 rejects(
   "the two float precisions do not mix",
-  'open @import "blot:prelude" ();\n' +
-    "return Float.add 1.5 (Float32.of_int 1);",
+  `open @import "blot:prelude" ()
+return Float.add 1.5 (Float32.of_int 1)
+`,
   "BLOT_TYPE_ERROR",
 );
 
 check(
   "crossing between the numeric types is explicit and exact",
-  'open @import "blot:prelude" ();\n' +
-    "return { .up = Float.of_int 7; .down = Float.truncate 3.75; };",
+  `open @import "blot:prelude" ()
+return { .up = Float.of_int 7; .down = Float.truncate 3.75; }
+`,
   "{ .up = F64; .down = Int; }",
 );
 
 rejects(
   "a float case is never exhaustive on its own",
-  'open @import "blot:prelude" ();\n' +
-    "sig pick = F64 -> Int;\nlet pick = fn x => case x of 1.5 => 1 end;\n" +
-    "return pick 1.5;",
+  `open @import "blot:prelude" ()
+sig pick = F64 -> Int
+let pick = fn x => case x of
+  1.5 => 1
+return pick 1.5
+`,
   "BLOT_INCOMPLETE_CASE",
 );
 
 rejects(
   "the two numeric types do not mix",
-  'open @import "blot:prelude" ();\nreturn Float.add 1.5 2;',
+  `open @import "blot:prelude" ()
+return Float.add 1.5 2
+`,
   "BLOT_TYPE_ERROR",
 );
 
 check(
   "identity preserves the singleton",
-  "let identity = fn x => x;\nreturn identity 42;",
+  `let identity = fn x => x
+return identity 42
+`,
   "42",
 );
 
 check(
   "arithmetic widens to the domain, because it cannot prove a width",
-  "return @int.add 20 22;",
+  `return @int.add 20 22
+`,
   "Int",
 );
 
@@ -227,7 +257,9 @@ check(
 
 check(
   "identity is polymorphic",
-  "let identity = fn x => x;\nreturn identity;",
+  `let identity = fn x => x
+return identity
+`,
   "'a -> 'a",
 );
 
@@ -235,124 +267,188 @@ check(
 
 check(
   "a declaration tag may replace the binding value and its type",
-  'const text = tag ("text", (), (fn _ => "changed"));\n' +
-    "@[text] let value = 1;\nreturn value;",
+  `const text = tag ("text", (), (fn _ => "changed"))
+@[text] let value = 1
+return value
+`,
   '"changed"',
 );
 
 check(
   "stacked declaration tags apply nearest-first",
-  'const add = fn n => tag ("add", n, (fn value => value + n));\n' +
-    "@[add(1)] @[add(2)] let value = 3;\nreturn value;",
+  `const add = fn n => tag ("add", n, (fn value => value + n))
+@[add(1)] @[add(2)] let value = 3
+return value
+`,
   "Int",
 );
 
 check(
   "a declaration tag transforms before its binding pattern matches",
-  'const pair = tag ("pair", (), (fn _ => (1, "two")));\n' +
-    "@[pair] let (number, text) = ();\n" +
-    "return { .number = number; .text = text; };",
+  `const pair = tag ("pair", (), (fn _ => (1, "two")))
+@[pair] let (number, text) = ()
+return { .number = number; .text = text; }
+`,
   '{ .number = 1; .text = "two"; }',
 );
 
 rejects(
   "a declaration tag descriptor must be a shape",
-  "@[1] let value = 2;\nreturn value;",
+  `@[1] let value = 2
+return value
+`,
   "BLOT_BAD_DECLARATION_TAG",
 );
 
 rejects(
   "a declaration tag descriptor transform must be callable",
-  '@[{ .name = "broken"; .metadata = (); .transform = 1; }]\n' +
-    "let value = 2;\nreturn value;",
+  `@[{ .name = "broken"; .metadata = (); .transform = 1; }]
+let value = 2
+return value
+`,
   "BLOT_BAD_DECLARATION_TAG",
 );
 
 rejects(
   "a declaration tag descriptor must be known before a local binding",
-  "let tagged = fn descriptor => do\n" +
-    "  @[descriptor] let value = 1;\n" +
-    "  return value;\n" +
-    "end;\n" +
-    "return tagged test;",
+  `let tagged = fn descriptor =>
+  @[descriptor] let value = 1
+  return value
+return tagged test
+`,
   "BLOT_NOT_COMPTIME",
 );
 
 check(
   "one binding instantiates independently per use",
-  'let identity = fn x => x;\nreturn { .a = identity 1; .b = identity "two"; };',
+  `let identity = fn x => x
+return { .a = identity 1; .b = identity "two"; }
+`,
   '{ .a = 1; .b = "two"; }',
 );
 
 check(
   "rebinding preserves the integer domain",
-  "let value = 1;\nvalue := 2;\nreturn value;",
+  `let value = 1
+value := 2
+return value
+`,
   "Int",
 );
 
 rejects(
   "rebinding rejects a different type",
-  'let value = 1;\nvalue := "two";\nreturn value;',
+  `let value = 1
+value := "two"
+return value
+`,
   "Use `let value = ...;`",
 );
 
 check(
   "a repeated let may shadow with a different type",
-  'let value = 1;\nlet value = "two";\nreturn value;',
+  `let value = 1
+let value = "two"
+return value
+`,
   '"two"',
 );
 
 check(
   "rebinding preserves polymorphism",
-  'let identity = fn x => x;\nidentity := fn x => x;\nreturn { .number = identity 1; .text = identity "two"; };',
+  `let identity = fn x => x
+identity := fn x => x
+return { .number = identity 1; .text = identity "two"; }
+`,
   '{ .number = 1; .text = "two"; }',
 );
 
 check(
   "an unconditional return determines its block result",
-  "let answer = fn () => do\n  return 42;\nend;\nreturn answer;",
+  `let answer = fn () =>
+  return 42
+return answer
+`,
   "() -> 42",
 );
 
 check(
   "a statement conditional returns from its surrounding block",
-  'let describe = fn value => do\n  if value < 0 then\n    return "negative";\n  end;\n  return "positive";\nend;\nreturn describe;',
+  `let describe = fn value =>
+  if value < 0 then
+    return "negative"
+  return "positive"
+return describe
+`,
   'Int -> ("negative" | "positive")',
 );
 
 check(
   "a return crosses a for loop",
-  "let find = fn wanted => do\n  for value in Iter.range (0, 5) do\n    if value == wanted then\n      return value;\n    end;\n  end;\n  return -1;\nend;\nreturn find;",
+  `let find = fn wanted =>
+  for value in Iter.range (0, 5):
+    if value == wanted then
+      return value
+  return -1
+return find
+`,
   "Int -> (Int | 0 | -1)",
 );
 
 check(
   "a return crosses an unbounded loop",
-  "let count_to = fn limit => do\n  let count = 0;\n  for ever do\n    count := count + 1;\n    if count >= limit then\n      return count;\n    end;\n  end;\n  return 0;\nend;\nreturn count_to;",
+  `let count_to = fn limit =>
+  let count = 0
+  for ever:
+    count := count + 1
+    if count >= limit then
+      return count
+  return 0
+return count_to
+`,
   "Int -> (Int | 0)",
 );
 
 check(
   "a value if keeps a nested return inside its result scope",
-  "let answer = fn () => do\n  let inner = if 1 < 2 then do\n    return 41;\n  end else 0 end;\n  return inner + 1;\nend;\nreturn answer;",
+  `let answer = fn () =>
+  let inner = if 1 < 2 then
+    return 41
+
+  else 0
+  return inner + 1
+return answer
+`,
   "() -> Int",
 );
 
 check(
   "a value case keeps a nested return inside its result scope",
-  "let answer = fn () => do\n  let inner = case Some 41 of\n    #Some value => do\n      return value;\n    end,\n    #None => 0\n  end;\n  return inner + 1;\nend;\nreturn answer;",
+  `let answer = fn () =>
+  let inner = case Some 41 of
+    #Some value =>
+      return value
+
+    #None => 0
+  return inner + 1
+return answer
+`,
   "() -> Int",
 );
 
 rejects(
   "rebinding requires an existing name",
-  "missing := 1;\nreturn missing;",
+  `missing := 1
+return missing
+`,
   "cannot shadow a name that is not in scope",
 );
 
 check(
   "a curried section keeps its remaining parameter",
-  "let add = fn a => fn b => @int.add a b;\nreturn add 2;",
+  `let add = fn a => fn b => @int.add a b
+return add 2
+`,
   "Int -> Int",
 );
 
@@ -361,7 +457,9 @@ check(
 // more general. Writing the expected string down is what caught the assumption.
 check(
   "applying a parameter twice intersects its two uses",
-  "let twice = fn f => fn x => f (f x);\nreturn twice;",
+  `let twice = fn f => fn x => f (f x)
+return twice
+`,
   "('a -> 'b & 'b -> 'c) -> 'a -> 'c",
 );
 
@@ -369,28 +467,36 @@ check(
 
 check(
   "a projection constrains only the field it reaches for",
-  "let width = fn shape => shape.w;\nreturn width;",
+  `let width = fn shape => shape.w
+return width
+`,
   "{ .w = 'a; } -> 'a",
 );
 
 check(
   "two projections accumulate one record constraint",
-  "let area = fn s => @int.mul s.w s.h;\nreturn area;",
+  `let area = fn s => @int.mul s.w s.h
+return area
+`,
   "{ .w = Int; .h = Int; } -> Int",
 );
 
 rejects(
   "a missing field is an ordinary constraint failure",
-  "let area = fn s => @int.mul s.w s.h;\nreturn area { .w = 2; };",
+  `let area = fn s => @int.mul s.w s.h
+return area { .w = 2; }
+`,
   "no field `.h`",
 );
 
 check(
   "an optional field supplies unit when it is omitted",
-  "sig count = { .value? = Int; } -> Int;\n" +
-    "let count = fn properties => case properties.value of " +
-    "() => 0, value => value end;\n" +
-    "return count {};",
+  `sig count = { .value? = Int; } -> Int
+let count = fn properties => case properties.value of
+  () => 0
+  value => value
+return count {}
+`,
   "Int",
 );
 
@@ -398,12 +504,12 @@ Deno.test("an omitted optional field records its call-site coercion", async () =
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
   await Deno.writeTextFile(
     path,
-    `${PRELUDE}sig count = { .value? = Int; } -> Int;
+    `${PRELUDE}sig count = { .value? = Int; } -> Int
 let count = fn properties => case properties.value of
-  () => 0,
+  () => 0
   value => value
-end;
-return count {};`,
+return count {}
+`,
   );
   const checked = await checkFile(path);
   const adaptation = [...checked.recordAdaptations.values()].find((candidate) =>
@@ -421,91 +527,154 @@ return count {};`,
 
 check(
   "a case joins its arms",
-  "let f = fn m => case m of #Ready => 1, #Failed r => r end;\nreturn f;",
+  `let f = fn m => case m of
+  #Ready => 1
+  #Failed r => r
+return f
+`,
   "#Ready | #Failed 'a -> ('a | 1)",
 );
 
 check(
   "a pinned pattern keeps the existing binding and joins its arms",
-  'let wanted = 1;\nlet choose = fn actual => case actual of #(wanted) => "yes", _ => "no" end;\nreturn choose;',
+  `let wanted = 1
+let choose = fn actual => case actual of
+  #(wanted) => "yes"
+  _ => "no"
+return choose
+`,
   'Int -> ("yes" | "no")',
 );
 
 rejects(
   "a pinned pattern does not make a case exhaustive",
-  'let wanted = 1;\nsig choose = Int -> Str;\nlet choose = fn actual => case actual of #(wanted) => "yes" end;\nreturn choose;',
+  `let wanted = 1
+sig choose = Int -> Str
+let choose = fn actual => case actual of
+  #(wanted) => "yes"
+return choose
+`,
   "BLOT_INCOMPLETE_CASE",
 );
 
 rejects(
   "a pinned pattern requires an existing binding",
-  'return case 1 of #(missing) => "yes", _ => "no" end;',
+  `return case 1 of
+  #(missing) => "yes"
+  _ => "no"
+`,
   "BLOT_UNBOUND",
 );
 
 rejects(
   "a pinned pattern requires a scalar equality domain",
-  'let wanted = [1];\nreturn case [1] of #(wanted) => "yes", _ => "no" end;',
+  `let wanted = [1]
+return case [1] of
+  #(wanted) => "yes"
+  _ => "no"
+`,
   "BLOT_UNMATCHABLE_PIN",
 );
 
 rejects(
   "a pinned parameter needs a known scalar type",
-  "let matches = fn expected => fn actual => case actual of #(expected) => 1, _ => 0 end;\nreturn matches;",
+  `let matches = fn expected => fn actual => case actual of
+  #(expected) => 1
+  _ => 0
+return matches
+`,
   "BLOT_UNMATCHABLE_PIN",
 );
 
 rejects(
   "a nested pin must share the matched value's scalar domain",
-  'let wanted = "one";\nsig choose = (Int, Int) -> Str;\nlet choose = fn pair => case pair of (#(wanted), _) => "yes", _ => "no" end;\nreturn choose;',
+  `let wanted = "one"
+sig choose = (Int, Int) -> Str
+let choose = fn pair => case pair of
+  (#(wanted), _) => "yes"
+  _ => "no"
+return choose
+`,
   "BLOT_TYPE_ERROR",
 );
 
 check(
   "an unmatched branch keeps the parameter open",
-  "let f = fn (flag, other) => case flag of #No => #Off, #Yes => other end;\nreturn f;",
+  `let f = fn (flag, other) => case flag of
+  #No => #Off
+  #Yes => other
+return f
+`,
   "(#No | #Yes, 'a) -> ('a | #Off)",
 );
 
 check(
   "a default arm still types the constructor arms it accompanies",
-  "let f = fn m => case m of #Some inner => inner, _ => 0 end;\nreturn f;",
+  `let f = fn m => case m of
+  #Some inner => inner
+  _ => 0
+return f
+`,
   "#Some 'a | .. -> ('a | 0)",
 );
 
 check(
   "an open union accepts a constructor no arm names",
-  'let f = fn m => case m of #Some inner => inner, _ => 0 end;\nreturn f (#Some "hi");',
+  `let f = fn m => case m of
+  #Some inner => inner
+  _ => 0
+return f (#Some "hi")
+`,
   '(0 | "hi")',
 );
 
 check(
   "a name arm is the target",
-  "let f = fn m => case m of other => other end;\nreturn f;",
+  `let f = fn m => case m of
+  other => other
+return f
+`,
   "'a -> 'a",
 );
 
 check(
   "a guard types what it binds",
-  'let f = fn m => do\n  if let #Some inner = m else\n    return "none";\n  end;\n  return inner;\nend;\nreturn f (#Some 7);',
+  `let f = fn m =>
+  if let #Some inner = m else
+    return "none"
+  return inner
+return f (#Some 7)
+`,
   '("none" | 7)',
 );
 
 rejects(
   "a guard rejects a payload used at the wrong type",
-  'let f = fn m => do\n  if let #Some inner = m else\n    return "none";\n  end;\n  return Text.append inner "!";\nend;\nreturn f (#Some 3);',
+  `let f = fn m =>
+  if let #Some inner = m else
+    return "none"
+  return Text.append inner "!"
+return f (#Some 3)
+`,
   "`3` is not `Str`",
 );
 
 rejects(
   "a constructor no arm covers is rejected",
-  'let f = fn m => case m of #Ready => 1, #Busy n => n end;\nreturn f (#Failed "x");',
+  `let f = fn m => case m of
+  #Ready => 1
+  #Busy n => n
+return f (#Failed "x")
+`,
   "`#Failed` is not one of",
 );
 
 rejects(
   "a declared literal union rejects a value outside it",
-  "sig level = 1 | 2 | 3;\nlet level = 7;\nreturn level;",
+  `sig level = 1 | 2 | 3
+let level = 7
+return level
+`,
   "`7` is not one of `1` | `2` | `3`",
 );
 
@@ -519,49 +688,86 @@ rejects(
 
 rejects(
   "a literal no arm covers is rejected",
-  'sig f = 1 | 2 | 3 -> Str;\nlet f = fn n => case n of 1 => "one" end;\nreturn f;',
+  `sig f = 1 | 2 | 3 -> Str
+let f = fn n => case n of
+  1 => "one"
+return f
+`,
   "No arm covers `2 | 3`",
 );
 
 rejects(
   "a text literal no arm covers is rejected",
-  'sig f = "up" | "down" -> Int;\nlet f = fn d => case d of "up" => 1 end;\nreturn f;',
+  `sig f = "up" | "down" -> Int
+let f = fn d => case d of
+  "up" => 1
+return f
+`,
   'No arm covers `"down"`',
 );
 
 check(
   "arms that exhaust a literal union are accepted",
-  'sig f = 1 | 2 | 3 -> Str;\nlet f = fn n => case n of 1 => "one", 2 => "two", 3 => "three" end;\nreturn f;',
+  `sig f = 1 | 2 | 3 -> Str
+let f = fn n => case n of
+  1 => "one"
+  2 => "two"
+  3 => "three"
+return f
+`,
   "1 | 2 | 3 -> Str",
 );
 
 check(
   "an irrefutable arm covers the rest of a literal union",
-  'sig f = 1 | 2 | 3 -> Str;\nlet f = fn n => case n of 1 => "one", _ => "rest" end;\nreturn f;',
+  `sig f = 1 | 2 | 3 -> Str
+let f = fn n => case n of
+  1 => "one"
+  _ => "rest"
+return f
+`,
   "1 | 2 | 3 -> Str",
 );
 
 rejects(
   "literal arms over an unconstrained target require a fallback",
-  'let f = fn n => case n of 1 => "one", 2 => "two" end;\nreturn f;',
+  `let f = fn n => case n of
+  1 => "one"
+  2 => "two"
+return f
+`,
   "not known well enough",
 );
 
 rejects(
   "an unbounded domain cannot be covered by literal arms",
-  'sig f = Int -> Str;\nlet f = fn n => case n of 1 => "one" end;\nreturn f;',
+  `sig f = Int -> Str
+let f = fn n => case n of
+  1 => "one"
+return f
+`,
   "BLOT_INCOMPLETE_CASE",
 );
 
 check(
   "a `_` arm covers what literals cannot, and `@panic` says why it is unreachable",
-  'sig f = Int -> Str;\nlet f = fn n => case n of 1 => "one", _ => @panic "not one" end;\nreturn f;',
+  `sig f = Int -> Str
+let f = fn n => case n of
+  1 => "one"
+  _ => @panic "not one"
+return f
+`,
   "Int -> Str",
 );
 
 check(
   "a literal payload arm leaves its constructor set alone",
-  'let f = fn m => case m of #Some 1 => "one", #Some n => "many", #None => "none" end;\nreturn f (#Some 2);',
+  `let f = fn m => case m of
+  #Some 1 => "one"
+  #Some n => "many"
+  #None => "none"
+return f (#Some 2)
+`,
   '("one" | "many" | "none")',
 );
 
@@ -575,37 +781,55 @@ check(
 
 rejects(
   "a guarded arm does not cover the literal it names",
-  "sig f = 1 | 2 -> Str;\n" +
-    'let f = fn n => case n of 1 => "one", m if m > 1 => "big" end;\nreturn f;',
+  `sig f = 1 | 2 -> Str
+let f = fn n => case n of
+  1 => "one"
+  m if m > 1 => "big"
+return f
+`,
   "No arm covers `2`",
 );
 
 rejects(
   "a `case` whose arms are all guarded covers nothing",
-  'let f = fn n => case n of m if m > 0 => "up", m if m < 0 => "down" end;\n' +
-    "return f;",
+  `let f = fn n => case n of
+  m if m > 0 => "up"
+  m if m < 0 => "down"
+return f
+`,
   "No arm of this `case` can be the one that matches",
 );
 
 rejects(
   "a guarded arm does not close a constructor set",
-  'let f = fn o => case o of #Some n if n > 0 => "big", #None => "none" end;\n' +
-    "return f (#Some 1);",
+  `let f = fn o => case o of
+  #Some n if n > 0 => "big"
+  #None => "none"
+return f (#Some 1)
+`,
   "`#Some` is not one of #None",
 );
 
 check(
   "an unguarded arm below a guarded one is what covers the set",
-  'let f = fn o => case o of #Some n if n > 0 => "big", #Some _ => "small", ' +
-    '#None => "none" end;\nreturn f (#Some 1);',
+  `let f = fn o => case o of
+  #Some n if n > 0 => "big"
+  #Some _ => "small"
+  #None => "none"
+return f (#Some 1)
+`,
   '("big" | "small" | "none")',
 );
 
 check(
   "the arms above a guard keep their priority",
-  "sig f = 1 | 2 -> Str;\n" +
-    'let f = fn n => case n of 1 => "one", m if m > 1 => "big", _ => "rest" end;\n' +
-    "return f 2;",
+  `sig f = 1 | 2 -> Str
+let f = fn n => case n of
+  1 => "one"
+  m if m > 1 => "big"
+  _ => "rest"
+return f 2
+`,
   "Str",
 );
 
@@ -614,13 +838,14 @@ check(
 // arm covers.
 rejects(
   "a guarded row does not cover a column combination",
-  "sig join = (Option Int, Option Int) -> Int;\n" +
-    "let join = fn pair => case pair of\n" +
-    "  (#Some a, #Some b) => a + b,\n" +
-    "  (#Some a, #None) => a,\n" +
-    "  (#None, #Some b) => b,\n" +
-    "  (#None, #None) if 1 > 0 => 0\n" +
-    "end;\nreturn join (None, None);",
+  `sig join = (Option Int, Option Int) -> Int
+let join = fn pair => case pair of
+  (#Some a, #Some b) => a + b
+  (#Some a, #None) => a
+  (#None, #Some b) => b
+  (#None, #None) if 1 > 0 => 0
+return join (None, None)
+`,
   "No arm covers `(#None, #None)`",
 );
 
@@ -628,7 +853,11 @@ rejects(
 // pattern bound, and it has to be a `Bool` like every other condition.
 rejects(
   "a guard that is not a condition is rejected",
-  'let f = fn n => case n of m if m => "yes", _ => "no" end;\nreturn f 1;',
+  `let f = fn n => case n of
+  m if m => "yes"
+  _ => "no"
+return f 1
+`,
   "BLOT_TYPE_ERROR",
 );
 
@@ -647,19 +876,33 @@ rejects(
 
 check(
   "a signature binds a parameter to the ground union itself",
-  "sig f = 1 | 2 | 3 -> 1 | 2 | 3;\nlet f = fn n => n;\nreturn f;",
+  `sig f = 1 | 2 | 3 -> 1 | 2 | 3
+let f = fn n => n
+return f
+`,
   "1 | 2 | 3 -> 1 | 2 | 3",
 );
 
 rejects(
   "an unnarrowed parameter is the whole union",
-  'sig h = 1 -> Str;\nlet h = fn k => "one";\nsig f = 1 | 2 | 3 -> Str;\nlet f = fn n => h n;\nreturn f;',
+  `sig h = 1 -> Str
+let h = fn k => "one"
+sig f = 1 | 2 | 3 -> Str
+let f = fn n => h n
+return f
+`,
   "`2` is outside `1`",
 );
 
 check(
   "the branch a condition proves accepts the narrowed value",
-  'sig h = 1 -> Str;\nlet h = fn k => "one";\nsig f = 1 | 2 | 3 -> Str;\nlet f = fn n => if n == 1 then h n else "rest" end;\nreturn f;',
+  `sig h = 1 -> Str
+let h = fn k => "one"
+sig f = 1 | 2 | 3 -> Str
+let f = fn n => if n == 1 then h n
+else "rest"
+return f
+`,
   "1 | 2 | 3 -> Str",
 );
 
@@ -667,37 +910,79 @@ check(
 // wider and no narrower.
 rejects(
   "the proven branch holds nothing but the narrowed value",
-  'sig h = 2 -> Str;\nlet h = fn k => "two";\nsig f = 1 | 2 | 3 -> Str;\nlet f = fn n => if n == 1 then h n else "rest" end;\nreturn f;',
+  `sig h = 2 -> Str
+let h = fn k => "two"
+sig f = 1 | 2 | 3 -> Str
+let f = fn n => if n == 1 then h n
+else "rest"
+return f
+`,
   "`1` is outside `2`",
 );
 
 rejects(
   "the other branch does not accept it",
-  'sig h = 1 -> Str;\nlet h = fn k => "one";\nsig f = 1 | 2 | 3 -> Str;\nlet f = fn n => if n == 1 then "one" else h n end;\nreturn f;',
+  `sig h = 1 -> Str
+let h = fn k => "one"
+sig f = 1 | 2 | 3 -> Str
+let f = fn n => if n == 1 then "one"
+else h n
+return f
+`,
   "`2` is outside `1`",
 );
 
 check(
   "the other branch accepts what the condition excluded",
-  'sig k = 2 | 3 -> Str;\nlet k = fn v => "rest";\nsig f = 1 | 2 | 3 -> Str;\nlet f = fn n => if n == 1 then "one" else k n end;\nreturn f;',
+  `sig k = 2 | 3 -> Str
+let k = fn v => "rest"
+sig f = 1 | 2 | 3 -> Str
+let f = fn n => if n == 1 then "one"
+else k n
+return f
+`,
   "1 | 2 | 3 -> Str",
 );
 
 check(
   "a proof survives into a case, which is then complete",
-  'sig f = 1 | 2 | 3 -> Str;\nlet f = fn n => if n == 1 then case n of 1 => "one" end else case n of 2 => "two", 3 => "three" end end;\nreturn f;',
+  `sig f = 1 | 2 | 3 -> Str
+let f = fn n => if n == 1 then case n of
+  1 => "one"
+
+else case n of
+  2 => "two"
+  3 => "three"
+
+return f
+`,
   "1 | 2 | 3 -> Str",
 );
 
 rejects(
   "a proof does not excuse an arm the narrowed set still needs",
-  'sig f = 1 | 2 | 3 -> Str;\nlet f = fn n => if n == 1 then case n of 1 => "one" end else case n of 2 => "two" end end;\nreturn f;',
+  `sig f = 1 | 2 | 3 -> Str
+let f = fn n => if n == 1 then case n of
+  1 => "one"
+
+else case n of
+  2 => "two"
+
+return f
+`,
   "No arm covers `3`",
 );
 
 check(
   "an else-if chain leaves the fallback with what is left",
-  'sig f = 1 | 2 | 3 -> Str;\nlet f = fn n => if n == 1 then "one" else if n == 2 then "two" else case n of 3 => "three" end end;\nreturn f;',
+  `sig f = 1 | 2 | 3 -> Str
+let f = fn n => if n == 1 then "one"
+else if n == 2 then "two"
+else case n of
+  3 => "three"
+
+return f
+`,
   "1 | 2 | 3 -> Str",
 );
 
@@ -706,31 +991,62 @@ check(
 
 check(
   "a comparison narrows an unbounded domain",
-  'sig low = range (@type.unbounded, 9) -> Str;\nlet low = fn n => "low";\nsig f = Int -> Str;\nlet f = fn n => if n < 10 then low n else "high" end;\nreturn f;',
+  `sig low = range (@type.unbounded, 9) -> Str
+let low = fn n => "low"
+sig f = Int -> Str
+let f = fn n => if n < 10 then low n
+else "high"
+return f
+`,
   "Int -> Str",
 );
 
 check(
   "the other half of an unbounded domain is the complement",
-  'sig high = range (10, @type.unbounded) -> Str;\nlet high = fn n => "high";\nsig f = Int -> Str;\nlet f = fn n => if n < 10 then "low" else high n end;\nreturn f;',
+  `sig high = range (10, @type.unbounded) -> Str
+let high = fn n => "high"
+sig f = Int -> Str
+let f = fn n => if n < 10 then "low"
+else high n
+return f
+`,
   "Int -> Str",
 );
 
 check(
   "a subject on the right mirrors the comparison",
-  'sig high = range (1, @type.unbounded) -> Str;\nlet high = fn n => "high";\nsig f = Int -> Str;\nlet f = fn n => if 0 < n then high n else "low" end;\nreturn f;',
+  `sig high = range (1, @type.unbounded) -> Str
+let high = fn n => "high"
+sig f = Int -> Str
+let f = fn n => if 0 < n then high n
+else "low"
+return f
+`,
   "Int -> Str",
 );
 
 check(
   "adjacent orderings narrow to one range",
-  'sig low = range (@type.unbounded, 9) -> Str;\nlet low = fn n => "low";\nsig f = Int -> Str;\nlet f = fn n => if n <= 9 then low n else "high" end;\nreturn f;',
+  `sig low = range (@type.unbounded, 9) -> Str
+let low = fn n => "low"
+sig f = Int -> Str
+let f = fn n => if n <= 9 then low n
+else "high"
+return f
+`,
   "Int -> Str",
 );
 
 check(
   "a disequality narrows the branch where it fails",
-  'sig f = 1 | 2 | 3 -> Str;\nlet f = fn n => if n /= 1 then case n of 2 => "two", 3 => "three" end else "one" end;\nreturn f;',
+  `sig f = 1 | 2 | 3 -> Str
+let f = fn n => if n /= 1 then case n of
+  2 => "two"
+  3 => "three"
+
+else "one"
+return f
+`,
   "1 | 2 | 3 -> Str",
 );
 
@@ -739,7 +1055,15 @@ check(
 
 check(
   "a statement conditional proves it too",
-  'sig h = 1 -> Str;\nlet h = fn k => "one";\nsig f = 1 | 2 | 3 -> Str;\nlet f = fn n => do\n  if n == 1 then\n    return h n;\n  end;\n  return "rest";\nend;\nreturn f;',
+  `sig h = 1 -> Str
+let h = fn k => "one"
+sig f = 1 | 2 | 3 -> Str
+let f = fn n =>
+  if n == 1 then
+    return h n
+  return "rest"
+return f
+`,
   "1 | 2 | 3 -> Str",
 );
 
@@ -749,13 +1073,26 @@ check(
 
 check(
   "nested exclusions accumulate into a bounded number of pieces",
-  'sig only = range (@type.unbounded, 0) | range (4, @type.unbounded) -> Str;\nlet only = fn k => "k";\nsig f = Int -> Str;\nlet f = fn n => if n /= 1 then (if n /= 2 then (if n /= 3 then only n else "c" end) else "b" end) else "a" end;\nreturn f;',
+  `sig only = range (@type.unbounded, 0) | range (4, @type.unbounded) -> Str
+let only = fn k => "k"
+sig f = Int -> Str
+let f = fn n => if n /= 1 then (if n /= 2 then (if n /= 3 then only n
+else "c")
+else "b")
+else "a"
+return f
+`,
   "Int -> Str",
 );
 
 rejects(
   "the same call outside the nest is not proved",
-  'sig only = range (@type.unbounded, 0) | range (4, @type.unbounded) -> Str;\nlet only = fn k => "k";\nsig f = Int -> Str;\nlet f = fn n => only n;\nreturn f;',
+  `sig only = range (@type.unbounded, 0) | range (4, @type.unbounded) -> Str
+let only = fn k => "k"
+sig f = Int -> Str
+let f = fn n => only n
+return f
+`,
   "`Int` is not one of `..0` | `4..`",
 );
 
@@ -763,13 +1100,24 @@ rejects(
 
 check(
   "a narrowing never widens the signature it was proved under",
-  'let f = fn n => if n == 1 then "y" else "n" end;\nreturn f;',
+  `let f = fn n => if n == 1 then "y"
+else "n"
+return f
+`,
   'Int -> ("y" | "n")',
 );
 
 check(
   "two conditions on one name do not accumulate an intersection",
-  'sig f = 1 | 2 | 3 -> Str;\nlet f = fn n => do\n  let a = if n == 1 then "x" else "y" end;\n  let b = if n == 2 then "x" else "y" end;\n  return Text.append a b;\nend;\nreturn f;',
+  `sig f = 1 | 2 | 3 -> Str
+let f = fn n =>
+  let a = if n == 1 then "x"
+  else "y"
+  let b = if n == 2 then "x"
+  else "y"
+  return Text.append a b
+return f
+`,
   "1 | 2 | 3 -> Str",
 );
 
@@ -778,7 +1126,14 @@ check(
 
 check(
   "a rebinding inside a proven branch widens back to the domain",
-  "sig f = 1 | 2 | 3 -> Int;\nlet f = fn n => if n == 1 then do\n  n := 5;\n  return n;\nend else 0 end;\nreturn f;",
+  `sig f = 1 | 2 | 3 -> Int
+let f = fn n => if n == 1 then
+  n := 5
+  return n
+
+else 0
+return f
+`,
   "1 | 2 | 3 -> Int",
 );
 
@@ -790,31 +1145,67 @@ check(
 
 rejects(
   "a runtime shadow of the operator proves nothing",
-  'let Eq = { .eq = fn a => fn b => True; .ne = fn a => fn b => False; };\nsig f = 1 | 2 | 3 -> Str;\nlet f = fn n => if n == 1 then case n of 1 => "one" end else "rest" end;\nreturn f;',
+  `let Eq = { .eq = fn a => fn b => True; .ne = fn a => fn b => False; }
+sig f = 1 | 2 | 3 -> Str
+let f = fn n => if n == 1 then case n of
+  1 => "one"
+
+else "rest"
+return f
+`,
   "No arm covers `2 | 3`",
 );
 
 rejects(
   "an operator supplied by the caller proves nothing",
-  'sig g = { .eq = 1 | 2 | 3 -> 1 -> #True | #False; } -> (1 | 2 | 3 -> Str);\nlet g = fn Eq => fn n => if n == 1 then case n of 1 => "one" end else "rest" end;\nreturn g;',
+  `sig g = { .eq = 1 | 2 | 3 -> 1 -> #True | #False; } -> (1 | 2 | 3 -> Str)
+let g = fn Eq => fn n => if n == 1 then case n of
+  1 => "one"
+
+else "rest"
+return g
+`,
   "No arm covers `2 | 3`",
 );
 
 rejects(
   "a witness that is another runtime name proves nothing",
-  'sig f = 1 | 2 | 3 -> (1 | 2 -> Str);\nlet f = fn n => fn m => if n == m then "same" else case n of 3 => "three" end end;\nreturn f;',
+  `sig f = 1 | 2 | 3 -> (1 | 2 -> Str)
+let f = fn n => fn m => if n == m then "same"
+else case n of
+  3 => "three"
+
+return f
+`,
   "No arm covers `1 | 2`",
 );
 
 rejects(
   "a witness bound by `let` is not a compile-time integer",
-  'let k = 1;\nsig f = 1 | 2 | 3 -> Str;\nlet f = fn n => if n == k then case n of 1 => "one" end else "rest" end;\nreturn f;',
+  `let k = 1
+sig f = 1 | 2 | 3 -> Str
+let f = fn n => if n == k then case n of
+  1 => "one"
+
+else "rest"
+return f
+`,
   "No arm covers `2 | 3`",
 );
 
 check(
   "a witness bound by `const` is",
-  'const k = 1;\nsig f = 1 | 2 | 3 -> Str;\nlet f = fn n => if n == k then case n of 1 => "one" end else case n of 2 => "two", 3 => "three" end end;\nreturn f;',
+  `const k = 1
+sig f = 1 | 2 | 3 -> Str
+let f = fn n => if n == k then case n of
+  1 => "one"
+
+else case n of
+  2 => "two"
+  3 => "three"
+
+return f
+`,
   "1 | 2 | 3 -> Str",
 );
 
@@ -824,19 +1215,40 @@ check(
 
 check(
   "the operator's own name proves the same thing",
-  'sig f = 1 | 2 | 3 -> Str;\nlet f = fn n => if Eq.eq n 1 then case n of 1 => "one" end else case n of 2 => "two", 3 => "three" end end;\nreturn f;',
+  `sig f = 1 | 2 | 3 -> Str
+let f = fn n => if Eq.eq n 1 then case n of
+  1 => "one"
+
+else case n of
+  2 => "two"
+  3 => "three"
+
+return f
+`,
   "1 | 2 | 3 -> Str",
 );
 
 rejects(
   "an operator carried through a binding proves nothing",
-  'sig f = 1 | 2 | 3 -> Str;\nlet f = fn n => do\n  let same = Eq.eq;\n  return if same n 1 then case n of 1 => "one" end else "rest" end;\nend;\nreturn f;',
+  `sig f = 1 | 2 | 3 -> Str
+let f = fn n =>
+  let same = Eq.eq
+  return if same n 1 then case n of
+    1 => "one"
+
+  else "rest"
+return f
+`,
   "No arm covers `2 | 3`",
 );
 
 check(
   "a condition that proves nothing leaves the branch types alone",
-  'sig f = 1 | 2 | 3 -> Str;\nlet f = fn n => if Ord.min n 1 == 1 then "y" else "n" end;\nreturn f;',
+  `sig f = 1 | 2 | 3 -> Str
+let f = fn n => if Ord.min n 1 == 1 then "y"
+else "n"
+return f
+`,
   "1 | 2 | 3 -> Str",
 );
 
@@ -845,7 +1257,15 @@ check(
 
 check(
   "a condition no value satisfies narrows nothing",
-  'sig f = 1 | 2 | 3 -> Str;\nlet f = fn n => if n == 7 then "never" else case n of 1 => "a", 2 => "b", 3 => "c" end end;\nreturn f;',
+  `sig f = 1 | 2 | 3 -> Str
+let f = fn n => if n == 7 then "never"
+else case n of
+  1 => "a"
+  2 => "b"
+  3 => "c"
+
+return f
+`,
   "1 | 2 | 3 -> Str",
 );
 
@@ -858,37 +1278,49 @@ check(
 
 check(
   "an index inside the array is still an ordinary read",
-  "let xs = [1, 2, 3];\nreturn @array.get xs 2;",
+  `let xs = [1, 2, 3]
+return @array.get xs 2
+`,
   "(1 | 2 | 3)",
 );
 
 rejects(
   "an index outside an array written at the call site is refused",
-  "return @array.get [1, 2, 3] 99;",
+  `return @array.get [1, 2, 3] 99
+`,
   "Index 99 is outside an array of 3",
 );
 
 rejects(
   "an index outside the literal a `let` was given is refused",
-  "let xs = [1, 2, 3];\nreturn @array.get xs 99;",
+  `let xs = [1, 2, 3]
+return @array.get xs 99
+`,
   "Index 99 is outside an array of 3",
 );
 
 rejects(
   "an index outside a compile-time array is refused",
-  "const xs = [1, 2, 3];\nreturn @array.get xs 99;",
+  `const xs = [1, 2, 3]
+return @array.get xs 99
+`,
   "Index 99 is outside an array of 3",
 );
 
 rejects(
   "`@array.set` is decided by the same rule",
-  "let xs = [1, 2, 3];\nreturn @array.set xs 99 0;",
+  `let xs = [1, 2, 3]
+return @array.set xs 99 0
+`,
   "Index 99 is outside an array of 3",
 );
 
 rejects(
   "a rebinding is measured by the array it rebound to",
-  "let xs = [1, 2, 3];\nxs := [4, 5, 6, 7];\nreturn @array.get xs 5;",
+  `let xs = [1, 2, 3]
+xs := [4, 5, 6, 7]
+return @array.get xs 5
+`,
   "Index 5 is outside an array of 4",
 );
 
@@ -899,31 +1331,44 @@ rejects(
 
 rejects(
   "a parameter shadowing an array binding needs its own proof",
-  "let xs = [1, 2, 3];\nlet read = fn xs => @array.get xs 99;\nreturn read;",
+  `let xs = [1, 2, 3]
+let read = fn xs => @array.get xs 99
+return read
+`,
   "BLOT_UNPROVEN_INDEX",
 );
 
 rejects(
   "an alias retains a literal array's known length",
-  "let xs = [1, 2, 3];\nlet ys = xs;\nreturn @array.get ys 99;",
+  `let xs = [1, 2, 3]
+let ys = xs
+return @array.get ys 99
+`,
   "Index 99 is outside an array of 3",
 );
 
 rejects(
   "an unproved access into an array with a spread is refused",
-  "let base = [1, 2, 3];\nlet xs = [0, ...base];\nreturn @array.get xs 99;",
+  `let base = [1, 2, 3]
+let xs = [0, ...base]
+return @array.get xs 99
+`,
   "BLOT_UNPROVEN_INDEX",
 );
 
 rejects(
   "a direct array read cannot be partially applied around its proof site",
-  "let read = fn xs => @array.get xs;\nreturn read;",
+  `let read = fn xs => @array.get xs
+return read
+`,
   "BLOT_ARRAY_ACCESS_NOT_DIRECT",
 );
 
 rejects(
   "a direct array write cannot be aliased away from its proof site",
-  "let write = @array.set;\nreturn write;",
+  `let write = @array.set
+return write
+`,
   "BLOT_ARRAY_ACCESS_NOT_DIRECT",
 );
 
@@ -935,7 +1380,10 @@ rejects(
 
 rejects(
   "an index bound by `let` is rejected when its ground type is outside",
-  "let n = 99;\nlet xs = [1, 2, 3];\nreturn @array.get xs n;",
+  `let n = 99
+let xs = [1, 2, 3]
+return @array.get xs n
+`,
   "BLOT_OUT_OF_BOUNDS",
 );
 
@@ -945,16 +1393,16 @@ rejects(
 // proposition to `Phi`, keyed to the immutable array value. The index and read
 // therefore name the same integer without putting that relation in their types.
 
-const GUARDED = "sig at = [Int] -> Int -> Int;\n" +
-  "let at = fn xs => fn n =>\n" +
-  "  if n >= 0\n" +
-  "  then (if n < @array.len xs then @array.get xs n else 0 end)\n" +
-  "  else 0\n" +
-  "  end;\n";
+const GUARDED = `sig at = [Int] -> Int -> Int
+let at = fn xs => fn n => if n >= 0 then (if n < @array.len xs then @array.get xs n
+else 0)
+else 0
+`;
 
 check(
   "a guarded read is an ordinary read, and its signature is untouched",
-  `${GUARDED}return { .fn = at; .call = at [1, 2, 3] 0; };`,
+  `${GUARDED}return { .fn = at; .call = at [1, 2, 3] 0; }
+`,
   "{ .fn = [Int] -> Int -> Int; .call = Int; }",
 );
 
@@ -962,20 +1410,27 @@ check(
 // sees the ordinary nonnegative branch type rather than an array relationship.
 rejects(
   "two comparisons prove the index is an index of that array",
-  "sig small = 1 | 2 -> Str;\n" +
-    'let small = fn k => case k of 1 => "one", 2 => "two" end;\n' +
-    "sig at = [Int] -> Int -> Str;\n" +
-    "let at = fn xs => fn n =>\n" +
-    '  if n >= 0 then (if n < @array.len xs then small n else "hi" end)\n' +
-    '  else "lo" end;\n' +
-    "return at;",
+  `sig small = 1 | 2 -> Str
+let small = fn k => case k of
+  1 => "one"
+  2 => "two"
+sig at = [Int] -> Int -> Str
+let at = fn xs => fn n => if n >= 0 then (if n < @array.len xs then small n
+else "hi")
+else "lo"
+return at
+`,
   "`0..9223372036854775807` is not one of `1` | `2`",
 );
 
 check(
   "a relationally proved index does not escape into a published type",
-  "sig n = Int;\nlet n = 5;\n" +
-    "let g = fn xs => if n < @array.len xs then n else 0 end;\nreturn g;",
+  `sig n = Int
+let n = 5
+let g = fn xs => if n < @array.len xs then n
+else 0
+return g
+`,
   "['a] -> (Int | 0)",
 );
 
@@ -983,29 +1438,42 @@ check(
 // and an index range is still not `1 | 2`.
 check(
   "`&&` proves both halves, so a bounded range is covered",
-  "sig f = Int -> Str;\n" +
-    'let f = fn i => if i > 0 && i < 3 then case i of 1 => "a", 2 => "b" end else "out" end;\n' +
-    "return f;",
+  `sig f = Int -> Str
+let f = fn i => if i > 0 && i < 3 then case i of
+  1 => "a"
+  2 => "b"
+
+else "out"
+return f
+`,
   "Int -> Str",
 );
 
 rejects(
   "a junction that is not conjunction proves nothing",
-  "const Logic = { .not = fn v => v; .and = fn a => fn b => True; .or = fn a => fn b => a; };\n" +
-    "sig f = Int -> Str;\n" +
-    'let f = fn i => if i > 0 && i < 3 then case i of 1 => "a", 2 => "b" end else "out" end;\n' +
-    "return f;",
+  `const Logic = { .not = fn v => v; .and = fn a => fn b => True; .or = fn a => fn b => a; }
+sig f = Int -> Str
+let f = fn i => if i > 0 && i < 3 then case i of
+  1 => "a"
+  2 => "b"
+
+else "out"
+return f
+`,
   "BLOT_INCOMPLETE_CASE",
 );
 
 rejects(
   "`&&` narrows the index, and an index range is still not `1 | 2`",
-  "sig small = 1 | 2 -> Str;\n" +
-    'let small = fn k => case k of 1 => "one", 2 => "two" end;\n' +
-    "sig at = [Int] -> Int -> Str;\n" +
-    "let at = fn xs => fn n =>\n" +
-    '  if n >= 0 && n < @array.len xs then small n else "lo" end;\n' +
-    "return at;",
+  `sig small = 1 | 2 -> Str
+let small = fn k => case k of
+  1 => "one"
+  2 => "two"
+sig at = [Int] -> Int -> Str
+let at = fn xs => fn n => if n >= 0 && n < @array.len xs then small n
+else "lo"
+return at
+`,
   "is not one of `1` | `2`",
 );
 
@@ -1014,25 +1482,31 @@ rejects(
 
 rejects(
   "an index at or past the length is refused",
-  "sig at = [Int] -> Int -> Int;\n" +
-    "let at = fn xs => fn n => if n >= @array.len xs then @array.get xs n else 0 end;\n" +
-    "return at;",
+  `sig at = [Int] -> Int -> Int
+let at = fn xs => fn n => if n >= @array.len xs then @array.get xs n
+else 0
+return at
+`,
   "BLOT_OUT_OF_BOUNDS",
 );
 
 rejects(
   "an index equal to the length is refused",
-  "sig at = [Int] -> Int -> Int;\n" +
-    "let at = fn xs => fn n => if n == @array.len xs then @array.get xs n else 0 end;\n" +
-    "return at;",
+  `sig at = [Int] -> Int -> Int
+let at = fn xs => fn n => if n == @array.len xs then @array.get xs n
+else 0
+return at
+`,
   "BLOT_OUT_OF_BOUNDS",
 );
 
 rejects(
   "`@array.set` is decided against a length by the same rule",
-  "sig put = [Int] -> Int -> [Int];\n" +
-    "let put = fn xs => fn n => if n >= @array.len xs then @array.set xs n 0 else xs end;\n" +
-    "return put;",
+  `sig put = [Int] -> Int -> [Int]
+let put = fn xs => fn n => if n >= @array.len xs then @array.set xs n 0
+else xs
+return put
+`,
   "BLOT_OUT_OF_BOUNDS",
 );
 
@@ -1041,137 +1515,150 @@ rejects(
 
 rejects(
   "a length proved about one array cannot access another",
-  "sig at = [Int] -> [Int] -> Int -> Int;\n" +
-    "let at = fn xs => fn ys => fn n =>\n" +
-    "  if n >= @array.len xs then @array.get ys n else 0 end;\n" +
-    "return at;",
+  `sig at = [Int] -> [Int] -> Int -> Int
+let at = fn xs => fn ys => fn n => if n >= @array.len xs then @array.get ys n
+else 0
+return at
+`,
   "BLOT_UNPROVEN_INDEX",
 );
 
 rejects(
   "an alias preserves the array identity used by a proof",
-  "sig at = [Int] -> Int -> Int;\n" +
-    "let at = fn xs => fn n => do\n" +
-    "  let ys = xs;\n" +
-    "  return if n >= @array.len xs then @array.get ys n else 0 end;\n" +
-    "end;\n" +
-    "return at;",
+  `sig at = [Int] -> Int -> Int
+let at = fn xs => fn n =>
+  let ys = xs
+  return if n >= @array.len xs then @array.get ys n
+  else 0
+return at
+`,
   "BLOT_OUT_OF_BOUNDS",
 );
 
 rejects(
   "a rebinding invalidates a proof about the previous value",
-  "sig at = [Int] -> [Int] -> Int -> Int;\n" +
-    "let at = fn xs => fn ws => fn n =>\n" +
-    "  if n >= @array.len xs then do\n" +
-    "    xs := ws;\n" +
-    "    return @array.get xs n;\n" +
-    "  end else 0 end;\n" +
-    "return at;",
+  `sig at = [Int] -> [Int] -> Int -> Int
+let at = fn xs => fn ws => fn n => if n >= @array.len xs then
+  xs := ws
+  return @array.get xs n
+
+else 0
+return at
+`,
   "BLOT_UNPROVEN_INDEX",
 );
 
 rejects(
   "an inferred integer is checked once a comparison grounds it",
-  "let at = fn xs => fn n => if n >= @array.len xs then @array.get xs n else 0 end;\n" +
-    "return at;",
+  `let at = fn xs => fn n => if n >= @array.len xs then @array.get xs n
+else 0
+return at
+`,
   "BLOT_OUT_OF_BOUNDS",
 );
 
 check(
   "an immutable field path preserves the array identity used by a proof",
-  "sig at = { .values = [Int]; } -> Int -> Int;\n" +
-    "let at = fn box => fn n =>\n" +
-    "  if n >= 0 && n < @array.len box.values then @array.get box.values n else 0 end;\n" +
-    "return at;",
+  `sig at = { .values = [Int]; } -> Int -> Int
+let at = fn box => fn n => if n >= 0 && n < @array.len box.values then @array.get box.values n
+else 0
+return at
+`,
   "{ .values = [Int]; } -> Int -> Int",
 );
 
 rejects(
   "a field proof cannot access a different array field",
-  "sig at = { .left = [Int]; .right = [Int]; } -> Int -> Int;\n" +
-    "let at = fn box => fn n =>\n" +
-    "  if n >= 0 && n < @array.len box.left then @array.get box.right n else 0 end;\n" +
-    "return at;",
+  `sig at = { .left = [Int]; .right = [Int]; } -> Int -> Int
+let at = fn box => fn n => if n >= 0 && n < @array.len box.left then @array.get box.right n
+else 0
+return at
+`,
   "BLOT_UNPROVEN_INDEX",
 );
 
 check(
   "a bound length keeps its relationship to the measured array",
-  "sig at = [Int] -> Int -> Int;\n" +
-    "let at = fn xs => fn n => do\n" +
-    "  let length = @array.len xs;\n" +
-    "  return if n >= 0 && n < length then @array.get xs n else 0 end;\n" +
-    "end;\nreturn at;",
+  `sig at = [Int] -> Int -> Int
+let at = fn xs => fn n =>
+  let length = @array.len xs
+  return if n >= 0 && n < length then @array.get xs n
+  else 0
+return at
+`,
   "[Int] -> Int -> Int",
 );
 
 check(
   "affine arithmetic preserves a bound length relationship",
-  "sig at = [Int] -> Int -> Int;\n" +
-    "let at = fn xs => fn n => do\n" +
-    "  let last = @int.sub (@array.len xs) 1;\n" +
-    "  return if n >= 0 && n <= last then @array.get xs n else 0 end;\n" +
-    "end;\nreturn at;",
+  `sig at = [Int] -> Int -> Int
+let at = fn xs => fn n =>
+  let last = @int.sub (@array.len xs) 1
+  return if n >= 0 && n <= last then @array.get xs n
+  else 0
+return at
+`,
   "[Int] -> Int -> Int",
 );
 
 check(
   "a proof follows an immutable array alias",
-  "sig at = [Int] -> Int -> Int;\n" +
-    "let at = fn xs => fn n => do\n" +
-    "  let ys = xs;\n" +
-    "  return if n >= 0 && n < @array.len xs then @array.get ys n else 0 end;\n" +
-    "end;\nreturn at;",
+  `sig at = [Int] -> Int -> Int
+let at = fn xs => fn n =>
+  let ys = xs
+  return if n >= 0 && n < @array.len xs then @array.get ys n
+  else 0
+return at
+`,
   "[Int] -> Int -> Int",
 );
 
 check(
   "total array access returns an option for an unproved index",
-  "sig at = [Int] -> Int -> Option Int;\n" +
-    "let at = fn xs => fn n => Array.get (xs, n);\nreturn at;",
+  `sig at = [Int] -> Int -> Option Int
+let at = fn xs => fn n => Array.get (xs, n)
+return at
+`,
   "[Int] -> Int -> #None | #Some Int",
 );
 
 check(
   "total array replacement returns an option for an unproved index",
-  "sig put = [Int] -> Int -> Int -> Option [Int];\n" +
-    "let put = fn xs => fn n => fn value => Array.set (xs, n, value);\n" +
-    "return put;",
+  `sig put = [Int] -> Int -> Int -> Option [Int]
+let put = fn xs => fn n => fn value => Array.set (xs, n, value)
+return put
+`,
   "[Int] -> Int -> Int -> #None | #Some [Int]",
 );
 
 check(
   "indexed iteration installs its erased bounds package in the loop body",
-  "sig sum = [Int] -> Int;\n" +
-    "let sum = fn values => do\n" +
-    "  let total = 0;\n" +
-    "  for (index, _) in Iter.indexed values do\n" +
-    "    total := total + @array.get values index;\n" +
-    "  end;\n" +
-    "  return total;\n" +
-    "end;\n" +
-    "return sum;",
+  `sig sum = [Int] -> Int
+let sum = fn values =>
+  let total = 0
+  for (index, _) in Iter.indexed values:
+    total := total + @array.get values index
+  return total
+return sum
+`,
   "[Int] -> Int",
 );
 
 rejects(
   "an ordinary iterator record cannot forge an index package",
-  "sig sum = [Int] -> Int;\n" +
-    "let sum = fn values => do\n" +
-    "  let iterator = {\n" +
-    "    .state = 0;\n" +
-    "    .step = fn index => if index < @array.len values\n" +
-    "      then #Some ((index, @array.get values index), index + 1)\n" +
-    "      else #None end;\n" +
-    "  };\n" +
-    "  let total = 0;\n" +
-    "  for (index, _) in iterator do\n" +
-    "    total := total + @array.get values index;\n" +
-    "  end;\n" +
-    "  return total;\n" +
-    "end;\n" +
-    "return sum;",
+  `sig sum = [Int] -> Int
+let sum = fn values =>
+  let iterator = {
+    .state = 0;
+    .step = fn index => if index < @array.len values then #Some ((index, @array.get values index), index + 1)
+    else #None;
+  }
+  let total = 0
+  for (index, _) in iterator:
+    total := total + @array.get values index
+  return total
+return sum
+`,
   "BLOT_UNPROVEN_INDEX",
 );
 
@@ -1179,128 +1666,136 @@ rejects(
 
 check(
   "a pure function has no row",
-  "let f = fn n => @int.add n 1;\nreturn f;",
+  `let f = fn n => @int.add n 1
+return f
+`,
   "Int -> Int",
 );
 
 check(
   "performing an operation puts it in the row",
-  `const Console = @effect { .write = Str -> Unit; };
-let greet = fn name => do
-  result <- Console.write name;
-  return result;
-end;
-return { .greet = greet; };`,
+  `const Console = @effect { .write = Str -> Unit; }
+let greet = fn name =>
+  result <- Console.write name
+  return result
+return { .greet = greet; }
+`,
   "{ .greet = Str -> () ~ { Console }; }",
 );
 
 check(
   "conditional rebinding stays local to its effect-bound scope",
-  `const Counter = @effect { .read = Unit -> Int; };
-let adjust = fn () => do
-  let result = 0;
+  `const Counter = @effect { .read = Unit -> Int; }
+let adjust = fn () =>
+  let result = 0
   if True then
-    current <- Counter.read ();
-    if current > 0 then current := current - 1; end;
-    result := current;
-  end;
-  return result;
-end;
-return { .adjust = adjust; };`,
+    current <- Counter.read ()
+    if current > 0 then
+      current := current - 1
+    result := current
+  return result
+return { .adjust = adjust; }
+`,
   "{ .adjust = () -> (Int | 0) ~ { Counter }; }",
 );
 
 check(
   "an element expression preserves its component result in tail position",
-  `const Draw = @effect { .create = Unit -> Int; };
-let div = fn _ => fn children => do
-  _ <- children ();
-  return Draw.create ();
-end;
-let view = fn () => do
-  _ <- <div></div>;
-  return <div></div>;
-end;
-return { .view = view; };`,
+  `const Draw = @effect { .create = Unit -> Int; }
+let div = fn _ => fn children =>
+  _ <- children ()
+  return Draw.create ()
+let view = fn () =>
+  _ <- <div></div>
+  return <div></div>
+return { .view = view; }
+`,
   "{ .view = () -> Int ~ { Draw }; }",
 );
 
 check(
   "a compile-time SIMD lane selector produces an immediate-certified access",
-  `const lane = 2;
-let pick = fn vector => Int32x4.lane vector lane;
-return pick;`,
+  `const lane = 2
+let pick = fn vector => Int32x4.lane vector lane
+return pick
+`,
   "I32x4 -> Int",
 );
 
 rejects(
   "a runtime SIMD lane selector is not a target immediate",
-  `let pick = fn vector => fn lane => Int32x4.lane vector lane;
-return pick;`,
+  `let pick = fn vector => fn lane => Int32x4.lane vector lane
+return pick
+`,
   "BLOT_SIMD_IMMEDIATE_NOT_COMPTIME",
 );
 
 rejects(
   "checked SIMD construction rejects an out-of-width lane",
-  "return Int8x16.splat 128;",
+  `return Int8x16.splat 128
+`,
   "BLOT_TYPE_ERROR",
 );
 
 check(
   "wrapping SIMD construction names truncation explicitly",
-  "return Int8x16.splat_wrapping 128;",
+  `return Int8x16.splat_wrapping 128
+`,
   "I8x16",
 );
 
 rejects(
   "element property rows reject misspelled fields",
-  `sig Button = { .label = Str; } -> (Unit -> Unit) -> Unit;
-let Button = fn _ => fn _ => ();
-return <Button .lable="Save" />;`,
+  `sig Button = { .label = Str; } -> (Unit -> Unit) -> Unit
+let Button = fn _ => fn _ => ()
+return <Button .lable="Save" />
+`,
   "BLOT_ELEMENT_UNKNOWN_PROPERTY",
 );
 
 rejects(
   "inferred component property rows are closed too",
-  `let Button = fn properties => fn _ => @text.len properties.label;
-return <Button .lable="Save" />;`,
+  `let Button = fn properties => fn _ => @text.len properties.label
+return <Button .lable="Save" />
+`,
   "BLOT_ELEMENT_UNKNOWN_PROPERTY",
 );
 
 check(
   "effect binding sequences the expression without inserting a call",
-  `const Clock = @effect { .now = Unit -> Int; };
-let operation = fn () => do
-  read <- Clock.now;
-  return read;
-end;
-return { .operation = operation; };`,
+  `const Clock = @effect { .now = Unit -> Int; }
+let operation = fn () =>
+  read <- Clock.now
+  return read
+return { .operation = operation; }
+`,
   "{ .operation = () -> () -> Int ~ { Clock }; }",
 );
 
 check(
   "two effects join into one row",
-  `const Console = @effect { .write = Str -> Unit; };
-const Clock = @effect { .now = Unit -> Int; };
-let stamped = fn name => do
-  t <- Clock.now ();
-  _ <- Console.write name;
-  return t;
-end;
-return { .stamped = stamped; };`,
+  `const Console = @effect { .write = Str -> Unit; }
+const Clock = @effect { .now = Unit -> Int; }
+let stamped = fn name =>
+  t <- Clock.now ()
+  _ <- Console.write name
+  return t
+return { .stamped = stamped; }
+`,
   "{ .stamped = Str -> Int ~ { Clock, Console }; }",
 );
 
 check(
   "a compile-time function exposes its inferred effects through type reflection",
-  "const Access = (@effect { .read = Unit -> Int; }) <+ { .ecs = 7; };\n" +
-    "const system = fn () => do value <- Access.read (); return value; end;\n" +
-    "const metadata = case @type.reflect (@type.of system) of\n" +
-    "  #Arrow arrow => sum (map (arrow.effects, (fn effect =>\n" +
-    "    (@type.members effect).ecs))),\n" +
-    "  _ => -1\n" +
-    "end;\n" +
-    "return metadata;",
+  `const Access = (@effect { .read = Unit -> Int; }) <+ { .ecs = 7; }
+const system = fn () =>
+  value <- Access.read ()
+  return value
+const metadata = case @type.reflect (@type.of system) of
+  #Arrow arrow => sum (map (arrow.effects, (fn effect => (@type.members effect).ecs)))
+  _ => -1
+return metadata
+`,
   "7",
 );
 
@@ -1308,21 +1803,22 @@ check(
 // variable is what carries "whatever". Nothing here is annotated.
 check(
   "a row variable makes an effect-polymorphic wrapper",
-  `const Console = @effect { .write = Str -> Unit; };
-let logged = fn f => fn x => do
-  _ <- Console.write "call";
-  result <- f x;
-  return result;
-end;
-return { .logged = logged; };`,
+  `const Console = @effect { .write = Str -> Unit; }
+let logged = fn f => fn x =>
+  _ <- Console.write "call"
+  result <- f x
+  return result
+return { .logged = logged; }
+`,
   "{ .logged = ('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }; }",
 );
 
 check(
   "an effect nothing performs stays out of the row",
-  `const Console = @effect { .write = Str -> Unit; };
-let quiet = fn n => @int.add n 1;
-return { .quiet = quiet; };`,
+  `const Console = @effect { .write = Str -> Unit; }
+let quiet = fn n => @int.add n 1
+return { .quiet = quiet; }
+`,
   "{ .quiet = Int -> Int; }",
 );
 
@@ -1333,34 +1829,35 @@ return { .quiet = quiet; };`,
 
 check(
   "a written row is what the printer prints",
-  `const Console = @effect { .write = Str -> Unit; };
-sig greet = Str -> Unit ~ { Console };
-let greet = fn name => do
-  result <- Console.write name;
-  return result;
-end;
-return { .greet = greet; };`,
+  `const Console = @effect { .write = Str -> Unit; }
+sig greet = Str -> Unit ~ { Console }
+let greet = fn name =>
+  result <- Console.write name
+  return result
+return { .greet = greet; }
+`,
   "{ .greet = Str -> () ~ { Console }; }",
 );
 
 check(
   "a signature may name an effect the body never performs",
-  `const Console = @effect { .write = Str -> Unit; };
-sig quiet = Int -> Int ~ { Console };
-let quiet = fn n => @int.add n 1;
-return { .quiet = quiet; };`,
+  `const Console = @effect { .write = Str -> Unit; }
+sig quiet = Int -> Int ~ { Console }
+let quiet = fn n => @int.add n 1
+return { .quiet = quiet; }
+`,
   "{ .quiet = Int -> Int ~ { Console }; }",
 );
 
 rejects(
   "a bare arrow is the empty row, not an unwritten one",
-  `const Console = @effect { .write = Str -> Unit; };
-sig greet = Str -> Unit;
-let greet = fn name => do
-  result <- Console.write name;
-  return result;
-end;
-return { .greet = greet; };`,
+  `const Console = @effect { .write = Str -> Unit; }
+sig greet = Str -> Unit
+let greet = fn name =>
+  result <- Console.write name
+  return result
+return { .greet = greet; }
+`,
   "is not handled",
 );
 
@@ -1369,13 +1866,13 @@ return { .greet = greet; };`,
 // printed type reads back as itself.
 check(
   "a curried signature carries its row on the last arrow",
-  `const Console = @effect { .write = Str -> Unit; };
-sig join = Str -> Str -> Unit ~ { Console };
-let join = fn a => fn b => do
-  result <- Console.write (a <> b);
-  return result;
-end;
-return { .join = join; };`,
+  `const Console = @effect { .write = Str -> Unit; }
+sig join = Str -> Str -> Unit ~ { Console }
+let join = fn a => fn b =>
+  result <- Console.write (a <> b)
+  return result
+return { .join = join; }
+`,
   "{ .join = Str -> Str -> () ~ { Console }; }",
 );
 
@@ -1383,15 +1880,19 @@ return { .join = join; };`,
 // row naming something else is refused where every other `sig` mistake is.
 rejects(
   "a row lists effects and nothing else",
-  "sig f = Int -> Int ~ { Int };\nlet f = fn n => n;\nreturn f;",
+  `sig f = Int -> Int ~ { Int }
+let f = fn n => n
+return f
+`,
   "BLOT_SIG_NOT_COMPTIME",
 );
 
 rejects(
   "an unhandled effect at the module boundary is rejected",
-  `const Console = @effect { .write = Str -> Unit; };
-_ <- Console.write "nobody is listening";
-return ();`,
+  `const Console = @effect { .write = Str -> Unit; }
+_ <- Console.write "nobody is listening"
+return ()
+`,
   "Nothing handles { Console }",
 );
 
@@ -1399,13 +1900,19 @@ return ();`,
 
 check(
   "a signature narrows what inference would have produced",
-  "sig increment = Int -> Int;\nlet increment = fn value => value + 1;\nreturn increment;",
+  `sig increment = Int -> Int
+let increment = fn value => value + 1
+return increment
+`,
   "Int -> Int",
 );
 
 rejects(
   "a signature that disagrees with the body is rejected",
-  'sig double = Int -> Int;\nlet double = fn v => @text.concat v "!";\nreturn double;',
+  `sig double = Int -> Int
+let double = fn v => @text.concat v "!"
+return double
+`,
   "`Int` is not `Str`",
 );
 
@@ -1413,43 +1920,62 @@ rejects(
 
 check(
   "a `const` whose value is a type is that type",
-  "const Bit = 0 | 1;\nsig b = Bit;\nlet b = 1;\nreturn b;",
+  `const Bit = 0 | 1
+sig b = Bit
+let b = 1
+return b
+`,
   "0 | 1",
 );
 
 check(
   "a range accepts what it contains",
-  "sig small = range (0, 9);\nlet small = 7;\nreturn small;",
+  `sig small = range (0, 9)
+let small = 7
+return small
+`,
   "0..9",
 );
 
 check(
   "a parameterized unsigned range includes its largest value",
-  "sig small = U 2;\nlet small = 3;\nreturn small;",
+  `sig small = U 2
+let small = 3
+return small
+`,
   "0..3",
 );
 
 rejects(
   "a full unsigned storage width is not a runtime integer type",
-  "sig word = U64;\nlet word = 0;\nreturn word;",
+  `sig word = U64
+let word = 0
+return word
+`,
   "BLOT_UNREPRESENTABLE_INTEGER",
 );
 
 rejects(
   "a runtime literal must fit signed i64",
-  "return 9223372036854775808;",
+  "return 9223372036854775808\n",
   "BLOT_RUNTIME_INTEGER_RANGE",
 );
 
 rejects(
   "a parameterized signed range excludes its positive boundary",
-  "sig small = I 2;\nlet small = 2;\nreturn small;",
+  `sig small = I 2
+let small = 2
+return small
+`,
   "`2` is outside `-2..1`",
 );
 
 rejects(
   "a range rejects what it does not contain",
-  "sig small = range (0, 9);\nlet small = 42;\nreturn small;",
+  `sig small = range (0, 9)
+let small = 42
+return small
+`,
   "is outside",
 );
 
@@ -1457,7 +1983,10 @@ rejects(
 // which is the one thing the reader already knew.
 rejects(
   "a range names the bound the value fell outside of",
-  "sig n = Nat;\nlet n = -1;\nreturn n;",
+  `sig n = Nat
+let n = -1
+return n
+`,
   "`-1` is outside `0..9223372036854775807`",
 );
 
@@ -1468,7 +1997,10 @@ Deno.test("a type error renders with a file, line, and column", async () => {
   await Deno.writeTextFile(
     path,
     PRELUDE +
-      "sig greet = Str -> Str;\nlet greet = fn name => name;\nreturn greet 1;\n",
+      `sig greet = Str -> Str
+let greet = fn name => name
+return greet 1
+`,
   );
   try {
     await checkFile(path);
@@ -1490,67 +2022,80 @@ Deno.test("a type error renders with a file, line, and column", async () => {
 
 rejects(
   "a const cannot silently become a runtime binding",
-  "let runtime = 41;\nconst copied = runtime + 1;\nreturn copied;",
+  `let runtime = 41
+const copied = runtime + 1
+return copied
+`,
   "BLOT_NOT_COMPTIME",
 );
 
 rejects(
   "a comptime expression cannot depend on a runtime binding",
-  "let runtime = 41;\nreturn comptime (runtime + 1);",
+  `let runtime = 41
+return comptime (runtime + 1)
+`,
   "BLOT_NOT_COMPTIME",
 );
 
 rejects(
   "a signature cannot float past another declaration",
-  "sig answer = Int;\nlet unrelated = 0;\nlet answer = 42;\nreturn answer;",
+  `sig answer = Int
+let unrelated = 0
+let answer = 42
+return answer
+`,
   "must be immediately followed",
 );
 
 rejects(
   "a signature cannot be left without a binding",
-  "sig answer = Int;\nreturn 42;",
+  `sig answer = Int
+return 42
+`,
   "has no adjacent binding",
 );
 
 rejects(
   "satisfies is a static constraint when its type is known",
-  "const Digit = range (0, 9);\nreturn @satisfies 42 Digit;",
+  `const Digit = range (0, 9)
+return @satisfies 42 Digit
+`,
   "is outside",
 );
 
 check(
   "a handler result is the common clause result",
-  `const Ask = @effect { .ask = Int -> Str; };
-let work = fn () => do
-  result <- Ask.ask 1;
-  return result;
-end;
+  `const Ask = @effect { .ask = Int -> Str; }
+let work = fn () =>
+  result <- Ask.ask 1
+  return result
 let text = {
-  .ask = fn (_, ?resume) => do
-    resumed <- resume "ok";
-    return @text.concat resumed "!";
-  end;
+  .ask = fn (_, ?resume) =>
+    resumed <- resume "ok"
+    return @text.concat resumed "!"
+  ;
   .return = fn value => @text.concat value ".";
-};
-return @handle (Ask, work, text);`,
+}
+return @handle (Ask, work, text)
+`,
   "Str",
 );
 
 rejects(
   "resume accepts the operation result type",
-  `const Ask = @effect { .ask = Int -> Str; };
-let work = fn () => do
-  result <- Ask.ask 1;
-  return result;
-end;
+  `const Ask = @effect { .ask = Int -> Str; }
+let work = fn () =>
+  result <- Ask.ask 1
+  return result
 let wrong = {
-  .ask = fn (argument, ?resume) => do
-    result <- resume argument;
-    return result;
-  end;
+  .ask = fn (argument, ?resume) =>
+    result <- resume argument
+    return result
+  ;
   .return = fn value => value;
-};
-return @handle (Ask, work, wrong);`,
+}
+return @handle (Ask, work, wrong)
+`,
   "`Int` is not `Str`",
 );
 
@@ -1558,33 +2103,36 @@ return @handle (Ask, work, wrong);`,
 
 check(
   "an explicit forall preserves a polymorphic binding",
-  `sig identity = @forall (fn T => T -> T);
-let identity = fn value => value;
-return identity;`,
+  `sig identity = @forall (fn T => T -> T)
+let identity = fn value => value
+return identity
+`,
   "forall 'q0. 'q0 -> 'q0",
 );
 
 check(
   "a Rank-N parameter may be instantiated at two monotypes",
-  `sig use = (@forall (fn T => T -> T)) -> { .number = Int; .text = Str; };
+  `sig use = (@forall (fn T => T -> T)) -> { .number = Int; .text = Str; }
 let use = fn identity => {
   .number = identity 42;
   .text = identity "forty-two";
-};
-let identity = fn value => value;
-return use identity;`,
+  }
+let identity = fn value => value
+return use identity
+`,
   "{ .number = Int; .text = Str; }",
 );
 
 rejects(
   "a monomorphic function does not satisfy a Rank-N parameter",
-  `sig use = (@forall (fn T => T -> T)) -> { .number = Int; .text = Str; };
+  `sig use = (@forall (fn T => T -> T)) -> { .number = Int; .text = Str; }
 let use = fn identity => {
   .number = identity 42;
   .text = identity "forty-two";
-};
-let increment = fn value => @int.add value 1;
-return use increment;`,
+  }
+let increment = fn value => @int.add value 1
+return use increment
+`,
   "rigid type",
 );
 
@@ -1598,43 +2146,49 @@ return use increment;`,
 
 check(
   "a member call the checker can run is typed by its value",
-  `const T = { .x = Int; } <+ { .make = fn n => #Some { .x = n; }; };
-let found = T.make 7;
-return case found of #Some p => p.x, #None => 0 end;`,
+  `const T = { .x = Int; } <+ { .make = fn n => #Some { .x = n; }; }
+let found = T.make 7
+return case found of
+  #Some p => p.x
+  #None => 0
+`,
   "(0 | 7)",
 );
 
 check(
   "a call to a struct accessor is typed by the storage it reads",
-  `const Point = struct { .x = I32; .y = I32; };
-let somewhere = Point.new { .y = 20; .x = 10; };
-return Point.x somewhere;`,
+  `const Point = struct { .x = I32; .y = I32; }
+let somewhere = Point.new { .y = 20; .x = 10; }
+return Point.x somewhere
+`,
   "10",
 );
 
 check(
   "a member call the checker cannot run knows nothing",
-  `const Money = #Money I32 <+ { .of = fn n => #Money n; };
-return fn amount => Money.of amount;`,
+  `const Money = #Money I32 <+ { .of = fn n => #Money n; }
+return fn amount => Money.of amount
+`,
   "'a -> ⊤",
 );
 
 rejects(
   "a sig is not believed for a member call the checker cannot run",
-  `const Money = #Money I32 <+ { .of = fn n => #Money n; };
-const priced = fn amount => do
-  sig converted = Money;
-  let converted = Money.of amount;
-  return converted;
-end;
-return priced 42;`,
+  `const Money = #Money I32 <+ { .of = fn n => #Money n; }
+const priced = fn amount =>
+  sig converted = Money
+  let converted = Money.of amount
+  return converted
+return priced 42
+`,
   "anything is not #Money",
 );
 
 check(
   "a member that is not a function keeps its own type",
-  `const Money = #Money I32 <+ { .zero = #Money 0; };
-return Money.zero;`,
+  `const Money = #Money I32 <+ { .zero = #Money 0; }
+return Money.zero
+`,
   "#Money 0",
 );
 
@@ -1642,8 +2196,9 @@ check(
   "a callable record attached to a namespace keeps its structural type",
   `const World = seal ("World", Unit) <+ {
   .Position = { .increment = fn value => value + 1; };
-};
-return fn value => World.Position.increment value;`,
+  }
+return fn value => World.Position.increment value
+`,
   "Int -> Int",
 );
 
@@ -1651,11 +2206,12 @@ check(
   "a generated namespace record keeps the values captured by its fields",
   `const bind = fn field => seal ("World", Unit) <+ {
   .Position = {
-    .read = fn value => @shape.get value field;
+  .read = fn value => @shape.get value field;
   };
-};
-const World = bind "x";
-return fn value => World.Position.read value;`,
+  }
+const World = bind "x"
+return fn value => World.Position.read value
+`,
   "{ .x = 'a; } -> 'a",
 );
 
@@ -1670,36 +2226,36 @@ return fn value => World.Position.read value;`,
 
 check(
   "arms that cover the cross-product need no wildcard",
-  `sig join = (Option Int, Option Int) -> Int;
+  `sig join = (Option Int, Option Int) -> Int
 let join = fn pair => case pair of
-  (#Some a, #Some b) => a + b,
-  (#Some a, #None) => a,
-  (#None, #Some b) => b,
+  (#Some a, #Some b) => a + b
+  (#Some a, #None) => a
+  (#None, #Some b) => b
   (#None, #None) => 0
-end;
-return join (Some 1, None);`,
+return join (Some 1, None)
+`,
   "Int",
 );
 
 rejects(
   "a combination no arm reaches is rejected",
-  `sig join = (Option Int, Option Int) -> Int;
+  `sig join = (Option Int, Option Int) -> Int
 let join = fn pair => case pair of
-  (#Some a, #Some b) => a + b,
-  (#Some a, #None) => a,
+  (#Some a, #Some b) => a + b
+  (#Some a, #None) => a
   (#None, #Some b) => b
-end;
-return join (None, None);`,
+return join (None, None)
+`,
   "No arm covers `(#None, #None)`",
 );
 
 rejects(
   "a column the target declares wider than the arms is rejected",
-  `sig join = (Option Int, Option Int) -> Int;
+  `sig join = (Option Int, Option Int) -> Int
 let join = fn pair => case pair of
   (#Some a, #Some b) => a + b
-end;
-return join (None, None);`,
+return join (None, None)
+`,
   "No arm covers `(#None, _)`",
 );
 
@@ -1710,30 +2266,30 @@ rejects(
   "arms close an undeclared column",
   `let join = fn pair => case pair of
   (#Some a, #Some b) => a + b
-end;
-return join (None, None);`,
+return join (None, None)
+`,
   "`#None` is not one of #Some",
 );
 
 rejects(
   "a column with more values than arms can list needs an irrefutable pattern",
-  `sig pick = (Int, Option Int) -> Int;
+  `sig pick = (Int, Option Int) -> Int
 let pick = fn pair => case pair of
-  (1, #Some a) => a,
+  (1, #Some a) => a
   (_, #None) => 0
-end;
-return pick (2, Some 1);`,
+return pick (2, Some 1)
+`,
   "No arm covers `(_, #Some)`",
 );
 
 check(
   "an irrefutable pattern is what covers such a column",
-  `sig pick = (Int, Option Int) -> Int;
+  `sig pick = (Int, Option Int) -> Int
 let pick = fn pair => case pair of
-  (1, #Some a) => a,
+  (1, #Some a) => a
   (_, _) => 0
-end;
-return pick (2, Some 1);`,
+return pick (2, Some 1)
+`,
   "Int",
 );
 
@@ -1741,64 +2297,64 @@ return pick (2, Some 1);`,
 // column is unlistable for the same reason `Int` is.
 rejects(
   "a float column is unlistable too",
-  `sig pick = (F64, Option Int) -> Int;
+  `sig pick = (F64, Option Int) -> Int
 let pick = fn pair => case pair of
-  (1.0, #Some a) => a,
+  (1.0, #Some a) => a
   (_, #None) => 0
-end;
-return pick (1.0, Some 1);`,
+return pick (1.0, Some 1)
+`,
   "No arm covers `(_, #Some)`",
 );
 
 check(
   "three columns are covered the same way",
-  `sig triple = (Bool, Bool, Bool) -> Int;
+  `sig triple = (Bool, Bool, Bool) -> Int
 let triple = fn t => case t of
-  (#True, #True, #True) => 1,
-  (#True, #True, #False) => 2,
-  (#True, #False, _) => 3,
+  (#True, #True, #True) => 1
+  (#True, #True, #False) => 2
+  (#True, #False, _) => 3
   (#False, _, _) => 4
-end;
-return triple (True, False, True);`,
+return triple (True, False, True)
+`,
   "Int",
 );
 
 rejects(
   "a missing combination of three columns is named in full",
-  `sig triple = (Bool, Bool, Bool) -> Int;
+  `sig triple = (Bool, Bool, Bool) -> Int
 let triple = fn t => case t of
-  (#True, #True, #True) => 1,
-  (#True, #False, _) => 3,
+  (#True, #True, #True) => 1
+  (#True, #False, _) => 3
   (#False, _, _) => 4
-end;
-return triple (True, True, False);`,
+return triple (True, True, False)
+`,
   "No arm covers `(#True, #True, #False)`",
 );
 
 check(
   "a nested tuple is a column like any other",
-  `sig nested = ((Option Int, Bool), Option Int) -> Int;
+  `sig nested = ((Option Int, Bool), Option Int) -> Int
 let nested = fn v => case v of
-  ((#Some a, #True), #None) => a,
-  ((#Some a, #True), #Some c) => a + c,
-  ((#Some a, #False), _) => a,
-  ((#None, _), #Some c) => c,
+  ((#Some a, #True), #None) => a
+  ((#Some a, #True), #Some c) => a + c
+  ((#Some a, #False), _) => a
+  ((#None, _), #Some c) => c
   ((#None, _), #None) => 0
-end;
-return nested ((Some 1, True), None);`,
+return nested ((Some 1, True), None)
+`,
   "Int",
 );
 
 rejects(
   "a gap inside a nested tuple is named where it is",
-  `sig nested = ((Option Int, Bool), Option Int) -> Int;
+  `sig nested = ((Option Int, Bool), Option Int) -> Int
 let nested = fn v => case v of
-  ((#Some a, #True), #None) => a,
-  ((#Some a, #False), _) => a,
-  ((#None, _), #Some c) => c,
+  ((#Some a, #True), #None) => a
+  ((#Some a, #False), _) => a
+  ((#None, _), #Some c) => c
   ((#None, _), #None) => 0
-end;
-return nested ((Some 1, True), Some 2);`,
+return nested ((Some 1, True), Some 2)
+`,
   "No arm covers `((#Some, #True), #Some)`",
 );
 
@@ -1812,31 +2368,43 @@ return nested ((Some 1, True), Some 2);`,
 
 check(
   "a field named by a literal has that field's type",
-  'let r = { .a = 7; .b = "x"; };\nreturn @shape.get r "a";',
+  `let r = { .a = 7; .b = "x"; }
+return @shape.get r "a"
+`,
   "7",
 );
 
 rejects(
   "a sig is not believed for a field named by a literal",
-  'let r = { .a = 7; };\nsig z = 0;\nlet z = @shape.get r "a";\nreturn z;',
+  `let r = { .a = 7; }
+sig z = 0
+let z = @shape.get r "a"
+return z
+`,
   "`7` is outside `0`",
 );
 
 rejects(
   "a field the shape does not have is refused rather than trapped",
-  'let r = { .a = 7; };\nreturn @shape.get r "c";',
+  `let r = { .a = 7; }
+return @shape.get r "c"
+`,
   "no field `.c`",
 );
 
 check(
   "setting a field named by a literal answers with the whole shape",
-  'let r = { .a = 7; };\nreturn @shape.set r "b" "x";',
+  `let r = { .a = 7; }
+return @shape.set r "b" "x"
+`,
   '{ .a = 7; .b = "x"; }',
 );
 
 check(
   "removing a field named by a literal answers with the rest",
-  'let r = { .a = 7; .b = 1; };\nreturn @shape.remove r "b";',
+  `let r = { .a = 7; .b = 1; }
+return @shape.remove r "b"
+`,
   "{ .a = 7; }",
 );
 
@@ -1844,33 +2412,37 @@ check(
 // still an ordinary field demand on it.
 check(
   "a literal name types a projection off a parameter",
-  'return fn shape => @shape.get shape "a";',
+  `return fn shape => @shape.get shape "a"
+`,
   "{ .a = 'a; } -> 'a",
 );
 
 rejects(
   "a runtime field name cannot invent a structural result type",
-  "let get = fn (shape, name) => @shape.get shape name;\n" +
-    'return get ({ .a = 1; }, "a");',
+  `let get = fn (shape, name) => @shape.get shape name
+return get ({ .a = 1; }, "a")
+`,
   "BLOT_DYNAMIC_SHAPE_FIELD",
 );
 
 rejects(
   "a generic reflection payload cannot prove a signature",
-  "sig reflected = Int -> 0;\n" +
-    "let reflected = fn value => case @type.reflect value of\n" +
-    "  #Shape payload => payload,\n" +
-    "  _ => 0\n" +
-    "end;\nreturn reflected;",
+  `sig reflected = Int -> 0
+let reflected = fn value => case @type.reflect value of
+  #Shape payload => payload
+  _ => 0
+return reflected
+`,
   "BLOT_REFLECTION_NOT_INDEXED",
 );
 
 rejects(
   "a generic reflection payload cannot drive a runtime operation",
-  "let reflected = fn value => case @type.reflect value of\n" +
-    "  #Shape payload => payload,\n" +
-    "  _ => 0\n" +
-    "end;\nreturn @int.add (reflected 1) 1;",
+  `let reflected = fn value => case @type.reflect value of
+  #Shape payload => payload
+  _ => 0
+return @int.add (reflected 1) 1
+`,
   "BLOT_REFLECTION_NOT_INDEXED",
 );
 
@@ -1883,18 +2455,25 @@ rejects(
 
 check(
   "two `rec` bindings in a run see each other",
-  "let is_even = rec (fn n => if n == 0 then True else is_odd (n - 1) end);\n" +
-    "let is_odd = rec (fn n => if n == 0 then False else is_even (n - 1) end);\n" +
-    "return is_even 10;",
+  `let is_even = rec (fn n => if n == 0 then True
+else is_odd (n - 1))
+let is_odd = rec (fn n => if n == 0 then False
+else is_even (n - 1))
+return is_even 10
+`,
   "(#True | #False)",
 );
 
 check(
   "three `rec` bindings in a cycle see each other",
-  "let a = rec (fn n => if n == 0 then 0 else b (n - 1) end);\n" +
-    "let b = rec (fn n => if n == 0 then 1 else c (n - 1) end);\n" +
-    "let c = rec (fn n => if n == 0 then 2 else a (n - 1) end);\n" +
-    "return a 7;",
+  `let a = rec (fn n => if n == 0 then 0
+else b (n - 1))
+let b = rec (fn n => if n == 0 then 1
+else c (n - 1))
+let c = rec (fn n => if n == 0 then 2
+else a (n - 1))
+return a 7
+`,
   "(0 | 1 | 2)",
 );
 
@@ -1902,31 +2481,37 @@ check(
 // as one, so a member calling nobody is still typed with the rest.
 check(
   "a group member that is not recursive at all is still a member",
-  "let ping = rec (fn n => if n == 0 then 0 else pong (n - 1) end);\n" +
-    "let pong = rec (fn n => if n == 0 then 1 else ping (n - 1) end);\n" +
-    "let plain = rec (fn n => n + 1);\n" +
-    "return plain (ping 5);",
+  `let ping = rec (fn n => if n == 0 then 0
+else pong (n - 1))
+let pong = rec (fn n => if n == 0 then 1
+else ping (n - 1))
+let plain = rec (fn n => n + 1)
+return plain (ping 5)
+`,
   "Int",
 );
 
 check(
   "a group inside a nested block sees itself",
-  "return do\n" +
-    "  let up = rec (fn n => if n == 0 then 0 else down (n - 1) end);\n" +
-    "  let down = rec (fn n => if n == 0 then 1 else up (n - 1) end);\n" +
-    "  return up 9;\n" +
-    "end;",
+  `return (
+  let up = rec (fn n => if n == 0 then 0 else down (n - 1))
+  let down = rec (fn n => if n == 0 then 1 else up (n - 1))
+  return up 9
+)
+`,
   "(0 | 1)",
 );
 
 check(
   "a group inside a lambda body sees itself",
-  "let outer = fn start => do\n" +
-    "  let up = rec (fn n => if n == 0 then 0 else down (n - 1) end);\n" +
-    "  let down = rec (fn n => if n == 0 then 1 else up (n - 1) end);\n" +
-    "  return up start;\n" +
-    "end;\n" +
-    "return outer 9;",
+  `let outer = fn start =>
+  let up = rec (fn n => if n == 0 then 0
+  else down (n - 1))
+  let down = rec (fn n => if n == 0 then 1
+  else up (n - 1))
+  return up start
+return outer 9
+`,
   "(0 | 1)",
 );
 
@@ -1934,19 +2519,25 @@ check(
 // inside a run is a member's own signature and cannot be separating anything.
 check(
   "a member's `sig` does not break the run",
-  "sig ping = Int -> Int;\n" +
-    "let ping = rec (fn n => if n == 0 then 0 else pong (n - 1) end);\n" +
-    "sig pong = Int -> Int;\n" +
-    "let pong = rec (fn n => if n == 0 then 1 else ping (n - 1) end);\n" +
-    "return ping 4;",
+  `sig ping = Int -> Int
+let ping = rec (fn n => if n == 0 then 0
+else pong (n - 1))
+sig pong = Int -> Int
+let pong = rec (fn n => if n == 0 then 1
+else ping (n - 1))
+return ping 4
+`,
   "Int",
 );
 
 check(
   "a `const` run is a group too",
-  "const even = rec (fn n => if n == 0 then True else odd (n - 1) end);\n" +
-    "const odd = rec (fn n => if n == 0 then False else even (n - 1) end);\n" +
-    "return even 12;",
+  `const even = rec (fn n => if n == 0 then True
+else odd (n - 1))
+const odd = rec (fn n => if n == 0 then False
+else even (n - 1))
+return even 12
+`,
   "(#True | #False)",
 );
 
@@ -1954,41 +2545,57 @@ check(
 // block-wide mutual visibility this program would rebind `value` to itself.
 check(
   "a repeated `let` still shadows the binding above it",
-  "let value = 1;\nlet value = value + 1;\nlet value = value + 1;\nreturn value;",
+  `let value = 1
+let value = value + 1
+let value = value + 1
+return value
+`,
   "Int",
 );
 
 rejects(
   "a declaration between two `rec` bindings ends the run",
-  "let a = rec (fn n => b n);\n" +
-    "let gap = 1;\n" +
-    "let b = rec (fn n => n + gap);\n" +
-    "return a 1;",
+  `let a = rec (fn n => b n)
+let gap = 1
+let b = rec (fn n => n + gap)
+return a 1
+`,
   "`b` is bound further down",
 );
 
 rejects(
   "a value that reads a later binding names the ordering, not a typo",
-  "let total = later + 1;\nlet later = 2;\nreturn total;",
+  `let total = later + 1
+let later = 2
+return total
+`,
   "`later` is bound further down",
 );
 
 // The hint has to be earned. A name nothing binds is still just unbound.
 rejects(
   "a name no declaration binds is still an ordinary unbound name",
-  "let total = nowhere + 1;\nreturn total;",
+  `let total = nowhere + 1
+return total
+`,
   "`nowhere` is not in scope",
 );
 
 rejects(
   "a group member that is not a function is refused",
-  "let total = rec (later 1);\nlet later = rec (fn n => n + 1);\nreturn total;",
+  `let total = rec (later 1)
+let later = rec (fn n => n + 1)
+return total
+`,
   "`rec` applies to a lambda",
 );
 
 rejects(
   "one name cannot be bound twice in one group",
-  "let step = rec (fn n => step n);\nlet step = rec (fn n => n + 1);\nreturn step 3;",
+  `let step = rec (fn n => step n)
+let step = rec (fn n => n + 1)
+return step 3
+`,
   "bound twice in one recursive group",
 );
 
@@ -1997,9 +2604,12 @@ rejects(
 // which is the capture rule's whole subject.
 rejects(
   "a `const` and a `let` do not share a group",
-  "const up = rec (fn n => if n == 0 then 0 else down (n - 1) end);\n" +
-    "let down = rec (fn n => if n == 0 then 1 else up (n - 1) end);\n" +
-    "return up 4;",
+  `const up = rec (fn n => if n == 0 then 0
+else down (n - 1))
+let down = rec (fn n => if n == 0 then 1
+else up (n - 1))
+return up 4
+`,
   "`down` is bound further down",
 );
 
@@ -2007,10 +2617,13 @@ rejects(
 // tagged binding holds no `rec` to group and ends the run it sits in.
 rejects(
   "a tagged binding is not a group member",
-  "@[derive(identity)]\n" +
-    "let up = rec (fn n => if n == 0 then 0 else down (n - 1) end);\n" +
-    "let down = rec (fn n => if n == 0 then 1 else up (n - 1) end);\n" +
-    "return up 5;",
+  `@[derive(identity)]
+let up = rec (fn n => if n == 0 then 0
+else down (n - 1))
+let down = rec (fn n => if n == 0 then 1
+else up (n - 1))
+return up 5
+`,
   "`down` is bound further down",
 );
 
@@ -2019,6 +2632,11 @@ rejects(
 // early for the same reason.
 rejects(
   "a nested block reads an enclosing binding too early",
-  "let a = do let t = 1; return t + later; end;\nlet later = 2;\nreturn a;",
+  `let a =
+  let t = 1
+  return t + later
+let later = 2
+return a
+`,
   "`later` is bound further down",
 );

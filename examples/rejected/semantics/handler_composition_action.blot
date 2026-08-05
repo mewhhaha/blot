@@ -3,4 +3,3 @@
 
 return try (fn () => ()) with
   @not_handle (MissingEffect, missing_handler)
-end;

@@ -1,6 +1,7 @@
 import { dirname, isAbsolute, relative, resolve } from "@std/path";
-import { BlotError } from "../diagnostic.ts";
+import { BlotError, type Diagnostic } from "../diagnostic.ts";
 import { LoadError, resolvePath } from "../load.ts";
+import { elaborateLayout } from "../syntax/layout.ts";
 import {
   type CapsuleModule,
   decodeModuleCapsuleForRust,
@@ -25,6 +26,7 @@ const PRELUDE_MODULE_PATH = "blot:prelude";
 interface ResidentModule {
   readonly inputRevision: string;
   readonly source: string;
+  readonly originalOffset: (offset: number) => number;
   readonly imports: readonly string[];
   readonly includes: readonly string[];
   readonly configurationRevision?: string;
@@ -113,11 +115,14 @@ export class RustMiddleCompiler {
     if (checked.diagnostic !== undefined) {
       let origin = checked.diagnostic.origin;
       if (origin === undefined) origin = path;
-      const source = this.#modules.get(origin)?.source;
-      if (source === undefined) {
+      const resident = this.#modules.get(origin);
+      if (resident === undefined) {
         throw new Error(`${origin}: resident Rust module lost its source`);
       }
-      throw new BlotError(checked.diagnostic, { path: origin, source });
+      throw new BlotError(
+        originalDiagnostic(checked.diagnostic, resident.originalOffset),
+        { path: origin, source: resident.source },
+      );
     }
     throw new Error(
       `${path}: Rust compiler failed without a diagnostic: ${checked.message}`,
@@ -140,13 +145,13 @@ export class RustMiddleCompiler {
       if (prepared.diagnostic !== undefined) {
         let origin = prepared.diagnostic.origin;
         if (origin === undefined) origin = absolute;
-        const source = this.#modules.get(origin)?.source;
-        if (source === undefined) {
+        const resident = this.#modules.get(origin);
+        if (resident === undefined) {
           throw new Error(`${origin}: resident Rust module lost its source`);
         }
         throw new BlotError(
-          prepared.diagnostic,
-          { path: origin, source },
+          originalDiagnostic(prepared.diagnostic, resident.originalOffset),
+          { path: origin, source: resident.source },
         );
       }
       throw new Error(
@@ -179,11 +184,14 @@ export class RustMiddleCompiler {
       if (compiled.diagnostic !== undefined) {
         let origin = compiled.diagnostic.origin;
         if (origin === undefined) origin = absolute;
-        const source = this.#modules.get(origin)?.source;
-        if (source === undefined) {
+        const resident = this.#modules.get(origin);
+        if (resident === undefined) {
           throw new Error(`${origin}: resident Rust module lost its source`);
         }
-        throw new BlotError(compiled.diagnostic, { path: origin, source });
+        throw new BlotError(
+          originalDiagnostic(compiled.diagnostic, resident.originalOffset),
+          { path: origin, source: resident.source },
+        );
       }
       throw new Error(
         `${absolute}: Rust compiler failed without a diagnostic: ${compiled.message}`,
@@ -246,20 +254,34 @@ export class RustMiddleCompiler {
     }
     let resident = this.#modules.get(path);
     if (resident === undefined || resident.inputRevision !== source) {
+      const elaborated = await elaborateLayout(source);
+      if (!elaborated.ok) {
+        throw new LoadError(path, source, elaborated.diagnostics);
+      }
       const added = this.#rust.addCompilerSessionModule(
         this.#session,
         path,
-        source,
+        elaborated.layout.source,
       );
       if (!added.ok) {
         if (added.diagnostics !== undefined) {
-          throw new LoadError(path, source, added.diagnostics);
+          throw new LoadError(
+            path,
+            source,
+            added.diagnostics.map((diagnostic) =>
+              originalDiagnostic(
+                diagnostic,
+                elaborated.layout.originalOffset,
+              )
+            ),
+          );
         }
         throw loweringError(path, source, added.message);
       }
       resident = {
         inputRevision: source,
         source,
+        originalOffset: elaborated.layout.originalOffset,
         imports: added.module.imports,
         includes: added.module.includes,
       };
@@ -514,6 +536,7 @@ export class RustMiddleCompiler {
       resident = {
         inputRevision,
         source: "",
+        originalOffset: (offset) => offset,
         imports: added.module.imports,
         includes: added.module.includes,
       };
@@ -647,6 +670,20 @@ function loweringError(
     );
   }
   return new Error(`${path}: Rust CST lowering failed: ${message}`);
+}
+
+function originalDiagnostic(
+  diagnostic: Diagnostic,
+  originalOffset: (offset: number) => number,
+): Diagnostic {
+  return {
+    code: diagnostic.code,
+    message: diagnostic.message,
+    span: {
+      start: originalOffset(diagnostic.span.start),
+      end: originalOffset(diagnostic.span.end),
+    },
+  };
 }
 
 function revision(parts: readonly string[]): string {

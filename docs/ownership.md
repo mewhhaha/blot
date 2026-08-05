@@ -34,12 +34,12 @@ consume (!token)
 
 ```blot
 let collecting = {
-  .write = fn (message, ?resume) => do
-    rest <- resume ();
-    return message ++ rest;
-  end;
+  .write = fn (message, ?resume) =>
+    rest <- resume ()
+    return message ++ rest
+  ;
   .return = fn value => value;
-};
+}
 ```
 
 When the captured continuation owns a linear resource, aborting would leak that
@@ -76,11 +76,12 @@ transient ownership fact and accepts it only for an immediate projection, a
 read-only primitive, or the matching position of a parameter marked `&`:
 
 ```blot
-let peek = fn &point => point.x + point.y;
-let consume = fn !point => case point of { .x; .y; } => x + y end;
-let !point = { .x = 20; .y = 22; };
-let total = peek (&point);
-return total + consume (!point);
+let peek = fn &point => point.x + point.y
+let consume = fn !point => case point of
+  { .x; .y; } => x + y
+let !point = { .x = 20; .y = 22; }
+let total = peek (&point)
+return total + consume (!point)
 ```
 
 The fact follows tuple and record structure, so `fn (&values, index) => ...` can
@@ -102,9 +103,9 @@ The obligation is not refused and is not discharged at the capture — it _moves
 into the closure_, and whoever holds it owes exactly one call:
 
 ```blot
-let !ticket = 7;
-let deferred = fn () => consume (!ticket); // deferred : linear
-let settled = deferred ();                // discharged
+let !ticket = 7
+let deferred = fn () => consume (!ticket) // deferred : linear
+let settled = deferred ()                // discharged
 ```
 
 `deferred` is linear because of what it holds, not because anyone wrote `!` on
@@ -136,10 +137,10 @@ Records, tuples, arrays, and constructor payloads inherit the obligations of
 their contents. Destructuring transfers each component to the matching binding:
 
 ```blot
-let !ticket = 7;
-let holder = { .go = fn () => consume (!ticket); };
-let { .go; } = holder;
-return go ();
+let !ticket = 7
+let holder = { .go = fn () => consume (!ticket); }
+let { .go; } = holder
+return go ()
 ```
 
 Projecting one field is rejected when another owned field would be discarded. A
@@ -161,8 +162,8 @@ spend of `token`, and each is counted whether `hold` is written above `start` or
 below:
 
 ```blot
-let start = rec (fn n => hold n);
-let hold = rec (fn n => consume (!token));
+let start = rec (fn n => hold n)
+let hold = rec (fn n => consume (!token))
 ```
 
 An ordinary declaration is walked before its name exists, which is right for a
@@ -184,9 +185,8 @@ against them.
 group.** Its own body is inside its own group, so this reaches plain recursion:
 
 ```blot
-let go = rec (fn n =>
-  if n < 1 then consume (!token) else go (n - 1) end);
-return go 3;
+let go = rec (fn n => if n < 1 then consume (!token) else go (n - 1))
+return go 3
 ```
 
 is `BLOT_LINEAR_CONSUMED_TWICE` on `go`. A recursive call is a second call, and

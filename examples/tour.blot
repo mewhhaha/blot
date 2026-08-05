@@ -4,124 +4,118 @@
 // `try`, `with`, `handler`, and assignment do not exist — each is either a
 // `const`, a call, or nothing at all.
 
-module init;
+module init
 
 // The header only adds precedence; `open` is what brings the names in. `+` is
 // `Num.add` either way — nothing about it is built in.
 operators {
   infixl 65 (++) = Text.append;
   infix 40 (===) = Eq.eq;
-};
+}
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 // --- types are values -------------------------------------------------------
 
-const Small = 1 | 2 | 3 | #Woop | "hello";
-const Message = #Ready | #Progress I32 | #Failed Str;
-const Counter = struct { .current = I32; .limit = I32; };
+const Small = 1 | 2 | 3 | #Woop | "hello"
+const Message = #Ready | #Progress I32 | #Failed Str
+const Counter = struct { .current = I32; .limit = I32; }
 
 // --- functions --------------------------------------------------------------
 
-let double = fn value => value * 2;
-let increment = fn value => value + 1;
+let double = fn value => value * 2
+let increment = fn value => value + 1
 
 // `fn` opens a lambda, so a curried chain needs no parentheses; the idiomatic
 // multi-argument function takes one shape instead.
-let apply_twice = fn f => fn x => f (f x);
-let distance = fn (from, to) => Num.abs (to - from);
+let apply_twice = fn f => fn x => f (f x)
+let distance = fn (from, to) => Num.abs (to - from)
 
 // `rec` makes the binding's own name visible inside the lambda.
-const factorial = rec (fn n => if n < 2 then 1 else n * factorial (n - 1) end);
+const factorial = rec (fn n => if n < 2 then 1
+else n * factorial (n - 1))
 
 // --- matching ---------------------------------------------------------------
 
 let describe = fn m => case m of
-  #Ready => "ready",
-  #Progress 0 => "idle",
-  #Progress n => "working",
+  #Ready => "ready"
+  #Progress 0 => "idle"
+  #Progress n => "working"
   #Failed reason => reason
-end;
 
 // Literal patterns narrow the union branch they match.
 let classify = fn value => case value of
-  -1 => "down",
-  1 => "up",
+  -1 => "down"
+  1 => "up"
   _ => "flat"
-end;
 
 // --- destructuring ----------------------------------------------------------
 
-let counter = { .current = 1; .limit = 10; };
-let { .current; .limit = ceiling; } = counter;
-let (left, right) = (40, 2);
-let [head, waist, tail] = [1, 2, 3];
+let counter = { .current = 1; .limit = 10; }
+let { .current; .limit = ceiling; } = counter
+let (left, right) = (40, 2)
+let [head, waist, tail] = [1, 2, 3]
 
 // --- shadowing and blocks ---------------------------------------------------
 
-let staged = do
-  let base = left * 2;
-  let scaled = base + right;
+let staged =
+  let base = left * 2
+  let scaled = base + right
   // `:=` rebinds at the same stable type; there is no assignment anywhere.
-  scaled := scaled + 1;
-  return scaled;
-end;
+  scaled := scaled + 1
+  return scaled
 
 // A repeated `let` is explicit shadowing and may change the type.
-let changing = 1;
-let changing = "now text";
+let changing = 1
+let changing = "now text"
 
 // --- loops ------------------------------------------------------------------
 
-let folded = 0;
-for n in Iter.range (1, 4) do
-  folded := folded + n;
-end;
+let folded = 0
+for n in Iter.range (1, 4):
+  folded := folded + n
 
-let repeated = 0;
-for ever do
-  repeated := repeated + 1;
+let repeated = 0
+for ever:
+  repeated := repeated + 1
   if repeated >= 3 then
-    break;
-  end;
-end;
+    break
 
 // --- effects ----------------------------------------------------------------
 
-const Console = @effect { .write = Str -> Unit; };
+const Console = @effect { .write = Str -> Unit; }
 
-let report = fn () => do
-  _ <- Console.write "one";
-  _ <- Console.write "two";
-  return "done";
-end;
+let report = fn () =>
+  _ <- Console.write "one"
+  _ <- Console.write "two"
+  return "done"
 
 let joining = {
-  .write = fn (message, ?resume) => do
-    rest <- resume ();
-    return message ++ rest;
-  end;
+  .write = fn (message, ?resume) =>
+    rest <- resume ()
+    return message ++ rest
+  ;
   .return = fn value => value;
-};
+}
 
 // The host's handler is one blot did not write. `init.print` is an opaque
 // function and the program's entire authority.
 let printing = {
-  .write = fn (message, ?resume) => do
-    _ <- init.print message;
-    result <- resume ();
-    return result;
-  end;
+  .write = fn (message, ?resume) =>
+    _ <- init.print message
+    result <- resume ()
+    return result
+  ;
   .return = fn value => value;
-};
+}
 
 // --- ownership --------------------------------------------------------------
 //
 // `!` marks a value consumed exactly once and `&` a bounded borrow. The
 // linearity pass gives them teeth; here they are ordinary binders.
 
-let !token = 41;
-let consume = fn !value => value + 1;
+let !token = 41
+let consume = fn !value => value + 1
 
 return {
   .small = Small;
@@ -158,4 +152,4 @@ return {
   .appended = "a" ++ "b" ++ "c";
   .piped = 20 |> Num.add 2 |> double;
   .comptime = comptime (20 * 2 + 1);
-};
+  }

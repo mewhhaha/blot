@@ -1,75 +1,58 @@
 // `return` exits the nearest module or explicit `do`, including from a
 // statement branch or across a loop. A nested `do` catches its own return.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-let describe = fn value => do
+let describe = fn value =>
   if value < 0 then
-    return "negative";
-  end;
+    return "negative"
   if value == 0 then
-    return "zero";
-  end;
-  return "positive";
-end;
+    return "zero"
+  return "positive"
 
-let unwrap = fn option => do
+let unwrap = fn option =>
   if let #Some value = option else
-    return -1;
-  end;
-  return value;
-end;
+    return -1
+  return value
 
-let find = fn wanted => do
-  for value in Iter.range (0, 5) do
+let find = fn wanted =>
+  for value in Iter.range (0, 5):
     if value == wanted then
-      return value;
-    end;
-  end;
-  return -1;
-end;
+      return value
+  return -1
 
-let count_to = fn limit => do
-  let count = 0;
-  for ever do
-    count := count + 1;
+let count_to = fn limit =>
+  let count = 0
+  for ever:
+    count := count + 1
     if count >= limit then
-      return count;
-    end;
-  end;
-  return 0;
-end;
+      return count
+  return 0
 
-let count_or_stop = fn limit => do
-  let count = 0;
-  for ever do
-    count := count + 1;
+let count_or_stop = fn limit =>
+  let count = 0
+  for ever:
+    count := count + 1
     if count >= limit then
-      return count;
-    end;
+      return count
     if count >= 5 then
-      break;
-    end;
-  end;
-  return -1;
-end;
+      break
+  return -1
 
-let nested_if = fn () => do
-  let inner = if 1 < 2 then do
-    return 41;
-  end else 0 end;
-  return inner + 1;
-end;
+let nested_if = fn () =>
+  let inner = if 1 < 2 then
+    return 41
 
-let nested_case = fn () => do
+  else 0
+  return inner + 1
+
+let nested_case = fn () =>
   let inner = case Some 41 of
-    #Some value => do
-      return value;
-    end,
+    #Some value =>
+      return value
+
     #None => 0
-  end;
-  return inner + 1;
-end;
+  return inner + 1
 
 return {
   .negative = describe (-1);
@@ -84,4 +67,4 @@ return {
   .broke_loop = count_or_stop 8;
   .nested_if = nested_if ();
   .nested_case = nested_case ();
-};
+  }

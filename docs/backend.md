@@ -285,12 +285,12 @@ performs, its parameter type, and its result type. gpufuck turns that into typed
 WebAssembly imports.
 
 ```blot
-const Console = @effect.host { .write = Str -> Unit; };
+const Console = @effect.host { .write = Str -> Unit; }
 
-let report = fn () => do
-  result <- Console.write "compiled";
-  return result;
-end; // () -> () ~ { Console }
+let report = fn () =>
+  result <- Console.write "compiled"
+  return result
+// () -> () ~ { Console }
 ```
 
 This is why blot needs no raw import form: you declare an effect, and the
@@ -349,16 +349,17 @@ passes the operation argument and an affine continuation representing the rest
 of the computation to the matching clause.
 
 ```blot
-const Counter = @effect { .bump = Int -> Int; };
-let doubling = { .bump = fn (n, ?resume) => do
-  result <- resume (n * 2);
-  return result;
-end; };
-let counted = fn () => do
-  first <- Counter.bump 20;
-  second <- Counter.bump 1;
-  return first + second;
-end;
+const Counter = @effect { .bump = Int -> Int; }
+let doubling = {
+  .bump = fn (n, ?resume) =>
+    result <- resume (n * 2)
+    return result
+  ;
+}
+let counted = fn () =>
+  first <- Counter.bump 20
+  second <- Counter.bump 1
+  return first + second
 
 @handle (Counter, counted, doubling)   // 42
 ```
@@ -375,10 +376,10 @@ not an optimization here — it is what makes it mean anything. The computation
 and the handler both have to be written in the module, which is what "a handler
 known at compile time" always required.
 
-`try program with ... end` adds no backend path. CST lowering turns each bound
-two-argument `@handle (effect, handler)` step into a named nullary computation
-containing the ordinary three-argument call, then emits one final three-argument
-call that executes the composition.
+`try program with` followed by an indented suite adds no backend path. CST
+lowering turns each bound two-argument `@handle (effect, handler)` step into a
+named nullary computation containing the ordinary three-argument call, then
+emits one final three-argument call that executes the composition.
 
 ## Names, and what may not be mangled
 
@@ -412,11 +413,11 @@ and a three-field record, and the resulting functions lower against two concrete
 nominals. A runtime export instead needs to state the concrete boundary:
 
 ```blot
-const Point = { .x = Int; .y = Int; };
-sig project = Point -> Int;
-let project = fn point => point.x;
+const Point = { .x = Int; .y = Int; }
+sig project = Point -> Int
+let project = fn point => point.x
 
-return { .project = project; };
+return { .project = project; }
 ```
 
 That signature is not an annotation the function body needs; it is the

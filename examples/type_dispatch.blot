@@ -18,37 +18,34 @@
 // `const` name straight to its value and has always emitted the selected
 // closure, which is why the two now agree rather than one following the other.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 // One definition, two implementations, and nothing at run time chooses between
 // them: `measuring` is applied while compiling and the loser is never emitted.
-const measuring = fn T => if refines (T, Str)
-  then fn x => Text.length x
-  else fn x => x + 0
-end;
+const measuring = fn T => if refines (T, Str) then fn x => Text.length x
+else fn x => x + 0
 
-const measure_text = measuring Str;
-const measure_int = measuring Int;
+const measure_text = measuring Str
+const measure_int = measuring Int
 
 // Each call site is typed against the arrow it actually got. `measure_text 41`
 // would be rejected here, and before this it was `measure_text "hello"` that
 // was rejected — against the branch that did not run.
-sig text_length = Int;
-let text_length = measure_text "hello";
+sig text_length = Int
+let text_length = measure_text "hello"
 
-sig int_itself = Int;
-let int_itself = measure_int 41;
+sig int_itself = Int
+let int_itself = measure_int 41
 
 // A guard rather than a choice: one lambda, and the type is checked before it
 // is returned. This is the shape `examples/generics.blot` uses, and it kept
 // working throughout — a body with nothing to select between never needed the
 // evaluator's answer.
-const adding = fn T => do
-  let _ = expect (refines (T, Int), "adding is integers only, and this is not one");
-  return fn (a, b) => a + b;
-end;
+const adding = fn T =>
+  let _ = expect (refines (T, Int), "adding is integers only, and this is not one")
+  return fn (a, b) => a + b
 
-const add = adding Int;
+const add = adding Int
 
 // A recursive function is still a function. Its body names the binding being
 // defined, which is not a capture and cannot come from the environment — so it
@@ -56,17 +53,18 @@ const add = adding Int;
 // recursive group ties around several names at once. A `const` that *is* a
 // group is still typed with its group; this is for one that arrived as a value,
 // selected here by a compile-time conditional.
-const counting = fn T => do
-  const down = rec (fn n => if n <= 0 then 0 else 1 + down (n - 1) end);
-  return if refines (T, Int) then down else fn _ => 0 end;
-end;
+const counting = fn T =>
+  const down = rec (fn n => if n <= 0 then 0
+  else 1 + down (n - 1))
+  return if refines (T, Int) then down
+  else fn _ => 0
 
-const count = counting Int;
+const count = counting Int
 
 // The branch that loses captures `down` too, as an ordinary sibling binding. A
 // captured function has no type to bridge to either, so it is typed the same
 // way — otherwise one helper in scope would sink the whole attempt.
-const ignoring = counting Str;
+const ignoring = counting Str
 
 return {
   .text_length = text_length;
@@ -74,4 +72,4 @@ return {
   .added = add (20, 22);
   .counted = count 4;
   .ignored = ignoring 4;
-};
+  }

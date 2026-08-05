@@ -19,27 +19,34 @@ in a benchmark months later.
 
 | counter                     |              blot | note                                               |
 | --------------------------- | ----------------: | -------------------------------------------------- |
-| `lexerStates`               |               126 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`               |               125 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |                21 | worst-case island candidates allocated per token   |
-| `islandCount`               |                72 | one island for every grammar rule                  |
-| `islandStates`              |               406 |                                                    |
-| `islandTransitions`         |               407 |                                                    |
+| `islandCount`               |                73 | one island for every grammar rule                  |
+| `islandStates`              |               420 |                                                    |
+| `islandTransitions`         |               423 |                                                    |
 | `contractionRounds`         |                33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      |           623,616 | immutable device table                             |
-| `packedBytes`               |           485,445 | version-3 runtime section                          |
+| `denseTransitionBytes`      |           660,240 | immutable device table                             |
+| `packedBytes`               |           511,967 | version-3 runtime section                          |
 | `rootLoopIsland`            | 5 (`declaration`) | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |                 9 | islands admitted to parallel long-region execution |
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
-and edge arrays directly. Declaring all 72 rules as islands is what preserves
+and edge arrays directly. Declaring all 73 rules as islands is what preserves
 the full CST shape needed by source lowering.
 
 ## Historical strict-profile measurements
 
 The measurements below record earlier syntax decisions under the Baba 7 strict
-profile. They explain the source forms that remain, but they are not the current
-plan counters.
+profile. They explain earlier tradeoffs, but they are not the current plan
+counters.
+
+The current source is indentation-sensitive without making Baba's lexer
+contextual. Blot first runs the generated lexer, inserts three reserved private
+tokens for logical newline, indent, and dedent, and then gives that elaborated
+stream to the generated compact CPU frontend. Physical offsets are retained for
+diagnostics. Because the layout tokens have fixed terminal identities, all 73
+rules still satisfy the general profile and no parser resolution is required.
 
 Updating Baba from 8.0.0 to 9.0.0 moved strict-island analysis and compact CST
 materialization into its Rust core. Blot regenerated parser plan 5 and Wasm ABI
@@ -120,42 +127,41 @@ declaration alternative was a shift/reduce conflict on IDENT against `:=`, and
 the design fix was to notice that both are a name, an arrow, and a value —
 `rebinding` is one rule with two arrows, and neither takes a pattern.
 
-`for` cost three lexer states and forty-six island states on top of that, again
-with the multiplicity and contraction bounds unmoved: an `end`-terminated region
-is a shape the profile already had four of. The binder is spelled with a keyword
-and costs no _alternative_ — `for x in src` is parsed as a value and
-reclassified into a pattern once `in` follows, rather than as a branch the
-parser would have to choose from the first token. `lambda` used the same trick
-until `fn` paid for a real pattern there; `for` has no second keyword to spend
-and needs none.
+The former `for ... do ... end` form cost three lexer states and forty-six
+island states on top of that, again with the multiplicity and contraction bounds
+unmoved. The binder is spelled with a keyword and costs no _alternative_ —
+`for x in src` is parsed as a value and reclassified into a pattern once `in`
+follows, rather than as a branch the parser would have to choose from the first
+token. `lambda` used the same trick until `fn` paid for a real pattern there;
+`for` has no second keyword to spend and needs none.
 
 Removing the separate `loop` form reduced the profile by three lexer states,
 twenty-five island states, 29,784 dense-transition bytes, and 34,237 packed
-bytes. `for ever do` needs no replacement grammar: `ever` is an ordinary prelude
-iterator in the existing `for source do` form. `break` remains its own
-declaration and targets the nearest `for` during CST lowering.
+bytes. `for ever:` needs no replacement grammar: `ever` is an ordinary prelude
+iterator in the existing `for source:` form. `break` remains its own declaration
+and targets the nearest `for` during CST lowering.
 
-Standalone `if` uses `then` as the boundary of its semicolon-bounded statement
-body; expression `if` keeps value branches and requires `else`. Factoring the
+Standalone `if` uses `then` as the boundary of its indented statement body;
+expression `if` keeps value branches and requires `else`. Factoring the
 standalone form's shared `if` opener also admits `if let pattern = value else`
 without another branch opener. A bare trailing value after block statements
-conflicted with the shared `IDENT` prefix of `name := ...;`. `return value;`
-keeps the value inside the existing semicolon-bounded statement stream and adds
-no parser resolution. Making `break` loop-only removed one island state, two
-island transitions, 1,536 dense-transition bytes, and 1,206 packed bytes. It
-also raised `parallelLongRegionIslands` from 8 to 9.
+conflicted with the shared `IDENT` prefix of `name := ...`. `return value` keeps
+the value inside the newline-bounded statement stream and adds no parser
+resolution. Making `break` loop-only removed one island state, two island
+transitions, 1,536 dense-transition bytes, and 1,206 packed bytes. It also
+raised `parallelLongRegionIslands` from 8 to 9.
 
-`open value;` costs one lexer state and twenty-one island states — one keyword
-and one declaration alternative. A former rename/ignore mask added two rules and
-sixty-six island states. Removing it, removing `do` from statement branches, and
-spelling handler composition with `with` moved the current general-profile plan
-from 74 to 72 islands and from 514,619 to 485,445 packed bytes. Candidate
-multiplicity and contraction rounds remain fixed.
+The former `open value;` rule cost one lexer state and twenty-one island states
+— one keyword and one declaration alternative. A former rename/ignore mask added
+two rules and sixty-six island states. Removing it, removing `do` from statement
+branches, and spelling handler composition with `with` moved the then-current
+general-profile plan from 74 to 72 islands and from 514,619 to 485,445 packed
+bytes. Candidate multiplicity and contraction rounds remain fixed.
 
-`try program with ... end` is one bounded island whose body is a repeated
-semicolon-terminated handler step followed by one final step, so candidate
-multiplicity and contraction rounds remain fixed. The two-argument `@handle`
-spelling is parsed only inside this region and becomes the existing
+`try program with` followed by an indented suite is one bounded island whose
+body is a repeated newline-terminated handler step followed by one final step,
+so candidate multiplicity and contraction rounds remain fixed. The two-argument
+`@handle` spelling is parsed only inside this region and becomes the existing
 three-argument primitive during CST lowering.
 
 `fn` is the largest reduction the grammar has taken. Before it a lambda was
@@ -211,15 +217,16 @@ work per token.
 The ten proofs are listed in `../baba/docs/webgpu-frontend.md`.
 
 - **(1) Root is the parser root and the first declared island.** `program`.
-- **(2) Fixed terminal identity.** No layout sensitivity, no template literals,
-  no contextual keywords. This is why blot has no interpolated-text patterns:
-  they cannot be lexed without contextual promotion.
+- **(2) Fixed terminal identity.** Layout is elaborated into three fixed private
+  terminals before parsing; there are no template literals or contextual
+  keywords. This is why blot has no interpolated-text patterns: they cannot be
+  lexed without contextual promotion.
 - **(3) Deterministic actions.** No metadata conflict resolutions are declared;
   the grammar generates clean.
 - **(4) Non-empty, lexically identifiable island FIRST sets.** Every declaration
   form opens with its own keyword or with `:=`.
-- **(5) Boundary spellings resolve to one terminal each.** `;` terminates
-  declarations and shape members, `end` terminates every variable-width region.
+- **(5) Boundary spellings resolve to one terminal each.** Layout newline and
+  dedent terminate declarations and suites; `;` remains only for shape members.
 - **(6) Unambiguous opener-to-closer mapping.** `()`, `[]`, `{}` only.
 - **(7) Distinct opener, closer, separator.** `[` `]` `,` for arrays and array
   patterns.
@@ -233,12 +240,11 @@ The ten proofs are listed in `../baba/docs/webgpu-frontend.md`.
 
 The concessions are recorded here so they are not rediscovered as bugs:
 
-- **`return expr;` is a declaration form**, not a trailing bare expression. It
+- **`return expr` is a declaration form**, not a trailing bare expression. It
   keeps the root a bounded sequence with an explicit structural boundary.
-- **An expression block exits with `return value;`.** The result remains a
-  semicolon-terminated statement. A bare result would let `IDENT` begin either
-  the result or `name := ...;`, which is an LR conflict and an unbounded GPU
-  island.
+- **An expression block exits with `return value`.** The result remains a
+  newline-terminated statement. A bare result would let `IDENT` begin either the
+  result or `name := ...`, which is an LR conflict and an unbounded GPU island.
 - **`statement` duplicates `declaration`.** The two rules are identical, but
   their distinct compact-CST nodes make top-level and nested sequences explicit.
 - **A lambda opens with a keyword.** `fn x => x`, not `x => x`. Requirement 4

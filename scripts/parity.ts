@@ -10,6 +10,7 @@ import {
   CpuFrontend,
   WebGpuRuntime,
 } from "@mewhhaha/baba/runtime/webgpu";
+import { elaborateLayout } from "../src/syntax/layout.ts";
 
 const paths = Deno.args.filter((argument) => !argument.startsWith("--"));
 const cpuOnly = Deno.args.includes("--cpu");
@@ -24,7 +25,12 @@ const cpu = CpuFrontend.create(plan);
 if (cpuOnly) {
   for (const path of paths) {
     const source = await Deno.readTextFile(path);
-    const result = cpu.ingest(source);
+    const elaborated = await elaborateLayout(source);
+    if (!elaborated.ok) {
+      report(path, "layout", elaborated.diagnostics);
+      Deno.exit(1);
+    }
+    const result = cpu.ingest(elaborated.layout.source);
     if (!result.ok) {
       report(path, "CPU frontend", result.diagnostics);
       Deno.exit(1);
@@ -43,8 +49,14 @@ try {
 
   for (const path of paths) {
     const source = await Deno.readTextFile(path);
-    const expected = cpu.ingest(source);
-    const actual = await frontend.ingest(source);
+    const elaborated = await elaborateLayout(source);
+    if (!elaborated.ok) {
+      report(path, "layout", elaborated.diagnostics);
+      failed = true;
+      continue;
+    }
+    const expected = cpu.ingest(elaborated.layout.source);
+    const actual = await frontend.ingest(elaborated.layout.source);
 
     if (!expected.ok) {
       report(path, "CPU frontend", expected.diagnostics);

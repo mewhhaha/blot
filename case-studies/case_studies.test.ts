@@ -28,10 +28,9 @@ Deno.test("Text.contains searches Unicode text", async () => {
   const source = `${directory}/contains.blot`;
   await Deno.writeTextFile(
     source,
-    [
-      'open @import "blot:prelude" ();',
-      'return Text.contains "GPU 😀 frontend" "😀 front";',
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+return Text.contains "GPU 😀 frontend" "😀 front"
+`,
   );
   const value = await evaluateFile(source, { write: () => {} });
   assertEquals(show(value), "#True");

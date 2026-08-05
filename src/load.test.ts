@@ -10,10 +10,15 @@ Deno.test("refreshing loaded modules replaces an edited dependency and its impor
   const directory = await Deno.makeTempDir();
   const dependencyPath = join(directory, "dependency.blot");
   const entryPath = join(directory, "entry.blot");
-  await Deno.writeTextFile(dependencyPath, "return 1;");
+  await Deno.writeTextFile(
+    dependencyPath,
+    `return 1
+`,
+  );
   await Deno.writeTextFile(
     entryPath,
-    'return (@import "./dependency.blot") ();',
+    `return (@import "./dependency.blot") ()
+`,
   );
 
   const firstEntry = await load(entryPath);
@@ -22,7 +27,11 @@ Deno.test("refreshing loaded modules replaces an edited dependency and its impor
     throw new Error(`loaded ${entryPath} omitted ${dependencyPath}`);
   }
 
-  await Deno.writeTextFile(dependencyPath, "return 2;");
+  await Deno.writeTextFile(
+    dependencyPath,
+    `return 2
+`,
+  );
   await refreshLoadedModules();
   const secondEntry = await load(entryPath);
   const secondDependency = secondEntry.dependencies.get("./dependency.blot");
@@ -32,7 +41,11 @@ Deno.test("refreshing loaded modules replaces an edited dependency and its impor
 
   assertNotStrictEquals(secondEntry, firstEntry);
   assertNotStrictEquals(secondDependency, firstDependency);
-  assertEquals(secondDependency.source, "return 2;");
+  assertEquals(
+    secondDependency.source,
+    `return 2
+`,
+  );
 });
 
 Deno.test("refreshing loaded modules replaces an edited include and its importers", async () => {
@@ -43,13 +56,15 @@ Deno.test("refreshing loaded modules replaces an edited include and its importer
   await Deno.writeTextFile(includedPath, "first");
   await Deno.writeTextFile(
     dependencyPath,
-    "const raw = fn source => source.text;\n" +
-      'const message = @include "./message.txt" raw;\n' +
-      "return message;",
+    `const raw = fn source => source.text
+const message = @include "./message.txt" raw
+return message
+`,
   );
   await Deno.writeTextFile(
     entryPath,
-    'return (@import "./dependency.blot") ();',
+    `return (@import "./dependency.blot") ()
+`,
   );
 
   const firstEntry = await load(entryPath);
@@ -80,8 +95,9 @@ Deno.test("loading reports a missing included file at the include site", async (
   const entryPath = join(directory, "entry.blot");
   await Deno.writeTextFile(
     entryPath,
-    "const raw = fn source => source.text;\n" +
-      'return @include "./missing.txt" raw;',
+    `const raw = fn source => source.text
+return @include "./missing.txt" raw
+`,
   );
 
   const failure = await assertRejects(() => load(entryPath), LoadError);

@@ -732,17 +732,17 @@ mod tests {
 
     #[test]
     fn incremental_frontend_matches_fresh_frontend_after_token_edit() {
-        assert_incremental_matches_fresh("return 1;", "return 22;");
+        assert_incremental_matches_fresh("return 1\u{e000}", "return 22\u{e000}");
     }
 
     #[test]
     fn incremental_frontend_matches_fresh_frontend_after_trailing_comment() {
-        assert_incremental_matches_fresh("return 1;", "return 1; // changed");
+        assert_incremental_matches_fresh("return 1\u{e000}", "return 1\u{e000} // changed");
     }
 
     #[test]
     fn incremental_frontend_matches_fresh_frontend_when_tokens_merge() {
-        assert_incremental_matches_fresh("return x;", "return xy;");
+        assert_incremental_matches_fresh("return x\u{e000}", "return xy\u{e000}");
     }
 
     fn assert_incremental_matches_fresh(previous: &str, current: &str) {

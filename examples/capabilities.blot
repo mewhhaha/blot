@@ -6,42 +6,41 @@
 // ambient print. `init.print` below is an opaque host function — the program
 // can call it and do nothing else with it.
 
-module init;
+module init
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 const Console = @effect {
   .write = Str -> Unit;
-};
+  }
 
 // A host capability is simply a handler blot did not write. Here the handler is
 // written in blot over the granted function, which is the ordinary case.
 const to_host = {
-  .write = fn (message, ?resume) => do
-    _ <- init.print message;
-    result <- resume ();
-    return result;
-  end;
+  .write = fn (message, ?resume) =>
+    _ <- init.print message
+    result <- resume ()
+    return result
+  ;
   .return = fn value => value;
-};
+}
 
 // The same computation, discharged two different ways. Nothing in `report`
 // mentions which.
-const report = fn () => do
-  _ <- Console.write "compiled";
-  _ <- Console.write "linked";
-  return "ok";
-end;
+const report = fn () =>
+  _ <- Console.write "compiled"
+  _ <- Console.write "linked"
+  return "ok"
 
 const to_memory = {
-  .write = fn (message, ?resume) => do
-    rest <- resume ();
-    return @text.concat message rest;
-  end;
+  .write = fn (message, ?resume) =>
+    rest <- resume ()
+    return @text.concat message rest
+  ;
   .return = fn _ => "";
-};
+}
 
 return {
   .printed = @handle (Console, report, to_host);
   .captured = @handle (Console, report, to_memory);
-};
+  }

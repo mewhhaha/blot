@@ -15,14 +15,16 @@
 // The same refusal covers the case no analysis of a value could ever handle:
 // `Eq` arriving as a function parameter, chosen by the caller.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-let Eq = { .eq = fn a => fn b => True; .ne = fn a => fn b => False; };
+let Eq = { .eq = fn a => fn b => True; .ne = fn a => fn b => False; }
 
-sig name = 1 | 2 | 3 -> Str;
-let name = fn n => if n == 1
-  then case n of 1 => "one" end
-  else case n of 2 => "two", 3 => "three" end
-end;
+sig name = 1 | 2 | 3 -> Str
+let name = fn n => if n == 1 then case n of
+  1 => "one"
 
-return name 2;
+else case n of
+    2 => "two"
+    3 => "three"
+
+return name 2

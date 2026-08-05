@@ -1,12 +1,12 @@
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-let values = Int32x4.of_wrapping (5, 7, -8, 9);
-let shifted = Int32x4.shift_left values 1;
-let bounded = Int32x4.max_signed shifted (Int32x4.splat_wrapping (@int.neg 12));
-let words = Int16x8.add (Int16x8.splat 32767) (Int16x8.splat 1);
-let bytes = Int8x16.add (Int8x16.splat 127) (Int8x16.splat 1);
-const selected = 2;
-let wrapped = Int8x16.splat_wrapping 128;
+let values = Int32x4.of_wrapping (5, 7, -8, 9)
+let shifted = Int32x4.shift_left values 1
+let bounded = Int32x4.max_signed shifted (Int32x4.splat_wrapping (@int.neg 12))
+let words = Int16x8.add (Int16x8.splat 32767) (Int16x8.splat 1)
+let bytes = Int8x16.add (Int8x16.splat 127) (Int8x16.splat 1)
+const selected = 2
+let wrapped = Int8x16.splat_wrapping 128
 
 return {
   .wide = Int32x4.x bounded;
@@ -14,4 +14,4 @@ return {
   .words = Int16x8.mask_bits (Int16x8.less_signed words (Int16x8.splat 0));
   .bytes = Int8x16.mask_bits (Int8x16.less_signed bytes (Int8x16.splat 0));
   .wrapped = Int8x16.mask_bits (Int8x16.less_signed wrapped (Int8x16.splat 0));
-};
+  }

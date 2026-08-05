@@ -12,26 +12,26 @@ operators {
   infixl 15 (<%>) = Fn.pipe;
   infix 35 (=~) = Ord.le;
   prefix 90 (~) = Num.negate;
-};
+}
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-const Value = I32 :| Str;
-const Method = "GET" :| "POST" :| "PUT";
-const Verb = Method :- "PUT";
+const Value = I32 :| Str
+const Method = "GET" :| "POST" :| "PUT"
+const Verb = Method :- "PUT"
 
 // Division and the comment marker coexist: an operator may contain `/`
 // anywhere except as a doubled prefix, which is what keeps `//` a comment.
-let ratio = 22 / 7;
-let chained = 1 + 2 * 3 - 4 / 2;
-let compared = 1 + 2 == 3;
+let ratio = 22 / 7
+let chained = 1 + 2 * 3 - 4 / 2
+let compared = 1 + 2 == 3
 
 // Associativity and precedence are the header's business, not the grammar's.
-let joined = "a" <> "b" <> "c";
-let piped = 20 <%> Num.add 2 <%> Num.mul 2;
-let applied = Num.add 20 $ 22;
-let bounded = 3 =~ 4;
-let negated = ~7 + 10;
+let joined = "a" <> "b" <> "c"
+let piped = 20 <%> Num.add 2 <%> Num.mul 2
+let applied = Num.add 20 $ 22
+let bounded = 3 =~ 4
+let negated = ~7 + 10
 
 // --- what the default levels mean -------------------------------------------
 //
@@ -42,12 +42,12 @@ let negated = ~7 + 10;
 // An arrow is looser than the type algebra on either side of it, so each pair
 // here prints the same value twice. `==` cannot state it: it compares scalars,
 // and these are types.
-const arrow_bare = Int | Str -> Int;
-const arrow_grouped = (Int | Str) -> Int;
+const arrow_bare = Int | Str -> Int
+const arrow_grouped = (Int | Str) -> Int
 
 // Set algebra mirrors arithmetic: intersection is the product.
-const algebra_bare = 0 | 1 & 1;
-const algebra_grouped = 0 | (1 & 1);
+const algebra_bare = 0 | 1 & 1
+const algebra_grouped = 0 | (1 & 1)
 
 // `&&` and `||` are boolean logic, distinct from `&` and `|`, which are set
 // algebra. Comparisons bind tighter than both, and `&&` tighter than `||`.
@@ -55,14 +55,14 @@ const algebra_grouped = 0 | (1 & 1);
 // Both arguments are evaluated. An operator here is an ordinary curried
 // function and blot has no laziness for one to exploit, so `if` is the
 // short-circuiting form.
-let ranged = 1 < 2 && 3 < 4;
-let either = False && True || True;
-let precedence = True || False && False;
+let ranged = 1 < 2 && 3 < 4
+let either = False && True || True
+let precedence = True || False && False
 
 // Append binds tighter than comparison and looser than arithmetic. `==` is
 // `Ord.eq` over `@int.cmp`, so it compares integers; `Text.cmp` compares text.
-let appended = is_equal (Text.cmp ("a" <> "b") "ab");
-let counted = "n" <> Text.of_int (1 + 2);
+let appended = is_equal (Text.cmp ("a" <> "b") "ab")
+let counted = "n" <> Text.of_int (1 + 2)
 
 return {
   .arrow_bare = arrow_bare;
@@ -84,4 +84,4 @@ return {
   .applied = applied;
   .bounded = bounded;
   .negated = negated;
-};
+  }

@@ -1,10 +1,8 @@
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-let unwrap = fn option => do
+let unwrap = fn option =>
   if let #Some value = option else
-    let ignored = ();
-  end;
-  return value;
-end;
+    let ignored = ()
+  return value
 
-return unwrap (Some 1);
+return unwrap (Some 1)

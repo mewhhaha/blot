@@ -13,7 +13,17 @@ const tokenWords = 4;
 const nodeWords = 8;
 const edgeWords = 4;
 
-const repeatedFields: ReadonlySet<string> = new Set(compactRepeatedFields);
+export interface CompactSchema {
+  readonly fieldNames: readonly string[];
+  readonly namedTokenKinds: readonly string[];
+  readonly repeatedFields: readonly string[];
+}
+
+const currentSchema: CompactSchema = {
+  fieldNames,
+  namedTokenKinds,
+  repeatedFields: compactRepeatedFields,
+};
 
 type Cursor = Rule | TokenCursor;
 
@@ -27,8 +37,16 @@ export function materializeCpuCst(
   frontend: CpuFrontend,
   program: CompactFrontendProgram,
   source: string,
+  originalOffset: (offset: number) => number = (offset) => offset,
+  schema: CompactSchema = currentSchema,
 ): Rule {
-  const materializer = new CpuCstMaterializer(frontend, program, source);
+  const materializer = new CpuCstMaterializer(
+    frontend,
+    program,
+    source,
+    originalOffset,
+    schema,
+  );
   return materializer.root();
 }
 
@@ -36,6 +54,9 @@ class CpuCstMaterializer {
   readonly #frontend: CpuFrontend;
   readonly #program: CompactFrontendProgram;
   readonly #source: string;
+  readonly #originalOffset: (offset: number) => number;
+  readonly #schema: CompactSchema;
+  readonly #repeatedFields: ReadonlySet<string>;
   readonly #ruleNameById: ReadonlyMap<number, string>;
   readonly #rules = new Map<number, Rule>();
   readonly #tokens = new Map<number, TokenCursor>();
@@ -44,10 +65,15 @@ class CpuCstMaterializer {
     frontend: CpuFrontend,
     program: CompactFrontendProgram,
     source: string,
+    originalOffset: (offset: number) => number,
+    schema: CompactSchema,
   ) {
     this.#frontend = frontend;
     this.#program = program;
     this.#source = source;
+    this.#originalOffset = originalOffset;
+    this.#schema = schema;
+    this.#repeatedFields = new Set(schema.repeatedFields);
     this.#ruleNameById = new Map(
       frontend.plan.islands.map((island) => [island.ruleId, island.ruleName]),
     );
@@ -124,13 +150,16 @@ class CpuCstMaterializer {
     const rule: Rule = {
       type: "rule",
       name,
-      span: { start, end },
+      span: {
+        start: this.#originalOffset(start),
+        end: this.#originalOffset(end),
+      },
       child: (index) => edges()[index]?.target,
       children: () => edges().map((edge) => edge.target),
       field: (fieldName) => {
         const values = indexedFields().get(fieldName);
         if (values === undefined) return undefined;
-        if (repeatedFields.has(`${name}.${fieldName}`)) {
+        if (this.#repeatedFields.has(`${name}.${fieldName}`)) {
           return values.filter((value) => value.type === "rule");
         }
         if (values.length === 1) return values[0];
@@ -169,7 +198,7 @@ class CpuCstMaterializer {
     }
     let field: string | null = null;
     if (fieldId >= 0) {
-      field = fieldNames[fieldId] ?? null;
+      field = this.#schema.fieldNames[fieldId] ?? null;
       if (field === null) {
         throw new Error(`Baba CPU frontend returned unknown field ${fieldId}`);
       }
@@ -190,8 +219,8 @@ class CpuCstMaterializer {
     );
     const text = this.#source.slice(start, end);
     let kind: string = text;
-    if (identity < namedTokenKinds.length) {
-      kind = namedTokenKinds[identity];
+    if (identity < this.#schema.namedTokenKinds.length) {
+      kind = this.#schema.namedTokenKinds[identity];
       if (kind === "WHITESPACE" || kind === "COMMENT") {
         throw new Error(`Baba CPU frontend emitted trivia token ${kind}`);
       }
@@ -200,7 +229,10 @@ class CpuCstMaterializer {
       type: "token",
       kind,
       text,
-      span: { start, end },
+      span: {
+        start: this.#originalOffset(start),
+        end: this.#originalOffset(end),
+      },
     };
     this.#tokens.set(id, token);
     return token;

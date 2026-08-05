@@ -2013,7 +2013,7 @@ function boundaryType(
  *
  * Each declaration contributes a wrapper around everything after it, because a
  * destructuring binding is a `case` and not a `let` — Core has no pattern
- * binder, so `let { .x; } = p;` becomes the match it always meant.
+ * binder, so `let { .x; } = p` becomes the match it always meant.
  */
 function lowerBlock(
   declarations: Module["declarations"],
@@ -2274,7 +2274,7 @@ function bind(
 
   if (pattern.tag === "tuple" || pattern.tag === "shape") {
     // The *value's* field set, not the pattern's: width subtyping means
-    // `let { .x; } = point;` names fewer than arrive, and Core records are
+    // `let { .x; } = point` names fewer than arrive, and Core records are
     // nominal.
     const nominal = lowering.nominal(
       destructuredFields(pattern, scope, lowering),

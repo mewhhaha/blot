@@ -10,7 +10,7 @@
 // so `reflect` and `refines` are all it needs and the prelude adds no
 // machinery — `Is` and `Has` are two lines each.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 // The type is what is asked about, never the value — which is why this works
 // on an expression whose value only exists at run time. `@type.of` cannot do
@@ -21,21 +21,21 @@ open @import "blot:prelude" ();
 //
 // The values here are ordinary so the catalog can record what the program
 // evaluates to; nothing about the mechanism needs them to be.
-let reading = { .value = 12; .label = "depth"; };
+let reading = { .value = 12; .label = "depth"; }
 
 // `Has` asks for a subset of fields. The value passes through unchanged, so it
 // reads as an assertion on the way to using it.
-let checked = @type.satisfies (reading, Has { .value = Int; });
+let checked = @type.satisfies (reading, Has { .value = Int; })
 
 // A predicate written inline can ask anything the comptime evaluator can.
 let counted = @type.satisfies (reading, fn t => case reflect t of
-  #Shape fields => @array.len (@shape.names fields) == 2,
+  #Shape fields => @array.len (@shape.names fields) == 2
   _ => False
-end);
+)
 
 // `Is` is exact rather than a subset.
-const Reading = { .value = 12; .label = "depth"; };
-let exact = @type.satisfies (reading, Is Reading);
+const Reading = { .value = 12; .label = "depth"; }
+let exact = @type.satisfies (reading, Is Reading)
 
 // `examples/rejected/semantics/does_not_satisfy.blot` is the program whose
 // predicate answers `#False`, and it is refused while compiling rather than
@@ -45,4 +45,4 @@ return {
   .value = checked.value;
   .label = counted.label;
   .both = exact.value;
-};
+  }

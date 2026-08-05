@@ -9,10 +9,10 @@
 // Spread a record whose fields are written where the spread is, and this is a
 // non-issue. The limit is on the parameter, not on the syntax.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-let tagging = fn r => { ...r; .tag = 1; };
+let tagging = fn r => { ...r; .tag = 1; }
 
-let tagged = tagging { .x = 1; };
+let tagged = tagging { .x = 1; }
 
-return tagged.x;
+return tagged.x

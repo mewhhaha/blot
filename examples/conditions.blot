@@ -15,34 +15,36 @@
 // `examples/narrowing.blot` is the sibling rule for `case`, where the arm's own
 // pattern is the proof.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-sig name = 1 | 2 | 3 -> Str;
-let name = fn n => if n == 1
-  then case n of 1 => "one" end
-  else case n of 2 => "two", 3 => "three" end
-end;
+sig name = 1 | 2 | 3 -> Str
+let name = fn n => if n == 1 then case n of
+  1 => "one"
+
+else case n of
+    2 => "two"
+    3 => "three"
 
 // The chain accumulates: the fallback knows that none of the earlier conditions
 // fired, so `n` is `3` there and one arm covers it.
-sig ordinal = 1 | 2 | 3 -> Str;
-let ordinal = fn n => if n == 1
-  then "first"
-  else if n == 2 then "second"
-  else case n of 3 => "third" end
-end;
+sig ordinal = 1 | 2 | 3 -> Str
+let ordinal = fn n => if n == 1 then "first"
+else if n == 2 then "second"
+else case n of
+    3 => "third"
 
 // Nothing is enumerated. `@int.cmp` answers on every pair of integers, so a
 // comparison narrows an unbounded domain the same way it narrows a finite one:
 // `..9` and `10..` are the two halves `Int` splits into, and `size` could not
 // call either helper without the proof.
-sig small = range (@type.unbounded, 9) -> Str;
-let small = fn n => "small";
+sig small = range (@type.unbounded, 9) -> Str
+let small = fn n => "small"
 
-sig large = range (10, @type.unbounded) -> Str;
-let large = fn n => "large";
+sig large = range (10, @type.unbounded) -> Str
+let large = fn n => "large"
 
-sig size = Int -> Str;
-let size = fn n => if n < 10 then small n else large n end;
+sig size = Int -> Str
+let size = fn n => if n < 10 then small n
+else large n
 
-return (name 1, name 3, ordinal 2, size 4, size 40);
+return (name 1, name 3, ordinal 2, size 4, size 40)

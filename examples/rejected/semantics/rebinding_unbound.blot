@@ -1,2 +1,2 @@
-missing := 1;
-return missing;
+missing := 1
+return missing

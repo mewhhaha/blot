@@ -164,9 +164,22 @@ export function materializeFlatModule(value: unknown): Module {
   } as unknown as Module;
 }
 
-export function canonicalModule(module: Module): unknown {
-  return JSON.parse(JSON.stringify(module, (_key, value) => {
+export function canonicalModule(
+  module: Module,
+  originalOffset: (offset: number) => number = (offset) => offset,
+): unknown {
+  return JSON.parse(JSON.stringify(module, (key, value) => {
     if (typeof value === "bigint") return value.toString();
+    if (key === "name" && typeof value === "string" && value.includes("$")) {
+      return value.replaceAll(/[0-9]+/g, "#");
+    }
+    if (key === "span") {
+      const span = object(value, "AST span");
+      return {
+        start: originalOffset(number(span.start, "span start")),
+        end: originalOffset(number(span.end, "span end")),
+      };
+    }
     return value;
   }));
 }
@@ -185,6 +198,11 @@ function array(value: unknown, label: string): unknown[] {
 
 function string(value: unknown, label: string): string {
   if (typeof value !== "string") throw new Error(`${label} is not text`);
+  return value;
+}
+
+function number(value: unknown, label: string): number {
+  if (typeof value !== "number") throw new Error(`${label} is not a number`);
   return value;
 }
 

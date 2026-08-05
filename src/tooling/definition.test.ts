@@ -3,15 +3,16 @@ import { parse } from "../syntax/parse.ts";
 import { definitionAt } from "./definition.ts";
 
 Deno.test("definition lookup follows lexical shadowing", async () => {
-  const source = "let value = 1;\n" +
-    "let inner = fn value => value;\n" +
-    "return (inner value, value);";
+  const source = `let value = 1
+let inner = fn value => value
+return (inner value, value)
+`;
   const parsed = await parse(source);
   if (!parsed.ok) throw new Error("definition fixture did not parse");
 
   const parameter = source.indexOf("value =>");
-  const innerUse = source.indexOf("value;", parameter);
-  const outerUse = source.lastIndexOf("value);");
+  const innerUse = source.indexOf("value\n", parameter);
+  const outerUse = source.lastIndexOf("value)");
 
   assertEquals(
     definitionAt(parsed.module, source, innerUse + 1),
@@ -24,9 +25,10 @@ Deno.test("definition lookup follows lexical shadowing", async () => {
 });
 
 Deno.test("definition lookup sees every member of a recursive group", async () => {
-  const source = "let even = rec (fn n => odd n);\n" +
-    "let odd = rec (fn n => even n);\n" +
-    "return even;";
+  const source = `let even = rec (fn n => odd n)
+let odd = rec (fn n => even n)
+return even
+`;
   const parsed = await parse(source);
   if (!parsed.ok) throw new Error("definition fixture did not parse");
 

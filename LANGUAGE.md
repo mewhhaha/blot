@@ -60,13 +60,13 @@ The reserved words are:
 
 ```text
 module operators infixl infixr infix prefix
-let const sig return do end
+let const sig return
 if then else case of rec comptime open
 for in break try fn
 ```
 
 Reserved words and capitalized names remain valid field names: `.return`,
-`.end`, `.Num`, and `.0` are all ordinary projections.
+`.else`, `.Num`, and `.0` are all ordinary projections.
 
 ### 2.2 Literals
 
@@ -201,27 +201,27 @@ lowering folds that chain using the active fixity table.
 A file has this order:
 
 ```blot
-module parameter;       // optional
+module parameter         // optional
 
 operators {             // optional
   infixl 60 (+) = Num.add;
-};
+}
 
 declarations
-return result;
+return result
 ```
 
 The `module` header, when present, must be first. The `operators` header, when
 present, follows it. At least one declaration is required, and the final
-declaration must be `return value;`.
+declaration must be `return value`.
 
 A module is a unary function from its parameter to its returned value. A module
 without an explicit header has a unit parameter that its body ignores; callers
 invoke it with `()`.
 
 ```blot
-const library = @import "./library.blot";
-let exports = library ();
+const library = @import "./library.blot"
+let exports = library ()
 ```
 
 `@import` accepts a literal text specifier and returns the module function. It
@@ -273,7 +273,7 @@ Nothing, including the prelude, is implicitly in scope. The conventional prelude
 opening is:
 
 ```blot
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 ```
 
 At compilation, imported module bodies are specialized and inlined. This does
@@ -285,8 +285,8 @@ not alter their source semantics as functions.
 function:
 
 ```blot
-const as_raw = fn source => source.text;
-const shader = @include "./shaders/main.wgsl" as_raw;
+const as_raw = fn source => source.text
+const shader = @include "./shaders/main.wgsl" as_raw
 ```
 
 Schematically, for every result type `a`, its type is:
@@ -308,8 +308,8 @@ text primitives require compiler support.
 The prelude supplies the conventional JSON policies:
 
 ```blot
-const config = @include "./config.json" as_json;
-const fixed_config = @include "./config.json" as_const_json;
+const config = @include "./config.json" as_json
+const fixed_config = @include "./config.json" as_const_json
 ```
 
 Both produce ordinary Blot values. JSON objects become records, arrays become
@@ -352,13 +352,21 @@ A name that is read before the block binds it is a scope error,
 name because the fix is different: the binding exists, and either it belongs
 above the reader or the two belong in one recursive group.
 
-Every declaration ends in `;`.
+Physical line breaks terminate declarations. A continuation may be indented, but
+indentation opens a statement suite only after a suite introducer. The
+introducers are `=`, `=>`, `<-`, `then`, `else`, `of`, `with`, loop `:`, and an
+opening element's `>`. An opening `(` also introduces an explicit block when its
+next physical line starts with a statement form. A suite may use any indentation
+width, but every line at that depth must agree; a dedent must return to an
+active suite width or to the introducer's width. Other indentation is expression
+continuation and does not silently create a scope. The formatter writes the
+accepted structure with two-space indentation.
 
 ### 4.1 Runtime and compile-time bindings
 
 ```blot
-let pattern = value;
-const pattern = value;
+let pattern = value
+const pattern = value
 ```
 
 `let` defines a value in the current phase, matches its pattern when demanded,
@@ -375,12 +383,9 @@ dispatch: each `const` bound from it is typed against the branch that ran, and
 the branch that did not run contributes nothing to it.
 
 ```blot
-const measuring = fn T => if refines (T, Str)
-  then fn x => Text.length x
-  else fn x => x + 0
-end;
+const measuring = fn T => if refines (T, Str) then fn x => Text.length x else fn x => x + 0
 
-const measure_text = measuring Str;   // Str -> Int, not joined with the other arm
+const measure_text = measuring Str   // Str -> Int, not joined with the other arm
 ```
 
 This applies equally to a compile-time function reached through an imported
@@ -430,8 +435,8 @@ A mismatch in a binding pattern is an error. Repeating `let` or `const`
 explicitly shadows the earlier binding and may change its type:
 
 ```blot
-let value = 1;
-let value = "now text";
+let value = 1
+let value = "now text"
 ```
 
 ### 4.2 Declaration tags
@@ -440,10 +445,10 @@ One or more compile-time descriptors may transform a `let` or `const` value:
 
 ```blot
 @[derive(add_accessors)]
-const Point = struct { .x = I32; .y = I32; };
+const Point = struct { .x = I32; .y = I32; }
 
 @[test]
-let point_origin = fn () => expect (True, "origin");
+let point_origin = fn () => expect (True, "origin")
 ```
 
 A descriptor is a compile-time shape with these members:
@@ -469,7 +474,7 @@ Transforms apply from the nearest tag outward:
 ```blot
 @[outer]
 @[inner]
-let value = source;
+let value = source
 ```
 
 binds `outer.transform (inner.transform source)`. The replacement is the value
@@ -496,8 +501,8 @@ Normal checking, evaluation, and building never execute tests.
 ### 4.3 Signatures
 
 ```blot
-sig name = type_value;
-let name = value;
+sig name = type_value
+let name = value
 ```
 
 A signature:
@@ -517,7 +522,7 @@ the empty row rather than an unwritten one.
 ### 4.4 Stable rebinding
 
 ```blot
-name := value;
+name := value
 ```
 
 `:=` is immutable shadowing, not assignment. The name must already be in scope.
@@ -535,7 +540,7 @@ of the inner loop instead.
 ### 4.5 Effect sequencing
 
 ```blot
-name <- expression;
+name <- expression
 ```
 
 This is the only declaration form that admits an effectful expression. It binds
@@ -543,15 +548,16 @@ one name, not a pattern, and evaluates the expression exactly as written. It
 does not insert a unit argument, so a nullary operation is explicit:
 
 ```blot
-request <- Runtime.request ();
+request <- Runtime.request ()
 ```
 
 `let`, `const`, `:=`, `open`, function results written without a block, and
-module results are pure value positions. The expression in `return value;` is a
-tail computation of its current module or `do` scope and may contribute effects
-to the enclosing function. Pure `let` bindings may be reordered, inlined, or
-discarded when their values are not demanded; sequencing an effect before the
-tail therefore requires `<-` even when its result is ignored.
+module results are pure value positions. The expression in `return value` is a
+tail computation of its current module or explicit indentation scope and may
+contribute effects to the enclosing function. Pure `let` bindings may be
+reordered, inlined, or discarded when their values are not demanded; sequencing
+an effect before the tail therefore requires `<-` even when its result is
+ignored.
 
 The left-hand binding in a `try` handler step is a separate bounded surface
 form. Section 12.2 specifies how it binds the newly handled computation without
@@ -565,9 +571,9 @@ expression:
 
 ```blot
 _ <- <div .class="counter" .hidden={hidden}>
-  _ <- text "Count: ";
-  _ <- <Button .disabled=True />;
-</div>;
+  _ <- text "Count: "
+  _ <- <Button .disabled=True />
+</div>
 ```
 
 The tag is a lexical binding with exactly the name written. Lower-case and
@@ -614,9 +620,8 @@ acquire type `Unit`.
 A component is otherwise an ordinary curried function. For example:
 
 ```blot
-let component = fn properties => fn children => do
-  _ <- children ();
-end;
+let component = fn properties => fn children =>
+  _ <- children ()
 ```
 
 Its principal type prints as `'a -> (() -> 'b ~ { e }) -> () ~ { e }`: the
@@ -631,13 +636,12 @@ underscore bind explicitly discards that result. In tail position the element
 becomes the block's tail computation:
 
 ```blot
-let draw_twice = fn () => do
-  _ <- <div />;
-  return <div />;
-end;
+let draw_twice = fn () =>
+  _ <- <div />
+  return <div />
 ```
 
-The statements between paired tags become one `fn () => do ... end` child
+The statements between paired tags become one indented `fn () =>` child
 computation. A self-closing element receives a function that returns `()`.
 Control inside the child computation has that new lambda as its boundary, and
 effects run only if the component sequences `children ()`. Nested element
@@ -645,10 +649,10 @@ computations are sequenced explicitly like every other child statement. The full
 lowering of the first example is equivalent to:
 
 ```blot
-_ <- div { .class = "counter"; .hidden = hidden; } (fn () => do
-  _ <- text "Count: ";
-  _ <- Button { .disabled = True; } (fn () => ());
-end);
+_ <- div { .class = "counter"; .hidden = hidden; } (fn () =>
+  _ <- text "Count: "
+  _ <- Button { .disabled = True; } (fn () => ())
+)
 ```
 
 Without the written `_ <-`, the same element lowers to the application on the
@@ -663,7 +667,7 @@ indistinguishable from opening an element expression.
 ### 4.7 Opening a record
 
 ```blot
-open record;
+open record
 ```
 
 The opened value must be a compile-time record. Every field enters scope under
@@ -674,20 +678,20 @@ Selective binding and renaming use an ordinary record pattern, which leaves
 unlisted fields out of scope:
 
 ```blot
-const { .source = target; .value; } = record;
+const { .source = target; .value; } = record
 ```
 
 ### 4.8 Return
 
 ```blot
-return value;
+return value
 ```
 
-`return` exits the nearest enclosing module or explicit `do` block with its
-value. Statement conditionals and `for` bodies do not establish return scopes,
-so a return crosses them. Value-producing `if` and `case` expressions are
-separate result scopes and do not inherit that surrounding target. Their
-branches are values, so a branch that needs statements uses `do`; a return in
+`return` exits the nearest enclosing module or explicit indentation block with
+its value. Statement conditionals and `for` bodies do not establish return
+scopes, so a return crosses them. Value-producing `if` and `case` expressions
+are separate result scopes and do not inherit that surrounding target. Their
+branches are values, so an indented branch may contain statements; a return in
 that block supplies the branch, and therefore the expression, rather than
 escaping farther.
 
@@ -724,11 +728,10 @@ contributes to exhaustiveness, even when the binding was initialized from a
 literal, so a case normally needs another arm:
 
 ```blot
-let wanted = 1;
+let wanted = 1
 let label = case actual of
-  #(wanted) => "wanted",
+  #(wanted) => "wanted"
   _ => "other"
-end;
 ```
 
 A direct `for` binder is the one exception: it is parsed as an expression and
@@ -913,28 +916,26 @@ without `fn` is therefore a syntax error rather than an operator chain.
 ### 6.4 Blocks
 
 ```blot
-do
+let result =
   declarations
-  return value;
-end
+  return value
 ```
 
-A block evaluates its statements in a nested scope. Reaching `end` returns `()`;
-`return value;` exits that block with `value`. It may leave from a nested
-statement conditional, guard, or loop. A nested explicit `do` becomes the
-nearest return scope.
+Indentation after `=`, `=>`, `<-`, `then`, `else`, `of`, `with`, a loop colon,
+or a parenthesis followed by a statement opens a block. A block evaluates its
+statements in a nested scope. Falling through returns `()`; `return value` exits
+that block with `value`. It may leave from a nested statement conditional,
+guard, or loop. The block is the nearest return scope.
 
-A bare trailing expression is not permitted. The semicolon makes `return value;`
-an ordinary bounded statement, so a result beginning with a name does not
-conflict with `name := value;`.
+A bare trailing expression is not permitted. The explicit `return` keeps a
+result beginning with a name distinct from `name := value`.
 
 ### 6.5 Recursion
 
 `rec` is a prefix form that is valid only as the value of a binding to one name:
 
 ```blot
-const factorial = rec (fn n =>
-  if n < 2 then 1 else n * factorial (n - 1) end);
+const factorial = rec (fn n => if n < 2 then 1 else n * factorial (n - 1))
 ```
 
 The bound name is visible inside the lambda body. `rec` applied outside such a
@@ -945,8 +946,8 @@ A run of adjacent `rec` bindings of the same kind is one **recursive group**,
 and every name the run binds is in scope in every member's body:
 
 ```blot
-let is_even = rec (fn n => if n == 0 then True else is_odd (n - 1) end);
-let is_odd = rec (fn n => if n == 0 then False else is_even (n - 1) end);
+let is_even = rec (fn n => if n == 0 then True else is_odd (n - 1))
+let is_odd = rec (fn n => if n == 0 then False else is_even (n - 1))
 ```
 
 A group of one is ordinary self-recursion, so this states the existing rule for
@@ -1010,7 +1011,7 @@ operators {
   infixr 10 ($) = Fn.apply;
   infix 30 (===) = Eq.eq;
   prefix 90 (!!) = negate;
-};
+}
 ```
 
 The target is a qualified name or intrinsic. Using an operator requires both a
@@ -1053,7 +1054,6 @@ let label = if ready
   then "ready"
   else if waiting then "waiting"
   else "done"
-end;
 ```
 
 An expression `if`:
@@ -1063,10 +1063,10 @@ An expression `if`:
 - evaluates and returns exactly one branch value; and
 - is a result-scope boundary that does not inherit surrounding control targets.
 
-Branches are values rather than statement lists. A branch that needs statements
-uses `do`; its `return` supplies that branch and therefore the conditional's
-result. A bare `break;` inside such a branch cannot escape the value expression
-to reach an enclosing loop.
+Branches are values rather than statement lists. A branch on the following
+indented lines is a block; its `return` supplies that branch and therefore the
+conditional's result. A bare `break` inside such a branch cannot escape the
+value expression to reach an enclosing loop.
 
 There is no truthiness and no `yield`.
 
@@ -1079,7 +1079,6 @@ else if other then
   statements
 else
   statements
-end;
 ```
 
 A statement conditional's `else` is optional. Its branches are lexical binding
@@ -1093,14 +1092,13 @@ including a missing `else`, which passes the name through unchanged. A `let`
 inside a branch stays local to that branch, shadowing any outer binding of that
 name for the rest of the branch and escaping with nothing.
 
-`then` begins the branch body; the final `end;` closes the whole conditional.
+The suite ends at the first dedent. `else` aligns with its `if`.
 
 ### 8.3 Deconstructing guard
 
 ```blot
 if let #Some value = candidate else
-  return fallback;
-end;
+  return fallback
 
 // value is in scope here
 ```
@@ -1120,9 +1118,8 @@ This form has no `then` because success continues after the guard.
 
 ```blot
 case value of
-  #None => fallback,
+  #None => fallback
   #Some inner => inner
-end
 ```
 
 The target is evaluated once. Arms are tested from left to right, each in a
@@ -1142,11 +1139,10 @@ rather than a type the target could be constrained to — so the members the arm
 do not name are reported, and the target's own type is left alone.
 
 ```blot
-sig rank = 1 | 2 | 3 -> Int;
+sig rank = 1 | 2 | 3 -> Int
 let rank = fn level => case level of
-  1 => 100,
+  1 => 100
   2 => 200
-end;
 ```
 
 is refused: `3` is a member of the target's type that no arm covers. Adding a
@@ -1157,8 +1153,10 @@ range with an open end — cannot be exhausted by listed literal arms. Such a
 `case` is refused rather than accepted in silence:
 
 ```blot
-sig describe = Int -> Str;
-let describe = fn n => case n of 1 => "one", 2 => "two" end;
+sig describe = Int -> Str
+let describe = fn n => case n of
+  1 => "one"
+  2 => "two"
 // BLOT_INCOMPLETE_CASE: `Int` has more values than these arms can cover.
 ```
 
@@ -1167,10 +1165,9 @@ irrefutable arm. `@panic` is how that arm says why reaching it is impossible:
 
 ```blot
 let describe = fn n => case n of
-  1 => "one",
-  2 => "two",
+  1 => "one"
+  2 => "two"
   _ => @panic "callers are checked against `1 | 2` upstream"
-end;
 ```
 
 `@panic` takes a text and returns the empty type, so it may stand where any
@@ -1193,9 +1190,8 @@ payloads carry, so
 
 ```blot
 let unwrap_or = fn m => case m of
-  #Some inner => inner,
+  #Some inner => inner
   _ => "none"
-end;
 ```
 
 has type `#Some 'a | .. -> ('a | "none")`, where `| ..` reads "and possibly
@@ -1211,10 +1207,9 @@ A target may be a tuple, which is how a join over two values is written:
 
 ```blot
 case (left, right) of
-  (#Some a, #Some b) => a + b,
-  (#Some a, #None) => a,
+  (#Some a, #Some b) => a + b
+  (#Some a, #None) => a
   _ => 0
-end
 ```
 
 Each arm is a row and each element is a column. Arms are tested in source order
@@ -1229,13 +1224,12 @@ cross-product: a combination of columns no arm accepts is
 target. So
 
 ```blot
-sig join = (Option Int, Option Int) -> Int;
+sig join = (Option Int, Option Int) -> Int
 let join = fn pair => case pair of
-  (#Some a, #Some b) => a + b,
-  (#Some a, #None) => a,
-  (#None, #Some b) => b,
+  (#Some a, #Some b) => a + b
+  (#Some a, #None) => a
+  (#None, #Some b) => b
   (#None, #None) => 0
-end;
 ```
 
 is total with no irrefutable arm at all, and dropping its last arm is refused
@@ -1253,11 +1247,10 @@ column whose type has more values than arms can list — `Int`, `F64`, an opaque
 type, a shape — can only be covered by an irrefutable pattern in that column, so
 
 ```blot
-sig pick = (Int, Option Int) -> Int;
+sig pick = (Int, Option Int) -> Int
 let pick = fn pair => case pair of
-  (1, #Some a) => a,
+  (1, #Some a) => a
   (_, #None) => 0
-end;
 ```
 
 is refused with `` No arm covers `(_, #Some)` ``: the first arm cannot help with
@@ -1268,28 +1261,26 @@ the same way when a `sig` says what they hold. Where nothing does, an inner
 column carries no requirement — only a column of the scrutinee's own tuple is
 closed by its arms.
 
-Like expression `if`, `case` is a separate result scope. An explicit `do` arm's
-`return` supplies the selected arm and therefore the case result; `break;`
-cannot escape an arm to reach an enclosing loop.
+Like expression `if`, `case` is a separate result scope. An indented arm block's
+`return` supplies the selected arm and therefore the case result; `break` cannot
+escape an arm to reach an enclosing loop.
 
 An effectful `case` remains a value expression. Select the effectful branch and
 sequence the selected expression once at the surrounding scope:
 
 ```blot
 _ <- case choice of
-  1 => first_effect (),
+  1 => first_effect ()
   _ => other_effect ()
-end;
 ```
 
 An arm may carry a **guard**, which is a refinement no pattern states:
 
 ```blot
 case n of
-  0 => "zero",
-  m if m > 0 => "positive",
+  0 => "zero"
+  m if m > 0 => "positive"
   _ => "negative"
-end
 ```
 
 `pattern if condition => body` is taken when the pattern matches _and_ the
@@ -1300,16 +1291,15 @@ cannot do: the arms keep the order they are written in, so
 
 ```blot
 case n of
-  5 => "five",
-  m if m > 0 => "positive",
+  5 => "five"
+  m if m > 0 => "positive"
   _ => "other"
-end
 ```
 
 answers `"five"` for 5 even though the guard below would hold.
 
-The statement form writes the same guard before `=> do`; a false guard falls
-through before any statement in that arm runs.
+The statement form writes the same guard before `=>` and an indented block; a
+false guard falls through before any statement in that arm runs.
 
 **A guarded arm does not count towards coverage.** Its guard may be false, so it
 can never be the arm that is guaranteed to match, and the arms that remain must
@@ -1318,10 +1308,9 @@ arms:
 
 ```blot
 let describe = fn option => case option of
-  #Some n if n > 0 => "positive",
+  #Some n if n > 0 => "positive"
   #None => "none"
-end;
-return describe (#Some 1);
+return describe (#Some 1)
 ```
 
 is refused, because with the guarded arm set aside the only constructor named is
@@ -1346,11 +1335,12 @@ branch reached because it was not, the name's type is the part of its declared
 set that the condition allows.
 
 ```blot
-sig name = 1 | 2 | 3 -> Str;
-let name = fn n => if n == 1
-  then case n of 1 => "one" end
-  else case n of 2 => "two", 3 => "three" end
-end;
+sig name = 1 | 2 | 3 -> Str
+let name = fn n => if n == 1 then case n of
+  1 => "one"
+else case n of
+  2 => "two"
+  3 => "three"
 ```
 
 `n` is `1` in the `then` branch and `2 | 3` in the `else`, so both `case`
@@ -1389,12 +1379,9 @@ The second is the length of an array a name in scope holds, written
 context rather than in the integer's type:
 
 ```blot
-sig at = [Int] -> Int -> Int;
+sig at = [Int] -> Int -> Int
 let at = fn xs => fn n =>
-  if n >= 0
-  then (if n < @array.len xs then @array.get xs n else 0 end)
-  else 0
-  end;
+  return if n >= 0 then (if n < @array.len xs then @array.get xs n else 0) else 0
 ```
 
 The inner branch retains `n : Int` and records `n < length(identity(xs))`;
@@ -1481,13 +1468,11 @@ the name inside the branch with `:=` replaces it under the ordinary rule (§4.4)
 `for` is a declaration, not an expression.
 
 ```blot
-for iterator do
+for iterator:
   statements
-end;
 
-for pattern in iterator do
+for pattern in iterator:
   statements
-end;
 ```
 
 An iterator is a shape:
@@ -1532,26 +1517,24 @@ or the backend.
 ### 9.1 `break`
 
 ```blot
-break;
+break
 ```
 
-`break;` exits the nearest `for` with its accumulator as it exists at that
-point. It may appear inside statement conditionals and guards. It cannot cross a
-lambda or a value-producing `if` or `case`, and using it without an enclosing
-`for` is an error.
+`break` exits the nearest `for` with its accumulator as it exists at that point.
+It may appear inside statement conditionals and guards. It cannot cross a lambda
+or a value-producing `if` or `case`, and using it without an enclosing `for` is
+an error.
 
-`break` never carries a value. `return value;` is the scoped value exit
-specified in §§4.8 and 6.4; inside a loop it crosses the repeated statement body
-and exits the nearest enclosing module or explicit `do`.
+`break` never carries a value. `return value` is the scoped value exit specified
+in §§4.8 and 6.4; inside a loop it crosses the repeated statement body and exits
+the nearest enclosing module or explicit block.
 
 An unbounded loop is ordinary iteration over the prelude's infinite iterator:
 
 ```blot
-for ever do
+for ever:
   if finished then
-    break;
-  end;
-end;
+    break
 ```
 
 `ever` is not syntax or a compiler special case. It must be explicitly brought
@@ -1589,10 +1572,10 @@ no type declaration syntax and no separate type expression grammar.
 Examples:
 
 ```blot
-const Bit = 0 | 1;
-const Message = #Ready | #Failed Str;
-const Point = { .x = I32; .y = I32; };
-const Meter = seal ("Meter", I32);
+const Bit = 0 | 1
+const Message = #Ready | #Failed Str
+const Point = { .x = I32; .y = I32; }
+const Meter = seal ("Meter", I32)
 ```
 
 The principal inferred forms are:
@@ -1846,9 +1829,8 @@ the next invocation; a base branch must consume a linear capture exactly once
 under the ordinary branch rules:
 
 ```blot
-let go = rec (fn n =>
-  if n < 1 then consume (!token) else go (n - 1) end);
-return go 3;
+let go = rec (fn n => if n < 1 then consume (!token) else go (n - 1))
+return go 3
 ```
 
 is accepted. The same certificate covers mutual recursion: the SCC is one owned
@@ -1896,7 +1878,7 @@ An effect is a compile-time value built from a shape of operation types:
 ```blot
 const Console = @effect {
   .write = Str -> Unit;
-};
+}
 ```
 
 Projecting an operation from an effect and calling it performs that operation:
@@ -1916,12 +1898,12 @@ WebAssembly imports and therefore constitute part of the module interface.
 
 ```blot
 let logging = {
-  .write = fn (message, ?resume) => do
-    rest <- resume ();
-    return message <> rest;
-  end;
+  .write = fn (message, ?resume) =>
+    rest <- resume ()
+    return message <> rest
+  ;
   .return = fn value => value;
-};
+}
 
 @handle (Console, computation, logging)
 ```
@@ -1944,11 +1926,11 @@ continuation:
 
 ```blot
 let cancelling = {
-  .write = fn (_, !resume) => do
-    _ <- Continuation.cancel resume;
-    return replacement;
-  end;
-};
+  .write = fn (_, !resume) =>
+    _ <- Continuation.cancel resume
+    return replacement
+  ;
+}
 ```
 
 `Continuation.cancel resume` consumes the one-shot continuation without running
@@ -1969,10 +1951,9 @@ statically visible. gpufuck has no runtime handler representation.
 
 ```blot
 let result = try program with
-  program_without_terminal <- @handle (Terminal, fake_terminal);
-  program_without_clock <- @handle (Clock, fake_clock);
+  program_without_terminal <- @handle (Terminal, fake_terminal)
+  program_without_clock <- @handle (Clock, fake_clock)
   @handle (Random, fake_random)
-end;
 ```
 
 The body contains zero or more bound handler steps followed by one final handler
@@ -1989,15 +1970,15 @@ The example lowers to the equivalent of:
 
 ```blot
 let program_without_terminal =
-  fn () => @handle (Terminal, program, fake_terminal);
+  fn () => @handle (Terminal, program, fake_terminal)
 let program_without_clock =
-  fn () => @handle (Clock, program_without_terminal, fake_clock);
+  fn () => @handle (Clock, program_without_terminal, fake_clock)
 @handle (Random, program_without_clock, fake_random)
 ```
 
-Handler composition is a bounded list of handler steps, not a general `do` block
-and not a dynamically scoped registry. Effect identities, handler shapes, and
-the resulting effect rows remain statically visible. It can discharge source
+Handler composition is a bounded list of handler steps, not a general statement
+block and not a dynamically scoped registry. Effect identities, handler shapes,
+and the resulting effect rows remain statically visible. It can discharge source
 effects; host effects remain caller capabilities.
 
 ### 12.3 Host boundary
@@ -2016,13 +1997,12 @@ A function type carries the row it performs, and a `sig` writes that row the way
 the checker prints it:
 
 ```blot
-const Console = @effect { .write = Str -> Unit; };
+const Console = @effect { .write = Str -> Unit; }
 
-sig greet = Str -> Unit ~ { Console };
-let greet = fn name => do
-  result <- Console.write name;
-  return result;
-end;
+sig greet = Str -> Unit ~ { Console }
+let greet = fn name =>
+  result <- Console.write name
+  return result
 ```
 
 `~` is an ordinary infix operator (`@type.performs`, precedence 21) whose right
@@ -2203,9 +2183,9 @@ They are typed at the call site instead, by the name:
   the target's fields, with that one added, replaced, or dropped.
 
 ```blot
-let r = { .a = 7; };
-sig z = 0;
-let z = @shape.get r "a";
+let r = { .a = 7; }
+sig z = 0
+let z = @shape.get r "a"
 // BLOT_TYPE_ERROR: `7` is outside `0`.
 ```
 
@@ -2259,8 +2239,8 @@ checker accepts them only when every value of `index` is inside
 `BLOT_UNPROVEN_INDEX` and points to the total API:
 
 ```blot
-let xs = [1, 2, 3];
-return @array.get xs 99;   // BLOT_OUT_OF_BOUNDS: Index 99 is outside an array of 3.
+let xs = [1, 2, 3]
+return @array.get xs 99   // BLOT_OUT_OF_BOUNDS: Index 99 is outside an array of 3.
 ```
 
 The proof belongs to the saturated primitive call. These primitives cannot be
@@ -2268,9 +2248,8 @@ aliased or partially applied: doing so would separate the eventual index from
 the site that must carry its certificate and is `BLOT_ARRAY_ACCESS_NOT_DIRECT`.
 
 ```blot
-sig at = [Int] -> Int -> Int;
-let at = fn xs => fn n =>
-  if n >= 0 && n < @array.len xs then @array.get xs n else 0 end;
+sig at = [Int] -> Int -> Int
+let at = fn xs => fn n => if n >= 0 && n < @array.len xs then @array.get xs n else 0
 ```
 
 The second needs no concrete length. The conjunction adds `0 <= n` and
@@ -2293,10 +2272,10 @@ gpufuck boundary.
 The relationship survives ordinary immutable bindings:
 
 ```blot
-let ys = xs;
-let length = @array.len xs;
-let last = length - 1;
-if n >= 0 && n <= last then @array.get ys n else 0 end
+let ys = xs
+let length = @array.len xs
+let last = length - 1
+if n >= 0 && n <= last then @array.get ys n else 0
 ```
 
 It does not become part of `[T]`, escape through an ordinary function result, or
@@ -2309,9 +2288,8 @@ For iteration, `Iter.items xs` yields each value and `Iter.indexed xs` yields
 loop body does not repeat the source-level test or perform another lookup:
 
 ```blot
-for (index, value) in Iter.indexed xs do
-  visit (index, value);
-end;
+for (index, value) in Iter.indexed xs:
+  _ <- visit (index, value)
 ```
 
 ### 13.3.1 Asking about a type
@@ -2321,8 +2299,8 @@ end;
 _type_ of an expression satisfies a compile-time predicate.
 
 ```blot
-reading <- { .value = Source.read (); .label = "depth"; };
-let checked = @type.satisfies (reading, Has { .value = Int; });
+reading <- { .value = Source.read (); .label = "depth"; }
+let checked = @type.satisfies (reading, Has { .value = Int; })
 ```
 
 The predicate is an ordinary compile-time function from a type value to a
@@ -2443,13 +2421,13 @@ record currently exports:
 Important conventional values include:
 
 ```blot
-const Bool = #True | #False;
-const Option = fn value => #None | #Some value;
+const Bool = #True | #False
+const Option = fn value => #None | #Some value
 
 const ever = {
   .state = ();
   .step = fn _ => #Some ((), ());
-};
+}
 ```
 
 `Iter.range (low, high)` iterates from `low` inclusive to `high` exclusive.
@@ -2609,43 +2587,39 @@ The byte-level layouts and host calling example are in
 ## 16. Complete example
 
 ```blot
-module init;
+module init
 
 operators {
   infixl 65 (++) = Text.append;
-};
+}
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 const Console = @effect.host {
   .write = Str -> Unit;
-};
+}
 
-const Message = #Ready | #Failed Str;
+const Message = #Ready | #Failed Str
 
 let describe = fn message => case message of
-  #Ready => "ready",
+  #Ready => "ready"
   #Failed reason => reason
-end;
 
-let attempts = 0;
-for ever do
-  attempts := attempts + 1;
+let attempts = 0
+for ever:
+  attempts := attempts + 1
   if attempts >= 3 then
-    break;
-  end;
-end;
+    break
 
-let report = fn () => do
-  let text = describe #Ready ++ Text.of_int attempts;
-  _ <- Console.write text;
-  return text;
-end;
+let report = fn () =>
+  let text = describe #Ready ++ Text.of_int attempts
+  _ <- Console.write text
+  return text
 
 return {
   .attempts = attempts;
   .report = report;
-};
+}
 ```
 
 This module receives its authority through `init`, explicitly opens the prelude,

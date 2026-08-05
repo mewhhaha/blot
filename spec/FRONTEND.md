@@ -5,13 +5,14 @@
 The frontend is the composition
 
 ```text
-F = elaborate o fixityFold o materialize o parse o lex
+F = elaborate o fixityFold o materialize o parse o layout o lex
 ```
 
-from exact source text to Blot AST. Baba owns `lex` and `parse`; Blot owns
-materialization, fixity folding, and elaboration. Compiler commands use Baba's
-CPU compact frontend. The WebGPU executor is a conformance tool, not a fallback
-source of syntax.
+from exact source text to Blot AST. Baba owns `lex` and `parse`; Blot uses the
+generated Baba lexer to elaborate physical newlines into private layout tokens,
+then owns materialization, fixity folding, and surface elaboration. Compiler
+commands use Baba's CPU compact frontend. The WebGPU executor is a conformance
+tool, not a fallback source of syntax.
 
 For source `s`, successful frontend execution produces
 
@@ -28,6 +29,14 @@ The generated Baba plan and its schema version are part of the compiler input.
 The grammar must satisfy the version-3 general profile and declare every rule as
 an island. No `metadata.parser.resolutions` entry may choose between ambiguous
 meanings.
+
+Layout elaboration inserts `LAYOUT_NEWLINE`, `LAYOUT_INDENT`, and
+`LAYOUT_DEDENT` only between Baba tokens. Delimiter nesting suspends layout, an
+indent opens a suite only after a grammar introducer, and a continuation indent
+after any other token remains ordinary whitespace. Every inserted offset maps
+back to the exact boundary in the original source, so diagnostics and editor
+locations never expose the private characters. Inconsistent dedents are source
+diagnostics before parsing.
 
 Required properties:
 
@@ -105,7 +114,7 @@ bindings determine lexical lookup. The prelude is an ordinary imported module.
 Elaboration preserves the source order of live computation bindings. Pure
 bindings may later be erased when unused, but the frontend does not reorder a
 computation or turn `let` into sequencing. A control translation must preserve
-the nearest enclosing `for` and module-or-explicit-`do` return targets, while
+the nearest enclosing `for` and module-or-explicit-block return targets, while
 isolating both at value-producing `if` and `case` result scopes.
 
 ## 6. Frontend theorem obligation

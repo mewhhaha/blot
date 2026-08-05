@@ -102,6 +102,9 @@ export type MainTokenKind =
   | "ANGLE_CLOSE"
   | "ANGLE_SELF_CLOSE"
   | "QUESTION"
+  | "LAYOUT_NEWLINE"
+  | "LAYOUT_INDENT"
+  | "LAYOUT_DEDENT"
   | "OPERATOR";
 
 export type TriviaTokenKind =
@@ -124,7 +127,6 @@ export type AnyNamedTokenKind = NamedTokenKind extends never
 
 export type LiteralKind =
   | "module"
-  | ";"
   | "operators"
   | "{"
   | "}"
@@ -135,6 +137,7 @@ export type LiteralKind =
   | "("
   | ")"
   | "="
+  | ";"
   | "let"
   | "const"
   | "sig"
@@ -144,8 +147,7 @@ export type LiteralKind =
   | ":="
   | "<-"
   | "for"
-  | "do"
-  | "end"
+  | ":"
   | "in"
   | "break"
   | "open"
@@ -293,6 +295,7 @@ export type RuleName =
   | "handler_composition_step"
   | "handler_composition_action"
   | "block"
+  | "statement_suite"
   | "qualified_name"
   | "qualified_name_part";
 
@@ -376,6 +379,7 @@ export interface BindingCursor extends RuleCursorBase<"binding"> {
 
 export interface DeclarationTagCursor extends RuleCursorBase<"declaration_tag"> {
   field(name: "descriptor"): ValueCursor;
+  field(name: "line"): TokenCursor<"named", "LAYOUT_NEWLINE"> | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -389,7 +393,7 @@ export interface RebindingCursor extends RuleCursorBase<"rebinding"> {
 }
 
 export interface IterationCursor extends RuleCursorBase<"iteration"> {
-  field(name: "body"): ReadonlyArray<StatementCursor>;
+  field(name: "body"): StatementSuiteCursor;
   field(name: "drawn"): IterationSourceCursor | null;
   field(name: "head"): ValueCursor;
   field(name: string): CursorFieldValue | undefined;
@@ -593,6 +597,8 @@ export interface ElementSelfCloseCursor extends RuleCursorBase<"element_self_clo
 }
 
 export interface ElementBodyCursor extends RuleCursorBase<"element_body"> {
+  field(name: "body_end"): TokenCursor<"named", "LAYOUT_DEDENT"> | null;
+  field(name: "body_start"): readonly [TokenCursor<"named", "LAYOUT_NEWLINE">, TokenCursor<"named", "LAYOUT_INDENT">] | null;
   field(name: "children"): ReadonlyArray<StatementCursor>;
   field(name: "closing"): ElementNameCursor;
   field(name: string): CursorFieldValue | undefined;
@@ -650,12 +656,14 @@ export interface ConditionalCursor extends RuleCursorBase<"conditional"> {
 export interface ElseIfClauseCursor extends RuleCursorBase<"else_if_clause"> {
   field(name: "condition"): ExpressionCursor;
   field(name: "consequence"): ValueCursor;
+  field(name: "line"): TokenCursor<"named", "LAYOUT_NEWLINE"> | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
 export interface ElseClauseCursor extends RuleCursorBase<"else_clause"> {
   field(name: "alternative"): ValueCursor;
+  field(name: "line"): TokenCursor<"named", "LAYOUT_NEWLINE"> | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -667,7 +675,7 @@ export interface ConditionalStatementCursor extends RuleCursorBase<"conditional_
 }
 
 export interface ConditionalStatementGuardCursor extends RuleCursorBase<"conditional_statement_guard"> {
-  field(name: "alternative"): ReadonlyArray<StatementCursor>;
+  field(name: "alternative"): StatementSuiteCursor;
   field(name: "pattern"): BindingPatternCursor;
   field(name: "value"): ValueCursor;
   field(name: string): CursorFieldValue | undefined;
@@ -677,7 +685,7 @@ export interface ConditionalStatementGuardCursor extends RuleCursorBase<"conditi
 export interface ConditionalStatementBranchesCursor extends RuleCursorBase<"conditional_statement_branches"> {
   field(name: "alternatives"): ReadonlyArray<ConditionalStatementElseIfClauseCursor>;
   field(name: "condition"): ExpressionCursor;
-  field(name: "consequence"): ReadonlyArray<StatementCursor>;
+  field(name: "consequence"): StatementSuiteCursor;
   field(name: "fallback"): ConditionalStatementElseClauseCursor | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
@@ -685,20 +693,20 @@ export interface ConditionalStatementBranchesCursor extends RuleCursorBase<"cond
 
 export interface ConditionalStatementElseIfClauseCursor extends RuleCursorBase<"conditional_statement_else_if_clause"> {
   field(name: "condition"): ExpressionCursor;
-  field(name: "consequence"): ReadonlyArray<StatementCursor>;
+  field(name: "consequence"): StatementSuiteCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
 export interface ConditionalStatementElseClauseCursor extends RuleCursorBase<"conditional_statement_else_clause"> {
-  field(name: "alternative"): ReadonlyArray<StatementCursor>;
+  field(name: "alternative"): StatementSuiteCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
 export interface CaseExpressionCursor extends RuleCursorBase<"case_expression"> {
   field(name: "first"): CaseArmCursor;
-  field(name: "rest"): ReadonlyArray<readonly [TokenCursor<"literal", ",">, CaseArmCursor]>;
+  field(name: "rest"): ReadonlyArray<CaseArmCursor>;
   field(name: "target"): ExpressionCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
@@ -742,6 +750,12 @@ export interface HandlerCompositionActionCursor extends RuleCursorBase<"handler_
 }
 
 export interface BlockCursor extends RuleCursorBase<"block"> {
+  field(name: "statements"): ReadonlyArray<StatementCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface StatementSuiteCursor extends RuleCursorBase<"statement_suite"> {
   field(name: "statements"): ReadonlyArray<StatementCursor>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
@@ -831,6 +845,7 @@ export type AnyRuleCursor =
   | HandlerCompositionStepCursor
   | HandlerCompositionActionCursor
   | BlockCursor
+  | StatementSuiteCursor
   | QualifiedNameCursor
   | QualifiedNamePartCursor;
 

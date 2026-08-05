@@ -11,9 +11,10 @@
 //
 // Writing `<` instead of `>=` is the accepted program, in `examples/indexed.blot`.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-sig at = [Int] -> Int -> Int;
-let at = fn xs => fn n => if n >= @array.len xs then @array.get xs n else 0 end;
+sig at = [Int] -> Int -> Int
+let at = fn xs => fn n => if n >= @array.len xs then @array.get xs n
+else 0
 
-return at [1, 2, 3] 0;
+return at [1, 2, 3] 0

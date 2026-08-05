@@ -1,10 +1,9 @@
 // A module is a return scope. Its standalone statement control flow retains
 // that target because an `if` does not establish another one.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 if 1 < 2 then
-  return 42;
-end;
+  return 42
 
-return 0;
+return 0

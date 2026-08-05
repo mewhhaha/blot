@@ -7,70 +7,61 @@
 // assignment anywhere — `:=` was already "a new binding, not a new value in
 // the old one", and it must preserve the binding's stable type.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 // An iterator is a `.state` and a `.step`, where `step state` answers
 // `#Some (value, next_state)` or `#None`. `Iter.range` and `Iter.items` are
 // ordinary prelude functions over that shape, so a new kind of sequence is a function
 // someone writes rather than a case the compiler knows about.
 
-let counted = 0;
-for Iter.range (0, 5) do
-  counted := counted + 1;
-end;
+let counted = 0
+for Iter.range (0, 5):
+  counted := counted + 1
 
 // `for x in …` binds each element.
-let total = 0;
-for n in Iter.range (1, 5) do
-  total := total + n;
-end;
+let total = 0
+for n in Iter.range (1, 5):
+  total := total + n
 
-let joined = "";
-for word in Iter.items ["a", "b", "c"] do
-  joined := joined <> word;
-end;
+let joined = ""
+for word in Iter.items ["a", "b", "c"]:
+  joined := joined <> word
 
 // A `let` inside the body is a local: the next iteration cannot see it, which
 // is what keeps the escaping set syntactic — and therefore something the
 // checker can pin a type to.
-let squares = 0;
-for n in Iter.range (1, 4) do
-  let square = n * n;
-  squares := squares + square;
-end;
+let squares = 0
+for n in Iter.range (1, 4):
+  let square = n * n
+  squares := squares + square
 
 // Local means local even when the name is already taken outside. `:=` is what
 // hands a value out of the body; a `let` of the same name is a different
 // binding that happens to be spelled the same, so the outer one is untouched
 // and free to hold a different type.
-let kept = 0;
-for n in Iter.range (0, 3) do
-  let kept = "not this one";
-end;
+let kept = 0
+for n in Iter.range (0, 3):
+  let kept = "not this one"
 
 // The two together: the outer `sum` accumulates, and `sum` inside the nested
 // binder is nobody else's business.
-let sum = 0;
-for n in Iter.range (1, 4) do
-  let doubled = do
-    let sum = n * 2;
-    return sum;
-  end;
-  sum := sum + doubled;
-end;
+let sum = 0
+for n in Iter.range (1, 4):
+  let doubled =
+    let sum = n * 2
+    return sum
+  sum := sum + doubled
 
 // Zero iterations leave every accumulator alone.
-let untouched = 7;
-for Iter.range (0, 0) do
-  untouched := untouched + 100;
-end;
+let untouched = 7
+for Iter.range (0, 0):
+  untouched := untouched + 100
 
 // An accumulator does not have to be a scalar. `[]` is the empty array literal,
 // and a spread rebuilds it — which reads as the append it is.
-let doubled = [];
-for n in Iter.range (1, 4) do
-  doubled := [...doubled, n * 2];
-end;
+let doubled = []
+for n in Iter.range (1, 4):
+  doubled := [...doubled, n * 2]
 
 // --- a refutable binder filters ---------------------------------------------
 //
@@ -80,16 +71,14 @@ end;
 // iteration rather than failing it, which is what makes this a filter and
 // costs exactly one arm.
 
-let found = 0;
-for #Some n in Iter.items [Some 1, None, Some 20, None, Some 300] do
-  found := found + n;
-end;
+let found = 0
+for #Some n in Iter.items [Some 1, None, Some 20, None, Some 300]:
+  found := found + n
 
 // A tuple binder cannot fail, so it stays a `let`.
-let labelled = "";
-for (rank, label) in Iter.items [(1, "one"), (2, "two")] do
-  labelled := labelled <> label <> Text.of_int rank;
-end;
+let labelled = ""
+for (rank, label) in Iter.items [(1, "one"), (2, "two")]:
+  labelled := labelled <> label <> Text.of_int rank
 
 // --- writing one ------------------------------------------------------------
 //
@@ -98,17 +87,13 @@ end;
 
 const halving = fn start => {
   .state = start;
-  .step = fn value =>
-    if is_less (@int.cmp value 1)
-      then None
-      else Some (value, @int.div value 2)
-  end;
-};
+  .step = fn value => if is_less (@int.cmp value 1) then None
+  else Some (value, @int.div value 2);
+}
 
-let steps = 0;
-for value in halving 40 do
-  steps := steps + value;
-end;
+let steps = 0
+for value in halving 40:
+  steps := steps + value
 
 return {
   .counted = counted;
@@ -124,4 +109,4 @@ return {
   .labelled = labelled;
   .collected = collect (Iter.range (0, 4));
   .folded = iterate (Iter.range (1, 4), 1, (fn (product, n) => product * n));
-};
+  }

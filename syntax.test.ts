@@ -13,6 +13,7 @@ import {
   CpuFrontend,
   inspectGpuFrontendPlan,
 } from "@mewhhaha/baba/runtime/webgpu";
+import { elaborateLayout } from "./src/syntax/layout.ts";
 
 const plan = await Deno.readFile("generated/wasm/parser.plan");
 const frontend = CpuFrontend.create(plan);
@@ -25,7 +26,7 @@ Deno.test("the generated plan carries a general version-3 frontend", () => {
   );
   assertEquals(inspection.version, 3);
   assertEquals(inspection.throughput, "general");
-  assertEquals(frontend.plan.islands.length, 72);
+  assertEquals(frontend.plan.islands.length, 73);
 });
 
 // The prelude and case-study libraries are Blot source too, so they are held to
@@ -43,7 +44,15 @@ for (const directory of CORPUS) {
     const path = `${directory}/${entry.name}`;
     Deno.test(`${path} is accepted by the CPU frontend`, async () => {
       const source = await Deno.readTextFile(path);
-      const result = frontend.ingest(source);
+      const elaborated = await elaborateLayout(source);
+      if (!elaborated.ok) {
+        throw new Error(
+          elaborated.diagnostics.map((diagnostic) => diagnostic.message).join(
+            "\n",
+          ),
+        );
+      }
+      const result = frontend.ingest(elaborated.layout.source);
       if (!result.ok) {
         throw new Error(
           result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"),

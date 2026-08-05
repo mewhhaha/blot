@@ -7,6 +7,6 @@
 // variable in its place would satisfy every argument, and this program would be
 // accepted and then read a field that is not there.
 
-const score = @import "./../../lib/score.blot";
+const score = @import "./../../lib/score.blot"
 
-return (score { .base = 40; }).run;
+return (score { .base = 40; }).run

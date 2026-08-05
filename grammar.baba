@@ -1,9 +1,8 @@
 grammar Blot
 
-// Every token has one fixed terminal identity: no layout sensitivity, no
-// template islands, no contextual promotion. That is requirement 2 of baba's
-// version-3 GPU frontend profile, and it is the constraint the whole language
-// is designed around.
+// Every source token has one fixed terminal identity. The three private-use
+// terminals are inserted by Blot's layout elaborator after Baba has lexed the
+// original source; they can never occur in user source.
 
 token IDENT = /[a-z_][A-Za-z0-9_]*/ ;
 token TYPE_IDENT = /[A-Z][A-Za-z0-9_]*/ ;
@@ -22,6 +21,9 @@ token ANGLE_RIGHT = />/ ;
 token ANGLE_CLOSE = /<\// ;
 token ANGLE_SELF_CLOSE = /\/>/ ;
 token QUESTION = /\?/ ;
+token LAYOUT_NEWLINE = // ;
+token LAYOUT_INDENT = // ;
+token LAYOUT_DEDENT = // ;
 
 // One operator class rather than an enumerated set. Custom operators are
 // therefore lexically ordinary; precedence and meaning come from the
@@ -45,7 +47,7 @@ operator_token = OPERATOR | ANGLE_LEFT | ANGLE_RIGHT | QUESTION ;
 skip WHITESPACE = /[ \t\r\n]+/ ;
 skip COMMENT = /\/\/[^\r\n]*/ ;
 
-// A module is a block: bounded headers, then one repeated `;`-terminated
+// A module is a block: bounded headers, then one repeated line-terminated
 // island. `return` is a declaration form rather than a trailing bare
 // expression so that the root remains a bounded declaration sequence.
 program = (
@@ -57,7 +59,7 @@ program = (
 module_header = (
   "module"
   parameter:binding_pattern
-  ";"
+  LAYOUT_NEWLINE
 ) ;
 
 operator_section = (
@@ -65,7 +67,7 @@ operator_section = (
   "{"
   declarations:fixity_declaration*
   "}"
-  ";"
+  LAYOUT_NEWLINE
 ) ;
 
 fixity_declaration = (
@@ -99,7 +101,7 @@ binding = (
   pattern:binding_pattern
   "="
   value:value
-  ";"
+  LAYOUT_NEWLINE
 ) ;
 
 // A declaration tag is a compile-time descriptor whose transformer wraps the
@@ -111,6 +113,7 @@ declaration_tag = (
   "["
   descriptor:value
   "]"
+  line:LAYOUT_NEWLINE?
 ) ;
 
 // Rebinding a name. Two arrows, one rule: `:=` shadows an existing binding with
@@ -130,7 +133,7 @@ rebinding = (
   name:(IDENT | TYPE_IDENT)
   arrow:(":=" | "<-")
   value:value
-  ";"
+  LAYOUT_NEWLINE
 ) ;
 
 // Looping. A declaration rather than an expression, because what a loop
@@ -139,21 +142,20 @@ rebinding = (
 // That is a fold with the state inferred, which is why blot can have `for`
 // without having assignment.
 //
-//   for source do … end;              runs the body once per element
-//   for x in source do … end;         binds each element
-//   for #Some x in source do … end;   binds, and skips what does not match
+//   for source:              runs the body once per element
+//   for x in source:         binds each element
+//   for #Some x in source:   binds, and skips what does not match
 //
-// `break;` stops the nearest `for` with its accumulator as it exists at that
+// `break` stops the nearest `for` with its accumulator as it exists at that
 // point. An unbounded loop is an ordinary iteration over an infinite iterator:
-// `for ever do … end;`.
+// `for ever:` followed by an indented body.
 iteration = (
   "for"
   head:value
   drawn:iteration_source?
-  "do"
-  body:statement*
-  "end"
-  ";"
+  ":"
+  body:statement_suite
+  LAYOUT_NEWLINE
 ) ;
 
 // `head` is parsed as a value and reclassified into a pattern when `in`
@@ -169,7 +171,7 @@ iteration_source = ( "in" source:value ) ;
 
 breaking = (
   "break"
-  ";"
+  LAYOUT_NEWLINE
 ) ;
 
 // Spreading a module's exports into scope. Selective binding and renaming use
@@ -179,13 +181,13 @@ breaking = (
 opening = (
   "open"
   value:value
-  ";"
+  LAYOUT_NEWLINE
 ) ;
 
 result = (
   "return"
   value:value
-  ";"
+  LAYOUT_NEWLINE
 ) ;
 
 // Patterns. The qualifier carries `!` (linear, consumed exactly once) and `&`
@@ -310,7 +312,7 @@ field_name = (IDENT | TYPE_IDENT | INTEGER | keyword) ;
 
 keyword = (
   "module" | "operators" | "infixl" | "infixr" | "infix" | "prefix"
-  | "let" | "const" | "sig" | "return" | "do" | "end"
+  | "let" | "const" | "sig" | "return"
   | "if" | "then" | "else" | "case" | "of" | "rec" | "comptime" | "open"
   | "for" | "in" | "break" | "try" | "with" | "fn"
 ) ;
@@ -421,7 +423,9 @@ element_self_close = (ANGLE_SELF_CLOSE) ;
 
 element_body = (
   ANGLE_RIGHT
+  body_start:(LAYOUT_NEWLINE LAYOUT_INDENT)?
   children:statement*
+  body_end:LAYOUT_DEDENT?
   ANGLE_CLOSE
   closing:element_name
   ANGLE_RIGHT
@@ -489,10 +493,10 @@ conditional = (
   consequence:value
   alternatives:else_if_clause*
   fallback:else_clause
-  "end"
 ) ;
 
 else_if_clause = (
+  line:LAYOUT_NEWLINE?
   ELSE_IF
   condition:expression
   "then"
@@ -500,6 +504,7 @@ else_if_clause = (
 ) ;
 
 else_clause = (
+  line:LAYOUT_NEWLINE?
   "else"
   alternative:value
 ) ;
@@ -509,17 +514,12 @@ else_clause = (
 // target the surrounding function or loop. `else` is optional because the
 // normal result is always `()`.
 //
-// `then` introduces the statement body directly, so one `end;` closes the
-// whole conditional without a nested expression block:
-//
-//   if ready then
-//     return ();
-//   end;
+// Every branch is a layout suite. The statement context is what lets a return
+// or break target the surrounding function or loop rather than the branch.
 conditional_statement = (
   "if"
   body:(conditional_statement_guard | conditional_statement_branches)
-  "end"
-  ";"
+  LAYOUT_NEWLINE
 ) ;
 
 // A deconstructing guard has no success block: matching binds the pattern for
@@ -535,36 +535,40 @@ conditional_statement_guard = (
   "="
   value:value
   "else"
-  alternative:statement*
+  alternative:statement_suite
 ) ;
 
 conditional_statement_branches = (
   condition:expression
   "then"
-  consequence:statement*
+  consequence:statement_suite
   alternatives:conditional_statement_else_if_clause*
   fallback:conditional_statement_else_clause?
 ) ;
 
 conditional_statement_else_if_clause = (
+  LAYOUT_NEWLINE?
   ELSE_IF
   condition:expression
   "then"
-  consequence:statement*
+  consequence:statement_suite
 ) ;
 
 conditional_statement_else_clause = (
+  LAYOUT_NEWLINE?
   "else"
-  alternative:statement*
+  alternative:statement_suite
 ) ;
 
 case_expression = (
   "case"
   target:expression
   "of"
+  LAYOUT_NEWLINE
+  LAYOUT_INDENT
   first:case_arm
-  rest:("," case_arm)*
-  "end"
+  rest:case_arm*
+  LAYOUT_DEDENT
 ) ;
 
 // An arm may refine its pattern with a guard: the arm is taken when the
@@ -578,6 +582,7 @@ case_arm = (
   guard:case_guard?
   "=>"
   body:value
+  LAYOUT_NEWLINE
 ) ;
 
 case_guard = ( "if" condition:expression ) ;
@@ -594,16 +599,19 @@ handler_composition = (
   "try"
   program:value
   "with"
+  LAYOUT_NEWLINE
+  LAYOUT_INDENT
   steps:handler_composition_step*
   result:handler_composition_action
-  "end"
+  LAYOUT_NEWLINE
+  LAYOUT_DEDENT
 ) ;
 
 handler_composition_step = (
   name:(IDENT | TYPE_IDENT)
   "<-"
   action:handler_composition_action
-  ";"
+  LAYOUT_NEWLINE
 ) ;
 
 handler_composition_action = (
@@ -615,13 +623,21 @@ handler_composition_action = (
   ")"
 ) ;
 
-// A block normally produces `()`. `return value;` is a statement, so it can
+// A block normally produces `()`. `return value` is a statement, so it can
 // leave the block from a nested statement branch without making a bare tail
 // expression compete with `name := value;` on IDENT.
 block = (
-  "do"
+  LAYOUT_NEWLINE
+  LAYOUT_INDENT
   statements:statement*
-  "end"
+  LAYOUT_DEDENT
+) ;
+
+statement_suite = (
+  LAYOUT_NEWLINE
+  LAYOUT_INDENT
+  statements:statement*
+  LAYOUT_DEDENT
 ) ;
 
 qualified_name = (

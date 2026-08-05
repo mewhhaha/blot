@@ -10,19 +10,18 @@
 // rather than as each one finishes: the answer for a projection in one file is
 // decided by a call site in another.
 
-module init;
+module init
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-const camera = @import "./lib/camera.blot" ();
+const camera = @import "./lib/camera.blot" ()
 
 // The capability is opaque at compile time, so the record survives to the
 // backend instead of being folded away before it can be lowered.
-let observed = fn zoom => do
-  _ <- init.print "framing";
-  return { .zoom = zoom; .angle = 7; .scale = 3; };
-end;
+let observed = fn zoom =>
+  _ <- init.print "framing"
+  return { .zoom = zoom; .angle = 7; .scale = 3; }
 
-seen <- observed 4;
+seen <- observed 4
 
-return camera.zoom_of seen + camera.doubled seen;
+return camera.zoom_of seen + camera.doubled seen

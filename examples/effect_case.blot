@@ -1,27 +1,24 @@
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-const Console = @effect { .write = Str -> Unit; };
+const Console = @effect { .write = Str -> Unit; }
 
-let choose = fn selected => do
+let choose = fn selected =>
   _ <- case selected of
-    1 => Console.write "one",
+    1 => Console.write "one"
     _ => Console.write "other"
-  end;
-
-end;
 
 let recording = {
   .write = fn (message, ?resume) => message;
   .return = fn _ => "none";
-};
+  }
 
 return {
-  .first = @handle (Console, (fn () => do
-    result <- choose 1;
-    return result;
-  end), recording);
-  .other = @handle (Console, (fn () => do
-    result <- choose 2;
-    return result;
-  end), recording);
-};
+  .first = @handle (Console, (fn () =>
+    result <- choose 1
+    return result
+  ), recording);
+  .other = @handle (Console, (fn () =>
+    result <- choose 2
+    return result
+  ), recording);
+}

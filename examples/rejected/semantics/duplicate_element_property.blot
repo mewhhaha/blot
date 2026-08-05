@@ -1,7 +1,6 @@
-let div = fn _ => fn _ => ();
+let div = fn _ => fn _ => ()
 
-let view = fn () => do
-  _ <- <div .class="first" .class="second" />;
-end;
+let view = fn () =>
+  _ <- <div .class="first" .class="second" />
 
-return view;
+return view

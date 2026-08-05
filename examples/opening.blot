@@ -4,8 +4,8 @@ const exports = {
   .source = 10;
   .value = 20;
   .rest = 30;
-};
+  }
 
-open exports;
+open exports
 
-return { .source = source; .value = value; .rest = rest; };
+return { .source = source; .value = value; .rest = rest; }

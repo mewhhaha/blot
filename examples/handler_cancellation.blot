@@ -1,22 +1,21 @@
 // Cancelling a continuation is an explicit sequenced operation. It consumes
 // the suspended continuation without running the rest of the computation.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-const Ask = @effect { .ask = Unit -> Unit; };
+const Ask = @effect { .ask = Unit -> Unit; }
 
-let consume = fn !value => value + 1;
-let !token = 40;
-let work = fn () => do
-  _ <- Ask.ask ();
-  return consume (!token);
-end;
+let consume = fn !value => value + 1
+let !token = 40
+let work = fn () =>
+  _ <- Ask.ask ()
+  return consume (!token)
 
 let cancelling = {
-  .ask = fn (_, !resume) => do
-    _ <- Continuation.cancel resume;
-    return 7;
-  end;
-};
+  .ask = fn (_, !resume) =>
+    _ <- Continuation.cancel resume
+    return 7
+  ;
+}
 
-return @handle (Ask, work, cancelling);
+return @handle (Ask, work, cancelling)

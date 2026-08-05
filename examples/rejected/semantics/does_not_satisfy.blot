@@ -5,10 +5,10 @@
 // difference from a check written as an `if` over `refines`: this one cannot
 // be reached at run time, because there is no run time in which it is true.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-const Source = @effect.host { .read = Unit -> Int; };
+const Source = @effect.host { .read = Unit -> Int; }
 
-reading <- { .value = Source.read (); };
+reading <- { .value = Source.read (); }
 
-return @type.satisfies (reading, Has { .missing = Int; });
+return @type.satisfies (reading, Has { .missing = Int; })

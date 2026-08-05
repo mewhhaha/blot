@@ -30,7 +30,9 @@ Deno.test("evaluation stops at its deterministic fuel limit", async () => {
   const error = await assertRejects(
     async () => {
       await evaluate(
-        "const spin = rec (fn () => spin ());\nreturn spin ();",
+        `const spin = rec (fn () => spin ())
+return spin ()
+`,
         100,
       );
     },
@@ -43,7 +45,8 @@ Deno.test("runtime integer addition traps outside signed i64", async () => {
   const error = await assertRejects(
     async () => {
       await evaluate(
-        "return @int.mul (@int.mul 2147483647 2147483647) 3;",
+        `return @int.mul (@int.mul 2147483647 2147483647) 3
+`,
       );
     },
     BlotError,
@@ -53,7 +56,8 @@ Deno.test("runtime integer addition traps outside signed i64", async () => {
 
 Deno.test("comptime integer addition remains arbitrary precision", async () => {
   const parsed = await parse(
-    "return @int.mul (@int.mul 2147483647 2147483647) 3;",
+    `return @int.mul (@int.mul 2147483647 2147483647) 3
+`,
   );
   if (!parsed.ok) {
     throw new Error("test source did not parse");
@@ -71,7 +75,9 @@ Deno.test("comptime integer addition remains arbitrary precision", async () => {
 
 Deno.test("an unused pure binding is not evaluated", async () => {
   assertEquals(
-    await evaluate('let unused = @panic "unused";\nreturn 42;'),
+    await evaluate(`let unused = @panic "unused"
+return 42
+`),
     { tag: "int", value: 42n },
   );
 });
@@ -80,9 +86,10 @@ Deno.test("live pure bindings evaluate once in source order", async () => {
   const error = await assertRejects(
     async () => {
       await evaluate(
-        'let first = @panic "first";\n' +
-          'let second = @panic "second";\n' +
-          "return @int.add second first;",
+        `let first = @panic "first"
+let second = @panic "second"
+return @int.add second first
+`,
       );
     },
     BlotError,

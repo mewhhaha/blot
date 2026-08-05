@@ -7,6 +7,7 @@ import { BlotError } from "../diagnostic.ts";
 import type { Module } from "./ast.ts";
 import { lowerModule, type Rule } from "./lower.ts";
 import { materializeCpuCst } from "./cpu_cst.ts";
+import { elaborateLayout } from "./layout.ts";
 
 const planUrl = new URL("../../generated/wasm/parser.plan", import.meta.url);
 
@@ -36,21 +37,31 @@ export type ConcreteParseResult =
 export async function parseConcrete(
   source: string,
 ): Promise<ConcreteParseResult> {
+  const elaborated = await elaborateLayout(source);
+  if (!elaborated.ok) return elaborated;
   const instance = await parser();
-  const result = ingestCpuSource(instance, source);
+  const result = ingestCpuSource(instance, elaborated.layout.source);
   if (!result.ok) {
     return {
       ok: false,
       diagnostics: result.diagnostics.map((diagnostic) => ({
         code: diagnostic.code,
         message: diagnostic.message,
-        span: { start: diagnostic.start, end: diagnostic.end },
+        span: {
+          start: elaborated.layout.originalOffset(diagnostic.start),
+          end: elaborated.layout.originalOffset(diagnostic.end),
+        },
       })),
     };
   }
 
   try {
-    const cst = materializeCpuCst(instance, result.program, source);
+    const cst = materializeCpuCst(
+      instance,
+      result.program,
+      elaborated.layout.source,
+      elaborated.layout.originalOffset,
+    );
     return {
       ok: true,
       module: lowerModule(cst, source),

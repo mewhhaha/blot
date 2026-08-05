@@ -1,12 +1,12 @@
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-let consume = fn !value => value + 1;
-let !left = 40;
-let !right = 41;
+let consume = fn !value => value + 1
+let !left = 40
+let !right = 41
 let holder = {
   .first = fn () => consume (!left);
   .second = fn () => consume (!right);
-};
-let { .first; } = holder;
+  }
+let { .first; } = holder
 
-return first ();
+return first ()

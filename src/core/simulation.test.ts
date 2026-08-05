@@ -227,15 +227,16 @@ Deno.test("typed Core elaboration simulates generated pure surface programs", as
       seed = next(seed);
       const value = BigInt(seed % 1000);
       values.push(value);
-      declarations.push(`let value_${index} = ${value};`);
-      declarations.push(`let unused_${index} = ${value + 1n};`);
+      declarations.push(`let value_${index} = ${value}`);
+      declarations.push(`let unused_${index} = ${value + 1n}`);
     }
     seed = next(seed);
     const first = seed % values.length;
     seed = next(seed);
     const second = seed % values.length;
     const source = `${declarations.join("\n")}
-return (value_${first}, value_${second});`;
+return (value_${first}, value_${second})
+`;
     const path = `${directory}/generated_${example}.blot`;
     await Deno.writeTextFile(path, source);
 
@@ -259,12 +260,13 @@ Deno.test("typed Core preserves host effect order", async () => {
   const path = `${directory}/effects.blot`;
   await Deno.writeTextFile(
     path,
-    `open @import "blot:prelude" ();
-const Console = @effect.host { .write = Str -> Unit; };
-_ <- Console.write "compiled";
-_ <- Console.write "linked";
-result <- Console.write "done";
-return result;`,
+    `open @import "blot:prelude" ()
+const Console = @effect.host { .write = Str -> Unit; }
+_ <- Console.write "compiled"
+_ <- Console.write "linked"
+result <- Console.write "done"
+return result
+`,
   );
   const directWrites: string[] = [];
   const direct = await evaluateFile(path, {

@@ -1,4 +1,5 @@
 import { RustMiddle } from "../src/backend/rust_middle_wasm.ts";
+import { elaborateLayout } from "../src/syntax/layout.ts";
 
 const crateRoot = new URL("../experiments/rust-middle/", import.meta.url);
 const artifact = new URL(
@@ -18,6 +19,10 @@ const preludeSnapshot = new URL(
 await buildRustMiddle();
 const bytes = await Deno.readFile(artifact);
 const preludeSource = await Deno.readTextFile(prelude);
+const preludeLayout = await elaborateLayout(preludeSource);
+if (!preludeLayout.ok) {
+  throw new Error("layout elaboration rejected the prelude");
+}
 const rust = await RustMiddle.load(bytes);
 const session = rust.createCompilerSession();
 const snapshotPath = "snapshot:prelude";
@@ -26,7 +31,7 @@ try {
   const added = rust.addCompilerSessionModule(
     session,
     snapshotPath,
-    preludeSource,
+    preludeLayout.layout.source,
   );
   if (!added.ok) {
     let message = added.message;

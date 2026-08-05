@@ -29,9 +29,7 @@
   "open" @keyword.control.import)
 
 (iteration
-  "for" @keyword.control.repeat
-  "do" @keyword.control
-  "end" @keyword.control)
+  "for" @keyword.control.repeat)
 
 (iteration_source
   "in" @keyword.control)
@@ -39,14 +37,9 @@
 (breaking
   "break" @keyword.control.return)
 
-(block
-  "do" @keyword.control
-  "end" @keyword.control)
-
 (conditional
   "if" @keyword.control.conditional
-  "then" @keyword.control.conditional
-  "end" @keyword.control.conditional)
+  "then" @keyword.control.conditional)
 
 (else_if_clause
   (ELSE_IF) @keyword.control.conditional
@@ -56,8 +49,7 @@
   "else" @keyword.control.conditional)
 
 (conditional_statement
-  "if" @keyword.control.conditional
-  "end" @keyword.control.conditional)
+  "if" @keyword.control.conditional)
 
 (conditional_statement_guard
   "let" @keyword.storage.type
@@ -75,13 +67,11 @@
 
 (case_expression
   "case" @keyword.control.exception
-  "of" @keyword.control.exception
-  "end" @keyword.control.exception)
+  "of" @keyword.control.exception)
 
 (handler_composition
   "try" @keyword.control.exception
-  "with" @keyword.control.exception
-  "end" @keyword.control)
+  "with" @keyword.control)
 
 (lambda_parameter
   "fn" @keyword.function)

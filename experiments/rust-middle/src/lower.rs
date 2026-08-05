@@ -89,11 +89,11 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
     let context = LoweringContext::root(&table);
     let declarations = cst.field_list(root, "declarations")?;
     let Some(last) = declarations.last().copied() else {
-        return Err("BLOT_MISSING_RESULT: a module ends with `return expr;`".to_owned());
+        return Err("BLOT_MISSING_RESULT: a module ends with `return expr`".to_owned());
     };
     let last = unwrapped_rule(cst, last)?;
     if cst.rule_name(last)? != "result" {
-        return Err("BLOT_MISSING_RESULT: a module ends with `return expr;`".to_owned());
+        return Err("BLOT_MISSING_RESULT: a module ends with `return expr`".to_owned());
     }
     let statements = &declarations[..declarations.len() - 1];
     let mut result = lower_value(cst, required(cst, last, "value")?, &context, &mut arena)?;
@@ -248,7 +248,8 @@ fn lower_declaration(
             Err("control break reached declaration lowering".to_owned())
         }
         "result" => Err(
-            "BLOT_RETURN_OUTSIDE_SCOPE: `return` has no enclosing module or `do` block.".to_owned(),
+            "BLOT_RETURN_OUTSIDE_SCOPE: `return` has no enclosing module or explicit block."
+                .to_owned(),
         ),
         "conditional_statement" => {
             let body = as_rule(required(cst, rule, "body")?)?;
@@ -268,7 +269,7 @@ fn lower_declaration(
                 )?,
                 consequence: lower_statement_block(
                     cst,
-                    cst.field_list(body, "consequence")?,
+                    statement_suite(cst, body, "consequence")?,
                     &rebound,
                     span,
                     context,
@@ -287,7 +288,7 @@ fn lower_declaration(
                     )?,
                     consequence: lower_statement_block(
                         cst,
-                        cst.field_list(alternative, "consequence")?,
+                        statement_suite(cst, alternative, "consequence")?,
                         &rebound,
                         alternative_span,
                         context,
@@ -300,7 +301,7 @@ fn lower_declaration(
                     let fallback = as_rule(fallback)?;
                     lower_statement_block(
                         cst,
-                        cst.field_list(fallback, "alternative")?,
+                        statement_suite(cst, fallback, "alternative")?,
                         &rebound,
                         cst.span(Cursor::Rule(fallback))?,
                         context,
@@ -533,7 +534,7 @@ fn lower_control_outcome(
     if cst.rule_name(rule)? == "result" {
         if !context.return_scope {
             return Err(
-                "BLOT_RETURN_OUTSIDE_SCOPE: `return` has no enclosing module or `do` block."
+                "BLOT_RETURN_OUTSIDE_SCOPE: `return` has no enclosing module or explicit block."
                     .to_owned(),
             );
         }
@@ -676,7 +677,7 @@ fn lower_control_statement(
     let body = as_rule(required(cst, rule, "body")?)?;
     let body_span = cst.span(Cursor::Rule(body))?;
     if cst.rule_name(body)? == "conditional_statement_guard" {
-        let alternative = cst.field_list(body, "alternative")?;
+        let alternative = statement_suite(cst, body, "alternative")?;
         if statements_can_continue(cst, &alternative)? {
             return Err(
                 "BLOT_GUARD_MAY_CONTINUE: the `else` branch of `if let` must `return` or `break`."
@@ -824,7 +825,7 @@ fn lower_control_conditional(
     )?;
     let consequence = lower_control_outcome(
         cst,
-        &cst.field_list(body, "consequence")?,
+        &statement_suite(cst, body, "consequence")?,
         context,
         body_span,
         continue_value,
@@ -846,7 +847,7 @@ fn lower_control_conditional(
         )?;
         let consequence = lower_control_outcome(
             cst,
-            &cst.field_list(alternative, "consequence")?,
+            &statement_suite(cst, alternative, "consequence")?,
             context,
             alternative_span,
             continue_value,
@@ -868,7 +869,7 @@ fn lower_control_conditional(
         let alternative = as_rule(alternative)?;
         fallback = lower_control_outcome(
             cst,
-            &cst.field_list(alternative, "alternative")?,
+            &statement_suite(cst, alternative, "alternative")?,
             context,
             cst.span(Cursor::Rule(alternative))?,
             continue_value,
@@ -923,7 +924,7 @@ fn lower_control_loop(
     arena: &mut AstArena,
 ) -> Result<LoweredControlLoop, String> {
     let span = cst.span(Cursor::Rule(rule))?;
-    let statements = cst.field_list(rule, "body")?;
+    let statements = statement_suite(cst, rule, "body")?;
     let carried = rebound_names(cst, &statements)?;
     let constructors = ControlConstructors {
         return_constructor: synthetic_constructor("LoopReturn", span),
@@ -996,7 +997,7 @@ fn lower_iteration(
     arena: &mut AstArena,
 ) -> Result<DeclarationId, String> {
     let span = cst.span(Cursor::Rule(rule))?;
-    let statements = cst.field_list(rule, "body")?;
+    let statements = statement_suite(cst, rule, "body")?;
     if statements_need_control(cst, &statements)? {
         let loop_result = lower_control_loop(cst, rule, context, arena)?;
         if loop_result.returns {
@@ -1591,6 +1592,12 @@ fn statement_rule(cst: &CompactCst<'_>, cursor: Cursor) -> Result<u32, String> {
     }
 }
 
+fn statement_suite(cst: &CompactCst<'_>, rule: u32, field: &str) -> Result<Vec<Cursor>, String> {
+    let suite = as_rule(required(cst, rule, field)?)?;
+    require_rule(cst, suite, "statement_suite")?;
+    cst.field_list(suite, "statements")
+}
+
 fn statements_need_control(cst: &CompactCst<'_>, statements: &[Cursor]) -> Result<bool, String> {
     for statement in statements {
         let statement = statement_rule(cst, *statement)?;
@@ -1608,7 +1615,7 @@ fn statements_need_control(cst: &CompactCst<'_>, statements: &[Cursor]) -> Resul
                 }
             }
             "iteration" => {
-                let body = cst.field_list(statement, "body")?;
+                let body = statement_suite(cst, statement, "body")?;
                 if statements_contain_return(cst, &body)? {
                     return Ok(true);
                 }
@@ -1709,21 +1716,21 @@ fn nested_statement_lists(
     statement: u32,
 ) -> Result<Vec<Vec<Cursor>>, String> {
     if cst.rule_name(statement)? == "iteration" {
-        return Ok(vec![cst.field_list(statement, "body")?]);
+        return Ok(vec![statement_suite(cst, statement, "body")?]);
     }
     if cst.rule_name(statement)? != "conditional_statement" {
         return Ok(Vec::new());
     }
     let body = as_rule(required(cst, statement, "body")?)?;
     if cst.rule_name(body)? == "conditional_statement_guard" {
-        return Ok(vec![cst.field_list(body, "alternative")?]);
+        return Ok(vec![statement_suite(cst, body, "alternative")?]);
     }
-    let mut nested = vec![cst.field_list(body, "consequence")?];
+    let mut nested = vec![statement_suite(cst, body, "consequence")?];
     for alternative in cst.field_list(body, "alternatives")? {
-        nested.push(cst.field_list(as_rule(alternative)?, "consequence")?);
+        nested.push(statement_suite(cst, as_rule(alternative)?, "consequence")?);
     }
     if let Some(fallback) = cst.field(body, "fallback")? {
-        nested.push(cst.field_list(as_rule(fallback)?, "alternative")?);
+        nested.push(statement_suite(cst, as_rule(fallback)?, "alternative")?);
     }
     Ok(nested)
 }

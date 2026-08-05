@@ -8,6 +8,7 @@ import {
 import { buildBlotAbiManifest } from "../../src/backend/runtime/abi.ts";
 import { load, type Loaded } from "../../src/load.ts";
 import { RustMiddle } from "../../src/backend/rust_middle_wasm.ts";
+import { layoutSource } from "./layout_source.ts";
 
 const wasm = await Deno.readFile(
   new URL("../../generated/rust-middle/compiler.wasm", import.meta.url),
@@ -29,7 +30,7 @@ if (roots.length === 0) roots = await repositoryPrograms();
         const added = rust.addCompilerSessionModule(
           session,
           loaded.path,
-          loaded.source,
+          (await layoutSource(loaded.path, loaded.source)).source,
         );
         if (!added.ok) throw new Error(`${loaded.path}: ${added.message}`);
       }

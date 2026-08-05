@@ -3,6 +3,7 @@ import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
 import { ingestCpuSource, parse } from "../../src/syntax/parse.ts";
 import { moduleImports, moduleIncludes } from "../../src/load.ts";
 import { canonicalModule, materializeFlatModule } from "./flat_ast.ts";
+import { layoutSource } from "./layout_source.ts";
 import { RustMiddle } from "../../src/backend/rust_middle_wasm.ts";
 
 const wasm = await Deno.readFile(
@@ -19,7 +20,8 @@ const rejectedPaths: string[] = [];
 
 for (const path of paths) {
   const source = await Deno.readTextFile(path);
-  const parsed = ingestCpuSource(frontend, source);
+  const elaborated = await layoutSource(path, source);
+  const parsed = ingestCpuSource(frontend, elaborated.source);
   const typescript = await parse(source);
   if (!parsed.ok) {
     if (typescript.ok) {
@@ -31,7 +33,7 @@ for (const path of paths) {
     rejectedPaths.push(path);
     continue;
   }
-  const lowered = rust.lower(source);
+  const lowered = rust.lower(elaborated.source);
   if (!typescript.ok) {
     if (!lowered.ok) {
       let rustCode = lowered.diagnostics?.[0]?.code;
@@ -61,7 +63,10 @@ for (const path of paths) {
   }
   try {
     assertEquals(
-      canonicalModule(materializeFlatModule(lowered.module)),
+      canonicalModule(
+        materializeFlatModule(lowered.module),
+        elaborated.originalOffset,
+      ),
       canonicalModule(typescript.module),
     );
   } catch (error) {
@@ -75,7 +80,7 @@ for (const path of paths) {
   const added = rust.addCompilerSessionModule(
     session,
     path,
-    source,
+    elaborated.source,
   );
   if (!added.ok) {
     throw new Error(

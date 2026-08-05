@@ -1,67 +1,62 @@
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 const Draw = @effect {
   .write = Str -> Unit;
-};
+  }
 
-let element = fn name => fn _properties => fn children => do
-  _ <- Draw.write ("<" <> name <> ">");
-  _ <- children ();
-  _ <- Draw.write ("</" <> name <> ">");
-  return name;
-end;
+let element = fn name => fn _properties => fn children =>
+  _ <- Draw.write ("<" <> name <> ">")
+  _ <- children ()
+  _ <- Draw.write ("</" <> name <> ">")
+  return name
 
 let Render = {
-  .text = fn text => do
-    _ <- Draw.write text;
-  end;
+  .text = fn text =>
+    _ <- Draw.write text
+  ;
   .div = element "div";
   .icon = element "icon";
-};
+}
 
-let text = Render.text;
-let div = Render.div;
-let icon = Render.icon;
+let text = Render.text
+let div = Render.div
+let icon = Render.icon
 
 sig Button = {
   .label = Str;
   .disabled? = Bool;
   .order? = Int;
-} -> (Unit -> Unit) -> Unit ~ { Draw };
-let Button = fn properties => fn children => do
+  } -> (Unit -> Unit) -> Unit ~ { Draw }
+let Button = fn properties => fn children =>
   let disabled = case properties.disabled of
-    () => "",
-    #False => "",
+    () => ""
+    #False => ""
     #True => " disabled"
-  end;
   let order = case properties.order of
-    () => "",
+    () => ""
     value => " data-order=" <> Text.of_int value
-  end;
-  _ <- Draw.write ("<button" <> disabled <> order <> ">");
-  _ <- text properties.label;
-  _ <- children ();
-  _ <- Draw.write "</button>";
-end;
+  _ <- Draw.write ("<button" <> disabled <> order <> ">")
+  _ <- text properties.label
+  _ <- children ()
+  _ <- Draw.write "</button>"
 
-let view = fn () => do
+let view = fn () =>
   root <- <div .class="counter" .hidden=False>
-    _ <- text "Count: ";
-    _ <- <Button .label="Save" />;
-    _ <- <Button .label="Delete" .disabled=True .order=2 />;
-    _ <- <icon />;
-  </div>;
-  return root;
-end;
+    _ <- text "Count: "
+    _ <- <Button .label="Save" />
+    _ <- <Button .label="Delete" .disabled=True .order=2 />
+    _ <- <icon />
+  </div>
+  return root
 
 let collecting = {
-  .write = fn (fragment, ?resume) => do
-    rest <- resume ();
-    return fragment <> rest;
-  end;
+  .write = fn (fragment, ?resume) =>
+    rest <- resume ()
+    return fragment <> rest
+  ;
   .return = fn _ => "";
-};
+}
 
-return @handle (Draw, (fn () => do
-  _ <- view ();
-end), collecting);
+return @handle (Draw, (fn () =>
+  _ <- view ()
+), collecting)

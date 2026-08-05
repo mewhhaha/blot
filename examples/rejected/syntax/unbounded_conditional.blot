@@ -1,4 +1,4 @@
-// Every variable-width region carries an explicit terminator. A conditional
-// without `end` has no locatable boundary, so it cannot be an island.
-let label = if 1 == 1 then "yes" else "no";
-return label;
+// A value conditional requires an alternative even when its condition is a
+// constructor known at compile time.
+let label = if #True then "yes"
+return label

@@ -17,7 +17,7 @@ filesystem and package host around the checked-in Rust/WebAssembly compiler:
 ```ts
 import { parse } from "@mewhhaha/blot";
 
-const result = await parse("return 42;");
+const result = await parse("return 42\n");
 ```
 
 Run `deno task publish:dry-run` to verify the package before publishing.
@@ -171,53 +171,66 @@ appending a second copy. It finishes by proving the editor grammar and the
 compiler agree about what the language is — see [docs/editor.md](docs/editor.md)
 for why that check exists.
 
+To migrate source written with `do`/`end` and declaration semicolons, run the
+one-shot AST-preserving rewrite over a file or directory:
+
+```bash
+deno task migrate:layout -- path/to/source
+# or: just migrate-layout path/to/source
+```
+
+The command parses with the frozen legacy grammar, prints canonical layout
+syntax, reparses it with the current grammar, and writes only when the
+normalized AST is unchanged. Directories are traversed recursively.
+
 ## The language
 
-Declarations are all `;`-terminated:
+Declarations end at a logical newline; indentation delimits suites:
 
 ```blot
-let name = expr;          // runtime binding
-const name = expr;        // must evaluate at compile time
-sig name = expr;          // constraint on the following binding
-open expr;                // spread every field into scope
-for src do … end;         // loop; see below
-for ever do … end;        // iterate the prelude's infinite iterator
-break;                    // exit the nearest `for`
-if c then … end;          // conditional control flow
-if let p = x else … end;  // bind p or leave through the else branch
-name := expr;             // shadow a name while preserving its type
-name <- expr;             // sequence an effect and bind its result
-return expr;              // exit the nearest module or explicit `do`
+let name = expr          // runtime binding
+const name = expr        // must evaluate at compile time
+sig name = expr          // constraint on the following binding
+open expr                // spread every field into scope
+for src:                 // loop; see below
+  ...
+for ever:                // iterate the prelude's infinite iterator
+  ...
+break                    // exit the nearest `for`
+if c then                // conditional control flow
+  ...
+if let p = x else        // bind p or leave through the else branch
+  return fallback
+name := expr             // shadow a name while preserving its type
+name <- expr             // sequence an effect and bind its result
+return expr              // exit the current explicit result scope
 ```
 
 An expression `if` always has an `else` and produces one of its branch values:
 
 ```blot
-let label = if ready then "ready" else "waiting" end;
+let label = if ready then "ready" else "waiting"
 ```
 
 There is no `yield`: the selected branch expression is the conditional's value.
 It is a separate result scope and does not inherit surrounding control targets.
-An explicit `do` branch's `return` supplies the conditional result, while
-`break;` cannot escape the value conditional to an enclosing loop. A standalone
+An indented value branch's `return` supplies the conditional result, while
+`break` cannot escape the value conditional to an enclosing loop. A standalone
 conditional is surrounding control flow, has an optional `else`, and may
 transfer control:
 
 ```blot
-let describe = fn value => do
+let describe = fn value =>
   if value < 0 then
-    return "negative";
-  end;
-  return "non-negative";
-end;
+    return "negative"
+  return "non-negative"
 ```
 
 A deconstructing guard binds its pattern on the path that follows:
 
 ```blot
 if let #Some value = candidate else
-  return fallback;
-end;
+  return fallback
 // value is in scope here
 ```
 
@@ -225,20 +238,20 @@ This form has no `then`: its success path is the following statements, not a
 second block. The `else` body must leave that path with `return` or `break`, so
 every name in the pattern is known to exist afterward.
 
-`do` is an expression block. Reaching `end` produces `()`; `return value;` exits
-the nearest module or explicit `do`, including from a statement branch or across
-a loop. Bare `break;` only exits a `for`. A bare trailing expression remains
-invalid because a trailing name and the start of `name := ...;` have the same
-one-token prefix.
+An indented expression block produces `()` when it reaches its dedent;
+`return value` exits the current module or explicit expression block, including
+from a statement branch or across a loop. Bare `break` only exits a `for`. A
+bare trailing expression remains invalid because a trailing name and the start
+of `name := ...` have the same one-token prefix.
 
 Element expressions are ordinary component calls with property records and a
 nullary child computation:
 
 ```blot
 _ <- <div .class="counter" .hidden={hidden}>
-  _ <- text "Count: ";
-  _ <- <Button .disabled=True />;
-</div>;
+  _ <- text "Count: "
+  _ <- <Button .disabled=True />
+</div>
 ```
 
 The element lowers only to
@@ -262,26 +275,25 @@ another widens the name to `Int`, while rebinding it to text is rejected. A
 repeated binding is the explicit type-changing form:
 
 ```blot
-let value = 1;
-let value = "now text";
+let value = 1
+let value = "now text"
 ```
 
 ```blot
-let x = 1;
-for Iter.range (0, 5) do        // run the body once per element
-  x := x + 1;
-end;
-return x;                       // 6
+let x = 1
+for Iter.range (0, 5):          // run the body once per element
+  x := x + 1
+return x                        // 6
 
-for n in source do … end;       // bind each element
-for #Some n in source do … end; // bind, and skip what does not match
+for n in source:                // bind each element
+  ...
+for #Some n in source:          // bind, and skip what does not match
+  ...
 
-for ever do
-  x := x + 1;
+for ever:
+  x := x + 1
   if done x then
-    break;
-  end;
-end;
+    break
 ```
 
 A binder that cannot fail is a `let`. One that can becomes the `case` it looks
@@ -292,10 +304,9 @@ A `case` arm may carry a guard, which is a refinement no pattern states:
 
 ```blot
 case n of
-  0 => "zero",
-  m if m > 0 => "positive",
+  0 => "zero"
+  m if m > 0 => "positive"
   _ => "negative"
-end
 ```
 
 A false guard falls through to the arms below, so the arms keep their order —
@@ -306,13 +317,14 @@ Guards desugar during CST lowering like every other surface form, so what
 reaches coverage, the evaluator, and the backend is ordinary arms.
 
 `for` desugars to `rec`/`case` recursion during CST lowering, so there is no
-loop in the AST, none in the evaluator, and none in the backend. `break;`
-carries the accumulator as it exists at that point; it can appear inside a
-standalone `if`, targets the nearest `for`, and cannot cross a function or
+loop in the AST, none in the evaluator, and none in the backend. `break` carries
+the accumulator as it exists at that point; it can appear inside a standalone
+`if`, targets the nearest `for`, and cannot cross a function or
 value-conditional boundary. `return` instead crosses a `for` and exits the
-nearest module or explicit `do`. A `for` names nothing, so a module that loops
-over an iterator it wrote itself needs nothing in scope. Looping over an _array_
-needs `Iter.items`, but that is a call the program writes and can see.
+current module or explicit expression block. A `for` names nothing, so a module
+that loops over an iterator it wrote itself needs nothing in scope. Looping over
+an _array_ needs `Iter.items`, but that is a call the program writes and can
+see.
 
 An iterator is a `.state` and a `.step`, where `step state` answers
 `#Some (value, next_state)` or `#None`. The `Option` is not decoration: a step
@@ -321,7 +333,7 @@ there is none, and for a polymorphic element no such value can be constructed �
 the same hole that makes an empty `Store` need its own constructor. `Iter.range`
 and `Iter.items` are ordinary prelude functions over that shape, and `ever` is
 an ordinary iterator whose step always produces another unit. That is why
-`for ever do` needs the prelude opened and no special grammar. A new kind of
+`for ever:` needs the prelude opened and no special grammar. A new kind of
 sequence is a value someone writes. A state and a step rather than a closure
 returning the next closure: both express the protocol, but the closure form
 allocates one per element and leaves the compiler resolving a lambda set that
@@ -331,13 +343,13 @@ Nothing is in scope that the module did not ask for. The prelude is an ordinary
 module with no privilege, so every file begins by opening it:
 
 ```blot
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 ```
 
 Selective binding and renaming use the ordinary record pattern instead:
 
 ```blot
-const { .source = target; .value; } = exports;
+const { .source = target; .value; } = exports
 ```
 
 `@import` returns the imported module function, and the final `()` supplies its
@@ -347,12 +359,12 @@ Non-Blot files enter through `@include`. The second argument is an ordinary
 compile-time function, so the program owns both parsing and representation:
 
 ```blot
-const as_raw = fn source => source.text;
-const shader = @include "./shaders/main.wgsl" as_raw;
+const as_raw = fn source => source.text
+const shader = @include "./shaders/main.wgsl" as_raw
 
-open @import "blot:prelude" ();
-const config = @include "./config.json" as_json;
-const fixed_config = @include "./config.json" as_const_json;
+open @import "blot:prelude" ()
+const config = @include "./config.json" as_json
+const fixed_config = @include "./config.json" as_const_json
 ```
 
 The function receives `{ .specifier; .path; .text; }`. Included files are
@@ -378,20 +390,20 @@ Types and effects do not need separate declaration forms because they are
 ordinary compile-time values:
 
 ```blot
-const I32 = I 32;
-const Message = #Ready | #Progress I32 | #Failed Str;
-const Point = struct { .x = I32; .y = I32; };
+const I32 = I 32
+const Message = #Ready | #Progress I32 | #Failed Str
+const Point = struct { .x = I32; .y = I32; }
 ```
 
 `struct` hands back the storage type _itself_, with its constructor and
 accessors attached to it, so one binding is both the type and its namespace:
 
 ```blot
-const Point = struct { .x = I32; .y = I32; };   // Point is (I32, I32)
+const Point = struct { .x = I32; .y = I32; }   // Point is (I32, I32)
 
-sig p = Point;
-let p = Point.new { .y = 20; .x = 10; };        // (10, 20)
-let x = Point.x p;                              // and so is p.0
+sig p = Point
+let p = Point.new { .y = 20; .x = 10; }        // (10, 20)
+let x = Point.x p                              // and so is p.0
 ```
 
 The members are invisible to typing — the bridge, equality, and inhabitation see
@@ -415,8 +427,8 @@ entry point into `struct`. _Packing_ is a separate question — which bits a fie
 occupies rather than which slot — and stays a separate call:
 
 ```blot
-const Pixel = { .red = U 8; .green = U 8; .mode = U 2; };
-const bits = packed Pixel;
+const Pixel = { .red = U 8; .green = U 8; .mode = U 2; }
+const bits = packed Pixel
 // bits.bit_size == 18, bits.byte_size == 3
 ```
 
@@ -445,38 +457,36 @@ fields is a `fold`, which is why `derive` is a function rather than a macro.
 
 Effects are a shape of operation types handed to one primitive, and performing
 one is an ordinary call, so the row is inferred rather than declared. It is
-still writable: `sig report = Unit -> Str ~ { Console };` says exactly what the
+still writable: `sig report = Unit -> Str ~ { Console }` says exactly what the
 printer prints, a bare `->` is the empty row rather than an unwritten one, and a
 row names effects that are in scope, so it is closed — there is no way to write
 the row variable inference uses for a callback's effects.
 
-`x <- expression;` sequences one. The expression is evaluated as written, so a
+`x <- expression` sequences one. The expression is evaluated as written, so a
 nullary operation keeps its explicit `()`; `let` remains a pure definition:
 
 ```blot
-const Terminal = @effect { .read = Unit -> Str; };
+const Terminal = @effect { .read = Unit -> Str; }
 
-let ask = fn () => do
-  answer <- Terminal.read ();
-  return answer <> "!";
-end;
+let ask = fn () =>
+  answer <- Terminal.read ()
+  return answer <> "!"
 ```
 
 ```blot
-const Console = @effect { .write = Str -> Unit; };
+const Console = @effect { .write = Str -> Unit; }
 
-let report = fn () => do
-  _ <- Console.write "one";
-  return "done";
-end;
+let report = fn () =>
+  _ <- Console.write "one"
+  return "done"
 
 let joining = {
-  .write = fn (message, ?resume) => do
-    rest <- resume ();
-    return message ++ rest;
-  end;
+  .write = fn (message, ?resume) =>
+    rest <- resume ()
+    return message ++ rest
+  ;
   .return = fn value => value;
-};
+}
 
 @handle (Console, report, joining)   // "onedone"
 ```
@@ -491,10 +501,9 @@ Several handlers compose without manual nesting:
 
 ```blot
 let result = try program with
-  program_without_terminal <- @handle (Terminal, fake_terminal);
-  program_without_clock <- @handle (Clock, fake_clock);
+  program_without_terminal <- @handle (Terminal, fake_terminal)
+  program_without_clock <- @handle (Clock, fake_clock)
   @handle (Random, fake_random)
-end;
 ```
 
 Each bound step names the nullary program with that source effect discharged;
@@ -506,11 +515,11 @@ become typed WebAssembly imports — so blot needs no raw import form, and its r
 is the program's declared interface rather than something left unhandled:
 
 ```blot
-const Console = @effect.host { .write = Str -> Unit; };
-let report = fn () => do
-  result <- Console.write "compiled";
-  return result;
-end; // () -> () ~ { Console }
+const Console = @effect.host { .write = Str -> Unit; }
+let report = fn () =>
+  result <- Console.write "compiled"
+  return result
+// () -> () ~ { Console }
 ```
 
 A handler the program did not write is a host capability. The entry module's
@@ -518,16 +527,16 @@ parameter is the entire authority it has — no ambient filesystem, no ambient
 clock, nothing to import for more:
 
 ```blot
-module init;
+module init
 
 let printing = {
-  .write = fn (message, resume) => do
-    _ <- init.print message;     // opaque; the program can only call it
-    result <- resume ();
-    return result;
-  end;
+  .write = fn (message, resume) =>
+    _ <- init.print message     // opaque; the program can only call it
+    result <- resume ()
+    return result
+  ;
   .return = fn value => value;
-};
+}
 ```
 
 Because a type is a value, inspecting one means inspecting a value, and there is
@@ -536,9 +545,8 @@ value domain a type is and hands back the parts as an ordinary tagged value:
 
 ```blot
 const element_of = fn t => case reflect t of
-  #Sealed s => if text_eq (s.name, "List") then Some s.inner else None end,
+  #Sealed s => if text_eq (s.name, "List") then Some s.inner else None
   _ => None
-end;
 ```
 
 `refines`, `Extract`, `Exclude`, `Pick`, and `Omit` are all prelude source over

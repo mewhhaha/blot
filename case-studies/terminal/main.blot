@@ -1,17 +1,16 @@
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
 const Terminal = @effect.host {
   .read_line = Unit -> Str;
   .write = Str -> Unit;
-};
+  }
 
-_ <- Terminal.write "What is your name?";
-name <- Terminal.read_line ();
+_ <- Terminal.write "What is your name?"
+name <- Terminal.read_line ()
 
 if text_eq (name, "") then
-  _ <- Terminal.write "Hello, stranger.";
-  return ();
-end;
+  _ <- Terminal.write "Hello, stranger."
+  return ()
 
-result <- Terminal.write (Text.append "Hello, " name);
-return result;
+result <- Terminal.write (Text.append "Hello, " name)
+return result

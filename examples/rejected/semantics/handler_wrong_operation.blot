@@ -2,15 +2,14 @@
 // operation name used to be a silent no-op at run time; naming the effect makes
 // it a type error.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-const Console = @effect { .write = Str -> Unit; };
-let handler = { .wrote = fn (m, ?resume) => do
-  result <- resume ();
-  return result;
-end; .return = fn v => v; };
-let work = fn () => do
-  result <- Console.write "x";
-  return result;
-end;
-return @handle (Console, work, handler);
+const Console = @effect { .write = Str -> Unit; }
+let handler = { .wrote = fn (m, ?resume) =>
+  result <- resume ()
+  return result
+; .return = fn v => v; }
+let work = fn () =>
+  result <- Console.write "x"
+  return result
+return @handle (Console, work, handler)

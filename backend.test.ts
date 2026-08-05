@@ -47,32 +47,28 @@ Deno.test("imported structural folds residualize over runtime records", async ()
   const root = join(directory, "root.blot");
   await Deno.writeTextFile(
     library,
-    [
-      'open @import "blot:prelude" ();',
-      "const component = fn definition => do",
-      "  let names = @shape.names definition.fields;",
-      "  return {",
-      "    .pack = fn value => fold (names, 0, (fn (sum, name) =>",
-      "      @int.add sum (@shape.get value name)));",
-      "  };",
-      "end;",
-      "return { .component = component; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const component = fn definition =>
+  let names = @shape.names definition.fields
+  return {
+    .pack = fn value => fold (names, 0, (fn (sum, name) => @int.add sum (@shape.get value name)));
+    }
+return { .component = component; }
+`,
   );
   await Deno.writeTextFile(
     root,
-    [
-      'open @import "blot:prelude" ();',
-      'const Components = (@import "./components.blot") ();',
-      "const Position = Components.component {",
-      "  .fields = { .x = Int; .y = Int; };",
-      "};",
-      "const Source = @effect.host { .x = Int -> Int; };",
-      "x <- Source.x 0;",
-      "sig packed = Int;",
-      "let packed = Position.pack { .x = x; .y = 2; };",
-      "return packed;",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const Components = (@import "./components.blot") ()
+const Position = Components.component {
+  .fields = { .x = Int; .y = Int; };
+  }
+const Source = @effect.host { .x = Int -> Int; }
+x <- Source.x 0
+sig packed = Int
+let packed = Position.pack { .x = x; .y = 2; }
+return packed
+`,
   );
 
   const hir = await prepareGpupaperHir(root);
@@ -103,15 +99,14 @@ Deno.test("static shape updates residualize over runtime records", async () => {
   const root = join(directory, "root.blot");
   await Deno.writeTextFile(
     root,
-    [
-      'open @import "blot:prelude" ();',
-      "const Source = @effect.host { .x = Int -> Int; };",
-      "x <- Source.x 0;",
-      "let original = { .x = x; .y = 1; };",
-      'let replaced = @shape.set original "y" (x + 2);',
-      'let trimmed = @shape.remove replaced "x";',
-      "return trimmed.y;",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const Source = @effect.host { .x = Int -> Int; }
+x <- Source.x 0
+let original = { .x = x; .y = 1; }
+let replaced = @shape.set original "y" (x + 2)
+let trimmed = @shape.remove replaced "x"
+return trimmed.y
+`,
   );
 
   const [outcome] = await buildBatch([root]);
@@ -137,16 +132,15 @@ Deno.test("runtime booleans survive local function results", async () => {
   const root = join(directory, "root.blot");
   await Deno.writeTextFile(
     root,
-    [
-      'open @import "blot:prelude" ();',
-      "const Source = @effect.host { .value = Int -> Int; };",
-      "let positive = fn () => do",
-      "  value <- Source.value 0;",
-      "  return value > 0;",
-      "end;",
-      "present <- positive ();",
-      "return if present then 42 else 0 end;",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const Source = @effect.host { .value = Int -> Int; }
+let positive = fn () =>
+  value <- Source.value 0
+  return value > 0
+present <- positive ()
+return if present then 42
+else 0
+`,
   );
 
   const [outcome] = await buildBatch([root]);
@@ -172,18 +166,17 @@ Deno.test("conditional shadows can destructure runtime join values", async () =>
   const root = join(directory, "root.blot");
   await Deno.writeTextFile(
     root,
-    [
-      'open @import "blot:prelude" ();',
-      "const Source = @effect.host { .value = Int -> Int; };",
-      "candidate <- Source.value 0;",
-      "let result = 0;",
-      "if candidate > 0 then",
-      "  current <- Source.value candidate;",
-      "  if current > 0 then current := current - 1; end;",
-      "  result := current;",
-      "end;",
-      "return result;",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const Source = @effect.host { .value = Int -> Int; }
+candidate <- Source.value 0
+let result = 0
+if candidate > 0 then
+  current <- Source.value candidate
+  if current > 0 then
+    current := current - 1
+  result := current
+return result
+`,
   );
 
   const [outcome] = await buildBatch([root]);
@@ -196,14 +189,13 @@ Deno.test("sealed runtime scalars erase to their checked representation", async 
   const root = join(directory, "root.blot");
   await Deno.writeTextFile(
     root,
-    [
-      'open @import "blot:prelude" ();',
-      "const Source = @effect.host { .value = Int -> Int; };",
-      'const Entity = seal ("test.Entity", Int);',
-      "value <- Source.value 0;",
-      'let entity = seal ("test.Entity", value);',
-      "return unseal entity;",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const Source = @effect.host { .value = Int -> Int; }
+const Entity = seal ("test.Entity", Int)
+value <- Source.value 0
+let entity = seal ("test.Entity", value)
+return unseal entity
+`,
   );
 
   const [outcome] = await buildBatch([root]);
@@ -236,7 +228,11 @@ Deno.test("staged scalar exports retain their checked values in gpupaper HIR", a
 Deno.test("gpupaper HIR cache follows loaded revision identity", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "revision.blot");
-  await Deno.writeTextFile(path, "return 41;");
+  await Deno.writeTextFile(
+    path,
+    `return 41
+`,
+  );
 
   const first = await prepareGpupaperHir(path);
   const repeated = await prepareGpupaperHir(path);
@@ -246,7 +242,11 @@ Deno.test("gpupaper HIR cache follows loaded revision identity", async () => {
     TypeError,
   );
 
-  await Deno.writeTextFile(path, "return 42;");
+  await Deno.writeTextFile(
+    path,
+    `return 42
+`,
+  );
   await refreshLoadedModules();
   const edited = await prepareGpupaperHir(path);
   assertNotStrictEquals(edited, first);
@@ -263,14 +263,23 @@ Deno.test("gpupaper HIR cache invalidates a transitive importer", async () => {
   const directory = await Deno.makeTempDir();
   const dependency = join(directory, "dependency.blot");
   const root = join(directory, "root.blot");
-  await Deno.writeTextFile(dependency, "return 40;");
+  await Deno.writeTextFile(
+    dependency,
+    `return 40
+`,
+  );
   await Deno.writeTextFile(
     root,
-    'return (@import "./dependency.blot") ();',
+    `return (@import "./dependency.blot") ()
+`,
   );
 
   const first = await prepareGpupaperHir(root);
-  await Deno.writeTextFile(dependency, "return 42;");
+  await Deno.writeTextFile(
+    dependency,
+    `return 42
+`,
+  );
   await refreshLoadedModules();
   const edited = await prepareGpupaperHir(root);
   assertNotStrictEquals(edited, first);
@@ -288,10 +297,9 @@ Deno.test("gpupaper HIR refuses a function crossing the staged boundary", async 
   const path = join(directory, "function-result.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "return fn value => value;",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+return fn value => value
+`,
   );
 
   await assertRejects(
@@ -334,29 +342,28 @@ Deno.test("an effect can carry its specialized handler into inferred reflection"
   const path = join(directory, "handler-combinator.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "const capability = fn () => do",
-      "  const Raw = @effect { .read = Unit -> Int; };",
-      "  const handle = fn selected => fn computation => @handle (",
-      "    Raw,",
-      "    computation,",
-      "    { .read = fn ((), ?resume) => resume selected; }",
-      "  );",
-      "  const Access = Raw <+ { .handler = handle; };",
-      "  return { .read = Access; };",
-      "end;",
-      "const Component = capability ();",
-      "const system = fn () => do value <- Component.read.read (); return value; end;",
-      "const reflected = case @type.reflect (@type.of system) of",
-      "  #Arrow arrow => case Array.get (arrow.effects, 0) of",
-      "    #Some effect => effect,",
-      '    #None => @fail "missing effect"',
-      "  end,",
-      '  _ => @fail "system is not a function"',
-      "end;",
-      "return (@type.members reflected).handler 42 system;",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const capability = fn () =>
+  const Raw = @effect { .read = Unit -> Int; }
+  const handle = fn selected => fn computation => @handle (
+    Raw,
+    computation,
+    { .read = fn ((), ?resume) => resume selected; }
+    )
+  const Access = Raw <+ { .handler = handle; }
+  return { .read = Access; }
+const Component = capability ()
+const system = fn () =>
+  value <- Component.read.read ()
+  return value
+const reflected = case @type.reflect (@type.of system) of
+  #Arrow arrow => case Array.get (arrow.effects, 0) of
+    #Some effect => effect
+    #None => @fail "missing effect"
+
+  _ => @fail "system is not a function"
+return (@type.members reflected).handler 42 system
+`,
   );
 
   assertEquals(await runLoweringExport(path, "default"), {
@@ -419,7 +426,7 @@ Deno.test("a `const` refuses to capture a `let`", async () => {
 Deno.test("runtime integers cross WebAssembly as signed i64", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "wide.blot");
-  await Deno.writeTextFile(path, "return 2147483648;");
+  await Deno.writeTextFile(path, "return 2147483648\n");
 
   assertEquals(await runLowering(path), {
     kind: "signed-integer-64",
@@ -433,11 +440,12 @@ Deno.test("a dependency may have source spans beyond the end of its importer", a
   const entryPath = join(directory, "entry.blot");
   await Deno.writeTextFile(
     dependencyPath,
-    `// ${"padding ".repeat(700)}\nreturn 42;`,
+    `// ${"padding ".repeat(700)}\nreturn 42\n`,
   );
   await Deno.writeTextFile(
     entryPath,
-    'return (@import "./dependency.blot") ();',
+    `return (@import "./dependency.blot") ()
+`,
   );
 
   await validateLowering(entryPath);
@@ -449,9 +457,9 @@ Deno.test("runtime integer overflow traps in emitted WebAssembly", async () => {
   await Deno.writeTextFile(
     path,
     [
-      'open @import "blot:prelude" ();',
-      "let maximum = 9223372036854775807;",
-      "return maximum + 1;",
+      'open @import "blot:prelude" ()',
+      "let maximum = 9223372036854775807",
+      "return maximum + 1",
     ].join("\n"),
   );
 
@@ -501,12 +509,11 @@ Deno.test("runtime fields are callable by their blot export names", async () => 
   const path = join(directory, "exports.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "sig increment = Int -> Int;",
-      "let increment = fn value => value + 1;",
-      "return { .increment = increment; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+sig increment = Int -> Int
+let increment = fn value => value + 1
+return { .increment = increment; }
+`,
   );
 
   assertEquals(
@@ -526,20 +533,17 @@ Deno.test("a pinned pattern compares runtime scalar values", async () => {
   const path = join(directory, "pinned-pattern.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "sig matches = Int -> Int -> Int;",
-      "let matches = fn expected => fn actual => case actual of",
-      "  #(expected) => 1,",
-      "  _ => 0",
-      "end;",
-      "sig text_matches = Str -> Str -> Int;",
-      "let text_matches = fn expected => fn actual => case actual of",
-      "  #(expected) => 1,",
-      "  _ => 0",
-      "end;",
-      "return { .matches = matches; .text_matches = text_matches; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+sig matches = Int -> Int -> Int
+let matches = fn expected => fn actual => case actual of
+  #(expected) => 1
+  _ => 0
+sig text_matches = Str -> Str -> Int
+let text_matches = fn expected => fn actual => case actual of
+  #(expected) => 1
+  _ => 0
+return { .matches = matches; .text_matches = text_matches; }
+`,
   );
 
   assertEquals(
@@ -579,13 +583,12 @@ Deno.test("a concrete record signature specializes an exported projection", asyn
   const path = join(directory, "record-export.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "const Point = { .x = Int; .y = Int; };",
-      "sig project = Point -> Int;",
-      "let project = fn point => point.x;",
-      "return { .project = project; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const Point = { .x = Int; .y = Int; }
+sig project = Point -> Int
+let project = fn point => point.x
+return { .project = project; }
+`,
   );
 
   const manifest = await validateLowering(path);
@@ -606,13 +609,12 @@ Deno.test("a generalized projection takes its shape from the call site", async (
   const path = join(directory, "flowed-shape.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "let get_x = fn v => v.x;",
-      "sig at = Int -> Int;",
-      "let at = fn n => get_x { .x = n; .y = 0; };",
-      "return { .at = at; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+let get_x = fn v => v.x
+sig at = Int -> Int
+let at = fn n => get_x { .x = n; .y = 0; }
+return { .at = at; }
+`,
   );
 
   assertEquals(
@@ -643,13 +645,12 @@ Deno.test("two shapes at one generalized projection are cloned", async () => {
   const path = join(directory, "two-shapes.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "let get_x = fn v => v.x;",
-      "sig at = Int -> Int;",
-      "let at = fn n => get_x { .x = n; .y = 0; } + get_x { .x = 1; .z = n; };",
-      "return { .at = at; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+let get_x = fn v => v.x
+sig at = Int -> Int
+let at = fn n => get_x { .x = n; .y = 0; } + get_x { .x = 1; .z = n; }
+return { .at = at; }
+`,
   );
 
   assertEquals(
@@ -663,14 +664,19 @@ Deno.test("two shapes at one generalized projection are cloned", async () => {
 
 Deno.test("a structural function remains specializable through a record", async () => {
   const path = await fixture("aggregate-specialization.blot", [
-    'open @import "blot:prelude" ();',
-    "let project = fn record => record.x;",
-    "let functions = { .project = project; };",
-    "sig at = Int -> Int;",
+    `open @import "blot:prelude" ()
+`,
+    `let project = fn record => record.x
+`,
+    `let functions = { .project = project; }
+`,
+    `sig at = Int -> Int
+`,
     "let at = fn n =>",
-    "  functions.project { .x = n; .y = 0; } +",
-    "  functions.project { .x = n; .z = 0; };",
-    "return { .at = at; };",
+    "  return functions.project { .x = n; .y = 0; } +",
+    "    functions.project { .x = n; .z = 0; }",
+    `return { .at = at; }
+`,
   ]);
   assertEquals(
     await runLoweringExport(path, "at", [{
@@ -686,14 +692,13 @@ Deno.test("an immutable alias preserves structural call specialization", async (
   const path = join(directory, "aliased-shapes.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "let get_x = fn value => value.x;",
-      "let alias = get_x;",
-      "sig at = Int -> Int;",
-      "let at = fn n => alias { .x = n; .y = 0; } + alias { .x = 1; .z = n; };",
-      "return { .at = at; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+let get_x = fn value => value.x
+let alias = get_x
+sig at = Int -> Int
+let at = fn n => alias { .x = n; .y = 0; } + alias { .x = 1; .z = n; }
+return { .at = at; }
+`,
   );
 
   assertEquals(
@@ -713,13 +718,12 @@ Deno.test("subset shapes at one generalized projection specialize too", async ()
   const path = join(directory, "subset-shapes.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "let get_x = fn v => v.x;",
-      "sig at = Int -> Int;",
-      "let at = fn n => get_x { .x = n; } + get_x { .x = 1; .y = n; };",
-      "return { .at = at; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+let get_x = fn v => v.x
+sig at = Int -> Int
+let at = fn n => get_x { .x = n; } + get_x { .x = 1; .y = n; }
+return { .at = at; }
+`,
   );
 
   assertEquals(
@@ -739,14 +743,13 @@ Deno.test("a generalized projection keeps its shape through a forwarder", async 
   const path = join(directory, "forwarded-shape.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "let get_x = fn v => v.x;",
-      "let twice = fn v => get_x v + get_x v;",
-      "sig at = Int -> Int;",
-      "let at = fn n => twice { .x = n; .y = 0; };",
-      "return { .at = at; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+let get_x = fn v => v.x
+let twice = fn v => get_x v + get_x v
+sig at = Int -> Int
+let at = fn n => twice { .x = n; .y = 0; }
+return { .at = at; }
+`,
   );
 
   assertEquals(
@@ -763,16 +766,15 @@ Deno.test("a generalized projection keeps its shape after escaping through ident
   const path = join(directory, "escaped-shape.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "let get_x = fn value => value.x;",
-      "let identity = fn value => value;",
-      "let escaped = identity get_x;",
-      "sig at = Int -> Int;",
-      "let at = fn n => escaped { .x = n; .y = 0; } +",
-      "  escaped { .x = 0; .z = n; };",
-      "return { .at = at; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+let get_x = fn value => value.x
+let identity = fn value => value
+let escaped = identity get_x
+sig at = Int -> Int
+let at = fn n => escaped { .x = n; .y = 0; } +
+  escaped { .x = 0; .z = n; }
+return { .at = at; }
+`,
   );
 
   assertEquals(
@@ -789,18 +791,16 @@ Deno.test("a runtime function choice specializes once per concrete shape", async
   const path = join(directory, "runtime-function-choice.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "sig run = Int -> Int;",
-      "let run = fn flag => do",
-      "  let selected = if flag > 0 then fn value => value.x",
-      "    else fn value => value.x end;",
-      "  let left = selected { .x = 20; .y = 1; };",
-      "  let right = selected { .x = 22; .z = 2; };",
-      "  return left + right;",
-      "end;",
-      "return { .run = run; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+sig run = Int -> Int
+let run = fn flag =>
+  let selected = if flag > 0 then fn value => value.x
+  else fn value => value.x
+  let left = selected { .x = 20; .y = 1; }
+  let right = selected { .x = 22; .z = 2; }
+  return left + right
+return { .run = run; }
+`,
   );
 
   for (const flag of [0n, 1n]) {
@@ -821,13 +821,14 @@ Deno.test("a generalized destructuring takes its shape from the call site", asyn
   const path = join(directory, "flowed-pattern.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "let get_x = fn v => do let { .x = a; } = v; return a; end;",
-      "sig at = Int -> Int;",
-      "let at = fn n => get_x { .x = n; .y = 0; };",
-      "return { .at = at; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+let get_x = fn v =>
+  let { .x = a; } = v
+  return a
+sig at = Int -> Int
+let at = fn n => get_x { .x = n; .y = 0; }
+return { .at = at; }
+`,
   );
 
   assertEquals(
@@ -844,14 +845,13 @@ Deno.test("a destructured parameter takes its shape from each call site", async 
   const path = join(directory, "parameter-pattern-shapes.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "let get_x = fn { .x = value; } => value;",
-      "sig at = Int -> Int;",
-      "let at = fn n => get_x { .x = n; .y = 0; } +",
-      "  get_x { .x = 0; .z = n; };",
-      "return { .at = at; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+let get_x = fn { .x = value; } => value
+sig at = Int -> Int
+let at = fn n => get_x { .x = n; .y = 0; } +
+  get_x { .x = 0; .z = n; }
+return { .at = at; }
+`,
   );
 
   assertEquals(
@@ -868,15 +868,14 @@ Deno.test("call specialization preserves a lambda's lexical captures", async () 
   const path = join(directory, "lexical-specialization.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "let value = 1;",
-      "let read = fn () => value;",
-      "let value = 2;",
-      "sig at = Unit -> Int;",
-      "let at = fn _ => read ();",
-      "return { .at = at; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+let value = 1
+let read = fn () => value
+let value = 2
+sig at = Unit -> Int
+let at = fn _ => read ()
+return { .at = at; }
+`,
   );
 
   assertEquals(
@@ -889,17 +888,17 @@ Deno.test("structural specialization crosses an imported module", async () => {
   const directory = await Deno.makeTempDir();
   await Deno.writeTextFile(
     join(directory, "projection.blot"),
-    "return { .get_x = fn value => value.x; };",
+    `return { .get_x = fn value => value.x; }
+`,
   );
   const path = join(directory, "root.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      'const projection = @import "./projection.blot" ();',
-      "return projection.get_x { .x = 1; .y = 2; } +",
-      "  projection.get_x { .x = 3; .z = 4; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const projection = @import "./projection.blot" ()
+return projection.get_x { .x = 1; .y = 2; } +
+  projection.get_x { .x = 3; .z = 4; }
+`,
   );
 
   await validateLowering(path);
@@ -920,16 +919,20 @@ Deno.test("Store values cross named exports as arrays", async () => {
 
 Deno.test("indexed iteration carries a bounds proof into a dynamic loop", async () => {
   const path = await fixture("indexed-runtime.blot", [
-    'open @import "blot:prelude" ();',
-    "sig sum = [Int] -> Int;",
-    "let sum = fn values => do",
-    "  let total = 0;",
-    "  for (index, _) in Iter.indexed values do",
-    "    total := total + @array.get values index;",
-    "  end;",
-    "  return total;",
-    "end;",
-    "return { .sum = sum; };",
+    `open @import "blot:prelude" ()
+`,
+    `sig sum = [Int] -> Int
+`,
+    "let sum = fn values =>",
+    `  let total = 0
+`,
+    "  for (index, _) in Iter.indexed values:",
+    `    total := total + @array.get values index
+`,
+    `  return total
+`,
+    `return { .sum = sum; }
+`,
   ]);
   assertEquals(
     await runLoweringExport(path, "sum", [{
@@ -985,13 +988,20 @@ async function fixture(
 Deno.test("linear array updates carry ownership into gpufuck Store operations", async () => {
   const updates = await storeUpdates(
     await fixture("owned-arrays.blot", [
-      "let shared = [1, 2, 3];",
-      "let copied = @array.set shared 0 4;",
-      "let !set_source = [1, 2, 3];",
-      "let replaced = @array.set set_source 0 4;",
-      "let !push_source = [1, 2, 3];",
-      "let appended = @array.push push_source 4;",
-      "return @int.add (@int.add (@array.get copied 0) (@array.get replaced 0)) (@array.get appended 3);",
+      `let shared = [1, 2, 3]
+`,
+      `let copied = @array.set shared 0 4
+`,
+      `let !set_source = [1, 2, 3]
+`,
+      `let replaced = @array.set set_source 0 4
+`,
+      `let !push_source = [1, 2, 3]
+`,
+      `let appended = @array.push push_source 4
+`,
+      `return @int.add (@int.add (@array.get copied 0) (@array.get replaced 0)) (@array.get appended 3)
+`,
     ]),
   );
 
@@ -1015,17 +1025,20 @@ Deno.test("linear array updates carry ownership into gpufuck Store operations", 
 Deno.test("a recursive group member does not own a store its sibling reads", async () => {
   const updates = await storeUpdates(
     await fixture("group-shared-array.blot", [
-      'open @import "blot:prelude" ();',
-      "let !cells = [7, 2, 3];",
+      `open @import "blot:prelude" ()
+`,
+      `let !cells = [7, 2, 3]
+`,
       "let peek = rec (fn n => case Array.get ((&cells), n) of",
-      "  #Some value => value,",
+      "  #Some value => value",
       "  #None => 0",
-      "end);",
-      "let write = rec (fn n => @array.set cells 0 n);",
+      ")",
+      `let write = rec (fn n => @array.set cells 0 n)
+`,
       "return @int.add (case Array.get (write 1, 0) of",
-      "  #Some value => value,",
+      "  #Some value => value",
       "  #None => 0",
-      "end) (peek 0);",
+      ") (peek 0)",
     ]),
   );
   assertEquals(updates.filter((update) => update.owned), []);
@@ -1038,22 +1051,35 @@ Deno.test("a recursive group member does not own a store its sibling reads", asy
 for (
   const [order, members] of [
     ["a sibling declared before it", [
-      "let start = rec (fn n => case Array.get (bump n, 0) of #Some value => value, #None => 0 end);",
-      "let bump = rec (fn n => @array.set cells 0 n);",
+      `let start = rec (fn n => case Array.get (bump n, 0) of
+  #Some value => value
+  #None => 0
+)
+`,
+      `let bump = rec (fn n => @array.set cells 0 n)
+`,
     ]],
     ["a sibling declared after it", [
-      "let bump = rec (fn n => @array.set cells 0 n);",
-      "let start = rec (fn n => case Array.get (bump n, 0) of #Some value => value, #None => 0 end);",
+      `let bump = rec (fn n => @array.set cells 0 n)
+`,
+      `let start = rec (fn n => case Array.get (bump n, 0) of
+  #Some value => value
+  #None => 0
+)
+`,
     ]],
   ] as const
 ) {
   Deno.test(`a recursive group member owns the store it alone reads, called by ${order}`, async () => {
     const updates = await storeUpdates(
       await fixture("group-owned-array.blot", [
-        'open @import "blot:prelude" ();',
-        "let !cells = [7, 2, 3];",
+        `open @import "blot:prelude" ()
+`,
+        `let !cells = [7, 2, 3]
+`,
         ...members,
-        "return start 4;",
+        `return start 4
+`,
       ]),
     );
     assertEquals(
@@ -1069,14 +1095,14 @@ Deno.test("text primitives are self-contained in emitted WebAssembly", async () 
   await Deno.writeTextFile(
     path,
     [
-      'open @import "blot:prelude" ();',
+      'open @import "blot:prelude" ()',
       "return {",
       '  .length = @text.len "a😀";',
       "  .rendered = @text.of_int (-9223372036854775808);",
       '  .ordering = @text.cmp "a" "b";',
       '  .contains = @text.contains "GPU frontend" "front";',
       '  .missing = @text.contains "GPU frontend" "back";',
-      "};",
+      "}",
     ].join("\n"),
   );
 
@@ -1112,18 +1138,15 @@ Deno.test("a generalized variant match resolves a wildcard's constructor set", a
   const path = join(directory, "generalized-variant.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "let is_some = fn option => case option of",
-      "  #Some _ => True,",
-      "  _ => False",
-      "end;",
-      "sig at = Int -> Bool;",
-      "let at = fn value => if value > 0 then",
-      "  is_some (Some value)",
-      "else is_some None end;",
-      "return { .at = at; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+let is_some = fn option => case option of
+  #Some _ => True
+  _ => False
+sig at = Int -> Bool
+let at = fn value => if value > 0 then is_some (Some value)
+else is_some None
+return { .at = at; }
+`,
   );
 
   assertEquals(
@@ -1147,13 +1170,12 @@ Deno.test("host effects publish structural first-order imports", async () => {
   const path = join(directory, "structural-host.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "const Pair = { .left = Int; .right = Int; };",
-      "const Exchange = @effect.host { .swap = Pair -> Pair; };",
-      "pair <- Exchange.swap { .left = 20; .right = 22; };",
-      "return pair;",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const Pair = { .left = Int; .right = Int; }
+const Exchange = @effect.host { .swap = Pair -> Pair; }
+pair <- Exchange.swap { .left = 20; .right = 22; }
+return pair
+`,
   );
 
   const manifest = await validateLowering(path);
@@ -1169,20 +1191,18 @@ Deno.test("residual Wasm lowers integer control and structural host effects", as
   const path = join(directory, "residual-host-records.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "const Host = @effect.host {",
-      "  .read = Unit -> { .kind = Int; .target = Int; };",
-      "  .write = { .active = Bool; .kind = Int; .label = Str; } -> Unit;",
-      "};",
-      "const ready = 1;",
-      "event <- Host.read ();",
-      "_ <- case event.kind of",
-      "  #(ready) => Host.write { .active = True; .kind = event.kind + 1; .label = @text.of_int event.target; },",
-      '  _ => Host.write { .active = False; .kind = 0; .label = "idle"; }',
-      "end;",
-      "return ();",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const Host = @effect.host {
+  .read = Unit -> { .kind = Int; .target = Int; };
+  .write = { .active = Bool; .kind = Int; .label = Str; } -> Unit;
+  }
+const ready = 1
+event <- Host.read ()
+_ <- case event.kind of
+  #(ready) => Host.write { .active = True; .kind = event.kind + 1; .label = @text.of_int event.target; }
+  _ => Host.write { .active = False; .kind = 0; .label = "idle"; }
+return ()
+`,
   );
 
   const [outcome] = await buildBatch([path]);
@@ -1196,11 +1216,10 @@ Deno.test("module-result spreads preserve last-wins export staging", async () =>
   const path = join(directory, "spread.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "const base = { .a = 1; .kind = Int; };",
-      "return { ...base; .a = 2; .b = 3; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const base = { .a = 1; .kind = Int; }
+return { ...base; .a = 2; .b = 3; }
+`,
   );
 
   const manifest = await validateLowering(path);
@@ -1230,12 +1249,11 @@ Deno.test("residual module-result spreads still declare every export", async () 
   const path = join(directory, "residual-spread.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "const Source = @effect.host { .read = Unit -> Int; };",
-      "base <- { .a = Source.read (); .b = 2; };",
-      "return { ...base; .a = 3; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const Source = @effect.host { .read = Unit -> Int; }
+base <- { .a = Source.read (); .b = 2; }
+return { ...base; .a = 3; }
+`,
   );
 
   const manifest = await validateLowering(path);
@@ -1258,15 +1276,13 @@ Deno.test("proved array reads reach gpufuck with their bounds checks removed", a
   const path = join(directory, "proved-read.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "sig at = Int -> Int;",
-      "let at = fn value => do",
-      "  let [only] = [value];",
-      "  return only;",
-      "end;",
-      "return { .at = at; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+sig at = Int -> Int
+let at = fn value =>
+  let [only] = [value]
+  return only
+return { .at = at; }
+`,
   );
 
   const built = await build(path);
@@ -1286,17 +1302,15 @@ Deno.test("a reachable @panic traps with the reason the program gave", async () 
   const path = join(directory, "panic.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "const Source = @effect.host { .read = Unit -> Int; };",
-      "sig pick = Int -> Int;",
-      "let pick = fn n => case n of",
-      "  0 => 100,",
-      '  _ => @panic "pick expects zero"',
-      "end;",
-      "value <- Source.read ();",
-      "return { .ok = pick value; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const Source = @effect.host { .read = Unit -> Int; }
+sig pick = Int -> Int
+let pick = fn n => case n of
+  0 => 100
+  _ => @panic "pick expects zero"
+value <- Source.read ()
+return { .ok = pick value; }
+`,
   );
 
   const manifest = await validateLowering(path);
@@ -1308,11 +1322,10 @@ Deno.test("an unused pure binding does not reach Core", async () => {
   const path = join(directory, "unused-panic.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      'let unused = @panic "unused";',
-      "return { .answer = 42; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+let unused = @panic "unused"
+return { .answer = 42; }
+`,
   );
 
   assertEquals(await runLoweringExport(path, "answer"), {
@@ -1391,18 +1404,30 @@ Deno.test("four-lane operations become SIMD instructions", async () => {
 
 Deno.test("integer vector operations become SIMD instructions", async () => {
   const path = await fixture("integer-simd.blot", [
-    'open @import "blot:prelude" ();',
-    "const Sample = @effect.host { .next = Int -> Int; };",
-    "a <- Sample.next 0;",
-    "b <- Sample.next 1;",
-    "c <- Sample.next 2;",
-    "d <- Sample.next 3;",
-    "let values = Int32x4.of_wrapping (a, b, c, d);",
-    "let shifted = Int32x4.shift_left values 1;",
-    "let bounded = Int32x4.max_signed shifted (Int32x4.splat_wrapping (@int.neg 12));",
-    "let negative = Int32x4.less_signed bounded (Int32x4.splat 0);",
-    "const selected = 2;",
-    "return @int.add (Int32x4.mask_bits negative) (Int32x4.lane values selected);",
+    `open @import "blot:prelude" ()
+`,
+    `const Sample = @effect.host { .next = Int -> Int; }
+`,
+    `a <- Sample.next 0
+`,
+    `b <- Sample.next 1
+`,
+    `c <- Sample.next 2
+`,
+    `d <- Sample.next 3
+`,
+    `let values = Int32x4.of_wrapping (a, b, c, d)
+`,
+    `let shifted = Int32x4.shift_left values 1
+`,
+    `let bounded = Int32x4.max_signed shifted (Int32x4.splat_wrapping (@int.neg 12))
+`,
+    `let negative = Int32x4.less_signed bounded (Int32x4.splat 0)
+`,
+    `const selected = 2
+`,
+    `return @int.add (Int32x4.mask_bits negative) (Int32x4.lane values selected)
+`,
   ]);
   const hir = await prepareGpupaperHir(path);
   const vectorOperators = hir.functions.flatMap((function_) =>
@@ -1431,12 +1456,12 @@ Deno.test("unlikely conditions become Wasm branch metadata", async () => {
   const path = join(directory, "unlikely.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "const Source = @effect.host { .ready = Unit -> Bool; };",
-      "ready <- Source.ready ();",
-      "return if unlikely ready then 1 else 2 end;",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const Source = @effect.host { .ready = Unit -> Bool; }
+ready <- Source.ready ()
+return if unlikely ready then 1
+else 2
+`,
   );
   const built = await build(path);
   const module = new WebAssembly.Module(Uint8Array.from(built.wasm));
@@ -1592,12 +1617,11 @@ Deno.test("a program with no vectors carries none of their machinery", async () 
   const path = join(directory, "plain.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "const Source = @effect.host { .read = Unit -> Int; };",
-      "value <- Source.read ();",
-      "return value + 1;",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const Source = @effect.host { .read = Unit -> Int; }
+value <- Source.read ()
+return value + 1
+`,
   );
 
   const built = await build(path);
@@ -1622,7 +1646,12 @@ Deno.test("scalar floats cross the boundary while F32x4 remains private", async 
     const path = join(directory, `${name}.blot`);
     await Deno.writeTextFile(
       path,
-      ['open @import "blot:prelude" ();', `return ${result};`].join(
+      [
+        `open @import "blot:prelude" ()
+`,
+        `return ${result}
+`,
+      ].join(
         "\n",
       ),
     );
@@ -1662,7 +1691,11 @@ async function tupleCase(
   const path = join(directory, `${name}.blot`);
   await Deno.writeTextFile(
     path,
-    ['open @import "blot:prelude" ();', ...lines].join("\n"),
+    [
+      `open @import "blot:prelude" ()
+`,
+      ...lines,
+    ].join("\n"),
   );
   return await runLowering(path);
 }
@@ -1675,8 +1708,8 @@ Deno.test("a tuple `case` reads each element from its own position", async () =>
     await tupleCase(directory, "columns", [
       "let difference = fn pair => case pair of",
       "  (a, b) => a - b",
-      "end;",
-      "return difference (9, 4);",
+      `return difference (9, 4)
+`,
     ]),
     { kind: "signed-integer-64", value: 5n },
   );
@@ -1689,37 +1722,40 @@ Deno.test("overlapping tuple arms fire in source order", async () => {
   const directory = await Deno.makeTempDir();
   const quadrant = [
     "let quadrant = fn point => case point of",
-    "  (0, 0) => 1,",
-    "  (0, _) => 2,",
-    "  (_, 0) => 3,",
+    "  (0, 0) => 1",
+    "  (0, _) => 2",
+    "  (_, 0) => 3",
     "  (x, y) => 4 + x * y",
-    "end;",
   ];
   assertEquals(
     await tupleCase(directory, "origin", [
       ...quadrant,
-      "return quadrant (0, 0);",
+      `return quadrant (0, 0)
+`,
     ]),
     { kind: "signed-integer-64", value: 1n },
   );
   assertEquals(
     await tupleCase(directory, "vertical", [
       ...quadrant,
-      "return quadrant (0, 7);",
+      `return quadrant (0, 7)
+`,
     ]),
     { kind: "signed-integer-64", value: 2n },
   );
   assertEquals(
     await tupleCase(directory, "horizontal", [
       ...quadrant,
-      "return quadrant (7, 0);",
+      `return quadrant (7, 0)
+`,
     ]),
     { kind: "signed-integer-64", value: 3n },
   );
   assertEquals(
     await tupleCase(directory, "elsewhere", [
       ...quadrant,
-      "return quadrant (2, 3);",
+      `return quadrant (2, 3)
+`,
     ]),
     { kind: "signed-integer-64", value: 10n },
   );
@@ -1733,20 +1769,19 @@ Deno.test("a tuple `case` matches wider than a pair", async () => {
     await tupleCase(directory, "three", [
       "let place = fn triple => case triple of",
       "  (a, b, c) => a * 100 + b * 10 + c",
-      "end;",
-      "return place (1, 2, 3);",
+      `return place (1, 2, 3)
+`,
     ]),
     { kind: "signed-integer-64", value: 123n },
   );
   assertEquals(
     await tupleCase(directory, "four", [
       "let score = fn roll => case roll of",
-      "  (1, 1, 1, 1) => 100,",
-      "  (a, 2, c, d) => a + c + d,",
+      "  (1, 1, 1, 1) => 100",
+      "  (a, 2, c, d) => a + c + d",
       "  (a, b, c, d) => a * 1000 + b * 100 + c * 10 + d",
-      "end;",
       "return score (1, 1, 1, 1) + score (5, 2, 6, 7) * 10",
-      "  + score (1, 3, 5, 7) * 100000;",
+      "  + score (1, 3, 5, 7) * 100000",
     ]),
     // `100 + 18 * 10 + 1357 * 100000`.
     { kind: "signed-integer-64", value: 135700280n },
@@ -1757,23 +1792,24 @@ Deno.test("a tuple pattern nests, and a wildcard column tests nothing", async ()
   const directory = await Deno.makeTempDir();
   const nested = [
     "let nested = fn value => case value of",
-    "  ((#Some a, b), #None) => a * b,",
-    "  ((#None, b), #Some c) => b + c,",
-    "  (_, #Some c) => c,",
+    "  ((#Some a, b), #None) => a * b",
+    "  ((#None, b), #Some c) => b + c",
+    "  (_, #Some c) => c",
     "  _ => 0",
-    "end;",
   ];
   assertEquals(
     await tupleCase(directory, "inner_left", [
       ...nested,
-      "return nested ((Some 5, 6), None);",
+      `return nested ((Some 5, 6), None)
+`,
     ]),
     { kind: "signed-integer-64", value: 30n },
   );
   assertEquals(
     await tupleCase(directory, "inner_right", [
       ...nested,
-      "return nested ((None, 5), Some 6);",
+      `return nested ((None, 5), Some 6)
+`,
     ]),
     { kind: "signed-integer-64", value: 11n },
   );
@@ -1784,7 +1820,8 @@ Deno.test("a tuple pattern nests, and a wildcard column tests nothing", async ()
   assertEquals(
     await tupleCase(directory, "inner_fallthrough", [
       ...nested,
-      "return nested ((Some 5, 6), Some 7);",
+      `return nested ((Some 5, 6), Some 7)
+`,
     ]),
     { kind: "signed-integer-64", value: 7n },
   );
@@ -1797,13 +1834,12 @@ Deno.test("a tuple `case` matches booleans and text as themselves", async () => 
   assertEquals(
     await tupleCase(directory, "mixed", [
       "let label = fn value => case value of",
-      '  (#True, "ready") => 1,',
-      "  (#True, _) => 2,",
-      '  (#False, "ready") => 3,',
+      '  (#True, "ready") => 1',
+      "  (#True, _) => 2",
+      '  (#False, "ready") => 3',
       "  (_, _) => 4",
-      "end;",
       'return label (True, "ready") + label (True, "busy") * 10',
-      '  + label (False, "ready") * 100 + label (False, "busy") * 1000;',
+      '  + label (False, "ready") * 100 + label (False, "busy") * 1000',
     ]),
     { kind: "signed-integer-64", value: 4321n },
   );
@@ -1815,12 +1851,11 @@ Deno.test("an arm naming the whole tuple binds the scrutinee", async () => {
     await tupleCase(directory, "whole", [
       "let difference = fn pair => case pair of",
       "  (a, b) => a - b",
-      "end;",
       "let rest = fn pair => case pair of",
-      "  (0, y) => y,",
+      "  (0, y) => y",
       "  whole => difference whole",
-      "end;",
-      "return rest (0, 8) + rest (9, 4) * 10;",
+      `return rest (0, 8) + rest (9, 4) * 10
+`,
     ]),
     { kind: "signed-integer-64", value: 58n },
   );
@@ -1831,18 +1866,15 @@ Deno.test("a shape inside a tuple pattern specializes at each call site", async 
   const path = join(directory, "shape_column.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "let total = fn pair => case pair of",
-      "  ({ .x; }, #Some b) => x + b,",
-      "  _ => 0",
-      "end;",
-      "sig at = Int -> Int;",
-      "let at = fn value =>",
-      "  total ({ .x = value; .y = 2; }, Some 3) +",
-      "  total ({ .x = 0; .z = value; }, Some 5);",
-      "return { .at = at; };",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+let total = fn pair => case pair of
+  ({ .x; }, #Some b) => x + b
+  _ => 0
+sig at = Int -> Int
+let at = fn value => total ({ .x = value; .y = 2; }, Some 3) +
+  total ({ .x = 0; .z = value; }, Some 5)
+return { .at = at; }
+`,
   );
 
   assertEquals(
@@ -1862,12 +1894,13 @@ Deno.test("a `let` recursive group reaches WebAssembly", async () => {
   const path = join(directory, "mutual.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "let is_even = rec (fn n => if n == 0 then 1 else is_odd (n - 1) end);",
-      "let is_odd = rec (fn n => if n == 0 then 0 else is_even (n - 1) end);",
-      "return is_even 11;",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+let is_even = rec (fn n => if n == 0 then 1
+else is_odd (n - 1))
+let is_odd = rec (fn n => if n == 0 then 0
+else is_even (n - 1))
+return is_even 11
+`,
   );
 
   assertEquals(await runLowering(path), {
@@ -1884,15 +1917,14 @@ Deno.test("a recursive group's members keep what they captured", async () => {
   const path = join(directory, "captured.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "let total = fn step => do",
-      "  let down = rec (fn n => if n < step then 0 else n + up (n - step) end);",
-      "  let up = rec (fn n => down n);",
-      "  return up 10;",
-      "end;",
-      "return total 3;",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+let total = fn step =>
+  let down = rec (fn n => if n < step then 0
+  else n + up (n - step))
+  let up = rec (fn n => down n)
+  return up 10
+return total 3
+`,
   );
 
   assertEquals(await runLowering(path), {
@@ -1909,13 +1941,14 @@ Deno.test("a `const` recursive group reaches WebAssembly", async () => {
   const path = join(directory, "mutual_const.blot");
   await Deno.writeTextFile(
     path,
-    [
-      'open @import "blot:prelude" ();',
-      "const even = rec (fn n => if n == 0 then 1 else odd (n - 1) end);",
-      "const odd = rec (fn n => if n == 0 then 0 else even (n - 1) end);",
-      "let counted = fn n => even n;",
-      "return counted 12;",
-    ].join("\n"),
+    `open @import "blot:prelude" ()
+const even = rec (fn n => if n == 0 then 1
+else odd (n - 1))
+const odd = rec (fn n => if n == 0 then 0
+else even (n - 1))
+let counted = fn n => even n
+return counted 12
+`,
   );
 
   assertEquals(await runLowering(path), {

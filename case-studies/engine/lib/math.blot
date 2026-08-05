@@ -21,72 +21,68 @@
 // turn of sines reaches WebAssembly as data and the polynomial that produced it
 // is not in the artifact.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-const PI = 3.141592653589793;
-const TAU = 6.283185307179586;
-const HALF_PI = 1.5707963267948966;
+const PI = 3.141592653589793
+const TAU = 6.283185307179586
+const HALF_PI = 1.5707963267948966
 
 // A turn is 256 steps, which is what the host sends and what a spin counts in.
 // Keeping the table indexed by step rather than by radians is what lets a
 // lookup be an array read instead of a range reduction.
-const TURN = 256;
-const QUARTER = 64;
+const TURN = 256
+const QUARTER = 64
 
-const STEP_RADIANS = Float32.of_float (Float.div TAU 256.0);
+const STEP_RADIANS = Float32.of_float (Float.div TAU 256.0)
 
-const radians = fn steps => Float32.mul (Float32.of_int steps) STEP_RADIANS;
+const radians = fn steps => Float32.mul (Float32.of_int steps) STEP_RADIANS
 
 // sin over [0, pi/2], seven terms. Odd powers only, and evaluated left to
 // right so each is the previous one times x squared — which keeps the largest
 // intermediate at x to the thirteenth rather than a factorial.
-const sin_quarter = fn k => do
-  let x = Float.mul (Float.of_int k) (Float.div HALF_PI (Float.of_int QUARTER));
-  let x2 = Float.mul x x;
-  let x3 = Float.mul x2 x;
-  let x5 = Float.mul x3 x2;
-  let x7 = Float.mul x5 x2;
-  let x9 = Float.mul x7 x2;
-  let x11 = Float.mul x9 x2;
-  let x13 = Float.mul x11 x2;
+const sin_quarter = fn k =>
+  let x = Float.mul (Float.of_int k) (Float.div HALF_PI (Float.of_int QUARTER))
+  let x2 = Float.mul x x
+  let x3 = Float.mul x2 x
+  let x5 = Float.mul x3 x2
+  let x7 = Float.mul x5 x2
+  let x9 = Float.mul x7 x2
+  let x11 = Float.mul x9 x2
+  let x13 = Float.mul x11 x2
   return Float.add
-  (Float.sub
-  (Float.add
-  (Float.sub
-  (Float.add
-  (Float.sub x (Float.div x3 6.0))
-  (Float.div x5 120.0))
-  (Float.div x7 5040.0))
-  (Float.div x9 362880.0))
-  (Float.div x11 39916800.0))
-  (Float.div x13 6227020800.0);
-end;
+    (Float.sub
+    (Float.add
+    (Float.sub
+    (Float.add
+    (Float.sub x (Float.div x3 6.0))
+    (Float.div x5 120.0))
+    (Float.div x7 5040.0))
+    (Float.div x9 362880.0))
+    (Float.div x11 39916800.0))
+    (Float.div x13 6227020800.0)
 
 const table = fold (
-upto (0, QUARTER + 1),
-@array.empty,
-(fn (built, k) => @array.push built (Float32.of_float (sin_quarter k)))
-);
+  upto (0, QUARTER + 1),
+  @array.empty,
+  (fn (built, k) => @array.push built (Float32.of_float (sin_quarter k)))
+  )
 
 const table_at = fn index => case Array.get (table, index) of
-  #Some value => value,
+  #Some value => value
   #None => Float32.of_int 0
-end;
 
 // `steps` is any integer; the quadrant decides which end of the table to read
 // and which sign to give it.
-const sin_steps = fn steps => do
-  let a = @int.rem (@int.rem steps TURN + TURN) TURN;
-  let quadrant = a / QUARTER;
-  let step = @int.rem a QUARTER;
+const sin_steps = fn steps =>
+  let a = @int.rem (@int.rem steps TURN + TURN) TURN
+  let quadrant = a / QUARTER
+  let step = @int.rem a QUARTER
   return if quadrant == 0 then table_at step
-    else if quadrant == 1 then table_at (QUARTER - step)
-    else if quadrant == 2 then Float32.negate (table_at step)
-    else Float32.negate (table_at (QUARTER - step))
-  end;
-end;
+  else if quadrant == 1 then table_at (QUARTER - step)
+  else if quadrant == 2 then Float32.negate (table_at step)
+  else Float32.negate (table_at (QUARTER - step))
 
-const cos_steps = fn steps => sin_steps (steps + QUARTER);
+const cos_steps = fn steps => sin_steps (steps + QUARTER)
 
 return {
   .pi = Float32.of_float PI;
@@ -97,4 +93,4 @@ return {
   .sin = sin_steps;
   .cos = cos_steps;
   .sqrt = Float32.sqrt;
-};
+  }

@@ -10,12 +10,11 @@
 // it is a parameter, nothing is proved, and the `case` is judged against the
 // whole of `1 | 2 | 3`.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-sig name = 1 | 2 | 3 -> (1 | 2 -> Str);
-let name = fn n => fn m => if n == m
-  then "same"
-  else case n of 3 => "three" end
-end;
+sig name = 1 | 2 | 3 -> (1 | 2 -> Str)
+let name = fn n => fn m => if n == m then "same"
+else case n of
+    3 => "three"
 
-return name 1 2;
+return name 1 2

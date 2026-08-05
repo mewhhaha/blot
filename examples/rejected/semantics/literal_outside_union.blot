@@ -1,8 +1,8 @@
 // Literals are singleton types, so a union of them is a real constraint rather
 // than documentation.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-sig level = 1 | 2 | 3;
-let level = 7;
-return level;
+sig level = 1 | 2 | 3
+let level = 7
+return level

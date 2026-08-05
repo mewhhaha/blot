@@ -1,16 +1,12 @@
 ; Indentation.
 ;
-; Every variable-width region in blot carries an explicit terminator, because
-; the GPU profile requires a locatable boundary. That makes indentation
-; unusually mechanical: indent inside each region, outdent on its terminator.
+; Layout suites and delimited collections define every indentation region.
 
 [
   (block)
-  (conditional)
-  (conditional_statement)
+  (statement_suite)
   (case_expression)
   (handler_composition)
-  (iteration)
   (shape)
   (shape_pattern)
   (array)
@@ -21,7 +17,6 @@
 ] @indent
 
 [
-  "end"
   "}"
   "]"
   ")"

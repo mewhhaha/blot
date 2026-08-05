@@ -31,16 +31,13 @@ const INDENTED_RULES = new Set([
   "array_pattern",
   "block",
   "case_expression",
-  "conditional",
-  "conditional_statement",
   "effect_row",
   "element_expression",
   "handler_composition",
-  "iteration",
-  "lambda",
   "operator_section",
   "shape",
   "shape_pattern",
+  "statement_suite",
 ]);
 
 /**
@@ -76,7 +73,7 @@ export async function formatSource(source: string): Promise<FormatResult> {
   const formatted = lines.map((line, index) => {
     const content = line.trim();
     if (content === "") return "";
-    const closesRegion = /^(end\b|[}\])]|<\/)/.test(content);
+    const closesRegion = /^(else\b|[}\])]|<\/)/.test(content);
     const openingLines = new Set<number>();
     for (const region of regions) {
       if (index <= region.startsAtLine) continue;
@@ -231,7 +228,13 @@ function collectIndentRegions(
 ): void {
   if (node.type !== "rule") return;
   if (INDENTED_RULES.has(node.name)) {
-    const startsAtLine = lineAtOffset(lineStarts, node.span.start);
+    let startsAtLine = lineAtOffset(lineStarts, node.span.start);
+    if (
+      (node.name === "block" || node.name === "statement_suite") &&
+      startsAtLine > 0
+    ) {
+      startsAtLine -= 1;
+    }
     const endsAtLine = lineAtOffset(
       lineStarts,
       Math.max(node.span.start, node.span.end - 1),
@@ -240,7 +243,7 @@ function collectIndentRegions(
       regions.push({
         startsAtLine,
         endsAtLine,
-        includesLastLine: node.name === "lambda",
+        includesLastLine: node.name === "block",
       });
     }
   }

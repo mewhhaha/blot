@@ -2,14 +2,16 @@
 // Recognition interrogates the closure itself, so this constant cannot narrow
 // `n` and the one-arm case remains non-exhaustive.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-const Eq = { .eq = fn _ => fn _ => True; .ne = fn _ => fn _ => False; };
+const Eq = { .eq = fn _ => fn _ => True; .ne = fn _ => fn _ => False; }
 
-sig name = 1 | 2 | 3 -> Str;
-let name = fn n => if n == 1
-  then case n of 1 => "one" end
-  else case n of 2 => "two", 3 => "three" end
-end;
+sig name = 1 | 2 | 3 -> Str
+let name = fn n => if n == 1 then case n of
+  1 => "one"
 
-return name 2;
+else case n of
+    2 => "two"
+    3 => "three"
+
+return name 2

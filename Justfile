@@ -45,6 +45,11 @@ format file:
 format-check file:
   deno run --allow-read src/cli.ts fmt --check {{file}}
 
+# Rewrite legacy do/end source into canonical indentation syntax. Directories
+# are traversed recursively, and every rewritten file is AST-checked first.
+migrate-layout *paths:
+  deno task migrate:layout {{paths}}
+
 # Last-use and linearity facts, for the backend that will consume them.
 ownership file:
   deno run --allow-read src/cli.ts ownership {{file}}

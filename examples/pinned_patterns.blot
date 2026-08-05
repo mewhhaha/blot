@@ -1,28 +1,25 @@
 // A pin tests a value against an existing binding without shadowing it.
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-let wanted = 2;
+let wanted = 2
 
 let classify = fn value => case value of
-  #(wanted) => "wanted",
+  #(wanted) => "wanted"
   _ => "other"
-end;
 
-let greeting = "hello";
+let greeting = "hello"
 let greeted = case "hello" of
-  #(greeting) => True,
+  #(greeting) => True
   _ => False
-end;
 
 let payload = case #Code 2 of
-  #Code #(wanted) => wanted,
+  #Code #(wanted) => wanted
   _ => 0
-end;
 
 return {
   .same = classify 2;
   .different = classify 3;
   .greeted = greeted;
   .payload = payload;
-};
+  }

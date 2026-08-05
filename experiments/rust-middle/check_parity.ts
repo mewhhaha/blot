@@ -3,6 +3,7 @@ import { BlotError } from "../../src/diagnostic.ts";
 import { checkFile } from "../../src/check/mod.ts";
 import { load, type Loaded, LoadError } from "../../src/load.ts";
 import { RustMiddle } from "../../src/backend/rust_middle_wasm.ts";
+import { layoutSource } from "./layout_source.ts";
 
 const wasm = await Deno.readFile(
   new URL("../../generated/rust-middle/compiler.wasm", import.meta.url),
@@ -28,7 +29,7 @@ try {
     const added = rust.addCompilerSessionModule(
       session,
       loaded.path,
-      loaded.source,
+      (await layoutSource(loaded.path, loaded.source)).source,
     );
     if (!added.ok) throw new Error(`${loaded.path}: ${added.message}`);
   }

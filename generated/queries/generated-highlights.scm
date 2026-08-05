@@ -10,6 +10,7 @@
 "," @punctuation.delimiter
 "." @punctuation.delimiter
 "..." @operator
+":" @punctuation.delimiter
 ":=" @operator
 ";" @punctuation.delimiter
 "<-" @operator

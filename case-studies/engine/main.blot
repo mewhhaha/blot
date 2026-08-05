@@ -35,15 +35,15 @@
 // workaround. It resolves to whatever `Eq.ne` the prelude opened below.
 operators {
   infix 40 (!=) = Eq.ne;
-};
+}
 
-open @import "blot:prelude" ();
+open @import "blot:prelude" ()
 
-const E = (@import "./lib/ecs.blot") ();
-const M = (@import "./lib/math.blot") ();
-const R = (@import "./lib/render.blot") ();
+const E = (@import "./lib/ecs.blot") ()
+const M = (@import "./lib/math.blot") ()
+const R = (@import "./lib/render.blot") ()
 
-const Store = E.Store;
+const Store = E.Store
 
 // --- the host boundary ------------------------------------------------------
 //
@@ -55,22 +55,22 @@ const Assets = @effect.host {
   .generation = Unit -> Int;
   .count = Unit -> Int;
   .entry = Int -> {
-    .kind = Int;
-    .x = Int; .y = Int; .z = Int;
-    .scale = Int;
-    .spin = Int;
-    .colour = Str;
+  .kind = Int;
+  .x = Int; .y = Int; .z = Int;
+  .scale = Int;
+  .spin = Int;
+  .colour = Str;
   };
-};
+  }
 
 const Host = @effect.host {
   .frame = Unit -> Int;
-};
+  }
 
 // The scene file says a box or a texture, and the renderer offers a call for
 // each. Which integer means which is the scene format's business, so the
 // dispatch is here rather than inside the renderer.
-const KIND_MESH = 0;
+const KIND_MESH = 0
 
 // --- components -------------------------------------------------------------
 
@@ -83,18 +83,18 @@ const Transform = {
   .angle = Int;
   .spin = Int;
   .scale = F32;
-};
-const Model = { .kind = Int; .colour = Str; };
+  }
+const Model = { .kind = Int; .colour = Str; }
 
 // --- systems ----------------------------------------------------------------
 
-sig advance = Store Transform -> Store Transform;
+sig advance = Store Transform -> Store Transform
 let advance = fn ts => E.each_1 (ts, (fn t => {
   .position = t.position;
   .angle = @int.rem (t.angle + t.spin) M.turn;
   .spin = t.spin;
   .scale = t.scale;
-}));
+  }))
 
 // The two loaders below name their rows: an effectful arrow's type includes
 // what it performs, and `~ { Assets }` is how a signature says so. `render`
@@ -108,21 +108,15 @@ let advance = fn ts => E.each_1 (ts, (fn t => {
 // brush takes placement and a colour rather than a component, because a record
 // carries its whole field set across a module boundary and the renderer has no
 // business knowing that a transform of this game's also has a spin.
-let render = fn (transforms, models) => do
-  _ <- R.frame (fn draw => do
-    _ <- E.visit_2 (transforms, models, (fn (transform, model) => do
-      _ <- if model.kind == KIND_MESH
-        then draw.mesh (
+let render = fn (transforms, models) =>
+  _ <- R.frame (fn draw =>
+    _ <- E.visit_2 (transforms, models, (fn (transform, model) =>
+      _ <- if model.kind == KIND_MESH then draw.mesh (
         transform.position, transform.angle, transform.scale, model.colour
         )
-        else draw.sprite (transform.position, transform.scale, model.colour)
-      end;
-
-    end));
-
-  end);
-
-end;
+      else draw.sprite (transform.position, transform.scale, model.colour)
+    ))
+  )
 
 // --- loading ----------------------------------------------------------------
 //
@@ -133,68 +127,60 @@ end;
 // blot module boundary, which costs nothing: the modules are inlined into one
 // artifact.
 
-sig load_transforms = Unit -> Store Transform ~ { Assets };
-let load_transforms = fn () => do
-  count <- Assets.count ();
+sig load_transforms = Unit -> Store Transform ~ { Assets }
+let load_transforms = fn () =>
+  count <- Assets.count ()
   store <- fold (
   upto (0, count),
   @array.empty,
-  (fn (store, id) => do
-    entry <- Assets.entry id;
+  (fn (store, id) =>
+    entry <- Assets.entry id
     return E.attach (store, {
       .position = R.point (entry.x, entry.y, entry.z);
       .angle = 0;
       .spin = entry.spin;
       .scale = R.unit entry.scale;
-    });
-  end)
-  );
-  return store;
-end;
+      })
+  )
+  )
+  return store
 
-sig load_models = Unit -> Store Model ~ { Assets };
-let load_models = fn () => do
-  count <- Assets.count ();
+sig load_models = Unit -> Store Model ~ { Assets }
+let load_models = fn () =>
+  count <- Assets.count ()
   store <- fold (
   upto (0, count),
   @array.empty,
-  (fn (store, id) => do
-    entry <- Assets.entry id;
-    return E.attach (store, { .kind = entry.kind; .colour = entry.colour; });
-  end)
-  );
-  return store;
-end;
+  (fn (store, id) =>
+    entry <- Assets.entry id
+    return E.attach (store, { .kind = entry.kind; .colour = entry.colour; })
+  )
+  )
+  return store
 
 // --- the frame loop ---------------------------------------------------------
 //
 // The two stores and the generation are the accumulator, so this is the world
 // and the fold at once. Adding a component means adding a name.
 
-transforms <- load_transforms ();
-models <- load_models ();
-generation <- Assets.generation ();
-let frames = 0;
+transforms <- load_transforms ()
+models <- load_models ()
+generation <- Assets.generation ()
+let frames = 0
 
-for ever do
-  remaining <- Host.frame ();
+for ever:
+  remaining <- Host.frame ()
   if remaining <= 0 then
-    break;
-  end;
-
+    break
   // Hot reload. The host bumps its generation when a watched file changes, and
   // the world is rebuilt from the new scene; nothing else has to know.
-  current <- Assets.generation ();
+  current <- Assets.generation ()
   if current != generation then
-    transforms <- load_transforms ();
-    models <- load_models ();
-    generation := current;
-  end;
+    transforms <- load_transforms ()
+    models <- load_models ()
+    generation := current
+  transforms := advance transforms
+  _ <- render (transforms, models)
+  frames := frames + 1
 
-  transforms := advance transforms;
-  _ <- render (transforms, models);
-
-  frames := frames + 1;
-end;
-
-return frames;
+return frames
