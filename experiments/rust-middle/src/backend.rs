@@ -22,9 +22,9 @@ const HEAP_CHECKPOINT_GLOBAL: u32 = 5;
 #[derive(Clone, Copy)]
 struct DynamicHelpers {
     realloc: u32,
-    text_compare: u32,
-    utf8_validator: u32,
-    i64_to_text: u32,
+    text_compare: Option<u32>,
+    utf8_validator: Option<u32>,
+    i64_to_text: Option<u32>,
 }
 
 #[derive(Clone, Copy)]
@@ -509,29 +509,52 @@ fn emit_dynamic_module(
     functions.function(realloc_type);
     code.function(&realloc_function());
 
-    let text_compare_type = add_function_type(
-        &mut types,
-        vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
-        vec![ValType::I32],
-    );
-    let text_compare_index = imported_function_count + functions.len();
-    functions.function(text_compare_type);
-    code.function(&text_compare_function());
-
-    let utf8_validator_type =
-        add_function_type(&mut types, vec![ValType::I32, ValType::I32], Vec::new());
-    let utf8_validator_index = imported_function_count + functions.len();
-    functions.function(utf8_validator_type);
-    code.function(&utf8_validator_function());
-
-    let i64_to_text_type = add_function_type(
-        &mut types,
-        vec![ValType::I64],
-        vec![ValType::I32, ValType::I32],
-    );
-    let i64_to_text_index = imported_function_count + functions.len();
-    functions.function(i64_to_text_type);
-    code.function(&i64_to_text_function(realloc_index));
+    let has_operation = |kind: &str| {
+        module.functions.iter().any(|function| {
+            function.blocks.iter().any(|block| {
+                block
+                    .operations
+                    .iter()
+                    .any(|operation| operation.kind == kind)
+            })
+        })
+    };
+    let text_compare_index = if has_operation("text.compare") {
+        let type_index = add_function_type(
+            &mut types,
+            vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
+            vec![ValType::I32],
+        );
+        let function_index = imported_function_count + functions.len();
+        functions.function(type_index);
+        code.function(&text_compare_function());
+        Some(function_index)
+    } else {
+        None
+    };
+    let utf8_validator_index = if has_operation("host.call") {
+        let type_index =
+            add_function_type(&mut types, vec![ValType::I32, ValType::I32], Vec::new());
+        let function_index = imported_function_count + functions.len();
+        functions.function(type_index);
+        code.function(&utf8_validator_function());
+        Some(function_index)
+    } else {
+        None
+    };
+    let i64_to_text_index = if has_operation("text.from-i64") {
+        let type_index = add_function_type(
+            &mut types,
+            vec![ValType::I64],
+            vec![ValType::I32, ValType::I32],
+        );
+        let function_index = imported_function_count + functions.len();
+        functions.function(type_index);
+        code.function(&i64_to_text_function(realloc_index));
+        Some(function_index)
+    } else {
+        None
+    };
     let dynamic_helpers = DynamicHelpers {
         realloc: realloc_index,
         text_compare: text_compare_index,
@@ -803,6 +826,9 @@ fn emit_dynamic_operation(
             }
         },
         "host.call" => {
+            let utf8_validator = helpers.utf8_validator.ok_or_else(|| {
+                format!("{}: host.call omitted the UTF-8 validator", module.source)
+            })?;
             let capability = operation
                 .capability
                 .as_deref()
@@ -853,16 +879,19 @@ fn emit_dynamic_operation(
                     result,
                     &mut flat_index,
                     scratch_length,
-                    helpers.utf8_validator,
+                    utf8_validator,
                 )?;
             }
         }
         "text.compare" => {
+            let text_compare = helpers.text_compare.ok_or_else(|| {
+                format!("{}: text.compare omitted its runtime helper", module.source)
+            })?;
             let left = locals_for(module, value_locals, operation.operands[0])?;
             let right = locals_for(module, value_locals, operation.operands[1])?;
             emit_local_values(instructions, left);
             emit_local_values(instructions, right);
-            instructions.call(helpers.text_compare).local_set(result[0]);
+            instructions.call(text_compare).local_set(result[0]);
         }
         "text.append" => {
             let left = locals_for(module, value_locals, operation.operands[0])?;
@@ -898,10 +927,16 @@ fn emit_dynamic_operation(
                 .local_set(result[1]);
         }
         "text.from-i64" => {
+            let i64_to_text = helpers.i64_to_text.ok_or_else(|| {
+                format!(
+                    "{}: text.from-i64 omitted its runtime helper",
+                    module.source
+                )
+            })?;
             let value = locals_for(module, value_locals, operation.operands[0])?;
             instructions
                 .local_get(value[0])
-                .call(helpers.i64_to_text)
+                .call(i64_to_text)
                 .local_set(result[1])
                 .local_set(result[0]);
         }
