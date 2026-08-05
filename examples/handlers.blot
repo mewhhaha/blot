@@ -18,7 +18,7 @@ const Scale = @effect { .by = Int -> Int; };
 // static error and never resuming is an abort — which is a different feature.
 let doubling = { .bump = fn (n, ?resume) => do
   result <- resume (n * 2);
-  break result;
+  return result;
 end; };
 
 // Resume may appear beneath a block, conditional, or case.
@@ -26,18 +26,18 @@ let stepping = {
   .by = fn (n, ?resume) => do
     let scaled = n * 10;
     result <- resume (if n < 0 then 0 else scaled end);
-    break result;
+    return result;
   end;
 };
 
 let counted = fn () => do
   first <- Counter.bump 20;
   second <- Counter.bump 1;
-  break first + second;
+  return first + second;
 end;
 let scaled = fn () => do
   result <- Scale.by 4;
-  break result;
+  return result;
 end;
 
 // Nested handlers discharge only what they replace.

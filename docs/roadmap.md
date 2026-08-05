@@ -243,7 +243,7 @@ place to answer it.
 where `eval` says `3` when the guard-bound name is returned directly;
 `return v + 0;` is correct, so the join is losing exactly the case where the
 continuation _is_ the bound name. Root-cause in the desugaring
-(`src/syntax/lower.ts`) or in the source-function boundary join
+(`src/syntax/lower.ts`) or in the return-scope boundary join
 (`src/check/infer.ts`); add an inference test pinning `(Int | 999)`.
 
 **1d. A `const` that captures a `let` must refuse in the checker, not at

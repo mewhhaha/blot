@@ -17,17 +17,18 @@ Measured against Baba 9.0.0. These are checked into the repository so that a
 grammar change which quietly degrades parallelism shows up in a diff instead of
 in a benchmark months later.
 
-| counter                    |              blot | note                                               |
-| -------------------------- | ----------------: | -------------------------------------------------- |
-| `lexerStates`              |               126 | direct multiplier in the parallel DFA summary pass |
-| `maxCandidateMultiplicity` |                21 | worst-case island candidates allocated per token   |
-| `islandCount`              |                72 | one island for every grammar rule                  |
-| `islandStates`             |               407 |                                                    |
-| `islandTransitions`        |               409 |                                                    |
-| `contractionRounds`        |                33 | fixed dispatch bound                               |
-| `denseTransitionBytes`     |           625,152 | immutable device table                             |
-| `packedBytes`              |           486,651 | version-3 runtime section                          |
-| `rootLoopIsland`           | 5 (`declaration`) | root loop still proven under general throughput    |
+| counter                     |              blot | note                                               |
+| --------------------------- | ----------------: | -------------------------------------------------- |
+| `lexerStates`               |               126 | direct multiplier in the parallel DFA summary pass |
+| `maxCandidateMultiplicity`  |                21 | worst-case island candidates allocated per token   |
+| `islandCount`               |                72 | one island for every grammar rule                  |
+| `islandStates`              |               406 |                                                    |
+| `islandTransitions`         |               407 |                                                    |
+| `contractionRounds`         |                33 | fixed dispatch bound                               |
+| `denseTransitionBytes`      |           623,616 | immutable device table                             |
+| `packedBytes`               |           485,445 | version-3 runtime section                          |
+| `rootLoopIsland`            | 5 (`declaration`) | root loop still proven under general throughput    |
+| `parallelLongRegionIslands` |                 9 | islands admitted to parallel long-region execution |
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
@@ -138,15 +139,17 @@ Standalone `if` uses `then` as the boundary of its semicolon-bounded statement
 body; expression `if` keeps value branches and requires `else`. Factoring the
 standalone form's shared `if` opener also admits `if let pattern = value else`
 without another branch opener. A bare trailing value after block statements
-conflicted with the shared `IDENT` prefix of `name := ...;`. `break value;`
+conflicted with the shared `IDENT` prefix of `name := ...;`. `return value;`
 keeps the value inside the existing semicolon-bounded statement stream and adds
-no parser resolution.
+no parser resolution. Making `break` loop-only removed one island state, two
+island transitions, 1,536 dense-transition bytes, and 1,206 packed bytes. It
+also raised `parallelLongRegionIslands` from 8 to 9.
 
 `open value;` costs one lexer state and twenty-one island states — one keyword
 and one declaration alternative. A former rename/ignore mask added two rules and
 sixty-six island states. Removing it, removing `do` from statement branches, and
 spelling handler composition with `with` moved the current general-profile plan
-from 74 to 72 islands and from 514,619 to 486,651 packed bytes. Candidate
+from 74 to 72 islands and from 514,619 to 485,445 packed bytes. Candidate
 multiplicity and contraction rounds remain fixed.
 
 `try program with ... end` is one bounded island whose body is a repeated
@@ -232,7 +235,7 @@ The concessions are recorded here so they are not rediscovered as bugs:
 
 - **`return expr;` is a declaration form**, not a trailing bare expression. It
   keeps the root a bounded sequence with an explicit structural boundary.
-- **An expression block exits with `break value;`.** The result remains a
+- **An expression block exits with `return value;`.** The result remains a
   semicolon-terminated statement. A bare result would let `IDENT` begin either
   the result or `name := ...;`, which is an LR conflict and an unbounded GPU
   island.

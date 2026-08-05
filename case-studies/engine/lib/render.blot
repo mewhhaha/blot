@@ -148,7 +148,7 @@ const LIGHT = Vec4.of (lane 0.53, lane 0.76, lane 0.38, ZERO);
 const rotation_of = fn angle => do
   let s = M.sin angle;
   let c = M.cos angle;
-  break {
+  return {
     .to_x = Vec4.of (c, ZERO, s, ZERO);
     .to_z = Vec4.of (Float32.negate s, ZERO, c, ZERO);
   };
@@ -192,7 +192,7 @@ const camera_of = fn (yaw, pitch, distance, lens) => do
   // out to at the camera's own distance — so switching lenses holds the scene
   // at roughly the size it already was, and pulling back still zooms out.
   let zoom = Float32.div FOCAL distance;
-  break {
+  return {
     .eye = Vec4.of (
     Float32.mul distance (Float32.mul cos_pitch sin_yaw),
     Float32.mul distance sin_pitch,
@@ -234,7 +234,7 @@ end;
 const shade_of = fn normal => do
   let dot = Vec4.dot normal LIGHT;
   let lit = if is_less (Float32.cmp dot ZERO) then ZERO else dot end;
-  break 60 + Float32.truncate (Float32.mul lit (lane 195.0));
+  return 60 + Float32.truncate (Float32.mul lit (lane 195.0));
 end;
 
 // One face of one box: place its corners, project them, and hand the host two
@@ -254,7 +254,7 @@ const draw_face = fn (position, angle, scale, colour, camera, face) => do
       #None => Vec4.splat ZERO
     end;
     let spun = turn_y (Vec4.scale (local, scale), rotation);
-    break to_view (Vec4.add spun position, camera);
+    return to_view (Vec4.add spun position, camera);
   end;
 
   let a = corner face.a;

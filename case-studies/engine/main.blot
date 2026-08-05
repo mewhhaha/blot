@@ -141,7 +141,7 @@ let load_transforms = fn () => do
   @array.empty,
   (fn (store, id) => do
     entry <- Assets.entry id;
-    break E.attach (store, {
+    return E.attach (store, {
       .position = R.point (entry.x, entry.y, entry.z);
       .angle = 0;
       .spin = entry.spin;
@@ -149,7 +149,7 @@ let load_transforms = fn () => do
     });
   end)
   );
-  break store;
+  return store;
 end;
 
 sig load_models = Unit -> Store Model ~ { Assets };
@@ -160,10 +160,10 @@ let load_models = fn () => do
   @array.empty,
   (fn (store, id) => do
     entry <- Assets.entry id;
-    break E.attach (store, { .kind = entry.kind; .colour = entry.colour; });
+    return E.attach (store, { .kind = entry.kind; .colour = entry.colour; });
   end)
   );
-  break store;
+  return store;
 end;
 
 // --- the frame loop ---------------------------------------------------------

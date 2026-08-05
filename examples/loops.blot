@@ -54,7 +54,7 @@ let sum = 0;
 for n in Iter.range (1, 4) do
   let doubled = do
     let sum = n * 2;
-    break sum;
+    return sum;
   end;
   sum := sum + doubled;
 end;

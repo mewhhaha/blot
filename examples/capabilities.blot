@@ -20,7 +20,7 @@ const to_host = {
   .write = fn (message, ?resume) => do
     _ <- init.print message;
     result <- resume ();
-    break result;
+    return result;
   end;
   .return = fn value => value;
 };
@@ -30,13 +30,13 @@ const to_host = {
 const report = fn () => do
   _ <- Console.write "compiled";
   _ <- Console.write "linked";
-  break "ok";
+  return "ok";
 end;
 
 const to_memory = {
   .write = fn (message, ?resume) => do
     rest <- resume ();
-    break @text.concat message rest;
+    return @text.concat message rest;
   end;
   .return = fn _ => "";
 };

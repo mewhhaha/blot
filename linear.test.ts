@@ -167,7 +167,7 @@ let first = holder.first ();
 let consume_holder = fn !value => do
   let { .first; .second; } = !value;
   let _ = first ();
-  break second ();
+  return second ();
 end;
 return @int.add first (consume_holder holder);`,
   "BLOT_LINEAR_PARTIAL_REUSE",
@@ -329,10 +329,10 @@ let values = [fn () => consume (!token)];
 let index = if 1 < 2 then 0 else 1 end;
 return case @array.take values index of
   #Taken (selected, remainder) => do
-    break case remainder of _ => selected () end;
+    return case remainder of _ => selected () end;
   end,
   #TakeOutOfBounds original => do
-    break case original of _ => 0 end;
+    return case original of _ => 0 end;
   end
 end;`,
 );
@@ -444,7 +444,7 @@ rejects(
   "a closure carrying a borrow cannot be stored",
   `let inspect = fn &point => do
   let later = fn () => @int.add point.x 0;
-  break later ();
+  return later ();
 end;
 return inspect { .x = 41; };`,
   "BLOT_BORROW_STORED",
@@ -485,7 +485,7 @@ rejects(
 let !token = 41;
 let work = fn () => do
   _ <- Ask.ask ();
-  break consume (!token);
+  return consume (!token);
 end;
 let aborting = { .ask = fn (_, ?resume) => 0; };
 return @handle (Ask, work, aborting);`,
@@ -498,7 +498,7 @@ accepts(
 let !token = 41;
 let work = fn () => do
   _ <- Ask.ask ();
-  break consume (!token);
+  return consume (!token);
 end;
 let resuming = { .ask = fn (_, !resume) => resume (); };
 return @handle (Ask, work, resuming);`,
@@ -510,11 +510,11 @@ accepts(
 let !token = 41;
 let work = fn () => do
   _ <- Ask.ask ();
-  break consume (!token);
+  return consume (!token);
 end;
 let cancelling = { .ask = fn (_, !resume) => do
   _ <- Continuation.cancel resume;
-  break 0;
+  return 0;
 end; };
 return @handle (Ask, work, cancelling);`,
 );
@@ -550,7 +550,7 @@ let work = fn () => do
 end;
 let cancelling = { .ask = fn (_, !resume) => do
   let cancelled = Continuation.cancel resume;
-  break cancelled;
+  return cancelled;
 end; };
 return @handle (Ask, work, cancelling);`,
   "BLOT_UNSEQUENCED_EFFECT",

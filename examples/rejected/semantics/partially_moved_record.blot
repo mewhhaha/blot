@@ -11,7 +11,7 @@ let first = holder.first ();
 let consume_holder = fn !value => do
   let { .first; .second; } = !value;
   let first_value = first ();
-  break first_value + second ();
+  return first_value + second ();
 end;
 
 return first + consume_holder holder;

@@ -26,7 +26,7 @@ struct LoopControl {
 struct LoweringContext<'a> {
     table: &'a FixityTable,
     loop_control: Option<LoopControl>,
-    block_break_constructor: Option<String>,
+    return_scope: bool,
     escape_boundary: EscapeBoundary,
 }
 
@@ -35,7 +35,7 @@ impl<'a> LoweringContext<'a> {
         Self {
             table,
             loop_control: None,
-            block_break_constructor: None,
+            return_scope: true,
             escape_boundary: EscapeBoundary::None,
         }
     }
@@ -44,7 +44,7 @@ impl<'a> LoweringContext<'a> {
         Self {
             table: self.table,
             loop_control: None,
-            block_break_constructor: None,
+            return_scope: false,
             escape_boundary: EscapeBoundary::None,
         }
     }
@@ -53,7 +53,7 @@ impl<'a> LoweringContext<'a> {
         Self {
             table: self.table,
             loop_control: None,
-            block_break_constructor: None,
+            return_scope: false,
             escape_boundary: EscapeBoundary::ValueCondition,
         }
     }
@@ -236,37 +236,20 @@ fn lower_declaration(
         }
         "iteration" => lower_iteration(cst, rule, context, arena),
         "breaking" => {
-            if cst.field(rule, "value")?.is_some() {
-                if context.block_break_constructor.is_none() {
-                    return Err(
-                        "BLOT_BLOCK_BREAK_OUTSIDE_BLOCK: `break value` has no enclosing `do` block."
-                            .to_owned(),
-                    );
-                }
-            } else {
-                if context.escape_boundary == EscapeBoundary::ValueCondition {
-                    return Err(
-                        "BLOT_BREAK_IN_VALUE_CONDITION: `break` cannot escape a value-producing `if` or `case`."
-                            .to_owned(),
-                    );
-                }
-                if context.loop_control.is_none() {
-                    return Err(
-                        "BLOT_BREAK_OUTSIDE_LOOP: `break` has no enclosing `for`.".to_owned()
-                    );
-                }
-            }
-            Err("control break reached declaration lowering".to_owned())
-        }
-        "result" => {
             if context.escape_boundary == EscapeBoundary::ValueCondition {
                 return Err(
-                    "BLOT_RETURN_IN_VALUE_CONDITION: `return` cannot escape a value-producing `if` or `case`."
+                    "BLOT_BREAK_IN_VALUE_CONDITION: `break` cannot escape a value-producing `if` or `case`."
                         .to_owned(),
                 );
             }
-            Err("BLOT_RETURN_OUTSIDE_BODY: `return` has no enclosing body.".to_owned())
+            if context.loop_control.is_none() {
+                return Err("BLOT_BREAK_OUTSIDE_LOOP: `break` has no enclosing `for`.".to_owned());
+            }
+            Err("control break reached declaration lowering".to_owned())
         }
+        "result" => Err(
+            "BLOT_RETURN_OUTSIDE_SCOPE: `return` has no enclosing module or `do` block.".to_owned(),
+        ),
         "conditional_statement" => {
             let body = as_rule(required(cst, rule, "body")?)?;
             if cst.rule_name(body)? == "conditional_statement_guard" {
@@ -488,8 +471,8 @@ fn resolve_control_sequence(
     arena: &mut AstArena,
 ) -> Result<ExpressionId, String> {
     let constructors = ControlConstructors {
-        return_constructor: synthetic_constructor("FunctionReturn", span),
-        continue_constructor: synthetic_constructor("FunctionContinue", span),
+        return_constructor: synthetic_constructor("ScopeReturn", span),
+        continue_constructor: synthetic_constructor("ScopeContinue", span),
     };
     let outcome = lower_control_outcome(
         cst,
@@ -509,19 +492,6 @@ fn resolve_control_sequence(
             span,
         });
         let body = variable("returned$", span, arena);
-        arms.push(Arm { pattern, body });
-    }
-    if statements_contain_block_break(cst, cursors)? {
-        let constructor = context.block_break_constructor.as_ref().ok_or_else(|| {
-            "BLOT_BLOCK_BREAK_OUTSIDE_BLOCK: `break value` has no enclosing `do` block.".to_owned()
-        })?;
-        let payload = control_payload_pattern(Some("blockResult$"), span, arena);
-        let pattern = arena.pattern(Pattern::Constructor {
-            name: constructor.clone(),
-            payload: Some(payload),
-            span,
-        });
-        let body = variable("blockResult$", span, arena);
         arms.push(Arm { pattern, body });
     }
     if statements_can_continue(cst, cursors)? {
@@ -561,9 +531,9 @@ fn lower_control_outcome(
     let rule = statement_rule(cst, first)?;
     let rule_span = cst.span(Cursor::Rule(rule))?;
     if cst.rule_name(rule)? == "result" {
-        if context.escape_boundary == EscapeBoundary::ValueCondition {
+        if !context.return_scope {
             return Err(
-                "BLOT_RETURN_IN_VALUE_CONDITION: `return` cannot escape a value-producing `if` or `case`."
+                "BLOT_RETURN_OUTSIDE_SCOPE: `return` has no enclosing module or `do` block."
                     .to_owned(),
             );
         }
@@ -576,14 +546,6 @@ fn lower_control_outcome(
         ));
     }
     if cst.rule_name(rule)? == "breaking" {
-        if let Some(value) = cst.field(rule, "value")? {
-            let constructor = context.block_break_constructor.as_ref().ok_or_else(|| {
-                "BLOT_BLOCK_BREAK_OUTSIDE_BLOCK: `break value` has no enclosing `do` block."
-                    .to_owned()
-            })?;
-            let value = lower_value(cst, value, context, arena)?;
-            return Ok(control_outcome(constructor, value, rule_span, arena));
-        }
         if let Some(loop_control) = &context.loop_control {
             let state = loop_state(&loop_control.carried, rule_span, arena);
             return Ok(control_outcome(
@@ -628,25 +590,6 @@ fn lower_control_outcome(
             let returned = variable("returned$", rule_span, arena);
             let body =
                 control_outcome(&constructors.return_constructor, returned, rule_span, arena);
-            arms.push(Arm { pattern, body });
-        }
-        if loop_result.block_breaks {
-            let outer_constructor = context.block_break_constructor.as_ref().ok_or_else(|| {
-                "BLOT_BLOCK_BREAK_OUTSIDE_BLOCK: `break value` has no enclosing `do` block."
-                    .to_owned()
-            })?;
-            let loop_constructor = loop_result
-                .block_break_constructor
-                .as_ref()
-                .ok_or_else(|| "loop block break lost its constructor".to_owned())?;
-            let payload = control_payload_pattern(Some("blockResult$"), rule_span, arena);
-            let pattern = arena.pattern(Pattern::Constructor {
-                name: loop_constructor.clone(),
-                payload: Some(payload),
-                span: rule_span,
-            });
-            let result = variable("blockResult$", rule_span, arena);
-            let body = control_outcome(outer_constructor, result, rule_span, arena);
             arms.push(Arm { pattern, body });
         }
         let payload = control_payload_pattern(Some("loopState$"), rule_span, arena);
@@ -796,10 +739,6 @@ fn lower_control_statement(
         if let Some(loop_control) = &mut branch_context.loop_control {
             loop_control.break_constructor = synthetic_constructor("ConditionalBreak", rule_span);
         }
-        if branch_context.block_break_constructor.is_some() {
-            branch_context.block_break_constructor =
-                Some(synthetic_constructor("ConditionalBlockBreak", rule_span));
-        }
     }
     let conditional = lower_control_conditional(
         cst,
@@ -859,24 +798,6 @@ fn lower_control_statement(
         });
         let stopped = variable("stopped$", rule_span, arena);
         let body = control_outcome(&outer_loop.break_constructor, stopped, rule_span, arena);
-        arms.push(Arm { pattern, body });
-    }
-    if statements_contain_block_break(cst, &[Cursor::Rule(rule)])? {
-        let outer_constructor = context.block_break_constructor.as_ref().ok_or_else(|| {
-            "BLOT_BLOCK_BREAK_OUTSIDE_BLOCK: `break value` has no enclosing `do` block.".to_owned()
-        })?;
-        let branch_constructor = branch_context
-            .block_break_constructor
-            .as_ref()
-            .ok_or_else(|| "conditional block break lost its block context".to_owned())?;
-        let payload = control_payload_pattern(Some("blockResult$"), rule_span, arena);
-        let pattern = arena.pattern(Pattern::Constructor {
-            name: branch_constructor.clone(),
-            payload: Some(payload),
-            span: rule_span,
-        });
-        let result = variable("blockResult$", rule_span, arena);
-        let body = control_outcome(outer_constructor, result, rule_span, arena);
         arms.push(Arm { pattern, body });
     }
     Ok(arena.expression(Expression::Case {
@@ -993,8 +914,6 @@ struct LoweredControlLoop {
     value: ExpressionId,
     constructors: ControlConstructors,
     returns: bool,
-    block_breaks: bool,
-    block_break_constructor: Option<String>,
 }
 
 fn lower_control_loop(
@@ -1018,21 +937,11 @@ fn lower_control_loop(
     let returns = statements_contain_return(cst, &statements)?;
     let continues = statements_can_continue(cst, &statements)?;
     let breaks = statements_contain_loop_break(cst, &statements)?;
-    let block_breaks = statements_contain_block_break(cst, &statements)?;
-    let mut block_break_constructor = None;
-    let mut body_block_break_constructor = None;
-    if block_breaks && context.block_break_constructor.is_some() {
-        block_break_constructor = Some(synthetic_constructor("LoopBlockBreak", span));
-        body_block_break_constructor = Some(synthetic_constructor("LoopBodyBlockBreak", span));
-    }
     let mut body_context = context.clone();
     body_context.loop_control = Some(LoopControl {
         carried: carried.clone(),
         break_constructor: break_constructor.clone(),
     });
-    if body_block_break_constructor.is_some() {
-        body_context.block_break_constructor = body_block_break_constructor.clone();
-    }
     let continue_value = loop_state(&carried, span, arena);
     let outcome = lower_control_outcome(
         cst,
@@ -1066,9 +975,6 @@ fn lower_control_loop(
             returns,
             continues,
             breaks,
-            block_breaks,
-            block_break_constructor: body_block_break_constructor,
-            result_block_break_constructor: block_break_constructor.clone(),
         }),
         statements_contain_effect(cst, &statements)?,
         LoopCompletion::Control,
@@ -1080,8 +986,6 @@ fn lower_control_loop(
         value,
         constructors,
         returns,
-        block_breaks,
-        block_break_constructor,
     })
 }
 
@@ -1175,9 +1079,6 @@ struct ControlLoopBody {
     returns: bool,
     continues: bool,
     breaks: bool,
-    block_breaks: bool,
-    block_break_constructor: Option<String>,
-    result_block_break_constructor: Option<String>,
 }
 
 enum LoopBody {
@@ -1517,28 +1418,6 @@ fn resolve_loop_visit(
             body: resolved,
         });
     }
-    if body.block_breaks {
-        let body_constructor = body
-            .block_break_constructor
-            .as_ref()
-            .expect("block break lost its block constructor");
-        let result_constructor = body
-            .result_block_break_constructor
-            .as_ref()
-            .expect("block break lost its loop result constructor");
-        let payload = control_payload_pattern(Some("blockResult$"), span, arena);
-        let pattern = arena.pattern(Pattern::Constructor {
-            name: body_constructor.clone(),
-            payload: Some(payload),
-            span,
-        });
-        let result = variable("blockResult$", span, arena);
-        let resolved = control_outcome(result_constructor, result, span, arena);
-        arms.push(Arm {
-            pattern,
-            body: resolved,
-        });
-    }
     arena.expression(Expression::Case {
         target: outcome,
         arms,
@@ -1730,9 +1609,7 @@ fn statements_need_control(cst: &CompactCst<'_>, statements: &[Cursor]) -> Resul
             }
             "iteration" => {
                 let body = cst.field_list(statement, "body")?;
-                if statements_contain_return(cst, &body)?
-                    || statements_contain_block_break(cst, &body)?
-                {
+                if statements_contain_return(cst, &body)? {
                     return Ok(true);
                 }
             }
@@ -1763,7 +1640,7 @@ fn statements_contain_loop_break(
 ) -> Result<bool, String> {
     for statement in statements {
         let statement = statement_rule(cst, *statement)?;
-        if cst.rule_name(statement)? == "breaking" && cst.field(statement, "value")?.is_none() {
+        if cst.rule_name(statement)? == "breaking" {
             return Ok(true);
         }
         if cst.rule_name(statement)? == "iteration" {
@@ -1771,24 +1648,6 @@ fn statements_contain_loop_break(
         }
         for nested in nested_statement_lists(cst, statement)? {
             if statements_contain_loop_break(cst, &nested)? {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
-}
-
-fn statements_contain_block_break(
-    cst: &CompactCst<'_>,
-    statements: &[Cursor],
-) -> Result<bool, String> {
-    for statement in statements {
-        let statement = statement_rule(cst, *statement)?;
-        if cst.rule_name(statement)? == "breaking" && cst.field(statement, "value")?.is_some() {
-            return Ok(true);
-        }
-        for nested in nested_statement_lists(cst, statement)? {
-            if statements_contain_block_break(cst, &nested)? {
                 return Ok(true);
             }
         }
@@ -2484,13 +2343,12 @@ fn lower_primary(
             let mut result = arena.expression(Expression::Unit { span });
             let mut result_effects = ResultEffects::Pure;
             let mut block_context = context.clone();
-            block_context.block_break_constructor = Some(synthetic_constructor("BlockBreak", span));
+            block_context.return_scope = true;
             if let Some(last) = statements.last().copied() {
                 let ending = statement_rule(cst, last)?;
-                if cst.rule_name(ending)? == "breaking"
-                    && let Some(value) = cst.field(ending, "value")?
-                {
-                    result = lower_value(cst, value, &block_context, arena)?;
+                if cst.rule_name(ending)? == "result" {
+                    result =
+                        lower_value(cst, required(cst, ending, "value")?, &block_context, arena)?;
                     result_effects = ResultEffects::Ambient;
                     statements.pop();
                 }

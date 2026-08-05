@@ -18,10 +18,10 @@ let recording = {
 return {
   .first = @handle (Console, (fn () => do
     result <- choose 1;
-    break result;
+    return result;
   end), recording);
   .other = @handle (Console, (fn () => do
     result <- choose 2;
-    break result;
+    return result;
   end), recording);
 };

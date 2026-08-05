@@ -1,23 +1,23 @@
-// `return` exits the nearest source function. `break value` exits the nearest
-// `do` block, including from a statement branch or across a loop.
+// `return` exits the nearest module or explicit `do`, including from a
+// statement branch or across a loop. A nested `do` catches its own return.
 
 open @import "blot:prelude" ();
 
 let describe = fn value => do
   if value < 0 then
-    break "negative";
+    return "negative";
   end;
   if value == 0 then
-    break "zero";
+    return "zero";
   end;
-  break "positive";
+  return "positive";
 end;
 
 let unwrap = fn option => do
   if let #Some value = option else
     return -1;
   end;
-  break value;
+  return value;
 end;
 
 let find = fn wanted => do
@@ -26,7 +26,7 @@ let find = fn wanted => do
       return value;
     end;
   end;
-  break -1;
+  return -1;
 end;
 
 let count_to = fn limit => do
@@ -34,10 +34,10 @@ let count_to = fn limit => do
   for ever do
     count := count + 1;
     if count >= limit then
-      break count;
+      return count;
     end;
   end;
-  break 0;
+  return 0;
 end;
 
 let count_or_stop = fn limit => do
@@ -51,7 +51,14 @@ let count_or_stop = fn limit => do
       break;
     end;
   end;
-  break -1;
+  return -1;
+end;
+
+let nested = fn () => do
+  let inner = if 1 < 2 then do
+    return 41;
+  end else 0 end;
+  return inner + 1;
 end;
 
 return {
@@ -65,4 +72,5 @@ return {
   .counted = count_to 4;
   .returned_from_loop = count_or_stop 3;
   .broke_loop = count_or_stop 8;
+  .nested = nested ();
 };

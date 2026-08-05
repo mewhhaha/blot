@@ -15,7 +15,7 @@ open @import "blot:prelude" ();
 
 const adding = fn T => do
   let _ = expect (refines (T, Int), "adding is integers only, and this is not one");
-  break fn (a, b) => @int.add a b;
+  return fn (a, b) => @int.add a b;
 end;
 
 const add_i32 = adding I32;
@@ -36,7 +36,7 @@ const HasX = { .x = Int; };
 
 const projecting = fn T => do
   let _ = expect (refines (T, HasX), "projecting needs a record with an .x");
-  break fn value => value.x;
+  return fn value => value.x;
 end;
 
 const x_of_2 = projecting Point2;

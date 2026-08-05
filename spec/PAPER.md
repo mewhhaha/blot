@@ -370,15 +370,15 @@ bind request <- elaborate(Runtime.request ()) in ...
 `let x = c` is rejected when `c` has a non-empty effect row. It creates neither
 an implicit bind nor an effect thunk.
 
-The value carried by a block break is a tail computation rather than an
+The value carried by a scoped return is a tail computation rather than an
 intermediate definition. It contributes its effects and result directly to the
-enclosing function, so no redundant bind is required around the final
-computation:
+enclosing module or explicit block, so no redundant bind is required around the
+final computation:
 
 ```blot
 fn () => do
   _ <- first_effect ();
-  break final_effect ();
+  return final_effect ();
 end
 ```
 
@@ -757,10 +757,11 @@ does not count as match failure.
 ### 8.2 Value conditionals do not transfer control
 
 Expression `if` and `case` produce values or computations selected from their
-branches. They cannot `return` from an enclosing function, `break;` from an
-enclosing loop, or `break value;` from an enclosing block. Statement
-conditionals elaborate with compiler-local control sums whose cases are
-eliminated at the corresponding function, loop, or block boundary.
+branches and do not establish statement control targets. An explicit `do` branch
+is a local return scope, while `break;` cannot cross the value expression to
+reach an enclosing loop. Statement conditionals elaborate with compiler-local
+control sums whose cases are eliminated at the corresponding loop or
+return-scope boundary.
 
 This keeps non-local control explicit in core and prevents a value expression
 from having a hidden continuation target.
@@ -769,8 +770,8 @@ from having a hidden continuation target.
 
 `for` elaborates to recursion over an iterator protocol. Names rebound by `:=`
 form an accumulator record. `break;` returns that record from the nearest loop;
-`break value;` carries a compiler-local result to the nearest block, and early
-`return` carries a separate result to the source-function boundary.
+`return` carries a compiler-local result through the repeated body to the
+nearest enclosing module or explicit `do` boundary.
 
 Downstream passes see recursion, cases, records, and computations. They do not
 contain a second loop semantics. The elaboration must preserve relational

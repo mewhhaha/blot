@@ -33,13 +33,13 @@ let normalize = fn input => do
   let biased = Vec4.add input gain;
   let scaled = Vec4.mul biased gain;
   let centered = Vec4.sub scaled gain;
-  break Vec4.div centered (Vec4.splat (Float32.of_int 2));
+  return Vec4.div centered (Vec4.splat (Float32.of_int 2));
 end;
 
 sig normalized = F32x4;
 normalized <- normalize (do
   _ <- Console.write "sampling";
-  break Vec4.of (
+  return Vec4.of (
   Float32.of_int 1,
   Float32.of_int 2,
   Float32.of_int 3,

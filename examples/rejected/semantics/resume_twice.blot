@@ -8,10 +8,10 @@ const Choice = @effect { .pick = Unit -> I32; };
 const twice = { .pick = fn (_, resume) => do
   first <- resume 1;
   second <- resume 2;
-  break @int.add first second;
+  return @int.add first second;
 end; .return = fn v => v; };
 let work = fn () => do
   result <- Choice.pick ();
-  break result;
+  return result;
 end;
 return @handle (Choice, work, twice);

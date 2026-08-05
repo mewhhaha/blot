@@ -26,7 +26,7 @@ let layout = rec (fn (index, !frames) => do
         .x = parent_x + node.offset;
         .width = node.width;
       };
-      break layout (index + 1, @array.push frames frame);
+      return layout (index + 1, @array.push frames frame);
     end
   end;
 end);

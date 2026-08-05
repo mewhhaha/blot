@@ -289,7 +289,7 @@ const Console = @effect.host { .write = Str -> Unit; };
 
 let report = fn () => do
   result <- Console.write "compiled";
-  break result;
+  return result;
 end; // () -> () ~ { Console }
 ```
 
@@ -352,12 +352,12 @@ of the computation to the matching clause.
 const Counter = @effect { .bump = Int -> Int; };
 let doubling = { .bump = fn (n, ?resume) => do
   result <- resume (n * 2);
-  break result;
+  return result;
 end; };
 let counted = fn () => do
   first <- Counter.bump 20;
   second <- Counter.bump 1;
-  break first + second;
+  return first + second;
 end;
 
 @handle (Counter, counted, doubling)   // 42

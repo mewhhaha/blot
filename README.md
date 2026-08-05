@@ -187,7 +187,7 @@ if c then … end;          // conditional control flow
 if let p = x else … end;  // bind p or leave through the else branch
 name := expr;             // shadow a name while preserving its type
 name <- expr;             // sequence an effect and bind its result
-return expr;              // exit the nearest function or module
+return expr;              // exit the nearest module or explicit `do`
 ```
 
 An expression `if` always has an `else` and produces one of its branch values:
@@ -197,8 +197,9 @@ let label = if ready then "ready" else "waiting" end;
 ```
 
 There is no `yield`: the selected branch expression is the conditional's value.
-It is a closed value computation: `return` and `break` cannot escape through one
-of its branches. A standalone conditional is surrounding control flow, has an
+It does not establish a statement control target. An explicit `do` branch
+catches its own `return`, while `break;` cannot escape the value conditional to
+an enclosing loop. A standalone conditional is surrounding control flow, has an
 optional `else`, and may transfer control:
 
 ```blot
@@ -206,7 +207,7 @@ let describe = fn value => do
   if value < 0 then
     return "negative";
   end;
-  break "non-negative";
+  return "non-negative";
 end;
 ```
 
@@ -223,10 +224,11 @@ This form has no `then`: its success path is the following statements, not a
 second block. The `else` body must leave that path with `return` or `break`, so
 every name in the pattern is known to exist afterward.
 
-`do` is an expression block. Reaching `end` produces `()`; `break value;` exits
-the nearest block with `value`, including from a statement branch or across a
-loop. A bare trailing expression remains invalid because a trailing name and the
-start of `name := ...;` have the same one-token prefix.
+`do` is an expression block. Reaching `end` produces `()`; `return value;` exits
+the nearest module or explicit `do`, including from a statement branch or across
+a loop. Bare `break;` only exits a `for`. A bare trailing expression remains
+invalid because a trailing name and the start of `name := ...;` have the same
+one-token prefix.
 
 Element expressions are ordinary component calls with property records and a
 nullary child computation:
@@ -307,9 +309,9 @@ loop in the AST, none in the evaluator, and none in the backend. `break;`
 carries the accumulator as it exists at that point; it can appear inside a
 standalone `if`, targets the nearest `for`, and cannot cross a function or
 value-conditional boundary. `return` instead crosses a `for` and exits the
-nearest function. A `for` names nothing, so a module that loops over an iterator
-it wrote itself needs nothing in scope. Looping over an _array_ needs
-`Iter.items`, but that is a call the program writes and can see.
+nearest module or explicit `do`. A `for` names nothing, so a module that loops
+over an iterator it wrote itself needs nothing in scope. Looping over an _array_
+needs `Iter.items`, but that is a call the program writes and can see.
 
 An iterator is a `.state` and a `.step`, where `step state` answers
 `#Some (value, next_state)` or `#None`. The `Option` is not decoration: a step
@@ -455,7 +457,7 @@ const Terminal = @effect { .read = Unit -> Str; };
 
 let ask = fn () => do
   answer <- Terminal.read ();
-  break answer <> "!";
+  return answer <> "!";
 end;
 ```
 
@@ -464,13 +466,13 @@ const Console = @effect { .write = Str -> Unit; };
 
 let report = fn () => do
   _ <- Console.write "one";
-  break "done";
+  return "done";
 end;
 
 let joining = {
   .write = fn (message, ?resume) => do
     rest <- resume ();
-    break message ++ rest;
+    return message ++ rest;
   end;
   .return = fn value => value;
 };
@@ -506,7 +508,7 @@ is the program's declared interface rather than something left unhandled:
 const Console = @effect.host { .write = Str -> Unit; };
 let report = fn () => do
   result <- Console.write "compiled";
-  break result;
+  return result;
 end; // () -> () ~ { Console }
 ```
 
@@ -521,7 +523,7 @@ let printing = {
   .write = fn (message, resume) => do
     _ <- init.print message;     // opaque; the program can only call it
     result <- resume ();
-    break result;
+    return result;
   end;
   .return = fn value => value;
 };

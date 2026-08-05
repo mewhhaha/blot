@@ -10,7 +10,7 @@ let shout = fn () => do
   if let #Some inner = counted else
     return "none";
   end;
-  break Text.append inner "!";
+  return Text.append inner "!";
 end;
 
 return shout ();

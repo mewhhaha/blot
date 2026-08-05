@@ -36,13 +36,13 @@ const Probes = {
   // carries the name. This function is \`fn a => fn b => a == 0\`.
   .opened = fn left => fn right => do
     open Sneaky;
-    break is_equal (@int.cmp left right);
+    return is_equal (@int.cmp left right);
   end;
 
   // \`left\` occurs once as a \`var\`, but a binder rebinds it first.
   .rebound = fn left => fn right => do
     let left = 5;
-    break is_equal (@int.cmp left right);
+    return is_equal (@int.cmp left right);
   end;
 
   // Reversed arguments are still one comparison of both parameters.

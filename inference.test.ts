@@ -272,7 +272,7 @@ rejects(
   "a declaration tag descriptor must be known before a local binding",
   "let tagged = fn descriptor => do\n" +
     "  @[descriptor] let value = 1;\n" +
-    "  break value;\n" +
+    "  return value;\n" +
     "end;\n" +
     "return tagged test;",
   "BLOT_NOT_COMPTIME",
@@ -309,27 +309,33 @@ check(
 );
 
 check(
-  "an unconditional early return determines the function result",
+  "an unconditional return determines its block result",
   "let answer = fn () => do\n  return 42;\nend;\nreturn answer;",
   "() -> 42",
 );
 
 check(
-  "a statement conditional returns from its function",
-  'let describe = fn value => do\n  if value < 0 then\n    return "negative";\n  end;\n  break "positive";\nend;\nreturn describe;',
+  "a statement conditional returns from its surrounding block",
+  'let describe = fn value => do\n  if value < 0 then\n    return "negative";\n  end;\n  return "positive";\nend;\nreturn describe;',
   'Int -> ("negative" | "positive")',
 );
 
 check(
   "a return crosses a for loop",
-  "let find = fn wanted => do\n  for value in Iter.range (0, 5) do\n    if value == wanted then\n      return value;\n    end;\n  end;\n  break -1;\nend;\nreturn find;",
+  "let find = fn wanted => do\n  for value in Iter.range (0, 5) do\n    if value == wanted then\n      return value;\n    end;\n  end;\n  return -1;\nend;\nreturn find;",
   "Int -> (Int | 0 | -1)",
 );
 
 check(
   "a return crosses an unbounded loop",
-  "let count_to = fn limit => do\n  let count = 0;\n  for ever do\n    count := count + 1;\n    if count >= limit then\n      return count;\n    end;\n  end;\n  break 0;\nend;\nreturn count_to;",
+  "let count_to = fn limit => do\n  let count = 0;\n  for ever do\n    count := count + 1;\n    if count >= limit then\n      return count;\n    end;\n  end;\n  return 0;\nend;\nreturn count_to;",
   "Int -> (Int | 0)",
+);
+
+check(
+  "a nested do catches its own return",
+  "let answer = fn () => do\n  let inner = if 1 < 2 then do\n    return 41;\n  end else 0 end;\n  return inner + 1;\nend;\nreturn answer;",
+  "() -> Int",
 );
 
 rejects(
@@ -475,13 +481,13 @@ check(
 
 check(
   "a guard types what it binds",
-  'let f = fn m => do\n  if let #Some inner = m else\n    return "none";\n  end;\n  break inner;\nend;\nreturn f (#Some 7);',
+  'let f = fn m => do\n  if let #Some inner = m else\n    return "none";\n  end;\n  return inner;\nend;\nreturn f (#Some 7);',
   '("none" | 7)',
 );
 
 rejects(
   "a guard rejects a payload used at the wrong type",
-  'let f = fn m => do\n  if let #Some inner = m else\n    return "none";\n  end;\n  break Text.append inner "!";\nend;\nreturn f (#Some 3);',
+  'let f = fn m => do\n  if let #Some inner = m else\n    return "none";\n  end;\n  return Text.append inner "!";\nend;\nreturn f (#Some 3);',
   "`3` is not `Str`",
 );
 
@@ -727,7 +733,7 @@ check(
 
 check(
   "a statement conditional proves it too",
-  'sig h = 1 -> Str;\nlet h = fn k => "one";\nsig f = 1 | 2 | 3 -> Str;\nlet f = fn n => do\n  if n == 1 then\n    return h n;\n  end;\n  break "rest";\nend;\nreturn f;',
+  'sig h = 1 -> Str;\nlet h = fn k => "one";\nsig f = 1 | 2 | 3 -> Str;\nlet f = fn n => do\n  if n == 1 then\n    return h n;\n  end;\n  return "rest";\nend;\nreturn f;',
   "1 | 2 | 3 -> Str",
 );
 
@@ -757,7 +763,7 @@ check(
 
 check(
   "two conditions on one name do not accumulate an intersection",
-  'sig f = 1 | 2 | 3 -> Str;\nlet f = fn n => do\n  let a = if n == 1 then "x" else "y" end;\n  let b = if n == 2 then "x" else "y" end;\n  break Text.append a b;\nend;\nreturn f;',
+  'sig f = 1 | 2 | 3 -> Str;\nlet f = fn n => do\n  let a = if n == 1 then "x" else "y" end;\n  let b = if n == 2 then "x" else "y" end;\n  return Text.append a b;\nend;\nreturn f;',
   "1 | 2 | 3 -> Str",
 );
 
@@ -766,7 +772,7 @@ check(
 
 check(
   "a rebinding inside a proven branch widens back to the domain",
-  "sig f = 1 | 2 | 3 -> Int;\nlet f = fn n => if n == 1 then do\n  n := 5;\n  break n;\nend else 0 end;\nreturn f;",
+  "sig f = 1 | 2 | 3 -> Int;\nlet f = fn n => if n == 1 then do\n  n := 5;\n  return n;\nend else 0 end;\nreturn f;",
   "1 | 2 | 3 -> Int",
 );
 
@@ -818,7 +824,7 @@ check(
 
 rejects(
   "an operator carried through a binding proves nothing",
-  'sig f = 1 | 2 | 3 -> Str;\nlet f = fn n => do\n  let same = Eq.eq;\n  break if same n 1 then case n of 1 => "one" end else "rest" end;\nend;\nreturn f;',
+  'sig f = 1 | 2 | 3 -> Str;\nlet f = fn n => do\n  let same = Eq.eq;\n  return if same n 1 then case n of 1 => "one" end else "rest" end;\nend;\nreturn f;',
   "No arm covers `2 | 3`",
 );
 
@@ -1041,7 +1047,7 @@ rejects(
   "sig at = [Int] -> Int -> Int;\n" +
     "let at = fn xs => fn n => do\n" +
     "  let ys = xs;\n" +
-    "  break if n >= @array.len xs then @array.get ys n else 0 end;\n" +
+    "  return if n >= @array.len xs then @array.get ys n else 0 end;\n" +
     "end;\n" +
     "return at;",
   "BLOT_OUT_OF_BOUNDS",
@@ -1053,7 +1059,7 @@ rejects(
     "let at = fn xs => fn ws => fn n =>\n" +
     "  if n >= @array.len xs then do\n" +
     "    xs := ws;\n" +
-    "    break @array.get xs n;\n" +
+    "    return @array.get xs n;\n" +
     "  end else 0 end;\n" +
     "return at;",
   "BLOT_UNPROVEN_INDEX",
@@ -1089,7 +1095,7 @@ check(
   "sig at = [Int] -> Int -> Int;\n" +
     "let at = fn xs => fn n => do\n" +
     "  let length = @array.len xs;\n" +
-    "  break if n >= 0 && n < length then @array.get xs n else 0 end;\n" +
+    "  return if n >= 0 && n < length then @array.get xs n else 0 end;\n" +
     "end;\nreturn at;",
   "[Int] -> Int -> Int",
 );
@@ -1099,7 +1105,7 @@ check(
   "sig at = [Int] -> Int -> Int;\n" +
     "let at = fn xs => fn n => do\n" +
     "  let last = @int.sub (@array.len xs) 1;\n" +
-    "  break if n >= 0 && n <= last then @array.get xs n else 0 end;\n" +
+    "  return if n >= 0 && n <= last then @array.get xs n else 0 end;\n" +
     "end;\nreturn at;",
   "[Int] -> Int -> Int",
 );
@@ -1109,7 +1115,7 @@ check(
   "sig at = [Int] -> Int -> Int;\n" +
     "let at = fn xs => fn n => do\n" +
     "  let ys = xs;\n" +
-    "  break if n >= 0 && n < @array.len xs then @array.get ys n else 0 end;\n" +
+    "  return if n >= 0 && n < @array.len xs then @array.get ys n else 0 end;\n" +
     "end;\nreturn at;",
   "[Int] -> Int -> Int",
 );
@@ -1137,7 +1143,7 @@ check(
     "  for (index, _) in Iter.indexed values do\n" +
     "    total := total + @array.get values index;\n" +
     "  end;\n" +
-    "  break total;\n" +
+    "  return total;\n" +
     "end;\n" +
     "return sum;",
   "[Int] -> Int",
@@ -1157,7 +1163,7 @@ rejects(
     "  for (index, _) in iterator do\n" +
     "    total := total + @array.get values index;\n" +
     "  end;\n" +
-    "  break total;\n" +
+    "  return total;\n" +
     "end;\n" +
     "return sum;",
   "BLOT_UNPROVEN_INDEX",
@@ -1176,7 +1182,7 @@ check(
   `const Console = @effect { .write = Str -> Unit; };
 let greet = fn name => do
   result <- Console.write name;
-  break result;
+  return result;
 end;
 return { .greet = greet; };`,
   "{ .greet = Str -> () ~ { Console }; }",
@@ -1192,7 +1198,7 @@ let adjust = fn () => do
     if current > 0 then current := current - 1; end;
     result := current;
   end;
-  break result;
+  return result;
 end;
 return { .adjust = adjust; };`,
   "{ .adjust = () -> (Int | 0) ~ { Counter }; }",
@@ -1203,11 +1209,11 @@ check(
   `const Draw = @effect { .create = Unit -> Int; };
 let div = fn _ => fn children => do
   _ <- children ();
-  break Draw.create ();
+  return Draw.create ();
 end;
 let view = fn () => do
   _ <- <div></div>;
-  break <div></div>;
+  return <div></div>;
 end;
 return { .view = view; };`,
   "{ .view = () -> Int ~ { Draw }; }",
@@ -1260,7 +1266,7 @@ check(
   `const Clock = @effect { .now = Unit -> Int; };
 let operation = fn () => do
   read <- Clock.now;
-  break read;
+  return read;
 end;
 return { .operation = operation; };`,
   "{ .operation = () -> () -> Int ~ { Clock }; }",
@@ -1273,7 +1279,7 @@ const Clock = @effect { .now = Unit -> Int; };
 let stamped = fn name => do
   t <- Clock.now ();
   _ <- Console.write name;
-  break t;
+  return t;
 end;
 return { .stamped = stamped; };`,
   "{ .stamped = Str -> Int ~ { Clock, Console }; }",
@@ -1282,7 +1288,7 @@ return { .stamped = stamped; };`,
 check(
   "a compile-time function exposes its inferred effects through type reflection",
   "const Access = (@effect { .read = Unit -> Int; }) <+ { .ecs = 7; };\n" +
-    "const system = fn () => do value <- Access.read (); break value; end;\n" +
+    "const system = fn () => do value <- Access.read (); return value; end;\n" +
     "const metadata = case @type.reflect (@type.of system) of\n" +
     "  #Arrow arrow => sum (map (arrow.effects, (fn effect =>\n" +
     "    (@type.members effect).ecs))),\n" +
@@ -1300,7 +1306,7 @@ check(
 let logged = fn f => fn x => do
   _ <- Console.write "call";
   result <- f x;
-  break result;
+  return result;
 end;
 return { .logged = logged; };`,
   "{ .logged = ('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }; }",
@@ -1325,7 +1331,7 @@ check(
 sig greet = Str -> Unit ~ { Console };
 let greet = fn name => do
   result <- Console.write name;
-  break result;
+  return result;
 end;
 return { .greet = greet; };`,
   "{ .greet = Str -> () ~ { Console }; }",
@@ -1346,7 +1352,7 @@ rejects(
 sig greet = Str -> Unit;
 let greet = fn name => do
   result <- Console.write name;
-  break result;
+  return result;
 end;
 return { .greet = greet; };`,
   "is not handled",
@@ -1361,7 +1367,7 @@ check(
 sig join = Str -> Str -> Unit ~ { Console };
 let join = fn a => fn b => do
   result <- Console.write (a <> b);
-  break result;
+  return result;
 end;
 return { .join = join; };`,
   "{ .join = Str -> Str -> () ~ { Console }; }",
@@ -1511,12 +1517,12 @@ check(
   `const Ask = @effect { .ask = Int -> Str; };
 let work = fn () => do
   result <- Ask.ask 1;
-  break result;
+  return result;
 end;
 let text = {
   .ask = fn (_, ?resume) => do
     resumed <- resume "ok";
-    break @text.concat resumed "!";
+    return @text.concat resumed "!";
   end;
   .return = fn value => @text.concat value ".";
 };
@@ -1529,12 +1535,12 @@ rejects(
   `const Ask = @effect { .ask = Int -> Str; };
 let work = fn () => do
   result <- Ask.ask 1;
-  break result;
+  return result;
 end;
 let wrong = {
   .ask = fn (argument, ?resume) => do
     result <- resume argument;
-    break result;
+    return result;
   end;
   .return = fn value => value;
 };
@@ -1613,7 +1619,7 @@ rejects(
 const priced = fn amount => do
   sig converted = Money;
   let converted = Money.of amount;
-  break converted;
+  return converted;
 end;
 return priced 42;`,
   "anything is not #Money",
@@ -1902,7 +1908,7 @@ check(
   "return do\n" +
     "  let up = rec (fn n => if n == 0 then 0 else down (n - 1) end);\n" +
     "  let down = rec (fn n => if n == 0 then 1 else up (n - 1) end);\n" +
-    "  break up 9;\n" +
+    "  return up 9;\n" +
     "end;",
   "(0 | 1)",
 );
@@ -1912,7 +1918,7 @@ check(
   "let outer = fn start => do\n" +
     "  let up = rec (fn n => if n == 0 then 0 else down (n - 1) end);\n" +
     "  let down = rec (fn n => if n == 0 then 1 else up (n - 1) end);\n" +
-    "  break up start;\n" +
+    "  return up start;\n" +
     "end;\n" +
     "return outer 9;",
   "(0 | 1)",
@@ -2007,6 +2013,6 @@ rejects(
 // early for the same reason.
 rejects(
   "a nested block reads an enclosing binding too early",
-  "let a = do let t = 1; break t + later; end;\nlet later = 2;\nreturn a;",
+  "let a = do let t = 1; return t + later; end;\nlet later = 2;\nreturn a;",
   "`later` is bound further down",
 );

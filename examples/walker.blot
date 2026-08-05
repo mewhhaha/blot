@@ -32,7 +32,7 @@ end;
 sig walk = [Int] -> Int -> (Int, Int);
 let walk = rec (fn source => fn at => do
   let head = token source at;
-  break if head < 2
+  return if head < 2
     then combine source (at + 1) head
     else (head - 2, at + 1)
   end;
@@ -42,7 +42,7 @@ sig combine = [Int] -> Int -> Int -> (Int, Int);
 let combine = rec (fn source => fn at => fn operator => do
   let (left, after_left) = walk source at;
   let (right, after_right) = walk source after_left;
-  break if operator == 0
+  return if operator == 0
     then (left + right, after_right)
     else (left * right, after_right)
   end;

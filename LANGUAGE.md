@@ -547,11 +547,11 @@ request <- Runtime.request ();
 ```
 
 `let`, `const`, `:=`, `open`, function results written without a block, and
-module results are pure value positions. The expression in `break value;` is a
-tail computation of its `do` block and may contribute effects to the enclosing
-function. Pure `let` bindings may be reordered, inlined, or discarded when their
-values are not demanded; sequencing an effect before the tail therefore requires
-`<-` even when its result is ignored.
+module results are pure value positions. The expression in `return value;` is a
+tail computation of its current module or `do` scope and may contribute effects
+to the enclosing function. Pure `let` bindings may be reordered, inlined, or
+discarded when their values are not demanded; sequencing an effect before the
+tail therefore requires `<-` even when its result is ignored.
 
 The left-hand binding in a `try` handler step is a separate bounded surface
 form. Section 12.2 specifies how it binds the newly handled computation without
@@ -633,7 +633,7 @@ becomes the block's tail computation:
 ```blot
 let draw_twice = fn () => do
   _ <- <div />;
-  break <div />;
+  return <div />;
 end;
 ```
 
@@ -683,10 +683,11 @@ const { .source = target; .value; } = record;
 return value;
 ```
 
-At the end of a module, `return` supplies its export value. Inside a function
-block, it exits the nearest source lambda. A return crosses statement
-conditionals and `for` loops, but cannot escape through a value-producing `if`
-or `case`.
+`return` exits the nearest enclosing module or explicit `do` block with its
+value. Statement conditionals and `for` bodies do not establish return scopes,
+so a return crosses them. A nested `do` does establish a scope, even when it is
+the branch of a value-producing `if` or `case`; a return in that block supplies
+the block's value rather than escaping farther.
 
 ## 5. Patterns
 
@@ -912,16 +913,16 @@ without `fn` is therefore a syntax error rather than an operator chain.
 ```blot
 do
   declarations
-  break value;
+  return value;
 end
 ```
 
 A block evaluates its statements in a nested scope. Reaching `end` returns `()`;
-`break value;` exits the nearest `do` block with `value`. It may leave from a
-nested statement conditional, guard, or loop, but does not cross a lambda or a
-value-producing `if` or `case`.
+`return value;` exits that block with `value`. It may leave from a nested
+statement conditional, guard, or loop. A nested explicit `do` becomes the
+nearest return scope.
 
-A bare trailing expression is not permitted. The semicolon makes `break value;`
+A bare trailing expression is not permitted. The semicolon makes `return value;`
 an ordinary bounded statement, so a result beginning with a name does not
 conflict with `name := value;`.
 
@@ -1058,7 +1059,11 @@ An expression `if`:
 - requires an `else`;
 - requires every condition to be `#True` or `#False`;
 - evaluates and returns exactly one branch value; and
-- is a closed value boundary through which `return` and `break` may not escape.
+- does not itself establish a statement control target.
+
+A `do` used as a branch is an ordinary explicit scope. Its `return` supplies
+that block's branch value. A bare `break;` inside such a branch still cannot
+escape the value expression to reach an enclosing loop.
 
 There is no truthiness and no `yield`.
 
@@ -1074,8 +1079,9 @@ else
 end;
 ```
 
-A statement conditional's `else` is optional. Branches are statement scopes, so
-`return` and `break` retain their surrounding targets.
+A statement conditional's `else` is optional. Its branches are lexical binding
+scopes but not return or loop boundaries, so `return` and `break` retain their
+surrounding targets.
 
 A branch is a scope for `let` but not for `:=`. A name a branch rebinds with
 `:=` is rebound for the statements that follow the conditional: the name was
@@ -1259,8 +1265,9 @@ the same way when a `sig` says what they hold. Where nothing does, an inner
 column carries no requirement — only a column of the scrutinee's own tuple is
 closed by its arms.
 
-Like expression `if`, `case` is a value boundary: `return` and `break` cannot
-escape from an arm.
+Like expression `if`, `case` does not establish a statement control target. An
+explicit `do` arm catches its own `return`; `break;` cannot escape an arm to
+reach an enclosing loop.
 
 An effectful `case` remains a value expression. Select the effectful branch and
 sequence the selected expression once at the surrounding scope:
@@ -1530,9 +1537,9 @@ point. It may appear inside statement conditionals and guards. It cannot cross a
 lambda or a value-producing `if` or `case`, and using it without an enclosing
 `for` is an error.
 
-`break value;` is the block form specified in §6.4. The value distinguishes it
-from a loop break: even inside a loop, it exits the nearest enclosing `do`
-block, carrying its value across the loop.
+`break` never carries a value. `return value;` is the scoped value exit
+specified in §§4.8 and 6.4; inside a loop it crosses the repeated statement body
+and exits the nearest enclosing module or explicit `do`.
 
 An unbounded loop is ordinary iteration over the prelude's infinite iterator:
 
@@ -1908,7 +1915,7 @@ WebAssembly imports and therefore constitute part of the module interface.
 let logging = {
   .write = fn (message, ?resume) => do
     rest <- resume ();
-    break message <> rest;
+    return message <> rest;
   end;
   .return = fn value => value;
 };
@@ -1936,7 +1943,7 @@ continuation:
 let cancelling = {
   .write = fn (_, !resume) => do
     _ <- Continuation.cancel resume;
-    break replacement;
+    return replacement;
   end;
 };
 ```
@@ -2011,7 +2018,7 @@ const Console = @effect { .write = Str -> Unit; };
 sig greet = Str -> Unit ~ { Console };
 let greet = fn name => do
   result <- Console.write name;
-  break result;
+  return result;
 end;
 ```
 
@@ -2629,7 +2636,7 @@ end;
 let report = fn () => do
   let text = describe #Ready ++ Text.of_int attempts;
   _ <- Console.write text;
-  break text;
+  return text;
 end;
 
 return {

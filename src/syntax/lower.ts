@@ -159,7 +159,7 @@ export function lowerModule(root: Rule, source: string): Module {
     source,
     table,
     loop: null,
-    block: null,
+    returnScope: true,
     escapeBoundary: "none",
   };
 
@@ -215,9 +215,7 @@ interface Context {
     readonly carried: readonly string[];
     readonly breakConstructor: string;
   } | null;
-  readonly block: {
-    readonly breakConstructor: string;
-  } | null;
+  readonly returnScope: boolean;
   readonly escapeBoundary: "none" | "value-condition";
 }
 
@@ -285,9 +283,7 @@ function statementsNeedControlLowering(cursors: readonly Cursor[]): boolean {
     }
     if (rule.name === "iteration") {
       const body = fieldList(rule, "body");
-      if (
-        statementsContainReturn(body) || statementsContainBlockBreak(body)
-      ) return true;
+      if (statementsContainReturn(body)) return true;
       continue;
     }
     for (const nested of nestedStatementLists(rule)) {
@@ -331,17 +327,6 @@ function statementsContainLoopBreak(cursors: readonly Cursor[]): boolean {
     if (rule.name === "iteration") continue;
     for (const nested of nestedStatementLists(rule)) {
       if (statementsContainLoopBreak(nested)) return true;
-    }
-  }
-  return false;
-}
-
-function statementsContainBlockBreak(cursors: readonly Cursor[]): boolean {
-  for (const cursor of cursors) {
-    const rule = statementRule(cursor);
-    if (rule.name === "breaking" && field(rule, "value") !== null) return true;
-    for (const nested of nestedStatementLists(rule)) {
-      if (statementsContainBlockBreak(nested)) return true;
     }
   }
   return false;
@@ -438,8 +423,8 @@ function resolveControlSequence(
   span: Span,
 ): Expr {
   const constructors: ControlConstructors = {
-    return: syntheticConstructor("FunctionReturn", span),
-    continue: syntheticConstructor("FunctionContinue", span),
+    return: syntheticConstructor("ScopeReturn", span),
+    continue: syntheticConstructor("ScopeContinue", span),
   };
   const outcome = lowerControlOutcome(
     cursors,
@@ -458,17 +443,6 @@ function resolveControlSequence(
         span,
       },
       body: { tag: "var", name: "returned$", span },
-    });
-  }
-  if (context.block !== null && statementsContainBlockBreak(cursors)) {
-    arms.push({
-      pattern: {
-        tag: "constructor",
-        name: context.block.breakConstructor,
-        payload: controlPayloadPattern("blockResult$", span),
-        span,
-      },
-      body: { tag: "var", name: "blockResult$", span },
     });
   }
   if (statementsCanContinue(cursors)) {
@@ -503,10 +477,10 @@ function lowerControlOutcome(
   }
   const rule = statementRule(first);
   if (rule.name === "result") {
-    if (context.escapeBoundary === "value-condition") {
+    if (!context.returnScope) {
       fail(
-        "BLOT_RETURN_IN_VALUE_CONDITION",
-        "`return` cannot escape a value-producing `if` or `case`.",
+        "BLOT_RETURN_OUTSIDE_SCOPE",
+        "`return` has no enclosing module or `do` block.",
         rule.span,
       );
     }
@@ -517,28 +491,6 @@ function lowerControlOutcome(
     );
   }
   if (rule.name === "breaking") {
-    const value = field(rule, "value");
-    if (value !== null) {
-      if (context.block === null) {
-        if (context.escapeBoundary === "value-condition") {
-          fail(
-            "BLOT_BLOCK_BREAK_IN_VALUE_CONDITION",
-            "`break value` cannot escape a value-producing `if` or `case`.",
-            rule.span,
-          );
-        }
-        fail(
-          "BLOT_BLOCK_BREAK_OUTSIDE_BLOCK",
-          "`break value` has no enclosing `do` block.",
-          rule.span,
-        );
-      }
-      return controlOutcome(
-        context.block.breakConstructor,
-        lowerValue(asRule(value, "break value"), context),
-        rule.span,
-      );
-    }
     if (context.loop === null || context.loop.tag !== "control") {
       if (context.escapeBoundary === "value-condition") {
         fail(
@@ -632,17 +584,6 @@ function lowerControlOutcome(
           },
         };
       }
-      if (context.block !== null) {
-        branchContext = {
-          ...branchContext,
-          block: {
-            breakConstructor: syntheticConstructor(
-              "ConditionalBlockBreak",
-              rule.span,
-            ),
-          },
-        };
-      }
     }
     const conditional = lowerControlConditional(
       body,
@@ -705,25 +646,6 @@ function lowerControlOutcome(
         ),
       });
     }
-    if (
-      context.block !== null &&
-      branchContext.block !== null &&
-      statementsContainBlockBreak([rule])
-    ) {
-      arms.push({
-        pattern: {
-          tag: "constructor",
-          name: branchContext.block.breakConstructor,
-          payload: controlPayloadPattern("blockResult$", rule.span),
-          span: rule.span,
-        },
-        body: controlOutcome(
-          context.block.breakConstructor,
-          { tag: "var", name: "blockResult$", span: rule.span },
-          rule.span,
-        ),
-      });
-    }
     return {
       tag: "case",
       target: conditional,
@@ -745,25 +667,6 @@ function lowerControlOutcome(
         body: controlOutcome(
           constructors.return,
           { tag: "var", name: "returned$", span: rule.span },
-          rule.span,
-        ),
-      });
-    }
-    if (
-      loop.blockBreaks &&
-      loop.blockBreakConstructor !== null &&
-      context.block !== null
-    ) {
-      arms.push({
-        pattern: {
-          tag: "constructor",
-          name: loop.blockBreakConstructor,
-          payload: controlPayloadPattern("blockResult$", rule.span),
-          span: rule.span,
-        },
-        body: controlOutcome(
-          context.block.breakConstructor,
-          { tag: "var", name: "blockResult$", span: rule.span },
           rule.span,
         ),
       });
@@ -986,9 +889,6 @@ type LoopBody =
     readonly returns: boolean;
     readonly continues: boolean;
     readonly breaks: boolean;
-    readonly blockBreaks: boolean;
-    readonly blockBreakConstructor: string | null;
-    readonly resultBlockBreakConstructor: string | null;
   };
 
 interface LoweredLoop {
@@ -999,8 +899,6 @@ interface LoweredLoop {
 interface LoweredControlLoop extends LoweredLoop {
   readonly constructors: ControlConstructors;
   readonly returns: boolean;
-  readonly blockBreaks: boolean;
-  readonly blockBreakConstructor: string | null;
 }
 
 /** The destructuring counterpart of `loopState`. */
@@ -1207,25 +1105,6 @@ function desugarLoop(
         body: controlOutcome(
           body.resultConstructors.continue,
           name("stopped$"),
-          span,
-        ),
-      });
-    }
-    if (
-      body.blockBreaks &&
-      body.blockBreakConstructor !== null &&
-      body.resultBlockBreakConstructor !== null
-    ) {
-      arms.push({
-        pattern: {
-          tag: "constructor",
-          name: body.blockBreakConstructor,
-          payload: controlPayloadPattern("blockResult$", span),
-          span,
-        },
-        body: controlOutcome(
-          body.resultBlockBreakConstructor,
-          name("blockResult$"),
           span,
         ),
       });
@@ -1454,26 +1333,10 @@ function lowerControlLoop(
   const returns = statementsContainReturn(statements);
   const continues = statementsCanContinue(statements);
   const breaks = statementsContainLoopBreak(statements);
-  const blockBreaks = statementsContainBlockBreak(statements);
-  let blockBreakConstructor: string | null = null;
-  let bodyBlockBreakConstructor: string | null = null;
-  if (blockBreaks && context.block !== null) {
-    blockBreakConstructor = syntheticConstructor("LoopBlockBreak", rule.span);
-    bodyBlockBreakConstructor = syntheticConstructor(
-      "LoopBodyBlockBreak",
-      rule.span,
-    );
-  }
-  let bodyContext: Context = {
+  const bodyContext: Context = {
     ...context,
     loop: { tag: "control", carried, breakConstructor },
   };
-  if (bodyBlockBreakConstructor !== null) {
-    bodyContext = {
-      ...bodyContext,
-      block: { breakConstructor: bodyBlockBreakConstructor },
-    };
-  }
   const outcome = lowerControlOutcome(
     statements,
     bodyContext,
@@ -1499,9 +1362,6 @@ function lowerControlLoop(
         returns,
         continues,
         breaks,
-        blockBreaks,
-        blockBreakConstructor: bodyBlockBreakConstructor,
-        resultBlockBreakConstructor: blockBreakConstructor,
       },
       statementsContainEffect(statements),
       { tag: "control" },
@@ -1511,8 +1371,6 @@ function lowerControlLoop(
       ...loop,
       constructors,
       returns,
-      blockBreaks,
-      blockBreakConstructor,
     };
   }
   const loop = desugarLoop(
@@ -1534,9 +1392,6 @@ function lowerControlLoop(
       returns,
       continues,
       breaks,
-      blockBreaks,
-      blockBreakConstructor: bodyBlockBreakConstructor,
-      resultBlockBreakConstructor: blockBreakConstructor,
     },
     statementsContainEffect(statements),
     { tag: "control" },
@@ -1546,8 +1401,6 @@ function lowerControlLoop(
     ...loop,
     constructors,
     returns,
-    blockBreaks,
-    blockBreakConstructor,
   };
 }
 
@@ -1662,22 +1515,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     };
   }
   if (rule.name === "breaking") {
-    const value = field(rule, "value");
-    if (value !== null && context.block === null) {
-      if (context.escapeBoundary === "value-condition") {
-        fail(
-          "BLOT_BLOCK_BREAK_IN_VALUE_CONDITION",
-          "`break value` cannot escape a value-producing `if` or `case`.",
-          rule.span,
-        );
-      }
-      fail(
-        "BLOT_BLOCK_BREAK_OUTSIDE_BLOCK",
-        "`break value` has no enclosing `do` block.",
-        rule.span,
-      );
-    }
-    if (value === null && context.loop === null) {
+    if (context.loop === null) {
       if (context.escapeBoundary === "value-condition") {
         fail(
           "BLOT_BREAK_IN_VALUE_CONDITION",
@@ -1691,7 +1529,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
         rule.span,
       );
     }
-    throw new Error("control break reached declaration lowering");
+    throw new Error("control return reached declaration lowering");
   }
   if (rule.name === "conditional_statement") {
     const body = conditionalStatementBody(rule);
@@ -1779,16 +1617,9 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     };
   }
   if (rule.name === "result") {
-    if (context.escapeBoundary === "value-condition") {
-      fail(
-        "BLOT_RETURN_IN_VALUE_CONDITION",
-        "`return` cannot escape a value-producing `if` or `case`.",
-        rule.span,
-      );
-    }
     fail(
-      "BLOT_RETURN_OUTSIDE_BODY",
-      "`return` has no enclosing body.",
+      "BLOT_RETURN_OUTSIDE_SCOPE",
+      "`return` has no enclosing module or `do` block.",
       rule.span,
     );
   }
@@ -2149,7 +1980,7 @@ function lowerLambda(rule: Rule, context: Context): Expr {
     {
       ...context,
       loop: null,
-      block: null,
+      returnScope: false,
       escapeBoundary: "none",
     },
   );
@@ -2333,7 +2164,7 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
       const childContext: Context = {
         ...context,
         loop: null,
-        block: null,
+        returnScope: false,
         escapeBoundary: "none",
       };
       if (statementsNeedControlLowering(children)) {
@@ -2461,7 +2292,7 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     const closed: Context = {
       ...context,
       loop: null,
-      block: null,
+      returnScope: false,
       escapeBoundary: "value-condition",
     };
     const branches: Branch[] = [{
@@ -2505,7 +2336,7 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     const closed: Context = {
       ...context,
       loop: null,
-      block: null,
+      returnScope: false,
       escapeBoundary: "value-condition",
     };
     const arms: GuardedArm[] = [
@@ -2617,20 +2448,18 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     let resultEffects: "pure" | "ambient" = "pure";
     const blockContext: Context = {
       ...context,
-      block: {
-        breakConstructor: syntheticConstructor("BlockBreak", rule.span),
-      },
+      returnScope: true,
     };
     const last = statements.at(-1);
     if (last !== undefined) {
       const ending = statementRule(last);
-      if (ending.name === "breaking") {
-        const value = field(ending, "value");
-        if (value !== null) {
-          result = lowerValue(asRule(value, "block result"), blockContext);
-          resultEffects = "ambient";
-          statements = statements.slice(0, -1);
-        }
+      if (ending.name === "result") {
+        result = lowerValue(
+          asRule(field(ending, "value"), "block result"),
+          blockContext,
+        );
+        resultEffects = "ambient";
+        statements = statements.slice(0, -1);
       }
     }
     if (statementsNeedControlLowering(statements)) {

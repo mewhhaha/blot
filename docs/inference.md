@@ -59,7 +59,7 @@ const Clock = @effect { .now = Unit -> Int; };
 
 let greet = fn name => do
   result <- Console.write name;
-  break result;
+  return result;
 end; // Str -> () ~ { Console }
 let quiet = fn n => @int.add n 1;            // Int -> Int
 ```
@@ -73,7 +73,7 @@ variable — and it is what makes a wrapper effect-polymorphic without saying so
 let logged = fn f => fn x => do
   _ <- Console.write "call";
   result <- f x;
-  break result;
+  return result;
 end;
 // ('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }
 ```

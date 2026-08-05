@@ -971,7 +971,7 @@ function inferUnrecorded(
       // nothing becomes effectful because something else nearby was.
       const bodyRow = freshVar(level);
       let result: SimpleType;
-      if (expr.body.tag === "block" || isFunctionReturnBoundary(expr.body)) {
+      if (expr.body.tag === "block" || isReturnScopeBoundary(expr.body)) {
         result = infer(expr.body, inner, level, bodyRow);
       } else {
         result = inferPure(
@@ -4332,7 +4332,7 @@ function checkAgainst(
   const inner: Context = { ...context, types: scope };
   bindPatternAgainst(expr.parameter, expected.param, inner, level + 1);
   const bodyRow = freshVar(level + 1);
-  if (expr.body.tag === "block" || isFunctionReturnBoundary(expr.body)) {
+  if (expr.body.tag === "block" || isReturnScopeBoundary(expr.body)) {
     checkAgainst(
       expr.body,
       expected.result,
@@ -4354,11 +4354,11 @@ function checkAgainst(
   return expected;
 }
 
-function isFunctionReturnBoundary(expr: Expr): boolean {
+function isReturnScopeBoundary(expr: Expr): boolean {
   return expr.tag === "case" &&
     expr.arms.some((arm) =>
       arm.pattern.tag === "constructor" &&
-      arm.pattern.name.startsWith("FunctionReturn$")
+      arm.pattern.name.startsWith("ScopeReturn$")
     );
 }
 

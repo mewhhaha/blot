@@ -58,8 +58,8 @@ reintroduce an implicit scope to make that line disappear.
 **A loop is a fold, not an assignment.** `for` desugars during CST lowering:
 the names its body rebinds with `:=` become the accumulator record, and nothing
 downstream of the parser knows a loop exists. `break;` carries that record out
-of the nearest `for`; `break value;` exits the nearest `do` block, and an early
-`return` carries its value through the `for` to the enclosing source function.
+of the nearest `for`; `return` carries its value through the repeated body to
+the nearest enclosing module or explicit `do` scope.
 `ever` is an ordinary prelude iterator, not a keyword
 or compiler special case. Do not give these forms AST nodes, typing rules, or
 backend paths — each would be a second way to say what recursion and cases
@@ -73,10 +73,9 @@ when rebound. A repeated `let` or `const` is the explicit way to shadow a name
 while changing its type.
 
 **Surface forms desugar; they do not get machinery.** `for` becomes
-`rec`/`case` recursion, `break;` becomes loop-local control, `break value;`
-becomes block-local control, and early `return` becomes an unspellable
-compiler-local tagged result eliminated by a `case` at the source function
-boundary. A standalone `if` becomes an ordinary
+`rec`/`case` recursion, `break;` becomes loop-local control, and early `return`
+becomes an unspellable compiler-local tagged result eliminated by a `case` at
+the nearest module or explicit `do` boundary. A standalone `if` becomes an ordinary
 conditional over those results, and `x <- e` explicitly sequences the already
 applied expression `e`, all during CST lowering. `try program with ... end`
 likewise becomes named nullary
@@ -90,10 +89,11 @@ say what it means — otherwise it is a second way to say something the language
 already says, and every pass has to learn it.
 
 **Value conditionals do not transfer control.** An expression `if` or `case`
-produces one of its branch values and cannot `return` from an enclosing
-function, `break;` from an enclosing loop, or `break value;` from an enclosing
-block. A standalone `if ... then ... end;` inherits those surrounding control
-targets. Expression `if` requires `else`; statement `if` does not.
+produces one of its branch values and does not itself establish a statement
+control target. An explicit `do` branch is its own return scope; `break;` cannot
+escape it to reach an enclosing loop. A standalone `if ... then ... end;`
+inherits the surrounding return and loop targets. Expression `if` requires
+`else`; statement `if` does not.
 
 **A deconstructing guard must leave on failure.**
 `if let pattern = value else ... end;` binds the pattern in the statements

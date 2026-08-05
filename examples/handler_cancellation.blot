@@ -9,13 +9,13 @@ let consume = fn !value => value + 1;
 let !token = 40;
 let work = fn () => do
   _ <- Ask.ask ();
-  break consume (!token);
+  return consume (!token);
 end;
 
 let cancelling = {
   .ask = fn (_, !resume) => do
     _ <- Continuation.cancel resume;
-    break 7;
+    return 7;
   end;
 };
 

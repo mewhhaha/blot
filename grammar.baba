@@ -144,8 +144,7 @@ rebinding = (
 //   for #Some x in source do … end;   binds, and skips what does not match
 //
 // `break;` stops the nearest `for` with its accumulator as it exists at that
-// point. `break value;` instead exits the nearest `do` block with that value.
-// An unbounded loop is an ordinary iteration over an infinite iterator:
+// point. An unbounded loop is an ordinary iteration over an infinite iterator:
 // `for ever do … end;`.
 iteration = (
   "for"
@@ -170,7 +169,6 @@ iteration_source = ( "in" source:value ) ;
 
 breaking = (
   "break"
-  value:value?
   ";"
 ) ;
 
@@ -617,7 +615,7 @@ handler_composition_action = (
   ")"
 ) ;
 
-// A block normally produces `()`. `break value;` is a statement, so it can
+// A block normally produces `()`. `return value;` is a statement, so it can
 // leave the block from a nested statement branch without making a bare tail
 // expression compete with `name := value;` on IDENT.
 block = (

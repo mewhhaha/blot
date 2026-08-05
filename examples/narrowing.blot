@@ -16,7 +16,7 @@ let shout = fn m => do
   if let #Some inner = m else
     return "none";
   end;
-  break Text.append inner "!";
+  return Text.append inner "!";
 end;
 
 // The default arm keeps the union open: `#Missing` is not one of the arms and

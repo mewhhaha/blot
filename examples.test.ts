@@ -271,18 +271,6 @@ const REJECTIONS: Record<
     code: "BLOT_BREAK_IN_VALUE_CONDITION",
     stage: "check",
   },
-  "block_break_outside_block": {
-    code: "BLOT_BLOCK_BREAK_OUTSIDE_BLOCK",
-    stage: "check",
-  },
-  "return_in_value_if": {
-    code: "BLOT_RETURN_IN_VALUE_CONDITION",
-    stage: "check",
-  },
-  "return_in_value_case": {
-    code: "BLOT_RETURN_IN_VALUE_CONDITION",
-    stage: "check",
-  },
   // A phase error, not a type error: the program checks and the interpreter
   // runs it, and only lowering has to place the capture in a frame that does
   // not exist. `backend.test.ts` asserts the code.

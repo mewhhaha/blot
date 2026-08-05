@@ -6,6 +6,6 @@ open @import "blot:prelude" ();
 let handler = fn ?resume => do
   first <- resume 1;
   second <- resume 2;
-  break @int.add first second;
+  return @int.add first second;
 end;
 return handler (fn n => n);
