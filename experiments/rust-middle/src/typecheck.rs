@@ -15,7 +15,7 @@ use crate::eval::{
 };
 use crate::value::{
     Domain as ValueDomain, Environment as ValueEnvironment, OpenedValues, Value, attach_signature,
-    child_env, lookup, register_closure_signature,
+    child_env, lookup,
 };
 
 type VariableId = u32;
@@ -1309,9 +1309,6 @@ impl Checker {
                 self.bind_pattern(module, pattern, inferred.type_.clone(), types);
                 let settled_signature = self.settle(inferred.type_.clone(), true);
                 let inferred_signature = reify_type(&settled_signature);
-                if let (Some(value), Some(signature)) = (&evaluated, &inferred_signature) {
-                    register_closure_signature(value, signature.clone());
-                }
                 for name in names {
                     let body = match types.lookup(&name) {
                         Some(Typing::Mono(type_)) => type_,

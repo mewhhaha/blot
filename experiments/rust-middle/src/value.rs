@@ -9,49 +9,11 @@ use crate::eval::Computation;
 
 pub type Environment = Rc<Env>;
 
-thread_local! {
-    static CLOSURE_SIGNATURES: RefCell<BTreeMap<(String, u32, u32), Value>> = const {
-        RefCell::new(BTreeMap::new())
-    };
-}
-
-pub(crate) fn register_closure_signature(value: &Value, signature: Value) {
-    let Value::Closure {
-        module,
-        parameter,
-        body,
-        ..
-    } = value
-    else {
-        return;
-    };
-    CLOSURE_SIGNATURES.with(|signatures| {
-        signatures
-            .borrow_mut()
-            .insert((module.clone(), parameter.0, body.0), signature);
-    });
-}
-
 pub(crate) fn closure_signature(value: &Value) -> Option<Value> {
-    let Value::Closure {
-        module,
-        parameter,
-        body,
-        signature,
-        ..
-    } = value
-    else {
+    let Value::Closure { signature, .. } = value else {
         return None;
     };
-    if let Some(signature) = signature {
-        return Some((**signature).clone());
-    }
-    CLOSURE_SIGNATURES.with(|signatures| {
-        signatures
-            .borrow()
-            .get(&(module.clone(), parameter.0, body.0))
-            .cloned()
-    })
+    signature.as_deref().cloned()
 }
 
 pub(crate) fn attach_signature(value: &mut Value, signature: &Value) {
