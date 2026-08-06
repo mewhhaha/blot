@@ -1713,15 +1713,32 @@ return { .adjust = adjust; }
 check(
   "an element expression preserves its component result in tail position",
   `const Draw = @effect { .create = Unit -> Int; }
-let div = fn _ => fn children =>
-  _ <- children ()
-  return Draw.create ()
+let div = fn _ => fn _children =>
+  result <- Draw.create ()
+  return result
 let view = fn () =>
-  _ <- <div></div>
+  <- <div></div>
   return <div></div>
 return { .view = view; }
 `,
   "{ .view = () -> Int ~ { Draw }; }",
+);
+
+check(
+  "an element child stays suspended when its parent ignores it",
+  `const Draw = @effect { .write = Str -> Unit; }
+let Ignore = fn _ => fn _children => ()
+let Child = fn _ => fn _children =>
+  result <- Draw.write "not run"
+  return result
+let view = fn () =>
+  <Ignore>
+    <Child />
+  </Ignore>
+  return ()
+return { .view = view; }
+`,
+  "{ .view = () -> (); }",
 );
 
 check(
@@ -1757,7 +1774,7 @@ check(
 
 rejects(
   "element property rows reject misspelled fields",
-  `sig Button = { .label = Str; } -> (Unit -> Unit) -> Unit
+  `sig Button = { .label = Str; } -> [Unit -> Unit] -> Unit
 let Button = fn _ => fn _ => ()
 return <Button .lable="Save" />
 `,

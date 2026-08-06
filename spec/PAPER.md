@@ -214,24 +214,23 @@ evaluate_surface(s) = observe(evaluate_core(elaborate(s)))
 An element has no built-in DOM, renderer, node type, or text operation.
 
 ```blot
-_ <- <Button .label="Save">
-  _ <- text "ready"
+<Button .label="Save">
+  text "ready"
 </Button>
 ```
 
 The element expression itself elaborates to an ordinary component call whose
-second argument is a nullary child computation:
+second argument is an array of suspended child computations:
 
 ```blot
-Button { .label = "Save"; } (fn () =>
-  _ <- text "ready"
-)
+Button { .label = "Save"; } [fn () => text "ready"]
 ```
 
-The surrounding `_ <-` is what sequences and discards that application. A named
-bind retains the component's result, and a tail element returns it as the tail
-of the enclosing computation. Element syntax therefore changes neither the
-component's result nor its effect row.
+A bare element statement sequences and discards that application. A named bind
+retains the component's result, and a tail element returns it as the tail of the
+enclosing computation. Each child effect remains suspended until the component
+calls its corresponding nullary function. Element syntax therefore changes
+neither the component's result nor its effect row.
 
 The component decides whether and how often to execute its children, subject to
 the child's ownership contract. An unrestricted child may be called repeatedly;
@@ -1218,7 +1217,8 @@ and divergence boundaries.
 - A demanded pure `let` is evaluated once.
 - `<-` executes left to right exactly once.
 - Moving a pure definition does not move a computation.
-- Case and element child computations execute only when selected/called.
+- Case branches and element child computations execute only when selected or
+  called.
 
 Update `LANGUAGE.md` to state liveness erasure and strict source order. This
 resolves the largest semantic contradiction before changing IR.

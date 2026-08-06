@@ -19,7 +19,7 @@ const camera = @import "./lib/camera.blot" ()
 // The capability is opaque at compile time, so the record survives to the
 // backend instead of being folded away before it can be lowered.
 let observed = fn zoom =>
-  _ <- init.print "framing"
+  <- init.print "framing"
   return { .zoom = zoom; .angle = 7; .scale = 3; }
 
 seen <- observed 4

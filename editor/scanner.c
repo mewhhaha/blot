@@ -182,7 +182,8 @@ bool tree_sitter_blot_external_scanner_scan(
     return false;
   }
   const bool closes_delimiter = lexer->lookahead == '}' ||
-    lexer->lookahead == ']' || lexer->lookahead == ')';
+    lexer->lookahead == ']' || lexer->lookahead == ')' ||
+    (lexer->lookahead == '<' && indent < current);
   if (
     valid_symbols[LAYOUT_DEDENT] && scanner->count > 1 && closes_delimiter
   ) {
@@ -202,6 +203,7 @@ bool tree_sitter_blot_external_scanner_scan(
   if (valid_symbols[LAYOUT_INDENT] && indent > current) {
     if (scanner->count == 64) return false;
     scanner->indents[scanner->count++] = indent;
+    lexer->mark_end(lexer);
     lexer->result_symbol = LAYOUT_INDENT;
     return true;
   }

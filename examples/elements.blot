@@ -5,14 +5,16 @@ const Draw = @effect {
 }
 
 let element = fn name => fn _properties => fn children =>
-  _ <- Draw.write ("<" <> name <> ">")
-  _ <- children ()
-  _ <- Draw.write ("</" <> name <> ">")
+  <- Draw.write ("<" <> name <> ">")
+  for child in Iter.items children:
+    <- child ()
+
+  <- Draw.write ("</" <> name <> ">")
   return name
 
 let Render = {
   .text = fn text =>
-    _ <- Draw.write text
+    <- Draw.write text
   ;
   .div = element "div";
   .icon = element "icon";
@@ -26,7 +28,7 @@ sig Button = {
   .label = Str;
   .disabled? = Bool;
   .order? = Int;
-} -> (Unit -> Unit) -> Unit ~ { Draw }
+} -> [Unit -> Unit ~ { Draw }] -> Unit ~ { Draw }
 let Button = fn properties => fn children =>
   let disabled = case properties.disabled of
     () => ""
@@ -35,17 +37,19 @@ let Button = fn properties => fn children =>
   let order = case properties.order of
     () => ""
     value => " data-order=" <> Text.of_int value
-  _ <- Draw.write ("<button" <> disabled <> order <> ">")
-  _ <- text properties.label
-  _ <- children ()
-  _ <- Draw.write "</button>"
+  <- Draw.write ("<button" <> disabled <> order <> ">")
+  <- text properties.label
+  for child in Iter.items children:
+    <- child ()
+
+  <- Draw.write "</button>"
 
 let view = fn () =>
   root <- <div .class="counter" .hidden=False>
-    _ <- text "Count: "
-    _ <- <Button .label="Save" />
-    _ <- <Button .label="Delete" .disabled=True .order=2 />
-    _ <- <icon />
+    text "Count: "
+    <Button .label="Save" />
+    <Button .label="Delete" .disabled=True .order=2 />
+    <icon />
   </div>
   return root
 
@@ -60,7 +64,7 @@ let collecting = {
 return @handle (
   Draw,
   (fn () =>
-    _ <- view ()
+    <- view ()
   ),
   collecting
 )

@@ -1,0 +1,6 @@
+open @import "blot:prelude" ()
+
+sig identity = Int -> Int
+const identity = fn value => value
+
+return { .identity = identity; }

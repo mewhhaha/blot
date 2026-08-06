@@ -20,7 +20,7 @@ for index in Iter.range (0, line_count):
   line <- File.line index
   let matching = Text.contains line pattern
   if matching:
-    _ <- Console.write line
+    <- Console.write line
 
   count := if matching:
     return count + 1

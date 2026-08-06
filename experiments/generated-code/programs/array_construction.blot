@@ -1,0 +1,14 @@
+open @import "blot:prelude" ()
+
+sig construct_go = (Int, [Int]) -> Int
+const construct_go = rec (fn (remaining, values) =>
+  if remaining <= 0:
+    return @array.len values
+
+  return construct_go (remaining - 1, @array.push values remaining)
+)
+
+sig construct = Int -> Int
+const construct = fn count => construct_go (count, @array.empty)
+
+return { .construct = construct; }

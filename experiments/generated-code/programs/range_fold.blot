@@ -1,0 +1,14 @@
+open @import "blot:prelude" ()
+
+sig fold_go = (Int, Int) -> Int
+const fold_go = rec (fn (remaining, total) =>
+  if remaining <= 0:
+    return total
+
+  return fold_go (remaining - 1, total + remaining)
+)
+
+sig fold = Int -> Int
+const fold = fn count => fold_go (count, 0)
+
+return { .fold = fold; }

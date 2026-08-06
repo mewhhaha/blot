@@ -4,12 +4,13 @@ Blot is a functional language built as one coherent system: compact CST parsing,
 comptime evaluation, algebraic subtyping, typed effects, ownership,
 specialization, and WebAssembly compilation all shape the source language.
 
-See [LANGUAGE.md](LANGUAGE.md) for the current language and the
-[specification map](spec/README.md) for the language model, compiler theorem,
-typechecking theory, staging, safety, lowering, incrementality, and cost model.
-Executable application studies live in [case-studies/](case-studies/): a
-grep-like file search, an interactive terminal program, an agent-style
-conversation loop, and a 3D engine with a browser host and hot reload.
+See [DOCS.md](DOCS.md) for idiomatic Blot, [LANGUAGE.md](LANGUAGE.md) for the
+current language, and the [specification map](spec/README.md) for the language
+model, compiler theorem, typechecking theory, staging, safety, lowering,
+incrementality, and cost model. Executable application studies live in
+[case-studies/](case-studies/): a grep-like file search, an interactive terminal
+program, an agent-style conversation loop, and a 3D engine with a browser host
+and hot reload.
 
 The package is published as `@mewhhaha/blot`. Its TypeScript surface is a thin
 filesystem and package host around the checked-in Rust/WebAssembly compiler:
@@ -205,6 +206,7 @@ if let p = x else:       // bind p or leave through the else branch
   return fallback
 name := expr             // shadow a name while preserving its type
 name <- expr             // sequence an effect and bind its result
+<- expr                  // sequence an effect and discard its result
 return expr              // exit the current explicit result scope
 ```
 
@@ -249,25 +251,25 @@ from a statement branch or across a loop. Bare `break` only exits a `for`. A
 bare trailing expression remains invalid because a trailing name and the start
 of `name := ...` have the same one-token prefix.
 
-Element expressions are ordinary component calls with property records and a
-nullary child computation:
+Elements are ordinary component calls with property records and an array of
+suspended child computations:
 
 ```blot
-_ <- <div .class="counter" .hidden={hidden}>
-  _ <- text "Count: "
-  _ <- <Button .disabled=True />
+<div .class="counter" .hidden={hidden}>
+  text "Count: "
+  <Button .disabled=True />
 </div>
 ```
 
 The element lowers only to
-`div { .class = "counter"; .hidden = hidden; } children`; the written `<-`
-sequences it. Both `div` and `Button` are ordinary lexical bindings, and their
-result types are preserved. The syntax supplies no implicit renderer or text
-operation. The body contains ordinary statements, so effect order stays
-explicit, and a component renders its children by sequencing `children ()`. A
-component's expected record makes ordinary fields required. Writing
-`.field? = T` in that record means `.field = T | ()`, so the field may be
-omitted and receives `()` at the call.
+`div { .class = "counter"; .hidden = hidden; } children`. A bare element
+statement sequences and discards that application; value-position elements
+preserve its result. Both `div` and `Button` are ordinary lexical bindings. The
+syntax supplies no implicit renderer or text operation. Each body value is
+suspended as one nullary function in the child array, so the component decides
+which children execute and in which order. A component's expected record makes
+ordinary fields required. Writing `.field? = T` in that record means
+`.field = T | ()`, so the field may be omitted and receives `()` at the call.
 
 `for` is a declaration rather than an expression because what it produces is an
 effect on the enclosing scope: the names its body rebinds with `:=` are the
@@ -482,7 +484,7 @@ let ask = fn () =>
 const Console = @effect { .write = Str -> Unit; }
 
 let report = fn () =>
-  _ <- Console.write "one"
+  <- Console.write "one"
   return "done"
 
 let joining = {
@@ -536,7 +538,7 @@ module init
 
 let printing = {
   .write = fn (message, resume) =>
-    _ <- init.print message     // opaque; the program can only call it
+    <- init.print message     // opaque; the program can only call it
     result <- resume ()
     return result
   ;

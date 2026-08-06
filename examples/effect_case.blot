@@ -3,7 +3,7 @@ open @import "blot:prelude" ()
 const Console = @effect { .write = Str -> Unit; }
 
 let choose = fn selected =>
-  _ <- case selected of
+  <- case selected of
     1 => Console.write "one"
     _ => Console.write "other"
 

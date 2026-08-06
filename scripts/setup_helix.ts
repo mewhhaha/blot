@@ -148,7 +148,7 @@ const layoutConflicts = `
     [$.postfix_expression],
     [$.application_argument],
   ],`;
-const editorGrammar = `${
+let editorGrammar = `${
   grammarJs.slice(0, cut)
 }${externalLayout}${layoutConflicts}
 
@@ -161,6 +161,16 @@ const editorGrammar = `${
   },
 ${grammarJs.slice(cut)}`
   .replace(/^\s*LAYOUT_(?:NEWLINE|INDENT|DEDENT):.*\n/gm, "");
+const elementBodyStart =
+  'field("body_start", $.LAYOUT_NEWLINE), $.LAYOUT_INDENT';
+if (!editorGrammar.includes(elementBodyStart)) {
+  throw new Error("grammar.js has no element body layout sequence");
+}
+// The external scanner recognizes and consumes the suite's physical newline
+// while producing INDENT. Requiring NEWLINE first would make it classify
+// arbitrary child values as statement starts before it knows this is an
+// element body.
+editorGrammar = editorGrammar.replace(elementBodyStart, "$.LAYOUT_INDENT");
 await Deno.writeTextFile(
   grammarJsPath,
   editorGrammar,

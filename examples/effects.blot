@@ -46,8 +46,8 @@ let answering = {
 // thing the printer would: the body may perform `Console` and nothing else.
 sig greet = Unit -> Str ~ { Console }
 let greet = fn () =>
-  _ <- Console.write "hello"
-  _ <- Console.write "world"
+  <- Console.write "hello"
+  <- Console.write "world"
   return "done"
 
 // A handler is a shape: one field per operation taking `(argument, ?resume)`,

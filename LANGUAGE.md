@@ -554,14 +554,19 @@ of the inner loop instead.
 
 ```blot
 name <- expression
+<- expression
 ```
 
 This is the only declaration form that admits an effectful expression. It binds
-one name, not a pattern, and evaluates the expression exactly as written. It
-does not insert a unit argument, so a nullary operation is explicit:
+one name, not a pattern, and evaluates the expression exactly as written. The
+leading form discards the result and is exactly equivalent to `_ <- expression`;
+it is sequencing syntax, not a prefix operator. The formatter uses the leading
+form as the canonical spelling. Neither form inserts a unit argument, so a
+nullary operation is explicit:
 
 ```blot
 request <- Runtime.request ()
+<- Console.write "ready"
 ```
 
 `let`, `const`, `:=`, `open`, function results written without a block, and
@@ -576,18 +581,24 @@ The left-hand binding in a `try` handler step is a separate bounded surface
 form. Section 12.2 specifies how it binds the newly handled computation without
 executing it.
 
-### 4.6 Element expressions
+### 4.6 Element expressions and statements
 
-An element expression applies an ordinary component binding to a property record
-and a child computation. It does not sequence or discard the resulting
-expression:
+An element applies an ordinary component binding to a property record and an
+array of suspended child computations. Written as a bare statement, it executes
+the component and discards that component's result:
 
 ```blot
-_ <- <div .class="counter" .hidden={hidden}>
-  _ <- text "Count: "
-  _ <- <Button .disabled=True />
+<div .class="counter" .hidden={hidden}>
+  text "Count: "
+  <Button .disabled=True />
 </div>
 ```
+
+Element syntax remains a value in every value position. A named effect binding
+retains its result as `reference <- <div />`, and `return <div />` makes it the
+tail computation. Only the bare statement spelling supplies the discard. An
+element is a complete value form; parenthesize it before projecting from its
+result or placing it in a larger operator expression.
 
 The tag is a lexical binding with exactly the name written. Lower-case and
 capitalized tags have the same semantics: `<div>` reaches `div`, and `<Button>`
@@ -622,7 +633,7 @@ supplies `()` when it is omitted. Thus this signature requires `label` and makes
 sig Button = {
   .label = Str;
   .disabled? = Bool;
-} -> (Unit -> Unit) -> Unit ~ { Draw };
+} -> [Unit -> Unit ~ { Draw }] -> Unit ~ { Draw };
 ```
 
 `<Button .label="Save" />` supplies `()` as `.disabled`, while `<Button />` is a
@@ -634,48 +645,54 @@ A component is otherwise an ordinary curried function. For example:
 
 ```blot
 let component = fn properties => fn children =>
-  _ <- children ()
+  for child in Iter.items children:
+    <- child ()
+
+  return ()
 ```
 
-Its principal type prints as `'a -> (() -> 'b ~ { e }) -> () ~ { e }`: the
-property argument remains polymorphic until the component inspects it, and the
-inferred row variable propagates exactly the effects performed by its child.
-Projecting fields or attaching a signature constrains `'a` to a record;
+Its principal type admits an array of nullary computations. The property
+argument remains polymorphic until the component inspects it, and calling a
+child propagates that child's inferred effects into the component. Projecting
+fields or attaching a signature constrains the property argument to a record;
 performing renderer operations adds their effects to the outer row.
 
-The component's result type is unchanged by element syntax. A component that
-returns `DivRef` may be sequenced and bound as `reference <- <div />`. An
-underscore bind explicitly discards that result. In tail position the element
-becomes the block's tail computation:
+The component's result type is unchanged by element syntax:
 
 ```blot
 let draw_twice = fn () =>
-  _ <- <div />
+  <div />
   return <div />
 ```
 
-The statements between paired tags become one indented `fn () =>` child
-computation. A self-closing element receives a function that returns `()`.
-Control inside the child computation has that new lambda as its boundary, and
-effects run only if the component sequences `children ()`. Nested element
-computations are sequenced explicitly like every other child statement. The full
-lowering of the first example is equivalent to:
+Each value between paired tags becomes one `fn () => value` entry in the child
+array. Its value is sequenced only when that function is called, and its result
+is returned from the function. A self-closing element receives `[]`. The
+component may inspect the computations, reorder them, keep only some of them, or
+execute them in source order. Control inside one child has that child's lambda
+as its boundary.
+
+The first example lowers conceptually to the equivalent of:
 
 ```blot
-_ <- div { .class = "counter"; .hidden = hidden; } (fn () =>
-  _ <- text "Count: "
-  _ <- Button { .disabled = True; } (fn () => ())
-)
+let first_child = fn () =>
+  child <- text "Count: "
+  return child
+let second_child = fn () =>
+  child <- Button { .disabled = True; } []
+  return child
+<- div { .class = "counter"; .hidden = hidden; } [first_child, second_child]
 ```
 
-Without the written `_ <-`, the same element lowers to the application on the
-right unchanged. The source form lowers completely during CST lowering. There is
-no element AST node, element type, renderer primitive, implicit effect, or
-backend path. Opening and closing names must match exactly. `</` and `/>` are
-reserved element delimiters; exact `<` and `>` remain available as fixity
-operators, while longer operator spellings continue to lex as operators. The
-exact brackets are infix operators only; using `<` as a prefix would be
-indistinguishable from opening an element expression.
+The outer `<-` in that expansion is the bare element statement's discard; a
+value-position element lowers to the application without it. The source form
+lowers completely during CST lowering. There is no element AST node, element
+type, renderer primitive, implicit effect, or backend path. Opening and closing
+names must match exactly. `</` and `/>` are reserved element delimiters; exact
+`<` and `>` remain available as fixity operators, while longer operator
+spellings continue to lex as operators. The exact brackets are infix operators
+only; using `<` as a prefix would be indistinguishable from opening an element
+expression.
 
 ### 4.7 Opening a record
 
@@ -1322,7 +1339,7 @@ An effectful `case` remains a value expression. Select the effectful branch and
 sequence the selected expression once at the surrounding scope:
 
 ```blot
-_ <- case choice of
+<- case choice of
   1 => first_effect ()
   _ => other_effect ()
 ```
@@ -1995,7 +2012,7 @@ continuation:
 ```blot
 let cancelling = {
   .write = fn (_, !resume) =>
-    _ <- Continuation.cancel resume
+    <- Continuation.cancel resume
     return replacement
   ;
 }
@@ -2030,9 +2047,10 @@ supplies its current computation as the omitted middle argument.
 
 Each bound step creates a nullary computation containing the corresponding
 ordinary three-argument `@handle`, binds that computation on the left of `<-`,
-and makes it current for the next step. Binding `_` suppresses the visible name
-without interrupting the composition. The final step executes the fully composed
-computation and supplies the value of the `try` expression.
+and makes it current for the next step. Leading `<-` suppresses the visible name
+without interrupting the composition; `_ <-` is its non-canonical equivalent.
+The final step executes the fully composed computation and supplies the value of
+the `try` expression.
 
 The example lowers to the equivalent of:
 
@@ -2363,7 +2381,7 @@ loop body does not repeat the source-level test or perform another lookup:
 
 ```blot
 for (index, value) in Iter.indexed xs:
-  _ <- visit (index, value)
+  <- visit (index, value)
 ```
 
 ### 13.3.1 Asking about a type
@@ -2507,10 +2525,10 @@ They do not perform implicit dispatch. An implementation is an ordinary record
 passed explicitly or named directly. `Text` satisfies both `Length Str` and
 `Monoid Str`. `Array` satisfies `Length [T]` and `Monoid [T]`; its `length`
 implementation borrows the array, while its `append` is prelude source over
-`fold` and `@array.push`. Ownership remains a separate flow property rather
-than part of the structural interface type. The default `<>` remains the
-concrete text operation `Text.append`. A module that wants the same spelling
-for arrays declares `Array.append` as its operator target.
+`fold` and `@array.push`. Ownership remains a separate flow property rather than
+part of the structural interface type. The default `<>` remains the concrete
+text operation `Text.append`. A module that wants the same spelling for arrays
+declares `Array.append` as its operator target.
 
 Important conventional values include:
 
@@ -2563,7 +2581,21 @@ Before gpufuck lowering, Blot:
 Runtime exports require a concrete first-order ABI. Supported boundary values
 include integers, text, unit, booleans, concrete records, arrays, variants,
 seals, and functions over supported values. Types and effects remain
-compile-time manifest entries and have no invented runtime encoding.
+compile-time manifest entries and have no invented runtime encoding. An exported
+function's curried source domains become ordered ABI parameters; calling it
+enters the same residual function graph used by internal direct and recursive
+calls. Its parameters and result therefore obey the same trapping, effect, and
+immutable-Store semantics as an in-module application.
+
+Residual recursion becomes a direct runtime function call. Runtime values that
+are lexically free in the recursive closure become additional internal function
+parameters and are passed at every recursive edge; compile-time free values stay
+erased. Recursion residualizes when either its explicit argument or one of those
+free values is runtime-known. Inferred closure signatures are checked facts
+attached to the defining module and lambda body, including when that module is
+loaded from the compiler-distributed prelude snapshot. Higher-order applications
+instantiate their representation variables before a nested recursive closure is
+lowered. These transformations change neither source scope nor the public ABI.
 
 A residual structurally polymorphic function is specialized to a concrete record
 shape before gpufuck. The shape is the one that _flows_ to the projection, not
@@ -2707,7 +2739,7 @@ for ever:
 
 let report = fn () =>
   let text = describe #Ready ++ Text.of_int attempts
-  _ <- Console.write text
+  <- Console.write text
   return text
 
 return {

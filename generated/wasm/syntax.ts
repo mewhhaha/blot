@@ -234,6 +234,8 @@ export type RuleName =
   | "binding"
   | "declaration_tag"
   | "rebinding"
+  | "sequencing"
+  | "element_line"
   | "iteration"
   | "iteration_source"
   | "breaking"
@@ -272,6 +274,8 @@ export type RuleName =
   | "element_property_expression"
   | "element_self_close"
   | "element_body"
+  | "element_child"
+  | "element_child_value"
   | "value"
   | "shape"
   | "shape_member"
@@ -387,6 +391,18 @@ export interface RebindingCursor extends RuleCursorBase<"rebinding"> {
   field(name: "arrow"): TokenCursor<"literal", ":="> | TokenCursor<"literal", "<-">;
   field(name: "name"): TokenCursor<"named", "IDENT"> | TokenCursor<"named", "TYPE_IDENT">;
   field(name: "value"): ValueCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface SequencingCursor extends RuleCursorBase<"sequencing"> {
+  field(name: "value"): ValueCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ElementLineCursor extends RuleCursorBase<"element_line"> {
+  field(name: "value"): ElementExpressionCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -596,12 +612,22 @@ export interface ElementSelfCloseCursor extends RuleCursorBase<"element_self_clo
 }
 
 export interface ElementBodyCursor extends RuleCursorBase<"element_body"> {
+  field(name: "body"): readonly [TokenCursor<"named", "LAYOUT_NEWLINE">, TokenCursor<"named", "LAYOUT_INDENT">, ReadonlyArray<ElementChildCursor | ElementLineCursor>, TokenCursor<"named", "LAYOUT_DEDENT">] | null;
   field(name: "body_end"): TokenCursor<"named", "LAYOUT_DEDENT"> | null;
-  field(name: "body_start"): readonly [TokenCursor<"named", "LAYOUT_NEWLINE">, TokenCursor<"named", "LAYOUT_INDENT">] | null;
-  field(name: "children"): ReadonlyArray<StatementCursor>;
+  field(name: "body_start"): TokenCursor<"named", "LAYOUT_NEWLINE"> | null;
+  field(name: "children"): ReadonlyArray<ElementChildCursor | ElementLineCursor> | null;
   field(name: "closing"): ElementNameCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ElementChildCursor extends RuleCursorBase<"element_child"> {
+  field(name: "value"): ElementChildValueCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ElementChildValueCursor extends RuleCursorBase<"element_child_value"> {
 }
 
 export interface ValueCursor extends RuleCursorBase<"value"> {
@@ -735,7 +761,7 @@ export interface HandlerCompositionCursor extends RuleCursorBase<"handler_compos
 
 export interface HandlerCompositionStepCursor extends RuleCursorBase<"handler_composition_step"> {
   field(name: "action"): HandlerCompositionActionCursor;
-  field(name: "name"): TokenCursor<"named", "IDENT"> | TokenCursor<"named", "TYPE_IDENT">;
+  field(name: "name"): TokenCursor<"named", "IDENT"> | TokenCursor<"named", "TYPE_IDENT"> | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -784,6 +810,8 @@ export type AnyRuleCursor =
   | BindingCursor
   | DeclarationTagCursor
   | RebindingCursor
+  | SequencingCursor
+  | ElementLineCursor
   | IterationCursor
   | IterationSourceCursor
   | BreakingCursor
@@ -822,6 +850,8 @@ export type AnyRuleCursor =
   | ElementPropertyExpressionCursor
   | ElementSelfCloseCursor
   | ElementBodyCursor
+  | ElementChildCursor
+  | ElementChildValueCursor
   | ValueCursor
   | ShapeCursor
   | ShapeMemberCursor

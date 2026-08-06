@@ -110,10 +110,10 @@ Effects and structural interfaces need no parallel lint AST. An effect, its
 written row, and `Empty`, `Length`, `Semigroup`, or `Monoid` are ordinary
 expressions, so the same expression visitor reaches all of them. Effect
 declarations remain sequenced: when a `<-` result is unread, the action changes
-only its name to `_` instead of deleting the effect. Interface implementations
-remain explicitly scoped values. The linter does not replace a primitive with an
-interface member merely because their inferred types agree, since a same-typed
-shadowed member may have different behavior.
+the binding to leading `<-` instead of deleting the effect. Interface
+implementations remain explicitly scoped values. The linter does not replace a
+primitive with an interface member merely because their inferred types agree,
+since a same-typed shadowed member may have different behavior.
 
 ## What gets written
 

@@ -323,8 +323,9 @@ function statementsContainEffect(cursors: readonly Cursor[]): boolean {
   for (const cursor of cursors) {
     const rule = statementRule(cursor);
     if (
-      rule.name === "rebinding" &&
-      tokenOf(required(rule, "arrow")).text === "<-"
+      rule.name === "sequencing" || rule.name === "element_line" ||
+      (rule.name === "rebinding" &&
+        tokenOf(required(rule, "arrow")).text === "<-")
     ) {
       return true;
     }
@@ -1730,6 +1731,26 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       span: rule.span,
     };
   }
+  if (rule.name === "sequencing") {
+    return {
+      tag: "binding",
+      kind: "effect",
+      tags: [],
+      pattern: { tag: "name", name: "_", qualifier: "none", span: rule.span },
+      value: lowerValue(asRule(field(rule, "value"), "value"), context),
+      span: rule.span,
+    };
+  }
+  if (rule.name === "element_line") {
+    return {
+      tag: "binding",
+      kind: "effect",
+      tags: [],
+      pattern: { tag: "name", name: "_", qualifier: "none", span: rule.span },
+      value: lowerPrimary(required(rule, "value"), context),
+      span: rule.span,
+    };
+  }
   fail(
     "BLOT_UNKNOWN_DECLARATION",
     `Unknown declaration \`${rule.name}\`.`,
@@ -2046,6 +2067,9 @@ function lowerValue(rule: Rule, context: Context): Expr {
   const inner = unwrap(rule);
   const target = asRule(inner, "value alternative");
   if (target.name === "lambda") return lowerLambda(target, context);
+  if (target.name === "element_expression") {
+    return lowerPrimary(target, context);
+  }
   return lowerExpression(target, context);
 }
 
@@ -2230,10 +2254,7 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     );
 
     const ending = asRule(required(rule, "ending"), "element ending");
-    let childBody: Expr = {
-      tag: "unit",
-      span: ending.span,
-    };
+    const childElements: ArrayElement[] = [];
     if (ending.name === "element_body") {
       const closingName = tokenOf(required(ending, "closing"));
       if (closingName.text !== elementName.text) {
@@ -2250,23 +2271,49 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
         returnScope: false,
         escapeBoundary: "none",
       };
-      if (statementsNeedControlLowering(children)) {
-        childBody = resolveControlSequence(
-          children,
-          { tag: "unit", span: ending.span },
-          childContext,
-          ending.span,
-        );
-      } else {
-        childBody = {
-          tag: "block",
-          declarations: children.map((child) =>
-            lowerDecl(statementRule(child), childContext)
-          ),
-          result: { tag: "unit", span: ending.span },
-          resultEffects: "pure",
-          span: ending.span,
-        };
+      for (const cursor of children) {
+        const child = asRule(cursor, "element child");
+        if (
+          child.name !== "element_line" && child.name !== "element_child"
+        ) {
+          fail(
+            "BLOT_UNKNOWN_ELEMENT_CHILD",
+            `Unknown element child \`${child.name}\`.`,
+            child.span,
+          );
+        }
+        const resultName = `elementChild$${child.span.start}$${child.span.end}`;
+        const childValue = required(child, "value");
+        const value = child.name === "element_line"
+          ? lowerPrimary(childValue, childContext)
+          : lowerValue(asRule(childValue, "value"), childContext);
+        childElements.push({
+          spread: false,
+          value: {
+            tag: "lambda",
+            parameter: { tag: "unit", span: child.span },
+            body: {
+              tag: "block",
+              declarations: [{
+                tag: "binding",
+                kind: "effect",
+                tags: [],
+                pattern: {
+                  tag: "name",
+                  name: resultName,
+                  qualifier: "none",
+                  span: child.span,
+                },
+                value,
+                span: child.span,
+              }],
+              result: { tag: "var", name: resultName, span: child.span },
+              resultEffects: "ambient",
+              span: child.span,
+            },
+            span: child.span,
+          },
+        });
       }
     } else {
       expect(
@@ -2276,9 +2323,8 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     }
 
     const children: Expr = {
-      tag: "lambda",
-      parameter: { tag: "unit", span: ending.span },
-      body: childBody,
+      tag: "array",
+      elements: childElements,
       span: ending.span,
     };
     const withProperties: Expr = {
@@ -2482,7 +2528,8 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
         },
         span: step.span,
       };
-      const name = tokenOf(required(step, "name")).text;
+      const nameCursor = field(step, "name");
+      const name = nameCursor === null ? "_" : tokenOf(nameCursor).text;
       if (name === "_") {
         current = handled;
         continue;

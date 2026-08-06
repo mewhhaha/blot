@@ -396,7 +396,7 @@ function valueSiteAt(
       case "array":
         for (const element of expression.elements) visit(element.value);
         return;
-      case "shape":
+      case "shape": {
         let memberStart = expression.span.start;
         for (const member of expression.members) {
           if (member.tag === "field" && member.name === token.text) {
@@ -422,6 +422,7 @@ function valueSiteAt(
           memberStart = member.value.span.end;
         }
         return;
+      }
       case "if":
         for (const branch of expression.branches) {
           visit(branch.condition);
@@ -704,7 +705,7 @@ const PUNCTUATION_DOCUMENTATION: Readonly<Record<string, string>> = {
   "=": "Associates a binding, signature, field, or pattern with its value.",
   ":=": "Rebinds an existing name while preserving its stable type.",
   "<-":
-    "Sequences an already-applied effectful expression and binds its result.",
+    "Sequences an already-applied effectful expression. `name <- effect` binds its result; leading `<- effect` discards it.",
   "=>": "Separates a function parameter or case pattern from its body.",
   ":": "Introduces an indentation-delimited statement or branch suite.",
   "...": "Spreads the members or elements of the following value.",

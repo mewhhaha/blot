@@ -77,8 +77,31 @@ const INDENTED_RULES = new Set([
  * lexer and cannot be dropped by printing from the elaborated AST.
  */
 export async function formatSource(source: string): Promise<FormatResult> {
-  const parsed = await parseConcrete(source);
+  let parsed = await parseConcrete(source);
   if (!parsed.ok) return parsed;
+
+  const preferredSequencing = preferDiscardSequencing(source, parsed.cst);
+  if (preferredSequencing !== source) {
+    const reparsed = await parseConcrete(preferredSequencing);
+    if (
+      reparsed.ok &&
+      moduleWithoutSpans(reparsed.module) === moduleWithoutSpans(parsed.module)
+    ) {
+      source = preferredSequencing;
+      parsed = reparsed;
+    }
+  }
+  const preferredElements = preferElementStatements(source, parsed.cst);
+  if (preferredElements !== source) {
+    const reparsed = await parseConcrete(preferredElements);
+    if (
+      reparsed.ok &&
+      moduleWithoutSpans(reparsed.module) === moduleWithoutSpans(parsed.module)
+    ) {
+      source = preferredElements;
+      parsed = reparsed;
+    }
+  }
 
   const redundantParentheses: Span[] = [];
   collectRedundantParentheses(parsed.cst, [], source, redundantParentheses);
@@ -653,6 +676,80 @@ function collectRules(
   for (const child of node.children()) collectRules(child, name, rules);
 }
 
+function preferDiscardSequencing(
+  source: string,
+  concrete: ConcreteRule,
+): string {
+  const bindings: ConcreteRule[] = [];
+  collectRules(concrete, "rebinding", bindings);
+  collectRules(concrete, "handler_composition_step", bindings);
+  const discardedNames = bindings.flatMap((binding) => {
+    const name = directToken(binding, "_");
+    const arrow = directToken(binding, "<-");
+    if (name === null || arrow === null || name.span.end > arrow.span.start) {
+      return [];
+    }
+    if (!/^[ \t]*$/.test(source.slice(name.span.end, arrow.span.start))) {
+      return [];
+    }
+    return [{ start: name.span.start, end: arrow.span.start }];
+  }).sort((left, right) => right.start - left.start);
+
+  let preferred = source;
+  for (const discardedName of discardedNames) {
+    preferred = replaceSpan(preferred, discardedName, "");
+  }
+  return preferred;
+}
+
+function preferElementStatements(
+  source: string,
+  concrete: ConcreteRule,
+): string {
+  const sequencingRules: ConcreteRule[] = [];
+  collectRules(concrete, "sequencing", sequencingRules);
+  const prefixes = sequencingRules.flatMap((sequencing) => {
+    const value = directRule(sequencing, "value");
+    const element = value === null ? null : bareElement(value);
+    const arrow = directToken(sequencing, "<-");
+    if (
+      element === null || arrow === null || arrow.span.end > element.span.start
+    ) {
+      return [];
+    }
+    if (!/^[ \t]*$/.test(source.slice(arrow.span.end, element.span.start))) {
+      return [];
+    }
+    return [{ start: arrow.span.start, end: element.span.start }];
+  }).sort((left, right) => right.start - left.start);
+
+  let preferred = source;
+  for (const prefix of prefixes) preferred = replaceSpan(preferred, prefix, "");
+  return preferred;
+}
+
+function bareElement(value: ConcreteRule): ConcreteRule | null {
+  const directElement = directRule(value, "element_expression");
+  if (directElement !== null) return directElement;
+  const expression = directRule(value, "expression");
+  if (
+    expression === null || directRules(expression, "infix_operation").length > 0
+  ) return null;
+  const operand = directRule(expression, "operand");
+  if (operand === null || directRules(operand, "prefix_operator").length > 0) {
+    return null;
+  }
+  const postfix = directRule(operand, "postfix_expression");
+  if (
+    postfix === null ||
+    directRules(postfix, "application_argument").length > 0 ||
+    directRules(postfix, "field_suffix").length > 0
+  ) return null;
+  const primary = directRule(postfix, "primary_expression");
+  if (primary === null) return null;
+  return directRule(primary, "element_expression");
+}
+
 function containsRule(
   node: ConcreteNode,
   names: ReadonlySet<string>,
@@ -979,7 +1076,9 @@ function collectIndentRegions(
       let closesEffectValue = false;
       if (node.name === "parenthesized_or_tuple") {
         for (const ancestor of ancestors.toReversed()) {
-          if (ancestor.name === "rebinding") {
+          if (
+            ancestor.name === "rebinding" || ancestor.name === "sequencing"
+          ) {
             closesEffectValue = directToken(ancestor, "<-") !== null;
             break;
           }

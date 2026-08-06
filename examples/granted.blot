@@ -18,15 +18,15 @@ const Console = @effect { .write = Str -> Unit; }
 // capability, then resumes the rest of the computation.
 const to_host = {
   .write = fn (message, ?resume) =>
-    _ <- init.print message
+    <- init.print message
     result <- resume ()
     return result
   ;
 }
 
 const report = fn () =>
-  _ <- Console.write "compiled"
-  _ <- Console.write "linked"
+  <- Console.write "compiled"
+  <- Console.write "linked"
   return 42
 
 return @handle (Console, report, to_host)

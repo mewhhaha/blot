@@ -1,6 +1,0 @@
-let div = fn _ => fn _ => ()
-
-let view = fn () =>
-  <div></div>
-
-return view

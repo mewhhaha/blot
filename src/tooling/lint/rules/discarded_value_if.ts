@@ -1,5 +1,5 @@
 import type { Expr } from "../../../syntax/ast.ts";
-import type { LintRule, LintRuleContext } from "../types.ts";
+import type { LintRule } from "../types.ts";
 
 export const discardedValueIf: LintRule = {
   name: "discarded-value-if",
@@ -12,7 +12,10 @@ export const discardedValueIf: LintRule = {
         if (declaration.tag !== "binding" || declaration.kind !== "effect") {
           return;
         }
-        if (!context.hasConcreteOrigin(declaration, "rebinding")) return;
+        if (
+          !context.hasConcreteOrigin(declaration, "rebinding") &&
+          !context.hasConcreteOrigin(declaration, "sequencing")
+        ) return;
         if (
           declaration.pattern.tag !== "name" ||
           declaration.pattern.name !== "_"

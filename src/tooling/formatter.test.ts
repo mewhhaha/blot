@@ -162,12 +162,12 @@ Deno.test("formatting indents nested conditionals within calls", async () => {
     burning <- ResidenceBurning.get_or (tile, 0)
     population <- Population.get_or (editor_entity, 0)
     burning_count <- BurningCount.get_or (editor_entity, 0)
-    _ <- Population.set (editor_entity, if population > 0 : population - 1
+    <- Population.set (editor_entity, if population > 0 : population - 1
     else: 0)
-    _ <- BurningCount.set (editor_entity, if burning > 0 : if burning_count > 0 : burning_count - 1
+    <- BurningCount.set (editor_entity, if burning > 0 : if burning_count > 0 : burning_count - 1
     else: 0
     else: burning_count)
-    _ <- Residences.remove tile
+    <- Residences.remove tile
 
   return ()
 return remove_residence
@@ -184,14 +184,14 @@ return remove_residence
     burning <- ResidenceBurning.get_or (tile, 0)
     population <- Population.get_or (editor_entity, 0)
     burning_count <- BurningCount.get_or (editor_entity, 0)
-    _ <- Population.set (
+    <- Population.set (
         editor_entity,
         if population > 0:
           return population - 1
         else:
           return 0
       )
-    _ <- BurningCount.set (
+    <- BurningCount.set (
         editor_entity,
         if burning > 0:
           if burning_count > 0:
@@ -201,7 +201,7 @@ return remove_residence
         else:
           return burning_count
       )
-    _ <- Residences.remove tile
+    <- Residences.remove tile
 
   return ()
 return remove_residence
@@ -216,7 +216,7 @@ return remove_residence
 
 Deno.test("formatting separates delimiters after an element property conditional", async () => {
   const source = `let render = fn state =>
-  _ <- <Object .material={material (color (180000, 850000, 1000000), if state == 3: 800000 else: 250000)} />
+  <- <Object .material={material (color (180000, 850000, 1000000), if state == 3: 800000 else: 250000)} />
   return ()
 return render
 `;
@@ -227,7 +227,7 @@ return render
   assertEquals(
     formatted.source,
     `let render = fn state =>
-  _ <- <Object .material={material (
+  <Object .material={material (
       color (180000, 850000, 1000000),
       if state == 3:
         return 800000
@@ -244,6 +244,31 @@ return render
     semanticTree(await parse(formatted.source)),
     semanticTree(await parse(source)),
   );
+});
+
+Deno.test("formatting indents suspended element children under their parent", async () => {
+  const source = `let render = fn () =>
+  viewport <- Viewport.current ()
+  <- <Camera .projection={perspective} .zoom=1000000>
+    <MeshResource .id=0 .url="/assets/cube.obj" />
+    <DirectionalLight
+      .color={color (1000000, 940000, 820000)}
+      .intensity=850000
+    />
+    <Object
+      .id=0
+      .transform={transform (
+        vec3 (0, 0, 0),
+        uniform_scale 1100000
+      )}
+    />
+  </Camera>
+  return ()
+return render
+`;
+  const expected = source.replace("<- <Camera", "<Camera");
+  assertEquals(await formatSource(source), { ok: true, source: expected });
+  assertEquals(await formatSource(expected), { ok: true, source: expected });
 });
 
 Deno.test("formatting places each long array element on its own line", async () => {
@@ -428,10 +453,10 @@ return load
 
 Deno.test("formatting staggers adjacent vertical delimiters", async () => {
   const source = `let draw = fn values =>
-  _ <- each (
+  <- each (
   values,
   (fn value =>
-    _ <- visit value
+    <- visit value
   )
   )
 return draw
@@ -440,10 +465,10 @@ return draw
   await assertStableFormatting(
     source,
     `let draw = fn values =>
-  _ <- each (
+  <- each (
       values,
       fn value =>
-        _ <- visit value
+        <- visit value
     )
 return draw
 `,
@@ -540,6 +565,39 @@ Deno.test("formatting normalizes line endings and trailing whitespace", async ()
     `let value = [first, second]
 return value
 `,
+  );
+});
+
+Deno.test("formatting prefers leading discard sequencing", async () => {
+  const sugared = `<- perform_work ()
+return ()
+`;
+  const explicit = `_ <- perform_work ()
+return ()
+`;
+  assertEquals(
+    semanticTree(await parse(sugared)),
+    semanticTree(await parse(explicit)),
+  );
+  assertEquals(await formatSource(sugared), { ok: true, source: sugared });
+  assertEquals(await formatSource(explicit), { ok: true, source: sugared });
+});
+
+Deno.test("formatting prefers leading discard in handler composition", async () => {
+  const source = `let result = try program with
+  _ <- @handle (Console, console_handler)
+  @handle (Clock, clock_handler)
+return result
+`;
+  const expected = `let result = try program with
+  <- @handle (Console, console_handler)
+  @handle (Clock, clock_handler)
+return result
+`;
+  assertEquals(await formatSource(source), { ok: true, source: expected });
+  assertEquals(
+    semanticTree(await parse(source)),
+    semanticTree(await parse(expected)),
   );
 });
 
@@ -642,7 +700,7 @@ Deno.test("formatting joins a short layout-significant continuation", async () =
   const source = `const sum = fn (left, right) => left
   + right
 if sum (1, 2) == 3:
-  _ <- effect ()
+  <- effect ()
 
 return ()
 `;
@@ -652,7 +710,7 @@ return ()
     formatted.source,
     `const sum = fn (left, right) => left + right
 if sum (1, 2) == 3:
-  _ <- effect ()
+  <- effect ()
 
 return ()
 `,
@@ -701,7 +759,12 @@ function semanticTree(value: unknown): unknown {
 
   const tree: Record<string, unknown> = {};
   for (const [key, field] of Object.entries(record)) {
-    if (key !== "span") tree[key] = semanticTree(field);
+    if (key === "span") continue;
+    if (key === "name" && typeof field === "string") {
+      tree[key] = field.replace(/\$[0-9]+/g, "$span");
+      continue;
+    }
+    tree[key] = semanticTree(field);
   }
   return tree;
 }

@@ -1,0 +1,14 @@
+open @import "blot:prelude" ()
+
+sig count_to = Int -> Int
+const count_to = fn limit =>
+  sig go = (Int, Int) -> Int
+  let go = rec (fn (index, total) =>
+    if index < limit:
+      return go (index + 1, total + index)
+
+    return total
+  )
+  return go (0, 0)
+
+return { .count_to = count_to; }

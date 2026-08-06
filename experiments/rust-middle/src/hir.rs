@@ -1,12 +1,16 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
 use serde::Serialize;
 
 use crate::diagnostic::Diagnostic;
-use crate::eval::{Computation, Context, Phase, Runtime, evaluate_expression, evaluate_module};
+use crate::eval::{
+    Computation, Context, Phase, Runtime, closure_free_names, evaluate_expression, evaluate_module,
+};
 use crate::typecheck::{CheckedModule, Domain, Scalar, Type};
-use crate::value::{OrderedFields, RuntimeMeaning, RuntimeValue, Value};
+use crate::value::{
+    Environment, OrderedFields, RuntimeMeaning, RuntimeValue, Value, child_env, lookup,
+};
 
 #[derive(Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -97,6 +101,10 @@ pub(crate) struct RuntimeOperation {
     pub(crate) lane: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) field: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) function: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) signature: Option<usize>,
 }
 
 #[derive(Clone, Serialize)]
@@ -229,6 +237,53 @@ pub(crate) struct ResidualTrace {
     current_block: usize,
     next_value: usize,
     active_primitive: Option<String>,
+    functions: BTreeMap<usize, RuntimeFunction>,
+    function_ids: HashMap<String, (usize, usize)>,
+    next_function: usize,
+    function_frames: Vec<ResidualFunctionFrame>,
+}
+
+struct ResidualFunctionFrame {
+    source: String,
+    blocks: Vec<ResidualBlock>,
+    current_block: usize,
+    next_value: usize,
+}
+
+pub(crate) enum ResidualFunctionCall {
+    Static,
+    Existing(Value),
+    Compile(ResidualFunctionCompilation),
+}
+
+pub(crate) struct ResidualClosure<'a> {
+    pub(crate) context: &'a Rc<Context>,
+    pub(crate) module: &'a str,
+    pub(crate) parameter: crate::ast::PatternId,
+    pub(crate) body: crate::ast::ExpressionId,
+    pub(crate) name: &'a str,
+    pub(crate) environment: &'a Environment,
+    pub(crate) signature: Option<&'a Value>,
+}
+
+#[derive(Clone, Copy)]
+struct LexicalClosure<'a> {
+    module: &'a str,
+    parameter: crate::ast::PatternId,
+    body: crate::ast::ExpressionId,
+    environment: &'a Environment,
+    self_name: Option<&'a str>,
+}
+
+pub(crate) struct ResidualFunctionCompilation {
+    pub(crate) argument: Value,
+    pub(crate) environment: Environment,
+    function: usize,
+    signature: usize,
+    result_type: usize,
+    caller_arguments: Vec<usize>,
+    name: String,
+    span: crate::ast::Span,
 }
 
 fn integer_simd_layout(name: &str) -> (&'static str, u8) {
@@ -265,6 +320,10 @@ impl ResidualTrace {
             current_block: 0,
             next_value: 0,
             active_primitive: None,
+            functions: BTreeMap::new(),
+            function_ids: HashMap::new(),
+            next_function: 1,
+            function_frames: Vec::new(),
         };
         trace.insert_type("unit", RuntimeType::Unit);
         trace.insert_type("boolean", RuntimeType::Boolean);
@@ -283,7 +342,16 @@ impl ResidualTrace {
         span: crate::ast::Span,
     ) -> Result<Value, Diagnostic> {
         let argument = self.lower_value(argument, span)?;
-        let result_type = self.type_from_type_value(result_type)?;
+        let result_type = self
+            .type_from_type_value(result_type)
+            .map_err(|mut diagnostic| {
+                diagnostic.message = format!(
+                    "{} Host operation `{capability}.{operation}` result signature: {}.",
+                    diagnostic.message,
+                    crate::value::show(result_type)
+                );
+                diagnostic
+            })?;
         let parameter_type = argument.type_id;
         let signature = self.signatures.len();
         let operations = self.capabilities.entry(capability.clone()).or_default();
@@ -325,6 +393,8 @@ impl ResidualTrace {
             conversion: None,
             lane: None,
             field: None,
+            function: None,
+            signature: None,
         });
         if matches!(self.types[result_type], RuntimeType::Unit) {
             return Ok(Value::Unit);
@@ -339,6 +409,106 @@ impl ResidualTrace {
         )
     }
 
+    pub(crate) fn export_parameter(
+        &mut self,
+        type_: &Type,
+        span: crate::ast::Span,
+    ) -> Result<(Value, usize), Diagnostic> {
+        let type_id = self.runtime_type_from_checked_type(type_)?;
+        let parameter = self.next_value();
+        let ownership = self.ownership(type_id);
+        let runtime_span = self.span(span);
+        self.current().parameters.push(RuntimeBlockParameter {
+            value: parameter,
+            type_id,
+            ownership,
+            span: runtime_span,
+        });
+        if matches!(self.types[type_id], RuntimeType::Unit) {
+            return Ok((Value::Unit, type_id));
+        }
+        let value = self.symbolic_value(
+            RuntimeValue {
+                id: parameter,
+                type_id,
+                meaning: RuntimeMeaning::Plain,
+            },
+            span,
+        )?;
+        Ok((value, type_id))
+    }
+
+    pub(crate) fn finish_export(
+        mut self,
+        name: String,
+        value: Value,
+        parameter_types: Vec<usize>,
+        result_type: &Type,
+    ) -> Result<RuntimeModule, Diagnostic> {
+        let result = self.lower_value(&value, crate::ast::Span { start: 0, end: 0 })?;
+        let expected = self.runtime_type_from_checked_type(result_type)?;
+        if result.type_id != expected {
+            return Err(hir_error(
+                "A function export result does not match its checked type.",
+            ));
+        }
+        let end = self.current_block;
+        self.blocks[end].terminator = Some(RuntimeTerminator::Return {
+            value: result.id,
+            span: self.span(crate::ast::Span { start: 0, end: 0 }),
+        });
+        let effects = self.capabilities.keys().cloned().collect::<Vec<_>>();
+        let signature = self.signatures.len();
+        self.signatures.push(RuntimeSignature {
+            parameters: parameter_types,
+            result: expected,
+            effects,
+        });
+        let blocks = self.take_blocks()?;
+        let capabilities = std::mem::take(&mut self.capabilities)
+            .into_iter()
+            .map(|(name, operations)| RuntimeCapability {
+                name,
+                operations: operations
+                    .into_iter()
+                    .map(|(name, signature)| RuntimeCapabilityOperation { name, signature })
+                    .collect(),
+            })
+            .collect();
+        self.functions.insert(
+            0,
+            simplify_runtime_function(RuntimeFunction {
+                id: 0,
+                name: format!("blot$residual${name}"),
+                signature,
+                entry_block: 0,
+                blocks,
+                span: RuntimeSpan {
+                    file: self.source.clone(),
+                    start: 0,
+                    end: 0,
+                },
+            }),
+        );
+        Ok(RuntimeModule {
+            format: "blot-runtime-hir",
+            schema_version: 1,
+            source: self.source,
+            types: self.types,
+            signatures: self.signatures,
+            functions: self.functions.into_values().collect(),
+            capabilities,
+            exports: vec![RuntimeExport::Runtime {
+                source_name: name.clone(),
+                phase: "runtime",
+                wasm_name: format!("blot:{name}"),
+                function: 0,
+                signature,
+                ownership: "owned",
+            }],
+        })
+    }
+
     pub(crate) fn primitive(
         &mut self,
         name: &str,
@@ -349,6 +519,12 @@ impl ResidualTrace {
             return Ok(None);
         }
         self.active_primitive = Some(name.to_owned());
+        if matches!(
+            name,
+            "@linear.own" | "@linear.borrow" | "@branch.likely" | "@branch.unlikely"
+        ) {
+            return Ok(arguments.first().cloned());
+        }
         if matches!(
             name,
             "@type.seal"
@@ -375,7 +551,99 @@ impl ResidualTrace {
         {
             return self.integer_simd_primitive(name, arguments, span).map(Some);
         }
+        if name.starts_with("@f32x4.") {
+            return self.float_simd_primitive(name, arguments, span).map(Some);
+        }
         let value = match name {
+            "@float.of_int" => {
+                let value = self.lower_as(arguments.first(), "signed-integer-64", span)?;
+                let float = self.insert_type("float-64", RuntimeType::Float64);
+                self.convert_operation("signed-integer-64-to-float-64", float, value.id, span)
+            }
+            "@f32.of_float" => {
+                let value = self.lower_as(arguments.first(), "float-64", span)?;
+                let float = self.insert_type("float-32", RuntimeType::Float32);
+                self.convert_operation("float-64-to-float-32", float, value.id, span)
+            }
+            "@float.of_f32" => {
+                let value = self.lower_as(arguments.first(), "float-32", span)?;
+                let float = self.insert_type("float-64", RuntimeType::Float64);
+                self.convert_operation("float-32-to-float-64", float, value.id, span)
+            }
+            "@int.of_float" => {
+                let value = self.lower_as(arguments.first(), "float-64", span)?;
+                let integer = self.insert_type("signed-integer-64", RuntimeType::SignedInteger64);
+                self.convert_operation("float-64-to-signed-integer-64", integer, value.id, span)
+            }
+            "@float.add" | "@float.sub" | "@float.mul" | "@float.div" | "@float.rem"
+            | "@f32.add" | "@f32.sub" | "@f32.mul" | "@f32.div" => {
+                let expected = if name.starts_with("@f32.") {
+                    "float-32"
+                } else {
+                    "float-64"
+                };
+                let left = self.lower_as(arguments.first(), expected, span)?;
+                let right = self.lower_as(arguments.get(1), expected, span)?;
+                let operator = match name.rsplit_once('.').map(|(_, operation)| operation) {
+                    Some("add") => "add",
+                    Some("sub") => "subtract",
+                    Some("mul") => "multiply",
+                    Some("div") => "divide",
+                    Some("rem") => "remainder",
+                    _ => unreachable!("matched float binary primitive"),
+                };
+                self.operation(
+                    "scalar",
+                    left.type_id,
+                    vec![left.id, right.id],
+                    span,
+                    Some(operator),
+                )
+            }
+            "@float.neg" | "@f32.neg" => {
+                let expected = if name == "@f32.neg" {
+                    "float-32"
+                } else {
+                    "float-64"
+                };
+                let value = self.lower_as(arguments.first(), expected, span)?;
+                self.operation(
+                    "scalar.unary",
+                    value.type_id,
+                    vec![value.id],
+                    span,
+                    Some("negate"),
+                )
+            }
+            "@float.is_nan" | "@f32.is_nan" => {
+                let expected = if name == "@f32.is_nan" {
+                    "float-32"
+                } else {
+                    "float-64"
+                };
+                let value = self.lower_as(arguments.first(), expected, span)?;
+                self.operation(
+                    "scalar",
+                    1,
+                    vec![value.id, value.id],
+                    span,
+                    Some("not-equal"),
+                )
+            }
+            "@float.cmp" | "@f32.cmp" => {
+                let expected = if name == "@f32.cmp" {
+                    "float-32"
+                } else {
+                    "float-64"
+                };
+                let left = self.lower_as(arguments.first(), expected, span)?;
+                let right = self.lower_as(arguments.get(1), expected, span)?;
+                RuntimeValue {
+                    id: left.id,
+                    type_id: left.type_id,
+                    meaning: RuntimeMeaning::ScalarOrdering { right: right.id },
+                }
+            }
             "@text.concat" => {
                 let left = self.lower_as(arguments.first(), "text", span)?;
                 let right = self.lower_as(arguments.get(1), "text", span)?;
@@ -399,7 +667,7 @@ impl ResidualTrace {
                 RuntimeValue {
                     id: left.id,
                     type_id: left.type_id,
-                    meaning: RuntimeMeaning::IntegerOrdering { right: right.id },
+                    meaning: RuntimeMeaning::ScalarOrdering { right: right.id },
                 }
             }
             "@int.neg" => {
@@ -436,6 +704,64 @@ impl ResidualTrace {
                     Some(operator),
                 )
             }
+            "@array.len" => {
+                let store = self.lower_value(&arguments[0], span)?;
+                if !matches!(self.types[store.type_id], RuntimeType::Store { .. }) {
+                    return Err(hir_error(
+                        "Dynamic array length received a non-array value.",
+                    ));
+                }
+                let integer = self.insert_type("signed-integer-64", RuntimeType::SignedInteger64);
+                self.array_operation("store.length", integer, vec![store.id], span, None)
+            }
+            "@array.get" => {
+                let store = self.lower_value(&arguments[0], span)?;
+                let RuntimeType::Store { element_type } = self.types[store.type_id] else {
+                    return Err(hir_error(
+                        "Dynamic array access received a non-array value.",
+                    ));
+                };
+                let index = self.lower_as(arguments.get(1), "signed-integer-64", span)?;
+                let value = self.array_operation(
+                    "store.read",
+                    element_type,
+                    vec![store.id, index.id],
+                    span,
+                    None,
+                );
+                return self.symbolic_value(value, span).map(Some);
+            }
+            "@array.set" => {
+                let store = self.lower_value(&arguments[0], span)?;
+                let RuntimeType::Store { element_type } = self.types[store.type_id] else {
+                    return Err(hir_error(
+                        "Dynamic array update received a non-array value.",
+                    ));
+                };
+                let index = self.lower_as(arguments.get(1), "signed-integer-64", span)?;
+                let value = self.lower_store_element(&arguments[2], element_type, span)?;
+                self.array_operation(
+                    "store.write",
+                    store.type_id,
+                    vec![store.id, index.id, value.id],
+                    span,
+                    Some("persistent"),
+                )
+            }
+            "@array.push" => {
+                let store = self.lower_value(&arguments[0], span)?;
+                let RuntimeType::Store { element_type } = self.types[store.type_id] else {
+                    return Err(hir_error("Dynamic array push received a non-array value."));
+                };
+                let value = self.lower_store_element(&arguments[1], element_type, span)?;
+                self.array_operation(
+                    "store.grow",
+                    store.type_id,
+                    vec![store.id, value.id],
+                    span,
+                    Some("persistent"),
+                )
+            }
             _ => {
                 return Err(Diagnostic::new(
                     "BLOT_UNSUPPORTED_LOWERING",
@@ -447,6 +773,85 @@ impl ResidualTrace {
             }
         };
         Ok(Some(Value::Runtime(value)))
+    }
+
+    fn float_simd_primitive(
+        &mut self,
+        name: &str,
+        arguments: &[Value],
+        span: crate::ast::Span,
+    ) -> Result<Value, Diagnostic> {
+        let vector_type = self.insert_type(
+            "vector:f32x4",
+            RuntimeType::Vector {
+                element: "float-32",
+                lanes: 4,
+            },
+        );
+        let mask_type = self.insert_type(
+            "mask:f32x4",
+            RuntimeType::Mask {
+                element: "float-32",
+                lanes: 4,
+            },
+        );
+        let operation = name
+            .strip_prefix("@f32x4.")
+            .ok_or_else(|| hir_error("Invalid F32x4 primitive name."))?;
+        if operation == "of" {
+            let operands = arguments
+                .iter()
+                .map(|argument| {
+                    self.lower_as(Some(argument), "float-32", span)
+                        .map(|value| value.id)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let value = self.simd_operation("make", vector_type, operands, span, None);
+            return self.symbolic_value(value, span);
+        }
+        if operation == "splat" {
+            let value = self.lower_as(arguments.first(), "float-32", span)?;
+            let value = self.simd_operation("splat", vector_type, vec![value.id], span, None);
+            return self.symbolic_value(value, span);
+        }
+        if let Some(lane) = ["x", "y", "z", "w"]
+            .iter()
+            .position(|candidate| candidate == &operation)
+        {
+            let vector = self.lower_value(&arguments[0], span)?;
+            let float = self.insert_type("float-32", RuntimeType::Float32);
+            let value = self.simd_operation(
+                "extract",
+                float,
+                vec![vector.id],
+                span,
+                Some(u8::try_from(lane).expect("F32x4 lane fits u8")),
+            );
+            return self.symbolic_value(value, span);
+        }
+        let (operator, result_type) = match operation {
+            "add" => ("add", vector_type),
+            "sub" => ("subtract", vector_type),
+            "mul" => ("multiply", vector_type),
+            "div" => ("divide", vector_type),
+            "eq" => ("equal", mask_type),
+            "less" => ("less-than", mask_type),
+            "select" => ("select", vector_type),
+            "sum" => ("sum", self.insert_type("float-32", RuntimeType::Float32)),
+            _ => {
+                return Err(Diagnostic::new(
+                    "BLOT_UNSUPPORTED_LOWERING",
+                    format!("The dynamic primitive `{name}` is outside the Rust SIMD calculus."),
+                    span,
+                ));
+            }
+        };
+        let operands = arguments
+            .iter()
+            .map(|argument| self.lower_value(argument, span).map(|value| value.id))
+            .collect::<Result<Vec<_>, _>>()?;
+        let value = self.simd_operation(operator, result_type, operands, span, None);
+        self.symbolic_value(value, span)
     }
 
     fn integer_simd_primitive(
@@ -637,7 +1042,7 @@ impl ResidualTrace {
                 let zero = self.constant(WireConstant::SignedInteger32(0), 2, span);
                 (zero.id, 2)
             }
-            RuntimeMeaning::IntegerOrdering { right } => (right, target.type_id),
+            RuntimeMeaning::ScalarOrdering { right } => (right, target.type_id),
             _ => {
                 return Err(Diagnostic::new(
                     "BLOT_UNSUPPORTED_LOWERING",
@@ -789,12 +1194,20 @@ impl ResidualTrace {
         alternate: Value,
         span: crate::ast::Span,
     ) -> Result<Value, Diagnostic> {
+        let consequent_value = crate::value::show(&consequent);
+        let alternate_value = crate::value::show(&alternate);
         let (consequent, alternate) =
             self.join_values(consequent_end, consequent, alternate_end, alternate, span)?;
         if consequent.type_id != alternate.type_id {
+            let consequent_type = serde_json::to_string(&self.types[consequent.type_id])
+                .unwrap_or_else(|_| format!("type {}", consequent.type_id));
+            let alternate_type = serde_json::to_string(&self.types[alternate.type_id])
+                .unwrap_or_else(|_| format!("type {}", alternate.type_id));
             return Err(Diagnostic::new(
                 "BLOT_UNSUPPORTED_LOWERING",
-                "Dynamic branches return incompatible runtime types.",
+                format!(
+                    "Dynamic branches return incompatible runtime types: {consequent_value} has {consequent_type}; {alternate_value} has {alternate_type}."
+                ),
                 span,
             ));
         }
@@ -883,15 +1296,312 @@ impl ResidualTrace {
             conversion: None,
             lane: None,
             field: None,
+            function: None,
+            signature: None,
         });
         if payload_type == 0 {
             return Ok(Value::Unit);
         }
-        Ok(Value::Runtime(RuntimeValue {
-            id: result,
-            type_id: payload_type,
-            meaning: RuntimeMeaning::Plain,
+        self.symbolic_value(
+            RuntimeValue {
+                id: result,
+                type_id: payload_type,
+                meaning: RuntimeMeaning::Plain,
+            },
+            span,
+        )
+    }
+
+    pub(crate) fn begin_recursive_function(
+        &mut self,
+        closure: ResidualClosure<'_>,
+        argument: &Value,
+        span: crate::ast::Span,
+    ) -> Result<ResidualFunctionCall, Diagnostic> {
+        let ResidualClosure {
+            context,
+            module,
+            parameter: closure_parameter,
+            body,
+            name,
+            environment,
+            signature,
+        } = closure;
+        let lexical_closure = LexicalClosure {
+            module,
+            parameter: closure_parameter,
+            body,
+            environment,
+            self_name: Some(name),
+        };
+        let staged_array_capture = closure_free_names(
+            context,
+            lexical_closure.module,
+            lexical_closure.parameter,
+            lexical_closure.body,
+            lexical_closure.self_name,
+        )?
+        .into_iter()
+        .filter_map(|name| lookup(lexical_closure.environment, &name))
+        .any(|value| {
+            matches!(
+                value,
+                Value::Array(ref elements) if !elements.iter().any(contains_runtime)
+            )
+        });
+        let captures = runtime_captures(context, lexical_closure)?;
+        if (!contains_runtime(argument) && captures.is_empty())
+            || contains_staged_iterator(argument)
+            || (staged_array_capture && contains_static_integer(argument))
+        {
+            return Ok(ResidualFunctionCall::Static);
+        }
+        let mut signature = signature;
+        while let Some(Value::Forall { body, .. }) = signature {
+            signature = Some(body);
+        }
+        let Some(
+            signature_value @ Value::Arrow {
+                domain,
+                codomain,
+                effects,
+            },
+        ) = signature
+        else {
+            return Err(Diagnostic::new(
+                "BLOT_UNSUPPORTED_LOWERING",
+                format!(
+                    "Residual recursive closure `{name}` at {module} expression {} has no settled function signature.",
+                    body.0
+                ),
+                span,
+            ));
+        };
+        let mut substitutions = HashMap::new();
+        let mut representation_facts = HashMap::new();
+        self.record_runtime_substitutions(
+            domain,
+            argument,
+            &mut substitutions,
+            &mut representation_facts,
+        )?;
+        let mut lexical_substitutions = BTreeMap::new();
+        let mut scope = Some(environment.clone());
+        while let Some(current) = scope {
+            for (variable, type_) in current.type_substitutions.borrow().iter() {
+                lexical_substitutions
+                    .entry(*variable)
+                    .or_insert_with(|| type_.clone());
+            }
+            scope = current.parent.clone();
+        }
+        loop {
+            let mut progress = false;
+            for (variable, type_) in &lexical_substitutions {
+                if substitutions.contains_key(variable) {
+                    continue;
+                }
+                let mut candidate_substitutions = substitutions.clone();
+                if let Ok(type_id) = self.specialized_type_from_type_value(
+                    type_,
+                    &mut candidate_substitutions,
+                    &representation_facts,
+                ) {
+                    candidate_substitutions.insert(*variable, type_id);
+                    substitutions = candidate_substitutions;
+                    progress = true;
+                }
+            }
+            if !progress {
+                break;
+            }
+        }
+        let caller_argument =
+            self.lower_residual_argument(argument, domain, &substitutions, span)?;
+        let result_type = self
+            .specialized_type_from_type_value(codomain, &mut substitutions, &representation_facts)
+            .map_err(|mut diagnostic| {
+                diagnostic.message = format!(
+                    "{} Residual signature: {}.",
+                    diagnostic.message,
+                    crate::value::show(signature_value)
+                );
+                diagnostic
+            })?;
+        let capture_types = captures
+            .iter()
+            .map(|capture| capture.type_id)
+            .collect::<Vec<_>>();
+        let key = format!(
+            "{module}:{}:{}:{result_type}:{capture_types:?}:{}",
+            body.0,
+            caller_argument.type_id,
+            crate::value::show(signature_value),
+        );
+        if let Some((function, signature)) = self.function_ids.get(&key).copied() {
+            let result_type = self.signatures[signature].result;
+            let mut caller_arguments = vec![caller_argument.id];
+            caller_arguments.extend(captures.iter().map(|capture| capture.id));
+            return self
+                .direct_call(function, result_type, caller_arguments, span)
+                .map(ResidualFunctionCall::Existing);
+        }
+
+        let signature_id = self.signatures.len();
+        self.signatures.push(RuntimeSignature {
+            parameters: std::iter::once(caller_argument.type_id)
+                .chain(capture_types)
+                .collect(),
+            result: result_type,
+            effects: effects.iter().filter_map(runtime_effect_name).collect(),
+        });
+        let function = self.next_function;
+        self.next_function += 1;
+        self.function_ids.insert(key, (function, signature_id));
+        self.function_frames.push(ResidualFunctionFrame {
+            source: self.source.clone(),
+            blocks: std::mem::take(&mut self.blocks),
+            current_block: self.current_block,
+            next_value: self.next_value,
+        });
+        self.source = module.to_owned();
+        self.current_block = 0;
+        self.next_value = 0;
+        self.block();
+        let parameter_value = self.next_value();
+        let ownership = self.ownership(caller_argument.type_id);
+        let runtime_span = self.span(span);
+        self.current().parameters.push(RuntimeBlockParameter {
+            value: parameter_value,
+            type_id: caller_argument.type_id,
+            ownership,
+            span: runtime_span,
+        });
+        let argument = self.symbolic_value(
+            RuntimeValue {
+                id: parameter_value,
+                type_id: caller_argument.type_id,
+                meaning: RuntimeMeaning::Plain,
+            },
+            span,
+        )?;
+        let mut replacements = HashMap::new();
+        for capture in &captures {
+            let parameter = self.next_value();
+            let ownership = self.ownership(capture.type_id);
+            let runtime_span = self.span(span);
+            self.current().parameters.push(RuntimeBlockParameter {
+                value: parameter,
+                type_id: capture.type_id,
+                ownership,
+                span: runtime_span,
+            });
+            replacements.insert(
+                (capture.id, capture.type_id),
+                RuntimeValue {
+                    id: parameter,
+                    type_id: capture.type_id,
+                    meaning: capture.meaning.clone(),
+                },
+            );
+        }
+        let environment = replace_environment_runtime(context, lexical_closure, &replacements)?;
+        let mut caller_arguments = vec![caller_argument.id];
+        caller_arguments.extend(captures.iter().map(|capture| capture.id));
+        Ok(ResidualFunctionCall::Compile(ResidualFunctionCompilation {
+            argument,
+            environment,
+            function,
+            signature: signature_id,
+            result_type,
+            caller_arguments,
+            name: name.to_owned(),
+            span,
         }))
+    }
+
+    pub(crate) fn finish_recursive_function(
+        &mut self,
+        compilation: ResidualFunctionCompilation,
+        value: Value,
+    ) -> Result<Value, Diagnostic> {
+        let result = self.lower_value(&value, compilation.span)?;
+        if result.type_id != compilation.result_type {
+            return Err(hir_error(
+                "A residual recursive function returned a value outside its signature.",
+            ));
+        }
+        let end = self.current_block;
+        self.blocks[end].terminator = Some(RuntimeTerminator::Return {
+            value: result.id,
+            span: self.span(compilation.span),
+        });
+        let blocks = self.take_blocks()?;
+        self.functions.insert(
+            compilation.function,
+            simplify_runtime_function(RuntimeFunction {
+                id: compilation.function,
+                name: format!("blot$residual${}", compilation.name),
+                signature: compilation.signature,
+                entry_block: 0,
+                blocks,
+                span: self.span(compilation.span),
+            }),
+        );
+        let frame = self
+            .function_frames
+            .pop()
+            .ok_or_else(|| hir_error("A residual function lost its caller frame."))?;
+        self.blocks = frame.blocks;
+        self.current_block = frame.current_block;
+        self.next_value = frame.next_value;
+        let call = self.direct_call(
+            compilation.function,
+            compilation.result_type,
+            compilation.caller_arguments,
+            compilation.span,
+        );
+        self.source = frame.source;
+        call
+    }
+
+    fn direct_call(
+        &mut self,
+        function: usize,
+        result_type: usize,
+        arguments: Vec<usize>,
+        span: crate::ast::Span,
+    ) -> Result<Value, Diagnostic> {
+        let result = self.next_value();
+        let ownership = self.ownership(result_type);
+        let runtime_span = self.span(span);
+        self.current().operations.push(RuntimeOperation {
+            kind: "call.direct",
+            result,
+            type_id: result_type,
+            operands: arguments,
+            ownership,
+            span: runtime_span,
+            value: None,
+            update: None,
+            case: None,
+            capability: None,
+            operation: None,
+            operator: None,
+            conversion: None,
+            lane: None,
+            field: None,
+            function: Some(function),
+            signature: None,
+        });
+        self.symbolic_value(
+            RuntimeValue {
+                id: result,
+                type_id: result_type,
+                meaning: RuntimeMeaning::Plain,
+            },
+            span,
+        )
     }
 
     pub(crate) fn finish(
@@ -918,8 +1628,8 @@ impl ResidualTrace {
             result: expected,
             effects,
         });
-        let capabilities = self
-            .capabilities
+        let blocks = self.take_blocks()?;
+        let capabilities = std::mem::take(&mut self.capabilities)
             .into_iter()
             .map(|(name, operations)| RuntimeCapability {
                 name,
@@ -933,28 +1643,9 @@ impl ResidualTrace {
                 },
             })
             .collect();
-        let blocks = self
-            .blocks
-            .into_iter()
-            .map(|block| {
-                let terminator = block.terminator.ok_or_else(|| {
-                    hir_error(&format!("Residual block {} has no terminator.", block.id))
-                })?;
-                Ok(RuntimeBlock {
-                    id: block.id,
-                    parameters: block.parameters,
-                    operations: block.operations,
-                    terminator,
-                })
-            })
-            .collect::<Result<Vec<_>, Diagnostic>>()?;
-        Ok(RuntimeModule {
-            format: "blot-runtime-hir",
-            schema_version: 1,
-            source: self.source.clone(),
-            types: self.types,
-            signatures: self.signatures,
-            functions: vec![RuntimeFunction {
+        self.functions.insert(
+            0,
+            simplify_runtime_function(RuntimeFunction {
                 id: 0,
                 name: "blot$residual$blot:default".to_owned(),
                 signature: function_signature,
@@ -965,7 +1656,15 @@ impl ResidualTrace {
                     start: 0,
                     end: 0,
                 },
-            }],
+            }),
+        );
+        Ok(RuntimeModule {
+            format: "blot-runtime-hir",
+            schema_version: 1,
+            source: self.source.clone(),
+            types: self.types,
+            signatures: self.signatures,
+            functions: self.functions.into_values().collect(),
             capabilities,
             exports: vec![RuntimeExport::Runtime {
                 source_name: "default".to_owned(),
@@ -978,6 +1677,23 @@ impl ResidualTrace {
         })
     }
 
+    fn take_blocks(&mut self) -> Result<Vec<RuntimeBlock>, Diagnostic> {
+        std::mem::take(&mut self.blocks)
+            .into_iter()
+            .map(|block| {
+                let terminator = block.terminator.ok_or_else(|| {
+                    hir_error(&format!("Residual block {} has no terminator.", block.id))
+                })?;
+                Ok(RuntimeBlock {
+                    id: block.id,
+                    parameters: block.parameters,
+                    operations: block.operations,
+                    terminator,
+                })
+            })
+            .collect()
+    }
+
     fn join_values(
         &mut self,
         consequent_block: usize,
@@ -986,6 +1702,28 @@ impl ResidualTrace {
         alternate: Value,
         span: crate::ast::Span,
     ) -> Result<(RuntimeValue, RuntimeValue), Diagnostic> {
+        if let Value::Runtime(consequent_runtime) = &consequent
+            && matches!(alternate, Value::Tag { .. })
+            && matches!(
+                self.types[consequent_runtime.type_id],
+                RuntimeType::Sum { .. }
+            )
+        {
+            self.current_block = alternate_block;
+            let alternate = self.lower_sum_member(&alternate, consequent_runtime.type_id, span)?;
+            return Ok((consequent_runtime.clone(), alternate));
+        }
+        if let Value::Runtime(alternate_runtime) = &alternate
+            && matches!(consequent, Value::Tag { .. })
+            && matches!(
+                self.types[alternate_runtime.type_id],
+                RuntimeType::Sum { .. }
+            )
+        {
+            self.current_block = consequent_block;
+            let consequent = self.lower_sum_member(&consequent, alternate_runtime.type_id, span)?;
+            return Ok((consequent, alternate_runtime.clone()));
+        }
         if matches!(
             (&consequent, &alternate),
             (
@@ -1063,13 +1801,16 @@ impl ResidualTrace {
     ) -> Result<RuntimeValue, Diagnostic> {
         let value = value.ok_or_else(|| hir_error("A dynamic primitive omitted an operand."))?;
         let lowered = self.lower_value(value, span)?;
-        let type_id = self.type_ids.get(expected).copied().unwrap_or_else(|| {
-            if expected == "signed-integer-64" {
-                self.insert_type(expected, RuntimeType::SignedInteger64)
-            } else {
-                unreachable!("base residual type")
-            }
-        });
+        let type_id = self
+            .type_ids
+            .get(expected)
+            .copied()
+            .unwrap_or_else(|| match expected {
+                "signed-integer-64" => self.insert_type(expected, RuntimeType::SignedInteger64),
+                "float-64" => self.insert_type(expected, RuntimeType::Float64),
+                "float-32" => self.insert_type(expected, RuntimeType::Float32),
+                _ => unreachable!("base residual type"),
+            });
         if lowered.type_id != type_id {
             return Err(Diagnostic::new(
                 "BLOT_UNSUPPORTED_LOWERING",
@@ -1082,6 +1823,114 @@ impl ResidualTrace {
             ));
         }
         Ok(lowered)
+    }
+
+    fn lower_typed_value(
+        &mut self,
+        value: &Value,
+        type_: &Value,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        match (value, type_) {
+            (Value::Array(elements), Value::Array(element_types)) => {
+                let element_type = element_types.first().ok_or_else(|| {
+                    hir_error("A residual array signature omitted its element type.")
+                })?;
+                let element_type_id = self.type_from_type_value(element_type)?;
+                let store_type = self.insert_type(
+                    &format!("store:{element_type_id}"),
+                    RuntimeType::Store {
+                        element_type: element_type_id,
+                    },
+                );
+                let mut store =
+                    self.array_operation("store.empty", store_type, Vec::new(), span, None);
+                for element in elements {
+                    let element = self.lower_typed_value(element, element_type, span)?;
+                    store = self.array_operation(
+                        "store.grow",
+                        store_type,
+                        vec![store.id, element.id],
+                        span,
+                        Some("persistent"),
+                    );
+                }
+                Ok(store)
+            }
+            (Value::Shape(fields), Value::Shape(field_types)) => {
+                let type_id = self.type_from_type_value(type_)?;
+                let RuntimeType::Product {
+                    fields: runtime_fields,
+                    ..
+                } = self.types[type_id].clone()
+                else {
+                    unreachable!("shape type lowered to a non-product");
+                };
+                let mut operands = Vec::new();
+                for field in runtime_fields {
+                    let value = fields.get(&field.name).ok_or_else(|| {
+                        hir_error("A residual argument omitted a signature field.")
+                    })?;
+                    let field_type = field_types.get(&field.name).ok_or_else(|| {
+                        hir_error("A residual signature omitted an argument field.")
+                    })?;
+                    operands.push(self.lower_typed_value(value, field_type, span)?.id);
+                }
+                Ok(self.operation("product.make", type_id, operands, span, None))
+            }
+            _ => self.lower_value(value, span),
+        }
+    }
+
+    fn lower_residual_argument(
+        &mut self,
+        value: &Value,
+        type_: &Value,
+        substitutions: &HashMap<u32, usize>,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        match (value, type_) {
+            (Value::Shape(fields), Value::Shape(field_types)) => {
+                let mut runtime_fields = Vec::new();
+                let mut operands = Vec::new();
+                for (name, value) in fields {
+                    let field_type = field_types.get(name).ok_or_else(|| {
+                        hir_error("A residual signature omitted an argument field.")
+                    })?;
+                    let lowered =
+                        self.lower_residual_argument(value, field_type, substitutions, span)?;
+                    runtime_fields.push(RuntimeField {
+                        name: name.clone(),
+                        type_id: lowered.type_id,
+                    });
+                    operands.push(lowered.id);
+                }
+                let type_id = self.insert_product_type(runtime_fields);
+                Ok(self.operation("product.make", type_id, operands, span, None))
+            }
+            (Value::Array(elements), expected) if elements.is_empty() => {
+                if let Value::TypeVariable(variable) = expected
+                    && let Some(type_id) = substitutions.get(variable).copied()
+                    && matches!(self.types[type_id], RuntimeType::Store { .. })
+                {
+                    return Ok(self.array_operation(
+                        "store.empty",
+                        type_id,
+                        Vec::new(),
+                        span,
+                        None,
+                    ));
+                }
+                let Value::Array(_) = expected else {
+                    return Err(hir_error(&format!(
+                        "An empty residual array has no element representation in {}.",
+                        crate::value::show(expected)
+                    )));
+                };
+                self.lower_typed_value(value, expected, span)
+            }
+            _ => self.lower_typed_value(value, type_, span),
+        }
     }
 
     fn lower_value(
@@ -1099,6 +1948,71 @@ impl ResidualTrace {
                     WireConstant::SignedInteger64(value.to_string()),
                     type_id,
                     span,
+                ))
+            }
+            Value::Float(value) => {
+                let type_id = self.insert_type("float-64", RuntimeType::Float64);
+                Ok(self.constant(WireConstant::Float64(*value), type_id, span))
+            }
+            Value::Float32(value) => {
+                let type_id = self.insert_type("float-32", RuntimeType::Float32);
+                Ok(self.constant(WireConstant::Float32(*value), type_id, span))
+            }
+            Value::Vector(lanes) => {
+                let float_type = self.insert_type("float-32", RuntimeType::Float32);
+                let vector_type = self.insert_type(
+                    "vector:f32x4",
+                    RuntimeType::Vector {
+                        element: "float-32",
+                        lanes: 4,
+                    },
+                );
+                let operands = lanes
+                    .iter()
+                    .map(|lane| {
+                        self.constant(WireConstant::Float32(*lane), float_type, span)
+                            .id
+                    })
+                    .collect();
+                Ok(self.simd_operation("make", vector_type, operands, span, None))
+            }
+            Value::VectorMask(lanes) => {
+                let float_type = self.insert_type("float-32", RuntimeType::Float32);
+                let vector_type = self.insert_type(
+                    "vector:f32x4",
+                    RuntimeType::Vector {
+                        element: "float-32",
+                        lanes: 4,
+                    },
+                );
+                let mask_type = self.insert_type(
+                    "mask:f32x4",
+                    RuntimeType::Mask {
+                        element: "float-32",
+                        lanes: 4,
+                    },
+                );
+                let operands = lanes
+                    .iter()
+                    .map(|lane| {
+                        self.constant(
+                            WireConstant::Float32(if *lane { 1.0 } else { 0.0 }),
+                            float_type,
+                            span,
+                        )
+                        .id
+                    })
+                    .collect();
+                let encoded = self.simd_operation("make", vector_type, operands, span, None);
+                let zero_lane = self.constant(WireConstant::Float32(0.0), float_type, span);
+                let zero =
+                    self.simd_operation("splat", vector_type, vec![zero_lane.id], span, None);
+                Ok(self.simd_operation(
+                    "not-equal",
+                    mask_type,
+                    vec![encoded.id, zero.id],
+                    span,
+                    None,
                 ))
             }
             Value::IntegerVector { bits, lanes } => {
@@ -1223,6 +2137,37 @@ impl ResidualTrace {
                 }
                 Ok(self.operation("product.make", type_id, operands, span, None))
             }
+            Value::Array(elements) => {
+                let first = elements.first().ok_or_else(|| {
+                    hir_error("An untyped empty residual array has no element representation.")
+                })?;
+                let element_type = self.value_type(first)?;
+                let store_type = self.insert_type(
+                    &format!("store:{element_type}"),
+                    RuntimeType::Store { element_type },
+                );
+                let mut store =
+                    self.array_operation("store.empty", store_type, Vec::new(), span, None);
+                for element in elements {
+                    let element = self.lower_store_element(element, element_type, span)?;
+                    store = self.array_operation(
+                        "store.grow",
+                        store_type,
+                        vec![store.id, element.id],
+                        span,
+                        Some("persistent"),
+                    );
+                }
+                Ok(store)
+            }
+            Value::EmptyArray { element } => {
+                let element_type = self.type_from_type_value(element)?;
+                let store_type = self.insert_type(
+                    &format!("store:{element_type}"),
+                    RuntimeType::Store { element_type },
+                );
+                Ok(self.array_operation("store.empty", store_type, Vec::new(), span, None))
+            }
             _ => Err(Diagnostic::new(
                 "BLOT_UNSUPPORTED_LOWERING",
                 format!(
@@ -1234,6 +2179,67 @@ impl ResidualTrace {
         }
     }
 
+    fn lower_store_element(
+        &mut self,
+        value: &Value,
+        expected_type: usize,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        if matches!(value, Value::Tag { .. })
+            && matches!(self.types[expected_type], RuntimeType::Sum { .. })
+        {
+            return self.lower_sum_member(value, expected_type, span);
+        }
+        let lowered = self.lower_value(value, span)?;
+        if lowered.type_id != expected_type {
+            return Err(hir_error(&format!(
+                "Array element {} differs from its inferred Store representation.",
+                crate::value::show(value)
+            )));
+        }
+        Ok(lowered)
+    }
+
+    fn lower_sum_member(
+        &mut self,
+        value: &Value,
+        expected_type: usize,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        let Value::Tag { name, payload } = value else {
+            return Err(hir_error(
+                "A sum injection received a non-constructor value.",
+            ));
+        };
+        let RuntimeType::Sum { cases, .. } = self.types[expected_type].clone() else {
+            return Err(hir_error(
+                "A sum injection received a non-sum runtime type.",
+            ));
+        };
+        let case = cases
+            .iter()
+            .position(|case_| case_.name == *name)
+            .ok_or_else(|| {
+                hir_error(&format!(
+                    "Constructor `#{name}` is absent from its inferred sum type."
+                ))
+            })?;
+        let payload = compiler_tag_payload(payload.as_deref());
+        let lowered = self.lower_value(&payload, span)?;
+        if lowered.type_id != cases[case].payload_type {
+            return Err(hir_error(&format!(
+                "Constructor `#{name}` has runtime payload type {}, but its inferred sum expects {}.",
+                lowered.type_id, cases[case].payload_type
+            )));
+        }
+        let mut tagged =
+            self.operation_with_case("sum.make", expected_type, vec![lowered.id], span, case);
+        tagged.meaning = RuntimeMeaning::Sum {
+            cases: cases.iter().map(|case_| case_.name.clone()).collect(),
+        };
+        Ok(tagged)
+    }
+
     fn value_type(&mut self, value: &Value) -> Result<usize, Diagnostic> {
         match value {
             Value::Runtime(value) => Ok(value.type_id),
@@ -1242,6 +2248,22 @@ impl ResidualTrace {
             Value::Int(_) => {
                 Ok(self.insert_type("signed-integer-64", RuntimeType::SignedInteger64))
             }
+            Value::Float(_) => Ok(self.insert_type("float-64", RuntimeType::Float64)),
+            Value::Float32(_) => Ok(self.insert_type("float-32", RuntimeType::Float32)),
+            Value::Vector(_) => Ok(self.insert_type(
+                "vector:f32x4",
+                RuntimeType::Vector {
+                    element: "float-32",
+                    lanes: 4,
+                },
+            )),
+            Value::VectorMask(_) => Ok(self.insert_type(
+                "mask:f32x4",
+                RuntimeType::Mask {
+                    element: "float-32",
+                    lanes: 4,
+                },
+            )),
             Value::IntegerVector { bits, lanes } => {
                 let vector_key = format!("vector:I{bits}x{}", lanes.len());
                 Ok(self.insert_type(
@@ -1275,15 +2297,33 @@ impl ResidualTrace {
                 payload: None,
             } if name == "True" || name == "False" => Ok(1),
             Value::Shape(fields) => self.product_type(fields),
-            _ => Err(hir_error(
-                "A residual value has no first-order runtime type.",
-            )),
+            Value::Array(elements) => {
+                let element = elements.first().ok_or_else(|| {
+                    hir_error("An untyped empty residual array has no element representation.")
+                })?;
+                let element_type = self.value_type(element)?;
+                Ok(self.insert_type(
+                    &format!("store:{element_type}"),
+                    RuntimeType::Store { element_type },
+                ))
+            }
+            Value::EmptyArray { element } => {
+                let element_type = self.type_from_type_value(element)?;
+                Ok(self.insert_type(
+                    &format!("store:{element_type}"),
+                    RuntimeType::Store { element_type },
+                ))
+            }
+            _ => Err(hir_error(&format!(
+                "{} has no first-order runtime type.",
+                crate::value::show(value)
+            ))),
         }
     }
 
     fn type_from_type_value(&mut self, value: &Value) -> Result<usize, Diagnostic> {
         match value {
-            Value::Unit | Value::Unbounded | Value::TypeVariable(_) => Ok(0),
+            Value::Unit | Value::Unbounded => Ok(0),
             Value::Range {
                 domain: Some(crate::value::Domain::Text),
                 ..
@@ -1292,6 +2332,14 @@ impl ResidualTrace {
                 domain: Some(crate::value::Domain::Int),
                 ..
             } => Ok(self.insert_type("signed-integer-64", RuntimeType::SignedInteger64)),
+            Value::Range {
+                domain: Some(crate::value::Domain::Float),
+                ..
+            } => Ok(self.insert_type("float-64", RuntimeType::Float64)),
+            Value::Range {
+                domain: Some(crate::value::Domain::Float32),
+                ..
+            } => Ok(self.insert_type("float-32", RuntimeType::Float32)),
             Value::Shape(fields) => {
                 let mut runtime_fields = Vec::new();
                 for (name, field) in fields {
@@ -1302,9 +2350,316 @@ impl ResidualTrace {
                 }
                 Ok(self.insert_product_type(runtime_fields))
             }
-            _ => Err(hir_error(
-                "A host result type is outside the Rust residual calculus.",
+            Value::OpaqueType(name) if name == "F32x4" => Ok(self.insert_type(
+                "vector:f32x4",
+                RuntimeType::Vector {
+                    element: "float-32",
+                    lanes: 4,
+                },
             )),
+            Value::OpaqueType(name) if name == "F32x4Mask" => Ok(self.insert_type(
+                "mask:f32x4",
+                RuntimeType::Mask {
+                    element: "float-32",
+                    lanes: 4,
+                },
+            )),
+            Value::OpaqueType(name) if matches!(name.as_str(), "I32x4" | "I16x8" | "I8x16") => {
+                let (element, lanes) = integer_simd_layout(name);
+                Ok(self.insert_type(
+                    &format!("vector:{name}"),
+                    RuntimeType::Vector { element, lanes },
+                ))
+            }
+            Value::OpaqueType(name)
+                if matches!(name.as_str(), "I32x4Mask" | "I16x8Mask" | "I8x16Mask") =>
+            {
+                let vector_name = name.strip_suffix("Mask").expect("matched mask name");
+                let (element, lanes) = integer_simd_layout(vector_name);
+                Ok(self.insert_type(
+                    &format!("mask:{vector_name}"),
+                    RuntimeType::Mask { element, lanes },
+                ))
+            }
+            Value::Array(elements) => {
+                let element = elements
+                    .first()
+                    .ok_or_else(|| hir_error("A residual array type omitted its element type."))?;
+                let element_type = self.type_from_type_value(element)?;
+                Ok(self.insert_type(
+                    &format!("store:{element_type}"),
+                    RuntimeType::Store { element_type },
+                ))
+            }
+            Value::Union(members) => {
+                if members
+                    .iter()
+                    .all(|member| matches!(member, Value::Tag { .. }))
+                {
+                    let mut cases = Vec::new();
+                    let mut payload_types = Vec::new();
+                    for member in members {
+                        let Value::Tag { name, payload } = member else {
+                            unreachable!("all union members are tags")
+                        };
+                        if cases.contains(name) {
+                            continue;
+                        }
+                        let payload = compiler_tag_payload(payload.as_deref());
+                        cases.push(name.clone());
+                        payload_types.push(self.type_from_type_value(&payload)?);
+                    }
+                    if cases.len() == 2
+                        && cases.iter().any(|name| name == "False")
+                        && cases.iter().any(|name| name == "True")
+                        && payload_types.iter().all(|type_id| *type_id == 0)
+                    {
+                        return Ok(1);
+                    }
+                    return Ok(self.sum_type(&cases, &payload_types));
+                }
+                let mut members = members.iter();
+                let first_member = members
+                    .next()
+                    .ok_or_else(|| hir_error("A residual union type has no members."))?;
+                let first = self.type_from_type_value(first_member)?;
+                for member in members {
+                    let representation = self.type_from_type_value(member)?;
+                    if representation != first {
+                        return Err(hir_error(&format!(
+                            "Residual union member {} has runtime type {representation}, but {} has runtime type {first}.",
+                            crate::value::show(member),
+                            crate::value::show(first_member),
+                        )));
+                    }
+                }
+                Ok(first)
+            }
+            _ => Err(hir_error(&format!(
+                "{} is outside the Rust residual type calculus.",
+                crate::value::show(value)
+            ))),
+        }
+    }
+
+    fn record_runtime_substitutions(
+        &mut self,
+        expected: &Value,
+        actual: &Value,
+        substitutions: &mut HashMap<u32, usize>,
+        representation_facts: &mut HashMap<String, Option<usize>>,
+    ) -> Result<(), Diagnostic> {
+        if let Ok(type_id) = self.value_type(actual) {
+            let mut keys = vec![crate::value::show(expected)];
+            if let Some(key) = representation_shape_key(expected) {
+                keys.push(key);
+            }
+            for key in keys {
+                representation_facts
+                    .entry(key)
+                    .and_modify(|known| {
+                        if known.is_some_and(|known| known != type_id) {
+                            *known = None;
+                        }
+                    })
+                    .or_insert(Some(type_id));
+            }
+        }
+        match expected {
+            Value::TypeVariable(variable) => {
+                if matches!(actual, Value::Array(elements) if elements.is_empty()) {
+                    return Ok(());
+                }
+                let type_id = self.value_type(actual)?;
+                if let Some(previous) = substitutions.insert(*variable, type_id)
+                    && previous != type_id
+                {
+                    return Err(hir_error(
+                        "A residual type variable received incompatible runtime representations.",
+                    ));
+                }
+            }
+            Value::Shape(expected_fields) => {
+                let Value::Shape(actual_fields) = actual else {
+                    return Ok(());
+                };
+                for (name, expected_field) in expected_fields {
+                    if let Some(actual_field) = actual_fields.get(name) {
+                        self.record_runtime_substitutions(
+                            expected_field,
+                            actual_field,
+                            substitutions,
+                            representation_facts,
+                        )?;
+                    }
+                }
+            }
+            Value::Array(expected_elements) => {
+                let Some(expected_element) = expected_elements.first() else {
+                    return Err(hir_error("A residual array type omitted its element type."));
+                };
+                if let Value::Array(actual_elements) = actual
+                    && let Some(actual_element) = actual_elements.first()
+                {
+                    self.record_runtime_substitutions(
+                        expected_element,
+                        actual_element,
+                        substitutions,
+                        representation_facts,
+                    )?;
+                }
+            }
+            Value::Extended { inner, .. }
+            | Value::Sealed { inner, .. }
+            | Value::Forall { body: inner, .. } => {
+                self.record_runtime_substitutions(
+                    inner,
+                    actual,
+                    substitutions,
+                    representation_facts,
+                )?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn specialized_type_from_type_value(
+        &mut self,
+        value: &Value,
+        substitutions: &mut HashMap<u32, usize>,
+        representation_facts: &HashMap<String, Option<usize>>,
+    ) -> Result<usize, Diagnostic> {
+        if let Some(Some(type_id)) = representation_facts.get(&crate::value::show(value)) {
+            return Ok(*type_id);
+        }
+        if let Some(key) = representation_shape_key(value)
+            && let Some(Some(type_id)) = representation_facts.get(&key)
+        {
+            return Ok(*type_id);
+        }
+        match value {
+            Value::TypeVariable(variable) => {
+                substitutions.get(variable).copied().ok_or_else(|| {
+                    hir_error(&format!(
+                        "Residual result type variable 't{variable} has no call-site representation."
+                    ))
+                })
+            }
+            Value::Shape(fields) => {
+                let runtime_fields = fields
+                    .iter()
+                    .map(|(name, field)| {
+                        Ok(RuntimeField {
+                            name: name.clone(),
+                            type_id: self.specialized_type_from_type_value(
+                                field,
+                                substitutions,
+                                representation_facts,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, Diagnostic>>()?;
+                Ok(self.insert_product_type(runtime_fields))
+            }
+            Value::Array(elements) => {
+                let element = elements
+                    .first()
+                    .ok_or_else(|| hir_error("A residual array type omitted its element type."))?;
+                let element_type = self.specialized_type_from_type_value(
+                    element,
+                    substitutions,
+                    representation_facts,
+                )?;
+                Ok(self.insert_type(
+                    &format!("store:{element_type}"),
+                    RuntimeType::Store { element_type },
+                ))
+            }
+            Value::Union(members) => {
+                if members
+                    .iter()
+                    .all(|member| matches!(member, Value::Tag { .. }))
+                {
+                    let mut cases = Vec::new();
+                    let mut payload_types = Vec::new();
+                    for member in members {
+                        let Value::Tag { name, payload } = member else {
+                            unreachable!("all union members are tags")
+                        };
+                        if cases.contains(name) {
+                            continue;
+                        }
+                        let payload = compiler_tag_payload(payload.as_deref());
+                        cases.push(name.clone());
+                        payload_types.push(self.specialized_type_from_type_value(
+                            &payload,
+                            substitutions,
+                            representation_facts,
+                        )?);
+                    }
+                    if cases.len() == 2
+                        && cases.iter().any(|name| name == "False")
+                        && cases.iter().any(|name| name == "True")
+                        && payload_types.iter().all(|type_id| *type_id == 0)
+                    {
+                        return Ok(1);
+                    }
+                    return Ok(self.sum_type(&cases, &payload_types));
+                }
+                let mut unresolved = Vec::new();
+                let mut representation = None;
+                let mut represented_member = None;
+                for member_value in members {
+                    if let Value::TypeVariable(variable) = member_value
+                        && !substitutions.contains_key(variable)
+                    {
+                        unresolved.push(*variable);
+                        continue;
+                    }
+                    let member_type = self.specialized_type_from_type_value(
+                        member_value,
+                        substitutions,
+                        representation_facts,
+                    )?;
+                    if representation.is_some_and(|known| known != member_type) {
+                        return Err(hir_error(&format!(
+                            "Residual union member {} has runtime type {member_type}, but {} has runtime type {}.",
+                            crate::value::show(member_value),
+                            represented_member
+                                .as_deref()
+                                .expect("a represented union member exists"),
+                            representation.expect("a union representation exists"),
+                        )));
+                    }
+                    representation = Some(member_type);
+                    represented_member = Some(crate::value::show(member_value));
+                }
+                let representation = representation.ok_or_else(|| {
+                    hir_error("A residual union has no concrete runtime representation.")
+                })?;
+                for variable in unresolved {
+                    substitutions.insert(variable, representation);
+                }
+                Ok(representation)
+            }
+            Value::Extended { inner, .. }
+            | Value::Sealed { inner, .. }
+            | Value::Forall { body: inner, .. } => {
+                self.specialized_type_from_type_value(
+                    inner,
+                    substitutions,
+                    representation_facts,
+                )
+            }
+            _ => self.type_from_type_value(value).map_err(|mut diagnostic| {
+                diagnostic.message = format!(
+                    "{} While specializing {}.",
+                    diagnostic.message,
+                    crate::value::show(value)
+                );
+                diagnostic
+            }),
         }
     }
 
@@ -1327,6 +2682,91 @@ impl ResidualTrace {
                 ..
             } => Ok(self.insert_type("signed-integer-64", RuntimeType::SignedInteger64)),
             _ => self.value_type(value),
+        }
+    }
+
+    fn runtime_type_from_checked_type(&mut self, type_: &Type) -> Result<usize, Diagnostic> {
+        match type_ {
+            Type::Unit => Ok(0),
+            Type::Range {
+                domain: Domain::Int,
+                ..
+            } => Ok(self.insert_type("signed-integer-64", RuntimeType::SignedInteger64)),
+            Type::Range {
+                domain: Domain::Text,
+                ..
+            } => Ok(3),
+            Type::Range {
+                domain: Domain::Float,
+                ..
+            } => Ok(self.insert_type("float-64", RuntimeType::Float64)),
+            Type::Range {
+                domain: Domain::Float32,
+                ..
+            } => Ok(self.insert_type("float-32", RuntimeType::Float32)),
+            Type::Record(fields) => {
+                let mut runtime_fields = Vec::new();
+                for (name, field) in fields {
+                    runtime_fields.push(RuntimeField {
+                        name: name.clone(),
+                        type_id: self.runtime_type_from_checked_type(field)?,
+                    });
+                }
+                Ok(self.insert_product_type(runtime_fields))
+            }
+            Type::Array(element) => {
+                let element_type = self.runtime_type_from_checked_type(element)?;
+                Ok(self.insert_type(
+                    &format!("store:{element_type}"),
+                    RuntimeType::Store { element_type },
+                ))
+            }
+            Type::Variant { cases, open: false } => {
+                let names = cases
+                    .iter()
+                    .map(|(name, _)| name.clone())
+                    .collect::<Vec<_>>();
+                let payloads = cases
+                    .iter()
+                    .map(|(_, payload)| self.runtime_type_from_checked_type(payload))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(self.sum_type(&names, &payloads))
+            }
+            Type::Opaque(name) if name == "F32x4" => Ok(self.insert_type(
+                "vector:f32x4",
+                RuntimeType::Vector {
+                    element: "float-32",
+                    lanes: 4,
+                },
+            )),
+            Type::Opaque(name) if name == "F32x4Mask" => Ok(self.insert_type(
+                "mask:f32x4",
+                RuntimeType::Mask {
+                    element: "float-32",
+                    lanes: 4,
+                },
+            )),
+            Type::Opaque(name) if matches!(name.as_str(), "I32x4" | "I16x8" | "I8x16") => {
+                let (element, lanes) = integer_simd_layout(name);
+                Ok(self.insert_type(
+                    &format!("vector:{name}"),
+                    RuntimeType::Vector { element, lanes },
+                ))
+            }
+            Type::Opaque(name)
+                if matches!(name.as_str(), "I32x4Mask" | "I16x8Mask" | "I8x16Mask") =>
+            {
+                let vector_name = name.strip_suffix("Mask").expect("matched mask name");
+                let (element, lanes) = integer_simd_layout(vector_name);
+                Ok(self.insert_type(
+                    &format!("mask:{vector_name}"),
+                    RuntimeType::Mask { element, lanes },
+                ))
+            }
+            Type::Forall { body, .. } => self.runtime_type_from_checked_type(body),
+            _ => Err(hir_error(
+                "A function export does not have a concrete first-order ABI type.",
+            )),
         }
     }
 
@@ -1355,6 +2795,8 @@ impl ResidualTrace {
             conversion: None,
             lane: None,
             field: None,
+            function: None,
+            signature: None,
         });
         RuntimeValue {
             id: result,
@@ -1390,6 +2832,45 @@ impl ResidualTrace {
             conversion: None,
             lane: None,
             field: None,
+            function: None,
+            signature: None,
+        });
+        RuntimeValue {
+            id: result,
+            type_id,
+            meaning: RuntimeMeaning::Plain,
+        }
+    }
+
+    fn array_operation(
+        &mut self,
+        kind: &'static str,
+        type_id: usize,
+        operands: Vec<usize>,
+        span: crate::ast::Span,
+        update: Option<&'static str>,
+    ) -> RuntimeValue {
+        let result = self.next_value();
+        let ownership = self.ownership(type_id);
+        let runtime_span = self.span(span);
+        self.current().operations.push(RuntimeOperation {
+            kind,
+            result,
+            type_id,
+            operands,
+            ownership,
+            span: runtime_span,
+            value: None,
+            update,
+            case: None,
+            capability: None,
+            operation: None,
+            operator: None,
+            conversion: None,
+            lane: None,
+            field: None,
+            function: None,
+            signature: None,
         });
         RuntimeValue {
             id: result,
@@ -1424,6 +2905,8 @@ impl ResidualTrace {
             conversion: None,
             lane,
             field: None,
+            function: None,
+            signature: None,
         });
         RuntimeValue {
             id: result,
@@ -1457,6 +2940,8 @@ impl ResidualTrace {
             conversion: Some(conversion),
             lane: None,
             field: None,
+            function: None,
+            signature: None,
         });
         RuntimeValue {
             id: result,
@@ -1588,15 +3073,18 @@ impl ResidualTrace {
                 conversion: None,
                 lane: None,
                 field: Some(field_index),
+                function: None,
+                signature: None,
             });
-            projected.insert(
-                field.name,
-                Value::Runtime(RuntimeValue {
+            let field_value = self.symbolic_value(
+                RuntimeValue {
                     id: result,
                     type_id: field.type_id,
                     meaning: RuntimeMeaning::Plain,
-                }),
-            );
+                },
+                span,
+            )?;
+            projected.insert(field.name, field_value);
         }
         Ok(Value::Shape(projected))
     }
@@ -1656,6 +3144,14 @@ fn compiler_tag_payload(payload: Option<&Value>) -> Value {
     let Some(value) = payload else {
         return Value::Unit;
     };
+    if let Value::Union(members) = value {
+        return Value::Union(
+            members
+                .iter()
+                .map(|member| compiler_tag_payload(Some(member)))
+                .collect(),
+        );
+    }
     if let Value::Shape(fields) = value
         && fields.len() == 1
         && let Some(value) = fields.get("value")
@@ -1665,7 +3161,7 @@ fn compiler_tag_payload(payload: Option<&Value>) -> Value {
     value.clone()
 }
 
-fn contains_runtime(value: &Value) -> bool {
+pub(crate) fn contains_runtime(value: &Value) -> bool {
     match value {
         Value::Runtime(_) => true,
         Value::Shape(fields) => fields.iter().any(|(_, value)| contains_runtime(value)),
@@ -1674,6 +3170,438 @@ fn contains_runtime(value: &Value) -> bool {
         Value::Sealed { inner, .. } | Value::Extended { inner, .. } => contains_runtime(inner),
         _ => false,
     }
+}
+
+fn contains_staged_iterator(value: &Value) -> bool {
+    match value {
+        Value::IndexedStep { .. } => true,
+        Value::Shape(fields) => fields
+            .iter()
+            .any(|(_, value)| contains_staged_iterator(value)),
+        Value::Array(elements) => elements.iter().any(contains_staged_iterator),
+        Value::Union(elements) => elements.iter().any(contains_staged_iterator),
+        Value::Tag { payload, .. } => payload.as_deref().is_some_and(contains_staged_iterator),
+        Value::Extended { inner, .. } | Value::Sealed { inner, .. } => {
+            contains_staged_iterator(inner)
+        }
+        _ => false,
+    }
+}
+
+fn contains_static_integer(value: &Value) -> bool {
+    match value {
+        Value::Int(_) => true,
+        Value::Shape(fields) => fields
+            .iter()
+            .any(|(_, value)| contains_static_integer(value)),
+        Value::Array(elements) | Value::Union(elements) => {
+            elements.iter().any(contains_static_integer)
+        }
+        Value::Tag { payload, .. } => payload.as_deref().is_some_and(contains_static_integer),
+        Value::Extended { inner, .. } | Value::Sealed { inner, .. } => {
+            contains_static_integer(inner)
+        }
+        _ => false,
+    }
+}
+
+fn representation_shape_key(value: &Value) -> Option<String> {
+    fn shape(value: &Value) -> String {
+        match value {
+            Value::Shape(fields) => {
+                let fields = fields
+                    .iter()
+                    .map(|(name, value)| format!("{name}:{}", shape(value)))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("{{{fields}}}")
+            }
+            Value::Array(elements) => elements
+                .first()
+                .map(|element| format!("[{}]", shape(element)))
+                .unwrap_or_else(|| "[]".to_owned()),
+            Value::Tag { name, payload } => payload
+                .as_deref()
+                .map(|payload| format!("#{name} {}", shape(payload)))
+                .unwrap_or_else(|| format!("#{name}")),
+            Value::Extended { inner, .. }
+            | Value::Sealed { inner, .. }
+            | Value::Forall { body: inner, .. } => shape(inner),
+            _ => "_".to_owned(),
+        }
+    }
+
+    matches!(value, Value::Shape(_) | Value::Array(_)).then(|| format!("shape:{}", shape(value)))
+}
+
+fn runtime_captures(
+    context: &Rc<Context>,
+    closure: LexicalClosure<'_>,
+) -> Result<Vec<RuntimeValue>, Diagnostic> {
+    fn collect_fields(
+        context: &Rc<Context>,
+        fields: &OrderedFields,
+        visited: &mut HashSet<(String, u32, usize)>,
+        captured: &mut BTreeMap<(usize, usize), RuntimeValue>,
+    ) -> Result<(), Diagnostic> {
+        for (_, value) in fields {
+            collect_value(context, value, visited, captured)?;
+        }
+        Ok(())
+    }
+
+    fn collect_closure(
+        context: &Rc<Context>,
+        closure: LexicalClosure<'_>,
+        visited: &mut HashSet<(String, u32, usize)>,
+        captured: &mut BTreeMap<(usize, usize), RuntimeValue>,
+    ) -> Result<(), Diagnostic> {
+        let identity = (
+            closure.module.to_owned(),
+            closure.body.0,
+            Rc::as_ptr(closure.environment) as usize,
+        );
+        if !visited.insert(identity) {
+            return Ok(());
+        }
+        for name in closure_free_names(
+            context,
+            closure.module,
+            closure.parameter,
+            closure.body,
+            closure.self_name,
+        )? {
+            if let Some(value) = lookup(closure.environment, &name) {
+                collect_value(context, &value, visited, captured)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_value(
+        context: &Rc<Context>,
+        value: &Value,
+        visited: &mut HashSet<(String, u32, usize)>,
+        captured: &mut BTreeMap<(usize, usize), RuntimeValue>,
+    ) -> Result<(), Diagnostic> {
+        match value {
+            Value::Runtime(runtime) => {
+                captured
+                    .entry((runtime.id, runtime.type_id))
+                    .or_insert_with(|| runtime.clone());
+            }
+            Value::Shape(fields) => collect_fields(context, fields, visited, captured)?,
+            Value::Array(elements) | Value::IndexedStep { elements } | Value::Union(elements) => {
+                for element in elements {
+                    collect_value(context, element, visited, captured)?;
+                }
+            }
+            Value::Tag { payload, .. } => {
+                if let Some(payload) = payload {
+                    collect_value(context, payload, visited, captured)?;
+                }
+            }
+            Value::Closure {
+                module,
+                parameter,
+                body,
+                environment,
+                self_name,
+                ..
+            } => collect_closure(
+                context,
+                LexicalClosure {
+                    module,
+                    parameter: *parameter,
+                    body: *body,
+                    environment,
+                    self_name: self_name.as_deref(),
+                },
+                visited,
+                captured,
+            )?,
+            Value::Primitive { applied, .. } => {
+                for argument in applied {
+                    collect_value(context, argument, visited, captured)?;
+                }
+            }
+            Value::Range { low, high, .. } => {
+                collect_value(context, low, visited, captured)?;
+                collect_value(context, high, visited, captured)?;
+            }
+            Value::Arrow {
+                domain,
+                codomain,
+                effects,
+            } => {
+                collect_value(context, domain, visited, captured)?;
+                collect_value(context, codomain, visited, captured)?;
+                for effect in effects {
+                    collect_value(context, effect, visited, captured)?;
+                }
+            }
+            Value::Forall { body, .. }
+            | Value::Operation { effect: body, .. }
+            | Value::Sealed { inner: body, .. } => {
+                collect_value(context, body, visited, captured)?;
+            }
+            Value::Effect { operations, .. } => {
+                collect_fields(context, operations, visited, captured)?;
+            }
+            Value::Extended { inner, members } => {
+                collect_value(context, inner, visited, captured)?;
+                collect_fields(context, members, visited, captured)?;
+            }
+            Value::Int(_)
+            | Value::Float(_)
+            | Value::Float32(_)
+            | Value::Vector(_)
+            | Value::VectorMask(_)
+            | Value::IntegerVector { .. }
+            | Value::IntegerVectorMask { .. }
+            | Value::Text(_)
+            | Value::Unit
+            | Value::EmptyArray { .. }
+            | Value::ModuleClosure { .. }
+            | Value::Unbounded
+            | Value::TypeVariable(_)
+            | Value::OpaqueType(_)
+            | Value::Continuation { .. } => {}
+        }
+        Ok(())
+    }
+
+    let mut captured = BTreeMap::new();
+    collect_closure(context, closure, &mut HashSet::new(), &mut captured)?;
+    Ok(captured.into_values().collect())
+}
+
+fn replace_environment_runtime(
+    context: &Rc<Context>,
+    closure: LexicalClosure<'_>,
+    replacements: &HashMap<(usize, usize), RuntimeValue>,
+) -> Result<Environment, Diagnostic> {
+    fn replace_closure_environment(
+        context: &Rc<Context>,
+        closure: LexicalClosure<'_>,
+        replacements: &HashMap<(usize, usize), RuntimeValue>,
+        replaced: &mut HashMap<(String, u32, usize), Environment>,
+    ) -> Result<Environment, Diagnostic> {
+        let identity = (
+            closure.module.to_owned(),
+            closure.body.0,
+            Rc::as_ptr(closure.environment) as usize,
+        );
+        if let Some(environment) = replaced.get(&identity) {
+            return Ok(environment.clone());
+        }
+        let result = child_env(Some(closure.environment.clone()));
+        replaced.insert(identity, result.clone());
+        for name in closure_free_names(
+            context,
+            closure.module,
+            closure.parameter,
+            closure.body,
+            closure.self_name,
+        )? {
+            if let Some(value) = lookup(closure.environment, &name) {
+                result.names.borrow_mut().insert(
+                    name,
+                    replace_value(context, &value, replacements, replaced)?,
+                );
+            }
+        }
+        Ok(result)
+    }
+
+    fn replace_fields(
+        context: &Rc<Context>,
+        fields: &OrderedFields,
+        replacements: &HashMap<(usize, usize), RuntimeValue>,
+        replaced: &mut HashMap<(String, u32, usize), Environment>,
+    ) -> Result<OrderedFields, Diagnostic> {
+        fields
+            .iter()
+            .map(|(name, value)| {
+                Ok((
+                    name.clone(),
+                    replace_value(context, value, replacements, replaced)?,
+                ))
+            })
+            .collect()
+    }
+
+    fn replace_value(
+        context: &Rc<Context>,
+        value: &Value,
+        replacements: &HashMap<(usize, usize), RuntimeValue>,
+        replaced: &mut HashMap<(String, u32, usize), Environment>,
+    ) -> Result<Value, Diagnostic> {
+        let mut result = value.clone();
+        match &mut result {
+            Value::Runtime(runtime) => {
+                if let Some(replacement) = replacements.get(&(runtime.id, runtime.type_id)) {
+                    *runtime = replacement.clone();
+                }
+            }
+            Value::Shape(fields) => {
+                *fields = replace_fields(context, fields, replacements, replaced)?;
+            }
+            Value::Array(elements) | Value::IndexedStep { elements } | Value::Union(elements) => {
+                for element in elements {
+                    *element = replace_value(context, element, replacements, replaced)?;
+                }
+            }
+            Value::Tag { payload, .. } => {
+                if let Some(payload) = payload {
+                    **payload = replace_value(context, payload, replacements, replaced)?;
+                }
+            }
+            Value::Closure {
+                module,
+                parameter,
+                body,
+                environment,
+                self_name,
+                ..
+            } => {
+                *environment = replace_closure_environment(
+                    context,
+                    LexicalClosure {
+                        module,
+                        parameter: *parameter,
+                        body: *body,
+                        environment,
+                        self_name: self_name.as_deref(),
+                    },
+                    replacements,
+                    replaced,
+                )?;
+            }
+            Value::Primitive { applied, .. } => {
+                for argument in applied {
+                    *argument = replace_value(context, argument, replacements, replaced)?;
+                }
+            }
+            Value::Range { low, high, .. } => {
+                **low = replace_value(context, low, replacements, replaced)?;
+                **high = replace_value(context, high, replacements, replaced)?;
+            }
+            Value::Arrow {
+                domain,
+                codomain,
+                effects,
+            } => {
+                **domain = replace_value(context, domain, replacements, replaced)?;
+                **codomain = replace_value(context, codomain, replacements, replaced)?;
+                for effect in effects {
+                    *effect = replace_value(context, effect, replacements, replaced)?;
+                }
+            }
+            Value::Forall { body, .. }
+            | Value::Operation { effect: body, .. }
+            | Value::Sealed { inner: body, .. } => {
+                **body = replace_value(context, body, replacements, replaced)?;
+            }
+            Value::Effect { operations, .. } => {
+                *operations = replace_fields(context, operations, replacements, replaced)?;
+            }
+            Value::Extended { inner, members } => {
+                **inner = replace_value(context, inner, replacements, replaced)?;
+                *members = replace_fields(context, members, replacements, replaced)?;
+            }
+            Value::Int(_)
+            | Value::Float(_)
+            | Value::Float32(_)
+            | Value::Vector(_)
+            | Value::VectorMask(_)
+            | Value::IntegerVector { .. }
+            | Value::IntegerVectorMask { .. }
+            | Value::Text(_)
+            | Value::Unit
+            | Value::EmptyArray { .. }
+            | Value::ModuleClosure { .. }
+            | Value::Unbounded
+            | Value::TypeVariable(_)
+            | Value::OpaqueType(_)
+            | Value::Continuation { .. } => {}
+        }
+        Ok(result)
+    }
+
+    replace_closure_environment(context, closure, replacements, &mut HashMap::new())
+}
+
+fn runtime_effect_name(value: &Value) -> Option<String> {
+    let Value::Effect { name, .. } = value else {
+        return None;
+    };
+    Some(name.clone())
+}
+
+fn simplify_runtime_function(mut function: RuntimeFunction) -> RuntimeFunction {
+    let forwarding = function
+        .blocks
+        .iter()
+        .filter_map(|block| {
+            if block.id == function.entry_block || !block.operations.is_empty() {
+                return None;
+            }
+            let RuntimeTerminator::Branch {
+                target, arguments, ..
+            } = &block.terminator
+            else {
+                return None;
+            };
+            let forwards_parameters = block
+                .parameters
+                .iter()
+                .map(|parameter| parameter.value)
+                .eq(arguments.iter().copied());
+            forwards_parameters.then_some((block.id, *target))
+        })
+        .collect::<BTreeMap<_, _>>();
+    if forwarding.is_empty() {
+        return function;
+    }
+    let resolve = |mut target: usize| {
+        let mut visited = BTreeSet::new();
+        while let Some(next) = forwarding.get(&target) {
+            if !visited.insert(target) {
+                break;
+            }
+            target = *next;
+        }
+        target
+    };
+    function
+        .blocks
+        .retain(|block| !forwarding.contains_key(&block.id));
+    let block_ids = function
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| (block.id, index))
+        .collect::<BTreeMap<_, _>>();
+    for block in &mut function.blocks {
+        block.id = block_ids[&block.id];
+        match &mut block.terminator {
+            RuntimeTerminator::Branch { target, .. } => {
+                *target = block_ids[&resolve(*target)];
+            }
+            RuntimeTerminator::Conditional {
+                consequent,
+                alternate,
+                ..
+            } => {
+                *consequent = block_ids[&resolve(*consequent)];
+                *alternate = block_ids[&resolve(*alternate)];
+            }
+            RuntimeTerminator::Return { .. } => {}
+        }
+    }
+    function.entry_block = block_ids[&function.entry_block];
+    function
 }
 
 fn merge_meaning(left: &RuntimeMeaning, right: &RuntimeMeaning) -> RuntimeMeaning {
@@ -1689,6 +3617,7 @@ fn merge_meaning(left: &RuntimeMeaning, right: &RuntimeMeaning) -> RuntimeMeanin
     }
 }
 
+#[derive(Clone)]
 struct HostCall {
     capability: String,
     operation: String,
@@ -1744,7 +3673,170 @@ pub fn elaborate(
             crate::ast::Span { start: 0, end: 0 },
         ));
     }
-    HirBuilder::new(path).build(staged, host_calls)
+    prepare_exports(context, path, staged, host_calls)
+}
+
+fn prepare_exports(
+    context: Rc<Context>,
+    path: &str,
+    staged: Vec<StagedExport>,
+    host_calls: Vec<HostCall>,
+) -> Result<RuntimeModule, Diagnostic> {
+    let mut value_exports = Vec::new();
+    let mut function_exports = Vec::new();
+    for exported in staged {
+        match &exported.runtime {
+            Some((_, Type::Function { .. })) => function_exports.push(exported),
+            _ => value_exports.push(exported),
+        }
+    }
+    if function_exports.is_empty() {
+        return HirBuilder::new(path).build(value_exports, host_calls);
+    }
+
+    let mut modules = Vec::new();
+    if !value_exports.is_empty() {
+        modules.push(HirBuilder::new(path).build(value_exports, host_calls)?);
+    }
+    for exported in function_exports {
+        modules.push(prepare_function_export(context.clone(), path, exported)?);
+    }
+    merge_runtime_modules(path, modules)
+}
+
+fn prepare_function_export(
+    context: Rc<Context>,
+    path: &str,
+    exported: StagedExport,
+) -> Result<RuntimeModule, Diagnostic> {
+    let Some((mut function, mut type_)) = exported.runtime else {
+        return Err(hir_error("A function export lost its runtime value."));
+    };
+    let trace = Rc::new(std::cell::RefCell::new(ResidualTrace::new(path)));
+    let runtime = Runtime::residual(Phase::Runtime, path.to_owned(), trace.clone());
+    let mut parameter_types = Vec::new();
+    while let Type::Function {
+        parameter, result, ..
+    } = type_
+    {
+        let (argument, parameter_type) = trace
+            .borrow_mut()
+            .export_parameter(&parameter, crate::ast::Span { start: 0, end: 0 })?;
+        parameter_types.push(parameter_type);
+        function = complete_residual_host_calls(
+            crate::eval::apply(
+                context.clone(),
+                function,
+                argument,
+                crate::ast::Span { start: 0, end: 0 },
+                runtime.clone(),
+            ),
+            &trace,
+        )?;
+        type_ = *result;
+    }
+    drop(runtime);
+    let trace = Rc::try_unwrap(trace)
+        .map_err(|_| hir_error("A function export trace still has live evaluator references."))?
+        .into_inner();
+    trace.finish_export(exported.name, function, parameter_types, &type_)
+}
+
+fn merge_runtime_modules(
+    source: &str,
+    modules: Vec<RuntimeModule>,
+) -> Result<RuntimeModule, Diagnostic> {
+    if modules.len() == 1 {
+        return modules
+            .into_iter()
+            .next()
+            .ok_or_else(|| hir_error("A runtime module merge lost its input."));
+    }
+    let mut types = Vec::new();
+    let mut signatures = Vec::new();
+    let mut functions = Vec::new();
+    let mut capabilities = Vec::new();
+    let mut exports = Vec::new();
+    for module in modules {
+        let type_offset = types.len();
+        let signature_offset = signatures.len();
+        let function_offset = functions.len();
+        for mut type_ in module.types {
+            match &mut type_ {
+                RuntimeType::Store { element_type } => *element_type += type_offset,
+                RuntimeType::Product { fields, .. } => {
+                    for field in fields {
+                        field.type_id += type_offset;
+                    }
+                }
+                RuntimeType::Sum { cases, .. } => {
+                    for case_ in cases {
+                        case_.payload_type += type_offset;
+                    }
+                }
+                RuntimeType::Sealed {
+                    representation_type,
+                    ..
+                } => *representation_type += type_offset,
+                _ => {}
+            }
+            types.push(type_);
+        }
+        for mut signature in module.signatures {
+            for parameter in &mut signature.parameters {
+                *parameter += type_offset;
+            }
+            signature.result += type_offset;
+            signatures.push(signature);
+        }
+        for mut function in module.functions {
+            function.id += function_offset;
+            function.signature += signature_offset;
+            for block in &mut function.blocks {
+                for parameter in &mut block.parameters {
+                    parameter.type_id += type_offset;
+                }
+                for operation in &mut block.operations {
+                    operation.type_id += type_offset;
+                    if let Some(target) = &mut operation.function {
+                        *target += function_offset;
+                    }
+                    if let Some(signature) = &mut operation.signature {
+                        *signature += signature_offset;
+                    }
+                }
+            }
+            functions.push(function);
+        }
+        for mut capability in module.capabilities {
+            for operation in &mut capability.operations {
+                operation.signature += signature_offset;
+            }
+            capabilities.push(capability);
+        }
+        for mut exported in module.exports {
+            if let RuntimeExport::Runtime {
+                function,
+                signature,
+                ..
+            } = &mut exported
+            {
+                *function += function_offset;
+                *signature += signature_offset;
+            }
+            exports.push(exported);
+        }
+    }
+    Ok(RuntimeModule {
+        format: "blot-runtime-hir",
+        schema_version: 1,
+        source: source.to_owned(),
+        types,
+        signatures,
+        functions,
+        capabilities,
+        exports,
+    })
 }
 
 fn prepare_residual(
@@ -1752,26 +3844,6 @@ fn prepare_residual(
     path: &str,
     checked: CheckedModule,
 ) -> Result<RuntimeModule, Diagnostic> {
-    if let Some(span) = context.modules.borrow().get(path).and_then(|loaded| {
-        loaded
-            .module
-            .arena
-            .expressions
-            .iter()
-            .find_map(|expression| {
-                if let crate::ast::Expression::Rec { span, .. } = expression {
-                    Some(*span)
-                } else {
-                    None
-                }
-            })
-    }) {
-        return Err(Diagnostic::new(
-            "BLOT_UNSUPPORTED_LOWERING",
-            "`rec` is outside the Rust residual Runtime-HIR calculus.",
-            span,
-        ));
-    }
     let trace = Rc::new(std::cell::RefCell::new(ResidualTrace::new(path)));
     let computation = evaluate_checked_module(
         context,
@@ -2193,10 +4265,14 @@ impl HirBuilder {
                 ))
             }
             Type::Array(element) => {
-                let Value::Array(elements) = value else {
-                    return Err(self.mismatch(value, "array"));
+                let (elements, element_value) = match value {
+                    Value::Array(elements) => (
+                        elements.as_slice(),
+                        elements.first().unwrap_or(&Value::Unit),
+                    ),
+                    Value::EmptyArray { element } => (&[] as &[Value], element.as_ref()),
+                    _ => return Err(self.mismatch(value, "array")),
                 };
-                let element_value = elements.first().unwrap_or(&Value::Unit);
                 let element_type =
                     if elements.is_empty() && matches!(element.as_ref(), Type::Bottom) {
                         0
@@ -2471,10 +4547,18 @@ impl HirBuilder {
                         conversion: None,
                         lane: None,
                         field: None,
+                        function: None,
+                        signature: None,
                     });
                     store = result;
                 }
                 Ok(store)
+            }
+            Value::EmptyArray { .. } => {
+                let Type::Array(_) = type_ else {
+                    return Err(self.mismatch(value, "array"));
+                };
+                Ok(self.operation("store.empty", type_id, Vec::new(), "owned", operations))
             }
             Value::Tag { name, payload } => {
                 let Type::Variant { cases, .. } = type_ else {
@@ -2520,6 +4604,8 @@ impl HirBuilder {
                     conversion: None,
                     lane: None,
                     field: None,
+                    function: None,
+                    signature: None,
                 });
                 Ok(result)
             }
@@ -2587,6 +4673,8 @@ impl HirBuilder {
             conversion: None,
             lane: None,
             field: None,
+            function: None,
+            signature: None,
         });
         Ok(())
     }
@@ -2615,6 +4703,8 @@ impl HirBuilder {
             conversion: None,
             lane: None,
             field: None,
+            function: None,
+            signature: None,
         });
         result
     }
@@ -2644,6 +4734,8 @@ impl HirBuilder {
             conversion: None,
             lane: None,
             field: None,
+            function: None,
+            signature: None,
         });
         result
     }
@@ -2707,6 +4799,7 @@ fn type_from_value(value: &Value) -> Type {
                 .map(type_from_value)
                 .unwrap_or(Type::Bottom),
         )),
+        Value::EmptyArray { .. } => Type::Array(Box::new(Type::Bottom)),
         Value::Tag { name, payload } => Type::Variant {
             cases: vec![(
                 name.clone(),

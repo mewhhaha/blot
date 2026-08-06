@@ -49,13 +49,17 @@ function reportUnusedResults(
     if (sourceReadsLater(declaration, declaration.pattern.name, context)) {
       continue;
     }
-    const name = effectNameSpan(declaration, context);
-    if (name === null) continue;
+    const prefix = effectPrefix(declaration, context);
+    if (prefix === null) continue;
     context.report({
       message:
-        `The result of this effect is never read; bind it to \`_\` to make the discard explicit.`,
-      span: name,
-      fix: context.fix(name, "Discard unused effect result explicitly", "_"),
+        `The result of this effect is never read; sequence it with a leading \`<-\`.`,
+      span: prefix.name,
+      fix: context.fix(
+        prefix.binding,
+        "Discard unused effect result explicitly",
+        "<-",
+      ),
     });
   }
 }
@@ -69,10 +73,10 @@ function sourceReadsLater(
   return new RegExp(`\\b${name}\\b`).test(later);
 }
 
-function effectNameSpan(
+function effectPrefix(
   declaration: Extract<Decl, { readonly tag: "binding" }>,
   context: LintRuleContext,
-): Span | null {
+): { readonly name: Span; readonly binding: Span } | null {
   const prefix = context.source.slice(
     declaration.span.start,
     declaration.value.span.start,
@@ -80,7 +84,13 @@ function effectNameSpan(
   const match = /^([A-Za-z_][A-Za-z0-9_]*)[ \t]*<-/.exec(prefix);
   if (match === null) return null;
   return {
-    start: declaration.span.start,
-    end: declaration.span.start + match[1].length,
+    name: {
+      start: declaration.span.start,
+      end: declaration.span.start + match[1].length,
+    },
+    binding: {
+      start: declaration.span.start,
+      end: declaration.span.start + match[0].length,
+    },
   };
 }

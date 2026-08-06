@@ -92,7 +92,10 @@ Surface forms translate to the smaller AST described by
 [`LANGUAGE.md`](../LANGUAGE.md). In particular, loops become recursion and
 cases, statement control becomes compiler-local result constructors, element
 syntax becomes ordinary applications, and sequencing `x <- e` remains explicit
-sequencing of the already-applied expression `e`.
+sequencing of the already-applied expression `e`. Each element child becomes a
+fresh nullary function in the array passed to that application. A bare element
+statement effect-binds and discards the application result; a value-position
+element leaves the same application unsequenced.
 
 Write `surface(s) ⇓ a` for elaboration and `~` for observational equivalence in
 the source semantics. Every translation has the obligation

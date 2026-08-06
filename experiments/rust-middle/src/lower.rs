@@ -234,6 +234,36 @@ fn lower_declaration(
                 span,
             }))
         }
+        "sequencing" => {
+            let value = lower_value(cst, required(cst, rule, "value")?, context, arena)?;
+            let pattern = arena.pattern(Pattern::Name {
+                name: "_".to_owned(),
+                qualifier: Qualifier::None,
+                span,
+            });
+            Ok(arena.declaration(Declaration::Binding {
+                kind: DeclarationKind::Effect,
+                tags: Vec::new(),
+                pattern,
+                value,
+                span,
+            }))
+        }
+        "element_line" => {
+            let value = lower_primary(cst, required(cst, rule, "value")?, context, arena)?;
+            let pattern = arena.pattern(Pattern::Name {
+                name: "_".to_owned(),
+                qualifier: Qualifier::None,
+                span,
+            });
+            Ok(arena.declaration(Declaration::Binding {
+                kind: DeclarationKind::Effect,
+                tags: Vec::new(),
+                pattern,
+                value,
+                span,
+            }))
+        }
         "iteration" => lower_iteration(cst, rule, context, arena),
         "breaking" => {
             if context.escape_boundary == EscapeBoundary::ValueCondition {
@@ -1697,8 +1727,10 @@ fn statements_can_continue(cst: &CompactCst<'_>, statements: &[Cursor]) -> Resul
 fn statements_contain_effect(cst: &CompactCst<'_>, statements: &[Cursor]) -> Result<bool, String> {
     for statement in statements {
         let statement = statement_rule(cst, *statement)?;
-        if cst.rule_name(statement)? == "rebinding"
-            && token_text(cst, required(cst, statement, "arrow")?)? == "<-"
+        if cst.rule_name(statement)? == "sequencing"
+            || cst.rule_name(statement)? == "element_line"
+            || (cst.rule_name(statement)? == "rebinding"
+                && token_text(cst, required(cst, statement, "arrow")?)? == "<-")
         {
             return Ok(true);
         }
@@ -1980,6 +2012,9 @@ fn lower_value(
     };
     if cst.rule_name(target_rule)? == "lambda" {
         return lower_lambda(cst, target_rule, context, arena);
+    }
+    if cst.rule_name(target_rule)? == "element_expression" {
+        return lower_primary(cst, Cursor::Rule(target_rule), context, arena);
     }
     let name = cst.rule_name(target_rule)?;
     lower_expression(cst, target_rule, context, arena)
@@ -2351,14 +2386,18 @@ fn lower_primary(
             let mut result_effects = ResultEffects::Pure;
             let mut block_context = context.clone();
             block_context.return_scope = true;
-            if let Some(last) = statements.last().copied() {
-                let ending = statement_rule(cst, last)?;
-                if cst.rule_name(ending)? == "result" {
-                    result =
-                        lower_value(cst, required(cst, ending, "value")?, &block_context, arena)?;
-                    result_effects = ResultEffects::Ambient;
-                    statements.pop();
-                }
+            let mut contains_only_result = false;
+            if let Some(last) = statements.last().copied()
+                && let Some(terminal_return) =
+                    lower_terminal_return(cst, last, &block_context, arena)?
+            {
+                result = terminal_return;
+                result_effects = ResultEffects::Ambient;
+                statements.pop();
+                contains_only_result = statements.is_empty();
+            }
+            if contains_only_result {
+                return Ok(result);
             }
             if statements_need_control(cst, &statements)? {
                 let result = resolve_control_sequence(
@@ -2392,6 +2431,100 @@ fn lower_primary(
             "Rust middle has not lowered expression `{name}` yet"
         )),
     }
+}
+
+fn lower_terminal_return(
+    cst: &CompactCst<'_>,
+    cursor: Cursor,
+    context: &LoweringContext<'_>,
+    arena: &mut AstArena,
+) -> Result<Option<ExpressionId>, String> {
+    let rule = statement_rule(cst, cursor)?;
+    if cst.rule_name(rule)? == "result" {
+        return lower_value(cst, required(cst, rule, "value")?, context, arena).map(Some);
+    }
+    if cst.rule_name(rule)? != "conditional_statement" {
+        return Ok(None);
+    }
+
+    let body = as_rule(required(cst, rule, "body")?)?;
+    if cst.rule_name(body)? != "conditional_statement_branches" {
+        return Ok(None);
+    }
+    let Some(fallback) = cst.field(body, "fallback")? else {
+        return Ok(None);
+    };
+
+    let mut clauses = vec![Cursor::Rule(body)];
+    clauses.extend(cst.field_list(body, "alternatives")?);
+    let mut branches = Vec::new();
+    for clause in clauses {
+        let clause = as_rule(clause)?;
+        let statements = statement_suite(cst, clause, "consequence")?;
+        let Some(consequence) = lower_terminal_suite(cst, &statements, context, arena)? else {
+            return Ok(None);
+        };
+        let condition = lower_expression(
+            cst,
+            as_rule(required(cst, clause, "condition")?)?,
+            context,
+            arena,
+        )?;
+        branches.push(Branch {
+            condition,
+            consequence,
+        });
+    }
+
+    let fallback = as_rule(fallback)?;
+    let statements = statement_suite(cst, fallback, "alternative")?;
+    let Some(alternative) = lower_terminal_suite(cst, &statements, context, arena)? else {
+        return Ok(None);
+    };
+    Ok(Some(arena.expression(Expression::If {
+        branches,
+        fallback: Some(alternative),
+        span: cst.span(Cursor::Rule(body))?,
+    })))
+}
+
+fn lower_terminal_suite(
+    cst: &CompactCst<'_>,
+    cursors: &[Cursor],
+    context: &LoweringContext<'_>,
+    arena: &mut AstArena,
+) -> Result<Option<ExpressionId>, String> {
+    let Some(last) = cursors.last().copied() else {
+        return Ok(None);
+    };
+    let Some(result) = lower_terminal_return(cst, last, context, arena)? else {
+        return Ok(None);
+    };
+
+    let declarations = &cursors[..cursors.len() - 1];
+    if statements_need_control(cst, declarations)? {
+        return Ok(None);
+    }
+    if declarations.is_empty() {
+        return Ok(Some(result));
+    }
+
+    let mut lowered = Vec::new();
+    for declaration in declarations {
+        let declaration = statement_rule(cst, *declaration)?;
+        lowered.push(lower_declaration(cst, declaration, context, arena)?);
+    }
+    let start = cst.span(Cursor::Rule(statement_rule(cst, declarations[0])?))?;
+    let end = cst.span(Cursor::Rule(statement_rule(cst, last)?))?;
+    Ok(Some(arena.expression(Expression::Block {
+        declarations: lowered,
+        result,
+        result_effects: ResultEffects::Ambient,
+        span: Span {
+            start: start.start,
+            end: end.end,
+        },
+    })))
 }
 
 #[derive(Clone, Copy)]
@@ -2638,7 +2771,10 @@ fn lower_handler_composition(
             body: handled_body,
             span: step_span,
         });
-        let name = token_text(cst, required(cst, step, "name")?)?;
+        let name = match cst.field(step, "name")? {
+            Some(name) => token_text(cst, name)?,
+            None => "_".to_owned(),
+        };
         if name == "_" {
             current = handled;
             continue;
@@ -2729,7 +2865,8 @@ fn lower_element(
 
     let ending = as_rule(required(cst, rule, "ending")?)?;
     let ending_span = cst.span(Cursor::Rule(ending))?;
-    let child_body = if cst.rule_name(ending)? == "element_body" {
+    let mut child_elements = Vec::new();
+    if cst.rule_name(ending)? == "element_body" {
         let closing_cursor = required(cst, ending, "closing")?;
         let closing = token_text(cst, closing_cursor)?;
         if closing != name {
@@ -2739,39 +2876,59 @@ fn lower_element(
         }
         let children = cst.field_list(ending, "children")?;
         let child_context = context.body();
-        if statements_need_control(cst, &children)? {
-            let result = arena.expression(Expression::Unit { span: ending_span });
-            resolve_control_sequence(cst, &children, result, &child_context, ending_span, arena)?
-        } else {
-            let mut declarations = Vec::new();
-            for child in children {
-                declarations.push(lower_declaration(
-                    cst,
-                    unwrapped_rule(cst, child)?,
-                    &child_context,
-                    arena,
-                )?);
+        for child in children {
+            let child = as_rule(child)?;
+            let child_rule = cst.rule_name(child)?;
+            if child_rule != "element_line" && child_rule != "element_child" {
+                return Err(format!("unknown element child `{child_rule}`"));
             }
-            let result = arena.expression(Expression::Unit { span: ending_span });
-            arena.expression(Expression::Block {
-                declarations,
+            let child_span = cst.span(Cursor::Rule(child))?;
+            let child_value = required(cst, child, "value")?;
+            let value = if child_rule == "element_line" {
+                lower_primary(cst, child_value, &child_context, arena)?
+            } else {
+                lower_value(cst, child_value, &child_context, arena)?
+            };
+            let result_name = format!("elementChild${}${}", child_span.start, child_span.end);
+            let result_pattern = arena.pattern(Pattern::Name {
+                name: result_name.clone(),
+                qualifier: Qualifier::None,
+                span: child_span,
+            });
+            let binding = arena.declaration(Declaration::Binding {
+                kind: DeclarationKind::Effect,
+                tags: Vec::new(),
+                pattern: result_pattern,
+                value,
+                span: child_span,
+            });
+            let result = variable(&result_name, child_span, arena);
+            let body = arena.expression(Expression::Block {
+                declarations: vec![binding],
                 result,
-                result_effects: ResultEffects::Pure,
-                span: ending_span,
-            })
+                result_effects: ResultEffects::Ambient,
+                span: child_span,
+            });
+            let parameter = arena.pattern(Pattern::Unit { span: child_span });
+            let value = arena.expression(Expression::Lambda {
+                parameter,
+                body,
+                span: child_span,
+            });
+            child_elements.push(ArrayElement {
+                spread: false,
+                value,
+            });
         }
     } else if cst.rule_name(ending)? == "element_self_close" {
-        arena.expression(Expression::Unit { span: ending_span })
     } else {
         return Err(format!(
             "unknown element ending `{}`",
             cst.rule_name(ending)?
         ));
-    };
-    let unit_pattern = arena.pattern(Pattern::Unit { span: ending_span });
-    let children = arena.expression(Expression::Lambda {
-        parameter: unit_pattern,
-        body: child_body,
+    }
+    let children = arena.expression(Expression::Array {
+        elements: child_elements,
         span: ending_span,
     });
     let component = arena.expression(Expression::Var {

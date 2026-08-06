@@ -1,0 +1,11 @@
+open @import "blot:prelude" ()
+
+sig sum_to = Int -> Int
+const sum_to = fn count =>
+  let total = 0
+  for n in Iter.range (0, count):
+    total := total + n
+
+  return total
+
+return { .sum_to = sum_to; }

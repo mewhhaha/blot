@@ -39,8 +39,8 @@ let result = try program with
   @handle (Random, fake_random)
 
 let discarded = try program with
-  _ <- @handle (Terminal, fake_terminal)
-  _ <- @handle (Clock, fake_clock)
+  <- @handle (Terminal, fake_terminal)
+  <- @handle (Clock, fake_clock)
   @handle (Random, fake_random)
 
 return {

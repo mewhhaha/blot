@@ -31,7 +31,7 @@ let first = fn p =>
 // while the program runs rather than folded away while it compiles, and the
 // projections above are what reaches WebAssembly.
 point <-
-  _ <- Console.write "projected"
+  <- Console.write "projected"
   return { .x = 7; .y = 0; }
 
 return {

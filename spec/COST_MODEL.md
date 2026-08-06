@@ -46,6 +46,28 @@ Every report names the source graph, compiler artifact hash, sample count,
 aggregation statistic, and which setup work lies outside the clock. It reports
 artifact equality or observation parity before timing comparisons.
 
+Generated-code execution is a separate boundary from every compiler class above.
+A warm generated-execution measurement starts with validated and compiled
+WebAssembly modules; compilation, module instantiation, warmup, and observation
+validation remain outside the clock. It times calls into an already instantiated
+artifact. A report comparing generated artifacts names both source programs,
+their artifact hashes and byte sizes, code-generation flags, execution engine
+and version, workload inputs, invocation counts, and the same sample statistics.
+It establishes observation parity against an independent model before timing.
+Host crossings remain in the measurement when they supply dynamic inputs and
+must have an explicit baseline rather than being subtracted after the fact.
+Artifact-size reports include both complete bytes and marginal bytes relative to
+a boundary-matched minimal artifact. The complete size is the shipping cost; the
+marginal size answers how much one workload adds without conflating a nullary
+host adapter with a first-order function adapter.
+
+Scaling comparisons keep source and generated artifacts fixed while varying a
+runtime input. A semantic counterpart must preserve retention: Rust may reuse a
+`Vec` only when Blot carries owned-reuse permission for the corresponding Store.
+When a previous Store version remains observable, the Rust comparison must copy
+as well. Reports distinguish that required persistent cost from a missed
+ownership optimization.
+
 ## 3. Size parameters
 
 Let:

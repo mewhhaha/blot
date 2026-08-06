@@ -35,6 +35,20 @@ session. A revision consists of the entry source plus the revisions of every
 resolved import and included file; an unchanged revision returns the cached
 binary artifact. Changes invalidate the affected entry before compilation.
 
+Rust residual staging emits named recursive closures as internal Runtime-HIR
+functions and uses `call.direct` for recursive and outer calls. A source
+function with a concrete `sig` may cross the public ABI directly; curried
+domains become ordered Wasm parameters. Dynamic Store length, read, persistent
+write, and persistent growth use the same residual path. Empty forwarding blocks
+are removed before emission, which shortens branch-heavy dispatcher graphs
+without changing their values or effects. A recursive function closed over
+compile-time values becomes Runtime HIR directly. Runtime captures become
+explicit parameters selected from the closure's lexical free variables, and a
+dynamic argument or dynamic capture causes recursion to residualize. Settled
+closure signatures are checked facts keyed by module and lambda-body identity;
+the prelude snapshot carries them so the compiler does not re-infer snapshot
+internals. Dynamic surface `for` over `Iter.range` compiles through this path.
+
 Its release gates compare the complete AST, rejection diagnostics, pure
 evaluation, staged export phases, exact ABI bytes, decoded Wasm values, and
 host-effect observations with bounded independent oracles. The repository-wide
@@ -45,6 +59,11 @@ UTF-8-checked before they enter that residual program, including text nested in
 structural host results. Structural fields use canonical ordering and dynamic
 signed arithmetic traps on overflow. The benchmark and current measurements are
 in [`docs/rust-middle.md`](rust-middle.md).
+
+Generated-artifact execution is measured separately from compiler latency. The
+Blot-Wasm versus Rust-Wasm workloads, current results, and unsupported runtime
+programs are recorded in
+[`docs/generated-code-performance.md`](generated-code-performance.md).
 
 ## Three executions, one language
 
@@ -232,6 +251,11 @@ representation:
   lambda, and compile-time generic functions are specialized at their Blot call
   sites. An unconstrained runtime export is rejected instead of being assigned
   an arbitrary nominal ABI.
+- A generic runtime `fold` whose accumulator begins as an empty array still
+  needs a concrete element representation from its higher-order call site. The
+  compiler carries higher-order substitutions into nested closures, but rejects
+  the call when every available witness remains polymorphic. Surface iteration
+  does not allocate this intermediate index array and is the preferred form.
 
 The two formerly known shape leaks no longer reach gpufuck's type checker. A
 spread of a parameter, such as `fn r => { ...r; .x = 1; }`, needs a row variable

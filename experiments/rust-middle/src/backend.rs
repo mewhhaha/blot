@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::Serialize;
 use wasm_encoder::{
@@ -37,6 +37,8 @@ struct CanonicalResult<'a> {
 
 #[derive(Clone, Copy)]
 struct PublicExport<'a> {
+    parameter_types: &'a [AbiType],
+    parameter_runtime_types: &'a [usize],
     result_type: &'a AbiType,
     result_runtime_type: usize,
     call_id: u32,
@@ -562,6 +564,48 @@ fn emit_dynamic_module(
         i64_to_text: i64_to_text_index,
     };
 
+    let exported_functions = module
+        .exports
+        .iter()
+        .filter_map(|exported| match exported {
+            RuntimeExport::Runtime { function, .. } => Some(*function),
+            RuntimeExport::Comptime { .. } => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let mut runtime_function_indices = HashMap::new();
+    let internal_functions = module
+        .functions
+        .iter()
+        .filter(|function| !exported_functions.contains(&function.id))
+        .collect::<Vec<_>>();
+    for function in &internal_functions {
+        let signature = module.signatures.get(function.signature).ok_or_else(|| {
+            format!(
+                "{}: runtime function {} references unknown signature {}",
+                module.source, function.id, function.signature
+            )
+        })?;
+        let mut parameters = Vec::new();
+        for type_id in &signature.parameters {
+            parameters.extend(flattened_runtime_type(module, *type_id)?);
+        }
+        let results = flattened_runtime_type(module, signature.result)?;
+        let type_index = add_function_type(&mut types, parameters, results);
+        let function_index = imported_function_count + functions.len();
+        functions.function(type_index);
+        runtime_function_indices.insert(function.id, function_index);
+    }
+    for function in internal_functions {
+        code.function(&dynamic_internal_function(
+            module,
+            function,
+            manifest,
+            dynamic_helpers,
+            &text_offsets,
+            &runtime_function_indices,
+        )?);
+    }
+
     let mut function_exports = Vec::new();
     for (export_ordinal, exported) in module.exports.iter().enumerate() {
         let RuntimeExport::Runtime {
@@ -585,29 +629,28 @@ fn emit_dynamic_module(
                 module.source
             )
         })?;
-        if !signature.parameters.is_empty() {
-            return Err(format!(
-                "{}: residual Rust emission currently requires a nullary export",
-                module.source
-            ));
-        }
         let manifest_export = manifest
             .exports
             .iter()
             .find(|candidate| candidate.name.as_deref() == Some(wasm_name))
             .ok_or_else(|| format!("manifest omitted runtime export {wasm_name}"))?;
-        let result = &manifest_export
+        let public_function = manifest_export
             .function
             .as_ref()
-            .ok_or_else(|| format!("manifest export {wasm_name} has no function"))?
-            .result;
+            .ok_or_else(|| format!("manifest export {wasm_name} has no function"))?;
+        let result = &public_function.result;
         let flattened_result = flattened_type(result);
         let wasm_results = if flattened_result.len() <= 1 {
             flattened_result
         } else {
             vec![ValType::I32]
         };
-        let type_index = add_function_type(&mut types, Vec::new(), wasm_results);
+        let wasm_parameters = public_function
+            .parameters
+            .iter()
+            .flat_map(flattened_type)
+            .collect();
+        let type_index = add_function_type(&mut types, wasm_parameters, wasm_results);
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
         code.function(&dynamic_export_function(
@@ -615,12 +658,15 @@ fn emit_dynamic_module(
             runtime_function,
             manifest,
             PublicExport {
+                parameter_types: &public_function.parameters,
+                parameter_runtime_types: &signature.parameters,
                 result_type: result,
                 result_runtime_type: signature.result,
                 call_id: export_ordinal as u32 + 1,
             },
             dynamic_helpers,
             &text_offsets,
+            &runtime_function_indices,
         )?);
         function_exports.push((wasm_name.clone(), function_index));
         if let Some(post_return) = &manifest_export.post_return {
@@ -682,6 +728,129 @@ fn emit_dynamic_module(
     Ok(wasm.finish())
 }
 
+fn dynamic_internal_function(
+    module: &RuntimeModule,
+    function: &RuntimeFunction,
+    manifest: &AbiManifest,
+    helpers: DynamicHelpers,
+    text_offsets: &HashMap<(usize, usize), u32>,
+    runtime_function_indices: &HashMap<usize, u32>,
+) -> Result<Function, String> {
+    let signature = module.signatures.get(function.signature).ok_or_else(|| {
+        format!(
+            "{}: runtime function {} references unknown signature {}",
+            module.source, function.id, function.signature
+        )
+    })?;
+    let entry = function
+        .blocks
+        .iter()
+        .find(|block| block.id == function.entry_block)
+        .ok_or_else(|| {
+            format!(
+                "{}: runtime function {} has no entry block {}",
+                module.source, function.id, function.entry_block
+            )
+        })?;
+    if entry.parameters.len() != signature.parameters.len() {
+        return Err(format!(
+            "{}: runtime function {} has {} entry parameters for a {}-parameter signature",
+            module.source,
+            function.id,
+            entry.parameters.len(),
+            signature.parameters.len()
+        ));
+    }
+
+    let mut value_locals = HashMap::new();
+    let mut parameter_count = 0_u32;
+    for (parameter, type_id) in entry.parameters.iter().zip(&signature.parameters) {
+        if parameter.type_id != *type_id {
+            return Err(format!(
+                "{}: runtime function {} entry parameter type does not match its signature",
+                module.source, function.id
+            ));
+        }
+        let flattened = flattened_runtime_type(module, *type_id)?;
+        value_locals.insert(
+            parameter.value,
+            (parameter_count..parameter_count + flattened.len() as u32).collect(),
+        );
+        parameter_count += flattened.len() as u32;
+    }
+
+    let mut definitions = BTreeMap::new();
+    for block in &function.blocks {
+        for parameter in &block.parameters {
+            if !value_locals.contains_key(&parameter.value) {
+                definitions.insert(parameter.value, parameter.type_id);
+            }
+        }
+        for operation in &block.operations {
+            definitions.insert(operation.result, operation.type_id);
+        }
+    }
+    let mut local_types = Vec::new();
+    for (value, type_id) in definitions {
+        let flattened = flattened_runtime_type(module, type_id)?;
+        let start = parameter_count + local_types.len() as u32;
+        local_types.extend(flattened.iter().copied());
+        value_locals.insert(
+            value,
+            (start..start + flattened.len() as u32).collect::<Vec<_>>(),
+        );
+    }
+    let dispatcher = parameter_count + local_types.len() as u32;
+    local_types.push(ValType::I32);
+    let scratch_pointer = parameter_count + local_types.len() as u32;
+    local_types.push(ValType::I32);
+    let scratch_length = parameter_count + local_types.len() as u32;
+    local_types.push(ValType::I32);
+    let scratch_index = parameter_count + local_types.len() as u32;
+    local_types.push(ValType::I32);
+
+    let mut wasm_function = Function::new(local_types.into_iter().map(|type_| (1, type_)));
+    let mut instructions = wasm_function.instructions();
+    instructions
+        .i32_const(function.entry_block as i32)
+        .local_set(dispatcher)
+        .loop_(BlockType::Empty);
+    for block in &function.blocks {
+        instructions
+            .local_get(dispatcher)
+            .i32_const(block.id as i32)
+            .i32_eq()
+            .if_(BlockType::Empty);
+        for operation in &block.operations {
+            emit_dynamic_operation(
+                &mut instructions,
+                module,
+                function,
+                operation,
+                manifest,
+                helpers,
+                text_offsets,
+                &value_locals,
+                scratch_pointer,
+                scratch_length,
+                scratch_index,
+                runtime_function_indices,
+            )?;
+        }
+        emit_internal_terminator(
+            &mut instructions,
+            module,
+            function,
+            &block.terminator,
+            &value_locals,
+            dispatcher,
+        )?;
+        instructions.end();
+    }
+    instructions.unreachable().end().unreachable().end();
+    Ok(wasm_function)
+}
+
 fn dynamic_export_function(
     module: &RuntimeModule,
     function: &RuntimeFunction,
@@ -689,34 +858,82 @@ fn dynamic_export_function(
     public_export: PublicExport<'_>,
     helpers: DynamicHelpers,
     text_offsets: &HashMap<(usize, usize), u32>,
+    runtime_function_indices: &HashMap<usize, u32>,
 ) -> Result<Function, String> {
+    let entry = function
+        .blocks
+        .iter()
+        .find(|block| block.id == function.entry_block)
+        .ok_or_else(|| {
+            format!(
+                "{}: exported runtime function {} has no entry block {}",
+                module.source, function.id, function.entry_block
+            )
+        })?;
+    if entry.parameters.len() != public_export.parameter_runtime_types.len()
+        || entry.parameters.len() != public_export.parameter_types.len()
+    {
+        return Err(format!(
+            "{}: exported runtime function {} does not match its public parameters",
+            module.source, function.id
+        ));
+    }
+    let mut value_locals = HashMap::new();
+    let mut parameter_count = 0_u32;
+    for ((parameter, runtime_type), public_type) in entry
+        .parameters
+        .iter()
+        .zip(public_export.parameter_runtime_types)
+        .zip(public_export.parameter_types)
+    {
+        if parameter.type_id != *runtime_type {
+            return Err(format!(
+                "{}: exported runtime function {} entry parameter type does not match its signature",
+                module.source, function.id
+            ));
+        }
+        let runtime_flattened = flattened_runtime_type(module, *runtime_type)?;
+        let public_flattened = flattened_type(public_type);
+        if runtime_flattened != public_flattened {
+            return Err(format!(
+                "{}: exported runtime function {} parameter has incompatible public and runtime layouts",
+                module.source, function.id
+            ));
+        }
+        value_locals.insert(
+            parameter.value,
+            (parameter_count..parameter_count + runtime_flattened.len() as u32).collect(),
+        );
+        parameter_count += runtime_flattened.len() as u32;
+    }
     let mut definitions = BTreeMap::new();
     for block in &function.blocks {
         for parameter in &block.parameters {
-            definitions.insert(parameter.value, parameter.type_id);
+            if !value_locals.contains_key(&parameter.value) {
+                definitions.insert(parameter.value, parameter.type_id);
+            }
         }
         for operation in &block.operations {
             definitions.insert(operation.result, operation.type_id);
         }
     }
     let mut local_types = Vec::new();
-    let mut value_locals = HashMap::new();
     for (value, type_id) in definitions {
         let flattened = flattened_runtime_type(module, type_id)?;
-        let start = local_types.len() as u32;
+        let start = parameter_count + local_types.len() as u32;
         local_types.extend(flattened.iter().copied());
         value_locals.insert(
             value,
             (start..start + flattened.len() as u32).collect::<Vec<_>>(),
         );
     }
-    let dispatcher = local_types.len() as u32;
+    let dispatcher = parameter_count + local_types.len() as u32;
     local_types.push(ValType::I32);
-    let scratch_pointer = local_types.len() as u32;
+    let scratch_pointer = parameter_count + local_types.len() as u32;
     local_types.push(ValType::I32);
-    let scratch_length = local_types.len() as u32;
+    let scratch_length = parameter_count + local_types.len() as u32;
     local_types.push(ValType::I32);
-    let scratch_index = local_types.len() as u32;
+    let scratch_index = parameter_count + local_types.len() as u32;
     local_types.push(ValType::I32);
     let mut wasm_function = Function::new(local_types.into_iter().map(|type_| (1, type_)));
     let mut instructions = wasm_function.instructions();
@@ -744,6 +961,7 @@ fn dynamic_export_function(
                 scratch_pointer,
                 scratch_length,
                 scratch_index,
+                runtime_function_indices,
             )?;
         }
         emit_dynamic_terminator(
@@ -779,6 +997,7 @@ fn emit_dynamic_operation(
     scratch_pointer: u32,
     scratch_length: u32,
     scratch_index: u32,
+    runtime_function_indices: &HashMap<usize, u32>,
 ) -> Result<(), String> {
     let result = locals_for(module, value_locals, operation.result)?;
     match operation.kind {
@@ -883,6 +1102,24 @@ fn emit_dynamic_operation(
                 )?;
             }
         }
+        "call.direct" => {
+            let target = operation
+                .function
+                .ok_or_else(|| format!("{}: call.direct omitted its function", module.source))?;
+            let function_index = runtime_function_indices.get(&target).ok_or_else(|| {
+                format!(
+                    "{}: call.direct references unavailable function {target}",
+                    module.source
+                )
+            })?;
+            for operand in &operation.operands {
+                emit_local_values(instructions, locals_for(module, value_locals, *operand)?);
+            }
+            instructions.call(*function_index);
+            for local in result.iter().rev() {
+                instructions.local_set(*local);
+            }
+        }
         "text.compare" => {
             let text_compare = helpers.text_compare.ok_or_else(|| {
                 format!("{}: text.compare omitted its runtime helper", module.source)
@@ -953,11 +1190,52 @@ fn emit_dynamic_operation(
                     operation.operator,
                     &module.source,
                 )?;
+            } else if matches!(module.types[operand_type], RuntimeType::Float32) {
+                emit_float_operation(
+                    instructions,
+                    left[0],
+                    right[0],
+                    result[0],
+                    operation.operator,
+                    true,
+                    &module.source,
+                )?;
+            } else if matches!(module.types[operand_type], RuntimeType::Float64) {
+                emit_float_operation(
+                    instructions,
+                    left[0],
+                    right[0],
+                    result[0],
+                    operation.operator,
+                    false,
+                    &module.source,
+                )?;
             } else {
                 instructions.local_get(left[0]).local_get(right[0]);
                 emit_i32_operator(instructions, operation.operator, &module.source)?;
                 instructions.local_set(result[0]);
             }
+        }
+        "scalar.unary" => {
+            let operand = locals_for(module, value_locals, operation.operands[0])?;
+            let operand_type = runtime_value_type(function, operation.operands[0])?;
+            instructions.local_get(operand[0]);
+            match (&module.types[operand_type], operation.operator) {
+                (RuntimeType::Float32, Some("negate")) => {
+                    instructions.f32_neg();
+                }
+                (RuntimeType::Float64, Some("negate")) => {
+                    instructions.f64_neg();
+                }
+                (type_, operator) => {
+                    return Err(format!(
+                        "{}: dynamic unary scalar operator {operator:?} does not accept {}",
+                        module.source,
+                        runtime_kind(type_)
+                    ));
+                }
+            }
+            instructions.local_set(result[0]);
         }
         "convert" => {
             let operand = locals_for(module, value_locals, operation.operands[0])?;
@@ -968,6 +1246,18 @@ fn emit_dynamic_operation(
                 }
                 Some("signed-integer-32-to-signed-integer-64") => {
                     instructions.i64_extend_i32_s();
+                }
+                Some("signed-integer-64-to-float-64") => {
+                    instructions.f64_convert_i64_s();
+                }
+                Some("float-64-to-float-32") => {
+                    instructions.f32_demote_f64();
+                }
+                Some("float-32-to-float-64") => {
+                    instructions.f64_promote_f32();
+                }
+                Some("float-64-to-signed-integer-64") => {
+                    instructions.i64_trunc_f64_s();
                 }
                 conversion => {
                     return Err(format!(
@@ -1052,6 +1342,53 @@ fn emit_dynamic_operation(
                 .local_set(result[0])
                 .i32_const(0)
                 .local_set(result[1]);
+        }
+        "store.length" => {
+            let store = locals_for(module, value_locals, operation.operands[0])?;
+            instructions
+                .local_get(store[1])
+                .i64_extend_i32_u()
+                .local_set(result[0]);
+        }
+        "store.read" => {
+            let store_type = runtime_value_type(function, operation.operands[0])?;
+            let RuntimeType::Store { element_type } = module
+                .types
+                .get(store_type)
+                .ok_or_else(|| format!("{}: store.read has no Store type", module.source))?
+            else {
+                return Err(format!(
+                    "{}: store.read operand is not a Store",
+                    module.source
+                ));
+            };
+            let store = locals_for(module, value_locals, operation.operands[0])?;
+            let index = locals_for(module, value_locals, operation.operands[1])?;
+            let element_type_id = *element_type;
+            let element_type = canonical_type(module, element_type_id, &mut Vec::new())?;
+            let element_layout = memory_layout(&element_type);
+            instructions
+                .local_get(index[0])
+                .i64_const(0)
+                .i64_lt_s()
+                .if_(BlockType::Empty)
+                .unreachable()
+                .end()
+                .local_get(index[0])
+                .i32_wrap_i64()
+                .local_tee(scratch_index)
+                .local_get(store[1])
+                .i32_ge_u()
+                .if_(BlockType::Empty)
+                .unreachable()
+                .end()
+                .local_get(store[0])
+                .local_get(scratch_index)
+                .i32_const(element_layout.size as i32)
+                .i32_mul()
+                .i32_add()
+                .local_set(scratch_pointer);
+            emit_load_canonical_result(instructions, &element_type, result, scratch_pointer, 0)?;
         }
         "store.new" => {
             let RuntimeType::Store { element_type } = module
@@ -1146,7 +1483,26 @@ fn emit_dynamic_operation(
             let element_type_id = *element_type;
             let element_type = canonical_type(module, element_type_id, &mut Vec::new())?;
             let element_layout = memory_layout(&element_type);
-            assign_locals(instructions, result, store)?;
+            if operation.update == Some("persistent") {
+                instructions
+                    .i32_const(0)
+                    .i32_const(0)
+                    .i32_const(element_layout.alignment as i32)
+                    .local_get(store[1])
+                    .i32_const(element_layout.size as i32)
+                    .i32_mul()
+                    .call(helpers.realloc)
+                    .local_tee(result[0])
+                    .local_get(store[0])
+                    .local_get(store[1])
+                    .i32_const(element_layout.size as i32)
+                    .i32_mul()
+                    .memory_copy(0, 0)
+                    .local_get(store[1])
+                    .local_set(result[1]);
+            } else {
+                assign_locals(instructions, result, store)?;
+            }
             instructions
                 .local_get(index[0])
                 .i64_const(0)
@@ -1162,8 +1518,63 @@ fn emit_dynamic_operation(
                 .if_(BlockType::Empty)
                 .unreachable()
                 .end()
-                .local_get(store[0])
+                .local_get(result[0])
                 .local_get(scratch_index)
+                .i32_const(element_layout.size as i32)
+                .i32_mul()
+                .i32_add()
+                .local_set(scratch_pointer);
+            emit_store_public_result(
+                instructions,
+                module,
+                element_type_id,
+                &element_type,
+                value,
+                scratch_pointer,
+                0,
+            )?;
+        }
+        "store.grow" => {
+            let RuntimeType::Store { element_type } = module
+                .types
+                .get(operation.type_id)
+                .ok_or_else(|| format!("{}: store.grow has no Store type", module.source))?
+            else {
+                return Err(format!(
+                    "{}: store.grow result is not a Store",
+                    module.source
+                ));
+            };
+            let store = locals_for(module, value_locals, operation.operands[0])?;
+            let value = locals_for(module, value_locals, operation.operands[1])?;
+            let element_type_id = *element_type;
+            let element_type = canonical_type(module, element_type_id, &mut Vec::new())?;
+            let element_layout = memory_layout(&element_type);
+            instructions
+                .local_get(store[1])
+                .i32_const(1)
+                .i32_add()
+                .local_tee(result[1])
+                .local_get(store[1])
+                .i32_le_u()
+                .if_(BlockType::Empty)
+                .unreachable()
+                .end()
+                .i32_const(0)
+                .i32_const(0)
+                .i32_const(element_layout.alignment as i32)
+                .local_get(result[1])
+                .i32_const(element_layout.size as i32)
+                .i32_mul()
+                .call(helpers.realloc)
+                .local_tee(result[0])
+                .local_get(store[0])
+                .local_get(store[1])
+                .i32_const(element_layout.size as i32)
+                .i32_mul()
+                .memory_copy(0, 0)
+                .local_get(result[0])
+                .local_get(store[1])
                 .i32_const(element_layout.size as i32)
                 .i32_mul()
                 .i32_add()
@@ -1187,6 +1598,75 @@ fn emit_dynamic_operation(
                 "{}: dynamic operation {kind} is not emitted yet",
                 module.source
             ));
+        }
+    }
+    Ok(())
+}
+
+fn emit_internal_terminator(
+    instructions: &mut InstructionSink<'_>,
+    module: &RuntimeModule,
+    function: &RuntimeFunction,
+    terminator: &RuntimeTerminator,
+    value_locals: &HashMap<usize, Vec<u32>>,
+    dispatcher: u32,
+) -> Result<(), String> {
+    match terminator {
+        RuntimeTerminator::Branch {
+            target, arguments, ..
+        } => {
+            assign_block_arguments(
+                instructions,
+                module,
+                function,
+                *target,
+                arguments,
+                value_locals,
+            )?;
+            instructions
+                .i32_const(*target as i32)
+                .local_set(dispatcher)
+                .br(1);
+        }
+        RuntimeTerminator::Conditional {
+            condition,
+            consequent,
+            consequent_arguments,
+            alternate,
+            alternate_arguments,
+            ..
+        } => {
+            let condition = locals_for(module, value_locals, *condition)?;
+            instructions.local_get(condition[0]).if_(BlockType::Empty);
+            assign_block_arguments(
+                instructions,
+                module,
+                function,
+                *consequent,
+                consequent_arguments,
+                value_locals,
+            )?;
+            instructions
+                .i32_const(*consequent as i32)
+                .local_set(dispatcher)
+                .else_();
+            assign_block_arguments(
+                instructions,
+                module,
+                function,
+                *alternate,
+                alternate_arguments,
+                value_locals,
+            )?;
+            instructions
+                .i32_const(*alternate as i32)
+                .local_set(dispatcher)
+                .end()
+                .br(1);
+        }
+        RuntimeTerminator::Return { value, .. } => {
+            emit_local_values(instructions, locals_for(module, value_locals, *value)?);
+            instructions.return_();
         }
     }
     Ok(())
@@ -1409,17 +1889,91 @@ fn emit_dynamic_vector_operation(
             ));
         }
     };
+    let operands = operation
+        .operands
+        .iter()
+        .map(|operand| locals_for(module, value_locals, *operand).map(|locals| locals[0]))
+        .collect::<Result<Vec<_>, _>>()?;
+    if element == "float-32" && lanes == 4 {
+        match operation.operator {
+            Some("make") => {
+                instructions.local_get(operands[0]).f32x4_splat();
+                for (lane, operand) in operands.iter().enumerate().skip(1) {
+                    instructions
+                        .local_get(*operand)
+                        .f32x4_replace_lane(lane as u8);
+                }
+            }
+            Some("splat") => {
+                instructions.local_get(operands[0]).f32x4_splat();
+            }
+            Some("extract") => {
+                let lane = operation
+                    .lane
+                    .ok_or_else(|| format!("{}: vector extract omitted its lane", module.source))?;
+                instructions.local_get(operands[0]).f32x4_extract_lane(lane);
+            }
+            Some("add") => {
+                emit_local_pair(instructions, &operands);
+                instructions.f32x4_add();
+            }
+            Some("subtract") => {
+                emit_local_pair(instructions, &operands);
+                instructions.f32x4_sub();
+            }
+            Some("multiply") => {
+                emit_local_pair(instructions, &operands);
+                instructions.f32x4_mul();
+            }
+            Some("divide") => {
+                emit_local_pair(instructions, &operands);
+                instructions.f32x4_div();
+            }
+            Some("equal") => {
+                emit_local_pair(instructions, &operands);
+                instructions.f32x4_eq();
+            }
+            Some("less-than") => {
+                emit_local_pair(instructions, &operands);
+                instructions.f32x4_lt();
+            }
+            Some("select") => {
+                instructions
+                    .local_get(operands[1])
+                    .local_get(operands[2])
+                    .local_get(operands[0])
+                    .v128_bitselect();
+            }
+            Some("sum") => {
+                instructions
+                    .local_get(operands[0])
+                    .f32x4_extract_lane(0)
+                    .local_get(operands[0])
+                    .f32x4_extract_lane(1)
+                    .f32_add()
+                    .local_get(operands[0])
+                    .f32x4_extract_lane(2)
+                    .f32_add()
+                    .local_get(operands[0])
+                    .f32x4_extract_lane(3)
+                    .f32_add();
+            }
+            operator => {
+                return Err(format!(
+                    "{}: dynamic f32x4 operator {operator:?} is not emitted yet",
+                    module.source
+                ));
+            }
+        }
+        instructions.local_set(result);
+        return Ok(());
+    }
     if element != "integer-32" || lanes != 4 {
         return Err(format!(
             "{}: dynamic {element}x{lanes} operation is not emitted yet",
             module.source
         ));
     }
-    let operands = operation
-        .operands
-        .iter()
-        .map(|operand| locals_for(module, value_locals, *operand).map(|locals| locals[0]))
-        .collect::<Result<Vec<_>, _>>()?;
     match operation.operator {
         Some("make") => {
             instructions.local_get(operands[0]).i32x4_splat();
@@ -1709,6 +2263,63 @@ fn emit_i32_operator(
     Ok(())
 }
 
+fn emit_float_operation(
+    instructions: &mut InstructionSink<'_>,
+    left: u32,
+    right: u32,
+    result: u32,
+    operator: Option<&str>,
+    float32: bool,
+    source: &str,
+) -> Result<(), String> {
+    instructions.local_get(left).local_get(right);
+    match (float32, operator) {
+        (true, Some("add")) => instructions.f32_add(),
+        (true, Some("subtract")) => instructions.f32_sub(),
+        (true, Some("multiply")) => instructions.f32_mul(),
+        (true, Some("divide")) => instructions.f32_div(),
+        (true, Some("equal")) => instructions.f32_eq(),
+        (true, Some("not-equal")) => instructions.f32_ne(),
+        (true, Some("less-than")) => instructions.f32_lt(),
+        (true, Some("less-than-or-equal")) => instructions.f32_le(),
+        (true, Some("greater-than")) => instructions.f32_gt(),
+        (true, Some("greater-than-or-equal")) => instructions.f32_ge(),
+        (false, Some("add")) => instructions.f64_add(),
+        (false, Some("subtract")) => instructions.f64_sub(),
+        (false, Some("multiply")) => instructions.f64_mul(),
+        (false, Some("divide")) => instructions.f64_div(),
+        (false, Some("equal")) => instructions.f64_eq(),
+        (false, Some("not-equal")) => instructions.f64_ne(),
+        (false, Some("less-than")) => instructions.f64_lt(),
+        (false, Some("less-than-or-equal")) => instructions.f64_le(),
+        (false, Some("greater-than")) => instructions.f64_gt(),
+        (false, Some("greater-than-or-equal")) => instructions.f64_ge(),
+        (true, Some("remainder")) => instructions
+            .f32_div()
+            .f32_trunc()
+            .local_get(right)
+            .f32_mul()
+            .local_get(left)
+            .f32_sub()
+            .f32_neg(),
+        (false, Some("remainder")) => instructions
+            .f64_div()
+            .f64_trunc()
+            .local_get(right)
+            .f64_mul()
+            .local_get(left)
+            .f64_sub()
+            .f64_neg(),
+        (_, operator) => {
+            return Err(format!(
+                "{source}: dynamic float operator {operator:?} is not emitted yet"
+            ));
+        }
+    };
+    instructions.local_set(result);
+    Ok(())
+}
+
 fn emit_i64_operation(
     instructions: &mut InstructionSink<'_>,
     left: u32,
@@ -1878,6 +2489,28 @@ fn emit_load_canonical_result(
             instructions.local_set(destination[0]);
             Ok(1)
         }
+        AbiType::Float32 => {
+            instructions
+                .local_get(pointer)
+                .f32_load(wasm_encoder::MemArg {
+                    offset: u64::from(offset),
+                    align: 2,
+                    memory_index: 0,
+                });
+            instructions.local_set(destination[0]);
+            Ok(1)
+        }
+        AbiType::Float64 => {
+            instructions
+                .local_get(pointer)
+                .f64_load(wasm_encoder::MemArg {
+                    offset: u64::from(offset),
+                    align: 3,
+                    memory_index: 0,
+                });
+            instructions.local_set(destination[0]);
+            Ok(1)
+        }
         AbiType::Boolean => {
             instructions
                 .local_get(pointer)
@@ -1925,7 +2558,7 @@ fn emit_load_canonical_result(
             emit_load_canonical_result(instructions, inner, destination, pointer, offset)
         }
         _ => Err(format!(
-            "indirect dynamic {} host results are not emitted yet",
+            "indirect dynamic {} results are not emitted yet",
             abi_kind(type_)
         )),
     }

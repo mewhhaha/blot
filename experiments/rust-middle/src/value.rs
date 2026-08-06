@@ -21,6 +21,15 @@ pub(crate) fn attach_signature(value: &mut Value, signature: &Value) {
         Value::Forall { body, .. } => body.as_ref(),
         signature => signature,
     };
+    if matches!(value, Value::Array(elements) if elements.is_empty())
+        && let Value::Array(elements) = signature
+        && let Some(element) = elements.first()
+    {
+        *value = Value::EmptyArray {
+            element: Box::new(element.clone()),
+        };
+        return;
+    }
     match (value, signature) {
         (
             Value::Closure {
@@ -93,6 +102,7 @@ pub struct Env {
     pub names: RefCell<BTreeMap<String, Value>>,
     pub opens: RefCell<Vec<OpenedValues>>,
     pub signatures: RefCell<BTreeMap<String, Value>>,
+    pub type_substitutions: RefCell<BTreeMap<u32, Value>>,
     pub parent: Option<Environment>,
 }
 
@@ -101,6 +111,7 @@ pub fn child_env(parent: Option<Environment>) -> Environment {
         names: RefCell::new(BTreeMap::new()),
         opens: RefCell::new(Vec::new()),
         signatures: RefCell::new(BTreeMap::new()),
+        type_substitutions: RefCell::new(BTreeMap::new()),
         parent,
     })
 }
@@ -286,6 +297,9 @@ pub enum Value {
     Unit,
     Shape(OrderedFields),
     Array(Vec<Value>),
+    EmptyArray {
+        element: Box<Value>,
+    },
     Tag {
         name: String,
         payload: Option<Box<Value>>,
@@ -365,7 +379,7 @@ pub enum RuntimeMeaning {
     #[default]
     Plain,
     Ordering,
-    IntegerOrdering {
+    ScalarOrdering {
         right: usize,
     },
     Sum {
@@ -461,6 +475,9 @@ pub fn equal(left: &Value, right: &Value) -> bool {
                     .zip(right)
                     .all(|(left, right)| equal(left, right))
         }
+        (Value::EmptyArray { .. }, Value::EmptyArray { .. }) => true,
+        (Value::EmptyArray { .. }, Value::Array(right))
+        | (Value::Array(right), Value::EmptyArray { .. }) => right.is_empty(),
         (
             Value::Tag {
                 name: left_name,
@@ -601,6 +618,7 @@ pub fn show(value: &Value) -> String {
             "[{}]",
             elements.iter().map(show).collect::<Vec<_>>().join(", ")
         ),
+        Value::EmptyArray { .. } => "[]".to_owned(),
         Value::Tag { name, payload } => match payload {
             Some(payload) => format!("#{name} {}", show(payload)),
             None => format!("#{name}"),

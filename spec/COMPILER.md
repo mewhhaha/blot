@@ -149,9 +149,15 @@ Facts = InferenceFacts + PhaseFacts + SafetyCertificates
 ```
 
 Inference owns field sets, constructor sets, settled types, effect identities,
-and type-directed adaptations. Safety owns coverage decisions and relational
-proofs. Ownership owns path consumption and reuse permission. Staging owns
-compile-time values and residualization decisions. Specialization owns concrete
+type-directed adaptations, and residual closure signatures. A closure signature
+is keyed by its defining module revision and lambda-body expression identity;
+the compiler-distributed module certificate serializes the closed signature with
+that identity. Representation facts additionally record the concrete call-site
+layout of a residual type expression and of an unambiguous structural product
+shape. A conflicting observation invalidates the fact; it never selects one
+observation by order. Safety owns coverage decisions and relational proofs.
+Ownership owns path consumption and reuse permission. Staging owns compile-time
+values and residualization decisions. Specialization owns concrete
 representations. A later pass verifies and consumes these facts; it does not
 infer them again.
 
@@ -315,18 +321,23 @@ public artifact, or an explicit compiler command.
 
 ### 9.4 Normalization and representation closure
 
-| Responsibility                                                              | Required result                          |
-| --------------------------------------------------------------------------- | ---------------------------------------- |
-| distinguish static values from residual runtime computations                | phase-safe erasure                       |
-| reuse compile-time results already demanded by checking                     | no second semantic derivation            |
-| inline or apply imported module closures under concrete arguments           | consumer-specific program meaning        |
-| specialize structural calls by concrete shape                               | monomorphic runtime operations           |
-| unfold static structural folds around dynamic scalar work                   | direct runtime projections               |
-| specialize handlers, effect identities, seals, and generated descriptors    | closed runtime identities                |
-| preserve source evaluation and host-request order                           | observationally equivalent residual code |
-| choose concrete scalar, product, sum, Store, text, and SIMD representations | no open runtime type                     |
-| turn ownership and bounds evidence into permitted target operations         | checked mutation and eliminated checks   |
-| identify runtime exports and their source types                             | a closed public program boundary         |
+| Responsibility                                                                 | Required result                          |
+| ------------------------------------------------------------------------------ | ---------------------------------------- |
+| distinguish static values from residual runtime computations                   | phase-safe erasure                       |
+| reuse compile-time results already demanded by checking                        | no second semantic derivation            |
+| inline or apply imported module closures under concrete arguments              | consumer-specific program meaning        |
+| specialize structural calls by concrete shape                                  | monomorphic runtime operations           |
+| instantiate higher-order representation variables from concrete arguments      | closed nested closure signatures         |
+| solve positive recursive representation equations by their least fixed point   | no residual self-only result alternative |
+| preserve compiler-local control envelopes while erasing their payload wrappers | one runtime sum for statement control    |
+| erase scalar refinements without changing their concrete layout                | equal layouts for refined and open facts |
+| closure-convert runtime free variables into explicit function parameters       | lexically minimal residual environments  |
+| unfold static structural folds around dynamic scalar work                      | direct runtime projections               |
+| specialize handlers, effect identities, seals, and generated descriptors       | closed runtime identities                |
+| preserve source evaluation and host-request order                              | observationally equivalent residual code |
+| choose concrete scalar, product, sum, Store, text, and SIMD representations    | no open runtime type                     |
+| turn ownership and bounds evidence into permitted target operations            | checked mutation and eliminated checks   |
+| identify runtime exports and their source types                                | a closed public program boundary         |
 
 ### 9.5 Runtime program and ABI
 
@@ -360,7 +371,7 @@ results. Merely putting the same responsibilities in one file is not a collapse.
 
 ## 10. Present implementation shape
 
-This is an operational snapshot recorded on 2026-08-04, not a permanent
+This is an operational snapshot recorded on 2026-08-06, not a permanent
 contract. The two implementations do not currently materialize the logical
 artifact graph in the same way.
 
@@ -588,9 +599,13 @@ The collapse should be tested by deletion in this order:
 3. **Complete at the persistence boundary:** one `ClosedProgram` owns Runtime
    HIR and the compiled artifact for a semantic revision. Flattening the
    remaining request-local analysis arenas is a separate internal optimization.
-4. **Remaining:** progressively attach settled types and source origins to
-   stable residual IDs, deleting request-local fact maps as their last consumers
-   move into elaboration.
+4. **In progress:** recursive and higher-order closure signatures are attached
+   to stable `(module revision, lambda body)` identities and cross the prelude
+   snapshot as checked facts. Call-site representation substitutions, structural
+   product-shape facts, globally fresh representation holes, and imported source
+   origins now close recursive functions without guessing from captured values.
+   Progressively attach the remaining settled types, deleting request-local fact
+   maps as their last consumers move into elaboration.
 5. **Complete:** one `PublicLayout` owns manifest bytes, capabilities, canonical
    layout, and the data consumed by adapters.
 6. **Complete:** gpupaper's available Rust crate does not expose Core lowering,

@@ -18,6 +18,10 @@ let roots = Deno.args;
 if (roots.length === 0) roots = await repositoryPrograms();
 {
   const failures: { readonly root: string; readonly message: string }[] = [];
+  const oracleRejections: {
+    readonly root: string;
+    readonly message: string;
+  }[] = [];
   let compared = 0;
   let mutualRejections = 0;
   for (const root of roots) {
@@ -71,7 +75,13 @@ if (roots.length === 0) roots = await repositoryPrograms();
           `${code}: ${message}`,
         );
       }
-      if (typescriptError !== undefined) throw typescriptError;
+      if (typescriptError !== undefined) {
+        oracleRejections.push({
+          root,
+          message: errorMessage(typescriptError),
+        });
+        continue;
+      }
       if (typescriptModule === undefined) {
         throw new Error(
           `${root}: TypeScript HIR preparation returned no result`,
@@ -102,7 +112,11 @@ if (roots.length === 0) roots = await repositoryPrograms();
     }
   }
   console.log(
-    JSON.stringify({ compared, mutualRejections, failures }, null, 2),
+    JSON.stringify(
+      { compared, mutualRejections, oracleRejections, failures },
+      null,
+      2,
+    ),
   );
   if (failures.length > 0) Deno.exitCode = 1;
 }

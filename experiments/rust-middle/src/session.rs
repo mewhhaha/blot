@@ -349,6 +349,10 @@ impl CompilerSession {
             .evaluated_bindings
             .borrow_mut()
             .retain(|path, _| !invalidated.contains(path));
+        self.context
+            .closure_signatures
+            .borrow_mut()
+            .retain(|(path, _), _| !invalidated.contains(path));
         self.module_interfaces
             .borrow_mut()
             .retain(|path, _| !invalidated.contains(path));
@@ -405,6 +409,10 @@ fn json_value(value: &Value) -> serde_json::Value {
         Value::Array(elements) => serde_json::json!({
             "tag": "array",
             "elements": elements.iter().map(json_value).collect::<Vec<_>>(),
+        }),
+        Value::EmptyArray { .. } => serde_json::json!({
+            "tag": "array",
+            "elements": [],
         }),
         Value::Tag { name, payload } => serde_json::json!({
             "tag": "tag",
@@ -777,7 +785,7 @@ mod tests {
     #[test]
     fn binary_module_snapshot_restores_interface_and_value() {
         const MODULE_PATH: &str = "snapshot:library";
-        const MODULE_SOURCE: &str = "return { .answer = 42; }\u{e000}";
+        const MODULE_SOURCE: &str = "let increment = rec (fn value => @int.add value 1)\n\u{e000}return { .answer = increment 42; }\u{e000}\n";
         let mut builder = CompilerSession::default();
         builder
             .add_source(
@@ -803,6 +811,14 @@ mod tests {
                 .contains_key(MODULE_PATH)
         );
         assert_eq!(consumer.check_module(MODULE_PATH)["ok"], true);
+        assert!(
+            consumer
+                .context
+                .closure_signatures
+                .borrow()
+                .keys()
+                .any(|(path, _)| path == MODULE_PATH)
+        );
     }
 
     #[test]

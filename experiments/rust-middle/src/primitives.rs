@@ -281,9 +281,7 @@ pub fn run_primitive(
             _ => Ok(Value::Shape(OrderedFields::default())),
         },
         "@type.union_of" => {
-            let Value::Array(values) = &arguments[0] else {
-                return Err(type_error(name, "an array", &arguments[0], span));
-            };
+            let values = array(&arguments[0], span, name)?;
             let Some(first) = values.first().cloned() else {
                 return Err(Diagnostic::new(
                     "BLOT_EMPTY_TYPE",
@@ -361,7 +359,7 @@ pub fn run_primitive(
                 .ok_or_else(|| out_of_bounds(index, values.len(), span))
         }
         "@array.set" => {
-            let mut values = array(&arguments[0], span, name)?.clone();
+            let mut values = array(&arguments[0], span, name)?.to_vec();
             let index = index(&arguments[1], span, name)?;
             let Some(slot) = values.get_mut(index) else {
                 return Err(out_of_bounds(index, values.len(), span));
@@ -370,7 +368,7 @@ pub fn run_primitive(
             Ok(Value::Array(values))
         }
         "@array.push" => {
-            let mut values = array(&arguments[0], span, name)?.clone();
+            let mut values = array(&arguments[0], span, name)?.to_vec();
             values.push(arguments[1].clone());
             Ok(Value::Array(values))
         }
@@ -379,7 +377,7 @@ pub fn run_primitive(
             (
                 "step".to_owned(),
                 Value::IndexedStep {
-                    elements: array(&arguments[0], span, name)?.clone(),
+                    elements: array(&arguments[0], span, name)?.to_vec(),
                 },
             ),
         ]))),
@@ -805,9 +803,10 @@ fn shape<'a>(value: &'a Value, span: Span, what: &str) -> Result<&'a OrderedFiel
     }
 }
 
-fn array<'a>(value: &'a Value, span: Span, what: &str) -> Result<&'a Vec<Value>, Diagnostic> {
+fn array<'a>(value: &'a Value, span: Span, what: &str) -> Result<&'a [Value], Diagnostic> {
     match value {
         Value::Array(values) => Ok(values),
+        Value::EmptyArray { .. } => Ok(&[]),
         _ => Err(type_error(what, "an array", value, span)),
     }
 }
@@ -1209,8 +1208,10 @@ fn inhabits(value: &Value, type_: &Value) -> bool {
                 .all(|(name, type_)| fields.get(name).is_some_and(|value| inhabits(value, type_)))
         }
         Value::Array(types) => {
-            let Value::Array(values) = value else {
-                return false;
+            let values = match value {
+                Value::Array(values) => values.as_slice(),
+                Value::EmptyArray { .. } => &[],
+                _ => return false,
             };
             values
                 .iter()
@@ -1248,6 +1249,7 @@ fn type_of(value: &Value) -> Value {
                 .collect(),
         ),
         Value::Array(values) => Value::Array(values.iter().map(type_of).collect()),
+        Value::EmptyArray { element } => Value::Array(vec![(**element).clone()]),
         Value::Tag {
             name,
             payload: Some(payload),
@@ -1305,7 +1307,7 @@ fn reflect(value: &Value) -> Value {
         ),
         Value::Union(members) => tagged("Union", Value::Array(members.clone())),
         Value::Shape(_) => tagged("Shape", value.clone()),
-        Value::Array(_) => tagged("Array", value.clone()),
+        Value::Array(_) | Value::EmptyArray { .. } => tagged("Array", value.clone()),
         Value::Arrow {
             domain,
             codomain,

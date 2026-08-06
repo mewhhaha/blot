@@ -89,6 +89,26 @@ only when it corresponds to a specified language trap, malformed ABI input, or
 an unreachable defensive check. Integer arithmetic uses the source trapping or
 wrapping rule chosen before Runtime HIR.
 
+A residual recursive binding with a settled first-order signature is an ordinary
+Runtime-HIR function connected by `call.direct`; exported first-order functions
+use the same function bodies with canonical parameter and result adapters.
+Closure conversion appends the binding's lexically free runtime values to the
+function signature and to every direct call. Function identity includes the
+argument representation, capture representations, and specialized source
+signature. A recursive body is residualized when either its argument or one of
+those captures is dynamic; wholly static recursion may still be evaluated.
+
+Staged non-empty arrays become ordinary Store construction. Store memory uses
+the canonical scalar layout internally as well as at adapters, so reads and
+writes preserve `i64`, `f32`, and `f64` element representations rather than
+reinterpreting an unconstrained element as `Unit`.
+
+The emitter may remove an empty block whose only terminator forwards its
+parameters unchanged. Predecessors then target the forwarded block directly,
+preserving arguments, branch choice, effects, traps, and source evaluation
+order. This administrative simplification does not authorize folding a source
+computation or discarding an ownership edge.
+
 ## 6. Runtime theorem obligations
 
 Successful lowering and emission establish:

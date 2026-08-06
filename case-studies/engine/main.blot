@@ -105,12 +105,12 @@ let advance = fn ts => E.each_1 (
 // carries its whole field set across a module boundary and the renderer has no
 // business knowing that a transform of this game's also has a spin.
 let render = fn (transforms, models) =>
-  _ <- R.frame (fn draw =>
-      _ <- E.visit_2 (
+  <- R.frame (fn draw =>
+      <- E.visit_2 (
           transforms,
           models,
           fn (transform, model) =>
-            _ <- if model.kind == KIND_MESH:
+            <- if model.kind == KIND_MESH:
               return draw.mesh (
                 transform.position, transform.angle, transform.scale, model.colour
               )
@@ -135,33 +135,30 @@ let render = fn (transforms, models) =>
 sig load_transforms = Unit -> Store Transform ~ { Assets }
 let load_transforms = fn () =>
   count <- Assets.count ()
-  store <- fold (
-      upto (0, count),
-      Array.empty,
-      fn (store, id) =>
-        entry <- Assets.entry id
-        return E.attach (
-          store,
-          {
-            .position = R.point (entry.x, entry.y, entry.z);
-            .angle = 0;
-            .spin = entry.spin;
-            .scale = R.unit entry.scale;
-          }
-        )
-    )
+  sig store = Store Transform
+  let store = Array.empty
+  for id in Iter.range (0, count):
+    entry <- Assets.entry id
+    store := @array.push store (Some (
+        {
+          .position = R.point (entry.x, entry.y, entry.z);
+          .angle = 0;
+          .spin = entry.spin;
+          .scale = R.unit entry.scale;
+        }
+    ))
+
   return store
 
 sig load_models = Unit -> Store Model ~ { Assets }
 let load_models = fn () =>
   count <- Assets.count ()
-  store <- fold (
-      upto (0, count),
-      Array.empty,
-      fn (store, id) =>
-        entry <- Assets.entry id
-        return E.attach (store, { .kind = entry.kind; .colour = entry.colour; })
-    )
+  sig store = Store Model
+  let store = Array.empty
+  for id in Iter.range (0, count):
+    entry <- Assets.entry id
+    store := @array.push store (Some { .kind = entry.kind; .colour = entry.colour; })
+
   return store
 
 // --- the frame loop ---------------------------------------------------------
@@ -188,7 +185,7 @@ for ever:
     generation := current
 
   transforms := advance transforms
-  _ <- render (transforms, models)
+  <- render (transforms, models)
   frames := frames + 1
 
 return frames

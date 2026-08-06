@@ -8,12 +8,12 @@ const Ask = @effect { .ask = Unit -> Unit; }
 let consume = fn !value => value + 1
 let !token = 40
 let work = fn () =>
-  _ <- Ask.ask ()
+  <- Ask.ask ()
   return consume (!token)
 
 let cancelling = {
   .ask = fn (_, !resume) =>
-    _ <- Continuation.cancel resume
+    <- Continuation.cancel resume
     return 7
   ;
 }

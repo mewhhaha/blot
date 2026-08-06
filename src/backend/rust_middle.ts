@@ -21,6 +21,7 @@ const preludeSnapshotUrl = new URL(
   "../../generated/rust-middle/prelude.snapshot",
   import.meta.url,
 );
+const preludeSourceUrl = new URL("../prelude/prelude.blot", import.meta.url);
 const PRELUDE_MODULE_PATH = "blot:prelude";
 
 interface ResidentModule {
@@ -63,6 +64,8 @@ interface LoadedRevision {
 interface DistributedSnapshot {
   readonly bytes: Uint8Array;
   readonly revision: string;
+  readonly source: string;
+  readonly originalOffset: (offset: number) => number;
 }
 
 export class RustMiddleCompiler {
@@ -371,6 +374,13 @@ export class RustMiddleCompiler {
           PRELUDE_MODULE_PATH,
           snapshot.bytes,
         );
+        this.#modules.set(PRELUDE_MODULE_PATH, {
+          inputRevision: snapshot.revision,
+          source: snapshot.source,
+          originalOffset: snapshot.originalOffset,
+          imports: [],
+          includes: [],
+        });
         this.#preludeInstalled = true;
       }
       return {
@@ -422,6 +432,15 @@ export class RustMiddleCompiler {
         { cause },
       );
     }
+    let source: string;
+    try {
+      source = await Deno.readTextFile(preludeSourceUrl);
+    } catch (cause) {
+      throw new Error(
+        `could not read compiler-distributed prelude source ${preludeSourceUrl}`,
+        { cause },
+      );
+    }
     const digest = await crypto.subtle.digest(
       "SHA-256",
       Uint8Array.from(bytes).buffer,
@@ -430,9 +449,15 @@ export class RustMiddleCompiler {
       new Uint8Array(digest),
       (byte) => byte.toString(16).padStart(2, "0"),
     ).join("");
+    const elaborated = await elaborateLayout(source);
+    if (!elaborated.ok) {
+      throw new LoadError(PRELUDE_MODULE_PATH, source, elaborated.diagnostics);
+    }
     this.#preludeSnapshot = {
       bytes,
       revision: `module-snapshot:${hash}`,
+      source,
+      originalOffset: elaborated.layout.originalOffset,
     };
     return this.#preludeSnapshot;
   }

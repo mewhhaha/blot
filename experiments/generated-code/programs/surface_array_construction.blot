@@ -1,0 +1,12 @@
+open @import "blot:prelude" ()
+
+sig construct = Int -> Int
+const construct = fn count =>
+  sig values = [Int]
+  let values = Array.empty
+  for value in Iter.range (0, count):
+    values := @array.push values value
+
+  return Array.length values
+
+return { .construct = construct; }

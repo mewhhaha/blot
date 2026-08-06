@@ -9,8 +9,9 @@ use crate::ast::{
 use crate::diagnostic::Diagnostic;
 use crate::primitives::{constant, primitive_arity, run_primitive};
 use crate::value::{
-    Environment, OpenedValues, OrderedFields, Resume, RuntimeMeaning, RuntimeValue, Value,
-    as_tuple, attach_signature, child_env, equal, lookup, lookup_signature, show, tuple,
+    Domain as ValueDomain, Environment, OpenedValues, OrderedFields, Resume, RuntimeMeaning,
+    RuntimeValue, Value, as_tuple, attach_signature, child_env, equal, lookup, lookup_signature,
+    show, tuple,
 };
 
 #[derive(Clone, Eq, PartialEq)]
@@ -46,6 +47,7 @@ pub struct Context {
     pub(crate) module_cache: RefCell<Option<(String, Rc<Module>)>>,
     pub(crate) live_declarations: RefCell<LivenessCache>,
     pub(crate) evaluated_bindings: RefCell<EvaluatedBindings>,
+    pub(crate) closure_signatures: RefCell<HashMap<(String, ExpressionId), Value>>,
     next_effect: Cell<u32>,
     effect_ids: RefCell<HashMap<EffectIdentity, u32>>,
     named_effects: RefCell<HashMap<(String, String, bool), u32>>,
@@ -196,6 +198,17 @@ impl Computation {
             },
         }
     }
+
+    fn at(self, origin: Rc<String>) -> Computation {
+        match self {
+            Computation::Done(Ok(value)) => Computation::Done(Ok(value)),
+            Computation::Done(Err(error)) => Computation::Done(Err(error.at(&origin))),
+            Computation::Perform { request, resume } => Computation::Perform {
+                request,
+                resume: Box::new(move |value| resume(value).at(origin)),
+            },
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -295,7 +308,7 @@ pub fn evaluate_expression(
     runtime.fuel.set(remaining);
     let loaded_module = match module(&context, &module_path) {
         Ok(module) => module,
-        Err(error) => return Computation::error(error),
+        Err(error) => return Computation::error(error.at(&module_path)),
     };
     let expression = match loaded_module
         .arena
@@ -304,29 +317,36 @@ pub fn evaluate_expression(
     {
         Some(expression) => expression,
         None => {
-            return Computation::error(Diagnostic::new(
-                "BLOT_RUST_INVARIANT",
-                format!(
-                    "Expression {} is outside module `{module_path}`.",
-                    expression_id.0
-                ),
-                loaded_module.span,
-            ));
+            return Computation::error(
+                Diagnostic::new(
+                    "BLOT_RUST_INVARIANT",
+                    format!(
+                        "Expression {} is outside module `{module_path}`.",
+                        expression_id.0
+                    ),
+                    loaded_module.span,
+                )
+                .at(&module_path),
+            );
         }
     };
     let span = expression_span(expression);
     if remaining < 0 {
-        return Computation::error(Diagnostic::new(
-            "BLOT_EVALUATION_LIMIT",
-            format!(
-                "Evaluation exceeded its deterministic limit of {} steps.",
-                runtime.limit
-            ),
-            span,
-        ));
+        return Computation::error(
+            Diagnostic::new(
+                "BLOT_EVALUATION_LIMIT",
+                format!(
+                    "Evaluation exceeded its deterministic limit of {} steps.",
+                    runtime.limit
+                ),
+                span,
+            )
+            .at(&module_path),
+        );
     }
 
-    match expression {
+    let origin = module_path.clone();
+    let computation = match expression {
         Expression::Int { value, .. } => {
             if runtime.phase == Phase::Runtime
                 && (value < &(-BigIntExt::two_to_63()) || value > &BigIntExt::two_to_63_minus_one())
@@ -399,15 +419,23 @@ pub fn evaluate_expression(
         }
         Expression::Lambda {
             parameter, body, ..
-        } => Computation::value(Value::Closure {
-            module: module_path,
-            parameter: *parameter,
-            body: *body,
-            environment,
-            self_name: None,
-            imports: None,
-            signature: None,
-        }),
+        } => {
+            let signature = context
+                .closure_signatures
+                .borrow()
+                .get(&(module_path.as_ref().clone(), *body))
+                .cloned()
+                .map(Box::new);
+            Computation::value(Value::Closure {
+                module: module_path,
+                parameter: *parameter,
+                body: *body,
+                environment,
+                self_name: None,
+                imports: None,
+                signature,
+            })
+        }
         Expression::Tuple { elements, .. } => evaluate_many(
             context,
             module_path,
@@ -538,7 +566,8 @@ pub fn evaluate_expression(
         Expression::Comptime { body, .. } => {
             evaluate_expression(context, module_path, *body, environment, runtime.comptime())
         }
-    }
+    };
+    computation.at(origin)
 }
 
 fn evaluate_many(
@@ -584,19 +613,17 @@ fn evaluate_dynamic_case(
     span: Span,
 ) -> Computation {
     match target.meaning.clone() {
-        RuntimeMeaning::Ordering | RuntimeMeaning::IntegerOrdering { .. } => {
-            evaluate_ordering_arms(
-                context,
-                module_path,
-                environment,
-                runtime,
-                target,
-                arms,
-                0,
-                Vec::new(),
-                span,
-            )
-        }
+        RuntimeMeaning::Ordering | RuntimeMeaning::ScalarOrdering { .. } => evaluate_ordering_arms(
+            context,
+            module_path,
+            environment,
+            runtime,
+            target,
+            arms,
+            0,
+            Vec::new(),
+            span,
+        ),
         RuntimeMeaning::Sum { cases } => evaluate_sum_case(
             context,
             module_path,
@@ -1167,12 +1194,16 @@ fn evaluate_array(
         move |value| {
             let mut values = progress.values;
             if element.spread {
-                let Value::Array(spread) = value else {
-                    return Computation::error(Diagnostic::new(
-                        "BLOT_TYPE",
-                        format!("`...` spreads an array, found {}.", show(&value)),
-                        progress.span,
-                    ));
+                let spread = match value {
+                    Value::Array(spread) => spread,
+                    Value::EmptyArray { .. } => Vec::new(),
+                    _ => {
+                        return Computation::error(Diagnostic::new(
+                            "BLOT_TYPE",
+                            format!("`...` spreads an array, found {}.", show(&value)),
+                            progress.span,
+                        ));
+                    }
                 };
                 values.extend(spread);
             } else {
@@ -1314,10 +1345,10 @@ fn evaluate_dynamic_if(
     branch: crate::ast::Branch,
     condition: RuntimeValue,
 ) -> Computation {
-    if progress.branches.len() != 1 || progress.fallback.is_none() {
+    if progress.fallback.is_none() {
         return Computation::error(Diagnostic::new(
             "BLOT_UNSUPPORTED_LOWERING",
-            "The Rust residual calculus currently lowers one-branch conditionals with `else`.",
+            "A value-producing dynamic conditional requires `else`.",
             progress.span,
         ));
     }
@@ -1340,7 +1371,12 @@ fn evaluate_dynamic_if(
     let alternate_module = module_path.clone();
     let alternate_environment = environment.clone();
     let alternate_runtime = runtime.clone();
-    let fallback = progress.fallback.expect("checked fallback");
+    let alternate_progress = BranchProgress {
+        branches: progress.branches,
+        fallback: progress.fallback,
+        index: progress.index + 1,
+        span: progress.span,
+    };
     evaluate_expression(
         context,
         module_path,
@@ -1352,12 +1388,12 @@ fn evaluate_dynamic_if(
         let consequent_end = trace.borrow().current_block();
         trace.borrow_mut().select_block(branches.alternate);
         let join_trace = trace.clone();
-        evaluate_expression(
+        evaluate_if(
             alternate_context,
             alternate_module,
-            fallback,
             alternate_environment,
             alternate_runtime,
+            alternate_progress,
         )
         .and_then(move |alternate| {
             let alternate_end = join_trace.borrow().current_block();
@@ -1468,12 +1504,8 @@ fn evaluate_declarations(
                 };
                 if let Pattern::Name { name, .. } = &module.arena.patterns[pattern.0 as usize]
                     && let Some(signature) = lookup_signature(&binding_environment, name)
-                    && let Value::Closure {
-                        signature: closure_signature,
-                        ..
-                    } = &mut value
                 {
-                    *closure_signature = Some(Box::new(signature));
+                    attach_signature(&mut value, &signature);
                 }
                 if !match_pattern(&module, pattern, &value, &binding_environment) {
                     return Computation::error(Diagnostic::new(
@@ -1675,11 +1707,60 @@ pub fn apply(
             imports: _,
             signature,
         } => {
+            let mut argument = argument;
+            let mut environment = environment;
+            let mut residual_compilation = None;
+            let recursive_signature = self_name
+                .as_deref()
+                .and_then(|name| lookup_signature(&environment, name));
+            let inferred_signature = context
+                .closure_signatures
+                .borrow()
+                .get(&(closure_module.as_ref().clone(), body))
+                .cloned();
+            let signature = signature
+                .or_else(|| recursive_signature.map(Box::new))
+                .or_else(|| inferred_signature.map(Box::new));
+            let signature =
+                signature.map(|signature| Box::new(substitute_signature(&signature, &environment)));
             let loaded = match module(&context, &closure_module) {
                 Ok(module) => module,
                 Err(error) => return Computation::error(error),
             };
+            if self_name.is_some()
+                && let Some(trace) = runtime.residual.clone()
+            {
+                let name = self_name.as_deref().expect("checked recursive closure");
+                let call = trace.borrow_mut().begin_recursive_function(
+                    crate::hir::ResidualClosure {
+                        context: &context,
+                        module: &closure_module,
+                        parameter,
+                        body,
+                        name,
+                        environment: &environment,
+                        signature: signature.as_deref(),
+                    },
+                    &argument,
+                    span,
+                );
+                match call {
+                    Ok(crate::hir::ResidualFunctionCall::Static) => {}
+                    Ok(crate::hir::ResidualFunctionCall::Existing(value)) => {
+                        return Computation::value(value);
+                    }
+                    Ok(crate::hir::ResidualFunctionCall::Compile(compilation)) => {
+                        argument = compilation.argument.clone();
+                        environment = compilation.environment.clone();
+                        residual_compilation = Some((trace, compilation));
+                    }
+                    Err(error) => return Computation::error(error),
+                }
+            }
             let scope = child_env(Some(environment));
+            if let Some(Value::Arrow { domain, .. }) = signature.as_deref().map(signature_body) {
+                record_signature_substitutions(&scope, domain, &argument);
+            }
             if let Some(name) = self_name {
                 scope.names.borrow_mut().insert(
                     name.clone(),
@@ -1694,7 +1775,7 @@ pub fn apply(
                     },
                 );
             }
-            let argument = match signature.as_deref() {
+            let argument = match signature.as_deref().map(signature_body) {
                 Some(Value::Arrow { domain, .. }) => match adapt_argument(argument, domain, span) {
                     Ok(argument) => argument,
                     Err(error) => return Computation::error(error),
@@ -1713,10 +1794,21 @@ pub fn apply(
             Rc::make_mut(&mut closure_runtime.effect_scope).push(Rc::new(argument));
             evaluate_expression(context, closure_module, body, scope, closure_runtime).and_then(
                 move |mut value| {
-                    if let Some(Value::Arrow { codomain, .. }) = signature.as_deref() {
+                    if let Some(Value::Arrow { codomain, .. }) =
+                        signature.as_deref().map(signature_body)
+                    {
                         attach_signature(&mut value, codomain);
                     }
-                    Computation::value(value)
+                    let Some((trace, compilation)) = residual_compilation else {
+                        return Computation::value(value);
+                    };
+                    match trace
+                        .borrow_mut()
+                        .finish_recursive_function(compilation, value)
+                    {
+                        Ok(value) => Computation::value(value),
+                        Err(error) => Computation::error(error),
+                    }
                 },
             )
         }
@@ -2132,7 +2224,7 @@ fn project(target: Value, name: &str, span: Span) -> Computation {
         }
         value => Computation::error(Diagnostic::new(
             "BLOT_NO_FIELD",
-            format!("{} has no fields.", show(&value)),
+            format!("{} has no field `.{name}`.", show(&value)),
             span,
         )),
     }
@@ -2212,8 +2304,10 @@ pub(crate) fn match_pattern(
             }
         }
         Pattern::Array { elements, .. } => {
-            let Value::Array(values) = value else {
-                return false;
+            let values = match value {
+                Value::Array(values) => values.as_slice(),
+                Value::EmptyArray { .. } => &[],
+                _ => return false,
             };
             elements.len() == values.len()
                 && elements
@@ -2431,6 +2525,211 @@ fn adapt_argument(argument: Value, expected: &Value, span: Span) -> Result<Value
     Ok(Value::Shape(adapted))
 }
 
+fn signature_body(mut signature: &Value) -> &Value {
+    while let Value::Forall { body, .. } = signature {
+        signature = body;
+    }
+    signature
+}
+
+fn substitute_signature(signature: &Value, environment: &Environment) -> Value {
+    fn substitution(environment: &Environment, variable: u32) -> Option<Value> {
+        let mut scope = Some(environment.clone());
+        while let Some(current) = scope {
+            if let Some(value) = current.type_substitutions.borrow().get(&variable) {
+                return Some(value.clone());
+            }
+            scope = current.parent.clone();
+        }
+        None
+    }
+
+    match signature {
+        Value::TypeVariable(variable) => {
+            substitution(environment, *variable).unwrap_or_else(|| signature.clone())
+        }
+        Value::Shape(fields) => Value::Shape(
+            fields
+                .iter()
+                .map(|(name, value)| (name.clone(), substitute_signature(value, environment)))
+                .collect(),
+        ),
+        Value::Array(elements) => Value::Array(
+            elements
+                .iter()
+                .map(|value| substitute_signature(value, environment))
+                .collect(),
+        ),
+        Value::EmptyArray { element } => Value::EmptyArray {
+            element: Box::new(substitute_signature(element, environment)),
+        },
+        Value::Union(members) => Value::Union(
+            members
+                .iter()
+                .map(|value| substitute_signature(value, environment))
+                .collect(),
+        ),
+        Value::Tag { name, payload } => Value::Tag {
+            name: name.clone(),
+            payload: payload
+                .as_deref()
+                .map(|value| Box::new(substitute_signature(value, environment))),
+        },
+        Value::Range { low, high, domain } => Value::Range {
+            low: Box::new(substitute_signature(low, environment)),
+            high: Box::new(substitute_signature(high, environment)),
+            domain: *domain,
+        },
+        Value::Arrow {
+            domain,
+            codomain,
+            effects,
+        } => Value::Arrow {
+            domain: Box::new(substitute_signature(domain, environment)),
+            codomain: Box::new(substitute_signature(codomain, environment)),
+            effects: effects
+                .iter()
+                .map(|effect| substitute_signature(effect, environment))
+                .collect(),
+        },
+        Value::Forall { variable, body } => Value::Forall {
+            variable: *variable,
+            body: Box::new(substitute_signature(body, environment)),
+        },
+        Value::Extended { inner, members } => Value::Extended {
+            inner: Box::new(substitute_signature(inner, environment)),
+            members: members
+                .iter()
+                .map(|(name, value)| (name.clone(), substitute_signature(value, environment)))
+                .collect(),
+        },
+        Value::Sealed { name, inner } => Value::Sealed {
+            name: name.clone(),
+            inner: Box::new(substitute_signature(inner, environment)),
+        },
+        _ => signature.clone(),
+    }
+}
+
+fn record_signature_substitutions(environment: &Environment, expected: &Value, actual: &Value) {
+    fn value_signature(value: &Value) -> Option<Value> {
+        match value {
+            Value::Closure {
+                signature: Some(signature),
+                ..
+            } => Some((**signature).clone()),
+            Value::Int(_) => Some(Value::Range {
+                low: Box::new(Value::Unbounded),
+                high: Box::new(Value::Unbounded),
+                domain: Some(ValueDomain::Int),
+            }),
+            Value::Text(_) => Some(Value::Range {
+                low: Box::new(Value::Unbounded),
+                high: Box::new(Value::Unbounded),
+                domain: Some(ValueDomain::Text),
+            }),
+            Value::Unit => Some(Value::Unit),
+            Value::Shape(fields) => Some(Value::Shape(
+                fields
+                    .iter()
+                    .map(|(name, value)| Some((name.clone(), value_signature(value)?)))
+                    .collect::<Option<OrderedFields>>()?,
+            )),
+            Value::Array(elements) => Some(Value::Array(vec![value_signature(elements.first()?)?])),
+            Value::EmptyArray { element } => Some(Value::Array(vec![(**element).clone()])),
+            Value::Tag { name, payload } => Some(Value::Tag {
+                name: name.clone(),
+                payload: payload.as_deref().and_then(value_signature).map(Box::new),
+            }),
+            Value::Extended { inner, .. } | Value::Sealed { inner, .. } => value_signature(inner),
+            _ => None,
+        }
+    }
+
+    fn record_types(environment: &Environment, expected: &Value, actual: &Value) {
+        let expected = signature_body(expected);
+        let actual = signature_body(actual);
+        match (expected, actual) {
+            (Value::TypeVariable(variable), actual) => {
+                environment
+                    .type_substitutions
+                    .borrow_mut()
+                    .entry(*variable)
+                    .or_insert_with(|| actual.clone());
+            }
+            (Value::Shape(expected), Value::Shape(actual)) => {
+                for (name, expected) in expected {
+                    if let Some(actual) = actual.get(name) {
+                        record_types(environment, expected, actual);
+                    }
+                }
+            }
+            (Value::Array(expected), Value::Array(actual)) => {
+                if let (Some(expected), Some(actual)) = (expected.first(), actual.first()) {
+                    record_types(environment, expected, actual);
+                }
+            }
+            (Value::Array(expected), Value::EmptyArray { element }) => {
+                if let Some(expected) = expected.first() {
+                    record_types(environment, expected, element);
+                }
+            }
+            (
+                Value::Arrow {
+                    domain: expected_domain,
+                    codomain: expected_codomain,
+                    ..
+                },
+                Value::Arrow {
+                    domain: actual_domain,
+                    codomain: actual_codomain,
+                    ..
+                },
+            ) => {
+                record_types(environment, expected_domain, actual_domain);
+                record_types(environment, expected_codomain, actual_codomain);
+            }
+            _ => {}
+        }
+    }
+
+    match (signature_body(expected), actual) {
+        (Value::Shape(expected), Value::Shape(actual)) => {
+            for (name, expected) in expected {
+                if let Some(actual) = actual.get(name) {
+                    record_signature_substitutions(environment, expected, actual);
+                }
+            }
+        }
+        (Value::Array(expected), Value::Array(actual)) => {
+            if let (Some(expected), Some(actual)) = (expected.first(), actual.first()) {
+                record_signature_substitutions(environment, expected, actual);
+            }
+        }
+        (Value::Array(expected), Value::EmptyArray { element }) => {
+            if let Some(expected) = expected.first() {
+                record_signature_substitutions(environment, expected, element);
+            }
+        }
+        (expected @ Value::Arrow { .. }, Value::Closure { .. })
+        | (expected @ Value::TypeVariable(_), Value::Closure { .. }) => {
+            if let Some(actual) = value_signature(actual) {
+                record_types(environment, expected, &actual);
+            }
+        }
+        (Value::TypeVariable(variable), actual) => {
+            if let Some(actual) = value_signature(actual) {
+                environment
+                    .type_substitutions
+                    .borrow_mut()
+                    .entry(*variable)
+                    .or_insert(actual);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn admits_omission(value: &Value) -> bool {
     match value {
         Value::Unit => true,
@@ -2464,6 +2763,27 @@ fn free_names_expression(module: &Module, root: ExpressionId) -> HashSet<String>
     let mut bound = Vec::<HashSet<String>>::new();
     collect_free(module, root, &mut bound, &mut free);
     free
+}
+
+pub(crate) fn closure_free_names(
+    context: &Context,
+    module_path: &str,
+    parameter: PatternId,
+    body: ExpressionId,
+    self_name: Option<&str>,
+) -> Result<Vec<String>, Diagnostic> {
+    let module = module(context, module_path)?;
+    let mut local = pattern_names(&module, parameter)
+        .into_iter()
+        .collect::<HashSet<_>>();
+    if let Some(name) = self_name {
+        local.insert(name.to_owned());
+    }
+    let mut free = HashSet::new();
+    collect_free(&module, body, &mut vec![local], &mut free);
+    let mut free = free.into_iter().collect::<Vec<_>>();
+    free.sort();
+    Ok(free)
 }
 
 fn collect_free(

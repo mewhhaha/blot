@@ -1,0 +1,16 @@
+open @import "blot:prelude" ()
+
+sig retained_go = (Int, [Int], Int) -> Int
+const retained_go = rec (fn (remaining, values, observed) =>
+  if remaining <= 0:
+    return observed
+
+  let next = @array.push values remaining
+  let previous_length = @array.len values
+  return retained_go (remaining - 1, next, observed + previous_length)
+)
+
+sig retained_updates = Int -> Int
+const retained_updates = fn count => retained_go (count, @array.empty, 0)
+
+return { .retained_updates = retained_updates; }

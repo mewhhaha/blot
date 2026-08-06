@@ -81,6 +81,79 @@ respective call types. Memoization keys include closure identity, argument
 representation, effect identity, and every compile-time value observed while
 selecting the result.
 
+For a closure `lambda x. e`, let `FV_r(e)` be the lexically free bindings whose
+values contain residual runtime components. Closure conversion is:
+
+```text
+FV_r(e) = { c1 : C1, ..., cn : Cn }
+------------------------------------------------------------ closure-convert
+rec f x = e  =>  fun f(x : A, c1 : C1, ..., cn : Cn) = e'
+```
+
+where `e'` replaces each captured runtime component with the corresponding
+function parameter. A recursive application passes the same explicit captures.
+Compile-time free bindings remain in the evaluator environment and do not become
+runtime parameters. The dynamicity test is over the argument and the free
+variables unless the evaluator holds a finite staged driver:
+
+```text
+Dynamic(x) or exists c in FV(e). Dynamic(c)
+-------------------------------------------- residual-recursion
+residualize(rec f x = e)
+```
+
+If neither premise holds, ordinary static evaluation may continue. A finite
+staged iterator or a captured finite staged array paired with a static index is
+a stronger witness: recursion unfolds around the dynamic accumulator until that
+driver is exhausted. This is what permits a compile-time field-name array to
+drive residual projections. In the absence of that witness, recursion controlled
+by a dynamic captured bound must not be unrolled merely because its initial
+accumulator is static.
+
+When a higher-order argument supplies a concrete arrow for an abstract arrow,
+specialization records the induced representation substitution. For example,
+matching `(A, T) -> A` with `(Store S, Int) -> Store S` establishes
+`Rep(A) = Store(Rep(S))` and `Rep(T) = i64` for nested closures evaluated in
+that lexical scope. Every representation hole has a globally fresh identity in
+the checked module; two unrelated `Bottom` positions must not unify merely
+because their signatures were reified in separate traversals.
+
+Call-site facts are transactional. Matching an expected type expression `A`
+against an argument with layout `rho` records `Rep(A) = rho`. Products also
+record a structural key made from their field names and nesting, because scalar
+refinements do not affect layout:
+
+```text
+Rep({ generation : Int; frames : Top })
+  = Rep({ generation : Top; frames : Top })
+```
+
+only when that structural key has one observed call-site representation. Two
+different layouts for the same key erase the fact rather than selecting the
+first. Exact type-variable substitutions remain stronger than structural facts.
+This is representation erasure under checked shape equality, not structural type
+inference in the backend.
+
+Recursive representation equations use their concrete union members as
+witnesses. Positive recursion takes the least fixed point, so `R = R | X` has
+representation `Rep(X)` when every concrete member agrees. A compiler-local
+control constructor is the runtime envelope of its inferred union; payload
+projection distributes over unions,
+
+```text
+payload(A | B) = payload(A) | payload(B),
+```
+
+and removes the unspellable `{ .value = ... }` wrapper before choosing the
+runtime sum payload. The specializer may not infer a recursive result by looking
+at unrelated captured closures.
+
+Ownership markers and branch hints are identities after their respective
+certificates have been consumed. Staged non-empty arrays residualize as Store
+construction with one checked element representation. A dynamic conditional
+residualizes each branch in order, including `else if` chains, and injects a
+singleton constructor into the already inferred sum when necessary.
+
 ## 5. Imported compile-time dispatch
 
 When a compile-time closure chooses a branch from a concrete argument, result

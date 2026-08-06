@@ -20,19 +20,19 @@ in a benchmark months later.
 | counter                     |              blot | note                                               |
 | --------------------------- | ----------------: | -------------------------------------------------- |
 | `lexerStates`               |               122 | direct multiplier in the parallel DFA summary pass |
-| `maxCandidateMultiplicity`  |                21 | worst-case island candidates allocated per token   |
-| `islandCount`               |                73 | one island for every grammar rule                  |
-| `islandStates`              |               422 |                                                    |
-| `islandTransitions`         |               425 |                                                    |
+| `maxCandidateMultiplicity`  |                23 | worst-case island candidates allocated per token   |
+| `islandCount`               |                77 | one island for every grammar rule                  |
+| `islandStates`              |               440 |                                                    |
+| `islandTransitions`         |               439 |                                                    |
 | `contractionRounds`         |                33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      |           658,320 | immutable device table                             |
-| `packedBytes`               |           510,923 | version-3 runtime section                          |
+| `denseTransitionBytes`      |           707,520 | immutable device table                             |
+| `packedBytes`               |           546,584 | version-3 runtime section                          |
 | `rootLoopIsland`            | 5 (`declaration`) | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |                 9 | islands admitted to parallel long-region execution |
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
-and edge arrays directly. Declaring all 73 rules as islands is what preserves
+and edge arrays directly. Declaring all 77 rules as islands is what preserves
 the full CST shape needed by source lowering.
 
 ## Historical strict-profile measurements
@@ -45,8 +45,33 @@ The current source is indentation-sensitive without making Baba's lexer
 contextual. Blot first runs the generated lexer, inserts three reserved private
 tokens for logical newline, indent, and dedent, and then gives that elaborated
 stream to the generated compact CPU frontend. Physical offsets are retained for
-diagnostics. Because the layout tokens have fixed terminal identities, all 73
+diagnostics. Because the layout tokens have fixed terminal identities, all 77
 rules still satisfy the general profile and no parser resolution is required.
+
+Leading discard sequencing adds the exact `<- expression` statement. Its `<-`
+first token is disjoint from every declaration and statement alternative, so it
+needs no parser resolution. The rule adds one island, six island states, five
+island transitions, 14,496 dense-transition bytes, and 10,549 packed bytes.
+Lexer states, candidate multiplicity, contraction rounds, and parallel
+long-region admission are unchanged. Allowing the same leading discard in a
+bounded handler-composition step adds one island transition and 84 packed bytes;
+all other counters remain unchanged.
+
+Making each element child a value adds one island, three island states, two
+island transitions, 9,888 dense-transition bytes, and 7,136 packed bytes. The
+maximum candidate multiplicity and the region and candidate scratch factors
+increase from 21 to 22. Lexer states, contraction rounds, and parallel
+long-region admission are unchanged.
+
+Giving a bare element its statement meaning adds one island, five island states,
+four island transitions, 13,152 dense-transition bytes, and 9,531 packed bytes.
+The remaining counters are unchanged.
+
+Separating a nested bare element from other child values adds one island, four
+island states, two island transitions, 11,664 dense-transition bytes, and 8,361
+packed bytes. Maximum candidate multiplicity and the region and candidate
+scratch factors increase from 22 to 23. The disjoint alternatives also let the
+Tree-sitter target accept bare children without parser conflict metadata.
 
 Updating Baba from 8.0.0 to 9.0.0 moved strict-island analysis and compact CST
 materialization into its Rust core. Blot regenerated parser plan 5 and Wasm ABI

@@ -71,7 +71,7 @@ variable — and it is what makes a wrapper effect-polymorphic without saying so
 
 ```blot
 let logged = fn f => fn x =>
-  _ <- Console.write "call"
+  <- Console.write "call"
   result <- f x
   return result
 // ('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }

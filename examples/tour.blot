@@ -90,8 +90,8 @@ for ever:
 const Console = @effect { .write = Str -> Unit; }
 
 let report = fn () =>
-  _ <- Console.write "one"
-  _ <- Console.write "two"
+  <- Console.write "one"
+  <- Console.write "two"
   return "done"
 
 let joining = {
@@ -106,7 +106,7 @@ let joining = {
 // function and the program's entire authority.
 let printing = {
   .write = fn (message, ?resume) =>
-    _ <- init.print message
+    <- init.print message
     result <- resume ()
     return result
   ;

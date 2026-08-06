@@ -254,7 +254,7 @@ const each = fn (values, visit) =>
     values,
     (),
     fn (_, value) =>
-      _ <- visit value
+      <- visit value
   )
   return result
 

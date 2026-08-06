@@ -1,0 +1,14 @@
+open @import "blot:prelude" ()
+
+sig sum_go = (Int, Int) -> Int
+const sum_go = rec (fn (remaining, total) =>
+  if remaining <= 0:
+    return total
+
+  return sum_go (remaining - 1, total + remaining)
+)
+
+sig sum_to = Int -> Int
+const sum_to = fn count => sum_go (count, 0)
+
+return { .sum_to = sum_to; }

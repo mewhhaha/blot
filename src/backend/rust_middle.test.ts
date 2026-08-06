@@ -89,6 +89,135 @@ Deno.test("full Rust compiler emits a callable ABI-tagged module", async () => {
   }
 });
 
+Deno.test("full Rust compiler exports first-order recursive functions", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    const artifact = await compiler.compile(
+      "experiments/generated-code/programs/tail_recursion.blot",
+    );
+    const instance = await WebAssembly.instantiate(
+      await WebAssembly.compile(Uint8Array.from(artifact.wasm).buffer),
+    );
+    const sumTo = instance.exports["blot:sum_to"];
+    if (!(sumTo instanceof Function)) {
+      throw new Error("recursive function artifact omitted blot:sum_to");
+    }
+    assertEquals(sumTo(0n), 0n);
+    assertEquals(sumTo(10n), 55n);
+    assertEquals(sumTo(1_024n), 524_800n);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+Deno.test("full Rust compiler exports dynamic surface iteration", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    const artifact = await compiler.compile(
+      "experiments/generated-code/programs/surface_iteration.blot",
+    );
+    const instance = await WebAssembly.instantiate(
+      await WebAssembly.compile(Uint8Array.from(artifact.wasm).buffer),
+    );
+    const sumTo = instance.exports["blot:sum_to"];
+    if (!(sumTo instanceof Function)) {
+      throw new Error("surface iteration artifact omitted blot:sum_to");
+    }
+    assertEquals(sumTo(0n), 0n);
+    assertEquals(sumTo(10n), 45n);
+    assertEquals(sumTo(1_024n), 523_776n);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+Deno.test("full Rust compiler preserves a surface loop Store accumulator", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    const artifact = await compiler.compile(
+      "experiments/generated-code/programs/surface_array_construction.blot",
+    );
+    const instance = await WebAssembly.instantiate(
+      await WebAssembly.compile(Uint8Array.from(artifact.wasm).buffer),
+    );
+    const construct = instance.exports["blot:construct"];
+    if (!(construct instanceof Function)) {
+      throw new Error("surface Store artifact omitted blot:construct");
+    }
+    assertEquals(construct(0n), 0n);
+    assertEquals(construct(10n), 10n);
+    assertEquals(construct(1_024n), 1_024n);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+Deno.test("full Rust compiler passes runtime captures to recursive functions", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    const artifact = await compiler.compile(
+      "experiments/generated-code/programs/captured_recursion.blot",
+    );
+    const instance = await WebAssembly.instantiate(
+      await WebAssembly.compile(Uint8Array.from(artifact.wasm).buffer),
+    );
+    const countTo = instance.exports["blot:count_to"];
+    if (!(countTo instanceof Function)) {
+      throw new Error("captured recursion artifact omitted blot:count_to");
+    }
+    assertEquals(countTo(0n), 0n);
+    assertEquals(countTo(10n), 45n);
+    assertEquals(countTo(1_024n), 523_776n);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+Deno.test("full Rust compiler residualizes staged float arrays and else-if chains", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    const artifact = await compiler.compile(
+      "experiments/generated-code/programs/staged_float_table.blot",
+    );
+    const instance = await WebAssembly.instantiate(
+      await WebAssembly.compile(Uint8Array.from(artifact.wasm).buffer),
+    );
+    const classify = instance.exports["blot:classify"];
+    if (!(classify instanceof Function)) {
+      throw new Error("staged float table artifact omitted blot:classify");
+    }
+    assertEquals(classify(0n), 10n);
+    assertEquals(classify(1n), 21n);
+    assertEquals(classify(2n), -30n);
+    assertEquals(classify(9n), 0n);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+Deno.test("full Rust compiler preserves retained Store versions", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    const artifact = await compiler.compile(
+      "experiments/generated-code/programs/retained_updates.blot",
+    );
+    const instance = await WebAssembly.instantiate(
+      await WebAssembly.compile(Uint8Array.from(artifact.wasm).buffer),
+    );
+    const retainedUpdates = instance.exports["blot:retained_updates"];
+    if (!(retainedUpdates instanceof Function)) {
+      throw new Error(
+        "retained Store artifact omitted blot:retained_updates",
+      );
+    }
+    assertEquals(retainedUpdates(1n), 0n);
+    assertEquals(retainedUpdates(10n), 45n);
+    assertEquals(retainedUpdates(64n), 2_016n);
+  } finally {
+    compiler.destroy();
+  }
+});
+
 Deno.test("full Rust compiler preserves canonical variant names", async () => {
   const compiler = await RustMiddleCompiler.create();
   try {

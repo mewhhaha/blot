@@ -46,9 +46,9 @@ return outer;
   assertEquals(result.diagnostics[0]?.code, "BLOT_INCONSISTENT_INDENT");
 });
 
-Deno.test("layout elaboration accepts a delimiter between suite widths", async () => {
+Deno.test("layout elaboration opens a parenthesized suite with discard sequencing", async () => {
   const source = `let run = fn condition =>
-  _ <- effect (
+  <- effect (
       if condition:
         return 1
       else:

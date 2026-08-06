@@ -345,7 +345,7 @@ return run
     const action = actions.find((candidate) =>
       candidate.title === "Discard unused effect result explicitly"
     );
-    assertEquals(action?.edit.documentChanges[0].edits[0]?.newText, "_");
+    assertEquals(action?.edit.documentChanges[0].edits[0]?.newText, "<-");
   } finally {
     await service.destroy();
   }

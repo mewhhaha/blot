@@ -480,6 +480,7 @@ pub struct CheckedModule {
     pub effects: Type,
     pub parameter: Option<Type>,
     pub evaluated: Option<ValueEnvironment>,
+    pub closure_signatures: Vec<(ExpressionId, Type)>,
 }
 
 #[derive(Clone)]
@@ -489,9 +490,10 @@ pub struct CachedModuleInterface {
     effects: FlatTypeId,
     parameter: Option<FlatTypeId>,
     evaluated: Option<ValueEnvironment>,
+    closure_signatures: Vec<(ExpressionId, FlatTypeId)>,
 }
 
-pub const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 1;
+pub const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 2;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct CheckedModuleCertificate {
@@ -500,6 +502,7 @@ pub struct CheckedModuleCertificate {
     result: FlatTypeId,
     effects: FlatTypeId,
     parameter: Option<FlatTypeId>,
+    closure_signatures: Vec<(ExpressionId, FlatTypeId)>,
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -556,12 +559,23 @@ impl CachedModuleInterface {
             Some(parameter) => Some(flatten_interface_type(parameter, &mut bound, &mut nodes)?),
             None => None,
         };
+        let closure_signatures = checked
+            .closure_signatures
+            .iter()
+            .map(|(body, signature)| {
+                Some((
+                    *body,
+                    flatten_interface_type(signature, &mut bound, &mut nodes)?,
+                ))
+            })
+            .collect::<Option<Vec<_>>>()?;
         Some(Self {
             types: Rc::new(FlatTypeArena { nodes }),
             result,
             effects,
             parameter,
             evaluated: checked.evaluated.clone(),
+            closure_signatures,
         })
     }
 
@@ -572,6 +586,7 @@ impl CachedModuleInterface {
             result: self.result,
             effects: self.effects,
             parameter: self.parameter,
+            closure_signatures: self.closure_signatures.clone(),
         }
     }
 
@@ -585,6 +600,7 @@ impl CachedModuleInterface {
             effects: certificate.effects,
             parameter: certificate.parameter,
             evaluated: None,
+            closure_signatures: certificate.closure_signatures,
         })
     }
 }
@@ -604,6 +620,9 @@ impl CheckedModuleCertificate {
         validate_certificate_type(&arena, self.effects, &mut HashSet::new())?;
         if let Some(parameter) = self.parameter {
             validate_certificate_type(&arena, parameter, &mut HashSet::new())?;
+        }
+        for (_, signature) in &self.closure_signatures {
+            validate_certificate_type(&arena, *signature, &mut HashSet::new())?;
         }
         Ok(())
     }
@@ -694,12 +713,14 @@ pub struct Checker {
     constraint_types: RefCell<ConstraintTypeArena>,
     bound_insertions: RefCell<Vec<BoundInsertion>>,
     next_skolem: Cell<VariableId>,
+    next_representation_hole: Cell<VariableId>,
     level: Cell<u32>,
     phase: Cell<Phase>,
     specialization_depth: Cell<u32>,
     modules: RefCell<HashMap<String, Result<CheckedModule, Diagnostic>>>,
     active: RefCell<Vec<String>>,
     closed_record_arguments: RefCell<HashSet<(String, ExpressionId)>>,
+    closure_types: RefCell<HashMap<(String, ExpressionId), Type>>,
     incomplete_evaluations: RefCell<HashSet<String>>,
     module_interfaces: Rc<RefCell<HashMap<String, CachedModuleInterface>>>,
     module_analyses: Rc<RefCell<HashMap<String, CachedModuleAnalyses>>>,
@@ -726,12 +747,14 @@ impl Checker {
             constraint_types: RefCell::new(ConstraintTypeArena::default()),
             bound_insertions: RefCell::new(Vec::new()),
             next_skolem: Cell::new(0x8000_0000),
+            next_representation_hole: Cell::new(u32::MAX),
             level: Cell::new(0),
             phase: Cell::new(Phase::Runtime),
             specialization_depth: Cell::new(0),
             modules: RefCell::new(HashMap::new()),
             active: RefCell::new(Vec::new()),
             closed_record_arguments: RefCell::new(HashSet::new()),
+            closure_types: RefCell::new(HashMap::new()),
             incomplete_evaluations: RefCell::new(HashSet::new()),
             module_interfaces,
             module_analyses,
@@ -743,7 +766,7 @@ impl Checker {
             return checked.clone();
         }
         if let Some(cached) = self.module_interfaces.borrow().get(path).cloned() {
-            let checked = self.inflate_interface(cached);
+            let checked = self.inflate_interface(path, cached);
             self.modules
                 .borrow_mut()
                 .insert(path.to_owned(), Ok(checked.clone()));
@@ -784,8 +807,36 @@ impl Checker {
                 diagnostic.message, diagnostic.code
             )
         })?;
-        let interface = CachedModuleInterface::from_checked(&checked)
-            .ok_or_else(|| format!("module {path} has no closed checked interface"))?;
+        let interface = match CachedModuleInterface::from_checked(&checked) {
+            Some(interface) => interface,
+            None => {
+                for (body, signature) in &checked.closure_signatures {
+                    if flatten_interface_type(signature, &mut HashSet::new(), &mut Vec::new())
+                        .is_none()
+                    {
+                        return Err(format!(
+                            "module {path} closure expression {} has an open checked signature: {signature:?}",
+                            body.0
+                        ));
+                    }
+                }
+                for (name, type_) in [
+                    ("result", Some(&checked.result)),
+                    ("effects", Some(&checked.effects)),
+                    ("parameter", checked.parameter.as_ref()),
+                ] {
+                    if let Some(type_) = type_
+                        && flatten_interface_type(type_, &mut HashSet::new(), &mut Vec::new())
+                            .is_none()
+                    {
+                        return Err(format!(
+                            "module {path} has an open checked {name}: {type_:?}"
+                        ));
+                    }
+                }
+                return Err(format!("module {path} has no closed checked interface"));
+            }
+        };
         Ok(interface.certificate())
     }
 
@@ -821,6 +872,9 @@ impl Checker {
         self.closed_record_arguments
             .borrow_mut()
             .retain(|(path, _)| !paths.contains(path));
+        self.closure_types
+            .borrow_mut()
+            .retain(|(path, _), _| !paths.contains(path));
         self.incomplete_evaluations
             .borrow_mut()
             .retain(|path| !paths.contains(path));
@@ -945,11 +999,31 @@ impl Checker {
         let analyses = self.cached_analyses(path, &loaded.module, &values);
         analyses.ownership?;
         analyses.safety?;
+        let mut closure_signatures = self
+            .closure_types
+            .borrow()
+            .iter()
+            .filter(|((module, _), _)| module == path)
+            .map(|((_, body), type_)| (*body, self.residual_signature(type_.clone())))
+            .collect::<Vec<_>>();
+        closure_signatures.sort_by_key(|(body, _)| body.0);
+        let reified_closure_signatures = closure_signatures
+            .iter()
+            .filter_map(|(body, type_)| {
+                self.reify_runtime_type(type_)
+                    .map(|signature| ((path.to_owned(), *body), signature))
+            })
+            .collect::<Vec<_>>();
+        self.context
+            .closure_signatures
+            .borrow_mut()
+            .extend(reified_closure_signatures);
         let checked = CheckedModule {
             result: self.settle(inferred.type_, true),
             effects,
             parameter: parameter.map(|parameter| self.settle(parameter, false)),
             evaluated: (!self.incomplete_evaluations.borrow().contains(path)).then_some(values),
+            closure_signatures,
         };
         self.cache_module_result(path, &loaded.module, &checked);
         Ok(checked)
@@ -1004,8 +1078,25 @@ impl Checker {
         }
     }
 
-    fn inflate_interface(&self, cached: CachedModuleInterface) -> CheckedModule {
+    fn inflate_interface(&self, path: &str, cached: CachedModuleInterface) -> CheckedModule {
         let mut rigids = HashMap::new();
+        let closure_signatures = cached
+            .closure_signatures
+            .iter()
+            .map(|(body, signature)| {
+                (
+                    *body,
+                    self.inflate_interface_type(&cached.types, *signature, &mut rigids),
+                )
+            })
+            .collect::<Vec<_>>();
+        self.context
+            .closure_signatures
+            .borrow_mut()
+            .extend(closure_signatures.iter().filter_map(|(body, type_)| {
+                self.reify_runtime_type(type_)
+                    .map(|signature| ((path.to_owned(), *body), signature))
+            }));
         CheckedModule {
             result: self.inflate_interface_type(&cached.types, cached.result, &mut rigids),
             effects: self.inflate_interface_type(&cached.types, cached.effects, &mut rigids),
@@ -1013,6 +1104,7 @@ impl Checker {
                 self.inflate_interface_type(&cached.types, parameter, &mut rigids)
             }),
             evaluated: cached.evaluated,
+            closure_signatures,
         }
     }
 
@@ -1338,8 +1430,15 @@ impl Checker {
                     self.constrain(inferred.type_.clone(), bound, span)?;
                 }
                 self.bind_pattern(module, pattern, inferred.type_.clone(), types);
-                let settled_signature = self.settle(inferred.type_.clone(), true);
-                let inferred_signature = reify_type(&settled_signature);
+                let settled_signature = if matches!(
+                    module.arena.expressions[value.0 as usize],
+                    Expression::Lambda { .. } | Expression::Rec { .. }
+                ) {
+                    self.residual_signature(inferred.type_.clone())
+                } else {
+                    self.settle(inferred.type_.clone(), true)
+                };
+                let inferred_signature = self.reify_runtime_type(&settled_signature);
                 for name in names {
                     let body = match types.lookup(&name) {
                         Some(Typing::Mono(type_)) => type_,
@@ -1885,17 +1984,23 @@ impl Checker {
                 })
             }
             Expression::Lambda {
-                parameter, body, ..
+                parameter,
+                body: body_id,
+                ..
             } => {
                 let parameter_type = self.fresh();
                 let mut scope = TypeEnvironment::child(Rc::new(environment.clone()));
                 self.bind_pattern(module, parameter, parameter_type.clone(), &mut scope);
-                let body = self.infer(path, module, body, &scope, values, dependencies)?;
-                Ok(Inferred::pure(Type::Function {
+                let body = self.infer(path, module, body_id, &scope, values, dependencies)?;
+                let type_ = Type::Function {
                     parameter: Box::new(parameter_type),
                     effects: Box::new(body.effects),
                     result: Box::new(body.type_),
-                }))
+                };
+                self.closure_types
+                    .borrow_mut()
+                    .insert((path.to_owned(), body_id), type_.clone());
+                Ok(Inferred::pure(type_))
             }
             Expression::Tuple { elements, .. } => {
                 let mut fields = Vec::new();
@@ -2183,7 +2288,16 @@ impl Checker {
                 })
             }
             Expression::Rec { lambda, .. } => {
-                self.infer(path, module, lambda, environment, values, dependencies)
+                let inferred =
+                    self.infer(path, module, lambda, environment, values, dependencies)?;
+                let Expression::Lambda { body, .. } = module.arena.expressions[lambda.0 as usize]
+                else {
+                    return Ok(inferred);
+                };
+                self.closure_types
+                    .borrow_mut()
+                    .insert((path.to_owned(), body), inferred.type_.clone());
+                Ok(inferred)
             }
             Expression::Comptime { body, .. } => {
                 let previous_phase = self.phase.replace(Phase::Comptime);
@@ -2219,7 +2333,7 @@ impl Checker {
             return self.type_error(Type::Top, expected, span);
         }
         if let Expression::Rec { lambda, .. } = module.arena.expressions[expression.0 as usize] {
-            return self.infer_against(
+            let inferred = self.infer_against(
                 path,
                 module,
                 lambda,
@@ -2228,7 +2342,15 @@ impl Checker {
                 values,
                 dependencies,
                 span,
-            );
+            )?;
+            let Expression::Lambda { body, .. } = module.arena.expressions[lambda.0 as usize]
+            else {
+                return Ok(inferred);
+            };
+            self.closure_types
+                .borrow_mut()
+                .insert((path.to_owned(), body), inferred.type_.clone());
+            return Ok(inferred);
         }
         if let Expression::Lambda {
             parameter, body, ..
@@ -2239,6 +2361,9 @@ impl Checker {
                 result: expected_result,
             } = expected.clone()
         {
+            self.closure_types
+                .borrow_mut()
+                .insert((path.to_owned(), body), expected.clone());
             let mut scope = TypeEnvironment::child(Rc::new(environment.clone()));
             self.bind_pattern(module, parameter, (*expected_parameter).clone(), &mut scope);
             let body = self.infer_against(
@@ -2368,7 +2493,7 @@ impl Checker {
         }
         let subject = self.infer(path, module, elements[0], environment, values, dependencies)?;
         let settled = self.settle(subject.type_.clone(), true);
-        let reified = reify_type(&settled).ok_or_else(|| {
+        let reified = self.reify_runtime_type(&settled).ok_or_else(|| {
             Diagnostic::new(
                 "BLOT_TYPE_NOT_REIFIABLE",
                 format!("`{}` has no compile-time reading.", self.show(&settled)),
@@ -3217,6 +3342,226 @@ impl Checker {
         self.settle_seen(type_, positive, &mut HashSet::new())
     }
 
+    fn residual_signature(&self, type_: Type) -> Type {
+        let mut unresolved = BTreeSet::new();
+        let body = self.residual_signature_type(
+            type_,
+            &mut HashSet::new(),
+            &mut HashMap::new(),
+            &mut unresolved,
+        );
+        unresolved.clear();
+        let mut pending = vec![(&body, BTreeSet::<VariableId>::new())];
+        while let Some((type_, bound)) = pending.pop() {
+            match type_ {
+                Type::Rigid(variable) => {
+                    if !bound.contains(variable) {
+                        unresolved.insert(*variable);
+                    }
+                }
+                Type::Forall { variables, body } => {
+                    let mut nested_bound = bound;
+                    nested_bound.extend(variables);
+                    pending.push((body, nested_bound));
+                }
+                Type::Function {
+                    parameter,
+                    effects,
+                    result,
+                } => {
+                    pending.push((parameter, bound.clone()));
+                    pending.push((effects, bound.clone()));
+                    pending.push((result, bound));
+                }
+                Type::Record(fields) | Type::Variant { cases: fields, .. } => {
+                    for (_, field) in fields {
+                        pending.push((field, bound.clone()));
+                    }
+                }
+                Type::Array(element) => pending.push((element, bound)),
+                Type::Union(members) => {
+                    for member in members {
+                        pending.push((member, bound.clone()));
+                    }
+                }
+                Type::Variable(_)
+                | Type::Range { .. }
+                | Type::Unit
+                | Type::Effects(_)
+                | Type::Opaque(_)
+                | Type::Top
+                | Type::Bottom => {}
+            }
+        }
+        if unresolved.is_empty() {
+            return body;
+        }
+        Type::Forall {
+            variables: unresolved.into_iter().collect(),
+            body: Box::new(body),
+        }
+    }
+
+    fn reify_runtime_type(&self, type_: &Type) -> Option<Value> {
+        let mut next_hole = self.next_representation_hole.get();
+        let value = reify_type_with_holes(type_, &mut next_hole);
+        self.next_representation_hole.set(next_hole);
+        value
+    }
+
+    fn residual_signature_type(
+        &self,
+        type_: Type,
+        seen: &mut HashSet<VariableId>,
+        resolved: &mut HashMap<VariableId, Type>,
+        unresolved: &mut BTreeSet<VariableId>,
+    ) -> Type {
+        match type_ {
+            Type::Variable(id) => {
+                if let Some(type_) = resolved.get(&id) {
+                    return type_.clone();
+                }
+                if !seen.insert(id) {
+                    unresolved.insert(id);
+                    return Type::Rigid(id);
+                }
+                let resolved_before_evidence = resolved.clone();
+                let unresolved_before_evidence = unresolved.clone();
+                let variable = self.variables.borrow()[id as usize].clone();
+                let mut lower_evidence = variable
+                    .lower
+                    .iter()
+                    .map(|bound| self.expand_constraint(*bound))
+                    .filter(|bound| !matches!(bound, Type::Variable(variable) if *variable == id))
+                    .collect::<Vec<_>>();
+                let mut upper_evidence = variable
+                    .upper
+                    .iter()
+                    .map(|bound| self.expand_constraint(*bound))
+                    .collect::<Vec<_>>();
+                let upper_evidence = match upper_evidence.len() {
+                    0 => None,
+                    1 => upper_evidence.pop(),
+                    _ => Some(meet_types(upper_evidence)),
+                };
+                let evidence = if lower_evidence.is_empty() {
+                    upper_evidence.clone()
+                } else {
+                    match lower_evidence.len() {
+                        0 => None,
+                        1 => lower_evidence.pop(),
+                        _ => Some(join_types(lower_evidence)),
+                    }
+                };
+                let mut result = if let Some(evidence) = evidence {
+                    self.residual_signature_type(evidence, seen, resolved, unresolved)
+                } else {
+                    unresolved.insert(id);
+                    Type::Rigid(id)
+                };
+                if unresolved.contains(&id)
+                    && let Some(upper_evidence) = upper_evidence
+                {
+                    let lower_resolved = resolved.clone();
+                    let lower_unresolved = unresolved.clone();
+                    *resolved = resolved_before_evidence;
+                    *unresolved = unresolved_before_evidence;
+                    let upper =
+                        self.residual_signature_type(upper_evidence, seen, resolved, unresolved);
+                    if !unresolved.contains(&id) {
+                        result = upper;
+                    } else {
+                        *resolved = lower_resolved;
+                        *unresolved = lower_unresolved;
+                    }
+                }
+                seen.remove(&id);
+                resolved.insert(id, result.clone());
+                result
+            }
+            Type::Forall { variables, body } => Type::Forall {
+                variables,
+                body: Box::new(self.residual_signature_type(*body, seen, resolved, unresolved)),
+            },
+            Type::Function {
+                parameter,
+                effects,
+                result,
+            } => Type::Function {
+                parameter: Box::new(
+                    self.residual_signature_type(*parameter, seen, resolved, unresolved),
+                ),
+                effects: Box::new(self.settle(*effects, true)),
+                result: Box::new(self.residual_signature_type(*result, seen, resolved, unresolved)),
+            },
+            Type::Record(fields) => Type::Record(
+                fields
+                    .into_iter()
+                    .map(|(name, type_)| {
+                        (
+                            name,
+                            self.residual_signature_type(type_, seen, resolved, unresolved),
+                        )
+                    })
+                    .collect(),
+            ),
+            Type::Array(element) => Type::Array(Box::new(
+                self.residual_signature_type(*element, seen, resolved, unresolved),
+            )),
+            Type::Variant { cases, open } => Type::Variant {
+                cases: cases
+                    .into_iter()
+                    .map(|(name, type_)| {
+                        (
+                            name,
+                            self.residual_signature_type(type_, seen, resolved, unresolved),
+                        )
+                    })
+                    .collect(),
+                open,
+            },
+            Type::Union(members) => {
+                let members = members
+                    .into_iter()
+                    .map(|member| self.residual_signature_type(member, seen, resolved, unresolved))
+                    .collect::<Vec<_>>();
+                let mut control_cases = BTreeMap::<String, Vec<Type>>::new();
+                for member in &members {
+                    let Type::Variant { cases, .. } = member else {
+                        continue;
+                    };
+                    for (name, payload) in cases {
+                        if name.contains('$') {
+                            control_cases
+                                .entry(name.clone())
+                                .or_default()
+                                .push(payload.clone());
+                        }
+                    }
+                }
+                if control_cases.is_empty() {
+                    Type::Union(members)
+                } else {
+                    Type::Variant {
+                        cases: control_cases
+                            .into_iter()
+                            .map(|(name, mut payloads)| {
+                                let payload = if payloads.len() == 1 {
+                                    payloads.pop().expect("one control payload exists")
+                                } else {
+                                    join_types(payloads)
+                                };
+                                (name, payload)
+                            })
+                            .collect(),
+                        open: false,
+                    }
+                }
+            }
+            other => other,
+        }
+    }
+
     fn settle_seen(&self, type_: Type, positive: bool, seen: &mut HashSet<VariableId>) -> Type {
         match type_ {
             Type::Variable(id) => {
@@ -3745,6 +4090,7 @@ impl Checker {
                     .map(|value| self.bridge_runtime_value(value))
                     .collect(),
             ))),
+            Value::EmptyArray { .. } => Type::Array(Box::new(Type::Bottom)),
             Value::Tag { name, payload } => Type::Variant {
                 cases: vec![(
                     name.clone(),
@@ -3786,6 +4132,7 @@ impl Checker {
                     .filter_map(|value| self.bridge(value))
                     .collect(),
             )))),
+            Value::EmptyArray { .. } => Some(Type::Array(Box::new(Type::Bottom))),
             Value::Tag { name, payload } => Some(Type::Variant {
                 cases: vec![(
                     name.clone(),
@@ -5120,8 +5467,30 @@ fn scalar_bound(value: &Value) -> Option<Scalar> {
     }
 }
 
-pub(crate) fn reify_type(type_: &Type) -> Option<Value> {
+#[cfg(test)]
+fn reify_type(type_: &Type) -> Option<Value> {
+    let mut next_hole = u32::MAX;
+    reify_type_with_holes(type_, &mut next_hole)
+}
+
+fn reify_type_with_holes(type_: &Type, next_hole: &mut u32) -> Option<Value> {
     match type_ {
+        Type::Bottom => {
+            let hole = *next_hole;
+            *next_hole = next_hole.checked_sub(1)?;
+            Some(Value::TypeVariable(hole))
+        }
+        Type::Rigid(id) => Some(Value::TypeVariable(*id)),
+        Type::Forall { variables, body } => {
+            let mut body = reify_type_with_holes(body, next_hole)?;
+            for variable in variables.iter().rev() {
+                body = Value::Forall {
+                    variable: *variable,
+                    body: Box::new(body),
+                };
+            }
+            Some(body)
+        }
         Type::Range { domain, low, high } => {
             let low = reify_bound(low)?;
             let high = reify_bound(high)?;
@@ -5143,17 +5512,19 @@ pub(crate) fn reify_type(type_: &Type) -> Option<Value> {
         Type::Record(fields) => Some(Value::Shape(
             fields
                 .iter()
-                .map(|(name, type_)| Some((name.clone(), reify_type(type_)?)))
+                .map(|(name, type_)| Some((name.clone(), reify_type_with_holes(type_, next_hole)?)))
                 .collect::<Option<Vec<_>>>()?
                 .into_iter()
                 .collect(),
         )),
-        Type::Array(element) => Some(Value::Array(vec![reify_type(element)?])),
+        Type::Array(element) => Some(Value::Array(vec![reify_type_with_holes(
+            element, next_hole,
+        )?])),
         Type::Variant { cases, open: false } => Some(Value::Union(
             cases
                 .iter()
                 .map(|(name, payload)| {
-                    let payload = reify_type(payload)?;
+                    let payload = reify_type_with_holes(payload, next_hole)?;
                     Some(Value::Tag {
                         name: name.clone(),
                         payload: if matches!(payload, Value::Unit) {
@@ -5170,20 +5541,25 @@ pub(crate) fn reify_type(type_: &Type) -> Option<Value> {
             effects,
             result,
         } => Some(Value::Arrow {
-            domain: Box::new(reify_type(parameter)?),
-            codomain: Box::new(reify_type(result)?),
+            domain: Box::new(reify_type_with_holes(parameter, next_hole)?),
+            codomain: Box::new(reify_type_with_holes(result, next_hole)?),
             effects: match effects.as_ref() {
                 Type::Effects(labels) => labels
                     .iter()
                     .map(|label| crate::primitives::effect_value(label))
                     .collect::<Option<Vec<_>>>()?,
+                Type::Bottom => Vec::new(),
                 _ => return None,
             },
         }),
         Type::Union(members) => Some(Value::Union(
-            members.iter().map(reify_type).collect::<Option<Vec<_>>>()?,
+            members
+                .iter()
+                .map(|member| reify_type_with_holes(member, next_hole))
+                .collect::<Option<Vec<_>>>()?,
         )),
         Type::Top => Some(Value::Unbounded),
+        Type::Opaque(name) => Some(Value::OpaqueType(name.clone())),
         _ => None,
     }
 }
@@ -5812,6 +6188,78 @@ mod tests {
     use super::*;
 
     #[test]
+    fn residual_bottom_positions_get_distinct_representation_holes() {
+        let signature = reify_type(&Type::Record(vec![
+            ("left".to_owned(), Type::Bottom),
+            ("right".to_owned(), Type::Bottom),
+        ]))
+        .expect("bottom positions should reify as representation holes");
+        let Value::Shape(fields) = signature else {
+            panic!("record signature did not reify as a shape");
+        };
+        let Some(Value::TypeVariable(left)) = fields.get("left") else {
+            panic!("left bottom position lost its representation hole");
+        };
+        let Some(Value::TypeVariable(right)) = fields.get("right") else {
+            panic!("right bottom position lost its representation hole");
+        };
+        assert_ne!(left, right);
+    }
+
+    #[test]
+    fn residual_recursive_representation_uses_its_closed_upper_bound() {
+        let checker = Checker::new(Rc::new(Context::default()));
+        let recursive = checker.fresh();
+        let Type::Variable(variable) = recursive.clone() else {
+            unreachable!("fresh always returns a variable")
+        };
+        let store = Type::Array(Box::new(int_type()));
+        let recursive_bound = checker.constraint_type(&Type::Array(Box::new(recursive.clone())));
+        let store_bound = checker.constraint_type(&store);
+        {
+            let mut variables = checker.variables.borrow_mut();
+            variables[variable as usize].lower = vec![recursive_bound, store_bound];
+            variables[variable as usize].upper = vec![store_bound];
+        }
+
+        let residual = checker.residual_signature(recursive);
+
+        assert!(same_type(&residual, &store));
+    }
+
+    #[test]
+    fn residual_recursive_union_uses_its_non_recursive_lower_bound() {
+        let checker = Checker::new(Rc::new(Context::default()));
+        let recursive = checker.fresh();
+        let Type::Variable(variable) = recursive.clone() else {
+            unreachable!("fresh always returns a variable")
+        };
+        let store = Type::Array(Box::new(int_type()));
+        let recursive_bound = checker.constraint_type(&recursive);
+        let store_bound = checker.constraint_type(&store);
+        checker.variables.borrow_mut()[variable as usize].lower =
+            vec![recursive_bound, store_bound];
+
+        let residual = checker.residual_signature(recursive);
+
+        assert!(same_type(&residual, &store));
+    }
+
+    #[test]
+    fn residual_control_union_keeps_its_synthetic_envelope() {
+        let checker = Checker::new(Rc::new(Context::default()));
+        let state = Type::Record(vec![("value".to_owned(), int_type())]);
+        let control = Type::Variant {
+            cases: vec![("LoopContinue$1$2".to_owned(), state.clone())],
+            open: false,
+        };
+
+        let residual = checker.residual_signature(Type::Union(vec![state, control.clone()]));
+
+        assert!(same_type(&residual, &control));
+    }
+
+    #[test]
     fn cached_interfaces_instantiate_bound_rigids_freshly() {
         let checked = CheckedModule {
             result: Type::Forall {
@@ -5821,13 +6269,14 @@ mod tests {
             effects: Type::Effects(BTreeSet::new()),
             parameter: None,
             evaluated: None,
+            closure_signatures: Vec::new(),
         };
         let cached = CachedModuleInterface::from_checked(&checked)
             .expect("a quantified closed interface is cacheable");
         let checker = Checker::new(Rc::new(Context::default()));
 
-        let first = checker.inflate_interface(cached.clone()).result;
-        let second = checker.inflate_interface(cached).result;
+        let first = checker.inflate_interface("first", cached.clone()).result;
+        let second = checker.inflate_interface("second", cached).result;
 
         let Type::Forall {
             variables: first_variables,
@@ -5855,6 +6304,7 @@ mod tests {
             effects: Type::Effects(BTreeSet::new()),
             parameter: None,
             evaluated: None,
+            closure_signatures: Vec::new(),
         };
 
         assert!(CachedModuleInterface::from_checked(&checked).is_none());

@@ -97,6 +97,7 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
     previous,
     undefined,
     elementSuiteIntroducers,
+    true,
   );
 
   for (let tokenIndex = 1; tokenIndex < tokens.length; tokenIndex += 1) {
@@ -132,6 +133,7 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
             token,
             previous,
             elementSuiteIntroducers,
+            true,
           );
           previous = token;
           continue;
@@ -181,6 +183,7 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
       token,
       previous,
       elementSuiteIntroducers,
+      newline >= 0,
     );
     previous = token;
   }
@@ -341,7 +344,8 @@ function opensParenthesizedSuite(
 ): boolean {
   if (previous.type !== "literal" || previous.literal !== "(") return false;
   if (first.type === "literal") {
-    return first.literal === "let" || first.literal === "const" ||
+    return first.literal === "<-" || first.literal === "let" ||
+      first.literal === "const" ||
       first.literal === "sig" || first.literal === "return" ||
       first.literal === "for" || first.literal === "break" ||
       first.literal === "open";
@@ -356,6 +360,7 @@ function updateDelimiters(
   token: Token,
   previous: Token | undefined,
   elementSuiteIntroducers: Set<number>,
+  startsLine: boolean,
 ): void {
   if (token.type === "literal") {
     if (
@@ -373,7 +378,7 @@ function updateDelimiters(
     return;
   }
   if (token.type !== "named") return;
-  if (token.kind === "ANGLE_LEFT" && beginsElement(previous)) {
+  if (token.kind === "ANGLE_LEFT" && beginsElement(previous, startsLine)) {
     delimiters.elementHeads.push("open");
     return;
   }
@@ -391,8 +396,11 @@ function updateDelimiters(
   }
 }
 
-function beginsElement(previous: Token | undefined): boolean {
-  if (previous === undefined) return true;
+function beginsElement(
+  previous: Token | undefined,
+  startsLine: boolean,
+): boolean {
+  if (previous === undefined || startsLine) return true;
   if (previous.type === "literal") {
     return previous.literal === "=" || previous.literal === "=>" ||
       previous.literal === "<-" || previous.literal === "(" ||
@@ -400,5 +408,6 @@ function beginsElement(previous: Token | undefined): boolean {
       previous.literal === ",";
   }
   if (previous.type !== "named") return false;
-  return previous.kind === "OPERATOR";
+  return previous.kind === "OPERATOR" || previous.kind === "ANGLE_RIGHT" ||
+    previous.kind === "ANGLE_SELF_CLOSE";
 }

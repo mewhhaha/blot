@@ -5,11 +5,11 @@ const Terminal = @effect.host {
   .write = Str -> Unit;
 }
 
-_ <- Terminal.write "What is your name?"
+<- Terminal.write "What is your name?"
 name <- Terminal.read_line ()
 
 if text_eq (name, ""):
-  _ <- Terminal.write "Hello, stranger."
+  <- Terminal.write "Hello, stranger."
   return ()
 
 result <- Terminal.write (Text.append "Hello, " name)

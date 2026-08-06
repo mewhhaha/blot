@@ -273,7 +273,7 @@ const draw_face = fn (position, angle, scale, colour, camera, face) =>
   let near = fn z => is_less (Float32.cmp z NEAR)
   let behind = near za || near zb || near zc || near zd
   let hidden = is_greater (Float32.cmp outward ZERO)
-  _ <- if behind || hidden : ()
+  <- if behind || hidden : ()
   else:
       // Pixels, and the last place a float exists in this function. `Canvas` is
       // a module import, so its record is the boundary a float cannot cross.
@@ -291,13 +291,13 @@ const draw_face = fn (position, angle, scale, colour, camera, face) =>
       let depth = Float32.truncate
         (Float32.mul (Vec4.sum (Vec4.of (za, zb, zc, zd))) (lane 250.0))
       let shade = shade_of normal
-      _ <- Canvas.tri {
+      <- Canvas.tri {
         .ax = pa.x; .ay = pa.y;
         .bx = pb.x; .by = pb.y;
         .cx = pc.x; .cy = pc.y;
         .depth = depth; .shade = shade; .colour = colour;
       }
-      _ <- Canvas.tri {
+      <- Canvas.tri {
         .ax = pa.x; .ay = pa.y;
         .bx = pc.x; .by = pc.y;
         .cx = pd.x; .cy = pd.y;
@@ -308,10 +308,10 @@ const draw_face = fn (position, angle, scale, colour, camera, face) =>
 // path — an application that wants a second shape adds geometry here rather
 // than a second renderer.
 const draw_mesh = fn (position, angle, scale, colour, camera) =>
-  _ <- each (
+  <- each (
       faces,
       fn face =>
-        _ <- draw_face (position, angle, scale, colour, camera, face)
+        <- draw_face (position, angle, scale, colour, camera, face)
     )
 
 // A 2D texture placed in the 3D world. Its size divides by depth under a
@@ -320,7 +320,7 @@ const draw_mesh = fn (position, angle, scale, colour, camera) =>
 const draw_sprite = fn (position, scale, texture, camera) =>
   let view = to_view (position, camera)
   let depth = Vec4.z view
-  _ <- if is_less (Float32.cmp depth NEAR):
+  <- if is_less (Float32.cmp depth NEAR):
     return ()
   else:
     let point = to_screen (view, camera)
@@ -328,7 +328,7 @@ const draw_sprite = fn (position, scale, texture, camera) =>
       return Float32.div (Float32.mul scale FOCAL) depth
     else:
       return Float32.mul scale camera.zoom
-    _ <- Canvas.sprite {
+    <- Canvas.sprite {
       .x = Float32.truncate (Vec4.x point);
       .y = Float32.truncate (Vec4.y point);
       .size = Float32.truncate size;
@@ -351,7 +351,7 @@ sig frame = ({
   .sprite = (F32x4, F32, Str) -> Unit ~ { Canvas };
   } -> Unit ~ { Canvas }) -> Unit ~ { Canvas, View }
 let frame = fn paint =>
-  _ <- Canvas.clear ()
+  <- Canvas.clear ()
   yaw <- View.yaw ()
   pitch <- View.pitch ()
   distance <- View.distance ()
@@ -362,15 +362,15 @@ let frame = fn paint =>
     unit distance,
     lens
   )
-  _ <- paint {
+  <- paint {
     .mesh = (fn (position, angle, scale, colour) =>
-      _ <- draw_mesh (position, angle, scale, colour, camera)
+      <- draw_mesh (position, angle, scale, colour, camera)
     );
     .sprite = (fn (position, scale, texture) =>
-      _ <- draw_sprite (position, scale, texture, camera)
+      <- draw_sprite (position, scale, texture, camera)
     );
   }
-  _ <- Canvas.present ()
+  <- Canvas.present ()
 
 // `Canvas` and `View` are not exported. An effect is a compile-time value and a
 // module's returned record is a runtime one, so a capability cannot be handed

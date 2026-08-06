@@ -1,0 +1,18 @@
+open @import "blot:prelude" ()
+
+const table = [Float32.of_int 10, Float32.of_int 20, Float32.of_int 30]
+
+sig classify = Int -> Int
+const classify = fn index =>
+  let value = case Array.get (table, index) of
+    #Some found => found
+    #None => Float32.of_int 0
+
+  if index == 0:
+    return Float32.truncate value
+  else if index == 1:
+    return Float32.truncate (Float32.add value (Float32.of_int 1))
+  else:
+    return Float32.truncate (Float32.negate value)
+
+return { .classify = classify; }

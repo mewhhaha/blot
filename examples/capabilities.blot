@@ -18,7 +18,7 @@ const Console = @effect {
 // written in blot over the granted function, which is the ordinary case.
 const to_host = {
   .write = fn (message, ?resume) =>
-    _ <- init.print message
+    <- init.print message
     result <- resume ()
     return result
   ;
@@ -28,8 +28,8 @@ const to_host = {
 // The same computation, discharged two different ways. Nothing in `report`
 // mentions which.
 const report = fn () =>
-  _ <- Console.write "compiled"
-  _ <- Console.write "linked"
+  <- Console.write "compiled"
+  <- Console.write "linked"
   return "ok"
 
 const to_memory = {

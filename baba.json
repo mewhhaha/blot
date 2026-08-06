@@ -69,6 +69,18 @@
         }
       },
       {
+        "rule": "sequencing",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "element_line",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
         "rule": "iteration",
         "boundary": {
           "kind": "root"
@@ -308,6 +320,18 @@
       },
       {
         "rule": "element_body",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "element_child",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "element_child_value",
         "boundary": {
           "kind": "root"
         }
