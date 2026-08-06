@@ -23,7 +23,7 @@ const Set = {
   .union = fn left => fn right => @type.union left right;
   .intersect = fn left => fn right => @type.intersect left right;
   .diff = fn left => fn right => @type.diff left right;
-  }
+}
 
 // --- functions --------------------------------------------------------------
 
@@ -44,7 +44,7 @@ const Fn = {
   .pipe = pipe;
   .compose = compose;
   .flip = flip;
-  }
+}
 
 // --- declaration tags ------------------------------------------------------
 
@@ -55,7 +55,7 @@ const tag = fn (name, metadata, transform) => {
   .name = name;
   .metadata = metadata;
   .transform = transform;
-  }
+}
 
 const derive = fn transform => tag ("derive", (), transform)
 const test = tag ("test", (), identity)
@@ -129,10 +129,18 @@ const Ord = {
   .le = fn left => fn right => not (is_greater (@int.cmp left right));
   .gt = fn left => fn right => is_greater (@int.cmp left right);
   .ge = fn left => fn right => not (is_less (@int.cmp left right));
-  .min = fn left => fn right => if is_greater (@int.cmp left right) then right
-  else left;
-  .max = fn left => fn right => if is_less (@int.cmp left right) then right
-  else left;
+  .min = fn left => fn right =>
+    if is_greater (@int.cmp left right):
+      return right
+    else:
+      return left
+  ;
+  .max = fn left => fn right =>
+    if is_less (@int.cmp left right):
+      return right
+    else:
+      return left
+  ;
 }
 
 const Eq = { .eq = Ord.eq; .ne = Ord.ne; }
@@ -146,52 +154,66 @@ const Num = {
   .div = fn left => fn right => @int.div left right;
   .rem = fn left => fn right => @int.rem left right;
   .negate = fn value => @int.neg value;
-  .abs = fn value => if is_less (@int.cmp value 0) then @int.neg value
-  else value;
+  .abs = fn value =>
+    if is_less (@int.cmp value 0):
+      return @int.neg value
+    else:
+      return value
+  ;
   .succ = fn value => @int.add value 1;
   .pred = fn value => @int.sub value 1;
 }
 
 // --- text -------------------------------------------------------------------
 
+// Interfaces are structural types, not implicit dispatch. A function that
+// accepts one receives the implementation record explicitly, so its operator
+// choices remain visible in source.
+const Empty = fn value => { .empty = value; }
+const Length = fn value => { .length = value -> @type.int; }
+const Semigroup = fn value => { .append = value -> value -> value; }
+const Monoid = fn value => {
+  .empty = value;
+  .append = value -> value -> value;
+}
+
 const Text = {
+  .empty = "";
   .append = fn left => fn right => @text.concat left right;
   .length = fn value => @text.len value;
   .cmp = fn left => fn right => @text.cmp left right;
   .contains = fn text => fn query => @text.contains text query;
   .of_int = fn value => @text.of_int value;
-  }
+}
 
 const as_json = @json.parse #Widen
 const as_const_json = @json.parse #Exact
-
-const Semigroup = { .append = Text.append; }
 
 const text_eq = fn (left, right) => is_equal (@text.cmp left right)
 
 // --- arrays -----------------------------------------------------------------
 
-const array_get = fn (&values, index) => if index >= 0 then (if index < @array.len (&values) then #Some (@array.get (&values) index)
-else #None)
-else #None
+const array_get = fn (&values, index) =>
+  if index >= 0:
+    if index < @array.len (&values):
+      return #Some (@array.get (&values) index)
+    else:
+      return #None
+  else:
+    return #None
 
-const array_set = fn (values, index, value) => if index >= 0 then (if index < @array.len values then #Some (@array.set values index value)
-else #None)
-else #None
-
-const Array = {
-  .empty = @array.empty;
-  .length = fn &values => @array.len (&values);
-  .get = array_get;
-  .set = array_set;
-  .push = fn (values, value) => @array.push values value;
-  .take = fn (values, index) => @array.take values index;
-  .split = fn (values, index) => @array.split values index;
-  }
+const array_set = fn (values, index, value) =>
+  if index >= 0:
+    if index < @array.len values:
+      return #Some (@array.set values index value)
+    else:
+      return #None
+  else:
+    return #None
 
 const Continuation = {
   .cancel = @continuation.cancel;
-  }
+}
 
 // Structural recursion, which is all a surface loop becomes before inference.
 // Rebindings form the accumulator; `for` does not introduce assignment.
@@ -209,29 +231,80 @@ const fold = fn (values, state, step) =>
   result <- go (0, state)
   return result
 
+const array_append = fn left => fn right =>
+  return fold (
+    right,
+    left,
+    fn (state, value) => @array.push state value
+  )
+
+const Array = {
+  .empty = @array.empty;
+  .append = array_append;
+  .length = fn &values => @array.len (&values);
+  .get = array_get;
+  .set = array_set;
+  .push = fn (values, value) => @array.push values value;
+  .take = fn (values, index) => @array.take values index;
+  .split = fn (values, index) => @array.split values index;
+}
+
 const each = fn (values, visit) =>
-  result <- fold (values, (), (fn (_, value) =>
-    _ <- visit value
-  ))
+  result <- fold (
+    values,
+    (),
+    fn (_, value) =>
+      _ <- visit value
+  )
   return result
 
-const map = fn (values, f) => fold (values, @array.empty, (fn (state, value) => @array.push state (f value)))
+const map = fn (values, f) =>
+  return fold (
+    values,
+    Array.empty,
+    fn (state, value) => @array.push state (f value)
+  )
 
-const filter = fn (values, keep) => fold (values, @array.empty, (fn (state, value) => case keep value of
-  #True => @array.push state value
-  #False => state
-))
+const filter = fn (values, keep) => fold (
+  values,
+  Array.empty,
+  fn (state, value) => case keep value of
+    #True => @array.push state value
+    #False => state
+)
 
-const sum = fn values => fold (values, 0, (fn (state, value) => @int.add state value))
+const sum = fn values =>
+  return fold (
+    values,
+    0,
+    fn (state, value) => @int.add state value
+  )
 
-const any = fn (values, holds) => fold (values, False, (fn (seen, value) => seen || holds value))
+const any = fn (values, holds) =>
+  return fold (
+    values,
+    False,
+    fn (seen, value) => seen || holds value
+  )
 
-const every = fn (values, holds) => fold (values, True, (fn (seen, value) => seen && holds value))
+const every = fn (values, holds) =>
+  return fold (
+    values,
+    True,
+    fn (seen, value) => seen && holds value
+  )
 
 const upto = fn (low, high) =>
-  let build = rec (fn (index, state) => if is_less (@int.cmp index high) then build (@int.add index 1, @array.push state index)
-  else state)
-  return build (low, @array.empty)
+  let build = rec (fn (index, state) =>
+    if is_less (@int.cmp index high):
+      return build (
+        @int.add index 1,
+        @array.push state index
+      )
+    else:
+      return state
+  )
+  return build (low, Array.empty)
 
 // --- floats -----------------------------------------------------------------
 //
@@ -255,8 +328,12 @@ const Float = {
   .cmp = fn left => fn right => @float.cmp left right;
   .of_int = fn value => @float.of_int value;
   .truncate = fn value => @int.of_float value;
-  .abs = fn value => if is_less (@float.cmp value 0.0) then @float.neg value
-  else value;
+  .abs = fn value =>
+    if is_less (@float.cmp value 0.0):
+      return @float.neg value
+    else:
+      return value
+  ;
 
   // How a program asks before comparing. It cannot be written over `Float.cmp`,
   // because comparing a NaN is the thing that refuses — which is exactly why
@@ -266,7 +343,19 @@ const Float = {
   // Newton's method, seeded at the value. Core has no f64 square root, so a
   // `@float.sqrt` primitive would have been open-coded at lowering anyway —
   // and a primitive is for what blot cannot write, which this is not.
-  .sqrt = fn value => if is_equal (@float.cmp value 0.0) then 0.0 else if is_less (@float.cmp value 0.0) then @float.div 0.0 0.0 else fold (upto (0, 24), value, (fn (guess, _) => @float.mul 0.5 (@float.add guess (@float.div value guess))));
+  .sqrt = fn value =>
+    if is_equal (@float.cmp value 0.0):
+      return 0.0
+    else if is_less (@float.cmp value 0.0):
+      return @float.div 0.0 0.0
+    else:
+      return fold (
+        upto (0, 24),
+        value,
+        fn (guess, _) =>
+          return @float.mul 0.5 (@float.add guess (@float.div value guess))
+      )
+  ;
 }
 
 // --- single precision -------------------------------------------------------
@@ -288,15 +377,21 @@ const Float32 = {
   .of_int = fn value => @f32.of_float (@float.of_int value);
   .widen = fn value => @float.of_f32 value;
   .truncate = fn value => @int.of_float (@float.of_f32 value);
-  .abs = fn value => if is_less (@f32.cmp value (@f32.of_float 0.0)) then @f32.neg value
-  else value;
+  .abs = fn value =>
+    if is_less (@f32.cmp value (@f32.of_float 0.0)):
+      return @f32.neg value
+    else:
+      return value
+  ;
 
   // Core has no f32 remainder and no f32 square root, so both are computed in
   // double precision and narrowed once at the end. Rounding after every step
   // instead would be slower and no more accurate — the intermediates are exact
   // in an f64 either way.
-  .rem = fn left => fn right => @f32.of_float
-    (@float.rem (@float.of_f32 left) (@float.of_f32 right));
+  .rem = fn left => fn right =>
+    return @f32.of_float
+      (@float.rem (@float.of_f32 left) (@float.of_f32 right))
+  ;
   .sqrt = fn value => @f32.of_float (Float.sqrt (@float.of_f32 value));
 }
 
@@ -320,9 +415,15 @@ const Vec4 = {
   .div = fn left => fn right => @f32x4.div left right;
   .equal = fn left => fn right => @f32x4.eq left right;
   .less = fn left => fn right => @f32x4.less left right;
-  .select = fn mask => fn when_true => fn when_false => @f32x4.select mask when_true when_false;
-  .shuffle = fn (left, right, lane0, lane1, lane2, lane3) => @f32x4.shuffle left right lane0 lane1 lane2 lane3;
-  .swizzle = fn (value, lane0, lane1, lane2, lane3) => @f32x4.shuffle value value lane0 lane1 lane2 lane3;
+  .select = fn mask => fn when_true => fn when_false =>
+    return @f32x4.select mask when_true when_false
+  ;
+  .shuffle = fn (left, right, lane0, lane1, lane2, lane3) =>
+    return @f32x4.shuffle left right lane0 lane1 lane2 lane3
+  ;
+  .swizzle = fn (value, lane0, lane1, lane2, lane3) =>
+    return @f32x4.shuffle value value lane0 lane1 lane2 lane3
+  ;
   .x = fn value => @f32x4.x value;
   .y = fn value => @f32x4.y value;
   .z = fn value => @f32x4.z value;
@@ -336,7 +437,7 @@ const Vec4 = {
   .dot = fn left => fn right => @f32x4.sum (@f32x4.mul left right);
 
   .scale = fn (value, factor) => @f32x4.mul value (@f32x4.splat factor);
-  }
+}
 
 const Int32x4 = {
   .of = fn (x, y, z, w) => @i32x4.of x y z w;
@@ -367,7 +468,9 @@ const Int32x4 = {
   .min_unsigned = fn left => fn right => @i32x4.min_u left right;
   .max_signed = fn left => fn right => @i32x4.max_s left right;
   .max_unsigned = fn left => fn right => @i32x4.max_u left right;
-  .select = fn mask => fn when_true => fn when_false => @i32x4.select mask when_true when_false;
+  .select = fn mask => fn when_true => fn when_false =>
+    return @i32x4.select mask when_true when_false
+  ;
   .x = fn value => @i32x4.lane0 value;
   .y = fn value => @i32x4.lane1 value;
   .z = fn value => @i32x4.lane2 value;
@@ -377,14 +480,22 @@ const Int32x4 = {
   .with_y = fn value => fn lane => @i32x4.with_lane1 value lane;
   .with_z = fn value => fn lane => @i32x4.with_lane2 value lane;
   .with_w = fn value => fn lane => @i32x4.with_lane3 value lane;
-  .with_x_wrapping = fn value => fn lane => @i32x4.with_lane0_wrapping value lane;
-  .with_y_wrapping = fn value => fn lane => @i32x4.with_lane1_wrapping value lane;
-  .with_z_wrapping = fn value => fn lane => @i32x4.with_lane2_wrapping value lane;
-  .with_w_wrapping = fn value => fn lane => @i32x4.with_lane3_wrapping value lane;
+  .with_x_wrapping = fn value => fn lane =>
+    return @i32x4.with_lane0_wrapping value lane
+  ;
+  .with_y_wrapping = fn value => fn lane =>
+    return @i32x4.with_lane1_wrapping value lane
+  ;
+  .with_z_wrapping = fn value => fn lane =>
+    return @i32x4.with_lane2_wrapping value lane
+  ;
+  .with_w_wrapping = fn value => fn lane =>
+    return @i32x4.with_lane3_wrapping value lane
+  ;
   .mask_bits = fn mask => @i32x4.mask_bitmask mask;
   .all = fn mask => is_equal (@int.cmp (@i32x4.mask_all mask) 1);
   .any = fn mask => is_equal (@int.cmp (@i32x4.mask_any mask) 1);
-  }
+}
 
 const Int16x8 = {
   .splat = fn value => @i16x8.splat value;
@@ -413,11 +524,13 @@ const Int16x8 = {
   .min_unsigned = fn left => fn right => @i16x8.min_u left right;
   .max_signed = fn left => fn right => @i16x8.max_s left right;
   .max_unsigned = fn left => fn right => @i16x8.max_u left right;
-  .select = fn mask => fn when_true => fn when_false => @i16x8.select mask when_true when_false;
+  .select = fn mask => fn when_true => fn when_false =>
+    return @i16x8.select mask when_true when_false
+  ;
   .mask_bits = fn mask => @i16x8.mask_bitmask mask;
   .all = fn mask => is_equal (@int.cmp (@i16x8.mask_all mask) 1);
   .any = fn mask => is_equal (@int.cmp (@i16x8.mask_any mask) 1);
-  }
+}
 
 const Int8x16 = {
   .splat = fn value => @i8x16.splat value;
@@ -445,11 +558,13 @@ const Int8x16 = {
   .min_unsigned = fn left => fn right => @i8x16.min_u left right;
   .max_signed = fn left => fn right => @i8x16.max_s left right;
   .max_unsigned = fn left => fn right => @i8x16.max_u left right;
-  .select = fn mask => fn when_true => fn when_false => @i8x16.select mask when_true when_false;
+  .select = fn mask => fn when_true => fn when_false =>
+    return @i8x16.select mask when_true when_false
+  ;
   .mask_bits = fn mask => @i8x16.mask_bitmask mask;
   .all = fn mask => is_equal (@int.cmp (@i8x16.mask_all mask) 1);
   .any = fn mask => is_equal (@int.cmp (@i8x16.mask_any mask) 1);
-  }
+}
 
 // --- option and result ------------------------------------------------------
 
@@ -490,12 +605,16 @@ const Error = fn value => #Error value
 const ever = {
   .state = ();
   .step = fn _ => Some ((), ());
-  }
+}
 
 const iter_range = fn (from, to) => {
   .state = from;
-  .step = fn index => if is_less (@int.cmp index to) then Some (index, @int.add index 1)
-  else None;
+  .step = fn index =>
+    if is_less (@int.cmp index to):
+      return Some (index, @int.add index 1)
+    else:
+      return None
+  ;
 }
 
 const iter_items = fn values => {
@@ -516,9 +635,10 @@ const iterate = fn (iterator, initial, visit) =>
   return go (iterator.state, initial)
 
 const collect = fn iterator =>
-  let values = @array.empty
+  let values = Array.empty
   for value in iterator:
     values := @array.push values value
+
   return values
 
 // Namespaced because `range` is already the type constructor — `I32` is a
@@ -530,7 +650,7 @@ const Iter = {
   .indexed = @array.indexed;
   .iterate = iterate;
   .collect = collect;
-  }
+}
 
 // --- dictionaries ----------------------------------------------------------
 
@@ -538,25 +658,66 @@ const dict_type = fn value => [(@type.text, value)]
 
 const dict_get = fn (entries, key) =>
   let go = rec (fn index => case array_get (entries, index) of
-    #Some entry => if text_eq (entry.0, key) then Some entry.1
-    else go (@int.add index 1)
+    #Some entry => if text_eq (entry.0, key):
+      return Some entry.1
+    else:
+      return go (@int.add index 1)
+
     #None => None
   )
   return go 0
 
 const dict_put = fn (entries, key, value) =>
-  let replaced = fold (entries, (@array.empty, None, False), (fn (state, entry) => if state.2 then (@array.push state.0 entry, state.1, state.2) else if text_eq (entry.0, key) then (@array.push state.0 (key, value), Some entry.1, True) else (@array.push state.0 entry, state.1, state.2)))
-  let entries = if replaced.2 then replaced.0
-  else @array.push replaced.0 (key, value)
+  let replaced = fold (
+    entries,
+    (Array.empty, None, False),
+    fn (state, entry) =>
+      if state.2:
+        return (
+          @array.push state.0 entry,
+          state.1,
+          state.2
+        )
+      else if text_eq (entry.0, key):
+        return (
+          @array.push state.0 (key, value),
+          Some entry.1,
+          True
+        )
+      else:
+        return (@array.push state.0 entry, state.1, state.2)
+  )
+  let entries = if replaced.2:
+    return replaced.0
+  else:
+    return @array.push replaced.0 (key, value)
   return (replaced.1, entries)
 
 const dict_remove = fn (entries, key) =>
-  let removed = fold (entries, (@array.empty, None, False), (fn (state, entry) => if state.2 then (@array.push state.0 entry, state.1, state.2) else if text_eq (entry.0, key) then (state.0, Some entry.1, True) else (@array.push state.0 entry, state.1, state.2)))
+  let removed = fold (
+    entries,
+    (Array.empty, None, False),
+    fn (state, entry) =>
+      if state.2:
+        return (
+          @array.push state.0 entry,
+          state.1,
+          state.2
+        )
+      else if text_eq (entry.0, key):
+        return (state.0, Some entry.1, True)
+      else:
+        return (
+          @array.push state.0 entry,
+          state.1,
+          state.2
+        )
+  )
   return (removed.1, removed.0)
 
 const Dict = {
   .of = dict_type;
-  .empty = @array.empty;
+  .empty = Array.empty;
   .get = dict_get;
   .has = fn (entries, key) => case dict_get (entries, key) of
     #Some _ => True
@@ -574,17 +735,23 @@ const Dict = {
 // two things at once, and naming them beats threading a record through a
 // closure that has to rebuild it on every element.
 const sort_by = fn (values, before) =>
-  let sorted = @array.empty
+  let sorted = Array.empty
   for value in Iter.items values:
-    let out = @array.empty
+    let out = Array.empty
     let placed = False
     for existing in Iter.items sorted:
       let goes_first = not placed && before (value, existing)
-      out := if goes_first then @array.push (@array.push out value) existing
-      else @array.push out existing
+      out := if goes_first:
+        return @array.push (@array.push out value) existing
+      else:
+        return @array.push out existing
       placed := placed || goes_first
-    sorted := if placed then out
-    else @array.push out value
+
+    sorted := if placed:
+      return out
+    else:
+      return @array.push out value
+
   return sorted
 
 // --- types ------------------------------------------------------------------
@@ -603,13 +770,23 @@ const unseal = fn value => @type.open value
 // is curried and left-associative, so a namespace is written as a sequence of
 // attachments rather than as nested calls — which is as close to a sequence of
 // statements as a language without assignment gets.
-const attach = fn target => fn members => fold (@shape.names members, target, (fn (extended, name) => @type.attach extended name (@shape.get members name)))
+const attach = fn target => fn members =>
+  return fold (
+    @shape.names members,
+    target,
+    fn (extended, name) =>
+      return @type.attach extended name (@shape.get members name)
+  )
 
 // The GPU frontend requires every integer literal to fit the signed 32-bit
 // domain, so wider bounds are computed rather than spelled. Compile time is the
 // same language, so this costs nothing at runtime.
-const pow2 = rec (fn n => if is_less (@int.cmp n 1) then 1
-else @int.mul 2 (pow2 (@int.sub n 1)))
+const pow2 = rec (fn n =>
+  if is_less (@int.cmp n 1):
+    return 1
+  else:
+    return 2 * pow2 (@int.sub n 1)
+)
 
 // The arithmetic domains. Integer operations return signed-i64 `Int` without
 // proving a narrower storage width, so a `sig` narrowing to `I32` is a real
@@ -633,7 +810,11 @@ const unlikely = fn condition => @branch.unlikely condition
 // Fixed-width integer types are ranges rather than another numeric domain.
 // The width is compile-time information for storage tools; arithmetic still
 // uses `Int` and has to prove a narrower result when a signature asks for one.
-const integer_width = fn bits => (if is_greater (@int.cmp bits 0) then bits else @fail (Text.append "integer bit width must be positive, found " (Text.of_int bits)))
+const integer_width = fn bits => (if is_greater (@int.cmp bits 0):
+  return bits
+else:
+  return @fail (Text.append "integer bit width must be positive, found " (Text.of_int bits))
+)
 
 const U = fn bits => (
   let width = integer_width bits
@@ -643,7 +824,10 @@ const U = fn bits => (
 const I = fn bits => (
   let width = integer_width bits
   let magnitude = pow2 (@int.sub width 1)
-  return range (@int.neg magnitude, @int.sub magnitude 1) <+ { .bit_width = width; }
+  return range (
+    @int.neg magnitude,
+    @int.sub magnitude 1
+  ) <+ { .bit_width = width; }
 )
 
 const I8 = I 8
@@ -662,11 +846,12 @@ const Unit = @type.unit
 // idea rather than built in.
 const layout = fn (shape, width_of) => (
   let offset = 0
-  let fields = @array.empty
+  let fields = Array.empty
   for name in Iter.items (@shape.names shape):
     let width = width_of (@shape.get shape name)
     fields := @array.push fields { .name = name; .offset = offset; .width = width; }
     offset := @int.add offset width
+
   return { .size = offset; .fields = fields; }
 )
 
@@ -777,7 +962,7 @@ const admits_omission = rec (fn type => case reflect type of
 // hold and ask about.
 const refines = rec (fn (narrow, wide) => case reflect wide of
   #Unbounded => True
-  #Union options => any (options, (fn option => refines (narrow, option)))
+  #Union options => any (options, fn option => refines (narrow, option))
   #Range r => case reflect narrow of
     // Same ordered domain first: an unbounded text range and an unbounded
     // integer range have identical bounds and are not each other.
@@ -786,15 +971,32 @@ const refines = rec (fn (narrow, wide) => case reflect wide of
 
   #Shape wide_fields => case reflect narrow of
     // Width and depth: a wider record refines a narrower one.
-    #Shape narrow_fields => every (@shape.names wide_fields, (fn name => if @shape.has narrow_fields name then refines (@shape.get narrow_fields name, @shape.get wide_fields name) else admits_omission (@shape.get wide_fields name)))
+    #Shape narrow_fields => every (
+      @shape.names wide_fields,
+      fn name =>
+        if @shape.has narrow_fields name:
+          return refines (
+            @shape.get narrow_fields name,
+            @shape.get wide_fields name
+          )
+        else:
+          return admits_omission (@shape.get wide_fields name)
+    )
     _ => False
 
   #Array wide_elements => case reflect narrow of
-    #Array narrow_elements => if Ord.eq (@array.len narrow_elements) (@array.len wide_elements) then every (upto (0, @int.sub (@array.len wide_elements) 1), (fn index => case (array_get (narrow_elements, index), array_get (wide_elements, index)) of
-      (#Some narrow_element, #Some wide_element) => refines (narrow_element, wide_element)
-      _ => False
-    ))
-    else False
+    #Array narrow_elements => if Ord.eq (@array.len narrow_elements) (@array.len wide_elements):
+      return every (
+        upto (0, @int.sub (@array.len wide_elements) 1),
+        fn index => case (
+          array_get (narrow_elements, index),
+          array_get (wide_elements, index)
+        ) of
+          (#Some narrow_element, #Some wide_element) => refines (narrow_element, wide_element)
+          _ => False
+      )
+    else:
+      return False
     _ => False
 
   #Arrow w => case reflect narrow of
@@ -847,21 +1049,41 @@ const Has = fn shape => fn t => refines (t, shape)
 // `Exclude` read as they do in TypeScript, except that neither can quietly
 // produce a bottom type, because blot does not have one — an empty result is
 // reported where it happens.
-const Extract = fn (whole, bound) => union_of (filter (members whole, (fn option => refines (option, bound))))
+const Extract = fn (whole, bound) =>
+  return union_of (filter (
+    members whole,
+    fn option => refines (option, bound)
+  ))
 
-const Exclude = fn (whole, bound) => union_of (filter (members whole, (fn option => not (refines (option, bound)))))
+const Exclude = fn (whole, bound) =>
+  return union_of (filter (
+    members whole,
+    fn option => not (refines (option, bound))
+  ))
 
 // The field-level pair. `@shape.*` already does the work; these only name it.
-const Pick = fn (shape, names) => fold (names, @shape.empty, (fn (kept, name) => @shape.set kept name (@shape.get shape name)))
+const Pick = fn (shape, names) =>
+  return fold (
+    names,
+    @shape.empty,
+    fn (kept, name) => @shape.set kept name (@shape.get shape name)
+  )
 
-const Omit = fn (shape, names) => fold (names, shape, (fn (kept, name) => @shape.remove kept name))
+const Omit = fn (shape, names) =>
+  return fold (
+    names,
+    shape,
+    fn (kept, name) => @shape.remove kept name
+  )
 
 // Matching a parameterized nominal. `opened ("List", t)` is `#Some element`
 // when `t` is a `List` of something, which is the blot reading of writing
 // `case t of List a => ...` in a language that had a type-level `case`.
 const opened = fn (name, t) => case reflect t of
-  #Sealed s => if text_eq (s.name, name) then Some s.inner
-  else None
+  #Sealed s => if text_eq (s.name, name):
+    return Some s.inner
+  else:
+    return None
   _ => None
 
 const Reflect = {
@@ -874,7 +1096,7 @@ const Reflect = {
   .pick = Pick;
   .omit = Omit;
   .opened = opened;
-  }
+}
 
 // --- structs ----------------------------------------------------------------
 //
@@ -895,7 +1117,12 @@ const Reflect = {
 // placement is an operation on the shape rather than a second entry point
 // into the struct.
 
-const reorder = fn (shape, order) => fold (order, @shape.empty, (fn (moved, name) => @shape.set moved name (@shape.get shape name)))
+const reorder = fn (shape, order) =>
+  return fold (
+    order,
+    @shape.empty,
+    fn (moved, name) => @shape.set moved name (@shape.get shape name)
+  )
 
 const struct = fn shape =>
   let order = @shape.names shape
@@ -905,6 +1132,7 @@ const struct = fn shape =>
   for name in Iter.items order:
     slots := @shape.set slots name next
     next := @int.add next 1
+
   let at = slots
   let key = fn name => Text.of_int (@shape.get at name)
   // One binding, rebound through both passes — the same shape binned's `struct`
@@ -917,10 +1145,14 @@ const struct = fn shape =>
   let product = @shape.empty
   for name in Iter.items order:
     product := @shape.set product (key name) (@shape.get shape name)
+
   // One accessor per field: a projection at a known slot, nothing more. The
   // names are computed, so this is `@type.attach` rather than `<+`.
   for name in Iter.items order:
-    product := @type.attach product name (fn value => @shape.get value (key name))
+    product := @type.attach product name (fn value =>
+      return @shape.get value (key name)
+    )
+
   return product <+ {
     // Named record in, positional storage out. The call site writes the fields
     // in whatever order reads well; the order decides where they land. A field
@@ -931,6 +1163,7 @@ const struct = fn shape =>
       let product = @shape.empty
       for name in Iter.items order:
         product := @shape.set product (key name) (@satisfies (@shape.get record name) (@shape.get shape name))
+
       return product
     ;
 
@@ -939,6 +1172,7 @@ const struct = fn shape =>
       let record = @shape.empty
       for name in Iter.items order:
         record := @shape.set record name (@shape.get value (key name))
+
       return record
     ;
 
@@ -961,16 +1195,19 @@ const struct = fn shape =>
 const aligned = fn (shape, order, width_of) =>
   let offset = 0
   let padding = 0
-  let fields = @array.empty
+  let fields = Array.empty
   for name in Iter.items order:
     let width = width_of (@shape.get shape name)
     let slack = @int.rem offset width
-    let pad = if Ord.eq slack 0 then 0
-    else @int.sub width slack
+    let pad = if Ord.eq slack 0:
+      return 0
+    else:
+      return @int.sub width slack
     let start = @int.add offset pad
     fields := @array.push fields { .name = name; .offset = start; .width = width; }
     padding := @int.add padding pad
     offset := @int.add start width
+
   return { .size = offset; .padding = padding; .fields = fields; }
 
 // Fields keep declaration order and occupy consecutive bits. The mask is the
@@ -980,20 +1217,31 @@ const aligned = fn (shape, order, width_of) =>
 const packed = fn shape =>
   let order = @shape.names shape
   let bits = layout (shape, bit_width)
-  let fields = map (bits.fields, (fn field => {
-    .name = field.name;
-    .bit_offset = field.offset;
-    .bit_width = field.width;
-    .mask = @int.sub (pow2 field.width) 1;
-    }))
+  let fields = map (
+    bits.fields,
+    fn field => {
+      .name = field.name;
+      .bit_offset = field.offset;
+      .bit_width = field.width;
+      .mask = @int.sub (pow2 field.width) 1;
+    }
+  )
   let byte_size = @int.div (@int.add bits.size 7) 8
   return {
     .order = order;
     .bit_size = bits.size;
     .byte_size = byte_size;
-    .trailing_bits = @int.sub (@int.mul byte_size 8) bits.size;
+    .trailing_bits = @int.sub (byte_size * 8) bits.size;
     .fields = fields;
-    .bit_offset = fn name => fold (fields, None, (fn (found, field) => if text_eq (field.name, name) then Some field.bit_offset else found));
+    .bit_offset = fn name => fold (
+      fields,
+      None,
+      fn (found, field) =>
+        if text_eq (field.name, name):
+          return Some field.bit_offset
+        else:
+          return found
+    );
   }
 
 const Type = {
@@ -1006,7 +1254,7 @@ const Type = {
   .seal = seal;
   .unseal = unseal;
   .attach = attach;
-  }
+}
 
 return {
   .Fn = Fn;
@@ -1041,9 +1289,12 @@ return {
   .likely = likely;
   .unlikely = unlikely;
   .Text = Text;
+  .Empty = Empty;
+  .Length = Length;
   .as_json = as_json;
   .as_const_json = as_const_json;
   .Semigroup = Semigroup;
+  .Monoid = Monoid;
 
   .Array = Array;
   .Continuation = Continuation;
@@ -1119,4 +1370,4 @@ return {
   .Int = Int;
   .Str = Str;
   .Unit = Unit;
-  }
+}

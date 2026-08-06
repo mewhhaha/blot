@@ -108,7 +108,6 @@ const RESERVED_TOKENS = [
   "sig",
   "return",
   "if",
-  "then",
   "else",
   "case",
   "of",

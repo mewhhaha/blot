@@ -13,16 +13,27 @@
 open @import "blot:prelude" ()
 
 sig at = [Int] -> Int -> Int
-let at = fn xs => fn n => if n >= 0 then (if n < @array.len xs then @array.get xs n
-else 0)
-else 0
+let at = fn xs => fn n => if n >= 0:
+  return (if n < @array.len xs:
+    return @array.get xs n
+  else:
+    return 0
+  )
+else:
+  return 0
 
 // The same proof serves a write: `@array.set` takes the index `@array.get`
 // takes, and asks the same question of it.
 sig clear = [Int] -> Int -> [Int]
-let clear = fn xs => fn n => if n >= 0 then (if n < @array.len xs then @array.set xs n 0
-else xs)
-else xs
+let clear = fn xs => fn n =>
+  if n >= 0:
+    return (if n < @array.len xs:
+      return @array.set xs n 0
+    else:
+      return xs
+    )
+  else:
+    return xs
 
 let values = [10, 20, 30]
 let indexed_sum = 0

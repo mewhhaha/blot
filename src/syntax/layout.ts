@@ -120,6 +120,10 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
       const indentText = source.slice(lineStart, token.span.start);
       const indent = indentationWidth(indentText);
       const current = frame.indent;
+      const closesDelimiter = token.type === "literal" &&
+          (token.literal === ")" || token.literal === "]" ||
+            token.literal === "}") ||
+        token.type === "named" && token.kind === "ANGLE_CLOSE";
       let markers = layoutNewline;
       if (indent > current) {
         if (!suiteIntroducer) {
@@ -152,7 +156,7 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
         }
         if (
           indent !== frames[frames.length - 1].indent &&
-          indent !== structuralIndent
+          indent !== structuralIndent && !closesDelimiter
         ) {
           return {
             ok: false,
@@ -318,8 +322,7 @@ function opensSuite(
 ): boolean {
   if (token.type === "literal") {
     return token.literal === "=" || token.literal === "=>" ||
-      token.literal === "<-" || token.literal === "then" ||
-      token.literal === "else" ||
+      token.literal === "<-" ||
       token.literal === "of" || token.literal === "with" ||
       token.literal === ":";
   }
@@ -394,8 +397,7 @@ function beginsElement(previous: Token | undefined): boolean {
     return previous.literal === "=" || previous.literal === "=>" ||
       previous.literal === "<-" || previous.literal === "(" ||
       previous.literal === "[" || previous.literal === "{" ||
-      previous.literal === "," || previous.literal === "then" ||
-      previous.literal === "else";
+      previous.literal === ",";
   }
   if (previous.type !== "named") return false;
   return previous.kind === "OPERATOR";

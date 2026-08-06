@@ -18,16 +18,16 @@ open @import "blot:prelude" ()
 
 const Console = @effect {
   .write = Str -> Unit;
-  }
+}
 
 const Counter = @effect {
   .next = Unit -> Str;
-  }
+}
 
 // Reading from an effect, which is what `<-` is for.
 const Terminal = @effect {
   .read = Unit -> Str;
-  }
+}
 
 sig ask = Unit -> Str ~ { Terminal }
 let ask = fn () =>
@@ -85,7 +85,7 @@ let passing = {
 let silencing = {
   .write = fn (_, ?resume) => "silenced";
   .return = fn value => value;
-  }
+}
 
 let transcript = @handle (Console, greet, collecting)
 let writes = @handle (Console, greet, counting)
@@ -93,7 +93,11 @@ let silenced = @handle (Console, greet, silencing)
 
 // Handlers nest. The inner one discharges `Console`; the outer sees nothing
 // left to handle.
-let nested = @handle (Console, (fn () => @handle (Console, greet, counting)), passing)
+let nested = @handle (
+  Console,
+  fn () => @handle (Console, greet, counting),
+  passing
+)
 
 let asked = @handle (Terminal, ask, answering)
 
@@ -103,4 +107,4 @@ return {
   .silenced = silenced;
   .nested = nested;
   .asked = asked;
-  }
+}

@@ -23,13 +23,13 @@ let combine = fn (left, right) => case (left, right) of
   (#None, #Some b) => b
   (#None, #None) => 0
 
-// Both elements have the same type, so reading the wrong column is a wrong
+  // Both elements have the same type, so reading the wrong column is a wrong
 // answer rather than a type error. `9 - 4` is not `4 - 9`.
 let difference = fn pair => case pair of
   (a, b) => a - b
 
-// Overlapping arms, so their order is what decides. `(0, 0)` matches the first
-// two arms and the third; only the first runs. The columns are integers, which
+  // Overlapping arms, so their order is what decides. `(0, 0)` matches the first
+  // two arms and the third; only the first runs. The columns are integers, which
 // no arm list exhausts, so the last arm is what covers them.
 let quadrant = fn point => case point of
   (0, 0) => 1
@@ -49,7 +49,7 @@ let nested = fn value => case value of
   ((#None, b), #Some c) => b + c
   _ => 0
 
-// An arm that names the whole tuple rather than taking it apart, which is what
+  // An arm that names the whole tuple rather than taking it apart, which is what
 // a fall-through with a use for the scrutinee looks like.
 let rest = fn pair => case pair of
   (0, y) => y
@@ -73,4 +73,4 @@ return {
   .no_nested = nested ((Some 5, 6), Some 7);
   .named = rest (0, 8);
   .whole = rest (9, 4);
-  }
+}

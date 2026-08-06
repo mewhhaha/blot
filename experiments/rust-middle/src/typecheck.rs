@@ -761,6 +761,9 @@ impl Checker {
             .check_uncached(path)
             .map_err(|diagnostic| diagnostic.at(path));
         self.active.borrow_mut().pop();
+        if result.is_err() {
+            self.context.evaluated_bindings.borrow_mut().remove(path);
+        }
         self.modules
             .borrow_mut()
             .insert(path.to_owned(), result.clone());
@@ -3696,14 +3699,33 @@ impl Checker {
         environment: &ValueEnvironment,
         phase: Phase,
     ) -> Result<Value, Diagnostic> {
-        run(evaluate_binding(
+        let key = (pattern, expression, phase);
+        if let Some(value) = self
+            .context
+            .evaluated_bindings
+            .borrow()
+            .get(path)
+            .and_then(|bindings| bindings.get(&key))
+        {
+            return Ok(value.clone());
+        }
+        let evaluated = run(evaluate_binding(
             self.context.clone(),
             Rc::new(path.to_owned()),
             pattern,
             expression,
             environment.clone(),
             Runtime::new(phase, path.to_owned()),
-        ))
+        ));
+        if let Ok(value) = &evaluated {
+            self.context
+                .evaluated_bindings
+                .borrow_mut()
+                .entry(path.to_owned())
+                .or_default()
+                .insert(key, value.clone());
+        }
+        evaluated
     }
 
     fn bridge_runtime_value(&self, value: &Value) -> Type {

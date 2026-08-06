@@ -16,7 +16,7 @@ open @import "blot:prelude" ()
 
 const Console = @effect.host {
   .write = Str -> Unit;
-  }
+}
 
 // The write is what makes this resist folding. Its answer belongs to the host,
 // so the comptime evaluator has to stop at the block rather than run it, and
@@ -37,9 +37,14 @@ let normalize = fn input =>
 
 sig normalized = F32x4
 normalized <- normalize (
-  _ <- Console.write "sampling"
-  return Vec4.of (Float32.of_int 1, Float32.of_int 2, Float32.of_int 3, Float32.of_int 4)
-)
+    _ <- Console.write "sampling"
+    return Vec4.of (
+      Float32.of_int 1,
+      Float32.of_int 2,
+      Float32.of_int 3,
+      Float32.of_int 4
+    )
+  )
 
 sig gain = F32x4
 let gain = Vec4.splat (Float32.of_int 10)
@@ -71,4 +76,4 @@ return {
   .total = Float32.truncate (Vec4.sum normalized);
   .energy = Float32.truncate (Vec4.dot normalized gain);
   .shuffled = Float32.truncate (Vec4.sum shuffled);
-  }
+}

@@ -29,13 +29,35 @@ const readonly = without "PUT"
 // Three fields with the right names is the whole contract. Shadowing `Set`
 // rebinds `|`, `&`, and `\` for the rest of the module.
 
-const member = fn (values, needle) => fold (values, False, (fn (seen, value) => seen || Ord.eq value needle))
+const member = fn (values, needle) =>
+  return fold (
+    values,
+    False,
+    fn (seen, value) => seen || Ord.eq value needle
+  )
 
 const Set = {
-  .union = fn left => fn right => fold (right, left, (fn (all, value) => if member (all, value) then all
-  else @array.push all value));
-  .intersect = fn left => fn right => filter (left, (fn value => member (right, value)));
-  .diff = fn left => fn right => filter (left, (fn value => not (member (right, value))));
+  .union = fn left => fn right => fold (
+      right,
+      left,
+      fn (all, value) =>
+        if member (all, value):
+          return all
+        else:
+          return @array.push all value
+    );
+  .intersect = fn left => fn right =>
+    return filter (
+      left,
+      fn value => member (right, value)
+    )
+  ;
+  .diff = fn left => fn right =>
+    return filter (
+      left,
+      fn value => not (member (right, value))
+    )
+  ;
 }
 
 const evens = [2, 4, 6]
@@ -48,4 +70,4 @@ return {
   .union = evens | small;
   .intersect = evens & small;
   .diff = small \ evens;
-  }
+}

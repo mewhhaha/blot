@@ -38,12 +38,10 @@
   "break" @keyword.control.return)
 
 (conditional
-  "if" @keyword.control.conditional
-  "then" @keyword.control.conditional)
+  "if" @keyword.control.conditional)
 
 (else_if_clause
-  (ELSE_IF) @keyword.control.conditional
-  "then" @keyword.control.conditional)
+  (ELSE_IF) @keyword.control.conditional)
 
 (else_clause
   "else" @keyword.control.conditional)

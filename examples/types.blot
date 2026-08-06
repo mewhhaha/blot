@@ -38,23 +38,28 @@ const Pair = fn (a, b) => { .first = a; .second = b; }
 const Boxed = fn a => { .value = a; }
 const Compose = fn (f, g) => fn a => f (g a)
 
-const BoxedPair = Compose (Boxed, (fn a => Pair (a, a)))
+const BoxedPair = Compose (Boxed, fn a => Pair (a, a))
 
 // Reflection is a normal call, so `derive` is a function rather than a macro,
 // an attribute, or a compiler builtin.
 const Record = struct {
   .code = I32;
   .label = Str;
-  }
+}
 
 // Derivation takes the field names, not the struct. A struct's namespace is
 // compile-time and does not appear in its type — `Record` *is* the storage
 // tuple — so a function that wanted `.fields` off its parameter would have no
 // type to ask for. Handing it `Record.fields` is both what type checks and
 // what the derivation actually needs.
-const derive_names = fn names => map (names, (fn name => @text.concat "." name))
+const derive_names = fn names => map (names, fn name => @text.concat "." name)
 
-const describe = fn names => fold (names, "", (fn (state, name) => @text.concat state (@text.concat name " ")))
+const describe = fn names =>
+  return fold (
+    names,
+    "",
+    fn (state, name) => @text.concat state (@text.concat name " ")
+  )
 
 return {
   .one = One;
@@ -81,4 +86,4 @@ return {
   // runs at compile time because everything here does.
   .in_range = @satisfies 7 Digit;
   .typed = @type.of { .x = 1; .y = "two"; };
-  }
+}

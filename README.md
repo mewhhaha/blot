@@ -171,17 +171,19 @@ appending a second copy. It finishes by proving the editor grammar and the
 compiler agree about what the language is — see [docs/editor.md](docs/editor.md)
 for why that check exists.
 
-To migrate source written with `do`/`end` and declaration semicolons, run the
-one-shot AST-preserving rewrite over a file or directory:
+To migrate source written with `do`/`end` and declaration semicolons, or the
+previous value-conditional `if condition then value else value` spelling, run
+the one-shot rewrite over a file or directory:
 
 ```bash
 deno task migrate:layout -- path/to/source
 # or: just migrate-layout path/to/source
 ```
 
-The command parses with the frozen legacy grammar, prints canonical layout
-syntax, reparses it with the current grammar, and writes only when the
-normalized AST is unchanged. Directories are traversed recursively.
+The command parses delimiter syntax with the frozen legacy grammar and verifies
+that its normalized AST is unchanged. Previous indentation syntax has a direct
+token mapping to the colon branches, then passes through the current parser and
+formatter. Directories are traversed recursively.
 
 ## The language
 
@@ -209,7 +211,10 @@ return expr              // exit the current explicit result scope
 An expression `if` always has an `else` and produces one of its branch values:
 
 ```blot
-let label = if ready then "ready" else "waiting"
+let label = if ready:
+  return "ready"
+else:
+  return "waiting"
 ```
 
 There is no `yield`: the selected branch expression is the conditional's value.
@@ -234,9 +239,9 @@ if let #Some value = candidate else:
 // value is in scope here
 ```
 
-This form has no `then`: its success path is the following statements, not a
-second block. The `else` body must leave that path with `return` or `break`, so
-every name in the pattern is known to exist afterward.
+This form has no success suite: its success path is the following statements.
+The `else` body must leave that path with `return` or `break`, so every name in
+the pattern is known to exist afterward.
 
 An indented expression block produces `()` when it reaches its dedent;
 `return value` exits the current module or explicit expression block, including
@@ -545,7 +550,10 @@ value domain a type is and hands back the parts as an ordinary tagged value:
 
 ```blot
 const element_of = fn t => case reflect t of
-  #Sealed s => if text_eq (s.name, "List") then Some s.inner else None
+  #Sealed s => if text_eq (s.name, "List"):
+    return Some s.inner
+  else:
+    return None
   _ => None
 ```
 

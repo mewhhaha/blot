@@ -1,5 +1,5 @@
 import { LanguageService } from "./language_service.ts";
-import type { Position } from "./language_service.ts";
+import type { Position, Range } from "./language_service.ts";
 
 type RequestId = number | string | null;
 
@@ -38,6 +38,10 @@ interface PositionParams extends TextDocumentParams {
   readonly position: Position;
 }
 
+interface CodeActionParams extends TextDocumentParams {
+  readonly range: Range;
+}
+
 export async function runLanguageServer(
   input: ReadableStream<Uint8Array> = Deno.stdin.readable,
   output: WritableStream<Uint8Array> = Deno.stdout.writable,
@@ -57,7 +61,9 @@ export async function runLanguageServer(
             capabilities: {
               textDocumentSync: 1,
               definitionProvider: true,
+              hoverProvider: true,
               documentFormattingProvider: true,
+              codeActionProvider: true,
             },
             serverInfo: { name: "blot", version: "0.1.0" },
           });
@@ -127,10 +133,28 @@ export async function runLanguageServer(
           await respond(writer, message.id, location);
           continue;
         }
+        if (message.method === "textDocument/hover") {
+          const params = message.params as PositionParams;
+          const hover = await service.hover(
+            params.textDocument.uri,
+            params.position,
+          );
+          await respond(writer, message.id, hover);
+          continue;
+        }
         if (message.method === "textDocument/formatting") {
           const params = message.params as TextDocumentParams;
           const edits = await service.formatting(params.textDocument.uri);
           await respond(writer, message.id, edits);
+          continue;
+        }
+        if (message.method === "textDocument/codeAction") {
+          const params = message.params as CodeActionParams;
+          const actions = await service.codeActions(
+            params.textDocument.uri,
+            params.range,
+          );
+          await respond(writer, message.id, actions);
           continue;
         }
         await reject(

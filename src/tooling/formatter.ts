@@ -27,12 +27,14 @@ interface IndentRegion {
   readonly startsAtLine: number;
   readonly endsAtLine: number;
   readonly includesLastLine: boolean;
+  readonly extraInteriorIndent: boolean;
 }
 
 const maximumLineWidth = 80;
 const delimitedLayoutRules = new Set([
   "array",
   "effect_row",
+  "element_property_expression",
   "parenthesized_or_tuple",
   "shape",
 ]);
@@ -40,12 +42,17 @@ const layoutSensitiveRules = new Set([
   "array",
   "block",
   "case_expression",
+  "conditional",
   "effect_row",
   "element_expression",
   "handler_composition",
   "shape",
 ]);
 const blockRule = new Set(["block"]);
+const suiteStatementRules = new Set([
+  "conditional_statement",
+  "iteration",
+]);
 
 const INDENTED_RULES = new Set([
   "array",
@@ -89,6 +96,10 @@ export async function formatSource(source: string): Promise<FormatResult> {
       withoutRedundantParentheses = source;
     }
   }
+  withoutRedundantParentheses = await removeRedundantLambdaParentheses(
+    withoutRedundantParentheses,
+    parsed.module,
+  );
   let laidOut = withoutRedundantParentheses.replace(
     /\n[ \t]*\n([ \t]*else\b)/g,
     "\n$1",
@@ -106,14 +117,14 @@ export async function formatSource(source: string): Promise<FormatResult> {
       laidOut = tuple;
       continue;
     }
-    const lambda = formatOneLambda(laidOut, current.cst);
-    if (lambda !== laidOut) {
-      laidOut = lambda;
+    const conditional = formatOneConditional(laidOut, current.cst);
+    if (conditional !== laidOut) {
+      laidOut = conditional;
       continue;
     }
-    const conditional = formatOneConditional(laidOut, current.cst);
-    if (conditional === laidOut) break;
-    laidOut = conditional;
+    const lambda = formatOneLambda(laidOut, current.cst);
+    if (lambda === laidOut) break;
+    laidOut = lambda;
   }
   let laidOutParse = await parseConcrete(laidOut);
   if (!laidOutParse.ok) {
@@ -142,18 +153,26 @@ export async function formatSource(source: string): Promise<FormatResult> {
     const content = line.trim();
     if (content === "") return "";
     const openingLines = new Set<number>();
+    let extraInteriorIndent = 0;
     for (const region of regions) {
       if (index <= region.startsAtLine) continue;
-      if (index < region.endsAtLine) openingLines.add(region.startsAtLine);
+      if (index < region.endsAtLine) {
+        openingLines.add(region.startsAtLine);
+        if (region.extraInteriorIndent) extraInteriorIndent += 1;
+      }
       if (
         index === region.endsAtLine && region.includesLastLine
       ) {
         openingLines.add(region.startsAtLine);
       }
     }
-    return `${"  ".repeat(openingLines.size)}${content}`;
+    return `${"  ".repeat(openingLines.size + extraInteriorIndent)}${content}`;
   });
-  const formattedSource = `${formatted.join("\n").trimEnd()}\n`;
+  const formattedSource = separateStatementSuites(
+    `${formatted.join("\n").trimEnd()}\n`,
+    concrete,
+    lineStarts,
+  );
   const reparsed = await parseConcrete(formattedSource);
   if (
     reparsed.ok &&
@@ -165,14 +184,103 @@ export async function formatSource(source: string): Promise<FormatResult> {
   const preservedLayout = `${
     lines.map((line) => line.trimEnd()).join("\n").trimEnd()
   }\n`;
-  const preserved = await parseConcrete(preservedLayout);
+  let previousIndent: number | null = null;
+  const normalizedClosingLayout = preservedLayout.split("\n").map((line) => {
+    const content = line.trim();
+    if (content === "") return "";
+    const currentIndent = line.match(/^[ ]*/)?.[0].length;
+    if (currentIndent === undefined) {
+      throw new Error("preserved line has no indentation");
+    }
+    const indent = /^[)\]}][,;]?$/.test(content) && previousIndent !== null
+      ? Math.min(currentIndent, Math.max(0, previousIndent - 2))
+      : currentIndent;
+    previousIndent = indent;
+    return `${" ".repeat(indent)}${content}`;
+  }).join("\n");
+  const preserved = await parseConcrete(normalizedClosingLayout);
   if (
     !preserved.ok ||
     moduleWithoutSpans(preserved.module) !== moduleWithoutSpans(parsed.module)
   ) {
     throw new Error("formatter could not preserve the parsed module");
   }
-  return { ok: true, source: preservedLayout };
+  const separatedLayout = separateStatementSuites(
+    normalizedClosingLayout,
+    preserved.cst,
+    sourceLineStarts(normalizedClosingLayout),
+  );
+  const separated = await parseConcrete(separatedLayout);
+  if (
+    !separated.ok ||
+    moduleWithoutSpans(separated.module) !== moduleWithoutSpans(parsed.module)
+  ) {
+    throw new Error("formatter could not separate statement suites");
+  }
+  return { ok: true, source: separatedLayout };
+}
+
+function separateStatementSuites(
+  source: string,
+  root: ConcreteRule,
+  lineStarts: readonly number[],
+): string {
+  const lines = source.split("\n");
+  const separators = new Set<number>();
+  collectSeparators(root);
+
+  const separated: string[] = [];
+  for (let line = 0; line < lines.length; line += 1) {
+    if (
+      separators.has(line) && separated.at(-1)?.trim() !== ""
+    ) {
+      separated.push("");
+    }
+    const content = lines[line];
+    if (content !== undefined) separated.push(content);
+  }
+  return separated.join("\n");
+
+  function collectSeparators(node: ConcreteNode): void {
+    if (node.type !== "rule") return;
+    const siblingName = node.name === "program"
+      ? "declaration"
+      : node.name === "block" || node.name === "statement_suite"
+      ? "statement"
+      : null;
+    if (siblingName !== null) {
+      const siblings = directRules(node, siblingName);
+      for (let index = 0; index + 1 < siblings.length; index += 1) {
+        const current = siblings[index];
+        const next = siblings[index + 1];
+        if (
+          current === undefined || next === undefined ||
+          !current.children().some((child) =>
+            child.type === "rule" && suiteStatementRules.has(child.name)
+          )
+        ) {
+          continue;
+        }
+        let nextLine = lineAtOffset(lineStarts, next.span.start);
+        const nextIndent = lines[nextLine]?.match(/^[ ]*/)?.[0];
+        if (nextIndent === undefined) {
+          throw new Error("following statement has no indentation");
+        }
+        while (
+          nextLine > 0 && lines[nextLine - 1]?.trimStart().startsWith("//")
+        ) {
+          const comment = lines[nextLine - 1];
+          if (comment === undefined) {
+            throw new Error("leading comment is missing");
+          }
+          lines[nextLine - 1] = `${nextIndent}${comment.trimStart()}`;
+          nextLine -= 1;
+        }
+        separators.add(nextLine);
+      }
+    }
+    for (const child of node.children()) collectSeparators(child);
+  }
 }
 
 function formatOneArray(source: string, root: ConcreteRule): string {
@@ -266,14 +374,21 @@ function formatOneTuple(source: string, root: ConcreteRule): string {
   return source;
 }
 
-function formatOneConditional(source: string, root: ConcreteRule): string {
+function formatOneConditional(
+  source: string,
+  root: ConcreteRule,
+): string {
   const conditionals: ConcreteRule[] = [];
   collectRules(root, "conditional", conditionals);
   conditionals.sort((left, right) =>
     (left.span.end - left.span.start) - (right.span.end - right.span.start)
   );
   for (const conditional of conditionals) {
-    const conditionalSpan = contentSpan(source, conditional.span);
+    const conditionalSpan = ruleContentSpan(conditional);
+    const lineStart = source.lastIndexOf("\n", conditionalSpan.start - 1) + 1;
+    const linePrefix = source.slice(lineStart, conditionalSpan.start);
+    const returnedDirectly = linePrefix.trim() === "return" &&
+      hasAncestorIn(root, conditional, blockRule);
     const consequence = directRule(conditional, "value");
     const fallbackClause = directRule(conditional, "else_clause");
     if (consequence === null || fallbackClause === null) continue;
@@ -288,28 +403,14 @@ function formatOneConditional(source: string, root: ConcreteRule): string {
       }),
       fallback,
     ];
-    const hasBlockBranch = branchValues.some((value) => valueIsBlock(value));
-    const original = source.slice(conditionalSpan.start, conditionalSpan.end);
-    if (original.includes("//")) continue;
     if (
-      original.includes("\n") &&
-      branchValues.some((value) =>
-        !valueIsBlock(value) && containsRule(value, layoutSensitiveRules)
-      )
+      branchValues.every((value) => valueIsBlock(value)) &&
+      !returnedDirectly
     ) {
       continue;
     }
-    const flattened = flattenLines(original);
-    const lineStart = source.lastIndexOf("\n", conditionalSpan.start - 1) + 1;
-    const lineEnd = source.indexOf("\n", conditionalSpan.end);
-    const suffixEnd = lineEnd < 0 ? source.length : lineEnd;
-    const candidateWidth =
-      source.slice(lineStart, conditionalSpan.start).length +
-      flattened.length + source.slice(conditionalSpan.end, suffixEnd).length;
-    if (!hasBlockBranch && candidateWidth <= maximumLineWidth) {
-      if (flattened === original) continue;
-      return replaceSpan(source, conditionalSpan, flattened);
-    }
+    const original = source.slice(conditionalSpan.start, conditionalSpan.end);
+    if (original.includes("//")) continue;
     const condition = directRule(conditional, "expression");
     if (condition === null) continue;
     const indent = source.slice(lineStart).match(/^[ \t]*/)?.[0];
@@ -317,41 +418,73 @@ function formatOneConditional(source: string, root: ConcreteRule): string {
       throw new Error("conditional line has no indentation");
     }
     const nestedIndent = `${indent}  `;
+    const conditionText = flattenLines(
+      source.slice(condition.span.start, condition.span.end),
+    ).trim();
     const lines = [
-      `if ${
-        flattenLines(source.slice(condition.span.start, condition.span.end))
-      } then`,
+      `if ${conditionText}:`,
       ...conditionalBranchLines(source, consequence, nestedIndent),
     ];
     for (const alternative of alternatives) {
       const alternativeCondition = directRule(alternative, "expression");
       const alternativeValue = directRule(alternative, "value");
       if (alternativeCondition === null || alternativeValue === null) continue;
+      const alternativeConditionText = flattenLines(
+        source.slice(
+          alternativeCondition.span.start,
+          alternativeCondition.span.end,
+        ),
+      ).trim();
       lines.push(
-        `${indent}else if ${
-          flattenLines(
-            source.slice(
-              alternativeCondition.span.start,
-              alternativeCondition.span.end,
-            ),
-          )
-        } then`,
+        `${indent}else if ${alternativeConditionText}:`,
         ...conditionalBranchLines(source, alternativeValue, nestedIndent),
       );
     }
     lines.push(
-      `${indent}else`,
+      `${indent}else:`,
       ...conditionalBranchLines(source, fallback, nestedIndent),
     );
+    const closesDelimiter = closesDelimitedLayout(root, conditional);
     if (
-      hasAncestorIn(root, conditional, delimitedLayoutRules) &&
-      !hasAncestorIn(root, conditional, blockRule)
+      closesDelimiter &&
+      closesOnSameLine(source, conditionalSpan.end)
     ) {
       lines.push(indent);
     }
-    const replacement = lines.join("\n");
-    if (replacement === original) continue;
-    return replaceSpan(source, conditionalSpan, replacement);
+    let replacementSpan = returnedDirectly
+      ? { start: lineStart + indent.length, end: conditionalSpan.end }
+      : conditionalSpan;
+    let replacement = lines.join("\n");
+    if (
+      closesDelimiter &&
+      hasAncestorIn(
+        root,
+        conditional,
+        new Set(["element_property_expression"]),
+      )
+    ) {
+      const closingIndent = /^\r?\n[ \t]*/.exec(
+        source.slice(conditionalSpan.end),
+      )?.[0];
+      if (closingIndent !== undefined) {
+        const closingOffset = conditionalSpan.end + closingIndent.length;
+        const propertyIndent = closingIndent.replace(/^\r?\n/, "");
+        const closesTupleAndProperty = source.startsWith(")}", closingOffset);
+        replacementSpan = {
+          start: conditionalSpan.start,
+          end: closingOffset + (closesTupleAndProperty ? 1 : 0),
+        };
+        replacement = closesTupleAndProperty
+          ? `${replacement}\n${indent})\n${propertyIndent}`
+          : `${replacement}\n${indent}`;
+      }
+    }
+    if (
+      replacement === source.slice(replacementSpan.start, replacementSpan.end)
+    ) {
+      continue;
+    }
+    return replaceSpan(source, replacementSpan, replacement);
   }
   return source;
 }
@@ -393,7 +526,10 @@ function formatOneLambda(source: string, root: ConcreteRule): string {
     const suffixEnd = lineEnd < 0 ? source.length : lineEnd;
     const candidateWidth = source.slice(lineStart, lambdaSpan.start).length +
       flattened.length + source.slice(lambdaSpan.end, suffixEnd).length;
-    if (candidateWidth <= maximumLineWidth) {
+    if (
+      candidateWidth <= maximumLineWidth &&
+      !expressionPrimaryIs(body, "conditional")
+    ) {
       if (flattened === original) continue;
       return replaceSpan(source, lambdaSpan, flattened);
     }
@@ -410,20 +546,20 @@ function formatOneLambda(source: string, root: ConcreteRule): string {
       source,
       bodySpan,
       bodyIndent,
-      "return ",
+      expressionPrimaryIs(body, "conditional") ? "" : "return ",
     );
     const first = bodyLines[0];
     if (first === undefined || first === "") continue;
-    const closesDelimitedLayout = hasAncestorIn(
-      root,
-      lambda,
-      delimitedLayoutRules,
-    );
+    const closesDelimited = closesDelimitedLayout(root, lambda);
     const replacement = `${
       source.slice(lambdaSpan.start, arrow.span.end)
     }\n${first}${
       bodyLines.length === 1 ? "" : `\n${bodyLines.slice(1).join("\n")}`
-    }${closesDelimitedLayout ? `\n${indent}` : ""}`;
+    }${
+      closesDelimited && closesOnSameLine(source, lambdaSpan.end)
+        ? `\n${indent}`
+        : ""
+    }`;
     return replaceSpan(source, lambdaSpan, replacement);
   }
   return source;
@@ -445,13 +581,38 @@ function hasAncestorIn(
   );
 }
 
+function closesDelimitedLayout(
+  node: ConcreteNode,
+  target: ConcreteRule,
+  ancestors: readonly ConcreteRule[] = [],
+): boolean {
+  if (node === target) {
+    for (const ancestor of ancestors.toReversed()) {
+      if (delimitedLayoutRules.has(ancestor.name)) return true;
+      if (blockRule.has(ancestor.name)) return false;
+    }
+    return false;
+  }
+  if (node.type !== "rule") return false;
+  const nestedAncestors = [...ancestors, node];
+  return node.children().some((child) =>
+    closesDelimitedLayout(child, target, nestedAncestors)
+  );
+}
+
+function closesOnSameLine(source: string, offset: number): boolean {
+  const lineEnd = source.indexOf("\n", offset);
+  const suffixEnd = lineEnd < 0 ? source.length : lineEnd;
+  return source.slice(offset, suffixEnd).trim() !== "";
+}
+
 function indentedValueLines(
   source: string,
   value: ConcreteRule,
   indent: string,
   prefix: string,
 ): readonly string[] {
-  const span = contentSpan(source, value.span);
+  const span = ruleContentSpan(value);
   return reindentFragment(source, span, indent, prefix);
 }
 
@@ -545,6 +706,22 @@ function contentSpan(source: string, span: Span): Span {
   return { start: span.start, end };
 }
 
+function ruleContentSpan(rule: ConcreteRule): Span {
+  let end = rule.span.start;
+  collectContentEnd(rule);
+  return { start: rule.span.start, end };
+
+  function collectContentEnd(node: ConcreteNode): void {
+    if (node.type === "token") {
+      if (!/^[\uE000-\uF8FF]+$/.test(node.text)) {
+        end = Math.max(end, node.span.end);
+      }
+      return;
+    }
+    for (const child of node.children()) collectContentEnd(child);
+  }
+}
+
 function collectRedundantParentheses(
   node: ConcreteNode,
   ancestors: readonly ConcreteRule[],
@@ -554,6 +731,7 @@ function collectRedundantParentheses(
   if (node.type !== "rule") return;
   if (
     node.name === "parenthesized_or_tuple" &&
+    !parenthesizesLambda(node) &&
     source.slice(node.span.start, node.span.end).indexOf("\n") < 0 &&
     parenthesesAreRedundant(node, ancestors)
   ) {
@@ -562,6 +740,59 @@ function collectRedundantParentheses(
   const nestedAncestors = [...ancestors, node];
   for (const child of node.children()) {
     collectRedundantParentheses(child, nestedAncestors, source, parentheses);
+  }
+}
+
+async function removeRedundantLambdaParentheses(
+  source: string,
+  expectedModule: Module,
+): Promise<string> {
+  let current = source;
+  let candidates: Span[] = [];
+  while (true) {
+    const parsed = await parseConcrete(current);
+    if (!parsed.ok) {
+      throw new Error("lambda parenthesis removal received invalid source");
+    }
+    candidates = [];
+    collectCandidates(parsed.cst, []);
+    candidates.sort((left, right) =>
+      (left.end - left.start) - (right.end - right.start)
+    );
+    let removed = false;
+    for (const candidate of candidates) {
+      const trial = removeParentheses(current, [candidate]);
+      const reparsed = await parseConcrete(trial);
+      if (
+        !reparsed.ok ||
+        moduleWithoutSpans(reparsed.module) !==
+          moduleWithoutSpans(expectedModule)
+      ) {
+        continue;
+      }
+      current = trial;
+      removed = true;
+      break;
+    }
+    if (!removed) return current;
+  }
+
+  function collectCandidates(
+    node: ConcreteNode,
+    ancestors: readonly ConcreteRule[],
+  ): void {
+    if (node.type !== "rule") return;
+    if (
+      node.name === "parenthesized_or_tuple" &&
+      parenthesizesLambda(node) &&
+      parenthesesAreRedundant(node, ancestors)
+    ) {
+      candidates.push(node.span);
+    }
+    const nestedAncestors = [...ancestors, node];
+    for (const child of node.children()) {
+      collectCandidates(child, nestedAncestors);
+    }
   }
 }
 
@@ -578,6 +809,18 @@ function parenthesesAreRedundant(
   }
   const value = directRule(grouping, "value");
   if (value === null) return false;
+  if (directRule(value, "lambda") !== null) {
+    const outerPostfixIndex = findLastRule(ancestors, "postfix_expression");
+    if (outerPostfixIndex < 0) return true;
+    const pathFromPostfix = ancestors.slice(outerPostfixIndex + 1);
+    const groupingIsApplicationHead = pathFromPostfix.some((ancestor) =>
+      ancestor.name === "primary_expression"
+    );
+    if (!groupingIsApplicationHead) return true;
+    const outerPostfix = ancestors[outerPostfixIndex];
+    return directRules(outerPostfix, "application_argument").length === 0 &&
+      directRules(outerPostfix, "field_suffix").length === 0;
+  }
   const expression = directRule(value, "expression");
   if (expression === null) return false;
   if (directRules(expression, "infix_operation").length > 0) return false;
@@ -600,6 +843,11 @@ function parenthesesAreRedundant(
   ) return false;
   const outerPostfix = ancestors[outerPostfixIndex];
   return directRules(outerPostfix, "field_suffix").length === 0;
+}
+
+function parenthesizesLambda(grouping: ConcreteRule): boolean {
+  const value = directRule(grouping, "value");
+  return value !== null && directRule(value, "lambda") !== null;
 }
 
 function hasApplicationPrimary(postfix: ConcreteRule): boolean {
@@ -658,6 +906,15 @@ function removeParentheses(
     }
     removed.add(span.start);
     removed.add(span.end - 1);
+    const closingLineStart = source.lastIndexOf("\n", span.end - 2) + 1;
+    if (
+      closingLineStart > span.start &&
+      source.slice(closingLineStart, span.end - 1).trim() === ""
+    ) {
+      for (let index = closingLineStart - 1; index < span.end; index += 1) {
+        removed.add(index);
+      }
+    }
   }
   const characters: string[] = [];
   for (let index = 0; index < source.length; index += 1) {
@@ -699,6 +956,7 @@ function collectIndentRegions(
   node: ConcreteNode,
   lineStarts: readonly number[],
   regions: IndentRegion[],
+  ancestors: readonly ConcreteRule[] = [],
 ): void {
   if (node.type !== "rule") return;
   if (INDENTED_RULES.has(node.name)) {
@@ -709,20 +967,48 @@ function collectIndentRegions(
     ) {
       startsAtLine -= 1;
     }
+    const contentEnd = node.name === "lambda" || node.name === "block" ||
+        node.name === "operator_section"
+      ? ruleContentSpan(node).end
+      : node.span.end;
     const endsAtLine = lineAtOffset(
       lineStarts,
-      Math.max(node.span.start, node.span.end - 1),
+      Math.max(node.span.start, contentEnd - 1),
     );
     if (startsAtLine < endsAtLine) {
+      let closesEffectValue = false;
+      if (node.name === "parenthesized_or_tuple") {
+        for (const ancestor of ancestors.toReversed()) {
+          if (ancestor.name === "rebinding") {
+            closesEffectValue = directToken(ancestor, "<-") !== null;
+            break;
+          }
+          if (
+            delimitedLayoutRules.has(ancestor.name) ||
+            ancestor.name === "block" || ancestor.name === "lambda"
+          ) {
+            break;
+          }
+        }
+      }
+      const opensInsideSameLineScope = delimitedLayoutRules.has(node.name) &&
+        ancestors.some((ancestor) =>
+          INDENTED_RULES.has(ancestor.name) &&
+          ancestor.name !== "block" && ancestor.name !== "statement_suite" &&
+          lineAtOffset(lineStarts, ancestor.span.start) === startsAtLine
+        );
       regions.push({
         startsAtLine,
         endsAtLine,
-        includesLastLine: node.name === "block" || node.name === "lambda",
+        includesLastLine: node.name === "block" || node.name === "lambda" ||
+          closesEffectValue,
+        extraInteriorIndent: closesEffectValue || opensInsideSameLineScope,
       });
     }
   }
+  const nestedAncestors = [...ancestors, node];
   for (const child of node.children()) {
-    collectIndentRegions(child, lineStarts, regions);
+    collectIndentRegions(child, lineStarts, regions, nestedAncestors);
   }
 }
 

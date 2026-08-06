@@ -47,6 +47,7 @@ return result;
       break
     else:
       value := value + 1
+
   return value
 return result
 `,
@@ -82,6 +83,47 @@ return choose
   );
 });
 
+Deno.test("layout migration writes vertical value conditional branches", async () => {
+  const legacy = `let choose = fn ready => do
+  return if ready then 1 else 2 end;
+end;
+return choose;
+`;
+  const migrated = await migrateLayoutSource(legacy);
+  if (!migrated.ok) throw new Error(migrated.diagnostics[0]?.message);
+  assertEquals(
+    migrated.source,
+    `let choose = fn ready =>
+  if ready:
+    return 1
+  else:
+    return 2
+return choose
+`,
+  );
+  assertEquals((await parse(migrated.source)).ok, true);
+});
+
+Deno.test("layout migration updates the previous indentation syntax", async () => {
+  const previous = `let choose = fn ready =>
+  return if ready then 1 else 2
+return choose
+`;
+  const migrated = await migrateLayoutSource(previous);
+  if (!migrated.ok) throw new Error(migrated.diagnostics[0]?.message);
+  assertEquals(
+    migrated.source,
+    `let choose = fn ready =>
+  if ready:
+    return 1
+  else:
+    return 2
+return choose
+`,
+  );
+  assertEquals((await parse(migrated.source)).ok, true);
+});
+
 Deno.test("layout migration writes a colon after a guard alternative", async () => {
   const legacy = `let unwrap = fn option => do
   if let #Some value = option else
@@ -98,6 +140,7 @@ return unwrap;
     `let unwrap = fn option =>
   if let #Some value = option else:
     return 0
+
   return value
 return unwrap
 `,

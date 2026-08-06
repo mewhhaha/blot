@@ -369,6 +369,74 @@ function statementsCanContinue(cursors: readonly Cursor[]): boolean {
   return true;
 }
 
+function lowerTerminalReturn(cursor: Cursor, context: Context): Expr | null {
+  const rule = statementRule(cursor);
+  if (rule.name === "result") {
+    return lowerValue(asRule(field(rule, "value"), "return value"), context);
+  }
+  if (rule.name !== "conditional_statement") return null;
+
+  const body = conditionalStatementBody(rule);
+  if (body.name !== "conditional_statement_branches") return null;
+  const fallbackCursor = field(body, "fallback");
+  if (fallbackCursor === null) return null;
+
+  const clauses = [
+    body,
+    ...fieldList(body, "alternatives").map((alternative) =>
+      asRule(alternative, "conditional_statement_else_if_clause")
+    ),
+  ];
+  const branches: Branch[] = [];
+  for (const clause of clauses) {
+    const statements = statementSuite(clause, "consequence");
+    const consequence = lowerTerminalSuite(statements, context);
+    if (consequence === null) return null;
+    branches.push({
+      condition: lowerExpression(
+        asRule(field(clause, "condition"), "condition"),
+        context,
+      ),
+      consequence,
+    });
+  }
+
+  const fallback = asRule(
+    fallbackCursor,
+    "conditional_statement_else_clause",
+  );
+  const fallbackStatements = statementSuite(fallback, "alternative");
+  const alternative = lowerTerminalSuite(fallbackStatements, context);
+  if (alternative === null) return null;
+  return { tag: "if", branches, fallback: alternative, span: body.span };
+}
+
+function lowerTerminalSuite(
+  cursors: readonly Cursor[],
+  context: Context,
+): Expr | null {
+  const last = cursors.at(-1);
+  if (last === undefined) return null;
+  const result = lowerTerminalReturn(last, context);
+  if (result === null) return null;
+
+  const declarations = cursors.slice(0, -1);
+  if (statementsNeedControlLowering(declarations)) return null;
+  if (declarations.length === 0) return result;
+  return {
+    tag: "block",
+    declarations: declarations.map((cursor) =>
+      lowerDecl(statementRule(cursor), context)
+    ),
+    result,
+    resultEffects: "ambient",
+    span: {
+      start: statementRule(declarations[0]).span.start,
+      end: statementRule(last).span.end,
+    },
+  };
+}
+
 interface ControlConstructors {
   readonly return: string;
   readonly continue: string;
@@ -2466,17 +2534,17 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
       returnScope: true,
     };
     const last = statements.at(-1);
+    let containsOnlyResult = false;
     if (last !== undefined) {
-      const ending = statementRule(last);
-      if (ending.name === "result") {
-        result = lowerValue(
-          asRule(field(ending, "value"), "block result"),
-          blockContext,
-        );
+      const terminalReturn = lowerTerminalReturn(last, blockContext);
+      if (terminalReturn !== null) {
+        result = terminalReturn;
         resultEffects = "ambient";
         statements = statements.slice(0, -1);
+        containsOnlyResult = statements.length === 0;
       }
     }
+    if (containsOnlyResult) return result;
     if (statementsNeedControlLowering(statements)) {
       return {
         tag: "block",

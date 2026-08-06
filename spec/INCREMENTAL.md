@@ -89,9 +89,20 @@ revision of any input they observe. A complete checked environment may replace a
 second module evaluation only under the `checked-environment` premise in
 [`TYPECHECKING.md`](TYPECHECKING.md).
 
-Declaration liveness is derived from a lowered module and may be cached by module
-path plus the enclosing block's expression identity. Replacing that module
-invalidates every such entry before evaluation can observe the replacement AST.
+A changed module may retain successful declaration-value evaluations only for
+its maximal unchanged top-level declaration prefix. Equality includes the module
+parameter and fixities plus every reachable expression, pattern, declaration,
+and source span in that prefix. The resolved dependency and include mappings
+must also be unchanged. A change to any preceding declaration invalidates the
+suffix because its values form the later declarations' environment; a dependency
+change invalidates the importer through the ordinary reverse-dependency closure.
+Reuse removes deterministic evaluation only: every declaration in the new
+revision is still inferred and checked.
+
+Declaration liveness is derived from a lowered module and may be cached by
+module path plus the enclosing block's expression identity. Replacing that
+module invalidates every such entry before evaluation can observe the
+replacement AST.
 
 ## 6. Prelude snapshots
 

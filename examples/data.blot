@@ -8,7 +8,7 @@ open @import "blot:prelude" ()
 const Point = struct {
   .x = I32;
   .y = I32;
-  }
+}
 
 const Message = #Ready | #Progress I32 | #Failed Str
 
@@ -59,7 +59,7 @@ return {
   .one = one;
   .three = three;
   .extended = extended;
-  .doubled = map (values, (fn v => @int.mul v 2));
+  .doubled = map (values, fn v => v * 2);
   .ready = describe #Ready;
   .idle = describe (#Progress 0);
   .working = describe (#Progress 7);
@@ -67,4 +67,4 @@ return {
   .negative = classify (-1);
   .other = classify 99;
   .nested = nested_match (#Progress (5, 6));
-  }
+}

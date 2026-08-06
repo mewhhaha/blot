@@ -301,6 +301,24 @@ export async function load(
   }
 
   const source = await Deno.readTextFile(absolute);
+  return await loadSourceRevision(absolute, source, cache, nextActive);
+}
+
+/** Loads an editor revision without writing it over the source on disk. */
+export async function loadSource(
+  path: string,
+  source: string,
+): Promise<Loaded> {
+  const absolute = resolve(path);
+  return await loadSourceRevision(absolute, source, new Map(), [absolute]);
+}
+
+async function loadSourceRevision(
+  absolute: string,
+  source: string,
+  cache: Map<string, Loaded>,
+  active: readonly string[],
+): Promise<Loaded> {
   const parsed = await parse(source);
   if (!parsed.ok) {
     throw new LoadError(absolute, source, parsed.diagnostics);
@@ -319,7 +337,7 @@ export async function load(
   const imports = new Map<string, Value>();
   const dependencies = new Map<string, Loaded>();
   for (const specifier of new Set(dependencySites.imports.values())) {
-    const dependency = await loadImport(specifier, absolute, cache, nextActive);
+    const dependency = await loadImport(specifier, absolute, cache, active);
     imports.set(specifier, dependency.closure);
     dependencies.set(specifier, dependency);
   }

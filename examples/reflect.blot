@@ -23,10 +23,10 @@ const describe = fn t => case reflect t of
   #Sealed s => Text.append "the nominal " s.name
   _ => "something else"
 
-// --- refinement -------------------------------------------------------------
-//
-// `refines (narrow, wide)` is the comptime mirror of what biunification decides
-// during checking, over ground values rather than inferred ones.
+  // --- refinement -------------------------------------------------------------
+  //
+  // `refines (narrow, wide)` is the comptime mirror of what biunification decides
+  // during checking, over ground values rather than inferred ones.
 
 const Ok = { .status = Status; .body = Str; }
 const Failed = { .status = Status; .reason = Str; }
@@ -49,7 +49,10 @@ const Message = Ok | Failed | #Timeout | 0
 // written. `opened` is the blot reading of `case t of List a => ...`.
 
 const List = fn element => seal ("List", element)
-const Pair = fn element => seal ("Pair", { .first = element; .second = element; })
+const Pair = fn element => seal (
+    "Pair",
+    { .first = element; .second = element; }
+  )
 
 const element_of = fn t => unwrap_or (opened ("List", t), Unit)
 
@@ -90,4 +93,4 @@ return {
   .built = Header.new { .code = 7; .label = "ok"; };
   .picked = Pick (Ok, ["body"]);
   .omitted = Omit (Ok, ["body"]);
-  }
+}

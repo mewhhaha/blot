@@ -37,6 +37,7 @@ struct EffectIdentity {
 
 type LiveDeclarations = Rc<Vec<DeclarationId>>;
 type LivenessCache = HashMap<(String, Option<ExpressionId>), LiveDeclarations>;
+type EvaluatedBindings = HashMap<String, HashMap<(PatternId, ExpressionId, Phase), Value>>;
 
 #[derive(Default)]
 pub struct Context {
@@ -44,6 +45,7 @@ pub struct Context {
     pub module_results: RefCell<HashMap<String, Value>>,
     pub(crate) module_cache: RefCell<Option<(String, Rc<Module>)>>,
     pub(crate) live_declarations: RefCell<LivenessCache>,
+    pub(crate) evaluated_bindings: RefCell<EvaluatedBindings>,
     next_effect: Cell<u32>,
     effect_ids: RefCell<HashMap<EffectIdentity, u32>>,
     named_effects: RefCell<HashMap<(String, String, bool), u32>>,
@@ -95,7 +97,7 @@ impl Context {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Phase {
     Comptime,
     Runtime,

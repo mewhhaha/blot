@@ -1,9 +1,9 @@
 open @import "blot:prelude" ()
 
 for ever:
-  let value = if 1 < 2 then
+  let value = if 1 < 2:
     break
-
-  else ()
+  else:
+    return ()
 
 return ()

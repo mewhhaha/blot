@@ -63,9 +63,9 @@ const sin_quarter = fn k =>
 
 const table = fold (
   upto (0, QUARTER + 1),
-  @array.empty,
-  (fn (built, k) => @array.push built (Float32.of_float (sin_quarter k)))
-  )
+  Array.empty,
+  fn (built, k) => @array.push built (Float32.of_float (sin_quarter k))
+)
 
 const table_at = fn index => case Array.get (table, index) of
   #Some value => value
@@ -77,10 +77,14 @@ const sin_steps = fn steps =>
   let a = @int.rem (@int.rem steps TURN + TURN) TURN
   let quadrant = a / QUARTER
   let step = @int.rem a QUARTER
-  return if quadrant == 0 then table_at step
-  else if quadrant == 1 then table_at (QUARTER - step)
-  else if quadrant == 2 then Float32.negate (table_at step)
-  else Float32.negate (table_at (QUARTER - step))
+  if quadrant == 0:
+    return table_at step
+  else if quadrant == 1:
+    return table_at (QUARTER - step)
+  else if quadrant == 2:
+    return Float32.negate (table_at step)
+  else:
+    return Float32.negate (table_at (QUARTER - step))
 
 const cos_steps = fn steps => sin_steps (steps + QUARTER)
 
@@ -93,4 +97,4 @@ return {
   .sin = sin_steps;
   .cos = cos_steps;
   .sqrt = Float32.sqrt;
-  }
+}

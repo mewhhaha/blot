@@ -14,7 +14,10 @@
 open @import "blot:prelude" ()
 
 sig at = [Int] -> Int -> Int
-let at = fn xs => fn n => if n >= @array.len xs then @array.get xs n
-else 0
+let at = fn xs => fn n =>
+  if n >= @array.len xs:
+    return @array.get xs n
+  else:
+    return 0
 
 return at [1, 2, 3] 0

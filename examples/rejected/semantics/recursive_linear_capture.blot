@@ -7,6 +7,10 @@ open @import "blot:prelude" ()
 
 let consume = fn !value => @int.add value 1
 let !token = 41
-let go = rec (fn n => if n < 1 then consume (!token)
-else @int.add (go (@int.sub n 1)) 0)
+let go = rec (fn n =>
+  if n < 1:
+    return consume (!token)
+  else:
+    return @int.add (go (@int.sub n 1)) 0
+)
 return go 3

@@ -50,8 +50,8 @@ const Probes = {
 
   // The same equality, spelled with two comparisons. Refused: the occurrence
   // count is what licenses the factorization, and this body has four.
-  .twice = fn l => fn r => if is_less (@int.cmp l r) then False
-  else not (is_less (@int.cmp r l));
+  .twice = fn l => fn r => if is_less (@int.cmp l r) : False
+  else: not (is_less (@int.cmp r l));
 
   // Hand-written, in terms of the intrinsic rather than the prelude's helpers.
   .handwritten = fn l => fn r => case @int.cmp l r of
@@ -63,15 +63,15 @@ const Probes = {
   .constantly = fn a => fn b => True;
   .never = fn a => fn b => False;
   // A parameter used outside the comparison.
-  .leaks = fn l => fn r => if is_equal (@int.cmp l r) then l == l
-  else False;
+  .leaks = fn l => fn r => if is_equal (@int.cmp l r) : l == l
+  else: False;
   // The right domain, the wrong answer type.
   .ordering = fn l => fn r => @int.cmp l r;
   // Unary.
   .unary = fn l => is_equal (@int.cmp l l);
   // Refuses on one probe. \`blot check\` must survive it.
-  .refusing = fn l => fn r => if is_less (@int.cmp l r) then @fail "no"
-  else True;
+  .refusing = fn l => fn r => if is_less (@int.cmp l r) : @fail "no"
+  else: True;
 }
 return 0
 `;
@@ -163,7 +163,7 @@ Deno.test("adjacent orderings merge into one range", () => {
   assertEquals(regionOf("less", "equal", "greater"), "Int");
 });
 
-// `/=` is the only shape with a gap, and it is the reason a region may have two
+// `!=` is the only shape with a gap, and it is the reason a region may have two
 // pieces. Two is the maximum, which is what bounds `d` nested conditions at
 // `d + 1` pieces rather than `2^d`.
 Deno.test("a gap gives exactly two pieces", () => {

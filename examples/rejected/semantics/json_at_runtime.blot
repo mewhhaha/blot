@@ -2,6 +2,6 @@ let parsed = @json.parse #Widen {
   .specifier = "inline";
   .path = "inline";
   .text = "{}";
-  }
+}
 
 return parsed

@@ -22,4 +22,4 @@ return {
   .different = classify 3;
   .greeted = greeted;
   .payload = payload;
-  }
+}

@@ -17,7 +17,7 @@ let describe = fn n => case n of
   m if m > 0 => "positive"
   _ => "negative"
 
-// An arm above a guard still wins. `5` answers "five" even though the guard
+  // An arm above a guard still wins. `5` answers "five" even though the guard
 // below it would hold, because the guard is a fall-through and not a reordering.
 let name = fn n => case n of
   5 => "five"
@@ -31,7 +31,7 @@ let size = fn n => case n of
   m if m > 0 => 1
   _ => 0
 
-// A guard reads what the pattern bound, so a payload is refined where it comes
+  // A guard reads what the pattern bound, so a payload is refined where it comes
 // apart rather than in a second `case` inside the body.
 let progress = fn m => case m of
   #Step p if p >= 100 => 100
@@ -48,4 +48,4 @@ return {
   .done = progress (#Step 120);
   .partial = progress (#Step 30);
   .failed = progress (#Failed 4);
-  }
+}

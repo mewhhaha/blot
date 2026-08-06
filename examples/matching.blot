@@ -21,8 +21,8 @@ let classify = fn value => case value of
   1 => 20
   _ => 30
 
-// A declared literal union is a set, so its arms have to exhaust it the same
-// way a constructor set's do. Dropping the `3` arm is a type error here rather
+  // A declared literal union is a set, so its arms have to exhaust it the same
+  // way a constructor set's do. Dropping the `3` arm is a type error here rather
 // than a trap at the call that passes `3`.
 sig rank = 1 | 2 | 3 -> Int
 let rank = fn level => case level of
@@ -35,7 +35,7 @@ let unpack = fn m => case m of
   #Pair (left, right) => left + right
   #Single n => n
 
-// `fn` takes a binding pattern, so a shape argument comes apart at the
+  // `fn` takes a binding pattern, so a shape argument comes apart at the
 // parameter rather than inside the body.
 let span = fn { .from; .to; } => to - from
 

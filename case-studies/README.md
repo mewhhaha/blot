@@ -212,12 +212,12 @@ The camera carries a lens, and `to_screen` is the only place it matters:
 
 ```blot
 const to_screen = fn (view, camera) =>
-  if camera.lens == 0
-  then Vec4.add
-    SCREEN_CENTRE
-    (Vec4.div (Vec4.mul view FOCAL_AXES) (Vec4.splat (Vec4.z view)))
-  else Vec4.add SCREEN_CENTRE (Vec4.mul view camera.zoom_axes)
-  end;
+  if camera.lens == 0:
+    return Vec4.add
+      SCREEN_CENTRE
+      (Vec4.div (Vec4.mul view FOCAL_AXES) (Vec4.splat (Vec4.z view)))
+  else:
+    return Vec4.add SCREEN_CENTRE (Vec4.mul view camera.zoom_axes)
 ```
 
 A perspective divide, or no divide — the lenses differ only in what the view

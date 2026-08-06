@@ -158,7 +158,6 @@ export type LiteralKind =
   | "comptime"
   | "rec"
   | "if"
-  | "then"
   | "else"
   | "case"
   | "of"

@@ -32,6 +32,7 @@ let mixed = 0
 for x in Iter.range (0, 5):
   if x > 2:
     mixed := mixed + 1
+
   mixed := mixed * 2
 
 // Two names, only one of them rebound inside the branch.
@@ -64,4 +65,4 @@ return {
   .seen = seen;
   .scaled = scaled;
   .flagged = flagged;
-  }
+}

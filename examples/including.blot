@@ -1,9 +1,9 @@
 open @import "blot:prelude" ()
 
 const inspect = fn source => {
-  .specifier = source.specifier;
-  .path = source.path;
-  .text = source.text;
+    .specifier = source.specifier;
+    .path = source.path;
+    .text = source.text;
   }
 
 const included = @include "./assets/greeting.txt" inspect
@@ -14,4 +14,4 @@ return {
   .included = included;
   .normal_json = normal_json;
   .exact_json = exact_json;
-  }
+}

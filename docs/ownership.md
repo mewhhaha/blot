@@ -185,7 +185,11 @@ against them.
 group.** Its own body is inside its own group, so this reaches plain recursion:
 
 ```blot
-let go = rec (fn n => if n < 1 then consume (!token) else go (n - 1))
+let go = rec (fn n => if n < 1:
+  return consume (!token)
+else:
+  return go (n - 1)
+)
 return go 3
 ```
 

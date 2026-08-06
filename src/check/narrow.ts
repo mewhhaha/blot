@@ -1,6 +1,6 @@
 // What a condition proves, derived from the function it calls.
 //
-// `if n == 1` should leave the then-branch knowing `n : 1`. The obstacle is that
+// `if n == 1` should leave the first branch knowing `n : 1`. The obstacle is that
 // `==` is not a compiler concept: the fixity table names the binding `Eq.eq`,
 // and any module may bind that name to anything. A checker that assumed `==`
 // meant equality would prove a false fact the moment someone shadowed it — and

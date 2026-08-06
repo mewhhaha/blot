@@ -54,7 +54,7 @@ export const DEFAULT_FIXITIES: readonly Fixity[] = [
   entry("->", "right", 25, "@type.arrow"),
 
   entry("==", "none", 30, "Eq.eq"),
-  entry("/=", "none", 30, "Eq.ne"),
+  entry("!=", "none", 30, "Eq.ne"),
   entry("<", "none", 30, "Ord.lt"),
   entry("<=", "none", 30, "Ord.le"),
   entry(">", "none", 30, "Ord.gt"),
@@ -71,7 +71,7 @@ export const DEFAULT_FIXITIES: readonly Fixity[] = [
 
   // Above comparison, so `a <> b == c` compares the joined value; below
   // arithmetic, so `text <> x + y` appends the sum.
-  entry("<>", "right", 55, "Semigroup.append"),
+  entry("<>", "right", 55, "Text.append"),
 
   entry("+", "left", 60, "Num.add"),
   entry("-", "left", 60, "Num.sub"),

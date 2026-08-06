@@ -29,19 +29,18 @@ const at = fn (store, id) => case Array.get (store, id) of
 const replace = fn (store, id, value) => case Array.set (store, id, value) of
   #Some updated => updated
   #None => store
-const count = fn store => @array.len store
+const count = fn store => Array.length store
 
 // A system over one component: rebuild the store from the entities that have
 // it. The entities that do not are carried through untouched, so a system is a
 // total function over the world even when it reads a slice of it.
 const each_1 = fn (store, step) => fold (
-  upto (0, count store),
-  store,
-  (fn (state, id) => case at (store, id) of
-    #Some value => replace (state, id, Some (step value))
-    #None => state
+    upto (0, count store),
+    store,
+    fn (state, id) => case at (store, id) of
+      #Some value => replace (state, id, Some (step value))
+      #None => state
   )
-)
 
 // The join a two-component system wants: rebuild the left store for entities
 // that have both components and skip the rest.
@@ -50,13 +49,12 @@ const each_1 = fn (store, step) => fold (
 // and everything else is the other. Reading both stores before either is
 // tested is what "an entity id indexes every store alike" already promised.
 const each_2 = fn (left, right, step) => fold (
-  upto (0, count left),
-  left,
-  (fn (state, id) => case (at (left, id), at (right, id)) of
-    (#Some a, #Some b) => replace (state, id, Some (step (a, b)))
-    _ => state
+    upto (0, count left),
+    left,
+    fn (state, id) => case (at (left, id), at (right, id)) of
+      (#Some a, #Some b) => replace (state, id, Some (step (a, b)))
+      _ => state
   )
-)
 
 // The same join for a system that produces effects rather than components,
 // which is what a renderer is.
@@ -70,16 +68,15 @@ const each_2 = fn (left, right, step) => fold (
 // a tuple scrutinee, a renderer's join stays two `case`s.
 const visit_2 = fn (left, right, visit) =>
   _ <- each (
-  upto (0, count left),
-  (fn id =>
-    _ <- case at (left, id) of
-      #Some a => case at (right, id) of
-        #Some b => visit (a, b)
-        #None => ()
+      upto (0, count left),
+      fn id =>
+        _ <- case at (left, id) of
+          #Some a => case at (right, id) of
+            #Some b => visit (a, b)
+            #None => ()
 
-      #None => ()
-  )
-  )
+          #None => ()
+    )
 
 return {
   .Store = Store;
@@ -89,4 +86,4 @@ return {
   .each_1 = each_1;
   .each_2 = each_2;
   .visit_2 = visit_2;
-  }
+}

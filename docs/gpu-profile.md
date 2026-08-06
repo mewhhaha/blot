@@ -19,14 +19,14 @@ in a benchmark months later.
 
 | counter                     |              blot | note                                               |
 | --------------------------- | ----------------: | -------------------------------------------------- |
-| `lexerStates`               |               125 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`               |               122 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |                21 | worst-case island candidates allocated per token   |
 | `islandCount`               |                73 | one island for every grammar rule                  |
 | `islandStates`              |               422 |                                                    |
 | `islandTransitions`         |               425 |                                                    |
 | `contractionRounds`         |                33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      |           663,384 | immutable device table                             |
-| `packedBytes`               |           514,311 | version-3 runtime section                          |
+| `denseTransitionBytes`      |           658,320 | immutable device table                             |
+| `packedBytes`               |           510,923 | version-3 runtime section                          |
 | `rootLoopIsland`            | 5 (`declaration`) | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |                 9 | islands admitted to parallel long-region execution |
 
@@ -141,18 +141,19 @@ bytes. `for ever:` needs no replacement grammar: `ever` is an ordinary prelude
 iterator in the existing `for source:` form. `break` remains its own declaration
 and targets the nearest `for` during CST lowering.
 
-Standalone `if` uses the same `:` suite boundary as `for`; expression `if`
-keeps `then`, value branches, and its required `else`. Replacing the standalone
-form's `then` boundaries with `:` leaves lexer states, island count, candidate
-multiplicity, contraction rounds, and parallel long-region admission unchanged.
-It adds two island states, two island transitions, 3,144 dense-transition bytes,
-and 2,344 packed bytes. Factoring the standalone form's shared `if` opener also
-admits `if let pattern = value else:` without another branch opener. A bare
-trailing value after block statements conflicted with the shared `IDENT` prefix
-of `name := ...`. `return value` keeps the value inside the newline-bounded
-statement stream and adds no parser resolution. Making `break` loop-only
-removed one island state, two island transitions, 1,536 dense-transition bytes,
-and 1,206 packed bytes. It also raised `parallelLongRegionIslands` from 8 to 9.
+Standalone and expression `if` use the same `:` suite boundary; an expression
+branch is a value scope and still requires `else:`. Replacing expression `then`
+and its bare `else` boundary with colons removes three lexer states while
+leaving island count, island states, island transitions, candidate multiplicity,
+contraction rounds, and parallel long-region admission unchanged. It removes
+5,064 dense-transition bytes and 3,388 packed bytes. Factoring the standalone
+form's shared `if` opener also admits `if let pattern = value else:` without
+another branch opener. A bare trailing value after block statements conflicted
+with the shared `IDENT` prefix of `name := ...`. `return value` keeps the value
+inside the newline-bounded statement stream and adds no parser resolution.
+Making `break` loop-only removed one island state, two island transitions, 1,536
+dense-transition bytes, and 1,206 packed bytes. It also raised
+`parallelLongRegionIslands` from 8 to 9.
 
 The former `open value;` rule cost one lexer state and twenty-one island states
 — one keyword and one declaration alternative. A former rename/ignore mask added

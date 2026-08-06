@@ -258,7 +258,7 @@ function visitExpression(
   }
 }
 
-function identifierSpan(
+export function identifierSpan(
   containing: Span,
   name: string,
   source: string,

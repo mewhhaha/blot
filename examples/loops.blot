@@ -63,13 +63,13 @@ let doubled = []
 for n in Iter.range (1, 4):
   doubled := [...doubled, n * 2]
 
-// --- a refutable binder filters ---------------------------------------------
-//
-// `x in source` binds every element. A binder that *can* fail — a constructor,
-// a literal — becomes the `case` it looks like, with the other arm handing the
-// accumulator back untouched. An element that does not match skips the
-// iteration rather than failing it, which is what makes this a filter and
-// costs exactly one arm.
+  // --- a refutable binder filters ---------------------------------------------
+  //
+  // `x in source` binds every element. A binder that *can* fail — a constructor,
+  // a literal — becomes the `case` it looks like, with the other arm handing the
+  // accumulator back untouched. An element that does not match skips the
+  // iteration rather than failing it, which is what makes this a filter and
+  // costs exactly one arm.
 
 let found = 0
 for #Some n in Iter.items [Some 1, None, Some 20, None, Some 300]:
@@ -80,16 +80,20 @@ let labelled = ""
 for (rank, label) in Iter.items [(1, "one"), (2, "two")]:
   labelled := labelled <> label <> Text.of_int rank
 
-// --- writing one ------------------------------------------------------------
-//
-// Nothing about `Iter.range` is privileged. A step function and a starting
-// state is the whole protocol.
+  // --- writing one ------------------------------------------------------------
+  //
+  // Nothing about `Iter.range` is privileged. A step function and a starting
+  // state is the whole protocol.
 
 const halving = fn start => {
-  .state = start;
-  .step = fn value => if is_less (@int.cmp value 1) then None
-  else Some (value, @int.div value 2);
-}
+    .state = start;
+    .step = fn value =>
+      if is_less (@int.cmp value 1):
+        return None
+      else:
+        return Some (value, @int.div value 2)
+    ;
+  }
 
 let steps = 0
 for value in halving 40:
@@ -108,5 +112,5 @@ return {
   .found = found;
   .labelled = labelled;
   .collected = collect (Iter.range (0, 4));
-  .folded = iterate (Iter.range (1, 4), 1, (fn (product, n) => product * n));
-  }
+  .folded = iterate (Iter.range (1, 4), 1, fn (product, n) => product * n);
+}

@@ -1,1 +1,1 @@
-42
+{ .answer = 42; .empty_length = 0; .joined = [1, 2, 3, 4]; }

@@ -5,5 +5,7 @@ open @import "blot:prelude" ()
 
 let !token = 41
 let consume = fn !value => value
-return if 1 < 2 then consume (!token)
-else 0
+return if 1 < 2:
+  return consume (!token)
+else:
+  return 0

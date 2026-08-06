@@ -121,6 +121,8 @@ for graphs without simultaneous ready work.
 The compiler performs each semantic derivation once:
 
 - checking records facts that lowering consumes;
+- an unchanged top-level declaration prefix retains deterministic values across
+  a later semantic edit while the checker derives the new revision;
 - a complete checked compile-time environment may feed staging;
 - `prepare` and `compile` share Runtime HIR;
 - ABI layout planning feeds both manifest and adapters;

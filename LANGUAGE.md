@@ -61,7 +61,7 @@ The reserved words are:
 ```text
 module operators infixl infixr infix prefix
 let const sig return
-if then else case of rec comptime open
+if else case of rec comptime open
 for in break try fn
 ```
 
@@ -354,17 +354,23 @@ above the reader or the two belong in one recursive group.
 
 Physical line breaks terminate declarations. A continuation may be indented, but
 indentation opens a statement suite only after a suite introducer. The
-introducers are `=`, `=>`, `<-`, `then`, `else`, `of`, `with`, loop `:`, and an
-opening element's `>`. An opening `(` also introduces an explicit block when its
-next physical line starts with a statement form. A suite may use any indentation
-width, but every line at that depth must agree; a dedent must return to an
-active suite width or to the introducer's width. Other indentation is expression
-continuation and does not silently create a scope. The formatter writes the
-accepted structure with two-space indentation, keeping short lambdas and value
-conditionals on one line and expanding long ones toward 80 columns. When one
-conditional branch is a block, every branch body starts on its own indented
-line. Arrays use one line when they fit and otherwise place one element on each
-line.
+introducers are `=`, `=>`, `<-`, `of`, `with`, `:`, and an opening element's
+`>`. An opening `(` also introduces an explicit block when its next physical
+line starts with a statement form. A suite may use any indentation width, but
+every line at that depth must agree; a dedent must return to an active suite
+width or to the introducer's width. Other indentation is expression continuation
+and does not silently create a scope. A closing delimiter does not select a
+suite width, so its indentation is ignored and canonicalized by the formatter.
+The formatter writes the accepted structure with two-space indentation and
+expands lines toward an 80-column limit. A vertical delimiter indents its
+contents one level and closes one level outside them. It writes value
+conditionals vertically, expanding each direct branch value into a block whose
+explicit `return` supplies that value. When the conditional is itself the
+terminal result of a scope, the formatter omits the redundant outer `return` and
+lets those branch returns target the scope directly. Arrays use one line when
+they fit and otherwise place one element on each line. After a standalone `if`
+or `for` suite closes before another statement, the formatter writes one empty
+line to make the dedent visible.
 
 ### 4.1 Runtime and compile-time bindings
 
@@ -387,7 +393,10 @@ dispatch: each `const` bound from it is typed against the branch that ran, and
 the branch that did not run contributes nothing to it.
 
 ```blot
-const measuring = fn T => if refines (T, Str) then fn x => Text.length x else fn x => x + 0
+const measuring = fn T => if refines (T, Str):
+  return fn x => Text.length x
+else:
+  return fn x => x + 0
 
 const measure_text = measuring Str   // Str -> Int, not joined with the other arm
 ```
@@ -912,7 +921,10 @@ fn f => fn x => f (f x)
 
 The body extends as far to the right as it can, so an inner lambda that is
 followed by more of the enclosing expression is parenthesized like any other
-operand.
+operand. A lambda used as an entry in a parenthesized argument tuple needs no
+second pair of parentheses around itself: the tuple's comma or closing delimiter
+already marks its boundary, and the formatter removes a grouping used only for
+that purpose.
 
 The `=>` token is reserved for lambda parameters and case arms. A lambda written
 without `fn` is therefore a syntax error rather than an operator chain.
@@ -925,11 +937,11 @@ let result =
   return value
 ```
 
-Indentation after `=`, `=>`, `<-`, `then`, `else`, `of`, `with`, a loop colon,
-or a parenthesis followed by a statement opens a block. A block evaluates its
-statements in a nested scope. Falling through returns `()`; `return value` exits
-that block with `value`. It may leave from a nested statement conditional,
-guard, or loop. The block is the nearest return scope.
+Indentation after `=`, `=>`, `<-`, `of`, `with`, a colon, or a parenthesis
+followed by a statement opens a block. A block evaluates its statements in a
+nested scope. Falling through returns `()`; `return value` exits that block with
+`value`. It may leave from a nested statement conditional, guard, or loop. The
+block is the nearest return scope.
 
 A bare trailing expression is not permitted. The explicit `return` keeps a
 result beginning with a name distinct from `name := value`.
@@ -939,7 +951,11 @@ result beginning with a name distinct from `name := value`.
 `rec` is a prefix form that is valid only as the value of a binding to one name:
 
 ```blot
-const factorial = rec (fn n => if n < 2 then 1 else n * factorial (n - 1))
+const factorial = rec (fn n => if n < 2:
+  return 1
+else:
+  return n * factorial (n - 1)
+)
 ```
 
 The bound name is visible inside the lambda body. `rec` applied outside such a
@@ -950,8 +966,16 @@ A run of adjacent `rec` bindings of the same kind is one **recursive group**,
 and every name the run binds is in scope in every member's body:
 
 ```blot
-let is_even = rec (fn n => if n == 0 then True else is_odd (n - 1))
-let is_odd = rec (fn n => if n == 0 then False else is_even (n - 1))
+let is_even = rec (fn n => if n == 0:
+  return True
+else:
+  return is_odd (n - 1)
+)
+let is_odd = rec (fn n => if n == 0:
+  return False
+else:
+  return is_even (n - 1)
+)
 ```
 
 A group of one is ordinary self-recursion, so this states the existing rule for
@@ -1032,11 +1056,11 @@ Default fixities, from loosest to tightest:
 | 22    | `\|\|`                      | right           | `Logic.or`                      |
 | 24    | `&&`                        | right           | `Logic.and`                     |
 | 25    | `->`                        | right           | `@type.arrow`                   |
-| 30    | `==` `/=` `<` `<=` `>` `>=` | non-associative | `Eq.*`, `Ord.*`                 |
+| 30    | `==` `!=` `<` `<=` `>` `>=` | non-associative | `Eq.*`, `Ord.*`                 |
 | 40    | `\|` `\`                    | left            | `Set.union`, `Set.diff`         |
 | 45    | `&`                         | left            | `Set.intersect`                 |
 | 50    | `<+`                        | left            | `attach`                        |
-| 55    | `<>`                        | right           | `Semigroup.append`              |
+| 55    | `<>`                        | right           | `Text.append`                   |
 | 60    | `+` `-`                     | left            | `Num.add`, `Num.sub`            |
 | 70    | `*` `/` `%`                 | left            | `Num.mul`, `Num.div`, `Num.rem` |
 | 90    | `-`                         | prefix          | `Num.negate`                    |
@@ -1054,10 +1078,12 @@ operation.
 ### 8.1 Value-producing `if`
 
 ```blot
-let label = if ready
-  then "ready"
-  else if waiting then "waiting"
-  else "done"
+let label = if ready:
+  return "ready"
+else if waiting:
+  return "waiting"
+else:
+  return "done"
 ```
 
 An expression `if`:
@@ -1067,10 +1093,33 @@ An expression `if`:
 - evaluates and returns exactly one branch value; and
 - is a result-scope boundary that does not inherit surrounding control targets.
 
-Branches are values rather than statement lists. A branch on the following
-indented lines is a block; its `return` supplies that branch and therefore the
-conditional's result. A bare `break` inside such a branch cannot escape the
-value expression to reach an enclosing loop.
+The colon separates a condition from its branch value. A branch may be a direct
+value or an indented block; the formatter always writes the latter, whose
+explicit `return` supplies the branch and therefore the conditional's result.
+This makes the branch boundary visible even when its result is short and keeps
+expression conditionals in the same vertical layout as statement conditionals. A
+bare `break` inside such a branch cannot escape the value expression to reach an
+enclosing loop.
+
+When a returned value conditional is the last operation in a scope, these two
+forms have the same meaning:
+
+```blot
+return if ready:
+  return "ready"
+else:
+  return "waiting"
+
+if ready:
+  return "ready"
+else:
+  return "waiting"
+```
+
+The formatter writes the second form. There is no extra value-expression scope
+to communicate: every branch already transfers its value to the surrounding
+scope. A conditional used inside a binding, argument, or other expression
+position remains a value-producing `if`.
 
 There is no truthiness and no `yield`.
 
@@ -1116,7 +1165,7 @@ The guard is a `case` with a wildcard alternative, so it types its names the
 same way one does: `value` above has the type the matched constructor carries,
 and the guard leaves the rest of the constructor set open.
 
-This form has no `then` because success continues after the guard.
+This form has no success suite because success continues after the guard.
 
 ### 8.4 `case`
 
@@ -1340,14 +1389,17 @@ set that the condition allows.
 
 ```blot
 sig name = 1 | 2 | 3 -> Str
-let name = fn n => if n == 1 then case n of
-  1 => "one"
-else case n of
-  2 => "two"
-  3 => "three"
+let name = fn n =>
+  if n == 1:
+    return case n of
+      1 => "one"
+  else:
+    return case n of
+      2 => "two"
+      3 => "three"
 ```
 
-`n` is `1` in the `then` branch and `2 | 3` in the `else`, so both `case`
+`n` is `1` in the first branch and `2 | 3` in the `else`, so both `case`
 expressions cover their target without a catch-all arm. An `else if` chain
 accumulates: each condition is read knowing that none of the earlier ones fired,
 and the final `else` knows that none of them did.
@@ -1385,7 +1437,13 @@ context rather than in the integer's type:
 ```blot
 sig at = [Int] -> Int -> Int
 let at = fn xs => fn n =>
-  return if n >= 0 then (if n < @array.len xs then @array.get xs n else 0) else 0
+  if n >= 0:
+    if n < @array.len xs:
+      return @array.get xs n
+    else:
+      return 0
+  else:
+    return 0
 ```
 
 The inner branch retains `n : Int` and records `n < length(identity(xs))`;
@@ -1455,13 +1513,15 @@ the branch failing to cover a set the condition would have shrunk.
   would give `.."m" | "m"..` and readmit the value it was asked to remove.
   Integers are discrete, so the same split is exact for them and is performed. A
   recognised comparison is over `@int.cmp` in any case, which fails on text.
-- **Constructors.** `if flag then` does not prove `flag : #True`. A `variant`
+- **Constructors.** `if flag:` does not prove `flag : #True`. A `variant`
   carries its constructors and whether the set is open, so "those others, minus
   `#A`" is unrepresentable, and a narrowed constructor set would also disagree
   with the set recorded for the backend.
 - **An empty result.** A condition no value satisfies makes the branch
   unreachable. The branch keeps the wider type rather than being given the empty
-  one; reporting unreachability is not yet a diagnostic.
+  one; the type checker does not report that fact. The editor linter separately
+  reports a `case` arm made unreachable by an earlier syntactically covering
+  arm, which needs no inferred empty type.
 
 A proof is a shadow of the name, so it lasts as long as the name does. Rebinding
 the name inside the branch with `:=` replaces it under the ordinary rule (§4.4)
@@ -1833,7 +1893,11 @@ the next invocation; a base branch must consume a linear capture exactly once
 under the ordinary branch rules:
 
 ```blot
-let go = rec (fn n => if n < 1 then consume (!token) else go (n - 1))
+let go = rec (fn n => if n < 1:
+  return consume (!token)
+else:
+  return go (n - 1)
+)
 return go 3
 ```
 
@@ -2253,7 +2317,10 @@ the site that must carry its certificate and is `BLOT_ARRAY_ACCESS_NOT_DIRECT`.
 
 ```blot
 sig at = [Int] -> Int -> Int
-let at = fn xs => fn n => if n >= 0 && n < @array.len xs then @array.get xs n else 0
+let at = fn xs => fn n => if n >= 0 && n < @array.len xs:
+  return @array.get xs n
+else:
+  return 0
 ```
 
 The second needs no concrete length. The conjunction adds `0 <= n` and
@@ -2279,7 +2346,10 @@ The relationship survives ordinary immutable bindings:
 let ys = xs
 let length = @array.len xs
 let last = length - 1
-if n >= 0 && n <= last then @array.get ys n else 0
+if n >= 0 && n <= last:
+  return @array.get ys n
+else:
+  return 0
 ```
 
 It does not become part of `[T]`, escape through an ordinary function result, or
@@ -2407,7 +2477,8 @@ record currently exports:
   `Ord`, `Eq`, `Num`;
 - floats and lanes: `Float`, `Float32`, and `Vec4`;
 - branch hints: `likely` and `unlikely` (§15.1);
-- text: `Text`, `Semigroup`, `text_eq`;
+- structural interfaces: `Empty`, `Length`, `Semigroup`, and `Monoid`;
+- text: `Text`, `text_eq`;
 - arrays: `Array`, `fold`, `each`, `map`, `filter`, `sum`, `upto`, `any`,
   `every`, and `sort_by`;
 - homogeneous dynamic keys: `Dict`;
@@ -2421,6 +2492,25 @@ record currently exports:
 - standard types and integer range constructors: `I`, `I8`, `I16`, `I32`, `I64`,
   `U`, `U8`, `U16`, `U32`, `U64`, `Nat`, `Int`, `Str`, `Unit`, `F64`, `F32`,
   `F32x4`, and `F32x4Mask`.
+
+`Empty T`, `Length T`, `Semigroup T`, and `Monoid T` are structural interface
+types:
+
+```blot
+const Empty = fn T => { .empty = T; }
+const Length = fn T => { .length = T -> Int; }
+const Semigroup = fn T => { .append = T -> T -> T; }
+const Monoid = fn T => { .empty = T; .append = T -> T -> T; }
+```
+
+They do not perform implicit dispatch. An implementation is an ordinary record
+passed explicitly or named directly. `Text` satisfies both `Length Str` and
+`Monoid Str`. `Array` satisfies `Length [T]` and `Monoid [T]`; its `length`
+implementation borrows the array, while its `append` is prelude source over
+`fold` and `@array.push`. Ownership remains a separate flow property rather
+than part of the structural interface type. The default `<>` remains the
+concrete text operation `Text.append`. A module that wants the same spelling
+for arrays declares `Array.append` as its operator target.
 
 Important conventional values include:
 

@@ -14,4 +14,4 @@ return {
   .words = Int16x8.mask_bits (Int16x8.less_signed words (Int16x8.splat 0));
   .bytes = Int8x16.mask_bits (Int8x16.less_signed bytes (Int8x16.splat 0));
   .wrapped = Int8x16.mask_bits (Int8x16.less_signed wrapped (Int8x16.splat 0));
-  }
+}

@@ -137,7 +137,7 @@ implementation shortcut; it is what "types are values" means.
 
 ## A branch narrows without touching the lattice
 
-`if n == 1` leaves the then-branch knowing `n : 1` and the else-branch knowing
+`if n == 1` leaves the first branch knowing `n : 1` and the else-branch knowing
 `n : 2 | 3`. The obvious implementation — push `1` as an upper bound on `n`
 inside the branch — is not available and should not be made available.
 `Variable.upper` is a shared mutable array with no scope, no snapshot, and no
@@ -210,7 +210,7 @@ uncertainty is not permission to leave a latent no-match trap.
 
 **Narrowing stops at integers, and at one comparison per name.** A condition
 proves something only when it applies a recognised comparison to a name whose
-type is already a ground set of integers. `if flag then` does not prove
+type is already a ground set of integers. `if flag:` does not prove
 `flag : #True`: a `variant` carries its constructors and whether the set is
 open, so a negated constructor set is unrepresentable, and a narrowed
 constructor set would also disagree with the set `context.variants` records for
@@ -254,11 +254,11 @@ meaningless anyway.
 | 22    | `\|\|`                      | right  | `Logic.or`                      |
 | 24    | `&&`                        | right  | `Logic.and`                     |
 | 25    | `->`                        | right  | `@type.arrow`                   |
-| 30    | `==` `/=` `<` `<=` `>` `>=` | none   | `Eq.*`, `Ord.*`                 |
+| 30    | `==` `!=` `<` `<=` `>` `>=` | none   | `Eq.*`, `Ord.*`                 |
 | 40    | `\|` `\\`                   | left   | `Set.union`, `Set.diff`         |
 | 45    | `&`                         | left   | `Set.intersect`                 |
 | 50    | `<+`                        | left   | `attach`                        |
-| 55    | `<>`                        | right  | `Semigroup.append`              |
+| 55    | `<>`                        | right  | `Text.append`                   |
 | 60    | `+` `-`                     | left   | `Num.add`, `Num.sub`            |
 | 70    | `*` `/` `%`                 | left   | `Num.mul`, `Num.div`, `Num.rem` |
 | 90    | `-` `!` `?` `&`             | prefix | `Num.negate`, `@linear.*`       |

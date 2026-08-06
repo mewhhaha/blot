@@ -34,13 +34,23 @@ let (across, up) = somewhere
 
 const Record = { .flag = U8; .id = I32; .code = U8; .name = Str; }
 
-const byte_width = fn t => if refines (t, U8) then 1
-else (if refines (t, I32) then 4
-    else 8)
+const byte_width = fn t =>
+  if refines (t, U8):
+    return 1
+  else:
+    return (if refines (t, I32):
+      return 4
+    else:
+      return 8
+    )
 
 const Declared = struct Record
 
-const alphabetical = fn names => sort_by (names, (fn (left, right) => is_less (@text.cmp left right)))
+const alphabetical = fn names =>
+  return sort_by (
+    names,
+    fn (left, right) => is_less (@text.cmp left right)
+  )
 const Sorted = struct (reorder (Record, alphabetical (@shape.names Record)))
 
 // --- packing is a different question ----------------------------------------
@@ -56,7 +66,7 @@ const Pixel = {
   .red = U 8;
   .green = U 8;
   .mode = U 2;
-  }
+}
 const pixel_bits = packed Pixel
 const signed_bit_width = bit_width (I 7)
 const unsigned_bit_width = bit_width U64
@@ -70,7 +80,9 @@ const raw = layout (Record, byte_width)
 // it chains left, so a namespace reads as a sequence of attachments rather than
 // as nested calls.
 
-const Meters = seal ("Meters", I32) <+ { .of = fn n => seal ("Meters", n); } <+ { .unit = "m"; }
+const Meters = seal ("Meters", I32) <+ { .of = fn n =>
+  return seal ("Meters", n)
+; } <+ { .unit = "m"; }
 
 const Located = Point <+ { .origin = { .x = 0; .y = 0; }; }
 
@@ -103,4 +115,4 @@ return {
 
   .sorted_order = Sorted.fields;
   .unpadded_size = raw.size;
-  }
+}

@@ -14,9 +14,10 @@ Indent queries: ✓       Tags queries: ✓        Rainbow queries: ✓
 ```
 
 The server publishes syntax and compiler diagnostics for the open editor
-revision, finds local lexical definitions, formats documents, and publishes
-style lints. It runs the checked-in compiler Wasm and Baba's CPU frontend; it
-does not initialize WebGPU. Run it outside Helix with:
+revision, finds local lexical definitions, describes values and syntax on hover,
+formats documents, and publishes style lints with quick fixes. It runs the
+checked-in compiler Wasm and Baba's CPU frontend; it does not initialize WebGPU.
+Run it outside Helix with:
 
 ```bash
 deno task lsp
@@ -27,27 +28,92 @@ bindings, lambda parameters, case patterns, rebindings, and their shadowing are
 resolved. Definitions introduced dynamically by `open`, imported module fields,
 and package sources do not yet have cross-file locations.
 
+Hover is broader than definition lookup. A value hover shows its full inferred
+signature and, for a source-local binding, the declaration that introduced it.
+Function bodies are written as the placeholder `body` after their parameters, so
+a large implementation does not hide the signature. Consecutive `//` comments
+immediately above the declaration are included as documentation; `///` is
+accepted as the documentation-oriented spelling without introducing another
+comment token. Imported values and fields still show their inferred signature
+even when no local definition location is available. Hover inference is cached
+for the open document version. A shape field definition describes the selected
+field rather than the expression on its right. An attached member projection
+uses its qualified name and includes its compact local definition; an attached
+function projects as `⊤`, matching the namespace typing rule, even though a
+compile-time call can infer a more precise result.
+
+Every concrete syntax token also has a fallback description. Keywords explain
+their control or binding role, delimiters explain the structure they open or
+close, literals explain their domain, and operators show their active
+associativity and precedence. An operator also names the related value its
+fixity resolves to and shows a short surface-syntax example. Operators with both
+prefix and infix forms show both relationships. Those descriptions remain
+available when an incomplete program cannot yet be inferred.
+
 The formatter is biased but conservative. It applies two-space structural
-indentation and targets 80-column lines. Short lambdas and value conditionals
-stay on one line; long lambdas and conditional branches expand vertically
-according to their scopes. Once one conditional branch is a block, every branch
-body starts on its own indented line. Arrays stay on one line when the complete
-expression fits; otherwise every element gets its own line. Long tuple arguments
-likewise expand when that removes an overlong line. It also removes trailing
-whitespace, writes LF line endings, leaves one final newline, and removes
-parentheses made redundant by postfix precedence or left-associative application
-while retaining groupings that affect the AST. Comments remain source text in
-the gaps between Baba CST nodes, so formatting cannot discard them. Use it from
-the command line with:
+indentation and targets 80-column lines. Value conditionals always use vertical
+`if condition:` / `else:` branches, with an explicit `return` for every branch
+result. If that conditional is the scope's terminal result, the branch returns
+make an outer `return if` redundant, so the formatter writes the conditional as
+a statement. Lambdas expand according to their scope when needed. Arrays stay on
+one line when the complete expression fits; otherwise every element gets its own
+line. Long tuple arguments likewise expand when that removes an overlong line.
+It also removes trailing whitespace, writes LF line endings, leaves one final
+newline, and removes parentheses made redundant by postfix precedence or
+left-associative application while retaining groupings that affect the AST.
+Comments remain source text in the gaps between Baba CST nodes, so formatting
+cannot discard them. Use it from the command line with:
 
 ```bash
 deno task blot fmt source.blot
 deno task blot fmt --check source.blot
 ```
 
-The initial lints prefer one `case` over a chain of equality `if` branches and
-remove conditionals whose branches all produce the same expression. Lints are
-LSP hints, separate from compiler errors.
+Lints are independent rules over the lowered AST. A rule registers typed module,
+declaration, expression, or pattern visitors and may also inspect the compact
+CST when surface syntax matters. The runner traverses each tree once, supplies
+parent and ancestor paths, and owns reporting and source-safe fixes; adding a
+rule does not add another recursive compiler pass.
+
+The default correctness and readability rules report:
+
+- unread pure bindings, unread effect results, no-op rebindings, and unreachable
+  `case` arms;
+- equality `if` chains better written as one `case`, identical branches, and
+  conditionals that only reproduce a Boolean condition;
+- discarded value conditionals better written as statement suites and
+  Option-shaped terminal matches that can become `if let` guards;
+- singleton `Array.append` calls inside folds, retained aliases that force a
+  persistent array update to copy, and total array lookups that can become
+  proved direct accesses;
+- explicit calls with an active conventional infix or prefix operator spelling;
+  and
+- functions called with several distinct record shapes, including the maximum
+  specialization count exposed by those direct calls.
+
+Warnings identify likely correctness or cost problems; hints describe clearer
+equivalent source or optimization information. Safe local rewrites appear in the
+editor's code-action menu. Rewrites that need compiler evidence are different:
+the server checks the rewritten open-document revision. It only publishes a
+direct array access when that check supplies the required bounds proof, and it
+only calls a self-rebinding a no-op when removing it preserves the public type
+and effect row. Statement `if` suites remain control flow rather than value
+conditionals and do not receive value-conditional rules.
+
+Operator spelling is checked against the complete active fixity table. The
+default-rule test enumerates every default infix and prefix target, including
+function arrows, effect rows, numeric and comparison operations, set algebra,
+and ownership prefixes, and requires a parseable action for each. Declared
+fixities use the same path.
+
+Effects and structural interfaces need no parallel lint AST. An effect, its
+written row, and `Empty`, `Length`, `Semigroup`, or `Monoid` are ordinary
+expressions, so the same expression visitor reaches all of them. Effect
+declarations remain sequenced: when a `<-` result is unread, the action changes
+only its name to `_` instead of deleting the effect. Interface implementations
+remain explicitly scoped values. The linter does not replace a primitive with an
+interface member merely because their inferred types agree, since a same-typed
+shadowed member may have different behavior.
 
 ## What gets written
 

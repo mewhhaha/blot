@@ -6,8 +6,12 @@
 
 open @import "blot:prelude" ()
 
-let step = rec (fn n => if n == 0 then 0
-else step (n - 1))
+let step = rec (fn n =>
+  if n == 0:
+    return 0
+  else:
+    return step (n - 1)
+)
 let step = rec (fn n => n + 1)
 
 return step 3

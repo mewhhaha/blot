@@ -13,7 +13,7 @@ open @import "blot:prelude" ()
 
 const Console = @effect.host {
   .write = Str -> Unit;
-  }
+}
 
 // Nothing here says "effectful". The row is inferred, and `report` comes out as
 // `() -> () ~ { Console }` — an interface, not a leak.

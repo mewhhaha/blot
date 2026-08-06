@@ -7,11 +7,11 @@ open @import "blot:prelude" ()
 const Terminal = @effect.host {
   .read_line = Unit -> Str;
   .write = Str -> Unit;
-  }
+}
 
 const Model = @effect.host {
   .complete = Str -> Str;
-  }
+}
 
 let transcript = ""
 let turns = 0
@@ -21,6 +21,7 @@ for ever:
   prompt <- Terminal.read_line ()
   if text_eq (prompt, ""):
     break
+
   let request = transcript ++ "\nUser: " ++ prompt ++ "\nAssistant:"
   reply <- Model.complete request
   _ <- Terminal.write (Text.append "Agent: " reply)

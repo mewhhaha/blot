@@ -75,8 +75,8 @@ accepts(
   "branches that both consume agree",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-return if 1 < 2 then consume (!token)
-else consume (!token)
+return if 1 < 2 : consume (!token)
+else: consume (!token)
 `,
 );
 
@@ -84,8 +84,8 @@ Deno.test("ownership certificates publish every branch consumption", async () =>
   const { checked, path } = await analyze(
     `let consume = fn !value => @int.add value 1
 let !token = 41
-return if 1 < 2 then consume (!token)
-else consume (!token)
+return if 1 < 2 : consume (!token)
+else: consume (!token)
 `,
   );
   const entry = checked.ownershipCertificate.entries.find((candidate) =>
@@ -100,8 +100,8 @@ rejects(
   "branches that disagree about consuming are rejected",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-return if 1 < 2 then consume (!token)
-else 0
+return if 1 < 2 : consume (!token)
+else: 0
 `,
   "BLOT_LINEAR_BRANCH_DISAGREEMENT",
 );
@@ -318,8 +318,8 @@ rejects(
   "branch-produced records retain the obligation in their common field",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-let holder = if 1 < 2 then { .go = fn () => consume (!token); .value = 1; }
-else { .go = fn () => consume (!token); .value = 2; }
+let holder = if 1 < 2 : { .go = fn () => consume (!token); .value = 1; }
+else: { .go = fn () => consume (!token); .value = 2; }
 let { .go; .value; } = holder
 return value
 `,
@@ -329,8 +329,8 @@ return value
 rejects(
   "a branch-produced closure retains ownership in its call result",
   `let !token = 41
-let chosen = if 1 < 2 then fn () => token
-else fn () => token
+let chosen = if 1 < 2 : fn () => token
+else: fn () => token
 return chosen ()
 `,
   "BLOT_LINEAR_RESULT_ESCAPES",
@@ -394,8 +394,8 @@ accepts(
   `let consume = fn !value => @int.add value 1
 let !token = 41
 let values = [fn () => consume (!token)]
-let index = if 1 < 2 then 0
-else 1
+let index = if 1 < 2 : 0
+else: 1
 return case @array.take values index of
   #Taken (selected, remainder) =>
     return case remainder of
@@ -411,7 +411,7 @@ accepts(
   "array split makes every dynamic partition component explicit",
   `${CONSUME}let !token = 41
 let values = [fn () => consume (!token)]
-let index = (if 1 < 2 then 0 else 1)
+let index = (if 1 < 2 : 0 else: 1)
 return case @array.split values index of
   #Split (before, selected, after) =>
     return case before of
@@ -580,8 +580,8 @@ return twice (fn x => x)
 
 accepts(
   "affine branches need not agree, because either way it is at most once",
-  `let some = fn ?r => if 1 < 2 then r 1
-else 0
+  `let some = fn ?r => if 1 < 2 : r 1
+else: 0
 return some (fn x => x)
 `,
 );
@@ -716,8 +716,8 @@ accepts(
   "an ownership-tail recursive function transfers its linear capture",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-let go = rec (fn n => if n < 1 then consume (!token)
-else go (@int.sub n 1))
+let go = rec (fn n => if n < 1 : consume (!token)
+else: go (@int.sub n 1))
 return go 3
 `,
 );
@@ -726,8 +726,8 @@ accepts(
   "mutual ownership-tail recursion shares one captured obligation",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-let even = rec (fn n => if n < 1 then consume (!token)
-else odd (@int.sub n 1))
+let even = rec (fn n => if n < 1 : consume (!token)
+else: odd (@int.sub n 1))
 let odd = rec (fn n => even (@int.sub n 1))
 return even 4
 `,
@@ -737,8 +737,8 @@ rejects(
   "a recursive call nested inside another operation has no ownership proof",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-let go = rec (fn n => if n < 1 then consume (!token)
-else @int.add (go (@int.sub n 1)) 0)
+let go = rec (fn n => if n < 1 : consume (!token)
+else: @int.add (go (@int.sub n 1)) 0)
 return go 3
 `,
   "BLOT_RECURSIVE_OWNERSHIP_UNPROVED",
@@ -749,10 +749,10 @@ return go 3
 // the group is walked once.
 Deno.test("a group with no linear member owes and proves nothing", async () => {
   const { own } = await analyze(
-    `let even = rec (fn n => if n < 1 then 1
-else odd (@int.sub n 1))
-let odd = rec (fn n => if n < 1 then 0
-else even (@int.sub n 1))
+    `let even = rec (fn n => if n < 1 : 1
+else: odd (@int.sub n 1))
+let odd = rec (fn n => if n < 1 : 0
+else: even (@int.sub n 1))
 return @int.add (even 4) (odd 3)
 `,
   );

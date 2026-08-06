@@ -13,8 +13,11 @@
 open @import "blot:prelude" ()
 
 sig name = 1 | 2 | 3 -> (1 | 2 -> Str)
-let name = fn n => fn m => if n == m then "same"
-else case n of
-    3 => "three"
+let name = fn n => fn m =>
+  if n == m:
+    return "same"
+  else:
+    return case n of
+      3 => "three"
 
 return name 1 2

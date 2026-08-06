@@ -4,7 +4,7 @@ const exports = {
   .source = 10;
   .value = 20;
   .rest = 30;
-  }
+}
 
 open exports
 

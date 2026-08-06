@@ -7,11 +7,13 @@ open @import "blot:prelude" ()
 const Eq = { .eq = fn _ => fn _ => True; .ne = fn _ => fn _ => False; }
 
 sig name = 1 | 2 | 3 -> Str
-let name = fn n => if n == 1 then case n of
-  1 => "one"
-
-else case n of
-    2 => "two"
-    3 => "three"
+let name = fn n =>
+  if n == 1:
+    return case n of
+      1 => "one"
+  else:
+    return case n of
+      2 => "two"
+      3 => "three"
 
 return name 2

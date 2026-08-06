@@ -21,4 +21,4 @@ return {
   .has_label = bool_int (Dict.has (removed.1, "label"));
   .removed = option_or (removed.0, -1);
   .after_remove = option_or (Dict.get (removed.1, "count"), -1);
-  }
+}

@@ -46,4 +46,4 @@ let discarded = try program with
 return {
   .named = result;
   .discarded = discarded;
-  }
+}

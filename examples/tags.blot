@@ -4,8 +4,12 @@
 
 open @import "blot:prelude" ()
 
-const multiply = fn factor => tag ("multiply", { .factor = factor; }, (fn value => value * factor))
-const increment = tag ("increment", (), (fn value => value + 1))
+const multiply = fn factor => tag (
+  "multiply",
+  { .factor = factor; },
+  fn value => value * factor
+)
+const increment = tag ("increment", (), fn value => value + 1)
 
 // The nearest tag runs first: multiply produces 6, then increment produces 7.
 @[increment]
@@ -21,12 +25,20 @@ const Count = I32
 // Lowering keeps `rec` directly bound under its source name before applying
 // transforms, so tagging does not create a second recursion rule.
 @[tag ("identity", (), identity)]
-const factorial = rec (fn n => if n == 0 then 1
-else n * factorial (n - 1))
+const factorial = rec (fn n =>
+  if n == 0:
+    return 1
+  else:
+    return n * factorial (n - 1)
+)
 
 // A test is an ordinary identity transform whose descriptor name is `test`.
 // Normal evaluation leaves this function alone; `blot test` discovers it.
 @[test]
-let transformations_work = fn () => expect (ordered == 7, "tags apply nearest-first")
+let transformations_work = fn () =>
+  return expect (
+    ordered == 7,
+    "tags apply nearest-first"
+  )
 
 return { .ordered = ordered; .label = Count.label; .factorial = factorial 5; }

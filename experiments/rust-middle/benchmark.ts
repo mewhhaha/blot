@@ -211,7 +211,7 @@ function editedModule(source: string, revision: number): string {
   if (returnStart < 0) {
     throw new Error("benchmark source has no top-level return declaration");
   }
-  const insertion = `\nlet benchmark_revision = ${revision};`;
+  const insertion = `\nlet benchmark_revision = ${revision}`;
   return source.slice(0, returnStart) + insertion + source.slice(returnStart);
 }
 

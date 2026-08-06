@@ -3,7 +3,7 @@
 //
 // `==` resolves through the fixity table to the binding `Eq.eq`, and this module
 // binds that name to a function that always answers `#True`. Every call takes
-// the then-branch, `n` may be any of `1 | 2 | 3` there, and `case n of 1 => ...`
+// the first branch, `n` may be any of `1 | 2 | 3` there, and `case n of 1 => ...`
 // covers one of them.
 //
 // The checker refuses to narrow rather than reading the prelude's `Eq` through a
@@ -20,11 +20,13 @@ open @import "blot:prelude" ()
 let Eq = { .eq = fn a => fn b => True; .ne = fn a => fn b => False; }
 
 sig name = 1 | 2 | 3 -> Str
-let name = fn n => if n == 1 then case n of
-  1 => "one"
-
-else case n of
-    2 => "two"
-    3 => "three"
+let name = fn n =>
+  if n == 1:
+    return case n of
+      1 => "one"
+  else:
+    return case n of
+      2 => "two"
+      3 => "three"
 
 return name 2

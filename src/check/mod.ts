@@ -7,7 +7,7 @@
 
 import type { Diagnostic } from "../diagnostic.ts";
 import { BlotError } from "../diagnostic.ts";
-import { importExpressions, load, type Loaded } from "../load.ts";
+import { importExpressions, load, type Loaded, loadSource } from "../load.ts";
 import {
   type Env as ValueEnv,
   moduleEnv,
@@ -76,6 +76,8 @@ export interface OwnedBinding {
 }
 
 export interface CheckResult {
+  /** Root source AST whose identities key this result's local facts. */
+  readonly module: Loaded["module"];
   readonly type: string;
   readonly effects: string;
   /** Inferred module result retained for specialization and boundary lowering. */
@@ -143,6 +145,19 @@ function imports(loaded: Loaded) {
  */
 export async function checkFile(path: string): Promise<CheckResult> {
   const loaded = await load(path);
+  return checkLoadedProgram(loaded);
+}
+
+/** Checks an unsaved editor revision while loading its dependencies from disk. */
+export async function checkSource(
+  path: string,
+  source: string,
+): Promise<CheckResult> {
+  const loaded = await loadSource(path, source);
+  return checkLoadedProgram(loaded);
+}
+
+function checkLoadedProgram(loaded: Loaded): CheckResult {
   // Per call, not per process. A dependency's facts depend on its importers, so
   // there is no one answer it could carry between two programs — and since they
   // are keyed by AST node identity, one map could not hold both answers anyway.
@@ -317,6 +332,7 @@ function assemble(
     checked.opens,
   ]);
   const result: CheckResult = {
+    module: loaded.module,
     type: show(checked.type),
     effects: file.effects,
     moduleType: checked.type,

@@ -7,14 +7,14 @@ Deno.test("layout elaboration inserts suites only outside delimiters", async () 
     1,
     2,
   ];
-  return if condition then values.0 else values.1;
+  return if condition : values.0 else: values.1;
 return choose;
 `;
   const result = await elaborateLayout(source);
   if (!result.ok) throw new Error(result.diagnostics[0]?.message);
   assertEquals(
     visible(result.layout.source),
-    `let choose = fn condition =>\n  <NL><IN>let values = [\n    1,\n    2,\n  ];\n  <NL>return if condition then values.0 else values.1;\n<NL><DED><NL>return choose;<NL>\n`,
+    `let choose = fn condition =>\n  <NL><IN>let values = [\n    1,\n    2,\n  ];\n  <NL>return if condition : values.0 else: values.1;\n<NL><DED><NL>return choose;<NL>\n`,
   );
   for (let offset = 0; offset <= result.layout.source.length; offset += 1) {
     const original = result.layout.originalOffset(offset);
@@ -44,6 +44,21 @@ return outer;
   const result = await elaborateLayout(source);
   if (result.ok) throw new Error("inconsistent indentation was accepted");
   assertEquals(result.diagnostics[0]?.code, "BLOT_INCONSISTENT_INDENT");
+});
+
+Deno.test("layout elaboration accepts a delimiter between suite widths", async () => {
+  const source = `let run = fn condition =>
+  _ <- effect (
+      if condition:
+        return 1
+      else:
+        return 2
+    )
+  return ()
+return run
+`;
+  const result = await elaborateLayout(source);
+  if (!result.ok) throw new Error(result.diagnostics[0]?.message);
 });
 
 Deno.test("layout markers precede a trailing line comment", async () => {

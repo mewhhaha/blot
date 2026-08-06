@@ -52,9 +52,12 @@ Closing is the semantic revision boundary. If an edit produces the same AST,
 including source spans, the session keeps its compile-time result, inferred
 interface, ownership and safety certificates, `ClosedProgram`, and final
 artifact. A changed AST, resolved import, or included file invalidates all of
-those for the module and its transitive importers. `prepare` and `compile`
-consequently share one cached `ClosedProgram` instead of staging or planning the
-module twice.
+those for the module and its transitive importers. Within a changed module, an
+exactly unchanged top-level declaration prefix keeps its successful
+deterministic values while the checker still infers every declaration in the new
+revision. A changed preceding declaration or dependency mapping discards the
+suffix. `prepare` and `compile` consequently share one cached `ClosedProgram`
+instead of staging or planning the module twice.
 
 ## Release gates
 
@@ -144,6 +147,31 @@ and quantified alpha-equivalence. The phase split does not identify a dominant
 finite-row scan, so explicit SIMD row operations are not justified by this
 profile. These are observations, not release constants; rerun the benchmark on
 the machine and source being evaluated.
+
+On 2026-08-05, five independent nine-sample runs compared checkpoint `aca0a0d`
+with the declaration-prefix evaluation cache on the same machine. The table
+reports the median of the five run medians. The checkpoint compiler hash was
+`6a7ed4183061b669aa5bcaa9e27254edc55fadd28f67279797f73490060e5d58`; the new
+compiler hash was
+`6c823c3479cd07e60a4da76a9bb5fea18e578b058847182942a51b0875c984c4`.
+
+| `examples/storage.blot` boundary |      Checkpoint |    Prefix cache |    Change |
+| -------------------------------- | --------------: | --------------: | --------: |
+| changed module                   |         9.04 ms |         4.96 ms |      -45% |
+| checking within changed module   |         6.74 ms |         4.14 ms |      -39% |
+| prepare after check              |         1.43 ms |         1.37 ms |       -4% |
+| emit after prepare               |        0.316 ms |        0.314 ms | unchanged |
+| unchanged resident compilation   |       0.0597 ms |       0.0538 ms | unchanged |
+| source-only edit                 |         1.30 ms |         1.35 ms | unchanged |
+| compiler plus prelude snapshot   | 2,407,040 bytes | 2,425,435 bytes |     +0.8% |
+| emitted program                  |    14,830 bytes |    14,830 bytes | unchanged |
+
+Cold compilation after instantiation measured 61.11 ms at the checkpoint and
+51.90 ms with the cache, but declaration-prefix reuse cannot accelerate a fresh
+session; that movement is reported as run noise rather than attributed to this
+change. The measured incremental reduction comes from retaining successful
+deterministic values for the exact unchanged top-level prefix while inference,
+ownership, and safety still derive the edited revision.
 
 ## Package capsule comparison
 

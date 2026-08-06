@@ -6,7 +6,7 @@ let !right = 41
 let holder = {
   .first = fn () => consume (!left);
   .second = fn () => consume (!right);
-  }
+}
 let first = holder.first ()
 let consume_holder = fn !value =>
   let { .first; .second; } = !value

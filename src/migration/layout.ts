@@ -2,6 +2,7 @@ import type { Diagnostic } from "../diagnostic.ts";
 import { parse } from "../syntax/parse.ts";
 import type { Module, Span } from "../syntax/ast.ts";
 import type { Rule, TokenCursor } from "../syntax/lower.ts";
+import { formatSource } from "../tooling/formatter.ts";
 import { parseLegacySource } from "./legacy_parse.ts";
 
 export type MigrationResult =
@@ -34,7 +35,13 @@ export async function migrateLayoutSource(
   source: string,
 ): Promise<MigrationResult> {
   const legacy = await parseLegacySource(source);
-  if (!legacy.ok) return legacy;
+  if (!legacy.ok) {
+    const rewritten = rewriteValueConditionalTokens(source);
+    if (rewritten === source) return legacy;
+    const formatted = await formatSource(rewritten);
+    if (!formatted.ok) return legacy;
+    return { ok: true, source: formatted.source };
+  }
 
   const edits: Edit[] = [];
   collectEdits(legacy.cst, source, edits);
@@ -72,7 +79,59 @@ export async function migrateLayoutSource(
       }.\n${migrated}`,
     );
   }
-  return { ok: true, source: migrated };
+  const formatted = await formatSource(migrated);
+  if (!formatted.ok) {
+    throw new Error("Layout migration produced source the formatter rejected.");
+  }
+  return { ok: true, source: formatted.source };
+}
+
+function rewriteValueConditionalTokens(source: string): string {
+  let rewritten = "";
+  let offset = 0;
+  while (offset < source.length) {
+    if (source.startsWith("//", offset)) {
+      const lineEnd = source.indexOf("\n", offset);
+      if (lineEnd < 0) return rewritten + source.slice(offset);
+      rewritten += source.slice(offset, lineEnd);
+      offset = lineEnd;
+      continue;
+    }
+    if (source[offset] === '"') {
+      const start = offset;
+      offset += 1;
+      while (offset < source.length) {
+        if (source[offset] === "\\") {
+          offset += 2;
+          continue;
+        }
+        if (source[offset] === '"') {
+          offset += 1;
+          break;
+        }
+        offset += 1;
+      }
+      rewritten += source.slice(start, offset);
+      continue;
+    }
+    const word = /^[A-Za-z_][A-Za-z0-9_]*/.exec(source.slice(offset))?.[0];
+    if (word === undefined) {
+      rewritten += source[offset];
+      offset += 1;
+      continue;
+    }
+    if (word === "then") {
+      rewritten += ":";
+    } else if (word === "else") {
+      const remainder = source.slice(offset + word.length);
+      const nextWord = /^\s*([A-Za-z_][A-Za-z0-9_]*|:)/.exec(remainder)?.[1];
+      rewritten += nextWord === "if" || nextWord === ":" ? "else" : "else:";
+    } else {
+      rewritten += word;
+    }
+    offset += word.length;
+  }
+  return rewritten;
 }
 
 function collectEdits(rule: Rule, source: string, edits: Edit[]): void {
@@ -333,9 +392,7 @@ function migrateConditionalStatement(
     );
     separateStatements(branch.body, source, indent + 2, edits);
     const next = branches[index + 1];
-    const endOffset = next === undefined
-      ? end.span.end
-      : next.startsAt;
+    const endOffset = next === undefined ? end.span.end : next.startsAt;
     if (next === undefined) {
       removeClosingGap(
         source,
@@ -361,8 +418,8 @@ function migrateConditional(rule: Rule, source: string, edits: Edit[]): void {
   const condition = requiredRule(rule, "condition");
   const then = requiredToken(rule, "then");
   const consequence = requiredRule(rule, "consequence");
-  replaceWhitespace(source, condition.span.end, then.span.start, indent, edits);
-  normalizeIntroducedValue(then, consequence, source, indent, edits);
+  replaceConditionalIntroducer(source, condition.span.end, then, indent, edits);
+  normalizeConditionalValue(then, consequence, indent, edits);
 
   let previous = consequence;
   for (const alternative of fieldRules(rule, "alternatives")) {
@@ -372,17 +429,16 @@ function migrateConditional(rule: Rule, source: string, edits: Edit[]): void {
     const nestedCondition = requiredRule(alternative, "condition");
     const nestedThen = requiredToken(alternative, "then");
     const nestedConsequence = requiredRule(alternative, "consequence");
-    replaceWhitespace(
+    replaceConditionalIntroducer(
       source,
       nestedCondition.span.end,
-      nestedThen.span.start,
+      nestedThen,
       indent,
       edits,
     );
-    normalizeIntroducedValue(
+    normalizeConditionalValue(
       nestedThen,
       nestedConsequence,
-      source,
       indent,
       edits,
     );
@@ -393,15 +449,29 @@ function migrateConditional(rule: Rule, source: string, edits: Edit[]): void {
   const elseToken = requiredToken(fallback, "else");
   const alternative = requiredRule(fallback, "alternative");
   replaceGap(source, previous.span.end, elseToken.span.start, indent, edits);
-  normalizeIntroducedValue(
+  replaceToken(elseToken, "else:", edits);
+  normalizeConditionalValue(
     elseToken,
     alternative,
-    source,
     indent,
     edits,
   );
   const end = requiredToken(rule, "end");
   removeClosingGap(source, alternative.span.end, end.span.end, indent, edits);
+}
+
+function normalizeConditionalValue(
+  introducer: TokenCursor,
+  value: Rule,
+  indent: number,
+  edits: Edit[],
+): void {
+  if (rootRuleIs(value, "block")) return;
+  edits.push({
+    start: introducer.span.end,
+    end: value.span.start,
+    text: `\n${" ".repeat(indent + 2)}return `,
+  });
 }
 
 function migrateCase(rule: Rule, source: string, edits: Edit[]): void {
@@ -516,6 +586,26 @@ function replaceWhitespace(
     start,
     end,
     text: ` ${comments.join(`\n${" ".repeat(indent)}`)}\n${" ".repeat(indent)}`,
+  });
+}
+
+function replaceConditionalIntroducer(
+  source: string,
+  start: number,
+  introducer: TokenCursor,
+  indent: number,
+  edits: Edit[],
+): void {
+  const comments = source.slice(start, introducer.span.start).match(
+    /\/\/[^\r\n]*/g,
+  ) ?? [];
+  const commentText = comments.length === 0
+    ? ""
+    : ` ${comments.join(`\n${" ".repeat(indent)}`)}\n${" ".repeat(indent)}`;
+  edits.push({
+    start,
+    end: introducer.span.end,
+    text: `:${commentText}`,
   });
 }
 
@@ -819,14 +909,32 @@ function applyEdits(source: string, edits: readonly Edit[]): string {
 }
 
 function semanticTree(module: Module): string {
-  return JSON.stringify(module, (key, value) => {
-    if (key === "span") return undefined;
-    if (typeof value === "bigint") return `${value}n`;
-    if (key === "name" && typeof value === "string") {
-      return value.replace(/\$[0-9]+/g, "$span");
+  return JSON.stringify(normalizeModuleValue(module));
+}
+
+function normalizeModuleValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeModuleValue);
+  if (typeof value === "bigint") return `${value}n`;
+  if (typeof value !== "object" || value === null) return value;
+
+  const record = value as Record<string, unknown>;
+  if (
+    record.tag === "block" && Array.isArray(record.declarations) &&
+    record.declarations.length === 0
+  ) {
+    return normalizeModuleValue(record.result);
+  }
+
+  const normalized: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(record)) {
+    if (key === "span") continue;
+    if (key === "name" && typeof field === "string") {
+      normalized[key] = field.replace(/\$[0-9]+/g, "$span");
+      continue;
     }
-    return value;
-  });
+    normalized[key] = normalizeModuleValue(field);
+  }
+  return normalized;
 }
 
 function firstDifference(left: string, right: string): number {

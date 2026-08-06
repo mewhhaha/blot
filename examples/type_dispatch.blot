@@ -22,8 +22,11 @@ open @import "blot:prelude" ()
 
 // One definition, two implementations, and nothing at run time chooses between
 // them: `measuring` is applied while compiling and the loser is never emitted.
-const measuring = fn T => if refines (T, Str) then fn x => Text.length x
-else fn x => x + 0
+const measuring = fn T =>
+  if refines (T, Str):
+    return fn x => Text.length x
+  else:
+    return fn x => x + 0
 
 const measure_text = measuring Str
 const measure_int = measuring Int
@@ -42,7 +45,10 @@ let int_itself = measure_int 41
 // working throughout — a body with nothing to select between never needed the
 // evaluator's answer.
 const adding = fn T =>
-  let _ = expect (refines (T, Int), "adding is integers only, and this is not one")
+  let _ = expect (
+    refines (T, Int),
+    "adding is integers only, and this is not one"
+  )
   return fn (a, b) => a + b
 
 const add = adding Int
@@ -54,10 +60,16 @@ const add = adding Int
 // group is still typed with its group; this is for one that arrived as a value,
 // selected here by a compile-time conditional.
 const counting = fn T =>
-  const down = rec (fn n => if n <= 0 then 0
-  else 1 + down (n - 1))
-  return if refines (T, Int) then down
-  else fn _ => 0
+  const down = rec (fn n =>
+    if n <= 0:
+      return 0
+    else:
+      return 1 + down (n - 1)
+  )
+  if refines (T, Int):
+    return down
+  else:
+    return fn _ => 0
 
 const count = counting Int
 
@@ -72,4 +84,4 @@ return {
   .added = add (20, 22);
   .counted = count 4;
   .ignored = ignoring 4;
-  }
+}

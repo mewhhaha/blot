@@ -11,7 +11,7 @@ open @import "blot:prelude" ()
 
 const Console = @effect {
   .write = Str -> Unit;
-  }
+}
 
 sig notify = Str -> Unit
 let notify = fn message =>

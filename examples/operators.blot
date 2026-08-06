@@ -23,8 +23,10 @@ const Verb = Method :- "PUT"
 // Division and the comment marker coexist: an operator may contain `/`
 // anywhere except as a doubled prefix, which is what keeps `//` a comment.
 let ratio = 22 / 7
+let remainder = 22 % 7
 let chained = 1 + 2 * 3 - 4 / 2
 let compared = 1 + 2 == 3
+let distinct = remainder != 0
 
 // Associativity and precedence are the header's business, not the grammar's.
 let joined = "a" <> "b" <> "c"
@@ -77,11 +79,13 @@ return {
   .value = Value;
   .verb = Verb;
   .ratio = ratio;
+  .remainder = remainder;
   .chained = chained;
   .compared = compared;
+  .distinct = distinct;
   .joined = joined;
   .piped = piped;
   .applied = applied;
   .bounded = bounded;
   .negated = negated;
-  }
+}

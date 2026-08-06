@@ -10,15 +10,23 @@ let choose = fn selected =>
 let recording = {
   .write = fn (message, ?resume) => message;
   .return = fn _ => "none";
-  }
+}
 
 return {
-  .first = @handle (Console, (fn () =>
-    result <- choose 1
-    return result
-  ), recording);
-  .other = @handle (Console, (fn () =>
-    result <- choose 2
-    return result
-  ), recording);
+  .first = @handle (
+    Console,
+    (fn () =>
+      result <- choose 1
+      return result
+    ),
+    recording
+  );
+  .other = @handle (
+    Console,
+    (fn () =>
+      result <- choose 2
+      return result
+    ),
+    recording
+  );
 }

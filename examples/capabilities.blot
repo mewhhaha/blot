@@ -12,7 +12,7 @@ open @import "blot:prelude" ()
 
 const Console = @effect {
   .write = Str -> Unit;
-  }
+}
 
 // A host capability is simply a handler blot did not write. Here the handler is
 // written in blot over the granted function, which is the ordinary case.
@@ -43,4 +43,4 @@ const to_memory = {
 return {
   .printed = @handle (Console, report, to_host);
   .captured = @handle (Console, report, to_memory);
-  }
+}

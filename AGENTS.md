@@ -90,16 +90,16 @@ already says, and every pass has to learn it.
 
 **Value conditionals do not transfer control.** An expression `if` or `case`
 produces one of its branch values in a separate result scope that does not
-inherit surrounding control targets. An explicit `do` branch's return supplies
-the expression result; `break;` cannot escape it to reach an enclosing loop. A
+inherit surrounding control targets. A branch's explicit `return` supplies the
+expression result; `break` cannot escape it to reach an enclosing loop. A
 standalone `if condition:` suite inherits the surrounding return and loop
 targets. Expression `if` requires `else`; statement `if` does not.
 
 **A deconstructing guard must leave on failure.**
 `if let pattern = value else:` binds the pattern in the statements
 that follow it. Its `else` path must `return` or `break`; allowing that path to
-continue would put names in scope that were never bound. There is no `then`
-because success continues after the guard rather than entering another block.
+continue would put names in scope that were never bound. There is no success
+suite because success continues after the guard rather than entering a block.
 
 **Types are values.** There is no type-level sublanguage and no type namespace.
 If a feature seems to need one, it belongs in the comptime evaluator instead.

@@ -313,7 +313,7 @@ field_name = (IDENT | TYPE_IDENT | INTEGER | keyword) ;
 keyword = (
   "module" | "operators" | "infixl" | "infixr" | "infix" | "prefix"
   | "let" | "const" | "sig" | "return"
-  | "if" | "then" | "else" | "case" | "of" | "rec" | "comptime" | "open"
+  | "if" | "else" | "case" | "of" | "rec" | "comptime" | "open"
   | "for" | "in" | "break" | "try" | "with" | "fn"
 ) ;
 
@@ -489,7 +489,7 @@ lambda_parameter = (
 conditional = (
   "if"
   condition:expression
-  "then"
+  ":"
   consequence:value
   alternatives:else_if_clause*
   fallback:else_clause
@@ -499,13 +499,14 @@ else_if_clause = (
   line:LAYOUT_NEWLINE?
   ELSE_IF
   condition:expression
-  "then"
+  ":"
   consequence:value
 ) ;
 
 else_clause = (
   line:LAYOUT_NEWLINE?
   "else"
+  ":"
   alternative:value
 ) ;
 
@@ -526,8 +527,7 @@ conditional_statement = (
 // the statements that follow it, while the `else` body must transfer control.
 //
 //   if let #Some value = option else:
-//     return fallback;
-//   end;
+//     return fallback
 //   // value is in scope here
 conditional_statement_guard = (
   "let"

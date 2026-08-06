@@ -6,19 +6,23 @@ open @import "blot:prelude" ()
 let describe = fn value =>
   if value < 0:
     return "negative"
+
   if value == 0:
     return "zero"
+
   return "positive"
 
 let unwrap = fn option =>
   if let #Some value = option else:
     return -1
+
   return value
 
 let find = fn wanted =>
   for value in Iter.range (0, 5):
     if value == wanted:
       return value
+
   return -1
 
 let count_to = fn limit =>
@@ -27,6 +31,7 @@ let count_to = fn limit =>
     count := count + 1
     if count >= limit:
       return count
+
   return 0
 
 let count_or_stop = fn limit =>
@@ -35,15 +40,17 @@ let count_or_stop = fn limit =>
     count := count + 1
     if count >= limit:
       return count
+
     if count >= 5:
       break
+
   return -1
 
 let nested_if = fn () =>
-  let inner = if 1 < 2 then
+  let inner = if 1 < 2:
     return 41
-
-  else 0
+  else:
+    return 0
   return inner + 1
 
 let nested_case = fn () =>
@@ -67,4 +74,4 @@ return {
   .broke_loop = count_or_stop 8;
   .nested_if = nested_if ();
   .nested_case = nested_case ();
-  }
+}

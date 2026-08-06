@@ -3,7 +3,7 @@ open @import "blot:prelude" ()
 const Terminal = @effect.host {
   .read_line = Unit -> Str;
   .write = Str -> Unit;
-  }
+}
 
 _ <- Terminal.write "What is your name?"
 name <- Terminal.read_line ()

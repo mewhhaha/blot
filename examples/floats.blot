@@ -98,19 +98,19 @@ let third_64 = Float.truncate (Float.mul (Float.div 1.0 3.0) 1000000000.0)
 sig third_32 = Int
 let third_32 = Float.truncate (Float.mul
   (Float32.widen (Float32.div (Float32.of_int 1) (Float32.of_int 3)))
-  1000000000.0)
+1000000000.0)
 
 // A double that is exact in f32 survives the round trip; one that is not does
 // not. This is the pair that shows the narrowing is real rather than a label.
 sig exact_round_trip = Bool
 let exact_round_trip = is_equal (Float.cmp
   (Float32.widen (Float32.of_float 0.5))
-  0.5)
+0.5)
 
 sig lossy_round_trip = Bool
 let lossy_round_trip = is_equal (Float.cmp
   (Float32.widen (Float32.of_float 0.1))
-  0.1)
+0.1)
 
 // --- the boundary -----------------------------------------------------------
 //
@@ -144,4 +144,4 @@ return {
   .third_32 = third_32;
   .exact_round_trip = exact_round_trip;
   .lossy_round_trip = lossy_round_trip;
-  }
+}

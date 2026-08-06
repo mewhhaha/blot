@@ -36,22 +36,27 @@ let !right = 20
 let pair = {
   .left = fn () => consume (!left);
   .right = fn () => consume (!right);
-  }
+}
 let first = pair.left ()
 let fields = first + pair.right ()
 
 // `?` is affine: at most once. Not a weaker `!` but a different rule, and the
 // right one for a continuation — spending it on one branch and not the other is
 // still at most once, so branches need not agree.
-let choose = fn ?resume => if 1 < 2 then resume 10
-else 0
+let choose = fn ?resume =>
+  if 1 < 2:
+    return resume 10
+  else:
+    return 0
 let chosen = choose (fn n => n)
 
 // Branches have to agree about what a *linear* value spent, so this consumes on
 // both.
 let !coin = 1
-let flipped = if 1 < 2 then consume (!coin)
-else consume (!coin)
+let flipped = if 1 < 2:
+  return consume (!coin)
+else:
+  return consume (!coin)
 
 return {
   .owned = owned;
@@ -61,4 +66,4 @@ return {
   .fields = fields;
   .chosen = chosen;
   .flipped = flipped;
-  }
+}

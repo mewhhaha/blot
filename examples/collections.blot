@@ -11,14 +11,32 @@ let numbers = upto (0, 6)
 let total = sum numbers
 
 // An explicit fold, to show what `sum` is.
-let doubled = fold (numbers, 0, (fn (state, value) => state + value * 2))
+let doubled = fold (numbers, 0, fn (state, value) => state + value * 2)
 
 // Arrays are Core's `Store`, and an empty one is allocated by `storeEmpty` —
 // the surrounding constraints infer what it holds. That is what lets `map` and
 // `filter` compile at all: their element is a callback's result, generic at the
 // definition, so there is no value to allocate one with.
-let counted = fold ([4, 8, 15], 0, (fn (state, _) => state + 1))
-let scaled = map (numbers, (fn n => n * 3))
-let small = filter (scaled, (fn n => n < 8))
+let counted = fold ([4, 8, 15], 0, fn (state, _) => state + 1)
+let scaled = map (numbers, fn n => n * 3)
+let small = filter (scaled, fn n => n < 8)
 
-return total + doubled + counted * 8 + sum small - 36
+// Interfaces are structural types. The implementation record is passed like
+// any other value, and the signature specializes its polymorphic empty value
+// and append function together.
+sig join_four = Monoid [Int] -> [Int]
+let join_four = fn implementation =>
+  return implementation.append
+    (implementation.append implementation.empty [1, 2])
+    [3, 4]
+let joined = join_four Array
+
+sig count_values = Length [Int] -> [Int] -> Int
+let count_values = fn implementation => fn values =>
+  return implementation.length values
+
+return {
+  .answer = total + doubled + counted * 8 + sum small - 36;
+  .empty_length = count_values Array Array.empty;
+  .joined = joined;
+}

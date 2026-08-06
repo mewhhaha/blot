@@ -138,8 +138,8 @@ return n                                  // should be 2
 `carriedNames` (`src/syntax/lower.ts:1111`) only walks the loop body's top-level
 statements, so a `:=` inside a statement `if` is an inner-scope shadow nothing
 reads. The whole corpus is written around this — `case-studies/grep/main.blot`
-pointedly writes `count := if matching then count + 1 else count end;` — and
-nothing in the compiler says so.
+pointedly writes a value `if matching:` with explicit returns in both branches
+before rebinding `count` — and nothing in the compiler says so.
 
 **Runs but cannot compile.** A `const` that closes over a `let` checks (`Int`)
 and evaluates (`2`), and only `build` refuses it. The refusal now names the
@@ -232,11 +232,11 @@ the lattice stays polynomial.
 **1b. `:=` in a nested statement scope must be refused.** Add a scan in
 `src/syntax/lower.ts` over the loop body's nested statement scopes for a `:=`
 naming something not in `carried` and not `let`-bound in that scope; report
-`BLOT_REBINDING_NOT_CARRIED` with the fix
-(`n := if cond then n + 1 else n`). Same check at module and block level.
-Refuse rather than extend `carriedNames`: carrying a conditional rebinding out
-of a branch is a real language design question and this milestone is not the
-place to answer it.
+`BLOT_REBINDING_NOT_CARRIED` with the fix (`n := if cond:` returning `n + 1`,
+with `else:` returning `n`). Same check at module and block level. Refuse rather
+than extend `carriedNames`: carrying a conditional rebinding out of a branch is
+a real language design question and this milestone is not the place to answer
+it.
 
 **1c. The `if let` success path must reach the result type.** `check` says `999`
 where `eval` says `3` when the guard-bound name is returned directly;
@@ -347,17 +347,18 @@ judged three ways.
 
 _Design 2, coercion insertion at the instantiation edge, is rejected outright._
 All three judges ranked it last and one demonstrated a silent miscompile: for
-`let orDefault = fn v => if v.x > 0 then v else { .x = 0; }` applied to
-`{.x=5;
-.y=6;}`, the design's own `coreLabels` collapses to `{x}` on both sides
-of the instantiation edge, so its `BLOT_UNCOERCIBLE_SHAPE` refusal cannot fire,
-the narrowing is emitted, and the Wasm returns `{.x=5}` where the interpreter
-returns `{.x=5;.y=6;}`. Its stated central theorem ("every provider of a
-component contains every demanded label") was falsified by a four-line program.
-It also has no implementation — the scratch tree it claims differs from the repo
-in one file, and every byte figure in it came from hand-written gpufuck Core. A
-design that rewrites values at run time is the only one of the three that can
-break "the three executions agree", and it does.
+`let orDefault = fn v => if v.x > 0:` returning `v`, with `else:` returning
+`{ .x = 0; }`, applied to `{.x=5;
+.y=6;}`, the design's own `coreLabels`
+collapses to `{x}` on both sides of the instantiation edge, so its
+`BLOT_UNCOERCIBLE_SHAPE` refusal cannot fire, the narrowing is emitted, and the
+Wasm returns `{.x=5}` where the interpreter returns `{.x=5;.y=6;}`. Its stated
+central theorem ("every provider of a component contains every demanded label")
+was falsified by a four-line program. It also has no implementation — the
+scratch tree it claims differs from the repo in one file, and every byte figure
+in it came from hand-written gpufuck Core. A design that rewrites values at run
+time is the only one of the three that can break "the three executions agree",
+and it does.
 
 _Designs 1 and 3 split 2–1 for design 3._ The correctness judge and the cost
 judge both picked design 3 (widest-flow shapes: inference decides one nominal
@@ -715,7 +716,11 @@ at all.
 
     let !once = 42;
     let user = rec (fn n => holder n + holder n);
-    let holder = rec (fn n => if n == 0 then once else user (n - 1))
+    let holder = rec (fn n => if n == 0:
+      return once
+    else:
+      return user (n - 1)
+    )
 
 reported `holder` is never consumed, for a value it consumes twice. The
 rejection was right by accident and the reason was wrong, which is the shape

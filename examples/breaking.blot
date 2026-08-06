@@ -9,6 +9,7 @@ for ever:
   iterations := iterations + 1
   if iterations >= 5:
     break
+
   completed := completed + 1
 
 // Each `for` handles its own `break`, so nesting targets the nearest one.
@@ -21,6 +22,7 @@ for ever:
     inner := inner + 1
     if inner >= 2:
       break
+
   inner_total := inner_total + inner
   if outer >= 3:
     break
@@ -42,10 +44,13 @@ let guard_steps = 0
 let guard_total = 0
 for ever:
   guard_steps := guard_steps + 1
-  let candidate = if guard_steps < 3 then Some guard_steps
-  else None
+  let candidate = if guard_steps < 3:
+    return Some guard_steps
+  else:
+    return None
   if let #Some value = candidate else:
     break
+
   guard_total := guard_total + value
 
 return {
@@ -55,4 +60,4 @@ return {
   .inner_total = inner_total;
   .finite = finite;
   .guard_total = guard_total;
-  }
+}

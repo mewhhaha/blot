@@ -4,7 +4,9 @@ use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ast::{AstArena, Declaration, Expression, ExpressionId, Module};
+use crate::ast::{
+    AstArena, Declaration, DeclarationId, Expression, ExpressionId, Module, Pattern, PatternId,
+};
 use crate::backend::{ClosedProgram, CompiledModule};
 use crate::cst::{CompactCst, RULE_NAMES};
 use crate::diagnostic::Diagnostic;
@@ -133,11 +135,9 @@ impl CompilerSession {
 
     fn install_module(&mut self, path: String, module: Module) -> Result<AddedModule, String> {
         let dependencies = module_dependencies(&module);
-        let unchanged = self
-            .context
-            .modules
-            .borrow()
-            .get(&path)
+        let previous = self.context.modules.borrow().get(&path).cloned();
+        let unchanged = previous
+            .as_ref()
             .is_some_and(|loaded| loaded.module.as_ref() == &module);
         if unchanged {
             return Ok(AddedModule {
@@ -146,15 +146,63 @@ impl CompilerSession {
             });
         }
 
+        let retained_bindings = previous.as_ref().and_then(|loaded| {
+            if loaded.module.parameter != module.parameter
+                || loaded.module.fixities != module.fixities
+            {
+                return None;
+            }
+            let unchanged_declarations =
+                UnchangedDeclarations::new(&loaded.module, &module).prefix_len();
+            let unchanged_bindings = loaded
+                .module
+                .declarations
+                .iter()
+                .take(unchanged_declarations)
+                .filter_map(|declaration| {
+                    match &loaded.module.arena.declarations[declaration.0 as usize] {
+                        Declaration::Binding { pattern, value, .. } => Some((*pattern, *value)),
+                        Declaration::Shadow { .. } | Declaration::Open { .. } => None,
+                    }
+                })
+                .collect::<HashSet<_>>();
+            self.context
+                .evaluated_bindings
+                .borrow()
+                .get(&path)
+                .map(|bindings| {
+                    bindings
+                        .iter()
+                        .filter(|((pattern, expression, _), _)| {
+                            unchanged_bindings.contains(&(*pattern, *expression))
+                        })
+                        .map(|(key, value)| (*key, value.clone()))
+                        .collect::<HashMap<_, _>>()
+                })
+        });
+        let imports = previous
+            .as_ref()
+            .map_or_else(BTreeMap::new, |loaded| loaded.imports.clone());
+        let includes = previous
+            .as_ref()
+            .map_or_else(BTreeMap::new, |loaded| loaded.includes.clone());
         self.invalidate(&path);
         self.context.modules.borrow_mut().insert(
-            path,
+            path.clone(),
             LoadedModule {
                 module: Rc::new(module),
-                imports: BTreeMap::new(),
-                includes: BTreeMap::new(),
+                imports,
+                includes,
             },
         );
+        if let Some(bindings) = retained_bindings
+            && !bindings.is_empty()
+        {
+            self.context
+                .evaluated_bindings
+                .borrow_mut()
+                .insert(path, bindings);
+        }
         Ok(AddedModule {
             imports: dependencies.imports,
             includes: dependencies.includes,
@@ -297,6 +345,10 @@ impl CompilerSession {
             .live_declarations
             .borrow_mut()
             .retain(|(path, _), _| !invalidated.contains(path));
+        self.context
+            .evaluated_bindings
+            .borrow_mut()
+            .retain(|path, _| !invalidated.contains(path));
         self.module_interfaces
             .borrow_mut()
             .retain(|path, _| !invalidated.contains(path));
@@ -417,6 +469,176 @@ fn json_value(value: &Value) -> serde_json::Value {
         | Value::Primitive { .. }
         | Value::Continuation { .. } => {
             serde_json::json!({ "tag": "opaque", "display": show(value) })
+        }
+    }
+}
+
+struct UnchangedDeclarations<'a> {
+    previous: &'a Module,
+    current: &'a Module,
+    expressions: HashSet<ExpressionId>,
+    patterns: HashSet<PatternId>,
+    declarations: HashSet<DeclarationId>,
+}
+
+impl<'a> UnchangedDeclarations<'a> {
+    fn new(previous: &'a Module, current: &'a Module) -> Self {
+        Self {
+            previous,
+            current,
+            expressions: HashSet::new(),
+            patterns: HashSet::new(),
+            declarations: HashSet::new(),
+        }
+    }
+
+    fn prefix_len(mut self) -> usize {
+        for (ordinal, (previous, current)) in self
+            .previous
+            .declarations
+            .iter()
+            .zip(&self.current.declarations)
+            .enumerate()
+        {
+            if previous != current || !self.declaration(*current) {
+                return ordinal;
+            }
+        }
+        self.previous
+            .declarations
+            .len()
+            .min(self.current.declarations.len())
+    }
+
+    fn pattern(&mut self, id: PatternId) -> bool {
+        let Some(previous) = self.previous.arena.patterns.get(id.0 as usize) else {
+            return false;
+        };
+        let Some(current) = self.current.arena.patterns.get(id.0 as usize) else {
+            return false;
+        };
+        if previous != current {
+            return false;
+        }
+        if !self.patterns.insert(id) {
+            return true;
+        }
+        match current.clone() {
+            Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => {
+                elements.into_iter().all(|pattern| self.pattern(pattern))
+            }
+            Pattern::Constructor { payload, .. } => {
+                payload.is_none_or(|pattern| self.pattern(pattern))
+            }
+            Pattern::Shape { fields, .. } => {
+                fields.into_iter().all(|field| self.pattern(field.pattern))
+            }
+            Pattern::Name { .. }
+            | Pattern::Wildcard { .. }
+            | Pattern::Pin { .. }
+            | Pattern::Int { .. }
+            | Pattern::Float { .. }
+            | Pattern::Text { .. }
+            | Pattern::Unit { .. } => true,
+        }
+    }
+
+    fn declaration(&mut self, id: DeclarationId) -> bool {
+        let Some(previous) = self.previous.arena.declarations.get(id.0 as usize) else {
+            return false;
+        };
+        let Some(current) = self.current.arena.declarations.get(id.0 as usize) else {
+            return false;
+        };
+        if previous != current {
+            return false;
+        }
+        if !self.declarations.insert(id) {
+            return true;
+        }
+        match current.clone() {
+            Declaration::Binding {
+                tags,
+                pattern,
+                value,
+                ..
+            } => {
+                tags.into_iter().all(|tag| self.expression(tag.descriptor))
+                    && self.pattern(pattern)
+                    && self.expression(value)
+            }
+            Declaration::Shadow { value, .. } | Declaration::Open { value, .. } => {
+                self.expression(value)
+            }
+        }
+    }
+
+    fn expression(&mut self, id: ExpressionId) -> bool {
+        let Some(previous) = self.previous.arena.expressions.get(id.0 as usize) else {
+            return false;
+        };
+        let Some(current) = self.current.arena.expressions.get(id.0 as usize) else {
+            return false;
+        };
+        if previous != current {
+            return false;
+        }
+        if !self.expressions.insert(id) {
+            return true;
+        }
+        match current.clone() {
+            Expression::Apply {
+                function, argument, ..
+            } => self.expression(function) && self.expression(argument),
+            Expression::Field { target, .. } => self.expression(target),
+            Expression::Lambda {
+                parameter, body, ..
+            } => self.pattern(parameter) && self.expression(body),
+            Expression::Array { elements, .. } => elements
+                .into_iter()
+                .all(|element| self.expression(element.value)),
+            Expression::Tuple { elements, .. } => elements
+                .into_iter()
+                .all(|expression| self.expression(expression)),
+            Expression::Shape { members, .. } => members.into_iter().all(|member| {
+                let value = match member {
+                    crate::ast::ShapeMember::Field { value, .. }
+                    | crate::ast::ShapeMember::Spread { value } => value,
+                };
+                self.expression(value)
+            }),
+            Expression::If {
+                branches, fallback, ..
+            } => {
+                branches.into_iter().all(|branch| {
+                    self.expression(branch.condition) && self.expression(branch.consequence)
+                }) && fallback.is_none_or(|fallback| self.expression(fallback))
+            }
+            Expression::Case { target, arms, .. } => {
+                self.expression(target)
+                    && arms
+                        .into_iter()
+                        .all(|arm| self.pattern(arm.pattern) && self.expression(arm.body))
+            }
+            Expression::Block {
+                declarations,
+                result,
+                ..
+            } => {
+                declarations
+                    .into_iter()
+                    .all(|declaration| self.declaration(declaration))
+                    && self.expression(result)
+            }
+            Expression::Rec { lambda, .. } => self.expression(lambda),
+            Expression::Comptime { body, .. } => self.expression(body),
+            Expression::Var { .. }
+            | Expression::Int { .. }
+            | Expression::Float { .. }
+            | Expression::Text { .. }
+            | Expression::Unit { .. }
+            | Expression::Intrinsic { .. }
+            | Expression::Tag { .. } => true,
         }
     }
 }
@@ -637,6 +859,116 @@ mod tests {
             .add_source("main.blot".to_owned(), source("return 2\u{e000}"))
             .expect("semantic edit should load");
         assert!(session.closed_programs.borrow().is_empty());
+    }
+
+    #[test]
+    fn declaration_evaluations_follow_the_unchanged_ast_prefix() {
+        let path = "main.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                path.to_owned(),
+                source("const answer = 42\u{e000}return answer\u{e000}"),
+            )
+            .expect("initial source should load");
+        session
+            .configure_module(path, BTreeMap::new(), BTreeMap::new())
+            .expect("initial source should configure");
+        assert_eq!(session.check_module(path)["ok"], true);
+        assert_eq!(session.context.evaluated_bindings.borrow()[path].len(), 1);
+
+        session
+            .add_source(
+                path.to_owned(),
+                source("const answer = 42\u{e000}let unused = answer\u{e000}return answer\u{e000}"),
+            )
+            .expect("appended declaration should load");
+        assert_eq!(session.context.evaluated_bindings.borrow()[path].len(), 1);
+        assert_eq!(session.check_module(path)["ok"], true);
+        assert_eq!(session.context.evaluated_bindings.borrow()[path].len(), 2);
+
+        session
+            .add_source(
+                path.to_owned(),
+                source("const answer = 43\u{e000}let unused = answer\u{e000}return answer\u{e000}"),
+            )
+            .expect("changed prefix should load");
+        assert!(
+            !session
+                .context
+                .evaluated_bindings
+                .borrow()
+                .contains_key(path)
+        );
+    }
+
+    #[test]
+    fn dependency_changes_discard_cached_declaration_evaluations() {
+        let dependency_path = "dependency.blot";
+        let root_path = "main.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(dependency_path.to_owned(), source("return 1\u{e000}"))
+            .expect("dependency source should load");
+        session
+            .configure_module(dependency_path, BTreeMap::new(), BTreeMap::new())
+            .expect("dependency source should configure");
+        session
+            .add_source(
+                root_path.to_owned(),
+                source("const dependency = @import \"dep\" ()\u{e000}return dependency\u{e000}"),
+            )
+            .expect("root source should load");
+        session
+            .configure_module(
+                root_path,
+                BTreeMap::from([("dep".to_owned(), dependency_path.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("root source should configure");
+        assert_eq!(session.check_module(root_path)["ok"], true);
+        assert!(
+            session
+                .context
+                .evaluated_bindings
+                .borrow()
+                .contains_key(root_path)
+        );
+
+        session
+            .add_source(dependency_path.to_owned(), source("return 2\u{e000}"))
+            .expect("changed dependency should load");
+        assert!(
+            !session
+                .context
+                .evaluated_bindings
+                .borrow()
+                .contains_key(root_path)
+        );
+    }
+
+    #[test]
+    fn rejected_modules_discard_declaration_evaluations() {
+        let path = "main.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                path.to_owned(),
+                source("const answer = 42\u{e000}return missing\u{e000}"),
+            )
+            .expect("rejected source should load");
+        session
+            .configure_module(path, BTreeMap::new(), BTreeMap::new())
+            .expect("rejected source should configure");
+
+        assert_eq!(session.check_module(path)["ok"], false);
+        assert!(
+            !session
+                .context
+                .evaluated_bindings
+                .borrow()
+                .contains_key(path)
+        );
     }
 
     #[test]

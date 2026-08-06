@@ -4,8 +4,8 @@ import { formatSource } from "./formatter.ts";
 
 Deno.test("formatting applies structural indentation without losing comments", async () => {
   const source = `// choose a label
-let choose = fn n => if n == 1 then "one"
-else "other"
+let choose = fn n => if n == 1 : "one"
+else: "other"
 return choose 1
 `;
 
@@ -15,7 +15,11 @@ return choose 1
   assertEquals(
     formatted.source,
     `// choose a label
-let choose = fn n => if n == 1 then "one" else "other"
+let choose = fn n =>
+  if n == 1:
+    return "one"
+  else:
+    return "other"
 return choose 1
 `,
   );
@@ -26,9 +30,9 @@ return choose 1
   );
 });
 
-Deno.test("formatting keeps a conditional on one line within 80 columns", async () => {
-  const source = `const minimum = fn (left, right) => if left < right then left
-else right
+Deno.test("formatting writes a short conditional vertically", async () => {
+  const source = `const minimum = fn (left, right) => if left < right : left
+else: right
 return minimum
 `;
 
@@ -37,8 +41,80 @@ return minimum
 
   assertEquals(
     formatted.source,
-    `const minimum = fn (left, right) => if left < right then left else right
+    `const minimum = fn (left, right) =>
+  if left < right:
+    return left
+  else:
+    return right
 return minimum
+`,
+  );
+  assertEquals(await formatSource(formatted.source), formatted);
+  assertEquals(
+    semanticTree(await parse(formatted.source)),
+    semanticTree(await parse(source)),
+  );
+});
+
+Deno.test("formatting removes a redundant return around a terminal conditional", async () => {
+  const source = `let choose = fn ready =>
+  let fallback = 2
+  return if ready:
+    let selected = 1
+    return selected
+  else:
+    return fallback
+return choose
+`;
+
+  const formatted = await formatSource(source);
+  if (!formatted.ok) throw new Error("valid source did not format");
+
+  assertEquals(
+    formatted.source,
+    `let choose = fn ready =>
+  let fallback = 2
+  if ready:
+    let selected = 1
+    return selected
+  else:
+    return fallback
+return choose
+`,
+  );
+  assertEquals(await formatSource(formatted.source), formatted);
+  assertEquals(
+    semanticTree(await parse(formatted.source)),
+    semanticTree(await parse(source)),
+  );
+});
+
+Deno.test("formatting keeps following comments outside value branches", async () => {
+  const source = `let choose = fn n => if n == 1: case n of
+  1 => "one"
+else: case n of
+  _ => "other"
+
+// This documents the next binding.
+let selected = choose 1
+return selected
+`;
+
+  const formatted = await formatSource(source);
+  if (!formatted.ok) throw new Error("valid source did not format");
+
+  assertEquals(
+    formatted.source,
+    `let choose = fn n => if n == 1:
+  return case n of
+    1 => "one"
+else:
+  return case n of
+    _ => "other"
+
+// This documents the next binding.
+let selected = choose 1
+return selected
 `,
   );
   assertEquals(await formatSource(formatted.source), formatted);
@@ -50,7 +126,7 @@ return minimum
 
 Deno.test("formatting expands a long lambda conditional by scope", async () => {
   const source =
-    `const chooseMinimum = fn (veryLongLeftValue, veryLongRightValue) => if veryLongLeftValue < veryLongRightValue then veryLongLeftValue else veryLongRightValue
+    `const chooseMinimum = fn (veryLongLeftValue, veryLongRightValue) => if veryLongLeftValue < veryLongRightValue : veryLongLeftValue else: veryLongRightValue
 return chooseMinimum
 `;
 
@@ -60,9 +136,9 @@ return chooseMinimum
   assertEquals(
     formatted.source,
     `const chooseMinimum = fn (veryLongLeftValue, veryLongRightValue) =>
-  return if veryLongLeftValue < veryLongRightValue then
+  if veryLongLeftValue < veryLongRightValue:
     return veryLongLeftValue
-  else
+  else:
     return veryLongRightValue
 return chooseMinimum
 `,
@@ -86,12 +162,13 @@ Deno.test("formatting indents nested conditionals within calls", async () => {
     burning <- ResidenceBurning.get_or (tile, 0)
     population <- Population.get_or (editor_entity, 0)
     burning_count <- BurningCount.get_or (editor_entity, 0)
-    _ <- Population.set (editor_entity, if population > 0 then population - 1
-    else 0)
-    _ <- BurningCount.set (editor_entity, if burning > 0 then if burning_count > 0 then burning_count - 1
-    else 0
-    else burning_count)
+    _ <- Population.set (editor_entity, if population > 0 : population - 1
+    else: 0)
+    _ <- BurningCount.set (editor_entity, if burning > 0 : if burning_count > 0 : burning_count - 1
+    else: 0
+    else: burning_count)
     _ <- Residences.remove tile
+
   return ()
 return remove_residence
 `;
@@ -108,19 +185,58 @@ return remove_residence
     population <- Population.get_or (editor_entity, 0)
     burning_count <- BurningCount.get_or (editor_entity, 0)
     _ <- Population.set (
-      editor_entity,
-      if population > 0 then population - 1 else 0
-    )
+        editor_entity,
+        if population > 0:
+          return population - 1
+        else:
+          return 0
+      )
     _ <- BurningCount.set (
-      editor_entity,
-      if burning > 0 then
-        return if burning_count > 0 then burning_count - 1 else 0
-      else
-        return burning_count
-    )
+        editor_entity,
+        if burning > 0:
+          if burning_count > 0:
+            return burning_count - 1
+          else:
+            return 0
+        else:
+          return burning_count
+      )
     _ <- Residences.remove tile
+
   return ()
 return remove_residence
+`,
+  );
+  assertEquals(await formatSource(formatted.source), formatted);
+  assertEquals(
+    semanticTree(await parse(formatted.source)),
+    semanticTree(await parse(source)),
+  );
+});
+
+Deno.test("formatting separates delimiters after an element property conditional", async () => {
+  const source = `let render = fn state =>
+  _ <- <Object .material={material (color (180000, 850000, 1000000), if state == 3: 800000 else: 250000)} />
+  return ()
+return render
+`;
+
+  const formatted = await formatSource(source);
+  if (!formatted.ok) throw new Error("valid source did not format");
+
+  assertEquals(
+    formatted.source,
+    `let render = fn state =>
+  _ <- <Object .material={material (
+      color (180000, 850000, 1000000),
+      if state == 3:
+        return 800000
+      else:
+        return 250000
+    )
+  } />
+  return ()
+return render
 `,
   );
   assertEquals(await formatSource(formatted.source), formatted);
@@ -282,6 +398,142 @@ return (values, pair)
   );
 });
 
+Deno.test("formatting removes parentheses around a tuple lambda argument", async () => {
+  const source = `let load = fn count =>
+  store <- fold (
+  upto (0, count),
+  @array.empty,
+  (fn (store, id) =>
+    return append (store, id)
+  )
+  )
+  return store
+return load
+`;
+
+  await assertStableFormatting(
+    source,
+    `let load = fn count =>
+  store <- fold (
+      upto (0, count),
+      @array.empty,
+      fn (store, id) =>
+        return append (store, id)
+    )
+  return store
+return load
+`,
+  );
+});
+
+Deno.test("formatting staggers adjacent vertical delimiters", async () => {
+  const source = `let draw = fn values =>
+  _ <- each (
+  values,
+  (fn value =>
+    _ <- visit value
+  )
+  )
+return draw
+`;
+
+  await assertStableFormatting(
+    source,
+    `let draw = fn values =>
+  _ <- each (
+      values,
+      fn value =>
+        _ <- visit value
+    )
+return draw
+`,
+  );
+});
+
+Deno.test("formatting closes a vertical record outside its fields", async () => {
+  await assertStableFormatting(
+    `const Namespace = {
+  .empty = [];
+  .append = fn left => fn right => left;
+  }
+return Namespace
+`,
+    `const Namespace = {
+  .empty = [];
+  .append = fn left => fn right => left;
+}
+return Namespace
+`,
+  );
+});
+
+Deno.test("formatting closes an operator section outside its declarations", async () => {
+  await assertStableFormatting(
+    `operators {
+  infix 30 (!=) = Eq.ne;
+  }
+
+open @import "blot:prelude" ()
+return 1 != 2
+`,
+    `operators {
+  infix 30 (!=) = Eq.ne;
+}
+
+open @import "blot:prelude" ()
+return 1 != 2
+`,
+  );
+});
+
+Deno.test("formatting separates a completed statement suite", async () => {
+  await assertStableFormatting(
+    `let update = fn generation =>
+  current <- Generation.current ()
+  if current != generation:
+    transforms <- load_transforms ()
+    models <- load_models ()
+    generation := current
+  transforms := advance transforms
+  return transforms
+return update
+`,
+    `let update = fn generation =>
+  current <- Generation.current ()
+  if current != generation:
+    transforms <- load_transforms ()
+    models <- load_models ()
+    generation := current
+
+  transforms := advance transforms
+  return transforms
+return update
+`,
+  );
+});
+
+Deno.test("formatting attaches a dedented comment to the following statement", async () => {
+  await assertStableFormatting(
+    `let update = fn generation =>
+  if current != generation:
+    generation := current
+    // Advance the current generation.
+  transforms := advance transforms
+  return transforms
+return update
+`,
+    `let update = fn generation =>
+  if current != generation:
+    generation := current
+
+  // Advance the current generation.
+  transforms := advance transforms
+  return transforms
+return update
+`,
+  );
+});
+
 Deno.test("formatting normalizes line endings and trailing whitespace", async () => {
   await assertStableFormatting(
     "let value = [first, second]  \r\nreturn value\t\r\n\r\n",
@@ -315,6 +567,7 @@ Deno.test("formatting the accepted corpus is idempotent", async () => {
       const codes = formatted.diagnostics.map((diagnostic) => diagnostic.code);
       throw new Error(`${path} did not format: ${codes.join(", ")}`);
     }
+    assertEquals(formatted.source, source, `${path} needs formatting`);
     const repeated = await formatSource(formatted.source);
     assertEquals(repeated, formatted, `${path} changed on a second format`);
   }
@@ -356,7 +609,8 @@ return (imported, atom, left, right, grouped)
 
 Deno.test("formatting retains interacting parentheses when flattening changes application", async () => {
   const source = `let nested = apply ((apply 1))
-return nested
+let called = (fn value => value) 1
+return (nested, called)
 `;
   const formatted = await formatSource(source);
   if (!formatted.ok) throw new Error("valid source did not format");
@@ -377,6 +631,7 @@ return result
     `let result =
   if 1 == 1:
     return 1
+
   return 2
 return result
 `,
@@ -388,6 +643,7 @@ Deno.test("formatting joins a short layout-significant continuation", async () =
   + right
 if sum (1, 2) == 3:
   _ <- effect ()
+
 return ()
 `;
   const formatted = await formatSource(source);
@@ -397,6 +653,7 @@ return ()
     `const sum = fn (left, right) => left + right
 if sum (1, 2) == 3:
   _ <- effect ()
+
 return ()
 `,
   );
@@ -414,7 +671,18 @@ return outer
 `;
   const formatted = await formatSource(source);
   if (!formatted.ok) throw new Error("valid source did not format");
-  assertEquals(formatted.source, source);
+  assertEquals(
+    formatted.source,
+    `let outer = fn values =>
+  let inner = fn () =>
+    return ()
+  for value in values:
+    let selected = value
+
+  return inner
+return outer
+`,
+  );
   assertEquals(await formatSource(formatted.source), formatted);
 });
 
