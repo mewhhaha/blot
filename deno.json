@@ -16,7 +16,6 @@
     "blot": "deno run --allow-read --allow-write src/cli.ts",
     "lsp": "deno run --allow-read src/cli.ts lsp",
     "fmt:blot": "deno run --allow-read --allow-write src/cli.ts fmt",
-    "migrate:layout": "deno run --allow-read --allow-write src/cli.ts migrate-layout",
     "case-study": "deno run --unstable-webgpu --allow-read --allow-env case-studies/run.ts",
     "install": "deno run --allow-read --allow-write --allow-env --allow-run=deno,tree-sitter scripts/setup_helix.ts",
     "engine": "deno run --unstable-webgpu --allow-read --allow-net --allow-env --allow-run=xdg-open,open,explorer case-studies/engine/serve.ts",
