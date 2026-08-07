@@ -25,7 +25,7 @@ const Count = I32
 // Lowering keeps `rec` directly bound under its source name before applying
 // transforms, so tagging does not create a second recursion rule.
 @[tag ("identity", (), identity)]
-  const factorial =
+const factorial =
   rec (fn n =>
     if n == 0:
       return 1

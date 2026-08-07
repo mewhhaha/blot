@@ -269,7 +269,7 @@ function formatOneStatementValue(
     const valueSource = source.slice(valueSpan.start, valueSpan.end);
     const statementLineStart = source.lastIndexOf(
       "\n",
-      statement.span.start - 1,
+      introducer.span.start - 1,
     ) + 1;
     const indent = source.slice(statementLineStart).match(/^[ \t]*/)?.[0];
     if (indent === undefined) {
@@ -1116,7 +1116,9 @@ function collectIndentRegions(
     let value: ConcreteRule | null = null;
     if (indentedValue !== null) value = indentedBindingValue(indentedValue);
     if (value !== null) {
-      const startsAtLine = lineAtOffset(lineStarts, node.span.start);
+      const equals = directToken(node, "=");
+      if (equals === null) throw new Error("binding has no equals token");
+      const startsAtLine = lineAtOffset(lineStarts, equals.span.start);
       const endsAtLine = lineAtOffset(
         lineStarts,
         Math.max(value.span.start, ruleContentSpan(value).end - 1),

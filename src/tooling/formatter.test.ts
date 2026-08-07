@@ -305,6 +305,41 @@ return view
   assertEquals(await formatSource(expected), { ok: true, source: expected });
 });
 
+Deno.test("formatting aligns a tagged binding with its tag", async () => {
+  const source = `@[tag ("identity", (), identity)]
+  const factorial =
+  rec (fn n =>
+    if n == 0:
+      return 1
+    else:
+      return n * factorial (n - 1)
+  )
+return factorial
+`;
+
+  const formatted = await formatSource(source);
+  if (!formatted.ok) throw new Error("valid source did not format");
+
+  assertEquals(
+    formatted.source,
+    `@[tag ("identity", (), identity)]
+const factorial =
+  rec (fn n =>
+    if n == 0:
+      return 1
+    else:
+      return n * factorial (n - 1)
+  )
+return factorial
+`,
+  );
+  assertEquals(await formatSource(formatted.source), formatted);
+  assertEquals(
+    semanticTree(await parse(formatted.source)),
+    semanticTree(await parse(source)),
+  );
+});
+
 Deno.test("formatting places each long array element on its own line", async () => {
   const source = `const World = Ecs.indexed_world {
   .base = 0;
