@@ -2,9 +2,10 @@
  * Generic certificate graph for partitioned ownership authorities.
  *
  * This module deliberately knows nothing about arrays or intervals. It proves
- * only the linear authority graph: a permit is produced once, consumed once,
- * partitions do not retain their parent, combinations consume every input, and
- * all parts preserve one origin/family.
+ * only the linear authority graph: one origin generation is claimed once, a
+ * permit is produced once and consumed once, partitions do not retain their
+ * parent, combinations consume every input, and all parts preserve one
+ * origin/family.
  *
  * A region-family validator is responsible for the semantic half: e.g. an
  * array-interval partition must be a disjoint cover, a combine must join
@@ -76,6 +77,10 @@ interface LivePermit {
  * Replays the authority graph. A complete certificate must release every leaf.
  * Partial compilation can use `allowLive=true` while constructing a graph, but
  * Runtime HIR validation should require the default closed form.
+ *
+ * `origin` names one acquisition generation, not merely a raw pointer. Releasing
+ * an authority and later reacquiring unique access to the same Store creates a
+ * fresh origin id. That keeps "claimed exactly once" local and auditable.
  */
 export function verifyRegionAuthorityCertificate(
   certificate: RegionAuthorityCertificate,
@@ -83,6 +88,7 @@ export function verifyRegionAuthorityCertificate(
 ): VerifiedRegionAuthorityCertificate | null {
   if (certificate.schema !== 1) return null;
 
+  const claimedOrigins = new Set<RegionOriginId>();
   const produced = new Map<RegionPermitId, number>();
   const live = new Map<RegionPermitId, LivePermit>();
   const verified = new Map<RegionPermitId, VerifiedRegionPermit>();
@@ -120,7 +126,9 @@ export function verifyRegionAuthorityCertificate(
     if (event.operation.length === 0) return null;
 
     if (event.tag === "claim") {
+      if (!validId(event.origin) || claimedOrigins.has(event.origin)) return null;
       if (!produce(event.permit, event.origin, event.family, index)) return null;
+      claimedOrigins.add(event.origin);
       continue;
     }
 
