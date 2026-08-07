@@ -22,8 +22,8 @@ Deno.test("Region split and join preserve one owned root", async () => {
     `open @import "blot:prelude" ()
 let !values = [3, 1, 2]
 let !whole = @region.array.claim (!values)
-let !rejoined = case @region.array.split ((!whole), 1) of
-  #Split (!left, !right) => @region.array.join ((!left), (!right))
+let !rejoined = case @region.array.split (!whole) 1 of
+  #Split (!left, !right) => @region.array.join (!left) (!right)
   #SplitOutOfBounds !original => original
 return @region.array.freeze (!rejoined)
 `,
@@ -47,8 +47,8 @@ Deno.test("Region join rejects reversed siblings", async () => {
     `open @import "blot:prelude" ()
 let !values = [3, 1, 2]
 let !whole = @region.array.claim (!values)
-let !rejoined = case @region.array.split ((!whole), 1) of
-  #Split (!left, !right) => @region.array.join ((!right), (!left))
+let !rejoined = case @region.array.split (!whole) 1 of
+  #Split (!left, !right) => @region.array.join (!right) (!left)
   #SplitOutOfBounds !original => original
 return @region.array.freeze (!rejoined)
 `,
@@ -65,7 +65,7 @@ Deno.test("Region evaluator mutates only its private Store", async () => {
       `open @import "blot:prelude" ()
 let !values = [3, 1, 2]
 let !region = @region.array.claim (!values)
-let !changed = @region.array.swap ((!region), 0, 2)
+let !changed = @region.array.swap (!region) 0 2
 return @region.array.freeze (!changed)
 `,
     );
