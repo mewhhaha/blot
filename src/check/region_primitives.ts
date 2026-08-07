@@ -1,4 +1,5 @@
 import { scheme } from "./constrain.ts";
+import { PRIMITIVE_TYPES } from "./primitives.ts";
 import {
   effects,
   freshVar,
@@ -92,3 +93,12 @@ export const REGION_PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map([
     }),
   ],
 ]);
+
+// The core primitive table predates proof-producing private types and is kept
+// intentionally small. Install this private extension when the checker bridge
+// is loaded; the table is an ordinary Map at runtime even though consumers see
+// it through a read-only interface.
+const table = PRIMITIVE_TYPES as Map<string, Scheme>;
+for (const [name, type] of REGION_PRIMITIVE_TYPES) {
+  table.set(name, type);
+}
