@@ -39,9 +39,9 @@ let fake_random =
 
 let handled =
   program
-  |> @handle (Terminal, fake_terminal)
-  |> @handle (Clock, fake_clock)
-  |> @handle (Random, fake_random)
+    |> @handle (Terminal, fake_terminal)
+    |> @handle (Clock, fake_clock)
+    |> @handle (Random, fake_random)
 
 result <- handled
 discarded <- handled

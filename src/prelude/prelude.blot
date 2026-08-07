@@ -1094,7 +1094,7 @@ const unlikely = fn condition => @branch.unlikely condition
 const integer_width = fn bits => case is_greater (@int.cmp bits 0) of
   #True => bits
   #False =>
-    @fail (Text.append "integer bit width must be positive, found " (Text.of_int bits))
+    return @fail (Text.append "integer bit width must be positive, found " (Text.of_int bits))
 
 const U = fn bits => do:
   let width = integer_width bits
