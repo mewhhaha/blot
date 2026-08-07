@@ -66,3 +66,5 @@ console.log(JSON.stringify(
   null,
   2,
 ));
+
+if (passed.length !== results.length) Deno.exit(1);

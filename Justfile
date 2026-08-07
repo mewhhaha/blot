@@ -80,6 +80,7 @@ check:
   deno check mod.ts scripts/*.ts case-studies/*.ts experiments/generated-code/*.ts experiments/rust-middle/*.ts src/cli.ts src/backend/rust_middle.test.ts src/language_service.test.ts src/tooling/*.test.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts
   deno fmt --check
   deno lint
+  deno task corpus
   rustfmt --edition 2024 --check experiments/generated-code/counterpart.rs
   cargo fmt --manifest-path experiments/rust-middle/Cargo.toml --check
   cargo clippy --manifest-path experiments/rust-middle/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
