@@ -1,17 +1,20 @@
 open @import "blot:prelude" ()
 
-const Arguments = @effect.host {
-  .pattern = Unit -> Str;
-}
+const Arguments =
+  @effect.host {
+    .pattern = Unit -> Str;
+  }
 
-const File = @effect.host {
-  .line_count = Unit -> Int;
-  .line = Int -> Str;
-}
+const File =
+  @effect.host {
+    .line_count = Unit -> Int;
+    .line = Int -> Str;
+  }
 
-const Console = @effect.host {
-  .write = Str -> Unit;
-}
+const Console =
+  @effect.host {
+    .write = Str -> Unit;
+  }
 
 let count = 0
 pattern <- Arguments.pattern ()

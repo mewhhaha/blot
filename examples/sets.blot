@@ -36,29 +36,30 @@ const member = fn (values, needle) =>
     fn (seen, value) => seen || Ord.eq value needle
   )
 
-const Set = {
-  .union = fn left => fn right => fold (
-      right,
-      left,
-      fn (all, value) =>
-        if member (all, value):
-          return all
-        else:
-          return @array.push all value
-    );
-  .intersect = fn left => fn right =>
-    return filter (
-      left,
-      fn value => member (right, value)
-    )
-  ;
-  .diff = fn left => fn right =>
-    return filter (
-      left,
-      fn value => not (member (right, value))
-    )
-  ;
-}
+const Set =
+  {
+    .union = fn left => fn right => fold (
+        right,
+        left,
+        fn (all, value) =>
+          if member (all, value):
+            return all
+          else:
+            return @array.push all value
+      );
+    .intersect = fn left => fn right =>
+      return filter (
+        left,
+        fn value => member (right, value)
+      )
+    ;
+    .diff = fn left => fn right =>
+      return filter (
+        left,
+        fn value => not (member (right, value))
+      )
+    ;
+  }
 
 const evens = [2, 4, 6]
 const small = [1, 2, 3, 4]

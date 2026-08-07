@@ -32,12 +32,13 @@ let apply_twice = fn f => fn x => f (f x)
 let distance = fn (from, to) => Num.abs (to - from)
 
 // `rec` makes the binding's own name visible inside the lambda.
-const factorial = rec (fn n =>
-  if n < 2:
-    return 1
-  else:
-    return n * factorial (n - 1)
-)
+const factorial =
+  rec (fn n =>
+    if n < 2:
+      return 1
+    else:
+      return n * factorial (n - 1)
+  )
 
 // --- matching ---------------------------------------------------------------
 
@@ -53,7 +54,7 @@ let classify = fn value => case value of
   1 => "up"
   _ => "flat"
 
-// --- destructuring ----------------------------------------------------------
+  // --- destructuring ----------------------------------------------------------
 
 let counter = { .current = 1; .limit = 10; }
 let { .current; .limit = ceiling; } = counter
@@ -85,7 +86,7 @@ for ever:
   if repeated >= 3:
     break
 
-// --- effects ----------------------------------------------------------------
+    // --- effects ----------------------------------------------------------------
 
 const Console = @effect { .write = Str -> Unit; }
 
@@ -94,24 +95,26 @@ let report = fn () =>
   <- Console.write "two"
   return "done"
 
-let joining = {
-  .write = fn (message, ?resume) =>
-    rest <- resume ()
-    return message ++ rest
-  ;
-  .return = fn value => value;
-}
+let joining =
+  {
+    .write = fn (message, ?resume) =>
+      rest <- resume ()
+      return message ++ rest
+    ;
+    .return = fn value => value;
+  }
 
 // The host's handler is one blot did not write. `init.print` is an opaque
 // function and the program's entire authority.
-let printing = {
-  .write = fn (message, ?resume) =>
-    <- init.print message
-    result <- resume ()
-    return result
-  ;
-  .return = fn value => value;
-}
+let printing =
+  {
+    .write = fn (message, ?resume) =>
+      <- init.print message
+      result <- resume ()
+      return result
+    ;
+    .return = fn value => value;
+  }
 
 // --- ownership --------------------------------------------------------------
 //

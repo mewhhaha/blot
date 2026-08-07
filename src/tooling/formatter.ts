@@ -49,6 +49,17 @@ const layoutSensitiveRules = new Set([
   "shape",
 ]);
 const blockRule = new Set(["block"]);
+const valueScopeBoundaryRules = new Set([
+  "block",
+  "case_expression",
+  "conditional",
+  "handler_composition",
+]);
+const indentedValueRuleNames = new Set([
+  "continued_expression",
+  "element_expression",
+  "lambda",
+]);
 const suiteStatementRules = new Set([
   "conditional_statement",
   "iteration",
@@ -118,12 +129,9 @@ export async function formatSource(source: string): Promise<FormatResult> {
   while (true) {
     const current = await parseConcrete(laidOut);
     if (!current.ok) break;
-    const elementBinding = formatOneMultilineElementBinding(
-      laidOut,
-      current.cst,
-    );
-    if (elementBinding !== laidOut) {
-      laidOut = elementBinding;
+    const statementValue = formatOneStatementValue(laidOut, current.cst);
+    if (statementValue !== laidOut) {
+      laidOut = statementValue;
       continue;
     }
     const array = formatOneArray(laidOut, current.cst);
@@ -239,45 +247,103 @@ export async function formatSource(source: string): Promise<FormatResult> {
   return { ok: true, source: separatedLayout };
 }
 
-function formatOneMultilineElementBinding(
+function formatOneStatementValue(
   source: string,
   root: ConcreteRule,
 ): string {
-  const bindings: ConcreteRule[] = [];
-  collectRules(root, "binding", bindings);
-  for (const binding of bindings) {
-    const equals = directToken(binding, "=");
-    if (equals === null) continue;
-    const elements: ConcreteRule[] = [];
-    collectRules(binding, "element_expression", elements);
-    const element = elements.find((candidate) => {
-      if (candidate.span.start <= equals.span.end) return false;
-      return /^[ \t]*$/.test(
-        source.slice(equals.span.end, candidate.span.start),
-      );
-    });
-    if (element === undefined) continue;
-    const elementSource = source.slice(element.span.start, element.span.end);
-    if (!elementSource.includes("\n")) continue;
-    const bindingLineStart = source.lastIndexOf("\n", binding.span.start - 1) +
-      1;
-    const indent = source.slice(bindingLineStart).match(/^[ \t]*/)?.[0];
+  const statements: ConcreteRule[] = [];
+  collectRules(root, "binding", statements);
+  collectRules(root, "result", statements);
+  statements.sort((left, right) => left.span.start - right.span.start);
+  for (const statement of statements) {
+    let introducer = directToken(statement, "return");
+    if (statement.name === "binding") introducer = directToken(statement, "=");
+    if (introducer === null) continue;
+    let value = directRule(statement, "value");
+    const indentedValue = directRule(statement, "indented_value");
+    if (indentedValue !== null) value = indentedBindingValue(indentedValue);
+    if (value === null) continue;
+    const valueSpan = ruleContentSpan(value);
+    const separator = source.slice(introducer.span.end, valueSpan.start);
+    if (!/^[ \t\r\n]*$/.test(separator)) continue;
+    const valueSource = source.slice(valueSpan.start, valueSpan.end);
+    const statementLineStart = source.lastIndexOf(
+      "\n",
+      statement.span.start - 1,
+    ) + 1;
+    const indent = source.slice(statementLineStart).match(/^[ \t]*/)?.[0];
     if (indent === undefined) {
-      throw new Error("binding line has no indentation");
+      throw new Error(`${statement.name} line has no indentation`);
     }
-    const elementLines = reindentFragment(
+    const valueStartsOnIntroducerLine = !separator.includes("\n");
+    const valueIsMultiline = valueSource.includes("\n");
+    const valueFirstLineEnd = valueSource.indexOf("\n");
+    let valueFirstLine = valueSource;
+    if (valueFirstLineEnd >= 0) {
+      valueFirstLine = valueSource.slice(0, valueFirstLineEnd);
+    }
+    const inlineWidth = introducer.span.end - statementLineStart + 1 +
+      valueFirstLine.length;
+    let valueUsesDelimiters = value.name === "element_expression" ||
+      directRule(value, "element_expression") !== null;
+    const valueIsLambda = value.name === "lambda" ||
+      directRule(value, "lambda") !== null;
+    if (!valueUsesDelimiters && !valueIsLambda) {
+      let expression = directRule(value, "expression");
+      if (value.name === "continued_expression") expression = value;
+      if (expression !== null) {
+        let valueScopeOwnsLayout = false;
+        for (const layoutRule of valueScopeBoundaryRules) {
+          if (expressionPrimaryIs(expression, layoutRule)) {
+            valueScopeOwnsLayout = true;
+            break;
+          }
+        }
+        if (!valueScopeOwnsLayout) {
+          valueUsesDelimiters = containsRule(expression, delimitedLayoutRules);
+        }
+      }
+    }
+    const bindingOwnsDelimitedValue = statement.name === "binding" &&
+      valueIsMultiline && valueUsesDelimiters;
+    const needsSeparateLine = inlineWidth > maximumLineWidth ||
+      bindingOwnsDelimitedValue;
+    if (!needsSeparateLine) {
+      if (valueStartsOnIntroducerLine && separator === " ") continue;
+      if (statement.name === "binding") continue;
+      return replaceSpan(
+        source,
+        { start: introducer.span.end, end: valueSpan.end },
+        ` ${valueSource}`,
+      );
+    }
+    if (!valueStartsOnIntroducerLine && separator === `\n${indent}  `) {
+      continue;
+    }
+    const valueLines = reindentFragment(
       source,
-      element.span,
+      valueSpan,
       `${indent}  `,
       "",
     );
     return replaceSpan(
       source,
-      { start: equals.span.end, end: element.span.end },
-      `\n${elementLines.join("\n")}`,
+      { start: introducer.span.end, end: valueSpan.end },
+      `\n${valueLines.join("\n")}`,
     );
   }
   return source;
+}
+
+function indentedBindingValue(
+  indentedValue: ConcreteRule,
+): ConcreteRule | null {
+  for (const child of indentedValue.children()) {
+    if (child.type === "rule" && indentedValueRuleNames.has(child.name)) {
+      return child;
+    }
+  }
+  return null;
 }
 
 function separateStatementSuites(
@@ -1046,18 +1112,35 @@ function collectIndentRegions(
 ): void {
   if (node.type !== "rule") return;
   if (node.name === "binding") {
-    const indentedValue = directRules(node, "indented_element_value")[0];
-    let indentedElement: ConcreteRule | undefined;
-    if (indentedValue !== undefined) {
-      indentedElement = directRules(indentedValue, "element_expression")[0];
-    }
-    if (indentedElement !== undefined) {
+    const indentedValue = directRule(node, "indented_value");
+    let value: ConcreteRule | null = null;
+    if (indentedValue !== null) value = indentedBindingValue(indentedValue);
+    if (value !== null) {
       const startsAtLine = lineAtOffset(lineStarts, node.span.start);
       const endsAtLine = lineAtOffset(
         lineStarts,
-        Math.max(indentedElement.span.start, indentedElement.span.end - 1),
+        Math.max(value.span.start, ruleContentSpan(value).end - 1),
       );
       if (startsAtLine < endsAtLine) {
+        regions.push({
+          startsAtLine,
+          endsAtLine,
+          includesLastLine: true,
+          extraInteriorIndent: false,
+        });
+      }
+    }
+  }
+  if (node.name === "result") {
+    const value = directRule(node, "value");
+    if (value !== null) {
+      const startsAtLine = lineAtOffset(lineStarts, node.span.start);
+      const valueStartsAtLine = lineAtOffset(lineStarts, value.span.start);
+      const endsAtLine = lineAtOffset(
+        lineStarts,
+        Math.max(value.span.start, ruleContentSpan(value).end - 1),
+      );
+      if (startsAtLine < valueStartsAtLine && startsAtLine < endsAtLine) {
         regions.push({
           startsAtLine,
           endsAtLine,

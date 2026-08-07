@@ -1515,15 +1515,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     const pattern = lowerPattern(asRule(field(rule, "pattern"), "pattern"));
     const valueCursor = field(rule, "value");
     expect(valueCursor !== null, "a binding has no value");
-    let value: Expr;
-    if (isRule(valueCursor) && valueCursor.name === "indented_element_value") {
-      value = lowerPrimary(
-        asRule(required(valueCursor, "value"), "element_expression"),
-        context,
-      );
-    } else {
-      value = lowerValue(asRule(valueCursor, "value"), context);
-    }
+    let value = lowerValue(asRule(valueCursor, "value"), context);
     if (tags.length > 0) {
       expect(kind !== "sig", "a tagged signature reached value lowering");
       value = lowerTaggedValue(kind, pattern, value, tags, rule.span);
@@ -2065,7 +2057,9 @@ function patternFromExpr(expr: Expr): Pattern {
 // --- expressions ------------------------------------------------------------
 
 function lowerValue(rule: Rule, context: Context): Expr {
-  const inner = unwrap(rule);
+  let inner: Cursor;
+  if (rule.name === "indented_value") inner = required(rule, "value");
+  else inner = unwrap(rule);
   const target = asRule(inner, "value alternative");
   if (target.name === "lambda") return lowerLambda(target, context);
   if (target.name === "element_expression") {
@@ -2105,7 +2099,8 @@ function lowerLambda(rule: Rule, context: Context): Expr {
 
 function lowerExpression(rule: Rule, context: Context): Expr {
   expect(
-    rule.name === "expression" || rule.name === "element_child_expression",
+    rule.name === "expression" || rule.name === "continued_expression" ||
+      rule.name === "element_child_expression",
     `expected expression, got ${rule.name}`,
   );
   const first = lowerOperand(asRule(field(rule, "first"), "first"), context);

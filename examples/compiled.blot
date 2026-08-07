@@ -16,12 +16,13 @@ const describe = fn m => case m of
   #Busy n => n
   #Done n => n * 2
 
-const sum_to = rec (fn n =>
-  if n < 1:
-    return 0
-  else:
-    return n + sum_to (n - 1)
-)
+const sum_to =
+  rec (fn n =>
+    if n < 1:
+      return 0
+    else:
+      return n + sum_to (n - 1)
+  )
 
 let point = { .x = 20; .y = 22; }
 let moved = { ...point; .x = 18; }

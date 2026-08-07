@@ -1,0 +1,33 @@
+open @import "blot:prelude" ()
+
+const leaf = fn value => { .value = value; .left = 0; .right = 0; }
+const branch = fn (value, left, right) => {
+    .value = value;
+    .left = left;
+    .right = right;
+  }
+
+let nodes = Arena.singleton (leaf 0)
+let (nodes, one) = Arena.insert (?nodes, leaf 1)
+let (nodes, two) = Arena.insert (?nodes, leaf 2)
+let (nodes, three) = Arena.insert (?nodes, branch (3, one, two))
+let (nodes, four) = Arena.insert (?nodes, leaf 4)
+let (nodes, five) = Arena.insert (?nodes, leaf 5)
+let (nodes, six) = Arena.insert (?nodes, branch (6, four, five))
+let (nodes, root) = Arena.insert (?nodes, branch (7, three, six))
+
+let total =
+  rec (fn (&tree, address) =>
+    if address == 0:
+      return 0
+    else:
+      return case Arena.get ((&tree), address) of
+        #Some node => node.value + total ((&tree), node.left) + total ((&tree), node.right)
+        #None => 0
+  )
+
+return {
+  .root = root;
+  .nodes = Array.length (&nodes);
+  .sum = total ((&nodes), root);
+}

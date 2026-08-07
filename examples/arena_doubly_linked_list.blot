@@ -1,0 +1,58 @@
+open @import "blot:prelude" ()
+
+const node = fn (value, previous, next) => {
+    .value = value;
+    .previous = previous;
+    .next = next;
+  }
+
+let build =
+  rec (fn (value, ?nodes) =>
+    if value > 10:
+      return nodes
+    else:
+      let next = if value == 10:
+        return 0
+      else:
+        return value + 1
+      let (nodes, _) = Arena.insert (?nodes, node (value, value - 1, next))
+      return build (value + 1, nodes)
+  )
+
+let total_forward =
+  rec (fn (&nodes, address, sum) =>
+    if address == 0:
+      return sum
+    else:
+      return case Arena.get ((&nodes), address) of
+        #Some current => total_forward (
+          (&nodes),
+          current.next,
+          sum + current.value
+        )
+        #None => sum
+  )
+
+let total_backward =
+  rec (fn (&nodes, address, sum) =>
+    if address == 0:
+      return sum
+    else:
+      return case Arena.get ((&nodes), address) of
+        #Some current => total_backward (
+          (&nodes),
+          current.previous,
+          sum + current.value
+        )
+        #None => sum
+  )
+
+let nodes = Arena.singleton (node (0, 0, 0))
+let nodes = build (1, nodes)
+
+return {
+  .first = 1;
+  .last = 10;
+  .forward = total_forward ((&nodes), 1, 0);
+  .backward = total_backward ((&nodes), 10, 0);
+}

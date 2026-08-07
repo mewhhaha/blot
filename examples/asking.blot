@@ -28,12 +28,13 @@ let reading = { .value = 12; .label = "depth"; }
 let checked = @type.satisfies (reading, Has { .value = Int; })
 
 // A predicate written inline can ask anything the comptime evaluator can.
-let counted = @type.satisfies (
-  reading,
-  fn t => case reflect t of
-    #Shape fields => @array.len (@shape.names fields) == 2
-    _ => False
-)
+let counted =
+  @type.satisfies (
+    reading,
+    fn t => case reflect t of
+      #Shape fields => @array.len (@shape.names fields) == 2
+      _ => False
+  )
 
 // `Is` is exact rather than a subset.
 const Reading = { .value = 12; .label = "depth"; }

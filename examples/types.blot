@@ -42,10 +42,11 @@ const BoxedPair = Compose (Boxed, fn a => Pair (a, a))
 
 // Reflection is a normal call, so `derive` is a function rather than a macro,
 // an attribute, or a compiler builtin.
-const Record = struct {
-  .code = I32;
-  .label = Str;
-}
+const Record =
+  struct {
+    .code = I32;
+    .label = Str;
+  }
 
 // Derivation takes the field names, not the struct. A struct's namespace is
 // compile-time and does not appear in its type — `Record` *is* the storage

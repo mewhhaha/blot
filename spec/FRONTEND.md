@@ -97,8 +97,11 @@ sequencing `x <- e` executes `e`. When `e` has the erased effect-value shape
 element child is an effect value in the array passed to the parent application.
 A nested element and a braced existing effect value enter that array unchanged;
 an ordinary bare child computation receives one nullary suspension. A binding
-may place a multiline element after an indented newline; CST lowering removes
-that layout wrapper before performing the same element elaboration. A bare
+may place a lambda, element, or ordinary expression after an indented newline;
+CST lowering removes that layout wrapper before lowering the value normally. A
+top-level `if` after the newline remains the first statement of the existing
+binding block form, avoiding a second interpretation of its branch suites. The
+wrapper changes layout only and does not introduce an AST node or scope. A bare
 element is a child only; ordinary statement regions require explicit sequencing.
 
 Write `surface(s) ⇓ a` for elaboration and `~` for observational equivalence in

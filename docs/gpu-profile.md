@@ -20,19 +20,19 @@ in a benchmark months later.
 | counter                     |              blot | note                                               |
 | --------------------------- | ----------------: | -------------------------------------------------- |
 | `lexerStates`               |               122 | direct multiplier in the parallel DFA summary pass |
-| `maxCandidateMultiplicity`  |                27 | worst-case island candidates allocated per token   |
-| `islandCount`               |                82 | one island for every grammar rule                  |
-| `islandStates`              |               477 |                                                    |
-| `islandTransitions`         |               486 |                                                    |
+| `maxCandidateMultiplicity`  |                31 | worst-case island candidates allocated per token   |
+| `islandCount`               |                86 | one island for every grammar rule                  |
+| `islandStates`              |               504 |                                                    |
+| `islandTransitions`         |               517 |                                                    |
 | `contractionRounds`         |                33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      |           795,636 | immutable device table                             |
-| `packedBytes`               |           612,045 | version-3 runtime section                          |
+| `denseTransitionBytes`      |           864,864 | immutable device table                             |
+| `packedBytes`               |           662,943 | version-3 runtime section                          |
 | `rootLoopIsland`            | 5 (`declaration`) | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |                 9 | islands admitted to parallel long-region execution |
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
-and edge arrays directly. Declaring all 82 rules as islands is what preserves
+and edge arrays directly. Declaring all 86 rules as islands is what preserves
 the full CST shape needed by source lowering.
 
 ## Historical strict-profile measurements
@@ -45,7 +45,7 @@ The current source is indentation-sensitive without making Baba's lexer
 contextual. Blot first runs the generated lexer, inserts three reserved private
 tokens for logical newline, indent, and dedent, and then gives that elaborated
 stream to the generated compact CPU frontend. Physical offsets are retained for
-diagnostics. Because the layout tokens have fixed terminal identities, all 82
+diagnostics. Because the layout tokens have fixed terminal identities, all 86
 rules still satisfy the general profile and no parser resolution is required.
 
 Requiring explicit `<-` for an element in an ordinary statement region removes
@@ -62,12 +62,14 @@ directly so they do not introduce another brace-delimited island competing with
 records and effect rows; the four new islands describe only bare child
 expressions whose first token is not `{`.
 
-Allowing a multiline element binding to place its value after `=` adds one
-island, seven island states, seven island transitions, 17,316 dense-transition
-bytes, and 12,631 packed bytes. Its layout-newline first token is disjoint from
-the ordinary same-line value alternative. Lexer states, candidate multiplicity,
-contraction rounds, scratch factors, and parallel long-region admission are
-unchanged.
+Allowing any multiline binding to place its value after `=` retains one
+layout-newline wrapper and adds four continued-expression islands which exclude
+the top-level block and conditional starts owned by binding suites. Relative to
+the former element-only wrapper, the plan gains four islands, twenty-seven
+island states, thirty-one island transitions, 69,228 dense-transition bytes, and
+50,898 packed bytes. Maximum candidate multiplicity and the region and candidate
+scratch factors increase from 27 to 31. Lexer states, contraction rounds, and
+parallel long-region admission are unchanged.
 
 Leading discard sequencing adds the exact `<- expression` statement. Its `<-`
 first token is disjoint from every declaration and statement alternative, so it

@@ -519,11 +519,33 @@ impl ResidualTrace {
             return Ok(None);
         }
         self.active_primitive = Some(name.to_owned());
+        if matches!(name, "@linear.own" | "@linear.maybe") {
+            let mut value = arguments
+                .first()
+                .cloned()
+                .ok_or_else(|| hir_error("An ownership marker omitted its value."))?;
+            if let Value::Runtime(runtime) = &mut value
+                && matches!(self.types[runtime.type_id], RuntimeType::Store { .. })
+            {
+                runtime.meaning = RuntimeMeaning::ReusableStore;
+            }
+            return Ok(Some(value));
+        }
         if matches!(
             name,
-            "@linear.own" | "@linear.borrow" | "@branch.likely" | "@branch.unlikely"
+            "@linear.borrow" | "@branch.likely" | "@branch.unlikely"
         ) {
-            return Ok(arguments.first().cloned());
+            let mut value = arguments
+                .first()
+                .cloned()
+                .ok_or_else(|| hir_error("A runtime marker omitted its value."))?;
+            if name == "@linear.borrow"
+                && let Value::Runtime(runtime) = &mut value
+                && matches!(runtime.meaning, RuntimeMeaning::ReusableStore)
+            {
+                runtime.meaning = RuntimeMeaning::Plain;
+            }
+            return Ok(Some(value));
         }
         if matches!(
             name,
@@ -732,6 +754,17 @@ impl ResidualTrace {
                 return self.symbolic_value(value, span).map(Some);
             }
             "@array.set" => {
+                let update = if matches!(
+                    arguments.first(),
+                    Some(Value::Runtime(RuntimeValue {
+                        meaning: RuntimeMeaning::ReusableStore,
+                        ..
+                    }))
+                ) {
+                    "owned-reuse"
+                } else {
+                    "persistent"
+                };
                 let store = self.lower_value(&arguments[0], span)?;
                 let RuntimeType::Store { element_type } = self.types[store.type_id] else {
                     return Err(hir_error(
@@ -745,10 +778,21 @@ impl ResidualTrace {
                     store.type_id,
                     vec![store.id, index.id, value.id],
                     span,
-                    Some("persistent"),
+                    Some(update),
                 )
             }
             "@array.push" => {
+                let update = if matches!(
+                    arguments.first(),
+                    Some(Value::Runtime(RuntimeValue {
+                        meaning: RuntimeMeaning::ReusableStore,
+                        ..
+                    }))
+                ) {
+                    "owned-reuse"
+                } else {
+                    "persistent"
+                };
                 let store = self.lower_value(&arguments[0], span)?;
                 let RuntimeType::Store { element_type } = self.types[store.type_id] else {
                     return Err(hir_error("Dynamic array push received a non-array value."));
@@ -759,7 +803,7 @@ impl ResidualTrace {
                     store.type_id,
                     vec![store.id, value.id],
                     span,
-                    Some("persistent"),
+                    Some(update),
                 )
             }
             _ => {
@@ -1485,6 +1529,19 @@ impl ResidualTrace {
             },
             span,
         )?;
+        let loaded = context
+            .modules
+            .borrow()
+            .get(module)
+            .map(|loaded| loaded.module.clone())
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    "BLOT_UNRESOLVED_IMPORT",
+                    format!("Module `{module}` was not loaded."),
+                    span,
+                )
+            })?;
+        let argument = mark_reusable_stores(&loaded, closure_parameter, argument, &self.types);
         let mut replacements = HashMap::new();
         for capture in &captures {
             let parameter = self.next_value();
@@ -2193,8 +2250,10 @@ impl ResidualTrace {
         let lowered = self.lower_value(value, span)?;
         if lowered.type_id != expected_type {
             return Err(hir_error(&format!(
-                "Array element {} differs from its inferred Store representation.",
-                crate::value::show(value)
+                "Array element {} has runtime type {}, but its Store expects runtime type {}.",
+                crate::value::show(value),
+                lowered.type_id,
+                expected_type,
             )));
         }
         Ok(lowered)
@@ -3161,6 +3220,65 @@ fn compiler_tag_payload(payload: Option<&Value>) -> Value {
     value.clone()
 }
 
+fn mark_reusable_stores(
+    module: &crate::ast::Module,
+    pattern: crate::ast::PatternId,
+    mut value: Value,
+    types: &[RuntimeType],
+) -> Value {
+    let pattern = &module.arena.patterns[pattern.0 as usize];
+    match pattern {
+        crate::ast::Pattern::Name {
+            qualifier: crate::ast::Qualifier::Linear | crate::ast::Qualifier::Affine,
+            ..
+        } => {
+            if let Value::Runtime(runtime) = &mut value
+                && matches!(runtime.meaning, RuntimeMeaning::Plain)
+                && matches!(types[runtime.type_id], RuntimeType::Store { .. })
+            {
+                runtime.meaning = RuntimeMeaning::ReusableStore;
+            }
+        }
+        crate::ast::Pattern::Tuple { elements, .. }
+        | crate::ast::Pattern::Array { elements, .. } => {
+            if let Value::Shape(values) = &mut value {
+                for (index, pattern) in elements.iter().enumerate() {
+                    let name = index.to_string();
+                    if let Some(element) = values.get(&name).cloned() {
+                        values.insert(name, mark_reusable_stores(module, *pattern, element, types));
+                    }
+                }
+            }
+        }
+        crate::ast::Pattern::Shape { fields, .. } => {
+            if let Value::Shape(values) = &mut value {
+                for field in fields {
+                    if let Some(element) = values.get(&field.name).cloned() {
+                        values.insert(
+                            field.name.clone(),
+                            mark_reusable_stores(module, field.pattern, element, types),
+                        );
+                    }
+                }
+            }
+        }
+        crate::ast::Pattern::Constructor {
+            payload: Some(pattern),
+            ..
+        } => {
+            if let Value::Tag {
+                payload: Some(payload),
+                ..
+            } = &mut value
+            {
+                **payload = mark_reusable_stores(module, *pattern, (**payload).clone(), types);
+            }
+        }
+        _ => {}
+    }
+    value
+}
+
 pub(crate) fn contains_runtime(value: &Value) -> bool {
     match value {
         Value::Runtime(_) => true,
@@ -3540,68 +3658,593 @@ fn runtime_effect_name(value: &Value) -> Option<String> {
 }
 
 fn simplify_runtime_function(mut function: RuntimeFunction) -> RuntimeFunction {
-    let forwarding = function
-        .blocks
-        .iter()
-        .filter_map(|block| {
-            if block.id == function.entry_block || !block.operations.is_empty() {
-                return None;
+    recover_direct_tail_calls(&mut function);
+    loop {
+        fold_boolean_branch_roundtrips(&mut function);
+        fold_sum_branch_roundtrips(&mut function);
+        let forwarding = function
+            .blocks
+            .iter()
+            .filter_map(|block| {
+                if block.id == function.entry_block || !block.operations.is_empty() {
+                    return None;
+                }
+                let RuntimeTerminator::Branch {
+                    target, arguments, ..
+                } = &block.terminator
+                else {
+                    return None;
+                };
+                let forwards_parameters = block
+                    .parameters
+                    .iter()
+                    .map(|parameter| parameter.value)
+                    .eq(arguments.iter().copied());
+                forwards_parameters.then_some((block.id, *target))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let resolve = |mut target: usize| {
+            let mut visited = BTreeSet::new();
+            while let Some(next) = forwarding.get(&target) {
+                if !visited.insert(target) {
+                    break;
+                }
+                target = *next;
             }
+            target
+        };
+        let mut reachable = BTreeSet::new();
+        let mut pending = vec![function.entry_block];
+        while let Some(block_id) = pending.pop() {
+            let block_id = resolve(block_id);
+            if !reachable.insert(block_id) {
+                continue;
+            }
+            let block = &function.blocks[block_id];
+            match &block.terminator {
+                RuntimeTerminator::Branch { target, .. } => pending.push(*target),
+                RuntimeTerminator::Conditional {
+                    consequent,
+                    alternate,
+                    ..
+                } => {
+                    pending.push(*consequent);
+                    pending.push(*alternate);
+                }
+                RuntimeTerminator::Return { .. } => {}
+            }
+        }
+        if forwarding.is_empty() && reachable.len() == function.blocks.len() {
+            return function;
+        }
+        function
+            .blocks
+            .retain(|block| reachable.contains(&block.id) && !forwarding.contains_key(&block.id));
+        let block_ids = function
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(index, block)| (block.id, index))
+            .collect::<BTreeMap<_, _>>();
+        for block in &mut function.blocks {
+            block.id = block_ids[&block.id];
+            match &mut block.terminator {
+                RuntimeTerminator::Branch { target, .. } => {
+                    *target = block_ids[&resolve(*target)];
+                }
+                RuntimeTerminator::Conditional {
+                    consequent,
+                    alternate,
+                    ..
+                } => {
+                    *consequent = block_ids[&resolve(*consequent)];
+                    *alternate = block_ids[&resolve(*alternate)];
+                }
+                RuntimeTerminator::Return { .. } => {}
+            }
+        }
+        function.entry_block = block_ids[&function.entry_block];
+    }
+}
+
+fn fold_boolean_branch_roundtrips(function: &mut RuntimeFunction) {
+    loop {
+        let replacements = function
+            .blocks
+            .iter()
+            .filter_map(|block| {
+                folded_boolean_terminator(function, block).map(|terminator| (block.id, terminator))
+            })
+            .collect::<Vec<_>>();
+        if replacements.is_empty() {
+            return;
+        }
+        for (block_id, terminator) in replacements {
+            function.blocks[block_id].terminator = terminator;
+        }
+    }
+}
+
+fn folded_boolean_terminator(
+    function: &RuntimeFunction,
+    block: &RuntimeBlock,
+) -> Option<RuntimeTerminator> {
+    let RuntimeTerminator::Conditional {
+        condition,
+        consequent,
+        consequent_arguments,
+        alternate,
+        alternate_arguments,
+        span,
+    } = &block.terminator
+    else {
+        return None;
+    };
+    if !consequent_arguments.is_empty() || !alternate_arguments.is_empty() {
+        return None;
+    }
+    let (consequent_value, consequent_join) = branch_boolean(function, *consequent)?;
+    let (alternate_value, alternate_join) = branch_boolean(function, *alternate)?;
+    if consequent_join != alternate_join || consequent_value == alternate_value {
+        return None;
+    }
+    let join = function.blocks.get(consequent_join)?;
+    if join.parameters.len() != 1 || !join.operations.is_empty() {
+        return None;
+    }
+    let RuntimeTerminator::Conditional {
+        condition: joined_condition,
+        consequent: joined_consequent,
+        consequent_arguments: joined_consequent_arguments,
+        alternate: joined_alternate,
+        alternate_arguments: joined_alternate_arguments,
+        ..
+    } = &join.terminator
+    else {
+        return None;
+    };
+    if *joined_condition != join.parameters[0].value {
+        return None;
+    }
+    let (consequent, consequent_arguments, alternate, alternate_arguments) = if consequent_value {
+        (
+            *joined_consequent,
+            joined_consequent_arguments.clone(),
+            *joined_alternate,
+            joined_alternate_arguments.clone(),
+        )
+    } else {
+        (
+            *joined_alternate,
+            joined_alternate_arguments.clone(),
+            *joined_consequent,
+            joined_consequent_arguments.clone(),
+        )
+    };
+    Some(RuntimeTerminator::Conditional {
+        condition: *condition,
+        consequent,
+        consequent_arguments,
+        alternate,
+        alternate_arguments,
+        span: span.clone(),
+    })
+}
+
+fn branch_boolean(function: &RuntimeFunction, block_id: usize) -> Option<(bool, usize)> {
+    let block = function.blocks.get(block_id)?;
+    let [operation] = block.operations.as_slice() else {
+        return None;
+    };
+    if operation.kind != "constant" {
+        return None;
+    }
+    let Some(WireConstant::Boolean(value)) = operation.value else {
+        return None;
+    };
+    let RuntimeTerminator::Branch {
+        target, arguments, ..
+    } = &block.terminator
+    else {
+        return None;
+    };
+    if arguments.as_slice() != [operation.result] {
+        return None;
+    }
+    Some((value, *target))
+}
+
+struct SumDispatchFold {
+    consequent: usize,
+    alternate: usize,
+    predecessors: Vec<SumDispatchPredecessor>,
+}
+
+struct SumDispatchPredecessor {
+    block: usize,
+    target: usize,
+    payload: usize,
+}
+
+fn fold_sum_branch_roundtrips(function: &mut RuntimeFunction) {
+    loop {
+        let Some(fold) = function
+            .blocks
+            .iter()
+            .find_map(|join| folded_sum_dispatch(function, join))
+        else {
+            return;
+        };
+        for target in [fold.consequent, fold.alternate] {
+            let payload = function.blocks[target].operations.remove(0);
+            function.blocks[target]
+                .parameters
+                .push(RuntimeBlockParameter {
+                    value: payload.result,
+                    type_id: payload.type_id,
+                    ownership: payload.ownership,
+                    span: payload.span,
+                });
+        }
+        for predecessor in fold.predecessors {
+            function.blocks[predecessor.block].operations.pop();
             let RuntimeTerminator::Branch {
                 target, arguments, ..
-            } = &block.terminator
+            } = &mut function.blocks[predecessor.block].terminator
             else {
-                return None;
+                unreachable!();
             };
-            let forwards_parameters = block
-                .parameters
-                .iter()
-                .map(|parameter| parameter.value)
-                .eq(arguments.iter().copied());
-            forwards_parameters.then_some((block.id, *target))
-        })
-        .collect::<BTreeMap<_, _>>();
-    if forwarding.is_empty() {
-        return function;
-    }
-    let resolve = |mut target: usize| {
-        let mut visited = BTreeSet::new();
-        while let Some(next) = forwarding.get(&target) {
-            if !visited.insert(target) {
-                break;
-            }
-            target = *next;
+            *target = predecessor.target;
+            *arguments = vec![predecessor.payload];
         }
-        target
+    }
+}
+
+fn folded_sum_dispatch(function: &RuntimeFunction, join: &RuntimeBlock) -> Option<SumDispatchFold> {
+    if join.id == function.entry_block {
+        return None;
+    }
+    let [parameter] = join.parameters.as_slice() else {
+        return None;
     };
-    function
-        .blocks
-        .retain(|block| !forwarding.contains_key(&block.id));
-    let block_ids = function
-        .blocks
-        .iter()
-        .enumerate()
-        .map(|(index, block)| (block.id, index))
-        .collect::<BTreeMap<_, _>>();
-    for block in &mut function.blocks {
-        block.id = block_ids[&block.id];
-        match &mut block.terminator {
-            RuntimeTerminator::Branch { target, .. } => {
-                *target = block_ids[&resolve(*target)];
+    let [tag, constant, comparison] = join.operations.as_slice() else {
+        return None;
+    };
+    if tag.kind != "sum.tag" || tag.operands.as_slice() != [parameter.value] {
+        return None;
+    }
+    let Some(WireConstant::SignedInteger32(compared_case)) = constant.value else {
+        return None;
+    };
+    let compared_case = usize::try_from(compared_case).ok()?;
+    if comparison.kind != "scalar" || comparison.operator != Some("equal") {
+        return None;
+    }
+    let compares_tag = comparison.operands.as_slice() == [tag.result, constant.result]
+        || comparison.operands.as_slice() == [constant.result, tag.result];
+    if !compares_tag {
+        return None;
+    }
+    let RuntimeTerminator::Conditional {
+        condition,
+        consequent,
+        consequent_arguments,
+        alternate,
+        alternate_arguments,
+        ..
+    } = &join.terminator
+    else {
+        return None;
+    };
+    if *condition != comparison.result
+        || !consequent_arguments.is_empty()
+        || !alternate_arguments.is_empty()
+        || consequent == alternate
+        || *consequent == function.entry_block
+        || *alternate == function.entry_block
+    {
+        return None;
+    }
+    let consequent_payload = function.blocks.get(*consequent)?.operations.first()?;
+    let alternate_payload = function.blocks.get(*alternate)?.operations.first()?;
+    if !function.blocks[*consequent].parameters.is_empty()
+        || !function.blocks[*alternate].parameters.is_empty()
+        || consequent_payload.kind != "sum.payload"
+        || alternate_payload.kind != "sum.payload"
+        || consequent_payload.operands.as_slice() != [parameter.value]
+        || alternate_payload.operands.as_slice() != [parameter.value]
+        || consequent_payload.case != Some(compared_case)
+        || alternate_payload.case == Some(compared_case)
+    {
+        return None;
+    }
+    let target_incoming = |target: usize| {
+        function
+            .blocks
+            .iter()
+            .map(|block| match &block.terminator {
+                RuntimeTerminator::Branch {
+                    target: candidate, ..
+                } => usize::from(*candidate == target),
+                RuntimeTerminator::Conditional {
+                    consequent,
+                    alternate,
+                    ..
+                } => usize::from(*consequent == target) + usize::from(*alternate == target),
+                RuntimeTerminator::Return { .. } => 0,
+            })
+            .sum::<usize>()
+    };
+    if target_incoming(*consequent) != 1 || target_incoming(*alternate) != 1 {
+        return None;
+    }
+    let mut predecessors = Vec::new();
+    for block in &function.blocks {
+        match &block.terminator {
+            RuntimeTerminator::Branch {
+                target, arguments, ..
+            } if *target == join.id => {
+                let [sum] = arguments.as_slice() else {
+                    return None;
+                };
+                let operation = block.operations.last()?;
+                let [payload] = operation.operands.as_slice() else {
+                    return None;
+                };
+                if operation.kind != "sum.make" || operation.result != *sum {
+                    return None;
+                }
+                let target = if operation.case == Some(compared_case) {
+                    *consequent
+                } else if operation.case == alternate_payload.case {
+                    *alternate
+                } else {
+                    return None;
+                };
+                predecessors.push(SumDispatchPredecessor {
+                    block: block.id,
+                    target,
+                    payload: *payload,
+                });
             }
             RuntimeTerminator::Conditional {
                 consequent,
                 alternate,
                 ..
+            } if *consequent == join.id || *alternate == join.id => return None,
+            _ => {}
+        }
+    }
+    if predecessors.is_empty() {
+        return None;
+    }
+    Some(SumDispatchFold {
+        consequent: *consequent,
+        alternate: *alternate,
+        predecessors,
+    })
+}
+
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+struct TailDemand {
+    value: usize,
+    sum_case: Option<usize>,
+}
+
+fn recover_direct_tail_calls(function: &mut RuntimeFunction) {
+    let mut incoming = HashMap::<usize, Vec<usize>>::new();
+    for block in &function.blocks {
+        match &block.terminator {
+            RuntimeTerminator::Branch {
+                target, arguments, ..
+            } => record_incoming_arguments(function, *target, arguments, &mut incoming),
+            RuntimeTerminator::Conditional {
+                consequent,
+                consequent_arguments,
+                alternate,
+                alternate_arguments,
+                ..
             } => {
-                *consequent = block_ids[&resolve(*consequent)];
-                *alternate = block_ids[&resolve(*alternate)];
+                record_incoming_arguments(
+                    function,
+                    *consequent,
+                    consequent_arguments,
+                    &mut incoming,
+                );
+                record_incoming_arguments(function, *alternate, alternate_arguments, &mut incoming);
             }
             RuntimeTerminator::Return { .. } => {}
         }
     }
-    function.entry_block = block_ids[&function.entry_block];
-    function
+    let definitions = function
+        .blocks
+        .iter()
+        .flat_map(|block| {
+            block
+                .operations
+                .iter()
+                .map(|operation| (operation.result, operation))
+        })
+        .collect::<HashMap<_, _>>();
+    let value_types = function
+        .blocks
+        .iter()
+        .flat_map(|block| {
+            block
+                .parameters
+                .iter()
+                .map(|parameter| (parameter.value, parameter.type_id))
+                .chain(
+                    block
+                        .operations
+                        .iter()
+                        .map(|operation| (operation.result, operation.type_id)),
+                )
+        })
+        .collect::<HashMap<_, _>>();
+    let product_aliases = definitions
+        .values()
+        .filter_map(|operation| {
+            product_eta_source(operation, &definitions, &value_types)
+                .map(|source| (operation.result, source))
+        })
+        .collect::<HashMap<_, _>>();
+    let mut pending = function
+        .blocks
+        .iter()
+        .filter_map(|block| match block.terminator {
+            RuntimeTerminator::Return { value, .. } => Some(TailDemand {
+                value,
+                sum_case: None,
+            }),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut demands = HashSet::new();
+    let mut tail_calls = HashSet::new();
+    while let Some(demand) = pending.pop() {
+        if !demands.insert(demand) {
+            continue;
+        }
+        if demand.sum_case.is_none()
+            && let Some(source) = product_aliases.get(&demand.value)
+        {
+            pending.push(TailDemand {
+                value: *source,
+                sum_case: None,
+            });
+            continue;
+        }
+        if let Some(arguments) = incoming.get(&demand.value) {
+            pending.extend(arguments.iter().map(|argument| TailDemand {
+                value: *argument,
+                sum_case: demand.sum_case,
+            }));
+            continue;
+        }
+        let Some(operation) = definitions.get(&demand.value) else {
+            continue;
+        };
+        match (demand.sum_case, operation.kind) {
+            (None, "sum.payload") => {
+                if let (Some(value), Some(sum_case)) = (operation.operands.first(), operation.case)
+                {
+                    pending.push(TailDemand {
+                        value: *value,
+                        sum_case: Some(sum_case),
+                    });
+                }
+            }
+            (None, "call.direct") if operation.function == Some(function.id) => {
+                tail_calls.insert(operation.result);
+            }
+            (Some(sum_case), "sum.make") if operation.case == Some(sum_case) => {
+                if let Some(value) = operation.operands.first() {
+                    pending.push(TailDemand {
+                        value: *value,
+                        sum_case: None,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    if tail_calls.is_empty() {
+        return;
+    }
+    for block in &mut function.blocks {
+        let Some(call_index) = block.operations.iter().rposition(|operation| {
+            operation.kind == "call.direct"
+                && operation.function == Some(function.id)
+                && tail_calls.contains(&operation.result)
+        }) else {
+            continue;
+        };
+        if !tail_call_suffix_returns(&block.operations, call_index, &block.terminator) {
+            continue;
+        }
+        let call = block.operations[call_index].clone();
+        block.operations.truncate(call_index);
+        block.terminator = RuntimeTerminator::Branch {
+            target: function.entry_block,
+            arguments: call.operands,
+            span: call.span,
+        };
+    }
+}
+
+fn product_eta_source(
+    operation: &RuntimeOperation,
+    definitions: &HashMap<usize, &RuntimeOperation>,
+    value_types: &HashMap<usize, usize>,
+) -> Option<usize> {
+    if operation.kind != "product.make" || operation.operands.is_empty() {
+        return None;
+    }
+    let mut source = None;
+    for (field, operand) in operation.operands.iter().enumerate() {
+        let projection = definitions.get(operand)?;
+        if projection.kind != "product.project" || projection.field != Some(field) {
+            return None;
+        }
+        let projected = *projection.operands.first()?;
+        if let Some(source) = source {
+            if source != projected {
+                return None;
+            }
+        } else {
+            source = Some(projected);
+        }
+    }
+    let source = source?;
+    if value_types.get(&source) != Some(&operation.type_id) {
+        return None;
+    }
+    Some(source)
+}
+
+fn record_incoming_arguments(
+    function: &RuntimeFunction,
+    target: usize,
+    arguments: &[usize],
+    incoming: &mut HashMap<usize, Vec<usize>>,
+) {
+    let block = function
+        .blocks
+        .iter()
+        .find(|block| block.id == target)
+        .unwrap_or_else(|| panic!("tail-call recovery target block {target} is absent"));
+    assert_eq!(
+        block.parameters.len(),
+        arguments.len(),
+        "tail-call recovery branch to block {target} has {} arguments for {} parameters",
+        arguments.len(),
+        block.parameters.len(),
+    );
+    for (parameter, argument) in block.parameters.iter().zip(arguments) {
+        incoming.entry(parameter.value).or_default().push(*argument);
+    }
+}
+
+fn tail_call_suffix_returns(
+    operations: &[RuntimeOperation],
+    call_index: usize,
+    terminator: &RuntimeTerminator,
+) -> bool {
+    let administrative_suffix = operations[call_index + 1..].iter().all(|operation| {
+        matches!(
+            operation.kind,
+            "product.make" | "product.project" | "sum.make"
+        )
+    });
+    if !administrative_suffix {
+        return false;
+    }
+    match terminator {
+        RuntimeTerminator::Return { .. } => true,
+        RuntimeTerminator::Branch { arguments, .. } => arguments.len() == 1,
+        RuntimeTerminator::Conditional { .. } => false,
+    }
 }
 
 fn merge_meaning(left: &RuntimeMeaning, right: &RuntimeMeaning) -> RuntimeMeaning {
@@ -4920,4 +5563,423 @@ fn hir_error(message: &str) -> Diagnostic {
         message,
         crate::ast::Span { start: 0, end: 0 },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_self_call_return_becomes_entry_back_edge() {
+        let mut function = runtime_function(vec![RuntimeBlock {
+            id: 0,
+            parameters: vec![parameter(0)],
+            operations: vec![operation("call.direct", 1, vec![0], Some(7), None)],
+            terminator: RuntimeTerminator::Return {
+                value: 1,
+                span: span(),
+            },
+        }]);
+
+        recover_direct_tail_calls(&mut function);
+
+        assert!(function.blocks[0].operations.is_empty());
+        let RuntimeTerminator::Branch {
+            target, arguments, ..
+        } = &function.blocks[0].terminator
+        else {
+            panic!("tail call did not become a branch");
+        };
+        assert_eq!(*target, 0);
+        assert_eq!(arguments, &[0]);
+    }
+
+    #[test]
+    fn returned_private_sum_payload_becomes_entry_back_edge() {
+        let mut function = runtime_function(vec![
+            RuntimeBlock {
+                id: 0,
+                parameters: vec![parameter(0)],
+                operations: vec![
+                    operation("call.direct", 1, vec![0], Some(7), None),
+                    operation("sum.make", 2, vec![1], None, Some(1)),
+                ],
+                terminator: RuntimeTerminator::Branch {
+                    target: 1,
+                    arguments: vec![2],
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 1,
+                parameters: vec![parameter(3)],
+                operations: vec![operation("sum.payload", 4, vec![3], None, Some(1))],
+                terminator: RuntimeTerminator::Return {
+                    value: 4,
+                    span: span(),
+                },
+            },
+        ]);
+
+        recover_direct_tail_calls(&mut function);
+
+        assert!(function.blocks[0].operations.is_empty());
+        let RuntimeTerminator::Branch {
+            target, arguments, ..
+        } = &function.blocks[0].terminator
+        else {
+            panic!("wrapped tail call did not become a branch");
+        };
+        assert_eq!(*target, 0);
+        assert_eq!(arguments, &[0]);
+    }
+
+    #[test]
+    fn reconstructed_product_return_becomes_entry_back_edge() {
+        let mut function = runtime_function(vec![
+            RuntimeBlock {
+                id: 0,
+                parameters: vec![parameter(0)],
+                operations: vec![
+                    RuntimeOperation {
+                        type_id: 1,
+                        ..operation("call.direct", 1, vec![0], Some(7), None)
+                    },
+                    product_operation("product.project", 2, 1, vec![1], Some(0)),
+                    product_operation("product.project", 3, 1, vec![1], Some(1)),
+                    product_operation("product.make", 4, 1, vec![2, 3], None),
+                ],
+                terminator: RuntimeTerminator::Branch {
+                    target: 1,
+                    arguments: vec![4],
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 1,
+                parameters: vec![product_parameter(5)],
+                operations: vec![
+                    product_operation("product.project", 6, 1, vec![5], Some(0)),
+                    product_operation("product.project", 7, 1, vec![5], Some(1)),
+                    product_operation("product.make", 8, 1, vec![6, 7], None),
+                ],
+                terminator: RuntimeTerminator::Return {
+                    value: 8,
+                    span: span(),
+                },
+            },
+        ]);
+
+        recover_direct_tail_calls(&mut function);
+
+        assert!(function.blocks[0].operations.is_empty());
+        let RuntimeTerminator::Branch {
+            target, arguments, ..
+        } = &function.blocks[0].terminator
+        else {
+            panic!("reconstructed product tail call did not become a branch");
+        };
+        assert_eq!(*target, 0);
+        assert_eq!(arguments, &[0]);
+    }
+
+    #[test]
+    fn work_after_self_call_keeps_the_call() {
+        let function = simplify_runtime_function(runtime_function(vec![RuntimeBlock {
+            id: 0,
+            parameters: vec![parameter(0)],
+            operations: vec![
+                operation("call.direct", 1, vec![0], Some(7), None),
+                operation("scalar", 2, vec![1, 0], None, None),
+            ],
+            terminator: RuntimeTerminator::Return {
+                value: 2,
+                span: span(),
+            },
+        }]));
+
+        assert_eq!(function.blocks[0].operations.len(), 2);
+        assert_eq!(function.blocks[0].operations[0].kind, "call.direct");
+    }
+
+    #[test]
+    fn boolean_branch_roundtrip_becomes_direct_control_flow() {
+        let function = simplify_runtime_function(runtime_function(vec![
+            RuntimeBlock {
+                id: 0,
+                parameters: vec![parameter(0)],
+                operations: Vec::new(),
+                terminator: RuntimeTerminator::Conditional {
+                    condition: 0,
+                    consequent: 1,
+                    consequent_arguments: Vec::new(),
+                    alternate: 2,
+                    alternate_arguments: Vec::new(),
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 1,
+                parameters: Vec::new(),
+                operations: vec![boolean_constant(1, false)],
+                terminator: RuntimeTerminator::Branch {
+                    target: 3,
+                    arguments: vec![1],
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 2,
+                parameters: Vec::new(),
+                operations: vec![boolean_constant(2, true)],
+                terminator: RuntimeTerminator::Branch {
+                    target: 3,
+                    arguments: vec![2],
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 3,
+                parameters: vec![parameter(3)],
+                operations: Vec::new(),
+                terminator: RuntimeTerminator::Conditional {
+                    condition: 3,
+                    consequent: 4,
+                    consequent_arguments: Vec::new(),
+                    alternate: 5,
+                    alternate_arguments: Vec::new(),
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 4,
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: RuntimeTerminator::Return {
+                    value: 0,
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 5,
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: RuntimeTerminator::Return {
+                    value: 0,
+                    span: span(),
+                },
+            },
+        ]));
+
+        assert_eq!(function.blocks.len(), 3);
+        let RuntimeTerminator::Conditional {
+            condition,
+            consequent,
+            alternate,
+            ..
+        } = function.blocks[0].terminator
+        else {
+            panic!("boolean roundtrip did not become a direct conditional");
+        };
+        assert_eq!(condition, 0);
+        assert_eq!(consequent, 2);
+        assert_eq!(alternate, 1);
+    }
+
+    #[test]
+    fn known_sum_constructors_bypass_tag_dispatch() {
+        let function = simplify_runtime_function(runtime_function(vec![
+            RuntimeBlock {
+                id: 0,
+                parameters: vec![parameter(0)],
+                operations: Vec::new(),
+                terminator: RuntimeTerminator::Conditional {
+                    condition: 0,
+                    consequent: 1,
+                    consequent_arguments: Vec::new(),
+                    alternate: 2,
+                    alternate_arguments: Vec::new(),
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 1,
+                parameters: Vec::new(),
+                operations: vec![operation("sum.make", 1, vec![0], None, Some(0))],
+                terminator: RuntimeTerminator::Branch {
+                    target: 3,
+                    arguments: vec![1],
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 2,
+                parameters: Vec::new(),
+                operations: vec![operation("sum.make", 2, vec![0], None, Some(1))],
+                terminator: RuntimeTerminator::Branch {
+                    target: 3,
+                    arguments: vec![2],
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 3,
+                parameters: vec![parameter(3)],
+                operations: vec![
+                    operation("sum.tag", 4, vec![3], None, None),
+                    integer32_constant(5, 0),
+                    RuntimeOperation {
+                        operator: Some("equal"),
+                        ..operation("scalar", 6, vec![4, 5], None, None)
+                    },
+                ],
+                terminator: RuntimeTerminator::Conditional {
+                    condition: 6,
+                    consequent: 4,
+                    consequent_arguments: Vec::new(),
+                    alternate: 5,
+                    alternate_arguments: Vec::new(),
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 4,
+                parameters: Vec::new(),
+                operations: vec![operation("sum.payload", 7, vec![3], None, Some(0))],
+                terminator: RuntimeTerminator::Return {
+                    value: 7,
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 5,
+                parameters: Vec::new(),
+                operations: vec![operation("sum.payload", 8, vec![3], None, Some(1))],
+                terminator: RuntimeTerminator::Return {
+                    value: 8,
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 6,
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: RuntimeTerminator::Branch {
+                    target: 4,
+                    arguments: Vec::new(),
+                    span: span(),
+                },
+            },
+        ]));
+
+        assert_eq!(function.blocks.len(), 5);
+        for (block, target, payload) in [(1, 3, 0), (2, 4, 0)] {
+            assert!(function.blocks[block].operations.is_empty());
+            let RuntimeTerminator::Branch {
+                target: actual_target,
+                arguments,
+                ..
+            } = &function.blocks[block].terminator
+            else {
+                panic!("known sum constructor did not bypass dispatch");
+            };
+            assert_eq!(*actual_target, target);
+            assert_eq!(arguments, &[payload]);
+        }
+        assert_eq!(function.blocks[3].parameters[0].value, 7);
+        assert_eq!(function.blocks[4].parameters[0].value, 8);
+    }
+
+    fn runtime_function(blocks: Vec<RuntimeBlock>) -> RuntimeFunction {
+        RuntimeFunction {
+            id: 7,
+            name: "tail-test".to_owned(),
+            signature: 0,
+            entry_block: 0,
+            blocks,
+            span: span(),
+        }
+    }
+
+    fn parameter(value: usize) -> RuntimeBlockParameter {
+        RuntimeBlockParameter {
+            value,
+            type_id: 0,
+            ownership: "plain",
+            span: span(),
+        }
+    }
+
+    fn product_parameter(value: usize) -> RuntimeBlockParameter {
+        RuntimeBlockParameter {
+            value,
+            type_id: 1,
+            ownership: "owned",
+            span: span(),
+        }
+    }
+
+    fn operation(
+        kind: &'static str,
+        result: usize,
+        operands: Vec<usize>,
+        function: Option<usize>,
+        case: Option<usize>,
+    ) -> RuntimeOperation {
+        RuntimeOperation {
+            kind,
+            result,
+            type_id: 0,
+            operands,
+            ownership: "plain",
+            span: span(),
+            value: None,
+            update: None,
+            case,
+            capability: None,
+            operation: None,
+            operator: None,
+            conversion: None,
+            lane: None,
+            field: None,
+            function,
+            signature: None,
+        }
+    }
+
+    fn product_operation(
+        kind: &'static str,
+        result: usize,
+        type_id: usize,
+        operands: Vec<usize>,
+        field: Option<usize>,
+    ) -> RuntimeOperation {
+        RuntimeOperation {
+            field,
+            type_id,
+            ..operation(kind, result, operands, None, None)
+        }
+    }
+
+    fn boolean_constant(result: usize, value: bool) -> RuntimeOperation {
+        RuntimeOperation {
+            value: Some(WireConstant::Boolean(value)),
+            ..operation("constant", result, Vec::new(), None, None)
+        }
+    }
+
+    fn integer32_constant(result: usize, value: i32) -> RuntimeOperation {
+        RuntimeOperation {
+            value: Some(WireConstant::SignedInteger32(value)),
+            ..operation("constant", result, Vec::new(), None, None)
+        }
+    }
+
+    fn span() -> RuntimeSpan {
+        RuntimeSpan {
+            file: "tail-test.blot".to_owned(),
+            start: 0,
+            end: 0,
+        }
+    }
 }

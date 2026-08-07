@@ -362,22 +362,35 @@ width or to the introducer's width. Other indentation is expression continuation
 and does not silently create a scope. A closing delimiter does not select a
 suite width, so its indentation is ignored and canonicalized by the formatter.
 The formatter writes the accepted structure with two-space indentation and
-expands lines toward an 80-column limit. A vertical delimiter indents its
-contents one level and closes one level outside them. It writes value
-conditionals vertically, expanding each direct branch value into a block whose
-explicit `return` supplies that value. When the conditional is itself the
-terminal result of a scope, the formatter omits the redundant outer `return` and
-lets those branch returns target the scope directly. Arrays use one line when
-they fit and otherwise place one element on each line. After a standalone `if`
-or `for` suite closes before another statement, the formatter writes one empty
-line to make the dedent visible.
+expands lines toward an 80-column limit. When a binding or `return` line is too
+wide, its value moves to the following line at one additional indentation level.
+A delimited value that is already multiline likewise moves as a whole, so its
+opening and closing delimiters share the value's indentation scope rather than
+the declaration's prefix. A vertical delimiter indents its contents one level
+and closes one level outside them. The formatter writes value conditionals
+vertically, expanding each direct branch value into a block whose explicit
+`return` supplies that value. When the conditional is itself the terminal result
+of a scope, the formatter omits the redundant outer `return` and lets those
+branch returns target the scope directly. Arrays use one line when they fit
+within their value scope and otherwise place one element on each line. After a
+standalone `if` or `for` suite closes before another statement, the formatter
+writes one empty line to make the dedent visible.
 
 ### 4.1 Runtime and compile-time bindings
 
 ```blot
 let pattern = value
 const pattern = value
+
+let descriptive_pattern =
+  value
 ```
+
+The indented continuation accepts a lambda, element, or ordinary expression. An
+`if` immediately after the newline begins the binding's existing block form,
+where it is a statement conditional; parenthesize it when the binding must
+continue with a value conditional instead. The continuation changes layout only
+and does not introduce another scope.
 
 `let` defines a value in the current phase, matches its pattern when demanded,
 and binds the pattern's names.
@@ -624,11 +637,11 @@ let parent =
   </C>
 ```
 
-Short bodies may remain inline as `<C>{effect1}{effect2}</C>`. A multiline
-element binding places its value on the following indented line, so the opening
-and closing tags visibly share the value's scope. The braces distinguish an
-existing effect value from a bare child computation, which element syntax
-suspends once for convenience.
+Short bodies may remain inline as `<C>{effect1}{effect2}</C>`. Like other
+multiline binding values, a multiline element moves to the following indented
+line, so the opening and closing tags visibly share the value's scope. The
+braces distinguish an existing effect value from a bare child computation, which
+element syntax suspends once for convenience.
 
 The tag is a lexical binding with exactly the name written. Lower-case and
 capitalized tags have the same semantics: `<div>` reaches `div`, and `<Button>`
@@ -842,6 +855,14 @@ Arrays are ordered homogeneous collections:
 
 An array spread must evaluate to an array. Arrays are immutable; `@array.set`
 and `@array.push` return new arrays.
+
+`Arena` is the prelude convention for finite recursive data and graphs. It uses
+a homogeneous array as a scratch arena and stable `Int` indices as addresses.
+`Arena.singleton value` creates address zero, `Arena.insert (?arena, value)`
+returns `(arena, address)`, and `Arena.get (arena, address)` returns `#Some` or
+`#None`. Programs conventionally reserve address zero as a sentinel. The arena
+is an ordinary array: its node type remains statically checked, and no pointer
+or unchecked lifetime enters the source language.
 
 A tuple is a shape with fields `"0"`, `"1"`, and so on:
 
@@ -1980,16 +2001,16 @@ refused rather than guessed. A binding a closure holds the only read of keeps
 its last use, because how often that closure runs is exactly what the linear
 proof is about.
 
-When the proved consumption of a linear binding is the array operand of
-`@array.set` or `@array.push`, the backend may reuse that array's Store. This is
-an implementation permission published in an ownership certificate. A separate
-checker rejects duplicate binding identities, invalid spans, reentrant reads, or
-a reuse site absent from the complete set of path-specific consumptions before
-lowering consults it. Authorization is keyed to the exact binding identity and
-source occurrence, so one branch's consumption cannot authorize another branch's
-update. This is not mutation in the language: the source binding is unavailable
-after the consuming use, and updates of ordinary shared arrays remain persistent
-with the immutable behavior specified in §6.1.
+When the proved consumption of a linear or affine binding is the array operand
+of `@array.set` or `@array.push`, the backend may reuse that array's Store. This
+is an implementation permission published in an ownership certificate. A
+separate checker rejects duplicate binding identities, invalid spans, reentrant
+reads, or a reuse site absent from the complete set of path-specific
+consumptions before lowering consults it. Authorization is keyed to the exact
+binding identity and source occurrence, so one branch's consumption cannot
+authorize another branch's update. This is not mutation in the language: the
+source binding is unavailable after the consuming use, and updates of ordinary
+shared arrays remain persistent with the immutable behavior specified in §6.1.
 
 ## 12. Effects and handlers
 
@@ -2382,9 +2403,11 @@ same immutable array value. The primitive records an erasable `array-index`
 certificate containing normalized literal-or-identity terms and the affine
 assumptions used to prove the interval. The certificate contains no inference
 type, and a separate difference-constraint checker must replay it before
-lowering may emit the Store read. The Store's checked form remains the safety
-net; gpufuck's range pass removes the runtime check for the certified residual
-comparison.
+lowering may emit the Store read. After replay, the direct Runtime-HIR emitter
+omits a second bounds decision: an invalid index must have been refused by the
+checker, while the total prelude operation reaches the read only through its
+ordinary successful guard. Gpufuck's range pass applies the same erasure to the
+certified residual comparison.
 
 `@array.indexed xs` is the proof-producing traversal path (§9.2). Its `.step`
 performs one bounds decision to decide whether another element exists. A
@@ -2511,12 +2534,13 @@ function, an effect, and `F32x4`, whose whole content is its name.
 
 ### 13.5 Ownership markers
 
-`@linear.own` and `@linear.borrow` are runtime identities whose meaning comes
-from ownership analysis and the default prefix fixities `!` and `&`.
-`@linear.maybe` is the reserved target of prefix `?` and is not a primitive the
-checker knows: `?expression` is `BLOT_UNKNOWN_PRIMITIVE`. Affine obligations are
-introduced by `?name` patterns, and there is no expression form for them —
-unlike `!` and `&`, prefix `?` is a fixity entry with nothing behind it.
+`@linear.own`, `@linear.maybe`, and `@linear.borrow` are runtime identities
+whose meaning comes from ownership analysis and the default prefix fixities `!`,
+`?`, and `&`. A `?name` pattern introduces an at-most-once obligation;
+`?expression` explicitly transfers that affine value to a parameter which
+promises at-most-once use. The expression marker does not make a shared value
+unique: ownership analysis still rejects a second move or a callee without the
+matching affine parameter contract.
 
 ## 14. Standard prelude
 
@@ -2560,10 +2584,12 @@ They do not perform implicit dispatch. An implementation is an ordinary record
 passed explicitly or named directly. `Text` satisfies both `Length Str` and
 `Monoid Str`. `Array` satisfies `Length [T]` and `Monoid [T]`; its `length`
 implementation borrows the array, while its `append` is prelude source over
-`fold` and `@array.push`. Ownership remains a separate flow property rather than
-part of the structural interface type. The default `<>` remains the concrete
-text operation `Text.append`. A module that wants the same spelling for arrays
-declares `Array.append` as its operator target.
+`fold` and `@array.push`. `Arena` supplies `singleton`, affine `insert`,
+borrowed `length`, and safe `get` over the same array representation. Ownership
+remains a separate flow property rather than part of the structural interface
+type. The default `<>` remains the concrete text operation `Text.append`. A
+module that wants the same spelling for arrays declares `Array.append` as its
+operator target.
 
 Important conventional values include:
 
@@ -2608,7 +2634,8 @@ Before gpufuck lowering, Blot:
 - lowers shapes and tuples to nominal records;
 - lowers constructor sets to nominal variants;
 - lowers arrays to gpufuck `Store`;
-- marks a Store update owned only when it consumes a proved linear array;
+- marks a Store update owned only when it consumes a proved linear or affine
+  array;
 - lowers each recursive group to one local `let-rec` group;
 - specializes source handlers with selective CPS; and
 - turns host effects and entry-module projections into typed imports.

@@ -4,14 +4,16 @@ operators {
 
 open @import "blot:prelude" ()
 
-const Terminal = @effect.host {
-  .read_line = Unit -> Str;
-  .write = Str -> Unit;
-}
+const Terminal =
+  @effect.host {
+    .read_line = Unit -> Str;
+    .write = Str -> Unit;
+  }
 
-const Model = @effect.host {
-  .complete = Str -> Str;
-}
+const Model =
+  @effect.host {
+    .complete = Str -> Str;
+  }
 
 let transcript = ""
 let turns = 0

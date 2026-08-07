@@ -57,7 +57,7 @@
         }
       },
       {
-        "rule": "indented_element_value",
+        "rule": "indented_value",
         "boundary": {
           "kind": "root"
         }
@@ -180,6 +180,30 @@
       },
       {
         "rule": "expression",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "continued_expression",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "continued_operand",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "continued_postfix_expression",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "continued_primary_expression",
         "boundary": {
           "kind": "root"
         }

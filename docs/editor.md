@@ -55,14 +55,18 @@ indentation and targets 80-column lines. Value conditionals always use vertical
 `if condition:` / `else:` branches, with an explicit `return` for every branch
 result. If that conditional is the scope's terminal result, the branch returns
 make an outer `return if` redundant, so the formatter writes the conditional as
-a statement. Lambdas expand according to their scope when needed. Arrays stay on
-one line when the complete expression fits; otherwise every element gets its own
-line. Long tuple arguments likewise expand when that removes an overlong line.
-It also removes trailing whitespace, writes LF line endings, leaves one final
-newline, and removes parentheses made redundant by postfix precedence or
-left-associative application while retaining groupings that affect the AST.
-Comments remain source text in the gaps between Baba CST nodes, so formatting
-cannot discard them. Use it from the command line with:
+a statement. A binding or `return` value moves to a two-space continuation when
+the complete line is too wide. Multiline delimited values move as a unit before
+their contents are laid out, so a declaration prefix cannot select a different
+delimiter shape. Lambdas expand according to their scope when needed. Arrays
+stay on one line when the complete expression fits within its value scope;
+otherwise every element gets its own line. Long tuple arguments likewise expand
+when that removes an overlong line. It also removes trailing whitespace, writes
+LF line endings, leaves one final newline, and removes parentheses made
+redundant by postfix precedence or left-associative application while retaining
+groupings that affect the AST. Comments remain source text in the gaps between
+Baba CST nodes, so formatting cannot discard them. Use it from the command line
+with:
 
 ```bash
 deno task blot fmt source.blot

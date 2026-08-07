@@ -13,7 +13,9 @@ const targetSampleMilliseconds = 40;
 const maximumInvocations = 1_048_576;
 const rustPath = "experiments/generated-code/counterpart.rs";
 const sharedBlotPath = "experiments/generated-code/workloads.blot";
-const unsupportedPaths: readonly string[] = [];
+const unsupportedPaths: readonly string[] = [
+  "experiments/generated-code/programs/recursive_list.blot",
+];
 interface CompiledWorkload {
   readonly workload: Workload;
   readonly blotBytes: Uint8Array;
@@ -82,6 +84,7 @@ try {
           "--edition=2024",
           "--target=wasm32-unknown-unknown",
           "-O",
+          "-Coverflow-checks=yes",
           "-Cpanic=abort",
           "-Cstrip=symbols",
           "--crate-type=cdylib",
@@ -323,6 +326,7 @@ async function compileRust(
     "--edition=2024",
     "--target=wasm32-unknown-unknown",
     "-O",
+    "-Coverflow-checks=yes",
     "-Cpanic=abort",
     "-Cstrip=symbols",
     "--crate-type=cdylib",

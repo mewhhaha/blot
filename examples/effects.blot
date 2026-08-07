@@ -16,31 +16,35 @@
 
 open @import "blot:prelude" ()
 
-const Console = @effect {
-  .write = Str -> Unit;
-}
+const Console =
+  @effect {
+    .write = Str -> Unit;
+  }
 
-const Counter = @effect {
-  .next = Unit -> Str;
-}
+const Counter =
+  @effect {
+    .next = Unit -> Str;
+  }
 
 // Reading from an effect, which is what `<-` is for.
-const Terminal = @effect {
-  .read = Unit -> Str;
-}
+const Terminal =
+  @effect {
+    .read = Unit -> Str;
+  }
 
 sig ask = Unit -> Str ~ { Terminal }
 let ask = fn () =>
   answer <- Terminal.read ()
   return answer <> "!"
 
-let answering = {
-  .read = fn ((), ?resume) =>
-    answer <- resume "42"
-    return answer
-  ;
-  .return = fn value => value;
-}
+let answering =
+  {
+    .read = fn ((), ?resume) =>
+      answer <- resume "42"
+      return answer
+    ;
+    .return = fn value => value;
+  }
 
 // Performing is a call, and the row follows from it. The `sig` says the same
 // thing the printer would: the body may perform `Console` and nothing else.
@@ -56,36 +60,40 @@ let greet = fn () =>
 // `?` is affine — at most once. Not a weaker `!`: a handler that never resumes
 // is aborting, which is legitimate, while resuming twice is not. `blot check`
 // catches the second call statically.
-let collecting = {
-  .write = fn (message, ?resume) =>
-    rest <- resume ()
-    return @text.concat (@text.concat message "|") rest
-  ;
-  .return = fn value => value;
-}
+let collecting =
+  {
+    .write = fn (message, ?resume) =>
+      rest <- resume ()
+      return @text.concat (@text.concat message "|") rest
+    ;
+    .return = fn value => value;
+  }
 
-let counting = {
-  .write = fn (_, ?resume) =>
-    rest <- resume ()
-    return @int.add 1 rest
-  ;
-  .return = fn _ => 0;
-}
+let counting =
+  {
+    .write = fn (_, ?resume) =>
+      rest <- resume ()
+      return @int.add 1 rest
+    ;
+    .return = fn _ => 0;
+  }
 
-let passing = {
-  .write = fn (_, ?resume) =>
-    value <- resume ()
-    return value
-  ;
-  .return = fn value => value;
-}
+let passing =
+  {
+    .write = fn (_, ?resume) =>
+      value <- resume ()
+      return value
+    ;
+    .return = fn value => value;
+  }
 
 // A handler that never resumes discards the rest of the computation, which is
 // how an abort is written without any exception machinery.
-let silencing = {
-  .write = fn (_, ?resume) => "silenced";
-  .return = fn value => value;
-}
+let silencing =
+  {
+    .write = fn (_, ?resume) => "silenced";
+    .return = fn value => value;
+  }
 
 let transcript = @handle (Console, greet, collecting)
 let writes = @handle (Console, greet, counting)
@@ -93,11 +101,12 @@ let silenced = @handle (Console, greet, silencing)
 
 // Handlers nest. The inner one discharges `Console`; the outer sees nothing
 // left to handle.
-let nested = @handle (
-  Console,
-  fn () => @handle (Console, greet, counting),
-  passing
-)
+let nested =
+  @handle (
+    Console,
+    fn () => @handle (Console, greet, counting),
+    passing
+  )
 
 let asked = @handle (Terminal, ask, answering)
 

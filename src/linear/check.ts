@@ -1712,7 +1712,7 @@ function trustedBorrowOperation(expr: Expr, scope: Scope): boolean {
   if (namespace === "Num" || namespace === "Text") {
     return analysisBinding(scope, namespace) === null;
   }
-  if (namespace !== "Array") return false;
+  if (namespace !== "Array" && namespace !== "Arena") return false;
   if (analysisBinding(scope, namespace) !== null) return false;
   return application.callee.name === "get" ||
     application.callee.name === "length";

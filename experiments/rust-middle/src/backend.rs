@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde::Serialize;
 use wasm_encoder::{
@@ -18,6 +18,7 @@ const HEAP_GLOBAL: u32 = 0;
 const ACTIVE_EXPORT_GLOBAL: u32 = 3;
 const RESULT_POINTER_GLOBAL: u32 = 4;
 const HEAP_CHECKPOINT_GLOBAL: u32 = 5;
+const MAX_STRUCTURED_LOOP_BLOCKS: usize = 128;
 
 #[derive(Clone, Copy)]
 struct DynamicHelpers {
@@ -33,6 +34,12 @@ struct CanonicalResult<'a> {
     runtime_type: usize,
     pointer: u32,
     realloc: u32,
+}
+
+#[derive(Clone, Copy)]
+enum StructuredResult<'a> {
+    Internal,
+    Canonical(CanonicalResult<'a>),
 }
 
 #[derive(Clone, Copy)]
@@ -800,8 +807,14 @@ fn dynamic_internal_function(
             (start..start + flattened.len() as u32).collect::<Vec<_>>(),
         );
     }
-    let dispatcher = parameter_count + local_types.len() as u32;
-    local_types.push(ValType::I32);
+    let structured_loop = structured_loop_eligible(function);
+    let dispatcher = if structured_loop {
+        None
+    } else {
+        let dispatcher = parameter_count + local_types.len() as u32;
+        local_types.push(ValType::I32);
+        Some(dispatcher)
+    };
     let scratch_pointer = parameter_count + local_types.len() as u32;
     local_types.push(ValType::I32);
     let scratch_length = parameter_count + local_types.len() as u32;
@@ -811,43 +824,65 @@ fn dynamic_internal_function(
 
     let mut wasm_function = Function::new(local_types.into_iter().map(|type_| (1, type_)));
     let mut instructions = wasm_function.instructions();
-    instructions
-        .i32_const(function.entry_block as i32)
-        .local_set(dispatcher)
-        .loop_(BlockType::Empty);
-    for block in &function.blocks {
-        instructions
-            .local_get(dispatcher)
-            .i32_const(block.id as i32)
-            .i32_eq()
-            .if_(BlockType::Empty);
-        for operation in &block.operations {
-            emit_dynamic_operation(
-                &mut instructions,
-                module,
-                function,
-                operation,
-                manifest,
-                helpers,
-                text_offsets,
-                &value_locals,
-                scratch_pointer,
-                scratch_length,
-                scratch_index,
-                runtime_function_indices,
-            )?;
-        }
-        emit_internal_terminator(
+    if structured_loop {
+        instructions.loop_(BlockType::Empty);
+        emit_structured_loop_block(
             &mut instructions,
             module,
             function,
-            &block.terminator,
+            function.entry_block,
+            manifest,
+            helpers,
+            text_offsets,
             &value_locals,
-            dispatcher,
+            scratch_pointer,
+            scratch_length,
+            scratch_index,
+            runtime_function_indices,
+            StructuredResult::Internal,
+            0,
         )?;
-        instructions.end();
+        instructions.unreachable().end().unreachable().end();
+    } else {
+        let dispatcher = dispatcher.expect("dispatcher loop omitted its state local");
+        instructions
+            .i32_const(function.entry_block as i32)
+            .local_set(dispatcher)
+            .loop_(BlockType::Empty);
+        for block in &function.blocks {
+            instructions
+                .local_get(dispatcher)
+                .i32_const(block.id as i32)
+                .i32_eq()
+                .if_(BlockType::Empty);
+            for operation in &block.operations {
+                emit_dynamic_operation(
+                    &mut instructions,
+                    module,
+                    function,
+                    operation,
+                    manifest,
+                    helpers,
+                    text_offsets,
+                    &value_locals,
+                    scratch_pointer,
+                    scratch_length,
+                    scratch_index,
+                    runtime_function_indices,
+                )?;
+            }
+            emit_internal_terminator(
+                &mut instructions,
+                module,
+                function,
+                &block.terminator,
+                &value_locals,
+                dispatcher,
+            )?;
+            instructions.end();
+        }
+        instructions.unreachable().end().unreachable().end();
     }
-    instructions.unreachable().end().unreachable().end();
     Ok(wasm_function)
 }
 
@@ -927,8 +962,14 @@ fn dynamic_export_function(
             (start..start + flattened.len() as u32).collect::<Vec<_>>(),
         );
     }
-    let dispatcher = parameter_count + local_types.len() as u32;
-    local_types.push(ValType::I32);
+    let structured_loop = structured_loop_eligible(function);
+    let dispatcher = if structured_loop {
+        None
+    } else {
+        let dispatcher = parameter_count + local_types.len() as u32;
+        local_types.push(ValType::I32);
+        Some(dispatcher)
+    };
     let scratch_pointer = parameter_count + local_types.len() as u32;
     local_types.push(ValType::I32);
     let scratch_length = parameter_count + local_types.len() as u32;
@@ -938,49 +979,76 @@ fn dynamic_export_function(
     let mut wasm_function = Function::new(local_types.into_iter().map(|type_| (1, type_)));
     let mut instructions = wasm_function.instructions();
     begin_call(&mut instructions, public_export.call_id);
-    instructions
-        .i32_const(function.entry_block as i32)
-        .local_set(dispatcher)
-        .loop_(BlockType::Empty);
-    for block in &function.blocks {
-        instructions
-            .local_get(dispatcher)
-            .i32_const(block.id as i32)
-            .i32_eq()
-            .if_(BlockType::Empty);
-        for operation in &block.operations {
-            emit_dynamic_operation(
-                &mut instructions,
-                module,
-                function,
-                operation,
-                manifest,
-                helpers,
-                text_offsets,
-                &value_locals,
-                scratch_pointer,
-                scratch_length,
-                scratch_index,
-                runtime_function_indices,
-            )?;
-        }
-        emit_dynamic_terminator(
+    if structured_loop {
+        instructions.loop_(BlockType::Empty);
+        emit_structured_loop_block(
             &mut instructions,
             module,
             function,
-            &block.terminator,
+            function.entry_block,
+            manifest,
+            helpers,
+            text_offsets,
             &value_locals,
-            dispatcher,
-            CanonicalResult {
+            scratch_pointer,
+            scratch_length,
+            scratch_index,
+            runtime_function_indices,
+            StructuredResult::Canonical(CanonicalResult {
                 type_: public_export.result_type,
                 runtime_type: public_export.result_runtime_type,
                 pointer: scratch_pointer,
                 realloc: helpers.realloc,
-            },
+            }),
+            0,
         )?;
-        instructions.end();
+        instructions.unreachable().end().unreachable().end();
+    } else {
+        let dispatcher = dispatcher.expect("dispatcher loop omitted its state local");
+        instructions
+            .i32_const(function.entry_block as i32)
+            .local_set(dispatcher)
+            .loop_(BlockType::Empty);
+        for block in &function.blocks {
+            instructions
+                .local_get(dispatcher)
+                .i32_const(block.id as i32)
+                .i32_eq()
+                .if_(BlockType::Empty);
+            for operation in &block.operations {
+                emit_dynamic_operation(
+                    &mut instructions,
+                    module,
+                    function,
+                    operation,
+                    manifest,
+                    helpers,
+                    text_offsets,
+                    &value_locals,
+                    scratch_pointer,
+                    scratch_length,
+                    scratch_index,
+                    runtime_function_indices,
+                )?;
+            }
+            emit_dynamic_terminator(
+                &mut instructions,
+                module,
+                function,
+                &block.terminator,
+                &value_locals,
+                dispatcher,
+                CanonicalResult {
+                    type_: public_export.result_type,
+                    runtime_type: public_export.result_runtime_type,
+                    pointer: scratch_pointer,
+                    realloc: helpers.realloc,
+                },
+            )?;
+            instructions.end();
+        }
+        instructions.unreachable().end().unreachable().end();
     }
-    instructions.unreachable().end().unreachable().end();
     Ok(wasm_function)
 }
 
@@ -1369,19 +1437,8 @@ fn emit_dynamic_operation(
             let element_layout = memory_layout(&element_type);
             instructions
                 .local_get(index[0])
-                .i64_const(0)
-                .i64_lt_s()
-                .if_(BlockType::Empty)
-                .unreachable()
-                .end()
-                .local_get(index[0])
                 .i32_wrap_i64()
-                .local_tee(scratch_index)
-                .local_get(store[1])
-                .i32_ge_u()
-                .if_(BlockType::Empty)
-                .unreachable()
-                .end()
+                .local_set(scratch_index)
                 .local_get(store[0])
                 .local_get(scratch_index)
                 .i32_const(element_layout.size as i32)
@@ -1559,20 +1616,32 @@ fn emit_dynamic_operation(
                 .i32_le_u()
                 .if_(BlockType::Empty)
                 .unreachable()
-                .end()
-                .i32_const(0)
-                .i32_const(0)
+                .end();
+            if operation.update == Some("owned-reuse") {
+                instructions
+                    .local_get(store[0])
+                    .local_get(store[1])
+                    .i32_const(element_layout.size as i32)
+                    .i32_mul();
+            } else {
+                instructions.i32_const(0).i32_const(0);
+            }
+            instructions
                 .i32_const(element_layout.alignment as i32)
                 .local_get(result[1])
                 .i32_const(element_layout.size as i32)
                 .i32_mul()
                 .call(helpers.realloc)
-                .local_tee(result[0])
-                .local_get(store[0])
-                .local_get(store[1])
-                .i32_const(element_layout.size as i32)
-                .i32_mul()
-                .memory_copy(0, 0)
+                .local_tee(result[0]);
+            if operation.update == Some("persistent") {
+                instructions
+                    .local_get(store[0])
+                    .local_get(store[1])
+                    .i32_const(element_layout.size as i32)
+                    .i32_mul()
+                    .memory_copy(0, 0);
+            }
+            instructions
                 .local_get(result[0])
                 .local_get(store[1])
                 .i32_const(element_layout.size as i32)
@@ -1600,6 +1669,246 @@ fn emit_dynamic_operation(
             ));
         }
     }
+    Ok(())
+}
+
+fn structured_loop_eligible(function: &RuntimeFunction) -> bool {
+    let mut active = HashSet::new();
+    let mut has_back_edge = false;
+    let Some(expanded_blocks) = structured_loop_expansion(
+        function,
+        function.entry_block,
+        &mut active,
+        &mut has_back_edge,
+    ) else {
+        return false;
+    };
+    has_back_edge && expanded_blocks <= MAX_STRUCTURED_LOOP_BLOCKS
+}
+
+fn structured_loop_expansion(
+    function: &RuntimeFunction,
+    block_id: usize,
+    active: &mut HashSet<usize>,
+    has_back_edge: &mut bool,
+) -> Option<usize> {
+    if !active.insert(block_id) {
+        return None;
+    }
+    let block = function.blocks.get(block_id)?;
+    if block.id != block_id {
+        return None;
+    }
+    let mut expanded_blocks = 1;
+    for target in terminator_targets(&block.terminator) {
+        if target == function.entry_block {
+            *has_back_edge = true;
+            continue;
+        }
+        expanded_blocks += structured_loop_expansion(function, target, active, has_back_edge)?;
+        if expanded_blocks > MAX_STRUCTURED_LOOP_BLOCKS {
+            return None;
+        }
+    }
+    active.remove(&block_id);
+    Some(expanded_blocks)
+}
+
+fn terminator_targets(terminator: &RuntimeTerminator) -> Vec<usize> {
+    match terminator {
+        RuntimeTerminator::Branch { target, .. } => vec![*target],
+        RuntimeTerminator::Conditional {
+            consequent,
+            alternate,
+            ..
+        } => vec![*consequent, *alternate],
+        RuntimeTerminator::Return { .. } => Vec::new(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_structured_loop_block(
+    instructions: &mut InstructionSink<'_>,
+    module: &RuntimeModule,
+    function: &RuntimeFunction,
+    block_id: usize,
+    manifest: &AbiManifest,
+    helpers: DynamicHelpers,
+    text_offsets: &HashMap<(usize, usize), u32>,
+    value_locals: &HashMap<usize, Vec<u32>>,
+    scratch_pointer: u32,
+    scratch_length: u32,
+    scratch_index: u32,
+    runtime_function_indices: &HashMap<usize, u32>,
+    result: StructuredResult<'_>,
+    loop_depth: u32,
+) -> Result<(), String> {
+    let block = function.blocks.get(block_id).ok_or_else(|| {
+        format!(
+            "{}: structured loop references unknown block {block_id}",
+            module.source
+        )
+    })?;
+    if block.id != block_id {
+        return Err(format!(
+            "{}: structured loop block index {block_id} contains block {}",
+            module.source, block.id
+        ));
+    }
+    for operation in &block.operations {
+        emit_dynamic_operation(
+            instructions,
+            module,
+            function,
+            operation,
+            manifest,
+            helpers,
+            text_offsets,
+            value_locals,
+            scratch_pointer,
+            scratch_length,
+            scratch_index,
+            runtime_function_indices,
+        )?;
+    }
+    match &block.terminator {
+        RuntimeTerminator::Branch {
+            target, arguments, ..
+        } => emit_structured_loop_target(
+            instructions,
+            module,
+            function,
+            *target,
+            arguments,
+            manifest,
+            helpers,
+            text_offsets,
+            value_locals,
+            scratch_pointer,
+            scratch_length,
+            scratch_index,
+            runtime_function_indices,
+            result,
+            loop_depth,
+        )?,
+        RuntimeTerminator::Conditional {
+            condition,
+            consequent,
+            consequent_arguments,
+            alternate,
+            alternate_arguments,
+            ..
+        } => {
+            let condition = locals_for(module, value_locals, *condition)?;
+            instructions.local_get(condition[0]).if_(BlockType::Empty);
+            emit_structured_loop_target(
+                instructions,
+                module,
+                function,
+                *consequent,
+                consequent_arguments,
+                manifest,
+                helpers,
+                text_offsets,
+                value_locals,
+                scratch_pointer,
+                scratch_length,
+                scratch_index,
+                runtime_function_indices,
+                result,
+                loop_depth + 1,
+            )?;
+            instructions.else_();
+            emit_structured_loop_target(
+                instructions,
+                module,
+                function,
+                *alternate,
+                alternate_arguments,
+                manifest,
+                helpers,
+                text_offsets,
+                value_locals,
+                scratch_pointer,
+                scratch_length,
+                scratch_index,
+                runtime_function_indices,
+                result,
+                loop_depth + 1,
+            )?;
+            instructions.end();
+        }
+        RuntimeTerminator::Return { value, .. } => {
+            emit_structured_return(instructions, module, value_locals, *value, result)?;
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_structured_loop_target(
+    instructions: &mut InstructionSink<'_>,
+    module: &RuntimeModule,
+    function: &RuntimeFunction,
+    target: usize,
+    arguments: &[usize],
+    manifest: &AbiManifest,
+    helpers: DynamicHelpers,
+    text_offsets: &HashMap<(usize, usize), u32>,
+    value_locals: &HashMap<usize, Vec<u32>>,
+    scratch_pointer: u32,
+    scratch_length: u32,
+    scratch_index: u32,
+    runtime_function_indices: &HashMap<usize, u32>,
+    result: StructuredResult<'_>,
+    loop_depth: u32,
+) -> Result<(), String> {
+    assign_block_arguments(
+        instructions,
+        module,
+        function,
+        target,
+        arguments,
+        value_locals,
+    )?;
+    if target == function.entry_block {
+        instructions.br(loop_depth);
+        return Ok(());
+    }
+    emit_structured_loop_block(
+        instructions,
+        module,
+        function,
+        target,
+        manifest,
+        helpers,
+        text_offsets,
+        value_locals,
+        scratch_pointer,
+        scratch_length,
+        scratch_index,
+        runtime_function_indices,
+        result,
+        loop_depth,
+    )
+}
+
+fn emit_structured_return(
+    instructions: &mut InstructionSink<'_>,
+    module: &RuntimeModule,
+    value_locals: &HashMap<usize, Vec<u32>>,
+    value: usize,
+    result: StructuredResult<'_>,
+) -> Result<(), String> {
+    match result {
+        StructuredResult::Internal => {
+            emit_local_values(instructions, locals_for(module, value_locals, value)?);
+        }
+        StructuredResult::Canonical(canonical) => {
+            emit_canonical_return(instructions, module, value_locals, value, canonical)?;
+        }
+    }
+    instructions.return_();
     Ok(())
 }
 
@@ -1735,35 +2044,46 @@ fn emit_dynamic_terminator(
                 .br(1);
         }
         RuntimeTerminator::Return { value, .. } => {
-            let result = locals_for(module, value_locals, *value)?;
-            let flattened = flattened_type(canonical_result.type_);
-            if flattened.len() <= 1 {
-                finish_call(instructions);
-                emit_local_values(instructions, result);
-            } else {
-                let layout = memory_layout(canonical_result.type_);
-                instructions
-                    .i32_const(0)
-                    .i32_const(0)
-                    .i32_const(layout.alignment as i32)
-                    .i32_const(layout.size as i32)
-                    .call(canonical_result.realloc)
-                    .local_tee(canonical_result.pointer)
-                    .global_set(RESULT_POINTER_GLOBAL);
-                emit_store_public_result(
-                    instructions,
-                    module,
-                    canonical_result.runtime_type,
-                    canonical_result.type_,
-                    result,
-                    canonical_result.pointer,
-                    0,
-                )?;
-                instructions.local_get(canonical_result.pointer);
-            }
+            emit_canonical_return(instructions, module, value_locals, *value, canonical_result)?;
             instructions.return_();
         }
     }
+    Ok(())
+}
+
+fn emit_canonical_return(
+    instructions: &mut InstructionSink<'_>,
+    module: &RuntimeModule,
+    value_locals: &HashMap<usize, Vec<u32>>,
+    value: usize,
+    canonical_result: CanonicalResult<'_>,
+) -> Result<(), String> {
+    let result = locals_for(module, value_locals, value)?;
+    let flattened = flattened_type(canonical_result.type_);
+    if flattened.len() <= 1 {
+        finish_call(instructions);
+        emit_local_values(instructions, result);
+        return Ok(());
+    }
+    let layout = memory_layout(canonical_result.type_);
+    instructions
+        .i32_const(0)
+        .i32_const(0)
+        .i32_const(layout.alignment as i32)
+        .i32_const(layout.size as i32)
+        .call(canonical_result.realloc)
+        .local_tee(canonical_result.pointer)
+        .global_set(RESULT_POINTER_GLOBAL);
+    emit_store_public_result(
+        instructions,
+        module,
+        canonical_result.runtime_type,
+        canonical_result.type_,
+        result,
+        canonical_result.pointer,
+        0,
+    )?;
+    instructions.local_get(canonical_result.pointer);
     Ok(())
 }
 
@@ -1787,6 +2107,7 @@ fn assign_block_arguments(
             block.parameters.len()
         ));
     }
+    let mut assignments = Vec::new();
     for (parameter, argument) in block.parameters.iter().zip(arguments) {
         let destination = locals_for(module, value_locals, parameter.value)?;
         let source = locals_for(module, value_locals, *argument)?;
@@ -1812,7 +2133,15 @@ fn assign_block_arguments(
                 destination.len(),
             ));
         }
-        assign_locals(instructions, destination, source)?;
+        assignments.push((destination, source));
+    }
+    for (_, source) in &assignments {
+        emit_local_values(instructions, source);
+    }
+    for (destination, _) in assignments.iter().rev() {
+        for local in destination.iter().rev() {
+            instructions.local_set(*local);
+        }
     }
     Ok(())
 }
@@ -3324,6 +3653,29 @@ fn realloc_function() -> Function {
         .if_(BlockType::Result(ValType::I32))
         .i32_const(0)
         .else_()
+        .local_get(0)
+        .i32_eqz()
+        .i32_eqz()
+        .local_get(1)
+        .local_get(3)
+        .i32_le_u()
+        .i32_and()
+        .local_get(0)
+        .local_get(1)
+        .i32_add()
+        .global_get(HEAP_GLOBAL)
+        .i32_eq()
+        .i32_and()
+        .local_get(0)
+        .local_get(2)
+        .i32_const(1)
+        .i32_sub()
+        .i32_and()
+        .i32_eqz()
+        .i32_and()
+        .if_(BlockType::Result(ValType::I32))
+        .local_get(0)
+        .else_()
         .global_get(HEAP_GLOBAL)
         .local_get(2)
         .i32_const(1)
@@ -3333,6 +3685,7 @@ fn realloc_function() -> Function {
         .i32_const(-1)
         .i32_mul()
         .i32_and()
+        .end()
         .local_tee(new_pointer)
         .local_get(3)
         .i32_add()
@@ -3367,6 +3720,10 @@ fn realloc_function() -> Function {
         .end()
         .local_get(0)
         .if_(BlockType::Empty)
+        .local_get(new_pointer)
+        .local_get(0)
+        .i32_ne()
+        .if_(BlockType::Empty)
         .local_get(1)
         .local_get(3)
         .i32_lt_u()
@@ -3380,6 +3737,7 @@ fn realloc_function() -> Function {
         .local_get(0)
         .local_get(copy_length)
         .memory_copy(0, 0)
+        .end()
         .end()
         .local_get(end_pointer)
         .global_set(HEAP_GLOBAL)
@@ -3570,4 +3928,101 @@ fn variant_layout(cases: &[AbiCase]) -> VariantLayout {
 
 fn align_to(value: u32, alignment: u32) -> u32 {
     value.div_ceil(alignment) * alignment
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hir::{RuntimeBlock, RuntimeBlockParameter, RuntimeSpan};
+
+    #[test]
+    fn entry_cycle_with_acyclic_body_is_a_structured_loop() {
+        let function = runtime_function(vec![
+            conditional_block(0, 1, 2),
+            return_block(1),
+            branch_block(2, 0),
+        ]);
+
+        assert!(structured_loop_eligible(&function));
+    }
+
+    #[test]
+    fn non_entry_cycle_keeps_the_dispatcher() {
+        let function = runtime_function(vec![
+            branch_block(0, 1),
+            branch_block(1, 2),
+            branch_block(2, 1),
+        ]);
+
+        assert!(!structured_loop_eligible(&function));
+    }
+
+    fn runtime_function(blocks: Vec<RuntimeBlock>) -> RuntimeFunction {
+        RuntimeFunction {
+            id: 0,
+            name: "structured-loop-test".to_owned(),
+            signature: 0,
+            entry_block: 0,
+            blocks,
+            span: span(),
+        }
+    }
+
+    fn conditional_block(id: usize, consequent: usize, alternate: usize) -> RuntimeBlock {
+        RuntimeBlock {
+            id,
+            parameters: vec![parameter(id)],
+            operations: Vec::new(),
+            terminator: RuntimeTerminator::Conditional {
+                condition: id,
+                consequent,
+                consequent_arguments: Vec::new(),
+                alternate,
+                alternate_arguments: Vec::new(),
+                span: span(),
+            },
+        }
+    }
+
+    fn branch_block(id: usize, target: usize) -> RuntimeBlock {
+        RuntimeBlock {
+            id,
+            parameters: Vec::new(),
+            operations: Vec::new(),
+            terminator: RuntimeTerminator::Branch {
+                target,
+                arguments: Vec::new(),
+                span: span(),
+            },
+        }
+    }
+
+    fn return_block(id: usize) -> RuntimeBlock {
+        RuntimeBlock {
+            id,
+            parameters: Vec::new(),
+            operations: Vec::new(),
+            terminator: RuntimeTerminator::Return {
+                value: 0,
+                span: span(),
+            },
+        }
+    }
+
+    fn parameter(value: usize) -> RuntimeBlockParameter {
+        RuntimeBlockParameter {
+            value,
+            type_id: 1,
+            ownership: "plain",
+            span: span(),
+        }
+    }
+
+    fn span() -> RuntimeSpan {
+        RuntimeSpan {
+            file: "structured-loop-test.blot".to_owned(),
+            start: 0,
+            end: 0,
+        }
+    }
 }

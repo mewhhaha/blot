@@ -103,6 +103,56 @@ the canonical scalar layout internally as well as at adapters, so reads and
 writes preserve `i64`, `f32`, and `f64` element representations rather than
 reinterpreting an unconstrained element as `Unit`.
 
+An owned-reuse Store growth receives the previous pointer and byte length. When
+that allocation ends at the private heap cursor and still satisfies the
+requested alignment, `cabi_realloc` extends it in place; otherwise it allocates
+and copies. A persistent growth never supplies the previous allocation and
+therefore cannot overwrite or extend storage observable through an older Store
+value. Linear and affine consumption both justify owned reuse because neither
+permits a second observation after the consuming occurrence. The public result
+adapter checkpoints the private heap at entry and restores it after scalar
+results or canonical post-return, so these internal allocations form a scratch
+arena per outer export call.
+
+Finite recursive structures may use the prelude `Arena`: nodes occupy a
+homogeneous Store and contain stable integer indices to other nodes. This is a
+typed indexed graph, not an ABI pointer. Safe lookup retains the Store bounds
+proof, and the arena cannot escape through an index alone. Once the safety
+certificate has been replayed, `store.read` omits a duplicate target bounds
+decision. The total `Arena.get` path reaches that operation only after its
+ordinary source guard succeeds. General recursive algebraic values still require
+an explicit recursive Runtime-HIR representation; the indexed form does not
+pretend to provide one.
+
+A direct self-tail call may become a branch to the function entry block. The
+returned value may pass only through block parameters, the compiler-private
+early-return sum envelope, and product projection followed by exact
+reconstruction; these operations neither trap nor perform effects. Any other
+operation after the call prevents the rewrite. The call operands become entry
+arguments and are assigned in parallel before the back-edge, so argument
+permutations observe the same old parameter values as a call. Mutual recursion
+and indirect calls remain calls.
+
+An entry-cycle function may be emitted as one WebAssembly `loop` when treating
+every edge to the entry as a back-edge leaves an acyclic reachable graph. The
+emitter unfolds that graph into nested target conditionals, assigns entry
+arguments in parallel, and emits each entry edge as `br`; returns remain
+returns. A shared acyclic join may therefore be duplicated in the artifact, but
+only the chosen branch executes it. Unfolding has an explicit block budget. A
+non-entry cycle, an invalid target, or a graph over that budget retains the
+block dispatcher. This criterion makes reducibility and code-size growth
+explicit rather than relying on source syntax: recursive functions and desugared
+`for` forms use the same rule.
+
+Before that test, Runtime HIR may bypass representation-only control
+round-trips. A conditional that materializes opposite booleans solely to branch
+on the result becomes a direct conditional. Likewise, known sum constructors
+that flow to one tag decision may branch directly to their matching payload
+blocks when those blocks have no other predecessor. Constructor payloads become
+block arguments. These rewrites do not duplicate or discard source operations,
+effects, or traps; they remove only the constructor/tag/projection steps whose
+outcome is already fixed.
+
 The emitter may remove an empty block whose only terminator forwards its
 parameters unchanged. Predecessors then target the forwarded block directly,
 preserving arguments, branch choice, effects, traps, and source evaluation

@@ -98,6 +98,14 @@ export const WORKLOADS: readonly Workload[] = [
     (count) => count * (count + 1n) / 2n,
   ),
   ...scalingWorkloads(
+    "loop mix",
+    "experiments/generated-code/programs/loop_mix.blot",
+    "workload_loop_mix",
+    "blot:mix",
+    "a nonlinear data-dependent integer recurrence",
+    loopMix,
+  ),
+  ...scalingWorkloads(
     "array construction",
     "experiments/generated-code/programs/array_construction.blot",
     "workload_array_construction",
@@ -128,6 +136,14 @@ export const WORKLOADS: readonly Workload[] = [
     "blot:retained_updates",
     "persistent Store writes whose source remains live",
     (count) => count * (count - 1n) / 2n,
+  ),
+  ...scalingWorkloads(
+    "arena list",
+    "experiments/generated-code/programs/arena_list.blot",
+    "workload_arena_list",
+    "blot:arena_list",
+    "affine arena construction followed by linked traversal",
+    (count) => count * (count + 1n) / 2n,
   ),
 ];
 
@@ -186,4 +202,14 @@ function branchMix(input: bigint): bigint {
   if (input % 11n === 0n) return (input * 13n + 5n) % MODULUS;
   if (input % 13n === 0n) return (input * 17n + 6n) % MODULUS;
   return (input * 19n + 7n) % MODULUS;
+}
+
+function loopMix(count: bigint): bigint {
+  let remaining = count;
+  let state = 1n;
+  while (remaining > 0n) {
+    state = (state * 48_271n + remaining) % MODULUS;
+    remaining -= 1n;
+  }
+  return state;
 }

@@ -594,6 +594,13 @@ diagnostic at the smallest disagreeing path. Borrowing a path never changes the
 tree, but the borrow retains that exact path and cannot be used to recover its
 parent.
 
+The prefix markers `!e`, `?e`, and `&e` do not change `e`'s value type. They
+request, respectively, an exact move, an at-most-once move, or a borrow in
+`Omega`. An application admits `?e` only when `e` carries an affine obligation
+and the selected parameter summary promises at-most-once use. The marker cannot
+manufacture uniqueness for a shared value, and its runtime identity is erased
+after ownership-directed lowering has consumed the permission.
+
 **No-double-move lemma.** If `Omega` admits a move of path `p`, no prefix or
 descendant of `p` has previously been moved on that control-flow path.
 

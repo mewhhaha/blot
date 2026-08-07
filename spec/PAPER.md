@@ -1331,8 +1331,8 @@ Replace the closure-only escape restriction with obligations on aggregates.
 - Permit an abort of a linear continuation only through explicit sequenced
   cancellation.
 - Restrict recursive capture declaratively.
-- Continue using linear consumption, not syntactic last use, as Store-reuse
-  evidence.
+- Continue using proved linear or affine consumption, not syntactic last use, as
+  Store-reuse evidence.
 
 Known aggregates now carry one structural obligation derivation. Checked
 function contracts substitute caller obligations through ordinary and returned

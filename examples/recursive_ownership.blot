@@ -2,12 +2,13 @@ open @import "blot:prelude" ()
 
 let consume = fn !value => value + 1
 let !token = 41
-let even = rec (fn n =>
-  if n < 1:
-    return consume (!token)
-  else:
-    return odd (n - 1)
-)
+let even =
+  rec (fn n =>
+    if n < 1:
+      return consume (!token)
+    else:
+      return odd (n - 1)
+  )
 let odd = rec (fn n => even (n - 1))
 
 return even 4

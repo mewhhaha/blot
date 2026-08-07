@@ -198,19 +198,8 @@ fn lower_declaration(
                     cst.text(value_cursor)?
                 ));
             }
-            let mut value = if let Cursor::Rule(value) = value_cursor
-                && cst.rule_name(value)? == "indented_element_value"
-            {
-                lower_element(
-                    cst,
-                    as_rule(required(cst, value, "value")?)?,
-                    context,
-                    arena,
-                )
-            } else {
-                lower_value(cst, value_cursor, context, arena)
-            }
-            .map_err(|error| format!("while lowering its value: {error}"))?;
+            let mut value = lower_value(cst, value_cursor, context, arena)
+                .map_err(|error| format!("while lowering its value: {error}"))?;
             if !tags.is_empty() {
                 value = lower_tagged_value(kind, pattern, value, &tags, span, arena);
             }
@@ -1996,7 +1985,11 @@ fn lower_value(
 ) -> Result<ExpressionId, String> {
     let wrapper = as_rule(cursor)?;
     let wrapper_name = cst.rule_name(wrapper)?;
-    let target = cst.unwrap(cursor)?;
+    let target = if wrapper_name == "indented_value" {
+        required(cst, wrapper, "value")?
+    } else {
+        cst.unwrap(cursor)?
+    };
     let target_rule = match target {
         Cursor::Rule(rule) => rule,
         Cursor::Token(_) => {
@@ -2065,7 +2058,10 @@ fn lower_expression(
     arena: &mut AstArena,
 ) -> Result<ExpressionId, String> {
     let rule_name = cst.rule_name(rule)?;
-    if rule_name != "expression" && rule_name != "element_child_expression" {
+    if rule_name != "expression"
+        && rule_name != "continued_expression"
+        && rule_name != "element_child_expression"
+    {
         return Err(format!("expected expression, found `{rule_name}`"));
     }
     let first = lower_operand(cst, as_rule(required(cst, rule, "first")?)?, context, arena)

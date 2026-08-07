@@ -85,7 +85,9 @@ Certificate = (rule, conclusion, premises, sourceOrigin, revision)
 The consumer checks the rule and premise identities independently. Copying a
 certificate to another expression, using it after an identity-changing rebind,
 or loading it under a different revision is invalid. Evidence is erased from
-runtime values after it has authorized lowering.
+runtime values after it has authorized lowering. A certified direct array read
+therefore needs no second target bounds decision; total source access still
+performs its ordinary guard before reaching that read.
 
 Certificate failure after a successful analysis is an invariant failure. Failure
 to construct evidence from user source is a diagnostic at the source operation

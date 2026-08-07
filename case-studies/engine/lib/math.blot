@@ -61,11 +61,12 @@ const sin_quarter = fn k =>
     (Float.div x11 39916800.0))
     (Float.div x13 6227020800.0)
 
-const table = fold (
-  upto (0, QUARTER + 1),
-  Array.empty,
-  fn (built, k) => @array.push built (Float32.of_float (sin_quarter k))
-)
+const table =
+  fold (
+    upto (0, QUARTER + 1),
+    Array.empty,
+    fn (built, k) => @array.push built (Float32.of_float (sin_quarter k))
+  )
 
 const table_at = fn index => case Array.get (table, index) of
   #Some value => value

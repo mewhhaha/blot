@@ -62,11 +62,21 @@ marginal size answers how much one workload adds without conflating a nullary
 host adapter with a first-order function adapter.
 
 Scaling comparisons keep source and generated artifacts fixed while varying a
-runtime input. A semantic counterpart must preserve retention: Rust may reuse a
-`Vec` only when Blot carries owned-reuse permission for the corresponding Store.
-When a previous Store version remains observable, the Rust comparison must copy
-as well. Reports distinguish that required persistent cost from a missed
-ownership optimization.
+runtime input. A semantic counterpart must preserve traps as well as returned
+values: Rust integer workloads enable overflow checks because Blot `Int` traps
+rather than wraps. It must also preserve retention: Rust may reuse a `Vec` only
+when Blot carries owned-reuse permission for the corresponding Store. When a
+previous Store version remains observable, the Rust comparison must copy as
+well. Reports distinguish that required persistent cost from a missed ownership
+optimization.
+
+For an affine arena whose node payload does not allocate between appends, the
+latest Store allocation ends at the scratch heap cursor. Each authorized append
+therefore extends the allocation by one fixed-size node in `O(1)`, construction
+of `n` nodes is `O(n)`, and indexed traversal is `O(n)`. If a node payload
+allocates first or another live allocation follows the Store, growth may move
+and copy the existing `O(n)` prefix; the benchmark must expose that fallback
+rather than describing every arena workload as linear.
 
 ## 3. Size parameters
 
@@ -101,6 +111,14 @@ depth keeps its membership scan cheaper than hashing every island call.
 Compile-time evaluation can dominate these bounds because it executes source
 programs. Its budget and measured reductions are reported separately from
 structural compiler traversal.
+
+For a Runtime-HIR function with `H` blocks and `D` executed block transitions,
+the fallback dispatcher can perform `O(D H)` block-identity comparisons. A
+reducible entry cycle instead executes one structured path per iteration and no
+dispatcher comparisons. Unfolding shared acyclic joins can increase emitted `Q`,
+so eligibility includes a fixed expansion budget and otherwise preserves the
+dispatcher. HIR removal of known boolean and sum round-trips reduces both the
+expansion and the executed administrative steps without changing source work.
 
 Cold capsule loading hashes and decompresses `O(C)`, validates the `M` bundled
 flat ASTs, and resolves the `X` external edges through installed manifests. It
@@ -188,6 +206,11 @@ An optimization is accepted only when:
 4. reference, conformance, and WebAssembly observations agree;
 5. the benchmark includes the work claimed by its name; and
 6. the profile attributes the improvement to a removed or cheaper cost term.
+
+Generated-code comparisons additionally use the same target boundary. Native
+Rust and Rust WebAssembly answer different questions; the Rust counterparts in
+the Wasm execution benchmark are compiled to `wasm32-unknown-unknown` and run in
+the same warmed engine as Blot.
 
 A faster result that changes a trap, effect trace, manifest, accepted program,
 or cache invalidation boundary implements a different compiler judgment.

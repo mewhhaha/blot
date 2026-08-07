@@ -8,10 +8,11 @@
 open @import "blot:prelude" ()
 
 const adding = fn T =>
-  let _ = expect (
-    refines (T, Int),
-    "adding is integers only, and this is not one"
-  )
+  let _ =
+    expect (
+      refines (T, Int),
+      "adding is integers only, and this is not one"
+    )
   return fn (a, b) => @int.add a b
 
 const add_i32 = adding I32

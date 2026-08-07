@@ -7,10 +7,11 @@ let choose = fn selected =>
     1 => Console.write "one"
     _ => Console.write "other"
 
-let recording = {
-  .write = fn (message, ?resume) => message;
-  .return = fn _ => "none";
-}
+let recording =
+  {
+    .write = fn (message, ?resume) => message;
+    .return = fn _ => "none";
+  }
 
 return {
   .first = @handle (

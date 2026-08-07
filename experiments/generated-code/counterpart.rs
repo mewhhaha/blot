@@ -57,6 +57,14 @@ fn sum_to(remaining: i64, total: i64) -> i64 {
     sum_to(remaining - 1, total + remaining)
 }
 
+fn loop_mix(remaining: i64, state: i64) -> i64 {
+    if remaining <= 0 {
+        return state;
+    }
+    let next = (state * 48_271 + remaining) % 2_147_483_647;
+    loop_mix(remaining - 1, next)
+}
+
 fn construct(count: i64) -> i64 {
     let mut values = Vec::new();
     for value in (1..=count).rev() {
@@ -79,6 +87,23 @@ fn retained_updates(count: i64) -> i64 {
         values = next;
     }
     observed
+}
+
+fn arena_list(count: i64) -> i64 {
+    let mut nodes = vec![(0_i64, 0_usize)];
+    let mut head = 0_usize;
+    for value in (1..=count).rev() {
+        let next = nodes.len();
+        nodes.push((value, head));
+        head = next;
+    }
+    let mut total = 0_i64;
+    while head != 0 {
+        let node = nodes[head];
+        total += node.0;
+        head = node.1;
+    }
+    total
 }
 
 fn benchmark_input() -> i64 {
@@ -129,6 +154,12 @@ pub extern "C" fn run_tail_recursion(count: i64) -> i64 {
     sum_to(count, 0)
 }
 
+#[cfg(workload_loop_mix)]
+#[unsafe(export_name = "blot:mix")]
+pub extern "C" fn run_loop_mix(count: i64) -> i64 {
+    loop_mix(count, 1)
+}
+
 #[cfg(workload_array_construction)]
 #[unsafe(export_name = "blot:construct")]
 pub extern "C" fn run_array_construction(count: i64) -> i64 {
@@ -151,4 +182,10 @@ pub extern "C" fn run_surface_iteration(count: i64) -> i64 {
 #[unsafe(export_name = "blot:retained_updates")]
 pub extern "C" fn run_retained_updates(count: i64) -> i64 {
     retained_updates(count)
+}
+
+#[cfg(workload_arena_list)]
+#[unsafe(export_name = "blot:arena_list")]
+pub extern "C" fn run_arena_list(count: i64) -> i64 {
+    arena_list(count)
 }

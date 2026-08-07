@@ -1,10 +1,11 @@
 // Opening brings every field into scope under its existing name.
 
-const exports = {
-  .source = 10;
-  .value = 20;
-  .rest = 30;
-}
+const exports =
+  {
+    .source = 10;
+    .value = 20;
+    .rest = 30;
+  }
 
 open exports
 

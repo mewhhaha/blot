@@ -8,11 +8,12 @@ open @import "blot:prelude" ()
 
 let folded = comptime (20 * 2 + 1)
 
-const Header = struct {
-  .kind = U8;
-  .urgent = U8;
-  .length = I32;
-}
+const Header =
+  struct {
+    .kind = U8;
+    .urgent = U8;
+    .length = I32;
+  }
 
 // Structuring and padding are ordinary code over `@shape.*`, so a width
 // function is all a layout strategy is. `examples/storage.blot` takes this
@@ -32,7 +33,8 @@ const derive_show = fn names => fn value => fold (
     "",
     fn (state, name) =>
       let rendered = @text.of_int (@shape.get value name)
-      return @text.concat state (@text.concat name (@text.concat "=" (@text.concat rendered " ")))
+      return
+        @text.concat state (@text.concat name (@text.concat "=" (@text.concat rendered " ")))
   )
 
 const show_header = comptime derive_show Header.fields
@@ -50,12 +52,13 @@ let sample = { .kind = 5; .urgent = 1; .length = 120; }
 
 // Ordinary collection work, all of it prelude source over `fold`.
 let numbers = upto (0, 10)
-let evens = filter (
-  numbers,
-  fn n => case @int.rem n 2 of
-    0 => #True
-    _ => #False
-)
+let evens =
+  filter (
+    numbers,
+    fn n => case @int.rem n 2 of
+      0 => #True
+      _ => #False
+  )
 let squares = map (evens, fn n => n * n)
 
 return {

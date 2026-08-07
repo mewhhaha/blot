@@ -504,6 +504,13 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
     }),
   ],
   [
+    "@linear.maybe",
+    poly((fresh) => {
+      const value = fresh();
+      return curried([value], value);
+    }),
+  ],
+  [
     "@linear.borrow",
     poly((fresh) => {
       const value = fresh();

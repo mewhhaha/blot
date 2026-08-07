@@ -33,10 +33,11 @@ let held = case boxed of
 // sibling live, while the partially moved record itself is no longer usable.
 let !left = 19
 let !right = 20
-let pair = {
-  .left = fn () => consume (!left);
-  .right = fn () => consume (!right);
-}
+let pair =
+  {
+    .left = fn () => consume (!left);
+    .right = fn () => consume (!right);
+  }
 let first = pair.left ()
 let fields = first + pair.right ()
 

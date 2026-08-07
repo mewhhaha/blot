@@ -3,6 +3,7 @@ import {
   assertNotStrictEquals,
   assertRejects,
   assertStrictEquals,
+  assertThrows,
 } from "@std/assert";
 import { join } from "@std/path";
 import { BlotError } from "../diagnostic.ts";
@@ -11,7 +12,10 @@ import { prepareGpupaperHir } from "./compile.ts";
 import { buildTypeScriptOracleBatch } from "./gpupaper.ts";
 import { type BlotAbiManifest, buildBlotAbiManifest } from "./runtime/abi.ts";
 import { decodeBlotAbiResult } from "./runtime/abi_decode.ts";
-import { validateBlotRuntimeModule } from "./runtime/hir.ts";
+import {
+  type BlotRuntimeModule,
+  validateBlotRuntimeModule,
+} from "./runtime/hir.ts";
 import { compileBlotRuntimeModulesOnRustWasm } from "./runtime/target.ts";
 import { prepareRustGpupaperHir, RustMiddleCompiler } from "./rust_middle.ts";
 
@@ -92,9 +96,11 @@ Deno.test("full Rust compiler emits a callable ABI-tagged module", async () => {
 Deno.test("full Rust compiler exports first-order recursive functions", async () => {
   const compiler = await RustMiddleCompiler.create();
   try {
-    const artifact = await compiler.compile(
-      "experiments/generated-code/programs/tail_recursion.blot",
-    );
+    const path = "experiments/generated-code/programs/tail_recursion.blot";
+    const hir = validateBlotRuntimeModule(await compiler.prepare(path));
+    assertEquals(directSelfCalls(hir), []);
+
+    const artifact = await compiler.compile(path);
     const instance = await WebAssembly.instantiate(
       await WebAssembly.compile(Uint8Array.from(artifact.wasm).buffer),
     );
@@ -110,12 +116,42 @@ Deno.test("full Rust compiler exports first-order recursive functions", async ()
   }
 });
 
+Deno.test("structured Runtime HIR preserves a nonlinear trapping loop", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    const path = "experiments/generated-code/programs/loop_mix.blot";
+    const hir = validateBlotRuntimeModule(await compiler.prepare(path));
+    assertEquals(directSelfCalls(hir), []);
+
+    const artifact = await compiler.compile(path);
+    const instance = await WebAssembly.instantiate(
+      await WebAssembly.compile(Uint8Array.from(artifact.wasm).buffer),
+    );
+    const loopMix = instance.exports["blot:mix"];
+    if (!(loopMix instanceof Function)) {
+      throw new Error("nonlinear loop artifact omitted blot:mix");
+    }
+    assertEquals(loopMix(16n), 860_117_411n);
+    assertEquals(loopMix(64n), 1_948_565_355n);
+    assertEquals(loopMix(256n), 817_426_032n);
+    assertEquals(loopMix(1_024n), 1_993_385_803n);
+    assertThrows(
+      () => loopMix(9_223_372_036_854_775_807n),
+      WebAssembly.RuntimeError,
+    );
+  } finally {
+    compiler.destroy();
+  }
+});
+
 Deno.test("full Rust compiler exports dynamic surface iteration", async () => {
   const compiler = await RustMiddleCompiler.create();
   try {
-    const artifact = await compiler.compile(
-      "experiments/generated-code/programs/surface_iteration.blot",
-    );
+    const path = "experiments/generated-code/programs/surface_iteration.blot";
+    const hir = validateBlotRuntimeModule(await compiler.prepare(path));
+    assertEquals(directSelfCalls(hir), []);
+
+    const artifact = await compiler.compile(path);
     const instance = await WebAssembly.instantiate(
       await WebAssembly.compile(Uint8Array.from(artifact.wasm).buffer),
     );
@@ -215,6 +251,71 @@ Deno.test("full Rust compiler preserves retained Store versions", async () => {
     assertEquals(retainedUpdates(64n), 2_016n);
   } finally {
     compiler.destroy();
+  }
+});
+
+Deno.test("affine arena growth carries reuse permission and preserves traversal", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    const path = "experiments/generated-code/programs/arena_list.blot";
+    const hir = validateBlotRuntimeModule(await compiler.prepare(path));
+    const updates = hir.functions.flatMap((fn) =>
+      fn.blocks.flatMap((block) =>
+        block.operations.flatMap((operation) =>
+          operation.kind === "store.grow" ? [operation.update] : []
+        )
+      )
+    ).sort();
+    assertEquals(updates, ["owned-reuse", "persistent"]);
+    assertEquals(directSelfCalls(hir), []);
+
+    const artifact = await compiler.compile(path);
+    const instance = await WebAssembly.instantiate(
+      await WebAssembly.compile(Uint8Array.from(artifact.wasm).buffer),
+    );
+    const arenaList = instance.exports["blot:arena_list"];
+    if (!(arenaList instanceof Function)) {
+      throw new Error("arena list artifact omitted blot:arena_list");
+    }
+    assertEquals(arenaList(0n), 0n);
+    assertEquals(arenaList(10n), 55n);
+    assertEquals(arenaList(1_024n), 524_800n);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+Deno.test("total arena lookup guards the certified Store read", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "arena-lookup.blot");
+  try {
+    await Deno.writeTextFile(
+      path,
+      `open @import "blot:prelude" ()
+sig lookup = Int -> Int
+const lookup = fn address =>
+  let values = [41]
+  return case Arena.get ((&values), address) of
+    #Some value => value
+    #None => 0 - 1
+return { .lookup = lookup; }
+`,
+    );
+    const artifact = await compiler.compile(path);
+    const instance = await WebAssembly.instantiate(
+      await WebAssembly.compile(Uint8Array.from(artifact.wasm).buffer),
+    );
+    const lookup = instance.exports["blot:lookup"];
+    if (!(lookup instanceof Function)) {
+      throw new Error("arena lookup artifact omitted blot:lookup");
+    }
+    assertEquals(lookup(-1n), -1n);
+    assertEquals(lookup(0n), 41n);
+    assertEquals(lookup(1n), -1n);
+  } finally {
+    compiler.destroy();
+    await Deno.remove(directory, { recursive: true });
   }
 });
 
@@ -604,6 +705,16 @@ return 0
     await Deno.remove(directory, { recursive: true });
   }
 });
+
+function directSelfCalls(module: BlotRuntimeModule) {
+  return module.functions.flatMap((fn) =>
+    fn.blocks.flatMap((block) =>
+      block.operations.filter((operation) =>
+        operation.kind === "call.direct" && operation.function === fn.id
+      )
+    )
+  );
+}
 
 async function runTerminal(
   wasm: Uint8Array,

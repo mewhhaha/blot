@@ -1,8 +1,9 @@
 open @import "blot:prelude" ()
 
-const Draw = @effect {
-  .write = Str -> Unit;
-}
+const Draw =
+  @effect {
+    .write = Str -> Unit;
+  }
 
 let element = fn name => fn _properties => fn children =>
   <- Draw.write ("<" <> name <> ">")
@@ -12,23 +13,25 @@ let element = fn name => fn _properties => fn children =>
   <- Draw.write ("</" <> name <> ">")
   return name
 
-let Render = {
-  .text = fn text =>
-    <- Draw.write text
-  ;
-  .div = element "div";
-  .icon = element "icon";
-}
+let Render =
+  {
+    .text = fn text =>
+      <- Draw.write text
+    ;
+    .div = element "div";
+    .icon = element "icon";
+  }
 
 let text = Render.text
 let div = Render.div
 let icon = Render.icon
 
-sig Button = {
-  .label = Str;
-  .disabled? = Bool;
-  .order? = Int;
-} -> [Unit -> Unit ~ { Draw }] -> Unit ~ { Draw }
+sig Button =
+  {
+    .label = Str;
+    .disabled? = Bool;
+    .order? = Int;
+  } -> [Unit -> Unit ~ { Draw }] -> Unit ~ { Draw }
 let Button = fn properties => fn children =>
   let disabled = case properties.disabled of
     () => ""
@@ -55,13 +58,14 @@ let view = fn () =>
   </div>
   return root
 
-let collecting = {
-  .write = fn (fragment, ?resume) =>
-    rest <- resume ()
-    return fragment <> rest
-  ;
-  .return = fn _ => "";
-}
+let collecting =
+  {
+    .write = fn (fragment, ?resume) =>
+      rest <- resume ()
+      return fragment <> rest
+    ;
+    .return = fn _ => "";
+  }
 
 return @handle (
   Draw,

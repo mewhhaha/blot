@@ -11,11 +11,12 @@ let work = fn () =>
   <- Ask.ask ()
   return consume (!token)
 
-let cancelling = {
-  .ask = fn (_, !resume) =>
-    <- Continuation.cancel resume
-    return 7
-  ;
-}
+let cancelling =
+  {
+    .ask = fn (_, !resume) =>
+      <- Continuation.cancel resume
+      return 7
+    ;
+  }
 
 return @handle (Ask, work, cancelling)

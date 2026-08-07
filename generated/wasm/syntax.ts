@@ -232,7 +232,7 @@ export type RuleName =
   | "declaration"
   | "statement"
   | "binding"
-  | "indented_element_value"
+  | "indented_value"
   | "declaration_tag"
   | "rebinding"
   | "sequencing"
@@ -252,6 +252,10 @@ export type RuleName =
   | "shape_pattern"
   | "shape_pattern_field"
   | "expression"
+  | "continued_expression"
+  | "continued_operand"
+  | "continued_postfix_expression"
+  | "continued_primary_expression"
   | "infix_operation"
   | "operand"
   | "prefix_operator"
@@ -380,13 +384,13 @@ export interface BindingCursor extends RuleCursorBase<"binding"> {
   field(name: "kind"): TokenCursor<"literal", "const"> | TokenCursor<"literal", "let"> | TokenCursor<"literal", "sig">;
   field(name: "pattern"): BindingPatternCursor;
   field(name: "tags"): ReadonlyArray<DeclarationTagCursor>;
-  field(name: "value"): IndentedElementValueCursor | ValueCursor;
+  field(name: "value"): IndentedValueCursor | ValueCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
-export interface IndentedElementValueCursor extends RuleCursorBase<"indented_element_value"> {
-  field(name: "value"): ElementExpressionCursor;
+export interface IndentedValueCursor extends RuleCursorBase<"indented_value"> {
+  field(name: "value"): ContinuedExpressionCursor | ElementExpressionCursor | LambdaCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -504,6 +508,31 @@ export interface ExpressionCursor extends RuleCursorBase<"expression"> {
   field(name: "rest"): ReadonlyArray<InfixOperationCursor>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ContinuedExpressionCursor extends RuleCursorBase<"continued_expression"> {
+  field(name: "first"): ContinuedOperandCursor;
+  field(name: "rest"): ReadonlyArray<InfixOperationCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ContinuedOperandCursor extends RuleCursorBase<"continued_operand"> {
+  field(name: "prefixes"): ReadonlyArray<PrefixOperatorCursor>;
+  field(name: "value"): ContinuedPostfixExpressionCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ContinuedPostfixExpressionCursor extends RuleCursorBase<"continued_postfix_expression"> {
+  field(name: "arguments"): ReadonlyArray<ApplicationArgumentCursor>;
+  field(name: "suffixes"): ReadonlyArray<FieldSuffixCursor>;
+  field(name: "value"): ContinuedPrimaryExpressionCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ContinuedPrimaryExpressionCursor extends RuleCursorBase<"continued_primary_expression"> {
 }
 
 export interface InfixOperationCursor extends RuleCursorBase<"infix_operation"> {
@@ -846,7 +875,7 @@ export type AnyRuleCursor =
   | DeclarationCursor
   | StatementCursor
   | BindingCursor
-  | IndentedElementValueCursor
+  | IndentedValueCursor
   | DeclarationTagCursor
   | RebindingCursor
   | SequencingCursor
@@ -866,6 +895,10 @@ export type AnyRuleCursor =
   | ShapePatternCursor
   | ShapePatternFieldCursor
   | ExpressionCursor
+  | ContinuedExpressionCursor
+  | ContinuedOperandCursor
+  | ContinuedPostfixExpressionCursor
+  | ContinuedPrimaryExpressionCursor
   | InfixOperationCursor
   | OperandCursor
   | PrefixOperatorCursor

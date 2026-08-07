@@ -102,14 +102,14 @@ binding = (
   kind:("let" | "const" | "sig")
   pattern:binding_pattern
   "="
-  value:(value | indented_element_value)
+  value:(value | indented_value)
   LAYOUT_NEWLINE
 ) ;
 
-indented_element_value = (
+indented_value = (
   LAYOUT_NEWLINE
   LAYOUT_INDENT
-  value:element_expression
+  value:(lambda | element_expression | continued_expression)
   LAYOUT_NEWLINE
   LAYOUT_DEDENT
 ) ;
@@ -299,6 +299,44 @@ shape_pattern_field = (
 expression = (
   first:operand
   rest:infix_operation*
+) ;
+
+// A value continued after `=` cannot begin with a block or conditional. Both
+// begin with the same layout tokens as a binding block, and treating `if` as a
+// continued value would make its branch suites indistinguishable from a
+// statement conditional's suites. Other values have disjoint starts; an
+// explicit block remains available through the ordinary `value` alternative.
+continued_expression = (
+  first:continued_operand
+  rest:infix_operation*
+) ;
+
+continued_operand = (
+  prefixes:prefix_operator*
+  value:continued_postfix_expression
+) ;
+
+continued_postfix_expression = (
+  value:continued_primary_expression
+  suffixes:field_suffix*
+  arguments:application_argument*
+) ;
+
+continued_primary_expression = (
+  IDENT
+  | TYPE_IDENT
+  | INTEGER
+  | FLOAT
+  | TEXT
+  | INTRINSIC
+  | constructor_expression
+  | unit
+  | case_expression
+  | handler_composition
+  | array
+  | shape
+  | effect_row
+  | parenthesized_or_tuple
 ) ;
 
 infix_operation = (

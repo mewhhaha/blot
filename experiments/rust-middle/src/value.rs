@@ -378,6 +378,7 @@ pub struct RuntimeValue {
 pub enum RuntimeMeaning {
     #[default]
     Plain,
+    ReusableStore,
     Ordering,
     ScalarOrdering {
         right: usize,

@@ -14,9 +14,10 @@
 
 open @import "blot:prelude" ()
 
-const Console = @effect.host {
-  .write = Str -> Unit;
-}
+const Console =
+  @effect.host {
+    .write = Str -> Unit;
+  }
 
 // The write is what makes this resist folding. Its answer belongs to the host,
 // so the comptime evaluator has to stop at the block rather than run it, and

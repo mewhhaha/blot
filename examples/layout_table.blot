@@ -4,31 +4,34 @@
 
 open @import "blot:prelude" ()
 
-let nodes = [
-  { .parent = -1; .offset = 10; .width = 100; },
-  { .parent = 0; .offset = 20; .width = 40; },
-  { .parent = 1; .offset = 5; .width = 10; }
-]
+let nodes =
+  [
+    { .parent = -1; .offset = 10; .width = 100; },
+    { .parent = 0; .offset = 20; .width = 40; },
+    { .parent = 1; .offset = 5; .width = 10; }
+  ]
 
-let layout = rec (fn (index, !frames) =>
-  if index < 0 || index >= @array.len nodes:
-    return frames
-  else:
-    let node = @array.get nodes index
-    let parent_x = if node.parent < 0:
-      return 0
+let layout =
+  rec (fn (index, !frames) =>
+    if index < 0 || index >= @array.len nodes:
+      return frames
     else:
-      return case Array.get ((&frames), node.parent) of
-          #Some parent => parent.x
-          #None => 0
+      let node = @array.get nodes index
+      let parent_x = if node.parent < 0:
+        return 0
+      else:
+        return case Array.get ((&frames), node.parent) of
+            #Some parent => parent.x
+            #None => 0
 
-    let frame = {
-      .x = parent_x + node.offset;
-      .width = node.width;
-    }
-    return layout (index + 1, @array.push frames frame)
+      let frame =
+        {
+          .x = parent_x + node.offset;
+          .width = node.width;
+        }
+      return layout (index + 1, @array.push frames frame)
 
-)
+  )
 
 let frames = layout (0, [])
 return case Array.get (frames, 2) of

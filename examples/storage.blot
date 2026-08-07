@@ -62,11 +62,12 @@ const Sorted = struct (reorder (Record, alphabetical (@shape.names Record)))
 
 const declared_bytes = aligned (Record, Declared.fields, byte_width)
 
-const Pixel = {
-  .red = U 8;
-  .green = U 8;
-  .mode = U 2;
-}
+const Pixel =
+  {
+    .red = U 8;
+    .green = U 8;
+    .mode = U 2;
+  }
 const pixel_bits = packed Pixel
 const signed_bit_width = bit_width (I 7)
 const unsigned_bit_width = bit_width U64
@@ -80,9 +81,10 @@ const raw = layout (Record, byte_width)
 // it chains left, so a namespace reads as a sequence of attachments rather than
 // as nested calls.
 
-const Meters = seal ("Meters", I32) <+ { .of = fn n =>
-  return seal ("Meters", n)
-; } <+ { .unit = "m"; }
+const Meters =
+  seal ("Meters", I32) <+ { .of = fn n =>
+    return seal ("Meters", n)
+  ; } <+ { .unit = "m"; }
 
 const Located = Point <+ { .origin = { .x = 0; .y = 0; }; }
 

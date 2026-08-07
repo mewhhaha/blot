@@ -135,11 +135,12 @@ return chooseMinimum
 
   assertEquals(
     formatted.source,
-    `const chooseMinimum = fn (veryLongLeftValue, veryLongRightValue) =>
-  if veryLongLeftValue < veryLongRightValue:
-    return veryLongLeftValue
-  else:
-    return veryLongRightValue
+    `const chooseMinimum =
+  fn (veryLongLeftValue, veryLongRightValue) =>
+    if veryLongLeftValue < veryLongRightValue:
+      return veryLongLeftValue
+    else:
+      return veryLongRightValue
 return chooseMinimum
 `,
   );
@@ -320,22 +321,23 @@ return World
 
   assertEquals(
     formatted.source,
-    `const World = Ecs.indexed_world {
-  .base = 0;
-  .capacity = MapScene.tile_count + unit_capacity + 1;
-  .components = [
-    Terrain,
-    Construction,
-    Residence,
-    UnitMovement,
-    UnitActivity,
-    EditorState,
-    SimulationClock,
-    SimulationCursors,
-    CityStats,
-    CityInfrastructure
-  ];
-}
+    `const World =
+  Ecs.indexed_world {
+    .base = 0;
+    .capacity = MapScene.tile_count + unit_capacity + 1;
+    .components = [
+      Terrain,
+      Construction,
+      Residence,
+      UnitMovement,
+      UnitActivity,
+      EditorState,
+      SimulationClock,
+      SimulationCursors,
+      CityStats,
+      CityInfrastructure
+    ];
+  }
 return World
 `,
   );
@@ -346,7 +348,7 @@ return World
   );
 });
 
-Deno.test("formatting keeps a complete short array on one line", async () => {
+Deno.test("formatting moves an existing multiline array into its value scope", async () => {
   const source = `let components = [Terrain,
   Construction]
 return components
@@ -357,7 +359,8 @@ return components
 
   assertEquals(
     formatted.source,
-    `let components = [Terrain, Construction]
+    `let components =
+  [Terrain, Construction]
 return components
 `,
   );
@@ -379,8 +382,8 @@ Deno.test("formatting changes layout only after the 80-column boundary", async (
   );
   await assertStableFormatting(
     `${lambdaPrefix}${overflowingLambdaBody}\nreturn choose\n`,
-    `const choose = fn value =>
-  return ${overflowingLambdaBody}
+    `const choose =
+  fn value => ${overflowingLambdaBody}
 return choose
 `,
   );
@@ -396,12 +399,46 @@ return choose
   );
   await assertStableFormatting(
     `${arrayPrefix}[${overflowingElement}]\nreturn values\n`,
-    `let values = [
-  ${overflowingElement}
-]
+    `let values =
+  [${overflowingElement}]
 return values
 `,
   );
+
+  const returnPrefix = "return ";
+  const fittingReturnValue = "x".repeat(
+    80 - returnPrefix.length,
+  );
+  const overflowingReturnValue = `${fittingReturnValue}x`;
+  await assertStableFormatting(
+    `${returnPrefix}${fittingReturnValue}\n`,
+    `${returnPrefix}${fittingReturnValue}\n`,
+  );
+  await assertStableFormatting(
+    `${returnPrefix}${overflowingReturnValue}\n`,
+    `return
+  ${overflowingReturnValue}
+`,
+  );
+});
+
+Deno.test("formatting indents a separated return inside a colon block", async () => {
+  const returnedValue = "x".repeat(70);
+  const source = `let choose = fn ready =>
+  if ready:
+    return ${returnedValue}
+  return fallback
+return choose
+`;
+  const expected = `let choose = fn ready =>
+  if ready:
+    return
+      ${returnedValue}
+
+  return fallback
+return choose
+`;
+  await assertStableFormatting(source, expected);
 });
 
 Deno.test("formatting keeps nested arrays and spreads structurally clear", async () => {
@@ -415,13 +452,14 @@ return (empty, singleton, values)
     source,
     `let empty = []
 let singleton = [only]
-let values = [
-  firstComponent,
-  [secondComponent, thirdComponent],
-  ...remainingComponents,
-  fourthComponent,
-  fifthComponent
-]
+let values =
+  [
+    firstComponent,
+    [secondComponent, thirdComponent],
+    ...remainingComponents,
+    fourthComponent,
+    fifthComponent
+  ]
 return (empty, singleton, values)
 `,
   );
@@ -442,15 +480,17 @@ return (values, pair)
 
   await assertStableFormatting(
     source,
-    `let values = [
-  // the first component must remain first
-  firstComponent,
-  secondComponent
-]
-let pair = (
-  firstComponent, // retained on the left
-  secondComponent
-)
+    `let values =
+  [
+    // the first component must remain first
+    firstComponent,
+    secondComponent
+  ]
+let pair =
+  (
+    firstComponent, // retained on the left
+    secondComponent
+  )
 return (values, pair)
 `,
   );
@@ -516,10 +556,11 @@ Deno.test("formatting closes a vertical record outside its fields", async () => 
   }
 return Namespace
 `,
-    `const Namespace = {
-  .empty = [];
-  .append = fn left => fn right => left;
-}
+    `const Namespace =
+  {
+    .empty = [];
+    .append = fn left => fn right => left;
+  }
 return Namespace
 `,
   );

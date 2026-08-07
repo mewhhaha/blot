@@ -14,9 +14,10 @@
 
 open @import "blot:prelude" ()
 
-const Console = @effect.host {
-  .write = Str -> Unit;
-}
+const Console =
+  @effect.host {
+    .write = Str -> Unit;
+  }
 
 // A `let` is generalized, so nothing here fixes the shape of `v`.
 let get_x = fn v => v.x

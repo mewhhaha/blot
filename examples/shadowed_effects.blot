@@ -10,10 +10,11 @@
 open @import "blot:prelude" ()
 
 const Log = @effect { .write = Int -> Int; }
-let doubling = { .write = fn (n, ?resume) =>
-  result <- resume (n * 2)
-  return result
-; }
+let doubling =
+  { .write = fn (n, ?resume) =>
+    result <- resume (n * 2)
+    return result
+  ; }
 let work = fn () =>
   result <- Log.write 20
   return result
@@ -23,10 +24,11 @@ let first = @handle (Log, work, doubling)
 // compile-time binding: `:=` preserves the previous binding's effect identity,
 // so a fresh effect is introduced with another `const`.
 const Log = @effect { .write = Int -> Int; }
-let tripling = { .write = fn (n, ?resume) =>
-  result <- resume (n * 3)
-  return result
-; }
+let tripling =
+  { .write = fn (n, ?resume) =>
+    result <- resume (n * 3)
+    return result
+  ; }
 let other = fn () =>
   result <- Log.write 1
   return result

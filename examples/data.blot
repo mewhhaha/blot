@@ -5,10 +5,11 @@
 
 open @import "blot:prelude" ()
 
-const Point = struct {
-  .x = I32;
-  .y = I32;
-}
+const Point =
+  struct {
+    .x = I32;
+    .y = I32;
+  }
 
 const Message = #Ready | #Progress I32 | #Failed Str
 

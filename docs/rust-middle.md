@@ -66,14 +66,16 @@ The compiler is checked at each observable boundary:
 - its generated schema and embedded frontend plan must match `parser.plan`;
 - Cargo formatting, clippy with warnings denied, and Rust tests pass;
 - a release rebuild must match the checked-in compiler Wasm byte for byte;
-- 129 accepted corpus modules have exact Rust/TypeScript AST parity;
+- 164 corpus modules have Rust/TypeScript AST parity, including 23 rejected by
+  both frontends;
 - syntax and semantic rejections agree on acceptance and diagnostic codes;
-- 54 runnable examples have equal evaluator results;
-- 54 repository programs have equal staged phases and ABI manifests, while the
-  same eight programs are rejected by both implementations;
-- all 61 examples compile to valid Wasm with byte-identical ABI manifests;
-- 271 decoded runtime exports and their host-effect observations agree with the
-  independent language oracle across 56 programs;
+- 55 runnable examples have equal evaluator results;
+- 63 repository roots have equal Runtime HIR and ABI manifests where both
+  authorities admit them, with six mutual and two bounded-oracle rejections
+  named explicitly;
+- all 62 examples compile to valid Wasm with byte-identical ABI manifests;
+- 279 decoded runtime exports and their host-effect observations agree with the
+  independent language oracle across 62 programs;
 - the five programs outside the bounded TypeScript oracle are named explicitly
   by the differential gate and still compile and execute through the production
   compiler;
@@ -172,6 +174,26 @@ session; that movement is reported as run noise rather than attributed to this
 change. The measured incremental reduction comes from retaining successful
 deterministic values for the exact unchanged top-level prefix while inference,
 ownership, and safety still derive the edited revision.
+
+On 2026-08-07, a nine-sample run after the affine-arena change measured the
+current `examples/storage.blot` boundary with compiler hash
+`cbb538b9edfce8e8fdf20937fd31a389a151587c64016e941e0a1be54c778fdc`:
+
+| boundary                       | Full Rust/Wasm |
+| ------------------------------ | -------------: |
+| cold after instantiation       |        62.2 ms |
+| Wasm instantiation             |         6.1 ms |
+| unchanged resident compilation |       0.061 ms |
+| source-only edit               |        1.17 ms |
+| changed module                 |        5.86 ms |
+| check within changed module    |        4.24 ms |
+| prepare after check            |        1.59 ms |
+| emit after prepare             |       0.277 ms |
+
+The Store-reuse marker and allocator fast path did not move compiler throughput
+outside the earlier run-to-run range. The changed-module profile is still
+dominated by checking and Runtime-HIR preparation; emission is not the next
+compiler-speed target.
 
 ## Package capsule comparison
 

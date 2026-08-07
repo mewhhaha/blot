@@ -1,0 +1,28 @@
+open @import "../../../src/prelude/prelude.blot" ()
+
+sig build = (Int, [(Int, Int)], Int) -> ([(Int, Int)], Int)
+let build = rec (fn (remaining, ?nodes, head) =>
+  if remaining == 0:
+    return (nodes, head)
+  else:
+    let (nodes, next) = Arena.insert (?nodes, (remaining, head))
+    return build (remaining - 1, nodes, next)
+)
+
+sig total = ([(Int, Int)], Int, Int) -> Int
+let total = rec (fn (&nodes, head, sum) =>
+  if head == 0:
+    return sum
+  else:
+    return case Arena.get ((&nodes), head) of
+      #Some node => total ((&nodes), node.1, sum + node.0)
+      #None => sum
+)
+
+sig arena_list = Int -> Int
+let arena_list = fn count =>
+  let nodes = Arena.singleton (0, 0)
+  let (nodes, head) = build (count, nodes, 0)
+  return total ((&nodes), head, 0)
+
+return { .arena_list = arena_list; }

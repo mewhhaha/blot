@@ -14,16 +14,17 @@
 // --- sets -------------------------------------------------------------------
 //
 // Types are sets, so the three set operations are one namespace rather than
-// three loose primitives. `|` names `Set.union` exactly the way `+` names
+// three loose primitives. `|` names `TypeSet.union` exactly the way `+` names
 // `Num.add`: the operator points at prelude source, and the prelude decides
 // which primitive answers. Nothing about `|` is privileged, and this has to
 // come first because the declarations below already use it.
 
-const Set = {
-  .union = fn left => fn right => @type.union left right;
-  .intersect = fn left => fn right => @type.intersect left right;
-  .diff = fn left => fn right => @type.diff left right;
-}
+const TypeSet =
+  {
+    .union = fn left => fn right => @type.union left right;
+    .intersect = fn left => fn right => @type.intersect left right;
+    .diff = fn left => fn right => @type.diff left right;
+  }
 
 // --- functions --------------------------------------------------------------
 
@@ -37,14 +38,15 @@ const pipe = fn x => fn f => f x
 const compose = fn (f, g) => fn x => f (g x)
 const flip = fn f => fn (a, b) => f (b, a)
 
-const Fn = {
-  .identity = identity;
-  .always = always;
-  .apply = apply;
-  .pipe = pipe;
-  .compose = compose;
-  .flip = flip;
-}
+const Fn =
+  {
+    .identity = identity;
+    .always = always;
+    .apply = apply;
+    .pipe = pipe;
+    .compose = compose;
+    .flip = flip;
+  }
 
 // --- declaration tags ------------------------------------------------------
 
@@ -121,48 +123,50 @@ const is_greater = fn o => case o of
   #Less => False
   #Equal => False
 
-const Ord = {
-  .cmp = fn left => fn right => @int.cmp left right;
-  .eq = fn left => fn right => is_equal (@int.cmp left right);
-  .ne = fn left => fn right => not (is_equal (@int.cmp left right));
-  .lt = fn left => fn right => is_less (@int.cmp left right);
-  .le = fn left => fn right => not (is_greater (@int.cmp left right));
-  .gt = fn left => fn right => is_greater (@int.cmp left right);
-  .ge = fn left => fn right => not (is_less (@int.cmp left right));
-  .min = fn left => fn right =>
-    if is_greater (@int.cmp left right):
-      return right
-    else:
-      return left
-  ;
-  .max = fn left => fn right =>
-    if is_less (@int.cmp left right):
-      return right
-    else:
-      return left
-  ;
-}
+const Ord =
+  {
+    .cmp = fn left => fn right => @int.cmp left right;
+    .eq = fn left => fn right => is_equal (@int.cmp left right);
+    .ne = fn left => fn right => not (is_equal (@int.cmp left right));
+    .lt = fn left => fn right => is_less (@int.cmp left right);
+    .le = fn left => fn right => not (is_greater (@int.cmp left right));
+    .gt = fn left => fn right => is_greater (@int.cmp left right);
+    .ge = fn left => fn right => not (is_less (@int.cmp left right));
+    .min = fn left => fn right =>
+      if is_greater (@int.cmp left right):
+        return right
+      else:
+        return left
+    ;
+    .max = fn left => fn right =>
+      if is_less (@int.cmp left right):
+        return right
+      else:
+        return left
+    ;
+  }
 
 const Eq = { .eq = Ord.eq; .ne = Ord.ne; }
 
 // --- numbers ----------------------------------------------------------------
 
-const Num = {
-  .add = fn left => fn right => @int.add left right;
-  .sub = fn left => fn right => @int.sub left right;
-  .mul = fn left => fn right => @int.mul left right;
-  .div = fn left => fn right => @int.div left right;
-  .rem = fn left => fn right => @int.rem left right;
-  .negate = fn value => @int.neg value;
-  .abs = fn value =>
-    if is_less (@int.cmp value 0):
-      return @int.neg value
-    else:
-      return value
-  ;
-  .succ = fn value => @int.add value 1;
-  .pred = fn value => @int.sub value 1;
-}
+const Num =
+  {
+    .add = fn left => fn right => @int.add left right;
+    .sub = fn left => fn right => @int.sub left right;
+    .mul = fn left => fn right => @int.mul left right;
+    .div = fn left => fn right => @int.div left right;
+    .rem = fn left => fn right => @int.rem left right;
+    .negate = fn value => @int.neg value;
+    .abs = fn value =>
+      if is_less (@int.cmp value 0):
+        return @int.neg value
+      else:
+        return value
+    ;
+    .succ = fn value => @int.add value 1;
+    .pred = fn value => @int.sub value 1;
+  }
 
 // --- text -------------------------------------------------------------------
 
@@ -177,14 +181,30 @@ const Monoid = fn value => {
   .append = value -> value -> value;
 }
 
-const Text = {
-  .empty = "";
-  .append = fn left => fn right => @text.concat left right;
-  .length = fn value => @text.len value;
-  .cmp = fn left => fn right => @text.cmp left right;
-  .contains = fn text => fn query => @text.contains text query;
-  .of_int = fn value => @text.of_int value;
+// Blot has no higher-kinded type variables, so collection interfaces state one
+// concrete source and result instantiation. Polymorphic implementations such as
+// `Array.map` satisfy each requested instantiation independently.
+const Mappable = fn (source, target, value, mapped) => {
+  .map = (source, (value -> mapped)) -> target;
 }
+
+const Foldable = fn (collection, value, state) => {
+  .fold = (collection, state, ((state, value) -> state)) -> state;
+}
+
+const Filterable = fn (collection, value) => {
+  .filter = (collection, (value -> Bool)) -> collection;
+}
+
+const Text =
+  {
+    .empty = "";
+    .append = fn left => fn right => @text.concat left right;
+    .length = fn value => @text.len value;
+    .cmp = fn left => fn right => @text.cmp left right;
+    .contains = fn text => fn query => @text.contains text query;
+    .of_int = fn value => @text.of_int value;
+  }
 
 const as_json = @json.parse #Widen
 const as_const_json = @json.parse #Exact
@@ -211,23 +231,25 @@ const array_set = fn (values, index, value) =>
   else:
     return #None
 
-const Continuation = {
-  .cancel = @continuation.cancel;
-}
+const Continuation =
+  {
+    .cancel = @continuation.cancel;
+  }
 
 // Structural recursion, which is all a surface loop becomes before inference.
 // Rebindings form the accumulator; `for` does not introduce assignment.
 const fold = fn (values, state, step) =>
-  let go = rec (fn (index, current) =>
-    result <- case array_get (values, index) of
-      #Some value =>
-        next <- step (current, value)
-        continued <- go (@int.add index 1, next)
-        return continued
+  let go =
+    rec (fn (index, current) =>
+      result <- case array_get (values, index) of
+        #Some value =>
+          next <- step (current, value)
+          continued <- go (@int.add index 1, next)
+          return continued
 
-      #None => current
-    return result
-  )
+        #None => current
+      return result
+    )
   result <- go (0, state)
   return result
 
@@ -238,16 +260,55 @@ const array_append = fn left => fn right =>
     fn (state, value) => @array.push state value
   )
 
-const Array = {
-  .empty = @array.empty;
-  .append = array_append;
-  .length = fn &values => @array.len (&values);
-  .get = array_get;
-  .set = array_set;
-  .push = fn (values, value) => @array.push values value;
-  .take = fn (values, index) => @array.take values index;
-  .split = fn (values, index) => @array.split values index;
+const array_map = fn (values, transform) =>
+  return fold (
+    values,
+    @array.empty,
+    fn (state, value) => @array.push state (transform value)
+  )
+
+const array_filter = fn (values, keep) => fold (
+  values,
+  @array.empty,
+  fn (state, value) => case keep value of
+    #True => @array.push state value
+    #False => state
+)
+
+const array_items = fn values => {
+  .state = 0;
+  .step = fn index => case array_get (values, index) of
+    #Some value => #Some (value, @int.add index 1)
+    #None => #None
+  ;
 }
+
+const Array =
+  {
+    .empty = @array.empty;
+    .append = array_append;
+    .fold = fold;
+    .map = array_map;
+    .filter = array_filter;
+    .items = array_items;
+    .length = fn &values => @array.len (&values);
+    .get = array_get;
+    .set = array_set;
+    .push = fn (values, value) => @array.push values value;
+    .take = fn (values, index) => @array.take values index;
+    .split = fn (values, index) => @array.split values index;
+  }
+
+const Arena =
+  {
+    .singleton = fn value => [value];
+    .insert = fn (?values, value) =>
+      let address = @array.len (&values)
+      return (@array.push values value, address)
+    ;
+    .length = Array.length;
+    .get = Array.get;
+  }
 
 const each = fn (values, visit) =>
   result <- fold (
@@ -258,20 +319,9 @@ const each = fn (values, visit) =>
   )
   return result
 
-const map = fn (values, f) =>
-  return fold (
-    values,
-    Array.empty,
-    fn (state, value) => @array.push state (f value)
-  )
+const map = array_map
 
-const filter = fn (values, keep) => fold (
-  values,
-  Array.empty,
-  fn (state, value) => case keep value of
-    #True => @array.push state value
-    #False => state
-)
+const filter = array_filter
 
 const sum = fn values =>
   return fold (
@@ -295,15 +345,16 @@ const every = fn (values, holds) =>
   )
 
 const upto = fn (low, high) =>
-  let build = rec (fn (index, state) =>
-    if is_less (@int.cmp index high):
-      return build (
-        @int.add index 1,
-        @array.push state index
-      )
-    else:
-      return state
-  )
+  let build =
+    rec (fn (index, state) =>
+      if is_less (@int.cmp index high):
+        return build (
+          @int.add index 1,
+          @array.push state index
+        )
+      else:
+        return state
+    )
   return build (low, Array.empty)
 
 // --- floats -----------------------------------------------------------------
@@ -314,49 +365,50 @@ const upto = fn (low, high) =>
 // not have. `Float.add` is the addition, and a module that wants `+.` or `+`
 // to mean it says so in its own `operators` header.
 
-const Float = {
-  .add = fn left => fn right => @float.add left right;
-  .sub = fn left => fn right => @float.sub left right;
-  .mul = fn left => fn right => @float.mul left right;
-  .div = fn left => fn right => @float.div left right;
-  .rem = fn left => fn right => @float.rem left right;
-  .negate = fn value => @float.neg value;
-  // No `.eq`. Exact comparison is `is_equal (Float.cmp a b)`, which is the
-  // same test and refuses NaN instead of quietly answering `#False` for it —
-  // and a float equality that looks like the integer one invites the
-  // comparison that `0.1 + 0.2` is famous for failing.
-  .cmp = fn left => fn right => @float.cmp left right;
-  .of_int = fn value => @float.of_int value;
-  .truncate = fn value => @int.of_float value;
-  .abs = fn value =>
-    if is_less (@float.cmp value 0.0):
-      return @float.neg value
-    else:
-      return value
-  ;
+const Float =
+  {
+    .add = fn left => fn right => @float.add left right;
+    .sub = fn left => fn right => @float.sub left right;
+    .mul = fn left => fn right => @float.mul left right;
+    .div = fn left => fn right => @float.div left right;
+    .rem = fn left => fn right => @float.rem left right;
+    .negate = fn value => @float.neg value;
+    // No `.eq`. Exact comparison is `is_equal (Float.cmp a b)`, which is the
+    // same test and refuses NaN instead of quietly answering `#False` for it —
+    // and a float equality that looks like the integer one invites the
+    // comparison that `0.1 + 0.2` is famous for failing.
+    .cmp = fn left => fn right => @float.cmp left right;
+    .of_int = fn value => @float.of_int value;
+    .truncate = fn value => @int.of_float value;
+    .abs = fn value =>
+      if is_less (@float.cmp value 0.0):
+        return @float.neg value
+      else:
+        return value
+    ;
 
-  // How a program asks before comparing. It cannot be written over `Float.cmp`,
-  // because comparing a NaN is the thing that refuses — which is exactly why
-  // this one is a primitive and float equality is not.
-  .is_nan = fn value => @float.is_nan value;
+    // How a program asks before comparing. It cannot be written over `Float.cmp`,
+    // because comparing a NaN is the thing that refuses — which is exactly why
+    // this one is a primitive and float equality is not.
+    .is_nan = fn value => @float.is_nan value;
 
-  // Newton's method, seeded at the value. Core has no f64 square root, so a
-  // `@float.sqrt` primitive would have been open-coded at lowering anyway —
-  // and a primitive is for what blot cannot write, which this is not.
-  .sqrt = fn value =>
-    if is_equal (@float.cmp value 0.0):
-      return 0.0
-    else if is_less (@float.cmp value 0.0):
-      return @float.div 0.0 0.0
-    else:
-      return fold (
-        upto (0, 24),
-        value,
-        fn (guess, _) =>
-          return @float.mul 0.5 (@float.add guess (@float.div value guess))
-      )
-  ;
-}
+    // Newton's method, seeded at the value. Core has no f64 square root, so a
+    // `@float.sqrt` primitive would have been open-coded at lowering anyway —
+    // and a primitive is for what blot cannot write, which this is not.
+    .sqrt = fn value =>
+      if is_equal (@float.cmp value 0.0):
+        return 0.0
+      else if is_less (@float.cmp value 0.0):
+        return @float.div 0.0 0.0
+      else:
+        return fold (
+          upto (0, 24),
+          value,
+          fn (guess, _) =>
+            return @float.mul 0.5 (@float.add guess (@float.div value guess))
+        )
+    ;
+  }
 
 // --- single precision -------------------------------------------------------
 //
@@ -365,35 +417,36 @@ const Float = {
 // precision a step the program takes. It is also the lane type a four-wide
 // vector wants, which is the other reason to have it at all.
 
-const Float32 = {
-  .add = fn left => fn right => @f32.add left right;
-  .sub = fn left => fn right => @f32.sub left right;
-  .mul = fn left => fn right => @f32.mul left right;
-  .div = fn left => fn right => @f32.div left right;
-  .negate = fn value => @f32.neg value;
-  .cmp = fn left => fn right => @f32.cmp left right;
-  .is_nan = fn value => @f32.is_nan value;
-  .of_float = fn value => @f32.of_float value;
-  .of_int = fn value => @f32.of_float (@float.of_int value);
-  .widen = fn value => @float.of_f32 value;
-  .truncate = fn value => @int.of_float (@float.of_f32 value);
-  .abs = fn value =>
-    if is_less (@f32.cmp value (@f32.of_float 0.0)):
-      return @f32.neg value
-    else:
-      return value
-  ;
+const Float32 =
+  {
+    .add = fn left => fn right => @f32.add left right;
+    .sub = fn left => fn right => @f32.sub left right;
+    .mul = fn left => fn right => @f32.mul left right;
+    .div = fn left => fn right => @f32.div left right;
+    .negate = fn value => @f32.neg value;
+    .cmp = fn left => fn right => @f32.cmp left right;
+    .is_nan = fn value => @f32.is_nan value;
+    .of_float = fn value => @f32.of_float value;
+    .of_int = fn value => @f32.of_float (@float.of_int value);
+    .widen = fn value => @float.of_f32 value;
+    .truncate = fn value => @int.of_float (@float.of_f32 value);
+    .abs = fn value =>
+      if is_less (@f32.cmp value (@f32.of_float 0.0)):
+        return @f32.neg value
+      else:
+        return value
+    ;
 
-  // Core has no f32 remainder and no f32 square root, so both are computed in
-  // double precision and narrowed once at the end. Rounding after every step
-  // instead would be slower and no more accurate — the intermediates are exact
-  // in an f64 either way.
-  .rem = fn left => fn right =>
-    return @f32.of_float
-      (@float.rem (@float.of_f32 left) (@float.of_f32 right))
-  ;
-  .sqrt = fn value => @f32.of_float (Float.sqrt (@float.of_f32 value));
-}
+    // Core has no f32 remainder and no f32 square root, so both are computed in
+    // double precision and narrowed once at the end. Rounding after every step
+    // instead would be slower and no more accurate — the intermediates are exact
+    // in an f64 either way.
+    .rem = fn left => fn right =>
+      return @f32.of_float
+        (@float.rem (@float.of_f32 left) (@float.of_f32 right))
+    ;
+    .sqrt = fn value => @f32.of_float (Float.sqrt (@float.of_f32 value));
+  }
 
 // --- four lanes -------------------------------------------------------------
 //
@@ -406,165 +459,169 @@ const Float32 = {
 // way to choose between them at run time. That is also why there is no `.get`
 // taking an index.
 
-const Vec4 = {
-  .of = fn (x, y, z, w) => @f32x4.of x y z w;
-  .splat = fn value => @f32x4.splat value;
-  .add = fn left => fn right => @f32x4.add left right;
-  .sub = fn left => fn right => @f32x4.sub left right;
-  .mul = fn left => fn right => @f32x4.mul left right;
-  .div = fn left => fn right => @f32x4.div left right;
-  .equal = fn left => fn right => @f32x4.eq left right;
-  .less = fn left => fn right => @f32x4.less left right;
-  .select = fn mask => fn when_true => fn when_false =>
-    return @f32x4.select mask when_true when_false
-  ;
-  .shuffle = fn (left, right, lane0, lane1, lane2, lane3) =>
-    return @f32x4.shuffle left right lane0 lane1 lane2 lane3
-  ;
-  .swizzle = fn (value, lane0, lane1, lane2, lane3) =>
-    return @f32x4.shuffle value value lane0 lane1 lane2 lane3
-  ;
-  .x = fn value => @f32x4.x value;
-  .y = fn value => @f32x4.y value;
-  .z = fn value => @f32x4.z value;
-  .w = fn value => @f32x4.w value;
+const Vec4 =
+  {
+    .of = fn (x, y, z, w) => @f32x4.of x y z w;
+    .splat = fn value => @f32x4.splat value;
+    .add = fn left => fn right => @f32x4.add left right;
+    .sub = fn left => fn right => @f32x4.sub left right;
+    .mul = fn left => fn right => @f32x4.mul left right;
+    .div = fn left => fn right => @f32x4.div left right;
+    .equal = fn left => fn right => @f32x4.eq left right;
+    .less = fn left => fn right => @f32x4.less left right;
+    .select = fn mask => fn when_true => fn when_false =>
+      return @f32x4.select mask when_true when_false
+    ;
+    .shuffle = fn (left, right, lane0, lane1, lane2, lane3) =>
+      return @f32x4.shuffle left right lane0 lane1 lane2 lane3
+    ;
+    .swizzle = fn (value, lane0, lane1, lane2, lane3) =>
+      return @f32x4.shuffle value value lane0 lane1 lane2 lane3
+    ;
+    .x = fn value => @f32x4.x value;
+    .y = fn value => @f32x4.y value;
+    .z = fn value => @f32x4.z value;
+    .w = fn value => @f32x4.w value;
 
-  // A dot product is a multiply and three adds of the lanes. Written here
-  // rather than as a primitive because it is writable here.
-  // One instruction, where four extracts and three adds would be seven.
-  .sum = fn value => @f32x4.sum value;
+    // A dot product is a multiply and three adds of the lanes. Written here
+    // rather than as a primitive because it is writable here.
+    // One instruction, where four extracts and three adds would be seven.
+    .sum = fn value => @f32x4.sum value;
 
-  .dot = fn left => fn right => @f32x4.sum (@f32x4.mul left right);
+    .dot = fn left => fn right => @f32x4.sum (@f32x4.mul left right);
 
-  .scale = fn (value, factor) => @f32x4.mul value (@f32x4.splat factor);
-}
+    .scale = fn (value, factor) => @f32x4.mul value (@f32x4.splat factor);
+  }
 
-const Int32x4 = {
-  .of = fn (x, y, z, w) => @i32x4.of x y z w;
-  .of_wrapping = fn (x, y, z, w) => @i32x4.of_wrapping x y z w;
-  .splat = fn value => @i32x4.splat value;
-  .splat_wrapping = fn value => @i32x4.splat_wrapping value;
-  .add = fn left => fn right => @i32x4.add left right;
-  .sub = fn left => fn right => @i32x4.sub left right;
-  .mul = fn left => fn right => @i32x4.mul left right;
-  .bit_and = fn left => fn right => @i32x4.and left right;
-  .bit_or = fn left => fn right => @i32x4.or left right;
-  .bit_xor = fn left => fn right => @i32x4.xor left right;
-  .bit_not = fn value => @i32x4.not value;
-  .shift_left = fn value => fn amount => @i32x4.shl value amount;
-  .shift_right_signed = fn value => fn amount => @i32x4.shr_s value amount;
-  .shift_right_unsigned = fn value => fn amount => @i32x4.shr_u value amount;
-  .equal = fn left => fn right => @i32x4.eq left right;
-  .not_equal = fn left => fn right => @i32x4.ne left right;
-  .less_signed = fn left => fn right => @i32x4.lt_s left right;
-  .less_unsigned = fn left => fn right => @i32x4.lt_u left right;
-  .greater_signed = fn left => fn right => @i32x4.gt_s left right;
-  .greater_unsigned = fn left => fn right => @i32x4.gt_u left right;
-  .less_or_equal_signed = fn left => fn right => @i32x4.le_s left right;
-  .less_or_equal_unsigned = fn left => fn right => @i32x4.le_u left right;
-  .greater_or_equal_signed = fn left => fn right => @i32x4.ge_s left right;
-  .greater_or_equal_unsigned = fn left => fn right => @i32x4.ge_u left right;
-  .min_signed = fn left => fn right => @i32x4.min_s left right;
-  .min_unsigned = fn left => fn right => @i32x4.min_u left right;
-  .max_signed = fn left => fn right => @i32x4.max_s left right;
-  .max_unsigned = fn left => fn right => @i32x4.max_u left right;
-  .select = fn mask => fn when_true => fn when_false =>
-    return @i32x4.select mask when_true when_false
-  ;
-  .x = fn value => @i32x4.lane0 value;
-  .y = fn value => @i32x4.lane1 value;
-  .z = fn value => @i32x4.lane2 value;
-  .w = fn value => @i32x4.lane3 value;
-  .lane = @i32x4.lane;
-  .with_x = fn value => fn lane => @i32x4.with_lane0 value lane;
-  .with_y = fn value => fn lane => @i32x4.with_lane1 value lane;
-  .with_z = fn value => fn lane => @i32x4.with_lane2 value lane;
-  .with_w = fn value => fn lane => @i32x4.with_lane3 value lane;
-  .with_x_wrapping = fn value => fn lane =>
-    return @i32x4.with_lane0_wrapping value lane
-  ;
-  .with_y_wrapping = fn value => fn lane =>
-    return @i32x4.with_lane1_wrapping value lane
-  ;
-  .with_z_wrapping = fn value => fn lane =>
-    return @i32x4.with_lane2_wrapping value lane
-  ;
-  .with_w_wrapping = fn value => fn lane =>
-    return @i32x4.with_lane3_wrapping value lane
-  ;
-  .mask_bits = fn mask => @i32x4.mask_bitmask mask;
-  .all = fn mask => is_equal (@int.cmp (@i32x4.mask_all mask) 1);
-  .any = fn mask => is_equal (@int.cmp (@i32x4.mask_any mask) 1);
-}
+const Int32x4 =
+  {
+    .of = fn (x, y, z, w) => @i32x4.of x y z w;
+    .of_wrapping = fn (x, y, z, w) => @i32x4.of_wrapping x y z w;
+    .splat = fn value => @i32x4.splat value;
+    .splat_wrapping = fn value => @i32x4.splat_wrapping value;
+    .add = fn left => fn right => @i32x4.add left right;
+    .sub = fn left => fn right => @i32x4.sub left right;
+    .mul = fn left => fn right => @i32x4.mul left right;
+    .bit_and = fn left => fn right => @i32x4.and left right;
+    .bit_or = fn left => fn right => @i32x4.or left right;
+    .bit_xor = fn left => fn right => @i32x4.xor left right;
+    .bit_not = fn value => @i32x4.not value;
+    .shift_left = fn value => fn amount => @i32x4.shl value amount;
+    .shift_right_signed = fn value => fn amount => @i32x4.shr_s value amount;
+    .shift_right_unsigned = fn value => fn amount => @i32x4.shr_u value amount;
+    .equal = fn left => fn right => @i32x4.eq left right;
+    .not_equal = fn left => fn right => @i32x4.ne left right;
+    .less_signed = fn left => fn right => @i32x4.lt_s left right;
+    .less_unsigned = fn left => fn right => @i32x4.lt_u left right;
+    .greater_signed = fn left => fn right => @i32x4.gt_s left right;
+    .greater_unsigned = fn left => fn right => @i32x4.gt_u left right;
+    .less_or_equal_signed = fn left => fn right => @i32x4.le_s left right;
+    .less_or_equal_unsigned = fn left => fn right => @i32x4.le_u left right;
+    .greater_or_equal_signed = fn left => fn right => @i32x4.ge_s left right;
+    .greater_or_equal_unsigned = fn left => fn right => @i32x4.ge_u left right;
+    .min_signed = fn left => fn right => @i32x4.min_s left right;
+    .min_unsigned = fn left => fn right => @i32x4.min_u left right;
+    .max_signed = fn left => fn right => @i32x4.max_s left right;
+    .max_unsigned = fn left => fn right => @i32x4.max_u left right;
+    .select = fn mask => fn when_true => fn when_false =>
+      return @i32x4.select mask when_true when_false
+    ;
+    .x = fn value => @i32x4.lane0 value;
+    .y = fn value => @i32x4.lane1 value;
+    .z = fn value => @i32x4.lane2 value;
+    .w = fn value => @i32x4.lane3 value;
+    .lane = @i32x4.lane;
+    .with_x = fn value => fn lane => @i32x4.with_lane0 value lane;
+    .with_y = fn value => fn lane => @i32x4.with_lane1 value lane;
+    .with_z = fn value => fn lane => @i32x4.with_lane2 value lane;
+    .with_w = fn value => fn lane => @i32x4.with_lane3 value lane;
+    .with_x_wrapping = fn value => fn lane =>
+      return @i32x4.with_lane0_wrapping value lane
+    ;
+    .with_y_wrapping = fn value => fn lane =>
+      return @i32x4.with_lane1_wrapping value lane
+    ;
+    .with_z_wrapping = fn value => fn lane =>
+      return @i32x4.with_lane2_wrapping value lane
+    ;
+    .with_w_wrapping = fn value => fn lane =>
+      return @i32x4.with_lane3_wrapping value lane
+    ;
+    .mask_bits = fn mask => @i32x4.mask_bitmask mask;
+    .all = fn mask => is_equal (@int.cmp (@i32x4.mask_all mask) 1);
+    .any = fn mask => is_equal (@int.cmp (@i32x4.mask_any mask) 1);
+  }
 
-const Int16x8 = {
-  .splat = fn value => @i16x8.splat value;
-  .splat_wrapping = fn value => @i16x8.splat_wrapping value;
-  .add = fn left => fn right => @i16x8.add left right;
-  .sub = fn left => fn right => @i16x8.sub left right;
-  .mul = fn left => fn right => @i16x8.mul left right;
-  .bit_and = fn left => fn right => @i16x8.and left right;
-  .bit_or = fn left => fn right => @i16x8.or left right;
-  .bit_xor = fn left => fn right => @i16x8.xor left right;
-  .bit_not = fn value => @i16x8.not value;
-  .shift_left = fn value => fn amount => @i16x8.shl value amount;
-  .shift_right_signed = fn value => fn amount => @i16x8.shr_s value amount;
-  .shift_right_unsigned = fn value => fn amount => @i16x8.shr_u value amount;
-  .equal = fn left => fn right => @i16x8.eq left right;
-  .not_equal = fn left => fn right => @i16x8.ne left right;
-  .less_signed = fn left => fn right => @i16x8.lt_s left right;
-  .less_unsigned = fn left => fn right => @i16x8.lt_u left right;
-  .greater_signed = fn left => fn right => @i16x8.gt_s left right;
-  .greater_unsigned = fn left => fn right => @i16x8.gt_u left right;
-  .less_or_equal_signed = fn left => fn right => @i16x8.le_s left right;
-  .less_or_equal_unsigned = fn left => fn right => @i16x8.le_u left right;
-  .greater_or_equal_signed = fn left => fn right => @i16x8.ge_s left right;
-  .greater_or_equal_unsigned = fn left => fn right => @i16x8.ge_u left right;
-  .min_signed = fn left => fn right => @i16x8.min_s left right;
-  .min_unsigned = fn left => fn right => @i16x8.min_u left right;
-  .max_signed = fn left => fn right => @i16x8.max_s left right;
-  .max_unsigned = fn left => fn right => @i16x8.max_u left right;
-  .select = fn mask => fn when_true => fn when_false =>
-    return @i16x8.select mask when_true when_false
-  ;
-  .mask_bits = fn mask => @i16x8.mask_bitmask mask;
-  .all = fn mask => is_equal (@int.cmp (@i16x8.mask_all mask) 1);
-  .any = fn mask => is_equal (@int.cmp (@i16x8.mask_any mask) 1);
-}
+const Int16x8 =
+  {
+    .splat = fn value => @i16x8.splat value;
+    .splat_wrapping = fn value => @i16x8.splat_wrapping value;
+    .add = fn left => fn right => @i16x8.add left right;
+    .sub = fn left => fn right => @i16x8.sub left right;
+    .mul = fn left => fn right => @i16x8.mul left right;
+    .bit_and = fn left => fn right => @i16x8.and left right;
+    .bit_or = fn left => fn right => @i16x8.or left right;
+    .bit_xor = fn left => fn right => @i16x8.xor left right;
+    .bit_not = fn value => @i16x8.not value;
+    .shift_left = fn value => fn amount => @i16x8.shl value amount;
+    .shift_right_signed = fn value => fn amount => @i16x8.shr_s value amount;
+    .shift_right_unsigned = fn value => fn amount => @i16x8.shr_u value amount;
+    .equal = fn left => fn right => @i16x8.eq left right;
+    .not_equal = fn left => fn right => @i16x8.ne left right;
+    .less_signed = fn left => fn right => @i16x8.lt_s left right;
+    .less_unsigned = fn left => fn right => @i16x8.lt_u left right;
+    .greater_signed = fn left => fn right => @i16x8.gt_s left right;
+    .greater_unsigned = fn left => fn right => @i16x8.gt_u left right;
+    .less_or_equal_signed = fn left => fn right => @i16x8.le_s left right;
+    .less_or_equal_unsigned = fn left => fn right => @i16x8.le_u left right;
+    .greater_or_equal_signed = fn left => fn right => @i16x8.ge_s left right;
+    .greater_or_equal_unsigned = fn left => fn right => @i16x8.ge_u left right;
+    .min_signed = fn left => fn right => @i16x8.min_s left right;
+    .min_unsigned = fn left => fn right => @i16x8.min_u left right;
+    .max_signed = fn left => fn right => @i16x8.max_s left right;
+    .max_unsigned = fn left => fn right => @i16x8.max_u left right;
+    .select = fn mask => fn when_true => fn when_false =>
+      return @i16x8.select mask when_true when_false
+    ;
+    .mask_bits = fn mask => @i16x8.mask_bitmask mask;
+    .all = fn mask => is_equal (@int.cmp (@i16x8.mask_all mask) 1);
+    .any = fn mask => is_equal (@int.cmp (@i16x8.mask_any mask) 1);
+  }
 
-const Int8x16 = {
-  .splat = fn value => @i8x16.splat value;
-  .splat_wrapping = fn value => @i8x16.splat_wrapping value;
-  .add = fn left => fn right => @i8x16.add left right;
-  .sub = fn left => fn right => @i8x16.sub left right;
-  .bit_and = fn left => fn right => @i8x16.and left right;
-  .bit_or = fn left => fn right => @i8x16.or left right;
-  .bit_xor = fn left => fn right => @i8x16.xor left right;
-  .bit_not = fn value => @i8x16.not value;
-  .shift_left = fn value => fn amount => @i8x16.shl value amount;
-  .shift_right_signed = fn value => fn amount => @i8x16.shr_s value amount;
-  .shift_right_unsigned = fn value => fn amount => @i8x16.shr_u value amount;
-  .equal = fn left => fn right => @i8x16.eq left right;
-  .not_equal = fn left => fn right => @i8x16.ne left right;
-  .less_signed = fn left => fn right => @i8x16.lt_s left right;
-  .less_unsigned = fn left => fn right => @i8x16.lt_u left right;
-  .greater_signed = fn left => fn right => @i8x16.gt_s left right;
-  .greater_unsigned = fn left => fn right => @i8x16.gt_u left right;
-  .less_or_equal_signed = fn left => fn right => @i8x16.le_s left right;
-  .less_or_equal_unsigned = fn left => fn right => @i8x16.le_u left right;
-  .greater_or_equal_signed = fn left => fn right => @i8x16.ge_s left right;
-  .greater_or_equal_unsigned = fn left => fn right => @i8x16.ge_u left right;
-  .min_signed = fn left => fn right => @i8x16.min_s left right;
-  .min_unsigned = fn left => fn right => @i8x16.min_u left right;
-  .max_signed = fn left => fn right => @i8x16.max_s left right;
-  .max_unsigned = fn left => fn right => @i8x16.max_u left right;
-  .select = fn mask => fn when_true => fn when_false =>
-    return @i8x16.select mask when_true when_false
-  ;
-  .mask_bits = fn mask => @i8x16.mask_bitmask mask;
-  .all = fn mask => is_equal (@int.cmp (@i8x16.mask_all mask) 1);
-  .any = fn mask => is_equal (@int.cmp (@i8x16.mask_any mask) 1);
-}
+const Int8x16 =
+  {
+    .splat = fn value => @i8x16.splat value;
+    .splat_wrapping = fn value => @i8x16.splat_wrapping value;
+    .add = fn left => fn right => @i8x16.add left right;
+    .sub = fn left => fn right => @i8x16.sub left right;
+    .bit_and = fn left => fn right => @i8x16.and left right;
+    .bit_or = fn left => fn right => @i8x16.or left right;
+    .bit_xor = fn left => fn right => @i8x16.xor left right;
+    .bit_not = fn value => @i8x16.not value;
+    .shift_left = fn value => fn amount => @i8x16.shl value amount;
+    .shift_right_signed = fn value => fn amount => @i8x16.shr_s value amount;
+    .shift_right_unsigned = fn value => fn amount => @i8x16.shr_u value amount;
+    .equal = fn left => fn right => @i8x16.eq left right;
+    .not_equal = fn left => fn right => @i8x16.ne left right;
+    .less_signed = fn left => fn right => @i8x16.lt_s left right;
+    .less_unsigned = fn left => fn right => @i8x16.lt_u left right;
+    .greater_signed = fn left => fn right => @i8x16.gt_s left right;
+    .greater_unsigned = fn left => fn right => @i8x16.gt_u left right;
+    .less_or_equal_signed = fn left => fn right => @i8x16.le_s left right;
+    .less_or_equal_unsigned = fn left => fn right => @i8x16.le_u left right;
+    .greater_or_equal_signed = fn left => fn right => @i8x16.ge_s left right;
+    .greater_or_equal_unsigned = fn left => fn right => @i8x16.ge_u left right;
+    .min_signed = fn left => fn right => @i8x16.min_s left right;
+    .min_unsigned = fn left => fn right => @i8x16.min_u left right;
+    .max_signed = fn left => fn right => @i8x16.max_s left right;
+    .max_unsigned = fn left => fn right => @i8x16.max_u left right;
+    .select = fn mask => fn when_true => fn when_false =>
+      return @i8x16.select mask when_true when_false
+    ;
+    .mask_bits = fn mask => @i8x16.mask_bitmask mask;
+    .all = fn mask => is_equal (@int.cmp (@i8x16.mask_all mask) 1);
+    .any = fn mask => is_equal (@int.cmp (@i8x16.mask_any mask) 1);
+  }
 
 // --- option and result ------------------------------------------------------
 
@@ -579,6 +636,13 @@ const unwrap_or = fn (option, fallback) => case option of
 const Result = fn (ok, error) => #Ok ok | #Error error
 const Ok = fn value => #Ok value
 const Error = fn value => #Error value
+
+const Iterable = fn (collection, value, state) => {
+  .items = collection -> {
+    .state = state;
+    .step = state -> Option (value, state);
+  };
+}
 
 // --- iterators --------------------------------------------------------------
 //
@@ -602,10 +666,11 @@ const Error = fn value => #Error value
 // has to know about. `indexed` alone needs a primitive because its erased bounds
 // evidence must not be forgeable as an ordinary record.
 
-const ever = {
-  .state = ();
-  .step = fn _ => Some ((), ());
-}
+const ever =
+  {
+    .state = ();
+    .step = fn _ => Some ((), ());
+  }
 
 const iter_range = fn (from, to) => {
   .state = from;
@@ -628,10 +693,11 @@ const iter_items = fn values => {
 // Draining one. `for` is this loop with the accumulator inferred from the names
 // its body rebinds; written out, it is the same fold.
 const iterate = fn (iterator, initial, visit) =>
-  let go = rec (fn (state, carried) => case iterator.step state of
-    #None => carried
-    #Some pair => go (pair.1, visit (carried, pair.0))
-  )
+  let go =
+    rec (fn (state, carried) => case iterator.step state of
+      #None => carried
+      #Some pair => go (pair.1, visit (carried, pair.0))
+    )
   return go (iterator.state, initial)
 
 const collect = fn iterator =>
@@ -644,41 +710,143 @@ const collect = fn iterator =>
 // Namespaced because `range` is already the type constructor — `I32` is a
 // range — and two things called `range` in one scope would be worse than a
 // prefix. Every other group in this file is a record for the same reason.
-const Iter = {
-  .range = iter_range;
-  .items = iter_items;
-  .indexed = @array.indexed;
-  .iterate = iterate;
-  .collect = collect;
+const Iter =
+  {
+    .range = iter_range;
+    .items = iter_items;
+    .indexed = @array.indexed;
+    .iterate = iterate;
+    .collect = collect;
+  }
+
+// --- polymorphic collections -----------------------------------------------
+
+// Lists use `-1` as the empty address, leaving every array element available
+// for a real node. A one-step view exposes ordinary constructor matching while
+// retaining the compact arena in the tail.
+const list_type = fn value => ([(value, @type.int)], @type.int)
+const list_view = fn value => #Nil | #Cons (value, list_type value)
+const list_empty = (Array.empty, -1)
+
+const list_prepend = fn value => fn list =>
+  let (nodes, head) = list
+  let address = @array.len (&nodes)
+  return (@array.push nodes (value, head), address)
+
+const list_uncons = fn list =>
+  let (nodes, head) = list
+  if is_less (@int.cmp head 0):
+    return #Nil
+  else:
+    return case array_get (nodes, head) of
+      #Some node => #Cons (node.0, (nodes, node.1))
+      #None => #Nil
+
+const list_fold_nodes =
+  rec (fn (&nodes, address, state, visit) =>
+    if is_less (@int.cmp address 0):
+      return state
+    else:
+      return case array_get (nodes, address) of
+        #Some node => list_fold_nodes (
+          (&nodes),
+          node.1,
+          visit (state, node.0),
+          visit
+        )
+        #None => state
+  )
+
+const list_fold = fn (list, state, visit) =>
+  let (nodes, head) = list
+  return list_fold_nodes ((&nodes), head, state, visit)
+
+const list_reverse_onto = fn (source, target) =>
+  return list_fold (source, target, fn (result, value) => list_prepend value result)
+
+const list_reverse = fn list => list_reverse_onto (list, list_empty)
+
+const list_append = fn left => fn right =>
+  return list_reverse_onto (list_reverse left, right)
+
+const list_from_array = fn values =>
+  let reversed = fold (
+    values,
+    list_empty,
+    fn (result, value) => list_prepend value result
+  )
+  return list_reverse reversed
+
+const list_map = fn (list, transform) =>
+  let reversed = list_fold (
+    list,
+    list_empty,
+    fn (result, value) => list_prepend (transform value) result
+  )
+  return list_reverse reversed
+
+const list_filter = fn (list, keep) =>
+  let reversed = list_fold (
+    list,
+    list_empty,
+    fn (result, value) => case keep value of
+      #True => list_prepend value result
+      #False => result
+  )
+  return list_reverse reversed
+
+const list_to_array = fn list =>
+  return list_fold (list, Array.empty, fn (values, value) => @array.push values value)
+
+const list_items = fn list => {
+  .state = list;
+  .step = fn state => case list_uncons state of
+    #Nil => None
+    #Cons (value, tail) => Some (value, tail)
+  ;
 }
 
-// --- dictionaries ----------------------------------------------------------
+const List =
+  {
+    .of = list_type;
+    .view = list_view;
+    .empty = list_empty;
+    .singleton = fn value => list_prepend value list_empty;
+    .prepend = list_prepend;
+    .uncons = list_uncons;
+    .append = list_append;
+    .fold = list_fold;
+    .map = list_map;
+    .filter = list_filter;
+    .reverse = list_reverse;
+    .from_array = list_from_array;
+    .to_array = list_to_array;
+    .length = fn list => list_fold (list, 0, fn (count, _) => @int.add count 1);
+    .items = list_items;
+  }
 
-const dict_type = fn value => [(@type.text, value)]
+const map_type = fn (key, value) => [(key, value)]
 
-const dict_get = fn (entries, key) =>
-  let go = rec (fn index => case array_get (entries, index) of
-    #Some entry => if text_eq (entry.0, key):
-      return Some entry.1
-    else:
-      return go (@int.add index 1)
+const map_get = fn (equal, entries, key) =>
+  let find =
+    rec (fn index => case array_get (entries, index) of
+      #Some entry => if equal (entry.0, key):
+        return Some entry.1
+      else:
+        return find (@int.add index 1)
 
-    #None => None
-  )
-  return go 0
+      #None => None
+    )
+  return find 0
 
-const dict_put = fn (entries, key, value) =>
+const map_put = fn (equal, entries, key, value) =>
   let replaced = fold (
     entries,
     (Array.empty, None, False),
     fn (state, entry) =>
       if state.2:
-        return (
-          @array.push state.0 entry,
-          state.1,
-          state.2
-        )
-      else if text_eq (entry.0, key):
+        return (@array.push state.0 entry, state.1, state.2)
+      else if equal (entry.0, key):
         return (
           @array.push state.0 (key, value),
           Some entry.1,
@@ -687,45 +855,138 @@ const dict_put = fn (entries, key, value) =>
       else:
         return (@array.push state.0 entry, state.1, state.2)
   )
-  let entries = if replaced.2:
+  let updated = if replaced.2:
     return replaced.0
   else:
     return @array.push replaced.0 (key, value)
-  return (replaced.1, entries)
+  return (replaced.1, updated)
 
-const dict_remove = fn (entries, key) =>
+const map_remove = fn (equal, entries, key) =>
   let removed = fold (
     entries,
     (Array.empty, None, False),
     fn (state, entry) =>
       if state.2:
-        return (
-          @array.push state.0 entry,
-          state.1,
-          state.2
-        )
-      else if text_eq (entry.0, key):
+        return (@array.push state.0 entry, state.1, state.2)
+      else if equal (entry.0, key):
         return (state.0, Some entry.1, True)
       else:
-        return (
-          @array.push state.0 entry,
-          state.1,
-          state.2
-        )
+        return (@array.push state.0 entry, state.1, state.2)
   )
   return (removed.1, removed.0)
 
-const Dict = {
-  .of = dict_type;
-  .empty = Array.empty;
-  .get = dict_get;
-  .has = fn (entries, key) => case dict_get (entries, key) of
-    #Some _ => True
-    #None => False
-  ;
-  .put = dict_put;
-  .remove = dict_remove;
-}
+const map_with = fn equal =>
+  let put = fn (entries, key, value) => map_put (equal, entries, key, value)
+  let append = fn left => fn right => fold (
+    right,
+    left,
+    fn (entries, entry) => (put (entries, entry.0, entry.1)).1
+  )
+  return {
+    .of = map_type;
+    .empty = Array.empty;
+    .singleton = fn (key, value) => [(key, value)];
+    .get = fn (entries, key) => map_get (equal, entries, key);
+    .has = fn (entries, key) => case map_get (equal, entries, key) of
+      #Some _ => True
+      #None => False
+    ;
+    .put = put;
+    .remove = fn (entries, key) => map_remove (equal, entries, key);
+    .append = append;
+    .fold = fold;
+    .map = fn (entries, transform) => array_map (
+      entries,
+      fn entry => (entry.0, transform entry.1)
+    );
+    .filter = array_filter;
+    .length = Array.length;
+    .keys = fn entries => array_map (entries, fn entry => entry.0);
+    .values = fn entries => array_map (entries, fn entry => entry.1);
+    .items = array_items;
+  }
+
+const Map = { .of = map_type; .with = map_with; }
+
+const set_type = fn value => [value]
+
+const set_has = fn (equal, values, needle) =>
+  return fold (
+    values,
+    False,
+    fn (found, value) => found || equal (value, needle)
+  )
+
+const set_insert = fn (equal, values, inserted) =>
+  let replaced = fold (
+    values,
+    (Array.empty, None, False),
+    fn (state, value) =>
+      if state.2:
+        return (@array.push state.0 value, state.1, state.2)
+      else if equal (value, inserted):
+        return (@array.push state.0 inserted, Some value, True)
+      else:
+        return (@array.push state.0 value, state.1, state.2)
+  )
+  let updated = if replaced.2:
+    return replaced.0
+  else:
+    return @array.push replaced.0 inserted
+  return (replaced.1, updated)
+
+const set_remove = fn (equal, values, needle) =>
+  let removed = fold (
+    values,
+    (Array.empty, None, False),
+    fn (state, value) =>
+      if state.2:
+        return (@array.push state.0 value, state.1, state.2)
+      else if equal (value, needle):
+        return (state.0, Some value, True)
+      else:
+        return (@array.push state.0 value, state.1, state.2)
+  )
+  return (removed.1, removed.0)
+
+const set_with = fn equal =>
+  let insert = fn (values, value) => set_insert (equal, values, value)
+  let union = fn left => fn right => fold (
+    right,
+    left,
+    fn (values, value) => (insert (values, value)).1
+  )
+  return {
+    .of = set_type;
+    .empty = Array.empty;
+    .singleton = fn value => [value];
+    .has = fn (values, value) => set_has (equal, values, value);
+    .insert = insert;
+    .remove = fn (values, value) => set_remove (equal, values, value);
+    .append = union;
+    .union = union;
+    .intersect = fn left => fn right => array_filter (
+      left,
+      fn value => set_has (equal, right, value)
+    );
+    .diff = fn left => fn right => array_filter (
+      left,
+      fn value => not (set_has (equal, right, value))
+    );
+    .fold = fold;
+    .filter = array_filter;
+    .map = fn (values, mapped_equal, transform) => fold (
+      values,
+      Array.empty,
+      fn (mapped, value) => (set_insert (mapped_equal, mapped, transform value)).1
+    );
+    .length = Array.length;
+    .items = array_items;
+  }
+
+const Set = { .of = set_type; .with = set_with; }
+
+const Dict = map_with text_eq
 
 // Stable insertion sort. `before (a, b)` is `#True` when `a` must come first;
 // stability is what lets `packed` reorder by width without scrambling the
@@ -781,12 +1042,13 @@ const attach = fn target => fn members =>
 // The GPU frontend requires every integer literal to fit the signed 32-bit
 // domain, so wider bounds are computed rather than spelled. Compile time is the
 // same language, so this costs nothing at runtime.
-const pow2 = rec (fn n =>
-  if is_less (@int.cmp n 1):
-    return 1
-  else:
-    return 2 * pow2 (@int.sub n 1)
-)
+const pow2 =
+  rec (fn n =>
+    if is_less (@int.cmp n 1):
+      return 1
+    else:
+      return 2 * pow2 (@int.sub n 1)
+  )
 
 // The arithmetic domains. Integer operations return signed-i64 `Int` without
 // proving a narrower storage width, so a `sig` narrowing to `I32` is a real
@@ -813,7 +1075,8 @@ const unlikely = fn condition => @branch.unlikely condition
 const integer_width = fn bits => (if is_greater (@int.cmp bits 0):
   return bits
 else:
-  return @fail (Text.append "integer bit width must be positive, found " (Text.of_int bits))
+  return
+    @fail (Text.append "integer bit width must be positive, found " (Text.of_int bits))
 )
 
 const U = fn bits => (
@@ -947,11 +1210,12 @@ const same_domain = fn (left, right) => case left of
     #F64 => False
     #F32 => False
 
-const admits_omission = rec (fn type => case reflect type of
-  #Unit => True
-  #Union members => any (members, admits_omission)
-  _ => False
-)
+const admits_omission =
+  rec (fn type => case reflect type of
+    #Unit => True
+    #Union members => any (members, admits_omission)
+    _ => False
+  )
 
 // Does every value of `narrow` inhabit `wide`?
 //
@@ -960,80 +1224,81 @@ const admits_omission = rec (fn type => case reflect type of
 // checker's answer is about inferred types with variables in them, and this one
 // is about ground compile-time values, which is the only thing a program can
 // hold and ask about.
-const refines = rec (fn (narrow, wide) => case reflect wide of
-  #Unbounded => True
-  #Union options => any (options, fn option => refines (narrow, option))
-  #Range r => case reflect narrow of
-    // Same ordered domain first: an unbounded text range and an unbounded
-    // integer range have identical bounds and are not each other.
-    #Range s => same_domain (s.domain, r.domain) && above_low (s.low, r.low) && below_high (s.high, r.high)
-    _ => above_low (narrow, r.low) && below_high (narrow, r.high)
+const refines =
+  rec (fn (narrow, wide) => case reflect wide of
+    #Unbounded => True
+    #Union options => any (options, fn option => refines (narrow, option))
+    #Range r => case reflect narrow of
+      // Same ordered domain first: an unbounded text range and an unbounded
+      // integer range have identical bounds and are not each other.
+      #Range s => same_domain (s.domain, r.domain) && above_low (s.low, r.low) && below_high (s.high, r.high)
+      _ => above_low (narrow, r.low) && below_high (narrow, r.high)
 
-  #Shape wide_fields => case reflect narrow of
-    // Width and depth: a wider record refines a narrower one.
-    #Shape narrow_fields => every (
-      @shape.names wide_fields,
-      fn name =>
-        if @shape.has narrow_fields name:
-          return refines (
-            @shape.get narrow_fields name,
-            @shape.get wide_fields name
-          )
-        else:
-          return admits_omission (@shape.get wide_fields name)
-    )
-    _ => False
-
-  #Array wide_elements => case reflect narrow of
-    #Array narrow_elements => if Ord.eq (@array.len narrow_elements) (@array.len wide_elements):
-      return every (
-        upto (0, @int.sub (@array.len wide_elements) 1),
-        fn index => case (
-          array_get (narrow_elements, index),
-          array_get (wide_elements, index)
-        ) of
-          (#Some narrow_element, #Some wide_element) => refines (narrow_element, wide_element)
-          _ => False
+    #Shape wide_fields => case reflect narrow of
+      // Width and depth: a wider record refines a narrower one.
+      #Shape narrow_fields => every (
+        @shape.names wide_fields,
+        fn name =>
+          if @shape.has narrow_fields name:
+            return refines (
+              @shape.get narrow_fields name,
+              @shape.get wide_fields name
+            )
+          else:
+            return admits_omission (@shape.get wide_fields name)
       )
-    else:
-      return False
-    _ => False
+      _ => False
 
-  #Arrow w => case reflect narrow of
-    // Contravariant in the domain, covariant in the codomain. The row is the
-    // one part this cannot decide: an effect reflects as `#Opaque`, so there is
-    // no way here to ask whether one row contains another. A function that
-    // performs is therefore refused rather than guessed at — the checker
-    // decides rows, at the `sig`, where both of them are known.
-    #Arrow n => refines (w.domain, n.domain) && refines (n.codomain, w.codomain) && Ord.eq (@array.len n.effects) 0
-    _ => False
+    #Array wide_elements => case reflect narrow of
+      #Array narrow_elements => if Ord.eq (@array.len narrow_elements) (@array.len wide_elements):
+        return every (
+          upto (0, @int.sub (@array.len wide_elements) 1),
+          fn index => case (
+            array_get (narrow_elements, index),
+            array_get (wide_elements, index)
+          ) of
+            (#Some narrow_element, #Some wide_element) => refines (narrow_element, wide_element)
+            _ => False
+        )
+      else:
+        return False
+      _ => False
 
-  #Tag w => case reflect narrow of
-    #Tag n => text_eq (n.name, w.name) && (case w.payload of
-      #None => case n.payload of
-        #None => True
-        #Some _ => False
+    #Arrow w => case reflect narrow of
+      // Contravariant in the domain, covariant in the codomain. The row is the
+      // one part this cannot decide: an effect reflects as `#Opaque`, so there is
+      // no way here to ask whether one row contains another. A function that
+      // performs is therefore refused rather than guessed at — the checker
+      // decides rows, at the `sig`, where both of them are known.
+      #Arrow n => refines (w.domain, n.domain) && refines (n.codomain, w.codomain) && Ord.eq (@array.len n.effects) 0
+      _ => False
 
-      #Some carried => case n.payload of
-        #Some mine => refines (mine, carried)
-        #None => False
+    #Tag w => case reflect narrow of
+      #Tag n => text_eq (n.name, w.name) && (case w.payload of
+        #None => case n.payload of
+          #None => True
+          #Some _ => False
 
-    )
-    _ => False
+        #Some carried => case n.payload of
+          #Some mine => refines (mine, carried)
+          #None => False
 
-  // A seal is invariant: same name, and carriers that refine each other.
-  #Sealed w => case reflect narrow of
-    #Sealed n => text_eq (n.name, w.name) && refines (n.inner, w.inner) && refines (w.inner, n.inner)
-    _ => False
+      )
+      _ => False
 
-  #Int v => refines_literal (narrow, v)
-  #Text v => refines_literal (narrow, v)
-  #Unit => case reflect narrow of
-    #Unit => True
-    _ => False
+    // A seal is invariant: same name, and carriers that refine each other.
+    #Sealed w => case reflect narrow of
+      #Sealed n => text_eq (n.name, w.name) && refines (n.inner, w.inner) && refines (w.inner, n.inner)
+      _ => False
 
-  #Opaque => False
-)
+    #Int v => refines_literal (narrow, v)
+    #Text v => refines_literal (narrow, v)
+    #Unit => case reflect narrow of
+      #Unit => True
+      _ => False
+
+    #Opaque => False
+  )
 
 // --- asking about a type ----------------------------------------------------
 //
@@ -1086,17 +1351,18 @@ const opened = fn (name, t) => case reflect t of
     return None
   _ => None
 
-const Reflect = {
-  .of = reflect;
-  .members = members;
-  .union_of = union_of;
-  .refines = refines;
-  .extract = Extract;
-  .exclude = Exclude;
-  .pick = Pick;
-  .omit = Omit;
-  .opened = opened;
-}
+const Reflect =
+  {
+    .of = reflect;
+    .members = members;
+    .union_of = union_of;
+    .refines = refines;
+    .extract = Extract;
+    .exclude = Exclude;
+    .pick = Pick;
+    .omit = Omit;
+    .opened = opened;
+  }
 
 // --- structs ----------------------------------------------------------------
 //
@@ -1217,15 +1483,16 @@ const aligned = fn (shape, order, width_of) =>
 const packed = fn shape =>
   let order = @shape.names shape
   let bits = layout (shape, bit_width)
-  let fields = map (
-    bits.fields,
-    fn field => {
-      .name = field.name;
-      .bit_offset = field.offset;
-      .bit_width = field.width;
-      .mask = @int.sub (pow2 field.width) 1;
-    }
-  )
+  let fields =
+    map (
+      bits.fields,
+      fn field => {
+        .name = field.name;
+        .bit_offset = field.offset;
+        .bit_width = field.width;
+        .mask = @int.sub (pow2 field.width) 1;
+      }
+    )
   let byte_size = @int.div (@int.add bits.size 7) 8
   return {
     .order = order;
@@ -1244,17 +1511,18 @@ const packed = fn shape =>
     );
   }
 
-const Type = {
-  .range = range;
-  .union = Set.union;
-  .intersect = Set.intersect;
-  .diff = Set.diff;
-  .arrow = arrow;
-  .of = type_of;
-  .seal = seal;
-  .unseal = unseal;
-  .attach = attach;
-}
+const Type =
+  {
+    .range = range;
+    .union = Set.union;
+    .intersect = Set.intersect;
+    .diff = Set.diff;
+    .arrow = arrow;
+    .of = type_of;
+    .seal = seal;
+    .unseal = unseal;
+    .attach = attach;
+  }
 
 return {
   .Fn = Fn;
@@ -1297,6 +1565,7 @@ return {
   .Monoid = Monoid;
 
   .Array = Array;
+  .Arena = Arena;
   .Continuation = Continuation;
   .fold = fold;
   .each = each;

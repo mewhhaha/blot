@@ -44,21 +44,23 @@ const Store = E.Store
 // both stay here. Together with the renderer's two, that is four capabilities
 // and nothing else: this program cannot reach the page except through them.
 
-const Assets = @effect.host {
-  .generation = Unit -> Int;
-  .count = Unit -> Int;
-  .entry = Int -> {
-    .kind = Int;
-    .x = Int; .y = Int; .z = Int;
-    .scale = Int;
-    .spin = Int;
-    .colour = Str;
-  };
-}
+const Assets =
+  @effect.host {
+    .generation = Unit -> Int;
+    .count = Unit -> Int;
+    .entry = Int -> {
+      .kind = Int;
+      .x = Int; .y = Int; .z = Int;
+      .scale = Int;
+      .spin = Int;
+      .colour = Str;
+    };
+  }
 
-const Host = @effect.host {
-  .frame = Unit -> Int;
-}
+const Host =
+  @effect.host {
+    .frame = Unit -> Int;
+  }
 
 // The scene file says a box or a texture, and the renderer offers a call for
 // each. Which integer means which is the scene format's business, so the
@@ -71,12 +73,13 @@ const KIND_MESH = 0
 // which is what indexes the trig table and what the scene file counts in.
 // `position` is a point, so its fourth lane is 1 and a camera row's translation
 // reaches it.
-const Transform = {
-  .position = F32x4;
-  .angle = Int;
-  .spin = Int;
-  .scale = F32;
-}
+const Transform =
+  {
+    .position = F32x4;
+    .angle = Int;
+    .spin = Int;
+    .scale = F32;
+  }
 const Model = { .kind = Int; .colour = Str; }
 
 // --- systems ----------------------------------------------------------------

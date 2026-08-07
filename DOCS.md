@@ -811,6 +811,13 @@ let answer = consume (!token)
 let sum = inspect { .x = 20; .y = 22; }
 ```
 
+Transfer an affine binding with the matching `?` marker. It means “this callee
+may consume the value at most once,” not “silently copy it”:
+
+```blot
+let (nodes, address) = Arena.insert (?nodes, node)
+```
+
 Treat ownership as flow, not as part of the inferred type. A closure inherits
 the obligation of what it captures:
 
@@ -826,6 +833,30 @@ After moving a field, do not use the whole partially moved record again.
 For arrays, arrange the last update around the last use when storage reuse
 matters. Keeping an older alias alive makes the persistent update copy, which is
 correct but may be more expensive.
+
+Use `Arena` for finite linked structures and graphs whose lifetime is one
+operation. Store stable integer addresses in nodes, reserve address zero as a
+sentinel, and make the arena affine so appends may reuse its scratch storage:
+
+```blot
+sig build = (Int, [(Int, Int)], Int) -> ([(Int, Int)], Int)
+let build = rec (fn (remaining, ?nodes, head) =>
+  if remaining == 0:
+    return (nodes, head)
+  else:
+    let (nodes, next) = Arena.insert (?nodes, (remaining, head))
+    return build (remaining - 1, nodes, next)
+)
+
+let nodes = Arena.singleton (0, 0)
+let (nodes, head) = build (count, nodes, 0)
+```
+
+Borrow the finished arena while traversing it with `Arena.get`. Prefer this
+indexed form when the structure does not cross the module ABI: node shapes stay
+statically checked, allocation is reclaimed with the outer call's scratch arena,
+and no raw pointer or lifetime enters the source language. Use an ordinary
+persistent array when older versions must remain observable.
 
 ## Let compile time do compile-time work
 

@@ -14,24 +14,27 @@ let program = fn () =>
   result <- Random.add (input + time)
   return result
 
-let fake_terminal = {
-  .read = fn ((), ?resume) =>
-    result <- resume 10
-    return result
-  ;
-}
-let fake_clock = {
-  .now = fn ((), ?resume) =>
-    result <- resume 20
-    return result
-  ;
-}
-let fake_random = {
-  .add = fn (value, ?resume) =>
-    result <- resume (value + 12)
-    return result
-  ;
-}
+let fake_terminal =
+  {
+    .read = fn ((), ?resume) =>
+      result <- resume 10
+      return result
+    ;
+  }
+let fake_clock =
+  {
+    .now = fn ((), ?resume) =>
+      result <- resume 20
+      return result
+    ;
+  }
+let fake_random =
+  {
+    .add = fn (value, ?resume) =>
+      result <- resume (value + 12)
+      return result
+    ;
+  }
 
 let result = try program with
   program_without_terminal <- @handle (Terminal, fake_terminal)

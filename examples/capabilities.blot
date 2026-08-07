@@ -10,20 +10,22 @@ module init
 
 open @import "blot:prelude" ()
 
-const Console = @effect {
-  .write = Str -> Unit;
-}
+const Console =
+  @effect {
+    .write = Str -> Unit;
+  }
 
 // A host capability is simply a handler blot did not write. Here the handler is
 // written in blot over the granted function, which is the ordinary case.
-const to_host = {
-  .write = fn (message, ?resume) =>
-    <- init.print message
-    result <- resume ()
-    return result
-  ;
-  .return = fn value => value;
-}
+const to_host =
+  {
+    .write = fn (message, ?resume) =>
+      <- init.print message
+      result <- resume ()
+      return result
+    ;
+    .return = fn value => value;
+  }
 
 // The same computation, discharged two different ways. Nothing in `report`
 // mentions which.
@@ -32,13 +34,14 @@ const report = fn () =>
   <- Console.write "linked"
   return "ok"
 
-const to_memory = {
-  .write = fn (message, ?resume) =>
-    rest <- resume ()
-    return @text.concat message rest
-  ;
-  .return = fn _ => "";
-}
+const to_memory =
+  {
+    .write = fn (message, ?resume) =>
+      rest <- resume ()
+      return @text.concat message rest
+    ;
+    .return = fn _ => "";
+  }
 
 return {
   .printed = @handle (Console, report, to_host);

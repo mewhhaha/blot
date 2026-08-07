@@ -1369,7 +1369,8 @@ fn trusted_borrow_operation(function: ExpressionId, module: &Module) -> bool {
                 &module.arena.expressions[target.0 as usize],
                 Expression::Var { name: namespace, .. }
                     if (namespace == "Num" || namespace == "Text")
-                        || (namespace == "Array" && matches!(name.as_str(), "get" | "length"))
+                        || ((namespace == "Array" || namespace == "Arena")
+                            && matches!(name.as_str(), "get" | "length"))
             )
         }
         _ => false,

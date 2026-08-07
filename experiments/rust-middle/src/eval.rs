@@ -634,7 +634,7 @@ fn evaluate_dynamic_case(
             arms,
             span,
         ),
-        RuntimeMeaning::Plain => {
+        RuntimeMeaning::Plain | RuntimeMeaning::ReusableStore => {
             let boolean = runtime
                 .residual
                 .as_ref()

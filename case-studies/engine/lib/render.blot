@@ -43,41 +43,43 @@ const point = fn (x, y, z) => Vec4.of (unit x, unit y, unit z, ONE)
 
 // --- the host boundary ------------------------------------------------------
 
-const Canvas = @effect.host {
-  .clear = Unit -> Unit;
-  // A projected triangle. `depth` is the view distance the host sorts by — the
-  // guest owns geometry and the host owns rasterization order, which is the
-  // same split a depth buffer makes.
-  .tri = {
-  .ax = Int; .ay = Int;
-  .bx = Int; .by = Int;
-  .cx = Int; .cy = Int;
-  .depth = Int;
-  .shade = Int;
-  .colour = Str;
-  } -> Unit;
-  // A 2D texture, always square to the screen. Under an orthographic lens this
-  // is a plain sprite; under a perspective one it is a billboard, and the only
-  // difference is what scaled its size.
-  .sprite = {
-  .x = Int; .y = Int;
-  .size = Int;
-  .depth = Int;
-  .texture = Str;
-  } -> Unit;
-  .present = Unit -> Unit;
-}
+const Canvas =
+  @effect.host {
+    .clear = Unit -> Unit;
+    // A projected triangle. `depth` is the view distance the host sorts by — the
+    // guest owns geometry and the host owns rasterization order, which is the
+    // same split a depth buffer makes.
+    .tri = {
+    .ax = Int; .ay = Int;
+    .bx = Int; .by = Int;
+    .cx = Int; .cy = Int;
+    .depth = Int;
+    .shade = Int;
+    .colour = Str;
+    } -> Unit;
+    // A 2D texture, always square to the screen. Under an orthographic lens this
+    // is a plain sprite; under a perspective one it is a billboard, and the only
+    // difference is what scaled its size.
+    .sprite = {
+    .x = Int; .y = Int;
+    .size = Int;
+    .depth = Int;
+    .texture = Str;
+    } -> Unit;
+    .present = Unit -> Unit;
+  }
 
 // The camera lives in the host because the host owns the input device. Keeping
 // it there is what lets the code hot-reload without losing the view.
-const View = @effect.host {
-  .yaw = Unit -> Int;
-  .pitch = Unit -> Int;
-  .distance = Unit -> Int;
-  // `0` is a perspective lens and `1` is orthographic. A 2D scene is this
-  // engine with the lens switched, not a second renderer.
-  .lens = Unit -> Int;
-}
+const View =
+  @effect.host {
+    .yaw = Unit -> Int;
+    .pitch = Unit -> Int;
+    .distance = Unit -> Int;
+    // `0` is a perspective lens and `1` is orthographic. A 2D scene is this
+    // engine with the lens switched, not a second renderer.
+    .lens = Unit -> Int;
+  }
 
 // --- the screen -------------------------------------------------------------
 
@@ -111,25 +113,27 @@ const HALF = lane 0.5
 const NEG_HALF = Float32.negate HALF
 const NEG_ONE = Float32.negate ONE
 
-const corners = [
-  Vec4.of (NEG_HALF, NEG_HALF, NEG_HALF, ZERO),
-  Vec4.of (HALF, NEG_HALF, NEG_HALF, ZERO),
-  Vec4.of (HALF, HALF, NEG_HALF, ZERO),
-  Vec4.of (NEG_HALF, HALF, NEG_HALF, ZERO),
-  Vec4.of (NEG_HALF, NEG_HALF, HALF, ZERO),
-  Vec4.of (HALF, NEG_HALF, HALF, ZERO),
-  Vec4.of (HALF, HALF, HALF, ZERO),
-  Vec4.of (NEG_HALF, HALF, HALF, ZERO)
-]
+const corners =
+  [
+    Vec4.of (NEG_HALF, NEG_HALF, NEG_HALF, ZERO),
+    Vec4.of (HALF, NEG_HALF, NEG_HALF, ZERO),
+    Vec4.of (HALF, HALF, NEG_HALF, ZERO),
+    Vec4.of (NEG_HALF, HALF, NEG_HALF, ZERO),
+    Vec4.of (NEG_HALF, NEG_HALF, HALF, ZERO),
+    Vec4.of (HALF, NEG_HALF, HALF, ZERO),
+    Vec4.of (HALF, HALF, HALF, ZERO),
+    Vec4.of (NEG_HALF, HALF, HALF, ZERO)
+  ]
 
-const faces = [
-  { .a = 1; .b = 0; .c = 3; .d = 2; .n = Vec4.of (ZERO, ZERO, NEG_ONE, ZERO); },
-  { .a = 4; .b = 5; .c = 6; .d = 7; .n = Vec4.of (ZERO, ZERO, ONE, ZERO); },
-  { .a = 0; .b = 4; .c = 7; .d = 3; .n = Vec4.of (NEG_ONE, ZERO, ZERO, ZERO); },
-  { .a = 5; .b = 1; .c = 2; .d = 6; .n = Vec4.of (ONE, ZERO, ZERO, ZERO); },
-  { .a = 3; .b = 7; .c = 6; .d = 2; .n = Vec4.of (ZERO, ONE, ZERO, ZERO); },
-  { .a = 0; .b = 1; .c = 5; .d = 4; .n = Vec4.of (ZERO, NEG_ONE, ZERO, ZERO); }
-]
+const faces =
+  [
+    { .a = 1; .b = 0; .c = 3; .d = 2; .n = Vec4.of (ZERO, ZERO, NEG_ONE, ZERO); },
+    { .a = 4; .b = 5; .c = 6; .d = 7; .n = Vec4.of (ZERO, ZERO, ONE, ZERO); },
+    { .a = 0; .b = 4; .c = 7; .d = 3; .n = Vec4.of (NEG_ONE, ZERO, ZERO, ZERO); },
+    { .a = 5; .b = 1; .c = 2; .d = 6; .n = Vec4.of (ONE, ZERO, ZERO, ZERO); },
+    { .a = 3; .b = 7; .c = 6; .d = 2; .n = Vec4.of (ZERO, ONE, ZERO, ZERO); },
+    { .a = 0; .b = 1; .c = 5; .d = 4; .n = Vec4.of (ZERO, NEG_ONE, ZERO, ZERO); }
+  ]
 
 // A fixed light, normalized in advance so shading stays one dot product. A
 // direction, so its fourth lane is 0 and a normal's fourth lane never reaches
@@ -288,8 +292,9 @@ const draw_face = fn (position, angle, scale, colour, camera, face) =>
       // Millimetres of depth, so the host's sort keeps its resolution across an
       // integer boundary. The mean of four and the millimetre scale are one
       // constant — a quarter of a thousand — after the horizontal sum.
-      let depth = Float32.truncate
-        (Float32.mul (Vec4.sum (Vec4.of (za, zb, zc, zd))) (lane 250.0))
+      let depth =
+        Float32.truncate
+          (Float32.mul (Vec4.sum (Vec4.of (za, zb, zc, zd))) (lane 250.0))
       let shade = shade_of normal
       <- Canvas.tri {
         .ax = pa.x; .ay = pa.y;
@@ -346,22 +351,24 @@ const draw_sprite = fn (position, scale, texture, camera) =>
 // and a different field subset at each of the four places that reads one, and
 // the shapes only agree because inference sees the record reach them — which it
 // can only do while the record does not leave.
-sig frame = ({
-  .mesh = (F32x4, Int, F32, Str) -> Unit ~ { Canvas };
-  .sprite = (F32x4, F32, Str) -> Unit ~ { Canvas };
-  } -> Unit ~ { Canvas }) -> Unit ~ { Canvas, View }
+sig frame =
+  ({
+    .mesh = (F32x4, Int, F32, Str) -> Unit ~ { Canvas };
+    .sprite = (F32x4, F32, Str) -> Unit ~ { Canvas };
+    } -> Unit ~ { Canvas }) -> Unit ~ { Canvas, View }
 let frame = fn paint =>
   <- Canvas.clear ()
   yaw <- View.yaw ()
   pitch <- View.pitch ()
   distance <- View.distance ()
   lens <- View.lens ()
-  let camera = camera_of (
-    yaw,
-    pitch,
-    unit distance,
-    lens
-  )
+  let camera =
+    camera_of (
+      yaw,
+      pitch,
+      unit distance,
+      lens
+    )
   <- paint {
     .mesh = (fn (position, angle, scale, colour) =>
       <- draw_mesh (position, angle, scale, colour, camera)
