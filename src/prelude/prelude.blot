@@ -747,7 +747,7 @@ const list_fold_nodes =
     if is_less (@int.cmp address 0):
       return state
     else:
-      return case array_get (nodes, address) of
+      return case array_get ((&nodes), address) of
         #Some node => list_fold_nodes (
           (&nodes),
           node.1,
