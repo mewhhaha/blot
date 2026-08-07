@@ -744,6 +744,34 @@ Deno.test("a known higher-order projection preserves structural specialization",
   );
 });
 
+Deno.test("a known higher-order runtime choice preserves structural specialization", async () => {
+  const path = await fixture("higher-order-runtime-choice.blot", [
+    `open @import "blot:prelude" ()
+`,
+    `let choose = fn flag => if flag > 0 : fn value => value.x + flag
+else: fn value => value.x - flag
+`,
+    `sig run = Int -> Int
+`,
+    "let run = fn flag =>",
+    "  let selected = choose flag",
+    "  let left = selected { .x = 20; .y = 1; }",
+    "  let right = selected { .x = 22; .z = 2; }",
+    "  return left + right",
+    `return { .run = run; }
+`,
+  ]);
+  for (const [flag, expected] of [[0n, 42n], [1n, 44n]] as const) {
+    assertEquals(
+      await runLoweringExport(path, "run", [{
+        kind: "signed-integer-64",
+        value: flag,
+      }]),
+      { kind: "signed-integer-64", value: expected },
+    );
+  }
+});
+
 Deno.test("an immutable alias preserves structural call specialization", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "aliased-shapes.blot");

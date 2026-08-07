@@ -121,10 +121,12 @@ staging/handler/target simulations now have executable boundaries.
 What remains falls into three different classes and should not be described as
 one unfinished feature list:
 
-- **Semantic closure:** functions produced only by unknown run-time higher-order
-  control still need closure conversion with a closed parameter representation
-  or a representation dictionary. This is the remaining source program that can
-  be well typed yet reach a structural representation refusal.
+- **Semantic closure:** finite run-time choices returned by known higher-order
+  functions are defunctionalized, but a function whose source set is opaque to
+  whole-program control-flow analysis still needs closure conversion with a
+  closed parameter representation or a representation dictionary. This is the
+  remaining source program that can be well typed yet reach a structural
+  representation refusal.
 - **Compiler architecture:** discover recursive representation SCCs in the
   settled checker graph, progressively commit typed Runtime HIR during checking,
   and publish structural extraction lineage in ownership certificates. These

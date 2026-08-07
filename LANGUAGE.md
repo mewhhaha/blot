@@ -2753,8 +2753,11 @@ one of its statically selected leaves; the compiler follows that result and
 still clones the original lambda at each concrete call shape. A run-time
 conditional whose alternatives are statically known lambdas retains a single
 evaluated selector and specializes both alternatives at each concrete call
-shape. A closure produced only by run-time higher-order control remains a
-residual representation boundary.
+shape. The same rule follows a known higher-order function whose direct body is
+that conditional: its argument is evaluated once, remains available to closures
+returned by either branch, and supplies the selector. A closure whose source set
+cannot be recovered from known whole-program control remains a residual
+representation boundary.
 
 A shape parameter destructured in place is specialized by the same rule. For
 example, separate calls to `fn { .x = value; } => value` with `{ .x; .y; }` and

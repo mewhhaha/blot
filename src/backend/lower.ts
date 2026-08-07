@@ -677,6 +677,7 @@ function runtimeLambdaChoice(
   scope: Scope,
 ): {
   readonly condition: Expr;
+  readonly environment: Scope;
   readonly consequent: RuntimeLambda;
   readonly alternate: RuntimeLambda;
 } | null {
@@ -691,6 +692,7 @@ function runtimeLambdaChoice(
   if (consequent === null || alternate === null) return null;
   return {
     condition: expr.branches[0].condition,
+    environment: scope,
     consequent,
     alternate,
   };
@@ -2197,7 +2199,35 @@ function lowerBlock(
     if (declaration.kind === "sig") continue;
 
     if (step.tag !== "bind" && declaration.pattern.tag === "name") {
-      const choice = runtimeLambdaChoice(declaration.value, inner);
+      let choice = runtimeLambdaChoice(declaration.value, inner);
+      let choiceArgument:
+        | { readonly name: string; readonly value: Expr }
+        | null = null;
+      if (choice === null && declaration.value.tag === "apply") {
+        const callable = specializableLambda(declaration.value.fn, inner);
+        if (
+          callable !== null && callable.expression.parameter.tag === "name"
+        ) {
+          const argumentName = lowering.fresh(
+            `${declaration.pattern.name}$argument`,
+          );
+          const choiceScope = childScope(callable.environment);
+          choiceScope.names.set(
+            callable.expression.parameter.name,
+            argumentName,
+          );
+          choice = runtimeLambdaChoice(
+            callable.expression.body,
+            choiceScope,
+          );
+          if (choice !== null) {
+            choiceArgument = {
+              name: argumentName,
+              value: declaration.value.arg,
+            };
+          }
+        }
+      }
       if (choice !== null) {
         const selector = lowering.fresh(`${declaration.pattern.name}$choice`);
         inner.runtimeLambdaChoices.set(declaration.pattern.name, {
@@ -2211,9 +2241,22 @@ function lowerBlock(
             environment: snapshotScope(choice.alternate.environment),
           },
         });
-        wrappers.push((body) =>
-          surface.let(selector, lower(choice.condition, inner, lowering), body)
+        const selectorValue = lower(
+          choice.condition,
+          choice.environment,
+          lowering,
         );
+        if (choiceArgument === null) {
+          wrappers.push((body) => surface.let(selector, selectorValue, body));
+        } else {
+          wrappers.push((body) =>
+            surface.let(
+              choiceArgument.name,
+              lower(choiceArgument.value, inner, lowering),
+              surface.let(selector, selectorValue, body),
+            )
+          );
+        }
         continue;
       }
       const aliased = specializableLambda(declaration.value, inner);
