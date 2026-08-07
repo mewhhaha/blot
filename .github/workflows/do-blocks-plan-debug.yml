@@ -1,34 +1,77 @@
-name: do-blocks-plan-debug
+name: do-blocks-migrate-and-scan
 
 on:
   push:
     branches:
       - agent/do-blocks-ci
 
+permissions:
+  contents: write
+
 jobs:
-  inspect:
+  migrate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: do-blocks
+          fetch-depth: 0
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Check reduced forms on main
+      - name: Migrate remaining source forms
         run: |
-          cat > scripts/_debug_do_plan.ts <<'TS'
-          import { parseConcrete } from "../src/syntax/parse.ts";
-          async function check(label: string, body: string) {
-            const result = await parseConcrete(`${body}\nreturn ()\n`);
-            console.log(label, result.ok ? "OK" : JSON.stringify(result.diagnostics));
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/prelude/prelude.blot')
+          text = p.read_text()
+          old = '''const integer_width = fn bits => case is_greater (@int.cmp bits 0) of\n  #True => bits\n  #False =>\n    @fail (Text.append "integer bit width must be positive, found " (Text.of_int bits))\n'''
+          new = '''const integer_width = fn bits => case is_greater (@int.cmp bits 0) of\n  #True => bits\n  #False =>\n    return @fail (Text.append "integer bit width must be positive, found " (Text.of_int bits))\n'''
+          if old not in text:
+              raise SystemExit('integer_width source changed')
+          p.write_text(text.replace(old, new, 1))
+
+          p = Path('examples/simd.blot')
+          text = p.read_text()
+          old = '''normalized <- normalize (\n    <- Console.write "sampling"\n    return Vec4.of (\n      Float32.of_int 1,\n      Float32.of_int 2,\n      Float32.of_int 3,\n      Float32.of_int 4\n    )\n  )\n'''
+          new = '''normalized <- normalize (do:\n  <- Console.write "sampling"\n  return Vec4.of (\n    Float32.of_int 1,\n    Float32.of_int 2,\n    Float32.of_int 3,\n    Float32.of_int 4\n  )\n)\n'''
+          if old not in text:
+              raise SystemExit('simd parenthesized block changed')
+          p.write_text(text.replace(old, new, 1))
+          PY
+      - name: Scan tracked Blot syntax
+        run: |
+          cat > scripts/_debug_do_scan.ts <<'TS'
+          import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
+          import { elaborateLayout } from "../src/syntax/layout.ts";
+
+          const frontend = CpuFrontend.create(await Deno.readFile("generated/wasm/parser.plan"));
+          const out = await new Deno.Command("git", { args: ["ls-files", "*.blot"], stdout: "piped" }).output();
+          const files = new TextDecoder().decode(out.stdout).trim().split("\n").filter((path) => path && !path.startsWith("examples/rejected/"));
+          let failed = false;
+          for (const path of files) {
+            const source = await Deno.readTextFile(path);
+            const layout = await elaborateLayout(source);
+            if (!layout.ok) {
+              console.error(path, JSON.stringify(layout.diagnostics));
+              failed = true;
+              continue;
+            }
+            const parsed = frontend.ingest(layout.layout.source);
+            if (!parsed.ok) {
+              console.error(path, JSON.stringify(parsed.diagnostics));
+              failed = true;
+            }
           }
-          await check("exact", `const integer_width = fn bits => case is_greater (@int.cmp bits 0) of\n  #True => bits\n  #False =>\n    @fail (Text.append "integer bit width must be positive, found " (Text.of_int bits))`);
-          await check("short multiline", `const f = fn bits => case bits of\n  #True => bits\n  #False =>\n    @fail bits`);
-          await check("short inline", `const f = fn bits => case bits of\n  #True => bits\n  #False => @fail bits`);
-          await check("case no lambda", `const f = case x of\n  #True => x\n  #False =>\n    @fail x`);
-          await check("case multiline literal", `const f = fn x => case x of\n  #True => x\n  #False =>\n    1`);
-          await check("case parenthesized app", `const f = fn x => case x of\n  #True => x\n  #False =>\n    g (h x)`);
-          await check("indented non-case", `const f = fn x =>\n  g (h x)`);
+          if (failed) Deno.exit(1);
+          console.log(`syntax OK: ${files.length} files`);
           TS
-          deno run --allow-read scripts/_debug_do_plan.ts
+          deno run --allow-read --allow-run=git scripts/_debug_do_scan.ts
+      - name: Commit migrations
+        run: |
+          git config user.name "Jacob Torrång"
+          git config user.email "kopatheonlyone@hotmail.com"
+          git add src/prelude/prelude.blot examples/simd.blot
+          git commit -m "language: migrate explicit value scopes" || true
+          git push origin HEAD:do-blocks
