@@ -1,0 +1,157 @@
+name: Deferred Parameter Dev
+
+on:
+  push:
+    branches:
+      - deferred-parameters
+
+permissions:
+  contents: write
+
+jobs:
+  develop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: deferred-parameters
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Apply deferred parameter syntax
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          ast = Path("src/syntax/ast.ts")
+          text = ast.read_text()
+          old = '''    readonly tag: "lambda";\n    readonly parameter: Pattern;\n    readonly body: Expr;'''
+          new = '''    readonly tag: "lambda";\n    readonly parameter: Pattern;\n    /** The source argument is suspended until this parameter is demanded. */\n    readonly deferred?: boolean;\n    readonly body: Expr;'''
+          if "readonly deferred?: boolean;" not in text:
+              if old not in text:
+                  raise SystemExit("lambda AST anchor missing")
+              ast.write_text(text.replace(old, new, 1))
+
+          lower = Path("src/syntax/lower.ts")
+          text = lower.read_text()
+          replacement = r'''function lowerLambdaParameter(
+  parameter: Rule,
+): { readonly pattern: Pattern; readonly deferred: boolean } {
+  const pattern = asRule(field(parameter, "pattern"), "pattern");
+  const qualifierCursor = field(pattern, "qualifier");
+  if (qualifierCursor === null || tokenOf(qualifierCursor).text !== "~") {
+    return { pattern: lowerPattern(pattern), deferred: false };
+  }
+  const core = unwrap(asRule(field(pattern, "value"), "pattern_core"));
+  if (
+    core.type !== "token" ||
+    (core.kind !== "IDENT" && core.kind !== "TYPE_IDENT")
+  ) {
+    fail(
+      "BLOT_BAD_DEFERRED_PARAMETER",
+      "`~` defers one name parameter. Bind a name, then destructure the value after it is demanded.",
+      pattern.span,
+    );
+  }
+  if (core.text === "_") {
+    return {
+      pattern: { tag: "wildcard", span: pattern.span },
+      deferred: true,
+    };
+  }
+  return {
+    pattern: {
+      tag: "name",
+      name: core.text,
+      qualifier: "none",
+      span: pattern.span,
+    },
+    deferred: true,
+  };
+}
+
+function lowerLambda(rule: Rule, context: Context): Expr {
+  const parameters = fieldList(rule, "parameters")
+    .map((cursor) => asRule(cursor, "lambda_parameter"));
+  expect(parameters.length > 0, "a lambda has no parameter");
+  let result = lowerExpression(
+    asRule(field(rule, "body"), "body"),
+    {
+      ...context,
+      loop: null,
+      returnScope: false,
+      escapeBoundary: "none",
+    },
+  );
+  for (const parameter of [...parameters].reverse()) {
+    const lowered = lowerLambdaParameter(parameter);
+    result = {
+      tag: "lambda",
+      parameter: lowered.pattern,
+      deferred: lowered.deferred || undefined,
+      body: result,
+      span: { start: parameter.span.start, end: rule.span.end },
+    };
+  }
+  return result;
+}
+
+function lowerExpression'''
+          if "function lowerLambdaParameter(" not in text:
+              text, count = re.subn(
+                  r'function lowerLambda\(rule: Rule, context: Context\): Expr \{.*?\n\}\n\nfunction lowerExpression',
+                  replacement,
+                  text,
+                  count=1,
+                  flags=re.S,
+              )
+              if count != 1:
+                  raise SystemExit("lowerLambda anchor missing")
+              lower.write_text(text)
+
+          tests = Path("src/syntax/surface.test.ts")
+          text = tests.read_text()
+          addition = '''Deno.test("a deferred lambda parameter is recorded on the lambda", async () => {
+  const parsed = await parse(`let lazy = fn ~value => value\nreturn lazy\n`);
+  assert(parsed.ok);
+  if (!parsed.ok) return;
+  const binding = parsed.module.declarations[0];
+  assert(binding !== undefined && binding.tag === "binding");
+  if (binding === undefined || binding.tag !== "binding") return;
+  assertEquals(binding.value.tag, "lambda");
+  if (binding.value.tag !== "lambda") return;
+  assertEquals(binding.value.deferred, true);
+  assertEquals(binding.value.parameter.tag, "name");
+});
+
+Deno.test("a deferred lambda parameter must be one name", async () => {
+  const parsed = await parse(`let lazy = fn ~(left, right) => left\nreturn lazy\n`);
+  assert(!parsed.ok);
+  if (parsed.ok) return;
+  assertEquals(parsed.diagnostics[0]?.code, "BLOT_BAD_DEFERRED_PARAMETER");
+});
+
+'''
+          if "a deferred lambda parameter is recorded on the lambda" not in text:
+              marker = 'Deno.test("do is an explicit value-producing statement scope"'
+              at = text.find(marker)
+              if at < 0:
+                  raise SystemExit("surface test anchor missing")
+              tests.write_text(text[:at] + addition + text[at:])
+          PY
+      - name: Validate deferred parameter syntax
+        shell: bash
+        run: |
+          deno fmt src/syntax/ast.ts src/syntax/lower.ts src/syntax/surface.test.ts
+          deno check src/syntax/ast.ts src/syntax/lower.ts src/syntax/surface.test.ts
+          deno test --allow-read --allow-write src/syntax/surface.test.ts --filter "deferred lambda"
+      - name: Commit syntax slice
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/syntax/ast.ts src/syntax/lower.ts src/syntax/surface.test.ts
+          git commit -m 'feat: parse deferred lambda parameters [skip ci]' || true
+          git push origin HEAD:deferred-parameters

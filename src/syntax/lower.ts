@@ -2073,6 +2073,42 @@ function lowerValue(rule: Rule, context: Context): Expr {
 // after the first becomes a lambda whose body is what follows it, so the AST
 // has only one-parameter lambdas and the rest of the compiler never learns that
 // currying has a spelling.
+function lowerLambdaParameter(
+  parameter: Rule,
+): { readonly pattern: Pattern; readonly deferred: boolean } {
+  const pattern = asRule(field(parameter, "pattern"), "pattern");
+  const qualifierCursor = field(pattern, "qualifier");
+  if (qualifierCursor === null || tokenOf(qualifierCursor).text !== "~") {
+    return { pattern: lowerPattern(pattern), deferred: false };
+  }
+  const core = unwrap(asRule(field(pattern, "value"), "pattern_core"));
+  if (
+    core.type !== "token" ||
+    (core.kind !== "IDENT" && core.kind !== "TYPE_IDENT")
+  ) {
+    fail(
+      "BLOT_BAD_DEFERRED_PARAMETER",
+      "`~` defers one name parameter. Bind a name, then destructure the value after it is demanded.",
+      pattern.span,
+    );
+  }
+  if (core.text === "_") {
+    return {
+      pattern: { tag: "wildcard", span: pattern.span },
+      deferred: true,
+    };
+  }
+  return {
+    pattern: {
+      tag: "name",
+      name: core.text,
+      qualifier: "none",
+      span: pattern.span,
+    },
+    deferred: true,
+  };
+}
+
 function lowerLambda(rule: Rule, context: Context): Expr {
   const parameters = fieldList(rule, "parameters")
     .map((cursor) => asRule(cursor, "lambda_parameter"));
@@ -2087,9 +2123,11 @@ function lowerLambda(rule: Rule, context: Context): Expr {
     },
   );
   for (const parameter of [...parameters].reverse()) {
+    const lowered = lowerLambdaParameter(parameter);
     result = {
       tag: "lambda",
-      parameter: lowerPattern(asRule(field(parameter, "pattern"), "pattern")),
+      parameter: lowered.pattern,
+      deferred: lowered.deferred || undefined,
       body: result,
       span: { start: parameter.span.start, end: rule.span.end },
     };
