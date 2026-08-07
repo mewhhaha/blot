@@ -4,6 +4,11 @@ These are the remaining changes I would pursue after indexed arenas and the
 initial recursive-value representation work. They are suggestions, not accepted
 language rules; `LANGUAGE.md` and `spec/` remain authoritative.
 
+Sections 1 through 6 are representation and compiler work. Sections 7 onward
+came from a review of the language itself — inference, effects, refinement,
+reflection, and the surface — and are ordered by what they unblock rather than
+by size.
+
 ## 1. Implemented: close positive recursive algebraic values
 
 Inference already accepts the useful equation
@@ -140,3 +145,249 @@ one unfinished feature list:
 Capacity-bearing Stores, another proof-producing collection, first-class
 references, and a full-width word domain are contingent extensions. The current
 profiles and examples do not justify adding them to the language or runtime.
+
+## 7. Let a signature name the rest of an effect row
+
+§12.4 closes a written row, so `('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }`
+is a type the checker prints and no program can write. Every callback-taking
+export — `map`, `each`, any handler-shaped library function — can therefore be
+given a signature only by fixing the callback's row.
+
+The argument against record row variables does not transfer. An effect row is a
+set of labels with nothing under them, subsumption is already "fewer effects is
+a subtype", and inference carries these variables today: the `e` it prints is
+one. Row polymorphism over label sets has principal solutions in this lattice. A
+record row would need field types and the concatenation and override operations
+shape syntax can write, which is the reason that one has none.
+
+Implement it in `sig` elaboration alone: one written tail, `~ { Console, ..e }`,
+binding `e` for the extent of that signature, with both occurrences required. A
+tail on the outermost arrow with no second occurrence stays refused, which is
+the unconstrained-variable case §12.4 is right to fear. Inference does not
+change; the signature language catches up with what it already computes.
+
+## 8. Resolve `==` through an interface carried on the type
+
+`"a" == "a"` is still a type error because `==` names `Eq.eq` over `@int.cmp`.
+The repair is not a second equality primitive and not runtime dispatch. `==`
+stays an ordinary fixity entry whose target is source with type
+
+```text
+a -> a -> Bool
+```
+
+and whose body resolves the implementation by interface lookup on the
+argument's type.
+
+Both carriers exist. Attached namespace members (`@type.attach`, the `struct`
+precedent) hold `.eq` for sealed and constructed types, so a nominal type
+participates by attaching its own equality and no syntax is added. `reflect`
+covers the built-in domains: `#Range` with `.domain = #Int` resolves to
+`@int.cmp` and `#Text` to `@text.cmp`, which is ordinary prelude source.
+
+One checker capability is missing. Compile-time code cannot see the inferred
+type of a runtime argument — `@type.of` evaluates its operand, which on a
+runtime value is an error by design (§13.3.1). The lookup needs that type value
+delivered to the target's body at specialization, either through a primitive
+admissible only in this position or through a typing rule for the lookup
+function, which is how `@handle` is already special for its own reason.
+
+What follows is better than a dispatch table. Float equality stays refused
+because `F64` attaches no `.eq`, so §2.2's deliberate absence becomes a property
+of the type rather than a rule about an operator. There is no instance scope and
+no orphan question, because the implementation travels on the type value. The
+same mechanism gives `+` one name over `Int`, `F64`, and `F32` by looking up
+`.add`. Do not let it become implicit dispatch: the lookup is compile-time, the
+resolved target is visible in the specialized program, and a type that attaches
+nothing is a diagnostic rather than a fallback.
+
+## 9. Narrow on the primitive rather than on the shape of its wrapper
+
+§8.5 recognizes a comparison by inspecting the wrapper: one `@int.cmp p1 p2`
+application, one occurrence of each parameter, no `open` or `rec` in the body,
+and junctions identified by tabulating a truth table. It is sound, and it is
+fragile in a characteristic way — an eta-expansion or a logging wrapper loses
+narrowing, and the failure surfaces as a distant `BLOT_INCOMPLETE_CASE` that
+says nothing about the cause.
+
+Define narrowing on the primitive's result instead. `case @int.cmp n k of`
+narrows `n` in each arm by ordinary abstract interpretation of a reduction the
+checker already performs, with no occurrence counting. Every wrapper then
+narrows wherever comptime evaluation or specialization inlines it to that form,
+which is the machinery §4.1 already runs for branch-selected typing, and is what
+keeps this composing with the interface lookup above. Recognition-by-shape
+becomes a fallback, and §8.5's list of refusals shrinks to the cases that are
+genuinely undecidable.
+
+Two consequences follow, neither worth making before the primitive-level rule
+exists. `&&` and `||` should become grammar forms that desugar to nested `if`
+during CST lowering, like `for` and `try`: short-circuiting falls out, the
+truth-table recognition is deleted rather than reimplemented, and
+`a && perform ()` stops performing. They are not ordinary operators today — a
+fixity entry the checker matches by semantics is built in, in the way that
+matters. And a guarded arm whose guard is a recognized comparison can contribute
+its proved set to coverage, so `m if m > 0`, `m if m < 0`, `0` covers `Int`
+without a wildcard.
+
+## 10. Carry the index relation across affine arithmetic
+
+§10.3 widens `@int.add n 1` to `Int` whatever was proved about `n`, so a
+hand-written `i := i + 1` loop loses its bound on the first iteration and every
+indexed traversal has to go through `Iter.indexed`. Phi is already a
+difference-constraint system and already tracks affine shifts of a length by a
+literal (`length - 1`); `n' = n + 1` is the same constraint on the other side of
+the comparison.
+
+Extend the existing treatment to the subject: an index carried across addition
+or subtraction of a compile-time integer keeps its relation, shifted. The
+fragment stays difference-bound, incremental closure is standard, and the
+certificate checker replays what it already replays. Record the overflow
+argument in `spec/TYPECHECKING.md` beside the existing
+`0 <= len xs <= 2147483647` assumption: `+ 1` on `Int` traps rather than wraps,
+and a trap ends the program, so the proposition never becomes false on a path
+that continues.
+
+Arbitrary arithmetic must still widen. The value of the rule is that it covers
+the loop shape programs actually write, not that it approaches a general solver.
+
+## 11. Answer float comparison totally
+
+`Float.cmp` refuses NaN — a diagnostic while compiling and a trap while running
+— so every runtime float comparison is a potential fault and numeric code pays
+an `is_nan` pre-check per comparison. IEEE 754 defines the total answer, and
+returning it is more honest than trapping:
+
+```blot
+const FloatOrdering = #Less | #Equal | #Greater | #Unordered
+```
+
+`is_equal` refuses `#Unordered` by not matching it, so there is still no float
+equality. What changes is where the question is answered: a runtime trap becomes
+a compile-time exhaustiveness obligation, and the `case` over the result has to
+say what unordered means in that program, which is the question NaN actually
+poses. Keep `@float.is_nan` as the direct ask, and keep the trapping comparison
+under a name that says so for code that has already proved its inputs — the same
+split `Array.get` and `@array.get` already make.
+
+## 12. Return evidence from reflection, not descriptions
+
+The reflection surface is already the easy kind: `@type.reflect` describes a
+type the way a `@typeInfo` does, the shape primitives are field access and field
+membership, a comptime fold partial-evaluating into direct projections (§15) is
+an unrolled loop, and no reify primitive is needed because construction and
+description share one value domain. Preprocessing-based deriving is not a model
+to copy; declaration tags are already its semantic form.
+
+The difficulty is not a missing primitive but where checking happens. A language
+that checks a reflective body only at instantiation never has an evidence
+question. Blot checks principally, so §13.4 marks a reflect payload that cannot
+be related to the reflected input as unevidenced: usable at compile time, unable
+to discharge a runtime `sig`. That marking is the whole tax on derive-shaped
+code.
+
+Apply the rule the array path already uses. `Iter.indexed` does not hand back an
+index and require it to be re-proved; the primitive holding the authority
+packages the proof with the value. Let the shape and variant reflection cases
+yield operations rather than descriptions — each field as
+`{ .name; .type; .get = T -> F; .set = (T, F) -> T; }`, minted already typed
+against the reflected `T`. Deriving equality, rendering, serializers, and lenses
+then composes born-typed accessors instead of rebuilding projections from names,
+and the unevidenced marking stops arising on the uses that matter. No dependent
+types are involved: the compiler mints evidence where it holds it, exactly as it
+does for the index.
+
+A canonical sum-of-products view over `reflect` is worth writing first and costs
+no compiler change. Most derive-shaped code needs only sums of products of
+scalars plus the isomorphism, and folding a two-constructor view is easier than
+folding the full reflection variant.
+
+## 13. Finish the value surface before adding another form
+
+The Done criterion is a program that reads input and takes text apart, and text
+cannot be taken apart. The surface is `concat`, `len`, `cmp`, `contains`, and
+`of_int`. What is missing needs primitives, which is the correct reason to add
+one — these cannot be written in blot at all:
+
+- code-point iteration in the ordinary iterator shape, which is the single
+  primitive that makes `split`, `find`, `trim`, and text parsers prelude source;
+- slicing by code-point range, or a byte view with checked boundaries;
+- text to integer, so runtime input can become a number; and
+- float rendering, so a float can be printed.
+
+`Array.find`, `Iter.map`, `Option.map`, and `Result.map` are ordinary prelude
+source and are simply absent. Changing the prelude's public record updates
+`LANGUAGE.md` §14 and the distributed snapshot in the same change.
+
+Interpolation, if it is wanted, is a desugar to `Text.append` chains over `Str`
+expressions with no implicit conversion. Do not add it before the primitives: a
+form that makes text convenient to build while it remains impossible to take
+apart is the wrong order.
+
+## 14. Close the quiet behaviors
+
+Four places where the accepted reading is not the written one. None needs new
+machinery.
+
+A refutable `for` binder silently skips elements that do not match (§9). Adding
+a constructor to an element type therefore makes existing loops drop data with
+no diagnostic anywhere. Require the explicit spelling — an irrefutable binder
+and `if let` in the body — or keep the filtering binder only where coverage
+proves the match total.
+
+A spread of a parameter contributes no fields (§6), so
+`fn r => { ...r; .tag = 1; }` returns a record with `.tag` alone. Where the
+parameter's record type is declared by a `sig`, there is a sound reading with no
+row variable: desugar the spread to an explicit copy of exactly the declared
+fields. The type and the runtime value agree field for field,
+`BLOT_SPREAD_MAY_OVERWRITE` keeps its meaning where nothing was declared, and
+the idiom becomes writable precisely where the program said what it meant.
+
+An element property record is a closed row while every ordinary record has width
+subtyping, and the two spellings otherwise mean the same call. Make closedness a
+property the component's parameter type declares, so the rule lives in the type
+and holds for `div { … } [children]` as well; a second record rule selected by
+call-site spelling is a second way to say what the language already says.
+
+A module's demand on its parameter is inferred and unwritable, so its authority
+surface is documentation by excavation. Allow a `sig` for the parameter
+immediately after the header, checked as an upper bound like any other. The
+inferred demand stays the truth; the signature is the human-facing bound on it.
+
+## 15. Contingent, and what not to do yet
+
+- **Relational signatures.** Phi is deliberately unspeakable in a `sig` (§10.1),
+  so a proved-safe helper cannot export its precondition and every caller
+  re-proves it or takes the total API's `Option`. One relational form restricted
+  to the difference fragment the certificates already replay would close that.
+  It is a large change — function types gain a relational component and
+  subtyping on it becomes implication — and it should wait for section 10.
+  Sketch it before the capsule format hardens further: a capsule that cannot
+  carry the relation forces re-inference forever.
+- **A word domain.** `U64` is a storage descriptor whose runtime inhabitants are
+  `BLOT_UNREPRESENTABLE_INTEGER`, a cliff reachable by writing a plausible
+  struct field. Section 6 already lists a full-width word domain as contingent;
+  until a profile justifies it, `LANGUAGE.md` should carry the workaround rather
+  than only the refusal, and the diagnostic should name it.
+- **Concurrency.** Nothing states what it will be, and the pieces on hand —
+  one-shot continuations, handlers, typed host imports — admit the ordinary
+  answer of async as a host effect whose handler owns the schedule. That answer
+  constrains ABI 1, in whether a suspension may cross the boundary, and
+  generalizes the `!resume` ownership case. Write the design note before ABI 1
+  accretes exports; do not add a form.
+- **Mechanized invariants.** The evidence bullet in section 6 should name its
+  targets: linearity preserved by the `for` desugaring, Phi's frame conditions
+  under `:=` and aliasing, ownership-certificate replay soundness, and
+  cancellation discharging exactly the suspended computation's obligations. Each
+  is a hand-argued invariant a refactor can silently break, and each is small
+  enough to state over the existing core model.
+- **Naming.** One domain carries three stems — the type `Str`, the namespace
+  `Text`, the primitives `@text.*` — and `@fail` and `@panic` do not say which
+  phase they belong to. Both are cheap to settle and neither is urgent. The
+  sigil budget is spent: `!`, `?`, `&`, `<`, and `>` each carry two or three
+  grammar-position-resolved meanings, so a future feature gets a word.
+- **Effect nameability.** A module that acquires authority from a library that
+  does not export its effect receives it in inferred rows and cannot write them
+  (§12.4), so its public API cannot carry signatures at all. Nameability and
+  constructability are separate rights; an extractor yielding an arrow's row as
+  an opaque, write-only value would restore the signature without granting the
+  ability to handle or forge the effect.

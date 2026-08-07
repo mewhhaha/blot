@@ -1021,7 +1021,9 @@ nested scope. Falling through returns `()`; `return value` exits that block with
 block is the nearest return scope.
 
 A bare trailing expression is not permitted. The explicit `return` keeps a
-result beginning with a name distinct from `name := value`.
+result beginning with a name distinct from `name := value`, and it keeps every
+value that leaves a scope spelled one way, so a branch boundary stays visible
+where its result is short.
 
 ### 6.5 Recursion
 
