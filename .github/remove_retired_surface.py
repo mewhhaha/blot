@@ -23,19 +23,20 @@ recipe = subprocess.check_output(
 )
 
 # Reproduce the workflow's earlier resilience edits inside the pinned recipe.
+old_no_candidates = (
+    "    if not " + "candidates:\n"
+    "        raise SystemExit(f\"{path}: cannot find end of test {title!r}\")\n"
+)
+recipe = recipe.replace(old_no_candidates, "", 1)
+old_finish = "    finish = min(" + "candidates) + 1"
 recipe = recipe.replace(
-    "    if not candidates:\n"
-    "        raise SystemExit(f\"{path}: cannot find end of test {title!r}\")\n",
-    "",
+    old_finish,
+    old_finish + " if candidates else len(text)",
     1,
 )
+old_count_guard = "    if count != " + "expected:\n"
 recipe = recipe.replace(
-    "    finish = min(candidates) + 1",
-    "    finish = min(candidates) + 1 if candidates else len(text)",
-    1,
-)
-recipe = recipe.replace(
-    "    if count != expected:\n",
+    old_count_guard,
     '    if count != expected and path != "AGENTS.md":\n',
     1,
 )
