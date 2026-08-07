@@ -176,7 +176,7 @@ export async function formatSource(source: string): Promise<FormatResult> {
   const concrete = laidOutParse.cst;
   const lineStarts = sourceLineStarts(laidOut);
   const regions: IndentRegion[] = [];
-  collectIndentRegions(concrete, lineStarts, regions);
+  collectIndentRegions(concrete, laidOut, lineStarts, regions);
   const lines = laidOut.split("\n");
   const formatted = lines.map((line, index) => {
     const content = line.trim();
@@ -1108,8 +1108,27 @@ function normalizeModuleValue(value: unknown): unknown {
   return normalized;
 }
 
+function lastCodeLine(
+  source: string,
+  lineStarts: readonly number[],
+  line: number,
+  limit: number,
+): number {
+  let current = line;
+  while (current > limit) {
+    const start = lineStarts[current];
+    if (start === undefined) return current;
+    const end = lineStarts[current + 1] ?? source.length;
+    const content = source.slice(start, end).trim();
+    if (content !== "" && !content.startsWith("//")) return current;
+    current -= 1;
+  }
+  return current;
+}
+
 function collectIndentRegions(
   node: ConcreteNode,
+  source: string,
   lineStarts: readonly number[],
   regions: IndentRegion[],
   ancestors: readonly ConcreteRule[] = [],
@@ -1183,9 +1202,16 @@ function collectIndentRegions(
         node.name === "operator_section"
       ? ruleContentSpan(node).end
       : node.span.end;
-    const endsAtLine = lineAtOffset(
+    // A suite's span runs to the dedent, so it can cover the blank line and
+    // the comment that introduce whatever follows. Ending the region at the
+    // last line carrying code keeps a comment block at the indentation of the
+    // statement it belongs to, rather than indenting its first line into a
+    // scope the reader has left and leaving the rest behind.
+    const endsAtLine = lastCodeLine(
+      source,
       lineStarts,
-      Math.max(node.span.start, contentEnd - 1),
+      lineAtOffset(lineStarts, Math.max(node.span.start, contentEnd - 1)),
+      lineAtOffset(lineStarts, node.span.start),
     );
     if (startsAtLine < endsAtLine) {
       let closesEffectValue = false;
@@ -1222,7 +1248,7 @@ function collectIndentRegions(
   }
   const nestedAncestors = [...ancestors, node];
   for (const child of node.children()) {
-    collectIndentRegions(child, lineStarts, regions, nestedAncestors);
+    collectIndentRegions(child, source, lineStarts, regions, nestedAncestors);
   }
 }
 

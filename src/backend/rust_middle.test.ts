@@ -848,7 +848,10 @@ Deno.test("generated recursive divergence agrees with emitted Wasm", async () =>
   const stops = [0n, 1n, -1n, 17n, -23n, 1_024n];
   const declarations = stops.flatMap((stop, index) => [
     `sig spin_${index} = Int -> Int`,
-    `let spin_${index} = rec (fn value => if value == ${stop}: value else: spin_${index} value)`,
+    `let spin_${index} = rec (fn value => case value == ${stop} of`,
+    `  #True => value`,
+    `  #False => spin_${index} value`,
+    `)`,
   ]);
   const exports = stops.map((_, index) => `.spin_${index} = spin_${index};`);
   try {

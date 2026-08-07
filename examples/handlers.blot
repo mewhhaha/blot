@@ -28,9 +28,9 @@ let stepping =
     .by = fn (n, ?resume) =>
       let scaled = n * 10
       result <- resume (case n < 0 of
-        #True => 0
-        #False => scaled
-      )
+          #True => 0
+          #False => scaled
+        )
       return result
     ;
   }

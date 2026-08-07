@@ -45,12 +45,20 @@ export async function migrateLayoutSource(
 
   const edits: Edit[] = [];
   collectEdits(legacy.cst, source, edits);
-  const migrated = applyEdits(source, edits)
+  const rewritten = applyEdits(source, edits)
     .split(/\r?\n/)
     .map((line) => line.trimEnd())
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd() + "\n";
+  // The edits restore the layout; the formatter decides what the result reads
+  // like, including which `return` a conditional makes redundant. Running it
+  // here is what keeps a migrated program spelled the way the same program
+  // written today would be. Source the formatter refuses keeps its own text so
+  // the diagnostic below describes the migration rather than the formatting.
+  const reformatted = await formatSource(rewritten);
+  let migrated = rewritten;
+  if (reformatted.ok) migrated = reformatted.source;
   const reparsed = await parse(migrated);
   if (legacy.module === null) {
     if (legacy.diagnostic === null) {

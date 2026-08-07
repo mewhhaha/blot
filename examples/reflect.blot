@@ -23,10 +23,10 @@ const describe = fn t => case reflect t of
   #Sealed s => Text.append "the nominal " s.name
   _ => "something else"
 
-  // --- refinement -------------------------------------------------------------
-  //
-  // `refines (narrow, wide)` is the comptime mirror of what biunification decides
-  // during checking, over ground values rather than inferred ones.
+// --- refinement -------------------------------------------------------------
+//
+// `refines (narrow, wide)` is the comptime mirror of what biunification decides
+// during checking, over ground values rather than inferred ones.
 
 const Ok = { .status = Status; .body = Str; }
 const Failed = { .status = Status; .reason = Str; }

@@ -115,13 +115,13 @@ let render = fn (transforms, models) =>
           fn (transform, model) =>
             <- case model.kind == KIND_MESH of
               #True => draw.mesh (
-                transform.position, transform.angle, transform.scale, model.colour
-              )
+                  transform.position, transform.angle, transform.scale, model.colour
+                )
               #False => draw.sprite (
-                transform.position,
-                transform.scale,
-                model.colour
-              )
+                  transform.position,
+                  transform.scale,
+                  model.colour
+                )
         )
     )
 
