@@ -8,6 +8,7 @@ import type { Module } from "./ast.ts";
 import { lowerModule, type Rule } from "./lower.ts";
 import { materializeCpuCst } from "./cpu_cst.ts";
 import { elaborateLayout } from "./layout.ts";
+import { elaborateSurface } from "./surface.ts";
 
 const planUrl = new URL("../../generated/wasm/parser.plan", import.meta.url);
 
@@ -64,7 +65,7 @@ export async function parseConcrete(
     );
     return {
       ok: true,
-      module: lowerModule(cst, source),
+      module: elaborateSurface(lowerModule(cst, source)),
       cst,
     };
   } catch (error) {
