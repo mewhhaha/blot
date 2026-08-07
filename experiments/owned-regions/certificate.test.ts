@@ -139,7 +139,10 @@ Deno.test("combine cannot merge authorities from different roots", () => {
       },
     ],
   };
-  assertEquals(verifyRegionAuthorityCertificate(certificate, roots, true), null);
+  assertEquals(
+    verifyRegionAuthorityCertificate(certificate, roots, true),
+    null,
+  );
 });
 
 Deno.test("combine cannot merge different region families", () => {
@@ -172,7 +175,10 @@ Deno.test("combine cannot merge different region families", () => {
       },
     ],
   };
-  assertEquals(verifyRegionAuthorityCertificate(certificate, roots, true), null);
+  assertEquals(
+    verifyRegionAuthorityCertificate(certificate, roots, true),
+    null,
+  );
 });
 
 Deno.test("closed verification rejects leaked authorities", () => {
