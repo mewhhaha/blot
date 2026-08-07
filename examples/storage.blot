@@ -34,15 +34,11 @@ let (across, up) = somewhere
 
 const Record = { .flag = U8; .id = I32; .code = U8; .name = Str; }
 
-const byte_width = fn t =>
-  if refines (t, U8):
-    return 1
-  else:
-    return (if refines (t, I32):
-      return 4
-    else:
-      return 8
-    )
+const byte_width = fn t => case refines (t, U8) of
+  #True => 1
+  #False => case refines (t, I32) of
+    #True => 4
+    #False => 8
 
 const Declared = struct Record
 
