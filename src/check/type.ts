@@ -99,6 +99,8 @@ export type SimpleType =
   }
   | { readonly tag: "record"; readonly fields: ReadonlyMap<string, SimpleType> }
   | { readonly tag: "array"; readonly element: SimpleType }
+  /** Compiler-private mutable interval over one array Store. */
+  | { readonly tag: "region"; readonly element: SimpleType }
   /**
    * A union of constructors. Payload is `unit` when the tag carries none.
    *
@@ -374,6 +376,7 @@ export function levelOf(type: SimpleType): Level {
     case "variant":
       return maxLevel([...type.cases.values()]);
     case "array":
+    case "region":
       return levelOf(type.element);
     default:
       return 0;
