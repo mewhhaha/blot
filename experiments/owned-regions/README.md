@@ -7,9 +7,10 @@ draft before the production compiler learns the proposed `@region.*` operations.
 The experiment checks three independent facts:
 
 1. `claim` is rooted in a fresh Store allocation in `model.ts`; that allocation
-   is the evidence that no older persistent alias can observe destructive writes.
-2. `model.ts` checks after every successful operation that all live write regions
-   for one Store are pairwise disjoint.
+   is the evidence that no older persistent alias can observe destructive
+   writes.
+2. `model.ts` checks after every successful operation that all live write
+   regions for one Store are pairwise disjoint.
 3. `src/linear/region_certificate.ts` replays a generic linear authority graph
    without looking at interval geometry. The model records that graph and
    verifies it again when the Store is frozen.
@@ -42,8 +43,8 @@ release(p)
 
 The graph verifier receives a set of externally authorized `root` identities. It
 checks that each root and acquisition generation is claimed once and that all
-successor permits remain on that root/origin/family. It deliberately does not try
-to derive Store uniqueness itself.
+successor permits remain on that root/origin/family. It deliberately does not
+try to derive Store uniqueness itself.
 
 The array-interval validator separately proves that `@region.split` produces
 `[lo,mid)` and `[mid,hi)`, that `@region.join` receives adjacent regions of one
@@ -97,9 +98,9 @@ Store-root proof
 ### Failure must conserve authority
 
 A total split cannot return an error with no owner. Its failure arm returns the
-original region. Failed join returns both inputs. Failed write returns its input.
-The model deliberately records no authority event on failure, making this rule
-observable in tests.
+original region. Failed join returns both inputs. Failed write returns its
+input. The model deliberately records no authority event on failure, making this
+rule observable in tests.
 
 ### Empty regions still matter
 
@@ -112,18 +113,18 @@ than silently becoming a leaked proof token.
 
 Join does not need a parent-tree identity. If two live regions from the same
 origin are adjacent, their union is disjoint from every other live region: any
-third region overlapping the union would have overlapped one of the inputs.
-This allows reassociating nested partitions without copying or rebuilding an
-exact split tree.
+third region overlapping the union would have overlapped one of the inputs. This
+allows reassociating nested partitions without copying or rebuilding an exact
+split tree.
 
 ### The source representation should stay private
 
-A raw `(Store,start,length)` record would let source code project the whole Store
-and bypass slice-relative mutation. The production representation should
+A raw `(Store,start,length)` record would let source code project the whole
+Store and bypass slice-relative mutation. The production representation should
 therefore be compiler-private, or destructive operations must require a region
-certificate that survives projection and still restricts the writable range.
-The first implementation should choose the private representation because it has
-the smaller proof surface.
+certificate that survives projection and still restricts the writable range. The
+first implementation should choose the private representation because it has the
+smaller proof surface.
 
 ## Production wiring proposed next
 

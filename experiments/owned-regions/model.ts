@@ -353,11 +353,10 @@ export function freeze<T>(region: Region<T>): FrozenArray<T> {
     backingId: store.id,
     stats: snapshotStats(store.stats),
     authorityCertificate,
-    authorityVerified:
-      verifyRegionAuthorityCertificate(
-        authorityCertificate,
-        new Set([store.root]),
-      ) !== null,
+    authorityVerified: verifyRegionAuthorityCertificate(
+      authorityCertificate,
+      new Set([store.root]),
+    ) !== null,
     values: [...store.cells],
   };
 }

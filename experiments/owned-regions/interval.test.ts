@@ -1,7 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 import {
-  type IntervalRegion,
   intervalAbsoluteIndex,
+  type IntervalRegion,
   intervalsDisjoint,
   isFullInterval,
   joinIntervals,

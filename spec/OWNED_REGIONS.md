@@ -1,20 +1,20 @@
 # Partitioned ownership regions
 
-Status: experimental design. This file is deliberately ahead of
-`LANGUAGE.md`. The executable probes live in `experiments/owned-regions/`.
-Nothing here is a supported source-language rule until checker, Runtime HIR,
-evaluator, Wasm, and preservation gates agree.
+Status: experimental design. This file is deliberately ahead of `LANGUAGE.md`.
+The executable probes live in `experiments/owned-regions/`. Nothing here is a
+supported source-language rule until checker, Runtime HIR, evaluator, Wasm, and
+preservation gates agree.
 
-The motivating program is quicksort over one Store. Partitioning should rearrange
-one backing allocation, split permission to mutate it into disjoint child
-regions, recurse over the children, and rejoin the permission without copying the
-array at each recursive step.
+The motivating program is quicksort over one Store. Partitioning should
+rearrange one backing allocation, split permission to mutate it into disjoint
+child regions, recurse over the children, and rejoin the permission without
+copying the array at each recursive step.
 
 The useful compiler concept is broader than arrays:
 
 > A **partitioned ownership authority** is a linear capability naming one region
-> of one private runtime resource. A trusted partition consumes one authority and
-> produces authorities for a disjoint cover. A trusted combine consumes
+> of one private runtime resource. A trusted partition consumes one authority
+> and produces authorities for a disjoint cover. A trusted combine consumes
 > compatible authorities and produces their union.
 
 The design keeps this authority out of algebraic subtyping. Ordinary value types
@@ -49,16 +49,16 @@ Store provenance
 
 ### 1.1 Store provenance
 
-A **Store root** proves that an allocation has no source-visible persistent alias
-which can observe a destructive update.
+A **Store root** proves that an allocation has no source-visible persistent
+alias which can observe a destructive update.
 
-The easiest root is a fresh allocation. A compiler optimization may also preserve
-a root through operations whose existing ownership/reuse proof shows that the
-old Store is consumed and no observer survives.
+The easiest root is a fresh allocation. A compiler optimization may also
+preserve a root through operations whose existing ownership/reuse proof shows
+that the old Store is consumed and no observer survives.
 
-Store roots are not invented by the region checker. A region claim either creates
-a fresh root by copying, or consumes a separately verified root when the compiler
-chooses zero-copy reuse.
+Store roots are not invented by the region checker. A region claim either
+creates a fresh root by copying, or consumes a separately verified root when the
+compiler chooses zero-copy reuse.
 
 ### 1.2 Authority graph
 
@@ -76,8 +76,7 @@ release(p)
 No permit may be produced twice, consumed twice, reused after partition, or
 combined with a permit from another root/origin/family.
 
-This proof is implemented independently in
-`src/linear/region_certificate.ts`.
+This proof is implemented independently in `src/linear/region_certificate.ts`.
 
 ### 1.3 Region-family geometry
 
@@ -144,9 +143,9 @@ Its semantic meaning is:
 This meaning is sound even when the source array is shared: the private Store is
 a fresh allocation and any old alias observes the old Store.
 
-The compiler may optimize the copy away only when Store provenance already proves
-that the input Store is uniquely reusable. In that case the claim transfers that
-root into region authority instead of allocating a new Store.
+The compiler may optimize the copy away only when Store provenance already
+proves that the input Store is uniquely reusable. In that case the claim
+transfers that root into region authority instead of allocating a new Store.
 
 Thus there are two implementation paths with one source meaning:
 
@@ -172,8 +171,9 @@ Names are provisional. Prelude wrappers should own the application-facing API;
 
 ### `@region.array.claim`
 
-Creates a full array-interval authority. The evaluator may implement the semantic
-copy directly. Runtime HIR may choose either `fresh` or proof-backed `reuse`.
+Creates a full array-interval authority. The evaluator may implement the
+semantic copy directly. Runtime HIR may choose either `fresh` or proof-backed
+`reuse`.
 
 The result is a private slice value and a linear authority:
 
@@ -227,8 +227,8 @@ Borrows a slice and returns its region length. It changes no authority.
 
 ### `@region.array.get`
 
-Borrows a slice and reads relative to its start. A proved form can lower directly
-to `store.read`; a total wrapper can return `Option`.
+Borrows a slice and reads relative to its start. A proved form can lower
+directly to `store.read`; a total wrapper can return `Option`.
 
 ```text
 &Own(S,[lo,hi))   0 <= i < hi-lo
@@ -280,8 +280,8 @@ No destructive authority survives. The first implementation requires this permit
 to be the only live permit for the origin, including empty permits.
 
 `freeze` intentionally drops uniqueness provenance at the source boundary. A
-later `claim` is always semantically valid by copying and may reuse again only if
-a separate Store-provenance analysis re-establishes uniqueness.
+later `claim` is always semantically valid by copying and may reuse again only
+if a separate Store-provenance analysis re-establishes uniqueness.
 
 ## 5. Source-facing `Slice`
 
@@ -329,9 +329,9 @@ For every event stream it checks:
 8. release consumes a permit and produces none; and
 9. a closed certificate has no live leaf permits.
 
-This verifier does **not** accept an arbitrary root string as evidence. Production
-Runtime HIR must supply the authorized-root set from fresh allocation or a
-verified destructive-reuse provenance proof.
+This verifier does **not** accept an arbitrary root string as evidence.
+Production Runtime HIR must supply the authorized-root set from fresh allocation
+or a verified destructive-reuse provenance proof.
 
 The executable model creates its root from the fresh Store allocated by `claim`,
 then independently replays the authority graph at `freeze`.
@@ -404,8 +404,8 @@ each other.
 ### Join
 
 Replacing adjacent `[lo,mid)` and `[mid,hi)` with `[lo,hi)` preserves the
-invariant: any third live interval overlapping the union would have overlapped at
-least one input.
+invariant: any third live interval overlapping the union would have overlapped
+at least one input.
 
 ### Set/swap
 
@@ -462,8 +462,8 @@ proved unique input: zero acquisition copy + in-place quicksort
 ```
 
 The two recursive calls own disjoint regions. A sequential backend simply calls
-them in order. A future parallel backend could use the same disjointness evidence
-without changing source semantics.
+them in order. A future parallel backend could use the same disjointness
+evidence without changing source semantics.
 
 ## 11. Why this is not general mutable references
 
@@ -478,8 +478,8 @@ That restriction keeps the proof local:
 - no mutable-reference subtype relation; and
 - no region variables inside algebraic type inference.
 
-A new proof-producing collection can reuse the generic authority graph only after
-it supplies trusted partition/combine/transform laws for its own family.
+A new proof-producing collection can reuse the generic authority graph only
+after it supplies trusted partition/combine/transform laws for its own family.
 
 ## 12. Production gates
 
@@ -495,8 +495,8 @@ Before moving any of this into `LANGUAGE.md`, require:
 - failure-conservation tests on every total operation;
 - evaluator/Runtime-HIR/Wasm agreement;
 - ABI refusal for live slice values;
-- an in-place quicksort corpus entry whose recursive split/join path allocates no
-  element Stores; and
+- an in-place quicksort corpus entry whose recursive split/join path allocates
+  no element Stores; and
 - a benchmark distinguishing acquisition copy cost from partition/sort cost.
 
 Until those gates pass, `@region.*` remains an experimental trusted boundary,
