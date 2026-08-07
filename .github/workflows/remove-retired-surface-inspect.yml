@@ -1,4 +1,4 @@
-name: remove-retired-surface-schema-debug
+name: remove-retired-surface-cleanup
 
 on:
   push:
@@ -6,11 +6,12 @@ on:
       - agent/remove-retired-surface-syntax
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  inspect:
+  cleanup:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -18,13 +19,31 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Prepare retired-syntax removal
+      - name: Prepare Rust target
+        run: rustup target add wasm32-unknown-unknown
+      - name: Remove retired production syntax
         run: |
           sed -i '/    if not candidates:/,+1d' .github/remove_retired_surface.py
           sed -i 's/    finish = min(candidates) + 1/    finish = min(candidates) + 1 if candidates else len(text)/' .github/remove_retired_surface.py
           sed -i 's/    if count != expected:/    if count != expected and path != "AGENTS.md":/' .github/remove_retired_surface.py
           python3 .github/remove_retired_surface.py
-          git checkout origin/main -- src/syntax/compact_schema.ts
+          sed -i '/^  "result",$/d' src/syntax/compact_schema.ts
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('AGENTS.md')
+          text = path.read_text()
+          start = text.index('`try program with ... end`')
+          marker = 'Nothing downstream of the parser knows these forms exist.'
+          end = text.index(marker, start) + len(marker)
+          replacement = (
+              'Two-argument `@handle` calls become nullary computation '
+              'transformers containing ordinary three-argument calls. '
+              'Nothing downstream of surface elaboration knows that source '
+              'convenience exists.'
+          )
+          path.write_text(text[:start] + replacement + text[end:])
+          PY
           python3 - <<'PY'
           from pathlib import Path
           import json
@@ -61,66 +80,94 @@ jobs:
 
           prune(document)
           if removed != len(retired):
-              raise SystemExit(f'removed {removed} retired islands')
+              raise SystemExit(
+                  f'expected to remove {len(retired)} retired islands, removed {removed}'
+              )
           path.write_text(json.dumps(document, indent=2) + '\n')
           PY
-      - name: Generate and inspect compact field identifiers
+      - name: Regenerate frontend and compiler artifacts
         run: |
           deno task generate
-          cat > .github/inspect_fields.ts <<'TS'
-          import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
-          import { compactFieldNames } from "../src/syntax/compact_schema.ts";
-          import { elaborateLayout } from "../src/syntax/layout.ts";
+          deno task generate:rust-middle-schema
+          deno task build:rust-middle
+          deno task inspect > /tmp/blot-plan.json
+          cat /tmp/blot-plan.json
+      - name: Record frontend counters
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import re
 
-          const frontend = CpuFrontend.create(
-            await Deno.readFile("generated/wasm/parser.plan"),
-          );
-          const plan = frontend.plan as unknown as Record<string, unknown>;
-          console.log("plan keys", Object.keys(plan));
-          for (const [key, value] of Object.entries(plan)) {
-            if (key.toLowerCase().includes("field")) {
-              console.log("plan field property", key, value);
-            }
-          }
-          console.log(
-            "configured fields",
-            compactFieldNames.map((name, index) => `${index}:${name}`).join(" "),
-          );
+          inspection = json.loads(Path('/tmp/blot-plan.json').read_text())
+          path = Path('docs/gpu-profile.md')
+          text = path.read_text()
+          keys = [
+              'lexerStates',
+              'maxCandidateMultiplicity',
+              'islandCount',
+              'islandStates',
+              'islandTransitions',
+              'contractionRounds',
+              'denseTransitionBytes',
+              'packedBytes',
+              'rootLoopIsland',
+              'parallelLongRegionIslands',
+          ]
 
-          const source = await Deno.readTextFile("src/prelude/prelude.blot");
-          const layout = await elaborateLayout(source);
-          if (!layout.ok) throw new Error(JSON.stringify(layout.diagnostics));
-          const parsed = frontend.ingest(layout.layout.source);
-          if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
+          def display(key, value):
+              if key == 'parallelLongRegionIslands' and isinstance(value, list):
+                  return str(len(value))
+              if key == 'rootLoopIsland' and isinstance(value, dict):
+                  identifier = value.get('id', value.get('island', value.get('index')))
+                  name = value.get('name', value.get('rule', value.get('ruleName')))
+                  if identifier is not None and name is not None:
+                      return f'{identifier} (`{name}`)'
+              if isinstance(value, (dict, list)):
+                  return json.dumps(value, separators=(',', ':'))
+              return f'{value:,}' if isinstance(value, int) else str(value)
 
-          const names = new Map(
-            frontend.plan.islands.map((island) => [island.ruleId, island.ruleName]),
-          );
-          const nodes = parsed.program.nodes;
-          const edges = parsed.program.edges;
-          const selected: Array<{ id: number; name: string; fields: number[] }> = [];
-          for (let id = 0; id < nodes.length / 8; id += 1) {
-            const base = id * 8;
-            const name = names.get(nodes[base]);
-            if (name !== "program" && name !== "result" && name !== "binding") {
-              continue;
-            }
-            const edgeStart = nodes[base + 4];
-            const edgeCount = nodes[base + 5];
-            const fields: number[] = [];
-            for (let offset = 0; offset < edgeCount; offset += 1) {
-              fields.push(edges[(edgeStart + offset) * 4]);
-            }
-            selected.push({ id, name, fields });
-          }
-          console.log("program node", selected.find((entry) => entry.name === "program"));
-          console.log(
-            "last result nodes",
-            selected.filter((entry) => entry.name === "result").slice(-5),
-          );
-          console.log(
-            "first binding nodes",
-            selected.filter((entry) => entry.name === "binding").slice(0, 5),
-          );
-          TS
-          deno run --allow-read .github/inspect_fields.ts
+          for key in keys:
+              if key not in inspection:
+                  raise SystemExit(f'inspection omitted {key}: {sorted(inspection)}')
+              value = display(key, inspection[key])
+              pattern = re.compile(rf'^(\| `{re.escape(key)}`\s*\|)\s*[^|]*\|', re.M)
+              text, count = pattern.subn(
+                  lambda match: f'{match.group(1)} {value:>18} |',
+                  text,
+                  count=1,
+              )
+              if count != 1:
+                  raise SystemExit(f'docs/gpu-profile.md has no row for {key}')
+
+          path.write_text(text)
+          PY
+      - name: Format and validate
+        run: |
+          deno fmt
+          git diff --check
+          if ! command -v just >/dev/null 2>&1; then
+            cargo install just --locked
+          fi
+          just check
+          just test
+      - name: Verify cleanup boundaries
+        run: |
+          ! grep -R -n -E 'BLOT_VALUE_IF_REMOVED|BLOT_TRY_REMOVED|handler_composition|isValueConditional|discarded-value-if|discardedValueIf' \
+            --exclude-dir=.git --exclude-dir=migration --exclude-dir=generated \
+            --exclude='compiler.wasm' --exclude='lower.ts' \
+            grammar.baba baba.json queries src experiments/rust-middle
+          grep -q 'handler_composition' migration/layout-v1/grammar.baba
+          grep -q 'conditional = (' migration/layout-v1/grammar.baba
+      - name: Commit cleanup
+        run: |
+          rm .github/remove_retired_surface.py
+          rm .github/workflows/remove-retired-surface-inspect.yml
+          rm -f .github/inspect_fields.ts
+          git add -A
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git reset --soft origin/main
+          git commit -m 'Remove retired surface syntax'
+          git push --force-with-lease origin HEAD:agent/remove-retired-surface-syntax
