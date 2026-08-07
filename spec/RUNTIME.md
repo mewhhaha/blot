@@ -27,8 +27,10 @@ where `Delta_rep` maps every residual binding to a concrete representation and
 4. every proved operation carries valid evidence;
 5. every destructive Store operation carries ownership permission;
 6. every private recursive root was authorized by a checked closure-SCC
-   certificate and has a finite constructor case; and
-7. every export and import is admitted by the selected ABI policy.
+   certificate and has a finite constructor case;
+7. every private function-choice table has at least one alternative, one case
+   per alternative, and one capture product per case; and
+8. every export and import is admitted by the selected ABI policy.
 
 Validation does not infer a missing source fact. A well-typed internal program
 that reaches an open shape or polymorphic operation exposes a specialization or
@@ -99,6 +101,37 @@ function signature and to every direct call. Function identity includes the
 argument representation, capture representations, and specialized source
 signature. A recursive body is residualized when either its argument or one of
 those captures is dynamic; wholly static recursion may still be evaluated.
+
+A dynamic branch whose arms produce functions has no single closure to convert,
+so the join defunctionalizes them. Every reachable arm normalizes to one
+alternative: a lambda's module and body with the environment it closed in, or a
+partially applied primitive with the arguments it already holds, together with
+that arm's ordered runtime captures. The joined value is a private sum whose
+case selects an alternative and whose payload is that alternative's capture
+product. Two arms share a case only when they name the same source _and_ the
+same closed environment or equal already-applied arguments: a captured
+compile-time value is part of what a function means, so two closures over one
+body may not be merged on the body alone. An arm that is already such a choice
+contributes the alternatives it carries, so nested choices flatten into one
+finite table rather than nesting.
+
+One case's payload occupies the sum's payload slots from the first one on, so
+alternatives whose capture products are prefixes of the widest are carried
+directly. When they are not — an `Int` captured in one arm and an `F64` in
+another — every case carries a private indirection to its capture product
+instead, which is one slot whatever it points at.
+
+At application the choice dispatches on its tag, projects the payload back into
+the alternative's captures, and applies the selected function, so each call site
+specializes for the argument representation it supplies. `n` alternatives cost
+`n - 1` tests: the last needs none.
+
+The table is Runtime HIR's own bookkeeping. Its cases name compiler-local
+closure sources, so ABI 1 refuses it at any public boundary with a diagnostic
+that names the private layout. A branch that joins a function with a value that
+is neither a lambda, a partially applied primitive, nor another choice has an
+open source set; that refusal reports the offending value and the signature the
+checker inferred for the function. A closed source set must compile.
 
 Staged non-empty arrays become ordinary Store construction. Store memory uses
 the canonical scalar layout internally as well as at adapters, so reads and

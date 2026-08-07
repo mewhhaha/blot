@@ -20,6 +20,107 @@ return value
   assertEquals(binding.value.result.tag, "var");
 });
 
+Deno.test("a closure cannot rebind a captured outer lineage", async () => {
+  const source = `let x = 0
+let change = fn () => do:
+  x := 1
+  return x
+return change
+`;
+  const parsed = await parse(source);
+  assert(!parsed.ok);
+  if (parsed.ok) return;
+  assertEquals(parsed.diagnostics[0]?.code, "BLOT_REBINDING_FRAME");
+});
+
+Deno.test("a local let starts a rebinding lineage inside a closure", async () => {
+  const source = `let x = 0
+let change = fn () => do:
+  let x = x
+  x := 1
+  return x
+return change
+`;
+  const parsed = await parse(source);
+  assert(parsed.ok);
+});
+
+Deno.test("a closure parameter belongs to its rebinding frame", async () => {
+  const source = `let bump = fn x => do:
+  x := @int.add x 1
+  return x
+return bump
+`;
+  const parsed = await parse(source);
+  assert(parsed.ok);
+});
+
+Deno.test("an inner curried closure cannot rebind an outer parameter", async () => {
+  const source = `let update = fn outer => fn inner => do:
+  outer := inner
+  return outer
+return update
+`;
+  const parsed = await parse(source);
+  assert(!parsed.ok);
+  if (parsed.ok) return;
+  assertEquals(parsed.diagnostics[0]?.code, "BLOT_REBINDING_FRAME");
+});
+
+Deno.test("a curried closure can start a local lineage from its capture", async () => {
+  const source = `let update = fn outer => fn inner => do:
+  let outer = outer
+  outer := inner
+  return outer
+return update
+`;
+  const parsed = await parse(source);
+  assert(parsed.ok);
+});
+
+Deno.test("statement control flow keeps the surrounding rebinding frame", async () => {
+  const source = `let x = 0
+if True:
+  x := 1
+for ever:
+  x := @int.add x 1
+  break
+return x
+`;
+  const parsed = await parse(source);
+  assert(parsed.ok);
+});
+
+Deno.test("a nested do cannot rebind its enclosing do lineage", async () => {
+  const source = `let value = do:
+  let x = 0
+  let nested = do:
+    x := 1
+    return x
+  return nested
+return value
+`;
+  const parsed = await parse(source);
+  assert(!parsed.ok);
+  if (parsed.ok) return;
+  assertEquals(parsed.diagnostics[0]?.code, "BLOT_REBINDING_FRAME");
+});
+
+Deno.test("a case arm cannot rebind its enclosing lineage", async () => {
+  const source = `let x = 0
+let value = case True of
+  #True => do:
+    x := 1
+    return x
+  #False => 0
+return value
+`;
+  const parsed = await parse(source);
+  assert(!parsed.ok);
+  if (parsed.ok) return;
+  assertEquals(parsed.diagnostics[0]?.code, "BLOT_REBINDING_FRAME");
+});
+
 Deno.test(
   "two-argument @handle elaborates to a computation transformer",
   async () => {

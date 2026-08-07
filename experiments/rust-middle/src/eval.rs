@@ -9,9 +9,9 @@ use crate::ast::{
 use crate::diagnostic::Diagnostic;
 use crate::primitives::{constant, primitive_arity, run_primitive};
 use crate::value::{
-    Domain as ValueDomain, Environment, OpenedValues, OrderedFields, Resume, RuntimeMeaning,
-    RuntimeValue, Value, as_tuple, attach_signature, child_env, equal, lookup, lookup_signature,
-    show, tuple,
+    ClosureAlternative, Domain as ValueDomain, Environment, OpenedValues, OrderedFields, Resume,
+    RuntimeMeaning, RuntimeValue, Value, as_tuple, attach_signature, child_env, equal, lookup,
+    lookup_signature, show, tuple,
 };
 
 #[derive(Clone, Eq, PartialEq)]
@@ -748,6 +748,7 @@ fn evaluate_boolean_case(
     };
     trace.borrow_mut().select_block(branches.consequent);
     let alternate_context = context.clone();
+    let join_context = context.clone();
     let alternate_module = module_path.clone();
     let alternate_environment = environment.clone();
     let alternate_runtime = runtime.clone();
@@ -775,6 +776,7 @@ fn evaluate_boolean_case(
         .and_then(move |alternate| {
             let alternate_end = join_trace.borrow().current_block();
             match join_trace.borrow_mut().join_conditional(
+                &join_context,
                 branches,
                 consequent_end,
                 consequent,
@@ -857,6 +859,7 @@ fn evaluate_integer_case(
     };
     trace.borrow_mut().select_block(branches.consequent);
     let alternate_context = context.clone();
+    let join_context = context.clone();
     let alternate_module = module_path.clone();
     let alternate_environment = environment.clone();
     let alternate_runtime = runtime.clone();
@@ -882,6 +885,7 @@ fn evaluate_integer_case(
         .and_then(move |alternate| {
             let alternate_end = join_trace.borrow().current_block();
             match join_trace.borrow_mut().join_conditional(
+                &join_context,
                 branches,
                 consequent_end,
                 consequent,
@@ -1092,6 +1096,7 @@ fn evaluate_sum_case(
     }
 
     let alternate_context = context.clone();
+    let join_context = context.clone();
     let alternate_module = module_path.clone();
     let alternate_runtime = runtime.clone();
     let alternate_trace = trace.clone();
@@ -1144,6 +1149,7 @@ fn evaluate_sum_case(
         .and_then(move |alternate| {
             let alternate_end = join_trace.borrow().current_block();
             match join_trace.borrow_mut().join_conditional(
+                &join_context,
                 branches,
                 consequent_end,
                 consequent,
@@ -1368,6 +1374,7 @@ fn evaluate_dynamic_if(
     };
     trace.borrow_mut().select_block(branches.consequent);
     let alternate_context = context.clone();
+    let join_context = context.clone();
     let alternate_module = module_path.clone();
     let alternate_environment = environment.clone();
     let alternate_runtime = runtime.clone();
@@ -1398,6 +1405,7 @@ fn evaluate_dynamic_if(
         .and_then(move |alternate| {
             let alternate_end = join_trace.borrow().current_block();
             match join_trace.borrow_mut().join_conditional(
+                &join_context,
                 branches,
                 consequent_end,
                 consequent,
@@ -1746,6 +1754,10 @@ pub fn apply(
                 ]))),
             })
         }
+        Value::ClosureChoice {
+            selector,
+            alternatives,
+        } => apply_closure_choice(context, selector, alternatives, 0, argument, span, runtime),
         Value::Closure {
             module: closure_module,
             parameter,
@@ -1943,6 +1955,95 @@ pub fn apply(
             span,
         )),
     }
+}
+
+/// Apply a defunctionalized function choice by dispatching on its tag. Each
+/// branch projects its alternative's captures out of the payload, then applies
+/// that alternative's body, so the body specializes for the concrete argument
+/// representation this call site supplies. The last alternative needs no test.
+fn apply_closure_choice(
+    context: Rc<Context>,
+    selector: RuntimeValue,
+    alternatives: Rc<Vec<ClosureAlternative>>,
+    index: usize,
+    argument: Value,
+    span: Span,
+    runtime: Runtime,
+) -> Computation {
+    let Some(trace) = runtime.residual.clone() else {
+        return Computation::error(Diagnostic::new(
+            "BLOT_RUST_INVARIANT",
+            "A function choice exists without a residual trace.",
+            span,
+        ));
+    };
+    let Some(alternative) = alternatives.get(index).cloned() else {
+        return Computation::error(Diagnostic::new(
+            "BLOT_RUST_INVARIANT",
+            "A function choice dispatched outside its alternative table.",
+            span,
+        ));
+    };
+    let last = index + 1 == alternatives.len();
+    let branches = if last {
+        None
+    } else {
+        let condition = match trace.borrow_mut().choice_condition(&selector, index, span) {
+            Ok(condition) => condition,
+            Err(error) => return Computation::error(error),
+        };
+        match trace.borrow_mut().begin_conditional(&condition, span) {
+            Ok(branches) => Some(branches),
+            Err(error) => return Computation::error(error),
+        }
+    };
+    if let Some(branches) = &branches {
+        trace.borrow_mut().select_block(branches.consequent);
+    }
+    let selected =
+        match trace
+            .borrow_mut()
+            .choice_function(&context, &selector, index, &alternative, span)
+        {
+            Ok(selected) => selected,
+            Err(error) => return Computation::error(error),
+        };
+    let Some(branches) = branches else {
+        return apply(context, selected, argument, span, runtime);
+    };
+    let alternate_context = context.clone();
+    let join_context = context.clone();
+    let alternate_argument = argument.clone();
+    let alternate_runtime = runtime.clone();
+    apply(context, selected, argument, span, runtime).and_then(move |consequent| {
+        let consequent_end = trace.borrow().current_block();
+        trace.borrow_mut().select_block(branches.alternate);
+        let join_trace = trace.clone();
+        apply_closure_choice(
+            alternate_context,
+            selector,
+            alternatives,
+            index + 1,
+            alternate_argument,
+            span,
+            alternate_runtime,
+        )
+        .and_then(move |alternate| {
+            let alternate_end = join_trace.borrow().current_block();
+            match join_trace.borrow_mut().join_conditional(
+                &join_context,
+                branches,
+                consequent_end,
+                consequent,
+                alternate_end,
+                alternate,
+                span,
+            ) {
+                Ok(value) => Computation::value(value),
+                Err(error) => Computation::error(error),
+            }
+        })
+    })
 }
 
 fn run_special_or_primitive(

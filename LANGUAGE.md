@@ -552,12 +552,30 @@ the empty row rather than an unwritten one.
 name := value
 ```
 
-`:=` is immutable shadowing, not assignment. The name must already be in scope.
+`:=` is immutable shadowing, not assignment. It advances a lexical binding
+lineage, so its target must have been introduced by a binder in the current
+**rebinding frame**. A module or closure owns a frame; an explicit `do` value
+and each value-producing `case` arm own a new frame as well. Statement control
+flow (`if`, `if let`, and `for`) keeps the surrounding frame, which is why its
+`:=` rebindings can be merged or threaded deterministically.
+
+A captured binding from an enclosing frame may be read but cannot be advanced.
+Start a local lineage explicitly when that is what is intended:
+
+```blot
+let x = x
+x := update x
+```
+
+Function parameters, `let`/`const` bindings, named `<-` bindings, loop binders,
+and successful `if let` binders introduce names in their frame. `open` does not
+start a rebinding lineage; use `let` first when an opened name should be
+rebound. In a curried function every arrow is a closure boundary, so an inner
+closure must likewise start a local lineage before rebinding an outer parameter.
+
 The old and new types must constrain each other after singleton integer and text
 literals are widened to their stable domains. The previous polymorphic scheme is
-retained.
-
-Use another `let` or `const` to shadow a name with a different type.
+retained. Use another `let` or `const` to shadow a name with a different type.
 
 Only a single name may appear to the left of `:=`. A `:=` in a `for` body also
 defines one of that loop's accumulator fields, including one written inside a

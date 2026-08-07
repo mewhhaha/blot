@@ -313,6 +313,10 @@ pub enum Value {
         imports: Option<BTreeMap<String, String>>,
         signature: Option<Box<Value>>,
     },
+    ClosureChoice {
+        selector: RuntimeValue,
+        alternatives: Rc<Vec<ClosureAlternative>>,
+    },
     ModuleClosure {
         module: String,
     },
@@ -372,6 +376,122 @@ pub struct RuntimeValue {
     pub id: usize,
     pub type_id: usize,
     pub meaning: RuntimeMeaning,
+}
+
+/// Where one reachable function in a residual function choice comes from. A
+/// lambda names its module and body; a partially applied primitive names the
+/// primitive and the arguments it already holds.
+#[derive(Clone)]
+pub enum ChoiceSource {
+    Lambda {
+        module: Rc<String>,
+        parameter: PatternId,
+        body: ExpressionId,
+        environment: Environment,
+        self_name: Option<String>,
+        signature: Option<Box<Value>>,
+    },
+    Primitive {
+        name: String,
+        arity: usize,
+        applied: Vec<Value>,
+    },
+}
+
+/// One reachable function in a residual function choice, normalized to its
+/// stable source identity and the ordered runtime captures its branch supplied.
+#[derive(Clone)]
+pub struct ClosureAlternative {
+    pub source: ChoiceSource,
+    pub captures: Vec<RuntimeValue>,
+    /// The ordered capture product itself.
+    pub product_type: usize,
+    /// What this alternative's case declares as its payload: the capture
+    /// product, or a private indirection to it when the alternatives of one
+    /// choice capture mutually incompatible layouts.
+    pub payload_type: usize,
+}
+
+impl ClosureAlternative {
+    /// The name this alternative's case carries in the private sum type. It
+    /// identifies the source for a reader; it is not the equality relation.
+    pub fn source_name(&self) -> String {
+        match &self.source {
+            ChoiceSource::Lambda { module, body, .. } => format!("{module}#{}", body.0),
+            ChoiceSource::Primitive { name, applied, .. } => format!("{name}/{}", applied.len()),
+        }
+    }
+
+    /// The signature the checker recorded for this alternative, when it
+    /// recorded one.
+    pub fn signature(&self) -> Option<&Value> {
+        match &self.source {
+            ChoiceSource::Lambda { signature, .. } => signature.as_deref(),
+            ChoiceSource::Primitive { .. } => None,
+        }
+    }
+
+    /// Do two branches supply the same function? Two lambdas agree when they
+    /// share a body and the very environment that body was closed in — a
+    /// captured compile-time value is part of what the lambda means, and
+    /// comparing bodies alone would merge `make 1` with `make 2`. Two
+    /// primitives agree when they hold equal arguments. The relation is
+    /// conservative in the safe direction: a missed merge widens the
+    /// alternative table, it does not change what the program computes.
+    pub fn same_source(&self, other: &Self) -> bool {
+        match (&self.source, &other.source) {
+            (
+                ChoiceSource::Lambda {
+                    module,
+                    body,
+                    environment,
+                    ..
+                },
+                ChoiceSource::Lambda {
+                    module: other_module,
+                    body: other_body,
+                    environment: other_environment,
+                    ..
+                },
+            ) => {
+                module == other_module
+                    && body.0 == other_body.0
+                    && Rc::ptr_eq(environment, other_environment)
+            }
+            (
+                ChoiceSource::Primitive {
+                    name,
+                    arity,
+                    applied,
+                },
+                ChoiceSource::Primitive {
+                    name: other_name,
+                    arity: other_arity,
+                    applied: other_applied,
+                },
+            ) => {
+                name == other_name
+                    && arity == other_arity
+                    && applied.len() == other_applied.len()
+                    && applied
+                        .iter()
+                        .zip(other_applied)
+                        .all(|(left, right)| applied_equal(left, right))
+            }
+            _ => false,
+        }
+    }
+}
+
+/// `equal` refuses two residual values because it cannot see what they will
+/// hold. Two references to one runtime value are still the same argument.
+fn applied_equal(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Runtime(left), Value::Runtime(right)) => {
+            left.id == right.id && left.type_id == right.type_id
+        }
+        _ => equal(left, right),
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -626,6 +746,9 @@ pub fn show(value: &Value) -> String {
         },
         Value::Closure { .. } | Value::ModuleClosure { .. } | Value::IndexedStep { .. } => {
             "<function>".to_owned()
+        }
+        Value::ClosureChoice { alternatives, .. } => {
+            format!("<function choice of {}>", alternatives.len())
         }
         Value::Primitive { name, .. } => format!("<primitive {name}>"),
         Value::Range { low, high, .. } => format!("{}..{}", show(low), show(high)),

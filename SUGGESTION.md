@@ -76,7 +76,32 @@ remain in specialization cache keys; replacing those with structural identities
 belongs to the broader progressive checked-to-HIR construction work rather than
 recursive representation soundness.
 
-## 4. Require evidence before adding algebraic loop rewrites
+## 4. Defunctionalize a branch join rather than adding function pointers
+
+A dynamic branch whose arms are functions used to reach the residual value
+calculus refusal, because the join lost the set of lambdas the arms could
+produce. That set is finite and known, so the join now carries a private sum:
+its case selects a normalized closure source and its payload is that
+alternative's ordered runtime capture product. Application dispatches on the
+tag, projects the payload back into the captures, and applies the selected body,
+so each call site still specializes for the argument representation it supplies
+— the probe applies one selected lambda to two different record widths and each
+gets its own code.
+
+Two decisions carry the weight. Alternatives merge only when they name the same
+source _and_ the same closed environment or equal already-applied arguments;
+merging on the body alone would make `make 1` and `make 2` compute one answer.
+And an arm that is already a choice contributes its own alternatives, so nesting
+a choice inside a choice produces one flat table rather than a tree of tags.
+
+This is deliberately not a function-pointer representation. `call.indirect`, a
+runtime code table, or a uniform closure record would each make every joined
+function opaque to specialization and would put a dispatch the compiler cannot
+see into a language whose ownership analysis depends on knowing the callee. The
+table is refused at ABI 1 for the same reason: its cases name compiler-local
+closure sources, so no caller could read one.
+
+## 5. Require evidence before adding algebraic loop rewrites
 
 Runtime HIR now rewrites direct self-tail calls to block back-edges, including
 the private sum and product reconstruction introduced by source elaboration. The
@@ -100,7 +125,7 @@ special formula improves one pattern. Each new rewrite still needs a
 source/Runtime-HIR simulation argument and trap-preservation tests before its
 performance measurement counts.
 
-## 5. Keep compiler optimization profile-driven
+## 6. Keep compiler optimization profile-driven
 
 The resident compiler already returns unchanged artifacts in tens of
 microseconds; lowered-module edits are dominated by checking and Runtime-HIR
@@ -117,7 +142,7 @@ An optimization is successful only when it removes a derivation or makes its
 data contiguous. Moving the same derivation between TypeScript, Rust, and Wasm
 is not a compiler-speed improvement.
 
-## 6. Current theory/implementation frontier
+## 7. Current theory/implementation frontier
 
 The representative scalar tight-loop gap is closed: equal-semantics Blot and
 Rust Wasm are within 0.91--1.06x on the measured loops, and the indexed arena is
@@ -129,11 +154,15 @@ What remains falls into three different classes and should not be described as
 one unfinished feature list:
 
 - **Semantic closure:** finite run-time choices returned by known higher-order
-  functions are defunctionalized, but a function whose source set is opaque to
-  whole-program control-flow analysis still needs closure conversion with a
-  closed parameter representation or a representation dictionary. This is the
-  remaining source program that can be well typed yet reach a structural
-  representation refusal.
+  functions are defunctionalized, and so is a dynamic branch that joins several
+  functions: the join normalizes each arm to a closure source plus its ordered
+  runtime captures and carries the result as a private tagged table. A function
+  whose source set is opaque to whole-program control-flow analysis still needs
+  closure conversion with a closed parameter representation or a representation
+  dictionary. That open set is now the only source program that can be well
+  typed yet reach a structural representation refusal, and it is refused with
+  the offending value and its inferred signature rather than with a generic
+  value-calculus message.
 - **Compiler architecture:** progressively commit typed Runtime HIR during
   checking. This removes duplicate derivations and does not need new surface
   syntax.

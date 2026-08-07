@@ -110,6 +110,28 @@ drive residual projections. In the absence of that witness, recursion controlled
 by a dynamic captured bound must not be unrolled merely because its initial
 accumulator is static.
 
+A dynamic branch that produces a function has no single closure to convert. Let
+`f_1, ..., f_n` be the functions its arms can produce, each a lambda or a
+partially applied primitive, and let `FV_r(f_i)` be that arm's runtime captures.
+The join is defunctionalized:
+
+```text
+f_i = source_i with captures FV_r(f_i) = { c_i1 : C_i1, ..., c_ik : C_ik }
+------------------------------------------------------------------ choice-join
+join(f_1, ..., f_n)  =>  #choice_i { c_i1, ..., c_ik } : Choice(f_1, ..., f_n)
+```
+
+`Choice` is compiler-local. Two arms share a case only when they name the same
+source and the same closed environment, or the same primitive with equal applied
+arguments; a captured compile-time value distinguishes two closures over one
+body. An arm that is already a `Choice` contributes its own alternatives, so the
+table stays flat and finite. Applying the join dispatches on the case, projects
+the payload back into `FV_r(f_i)` through ordinary closure conversion, and
+applies `f_i` — so the body still specializes per argument representation. A
+branch that joins a function with anything outside this grammar has an open
+source set and is refused with the offending value and the inferred signature; a
+closed set must specialize.
+
 When a higher-order argument supplies a concrete arrow for an abstract arrow,
 specialization records the induced representation substitution. For example,
 matching `(A, T) -> A` with `(Store S, Int) -> Store S` establishes
