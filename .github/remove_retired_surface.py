@@ -212,6 +212,6 @@ eval_new = """        Expression::Block {
             ..
         } => {
 """
-if eval_text.count(eval_old) != 1:
+if eval_old not in eval_text:
     raise SystemExit("Rust block evaluator compatibility marker changed")
 eval_path.write_text(eval_text.replace(eval_old, eval_new, 1))
