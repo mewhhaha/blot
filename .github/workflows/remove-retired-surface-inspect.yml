@@ -76,6 +76,13 @@ jobs:
           if text.count('?resume') != 3:
               raise SystemExit('composed handler resume qualifiers changed')
           path.write_text(text.replace('?resume', '!resume'))
+
+          path = Path('experiments/rust-middle/src/eval.rs')
+          text = path.read_text()
+          old = '            result_effects: _,\n'
+          if text.count(old) != 1:
+              raise SystemExit('Rust block evaluator pattern changed')
+          path.write_text(text.replace(old, '', 1))
           PY
           python3 - <<'PY'
           from pathlib import Path
