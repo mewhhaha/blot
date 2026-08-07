@@ -108,6 +108,10 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@shape.names"
         | "@array.len"
         | "@array.indexed"
+        | "@region.array.type"
+        | "@region.array.claim"
+        | "@region.array.length"
+        | "@region.array.freeze"
         | "@int.neg"
         | "@text.len"
         | "@text.of_int"
@@ -131,15 +135,53 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@branch.likely"
         | "@branch.unlikely"
         | "@panic" => 1,
-        "@type.range" | "@type.union" | "@type.intersect" | "@type.diff" | "@type.arrow"
-        | "@type.performs" | "@type.seal" | "@satisfies" | "@shape.get" | "@shape.remove"
-        | "@shape.has" | "@array.get" | "@array.push" | "@array.take" | "@array.split"
-        | "@int.add" | "@int.sub" | "@int.mul" | "@int.div" | "@int.rem" | "@int.cmp"
-        | "@text.concat" | "@text.cmp" | "@text.contains" | "@json.parse" | "@float.add"
-        | "@float.sub" | "@float.mul" | "@float.div" | "@float.rem" | "@float.cmp" | "@f32.add"
-        | "@f32.sub" | "@f32.mul" | "@f32.div" | "@f32.cmp" | "@f32x4.add" | "@f32x4.sub"
-        | "@f32x4.mul" | "@f32x4.div" | "@f32x4.eq" | "@f32x4.less" => 2,
-        "@type.attach" | "@shape.set" | "@array.set" | "@f32x4.select" => 3,
+        "@type.range"
+        | "@type.union"
+        | "@type.intersect"
+        | "@type.diff"
+        | "@type.arrow"
+        | "@type.performs"
+        | "@type.seal"
+        | "@satisfies"
+        | "@shape.get"
+        | "@shape.remove"
+        | "@shape.has"
+        | "@array.get"
+        | "@array.push"
+        | "@array.take"
+        | "@array.split"
+        | "@region.array.get"
+        | "@region.array.split"
+        | "@region.array.join"
+        | "@int.add"
+        | "@int.sub"
+        | "@int.mul"
+        | "@int.div"
+        | "@int.rem"
+        | "@int.cmp"
+        | "@text.concat"
+        | "@text.cmp"
+        | "@text.contains"
+        | "@json.parse"
+        | "@float.add"
+        | "@float.sub"
+        | "@float.mul"
+        | "@float.div"
+        | "@float.rem"
+        | "@float.cmp"
+        | "@f32.add"
+        | "@f32.sub"
+        | "@f32.mul"
+        | "@f32.div"
+        | "@f32.cmp"
+        | "@f32x4.add"
+        | "@f32x4.sub"
+        | "@f32x4.mul"
+        | "@f32x4.div"
+        | "@f32x4.eq"
+        | "@f32x4.less" => 2,
+        "@type.attach" | "@shape.set" | "@array.set" | "@region.array.set"
+        | "@region.array.swap" | "@f32x4.select" => 3,
         "@f32x4.of" => 4,
         "@f32x4.shuffle" => 6,
         _ => return None,
@@ -347,6 +389,106 @@ pub fn run_primitive(
         "@shape.has" => Ok(boolean(
             shape(&arguments[0], span, name)?.contains_key(text(&arguments[1], span, name)?),
         )),
+        "@region.array.type" => Ok(Value::RegionType(Box::new(arguments[0].clone()))),
+        "@region.array.claim" => {
+            let values = array(&arguments[0], span, name)?.to_vec();
+            let length = values.len();
+            Ok(Value::Region {
+                store: std::rc::Rc::new(std::cell::RefCell::new(values)),
+                start: 0,
+                end: length,
+            })
+        }
+        "@region.array.length" => {
+            let (_, start, end) = region(&arguments[0], span, name)?;
+            Ok(Value::Int(BigInt::from(end - start)))
+        }
+        "@region.array.get" => {
+            let (store, start, end) = region(&arguments[0], span, name)?;
+            let relative = index(&arguments[1], span, name)?;
+            if relative >= end - start {
+                return Err(out_of_bounds(relative, end - start, span));
+            }
+            let value = store.borrow()[start + relative].clone();
+            Ok(value)
+        }
+        "@region.array.set" => {
+            let (store, start, end) = region(&arguments[0], span, name)?;
+            let relative = index(&arguments[1], span, name)?;
+            if relative >= end - start {
+                return Err(out_of_bounds(relative, end - start, span));
+            }
+            store.borrow_mut()[start + relative] = arguments[2].clone();
+            Ok(arguments[0].clone())
+        }
+        "@region.array.swap" => {
+            let (store, start, end) = region(&arguments[0], span, name)?;
+            let left = index(&arguments[1], span, name)?;
+            let right = index(&arguments[2], span, name)?;
+            let length = end - start;
+            if left >= length {
+                return Err(out_of_bounds(left, length, span));
+            }
+            if right >= length {
+                return Err(out_of_bounds(right, length, span));
+            }
+            store.borrow_mut().swap(start + left, start + right);
+            Ok(arguments[0].clone())
+        }
+        "@region.array.split" => {
+            let (store, start, end) = region(&arguments[0], span, name)?;
+            let offset = index(&arguments[1], span, name)?;
+            if offset > end - start {
+                return Ok(Value::Tag {
+                    name: "SplitOutOfBounds".to_owned(),
+                    payload: Some(Box::new(arguments[0].clone())),
+                });
+            }
+            let middle = start + offset;
+            Ok(Value::Tag {
+                name: "Split".to_owned(),
+                payload: Some(Box::new(tuple(vec![
+                    Value::Region {
+                        store: store.clone(),
+                        start,
+                        end: middle,
+                    },
+                    Value::Region {
+                        store,
+                        start: middle,
+                        end,
+                    },
+                ]))),
+            })
+        }
+        "@region.array.join" => {
+            let (left_store, left_start, left_end) = region(&arguments[0], span, name)?;
+            let (right_store, right_start, right_end) = region(&arguments[1], span, name)?;
+            if !std::rc::Rc::ptr_eq(&left_store, &right_store) || left_end != right_start {
+                return Err(Diagnostic::new(
+                    "BLOT_REGION_JOIN_UNPROVED",
+                    "Region join requires ordered adjacent siblings from one Store.",
+                    span,
+                ));
+            }
+            Ok(Value::Region {
+                store: left_store,
+                start: left_start,
+                end: right_end,
+            })
+        }
+        "@region.array.freeze" => {
+            let (store, start, end) = region(&arguments[0], span, name)?;
+            let values = store.borrow();
+            if start != 0 || end != values.len() {
+                return Err(Diagnostic::new(
+                    "BLOT_REGION_PARTIAL_FREEZE",
+                    "Only a complete root Region can be frozen.",
+                    span,
+                ));
+            }
+            Ok(Value::Array(values.clone()))
+        }
         "@array.len" => Ok(Value::Int(BigInt::from(
             array(&arguments[0], span, name)?.len(),
         ))),
@@ -808,6 +950,17 @@ fn array<'a>(value: &'a Value, span: Span, what: &str) -> Result<&'a [Value], Di
         Value::Array(values) => Ok(values),
         Value::EmptyArray { .. } => Ok(&[]),
         _ => Err(type_error(what, "an array", value, span)),
+    }
+}
+
+fn region(
+    value: &Value,
+    span: Span,
+    what: &str,
+) -> Result<(std::rc::Rc<std::cell::RefCell<Vec<Value>>>, usize, usize), Diagnostic> {
+    match value {
+        Value::Region { store, start, end } => Ok((store.clone(), *start, *end)),
+        _ => Err(type_error(what, "an owned Region", value, span)),
     }
 }
 

@@ -4153,6 +4153,15 @@ fn collect_value(
                 collect_value(context, element, visited, captured)?;
             }
         }
+        Value::RegionType(element) => {
+            collect_value(context, element, visited, captured)?;
+        }
+        Value::Region { store, start, end } => {
+            let cells = store.borrow();
+            for element in &cells[*start..*end] {
+                collect_value(context, element, visited, captured)?;
+            }
+        }
         Value::Tag { payload, .. } => {
             if let Some(payload) = payload {
                 collect_value(context, payload, visited, captured)?;
@@ -4335,6 +4344,18 @@ fn replace_value(
             for element in elements {
                 *element = replace_value(context, element, replacements, replaced)?;
             }
+        }
+        Value::RegionType(element) => {
+            **element = replace_value(context, element, replacements, replaced)?;
+        }
+        Value::Region { store, start, end } => {
+            let cells = store.borrow();
+            let mut replaced_cells = cells.clone();
+            drop(cells);
+            for element in &mut replaced_cells[*start..*end] {
+                *element = replace_value(context, element, replacements, replaced)?;
+            }
+            *store = Rc::new(std::cell::RefCell::new(replaced_cells));
         }
         Value::Tag { payload, .. } => {
             if let Some(payload) = payload {
@@ -5785,6 +5806,9 @@ impl HirBuilder {
                     },
                 ))
             }
+            Type::Region(_) => Err(hir_error(
+                "A live Region is compiler-private and cannot cross the runtime export boundary.",
+            )),
             Type::Array(element) => {
                 let (elements, element_value) = match value {
                     Value::Array(elements) => (

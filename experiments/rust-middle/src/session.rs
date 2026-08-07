@@ -414,6 +414,14 @@ fn json_value(value: &Value) -> serde_json::Value {
             "tag": "array",
             "elements": elements.iter().map(json_value).collect::<Vec<_>>(),
         }),
+        Value::RegionType(element) => serde_json::json!({
+            "tag": "region-type",
+            "element": json_value(element),
+        }),
+        Value::Region { start, end, .. } => serde_json::json!({
+            "tag": "opaque",
+            "display": format!("<region {start}..{end}>"),
+        }),
         Value::EmptyArray { .. } => serde_json::json!({
             "tag": "array",
             "elements": [],
