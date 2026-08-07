@@ -38,6 +38,10 @@ pub(crate) enum RuntimeType {
         #[serde(rename = "elementType")]
         element_type: usize,
     },
+    Indirect {
+        #[serde(rename = "targetType")]
+        target_type: usize,
+    },
     Product {
         name: String,
         fields: Vec<RuntimeField>,
@@ -239,6 +243,7 @@ pub(crate) struct ResidualTrace {
     active_primitive: Option<String>,
     functions: BTreeMap<usize, RuntimeFunction>,
     function_ids: HashMap<String, (usize, usize)>,
+    pending_recursive_types: HashSet<usize>,
     next_function: usize,
     function_frames: Vec<ResidualFunctionFrame>,
 }
@@ -322,6 +327,7 @@ impl ResidualTrace {
             active_primitive: None,
             functions: BTreeMap::new(),
             function_ids: HashMap::new(),
+            pending_recursive_types: HashSet::new(),
             next_function: 1,
             function_frames: Vec::new(),
         };
@@ -492,7 +498,7 @@ impl ResidualTrace {
         );
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 1,
+            schema_version: 2,
             source: self.source,
             types: self.types,
             signatures: self.signatures,
@@ -1128,10 +1134,27 @@ impl ResidualTrace {
     }
 
     pub(crate) fn sum_cases(&self, value: &RuntimeValue) -> Option<Vec<String>> {
-        let RuntimeType::Sum { cases, .. } = &self.types[value.type_id] else {
+        let (_, cases) = self.sum_representation(value.type_id)?;
+        Some(cases.iter().map(|case_| case_.name.clone()).collect())
+    }
+
+    fn sum_representation(&self, type_id: usize) -> Option<(usize, &[RuntimeCase])> {
+        let representation = match self.types.get(type_id)? {
+            RuntimeType::Indirect { target_type } => *target_type,
+            RuntimeType::Sum { .. } => type_id,
+            _ => return None,
+        };
+        let RuntimeType::Sum { cases, .. } = self.types.get(representation)? else {
             return None;
         };
-        Some(cases.iter().map(|case_| case_.name.clone()).collect())
+        Some((representation, cases))
+    }
+
+    fn load_indirect(&mut self, target: &RuntimeValue, span: crate::ast::Span) -> RuntimeValue {
+        let RuntimeType::Indirect { target_type } = self.types[target.type_id] else {
+            return target.clone();
+        };
+        self.operation("indirect.load", target_type, vec![target.id], span, None)
     }
 
     pub(crate) fn type_name(&self, value: &RuntimeValue) -> &'static str {
@@ -1146,6 +1169,7 @@ impl ResidualTrace {
             RuntimeType::Vector { .. } => "Vector",
             RuntimeType::Mask { .. } => "Mask",
             RuntimeType::Store { .. } => "Store",
+            RuntimeType::Indirect { .. } => "Recursive",
             RuntimeType::Product { .. } => "Record",
             RuntimeType::Sum { .. } => "Sum",
             RuntimeType::Sealed { .. } => "Sealed",
@@ -1303,7 +1327,8 @@ impl ResidualTrace {
                 span,
             ));
         }
-        let tag = self.operation("sum.tag", 2, vec![target.id], span, None);
+        let sum = self.load_indirect(target, span);
+        let tag = self.operation("sum.tag", 2, vec![sum.id], span, None);
         let first = self.constant(WireConstant::SignedInteger32(0), 2, span);
         Ok(self.operation("scalar", 1, vec![tag.id, first.id], span, Some("equal")))
     }
@@ -1314,9 +1339,14 @@ impl ResidualTrace {
         case: usize,
         span: crate::ast::Span,
     ) -> Result<Value, Diagnostic> {
-        let RuntimeType::Sum { cases, .. } = &self.types[target.type_id] else {
+        let (sum_type, cases) = self
+            .sum_representation(target.type_id)
+            .map(|(sum_type, cases)| (sum_type, cases.to_vec()))
+            .ok_or_else(|| hir_error("A dynamic sum value has a non-sum runtime type."))?;
+        let sum = self.load_indirect(target, span);
+        if sum.type_id != sum_type {
             return Err(hir_error("A dynamic sum value has a non-sum runtime type."));
-        };
+        }
         let payload_type = cases
             .get(case)
             .ok_or_else(|| hir_error("A dynamic sum case is outside its runtime type."))?
@@ -1328,7 +1358,7 @@ impl ResidualTrace {
             kind: "sum.payload",
             result,
             type_id: payload_type,
-            operands: vec![target.id],
+            operands: vec![sum.id],
             ownership,
             span: runtime_span,
             value: None,
@@ -1462,16 +1492,32 @@ impl ResidualTrace {
         }
         let caller_argument =
             self.lower_residual_argument(argument, domain, &substitutions, span)?;
-        let result_type = self
-            .specialized_type_from_type_value(codomain, &mut substitutions, &representation_facts)
-            .map_err(|mut diagnostic| {
+        let result_type = match self.specialized_type_from_type_value(
+            codomain,
+            &mut substitutions,
+            &representation_facts,
+        ) {
+            Ok(result_type) => result_type,
+            Err(_) if has_unresolved_representation(codomain, &substitutions) => {
+                let key = format!(
+                    "recursive-result:{module}:{}:{}:{}",
+                    body.0,
+                    caller_argument.type_id,
+                    crate::value::show(signature_value),
+                );
+                let result_type = self.insert_type(&key, RuntimeType::Indirect { target_type: 0 });
+                self.pending_recursive_types.insert(result_type);
+                result_type
+            }
+            Err(mut diagnostic) => {
                 diagnostic.message = format!(
                     "{} Residual signature: {}.",
                     diagnostic.message,
                     crate::value::show(signature_value)
                 );
-                diagnostic
-            })?;
+                return Err(diagnostic);
+            }
+        };
         let capture_types = captures
             .iter()
             .map(|capture| capture.type_id)
@@ -1582,8 +1628,31 @@ impl ResidualTrace {
         compilation: ResidualFunctionCompilation,
         value: Value,
     ) -> Result<Value, Diagnostic> {
-        let result = self.lower_value(&value, compilation.span)?;
-        if result.type_id != compilation.result_type {
+        let mut result = self.lower_value(&value, compilation.span)?;
+        if self
+            .pending_recursive_types
+            .remove(&compilation.result_type)
+        {
+            if result.type_id == compilation.result_type {
+                return Err(hir_error(
+                    "A residual recursive result has no finite constructor case.",
+                ));
+            }
+            let RuntimeType::Indirect { target_type } = &mut self.types[compilation.result_type]
+            else {
+                return Err(hir_error(
+                    "A pending recursive result lost its indirect representation.",
+                ));
+            };
+            *target_type = result.type_id;
+            result = self.operation(
+                "indirect.make",
+                compilation.result_type,
+                vec![result.id],
+                compilation.span,
+                None,
+            );
+        } else if result.type_id != compilation.result_type {
             return Err(hir_error(
                 "A residual recursive function returned a value outside its signature.",
             ));
@@ -1717,7 +1786,7 @@ impl ResidualTrace {
         );
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 1,
+            schema_version: 2,
             source: self.source.clone(),
             types: self.types,
             signatures: self.signatures,
@@ -1761,10 +1830,9 @@ impl ResidualTrace {
     ) -> Result<(RuntimeValue, RuntimeValue), Diagnostic> {
         if let Value::Runtime(consequent_runtime) = &consequent
             && matches!(alternate, Value::Tag { .. })
-            && matches!(
-                self.types[consequent_runtime.type_id],
-                RuntimeType::Sum { .. }
-            )
+            && self
+                .sum_representation(consequent_runtime.type_id)
+                .is_some()
         {
             self.current_block = alternate_block;
             let alternate = self.lower_sum_member(&alternate, consequent_runtime.type_id, span)?;
@@ -1772,10 +1840,7 @@ impl ResidualTrace {
         }
         if let Value::Runtime(alternate_runtime) = &alternate
             && matches!(consequent, Value::Tag { .. })
-            && matches!(
-                self.types[alternate_runtime.type_id],
-                RuntimeType::Sum { .. }
-            )
+            && self.sum_representation(alternate_runtime.type_id).is_some()
         {
             self.current_block = consequent_block;
             let consequent = self.lower_sum_member(&consequent, alternate_runtime.type_id, span)?;
@@ -2242,9 +2307,7 @@ impl ResidualTrace {
         expected_type: usize,
         span: crate::ast::Span,
     ) -> Result<RuntimeValue, Diagnostic> {
-        if matches!(value, Value::Tag { .. })
-            && matches!(self.types[expected_type], RuntimeType::Sum { .. })
-        {
+        if matches!(value, Value::Tag { .. }) && self.sum_representation(expected_type).is_some() {
             return self.lower_sum_member(value, expected_type, span);
         }
         let lowered = self.lower_value(value, span)?;
@@ -2270,11 +2333,10 @@ impl ResidualTrace {
                 "A sum injection received a non-constructor value.",
             ));
         };
-        let RuntimeType::Sum { cases, .. } = self.types[expected_type].clone() else {
-            return Err(hir_error(
-                "A sum injection received a non-sum runtime type.",
-            ));
-        };
+        let (sum_type, cases) = self
+            .sum_representation(expected_type)
+            .map(|(sum_type, cases)| (sum_type, cases.to_vec()))
+            .ok_or_else(|| hir_error("A sum injection received a non-sum runtime type."))?;
         let case = cases
             .iter()
             .position(|case_| case_.name == *name)
@@ -2292,7 +2354,10 @@ impl ResidualTrace {
             )));
         }
         let mut tagged =
-            self.operation_with_case("sum.make", expected_type, vec![lowered.id], span, case);
+            self.operation_with_case("sum.make", sum_type, vec![lowered.id], span, case);
+        if sum_type != expected_type {
+            tagged = self.operation("indirect.make", expected_type, vec![tagged.id], span, None);
+        }
         tagged.meaning = RuntimeMeaning::Sum {
             cases: cases.iter().map(|case_| case_.name.clone()).collect(),
         };
@@ -2383,6 +2448,12 @@ impl ResidualTrace {
     fn type_from_type_value(&mut self, value: &Value) -> Result<usize, Diagnostic> {
         match value {
             Value::Unit | Value::Unbounded => Ok(0),
+            Value::Int(_) => {
+                Ok(self.insert_type("signed-integer-64", RuntimeType::SignedInteger64))
+            }
+            Value::Text(_) => Ok(3),
+            Value::Float(_) => Ok(self.insert_type("float-64", RuntimeType::Float64)),
+            Value::Float32(_) => Ok(self.insert_type("float-32", RuntimeType::Float32)),
             Value::Range {
                 domain: Some(crate::value::Domain::Text),
                 ..
@@ -3102,7 +3173,7 @@ impl ResidualTrace {
         mut value: RuntimeValue,
         span: crate::ast::Span,
     ) -> Result<Value, Diagnostic> {
-        if let RuntimeType::Sum { cases, .. } = &self.types[value.type_id] {
+        if let Some((_, cases)) = self.sum_representation(value.type_id) {
             value.meaning = RuntimeMeaning::Sum {
                 cases: cases.iter().map(|case_| case_.name.clone()).collect(),
             };
@@ -3183,6 +3254,7 @@ impl ResidualTrace {
         match self.types[type_id] {
             RuntimeType::Text
             | RuntimeType::Store { .. }
+            | RuntimeType::Indirect { .. }
             | RuntimeType::Product { .. }
             | RuntimeType::Sum { .. }
             | RuntimeType::Sealed { .. } => "owned",
@@ -3196,6 +3268,43 @@ impl ResidualTrace {
             start: span.start,
             end: span.end,
         }
+    }
+}
+
+fn has_unresolved_representation(value: &Value, substitutions: &HashMap<u32, usize>) -> bool {
+    match value {
+        Value::TypeVariable(variable) => !substitutions.contains_key(variable),
+        Value::Shape(fields) => fields
+            .iter()
+            .any(|(_, field)| has_unresolved_representation(field, substitutions)),
+        Value::Array(elements) | Value::Union(elements) => elements
+            .iter()
+            .any(|element| has_unresolved_representation(element, substitutions)),
+        Value::EmptyArray { element }
+        | Value::Extended { inner: element, .. }
+        | Value::Sealed { inner: element, .. }
+        | Value::Forall { body: element, .. } => {
+            has_unresolved_representation(element, substitutions)
+        }
+        Value::Tag { payload, .. } => payload
+            .as_deref()
+            .is_some_and(|payload| has_unresolved_representation(payload, substitutions)),
+        Value::Range { low, high, .. } => {
+            has_unresolved_representation(low, substitutions)
+                || has_unresolved_representation(high, substitutions)
+        }
+        Value::Arrow {
+            domain,
+            codomain,
+            effects,
+        } => {
+            has_unresolved_representation(domain, substitutions)
+                || has_unresolved_representation(codomain, substitutions)
+                || effects
+                    .iter()
+                    .any(|effect| has_unresolved_representation(effect, substitutions))
+        }
+        _ => false,
     }
 }
 
@@ -4407,6 +4516,7 @@ fn merge_runtime_modules(
         for mut type_ in module.types {
             match &mut type_ {
                 RuntimeType::Store { element_type } => *element_type += type_offset,
+                RuntimeType::Indirect { target_type } => *target_type += type_offset,
                 RuntimeType::Product { fields, .. } => {
                     for field in fields {
                         field.type_id += type_offset;
@@ -4472,7 +4582,7 @@ fn merge_runtime_modules(
     }
     Ok(RuntimeModule {
         format: "blot-runtime-hir",
-        schema_version: 1,
+        schema_version: 2,
         source: source.to_owned(),
         types,
         signatures,
@@ -4801,7 +4911,7 @@ impl HirBuilder {
             .collect();
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 1,
+            schema_version: 2,
             source: self.source,
             types: self.types,
             signatures: self.signatures,

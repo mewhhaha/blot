@@ -75,7 +75,7 @@ export function exportConstantRuntimeHir(
   );
   return {
     format: "blot-runtime-hir",
-    schemaVersion: 1,
+    schemaVersion: 2,
     source,
     types: builder.types,
     signatures: builder.signatures,

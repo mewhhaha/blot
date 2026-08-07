@@ -1160,7 +1160,7 @@ fn evaluate_sum_case(
 
 fn compiler_tag_value(name: String, payload: Value) -> Value {
     if !name.contains('$') {
-        let payload = if name == "None" && matches!(payload, Value::Unit) {
+        let payload = if matches!(payload, Value::Unit) {
             None
         } else {
             Some(Box::new(payload))

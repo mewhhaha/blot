@@ -1,5 +1,4 @@
 import { assertEquals } from "@std/assert";
-import { BlotError } from "../../src/diagnostic.ts";
 import { RustMiddleCompiler } from "../../src/backend/rust_middle.ts";
 import {
   type BenchmarkInput,
@@ -13,9 +12,6 @@ const targetSampleMilliseconds = 40;
 const maximumInvocations = 1_048_576;
 const rustPath = "experiments/generated-code/counterpart.rs";
 const sharedBlotPath = "experiments/generated-code/workloads.blot";
-const unsupportedPaths: readonly string[] = [
-  "experiments/generated-code/programs/recursive_list.blot",
-];
 interface CompiledWorkload {
   readonly workload: Workload;
   readonly blotBytes: Uint8Array;
@@ -92,7 +88,6 @@ try {
         workloads: await artifactDescriptions(compiledWorkloads),
       },
       measurements,
-      unsupported: await probeUnsupportedPrograms(compiler),
     },
     null,
     2,
@@ -297,25 +292,6 @@ async function artifactDescriptions(
     });
   }
   return descriptions;
-}
-
-async function probeUnsupportedPrograms(checkedCompiler: RustMiddleCompiler) {
-  const probes = [];
-  for (const path of unsupportedPaths) {
-    try {
-      await checkedCompiler.compile(path);
-      probes.push({ source: path, supported: true });
-    } catch (error) {
-      if (!(error instanceof BlotError)) throw error;
-      probes.push({
-        source: path,
-        supported: false,
-        diagnostic: error.diagnostic.code,
-        reason: error.diagnostic.message,
-      });
-    }
-  }
-  return probes;
 }
 
 async function compileRust(

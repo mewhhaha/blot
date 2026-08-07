@@ -5,7 +5,7 @@ const span = { file: "test.blot", start: 0, end: 1 } as const;
 function acceptedModule(): BlotRuntimeModule {
   return {
     format: "blot-runtime-hir",
-    schemaVersion: 1,
+    schemaVersion: 2,
     source: "test.blot",
     types: [
       { kind: "unit" },

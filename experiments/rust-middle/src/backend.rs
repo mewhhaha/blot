@@ -74,6 +74,7 @@ struct PublicLayout {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum AbiType {
     Unit,
+    InternalPointer,
     #[serde(rename = "signed-integer-64")]
     SignedInteger64,
     #[serde(rename = "float-32")]
@@ -317,6 +318,15 @@ fn canonical_type(
     type_id: usize,
     resolving: &mut Vec<usize>,
 ) -> Result<AbiType, String> {
+    runtime_layout_type(module, type_id, resolving, false)
+}
+
+fn runtime_layout_type(
+    module: &RuntimeModule,
+    type_id: usize,
+    resolving: &mut Vec<usize>,
+    admit_indirect: bool,
+) -> Result<AbiType, String> {
     if resolving.contains(&type_id) {
         return Err(format!(
             "{}: ABI type {type_id} has a recursive canonical layout",
@@ -348,8 +358,20 @@ fn canonical_type(
     resolving.push(type_id);
     let canonical = match type_ {
         RuntimeType::Store { element_type } => AbiType::Array {
-            element: Box::new(canonical_type(module, *element_type, resolving)?),
+            element: Box::new(runtime_layout_type(
+                module,
+                *element_type,
+                resolving,
+                admit_indirect,
+            )?),
         },
+        RuntimeType::Indirect { .. } if admit_indirect => AbiType::InternalPointer,
+        RuntimeType::Indirect { .. } => {
+            return Err(format!(
+                "{}: recursive type {type_id} cannot cross Blot Core Wasm ABI 1",
+                module.source
+            ));
+        }
         RuntimeType::Product { fields, .. } => {
             let mut fields = fields.clone();
             fields.sort_by(|left, right| left.name.cmp(&right.name));
@@ -359,7 +381,12 @@ fn canonical_type(
                     .map(|field| {
                         Ok(AbiField {
                             name: field.name,
-                            type_: canonical_type(module, field.type_id, resolving)?,
+                            type_: runtime_layout_type(
+                                module,
+                                field.type_id,
+                                resolving,
+                                admit_indirect,
+                            )?,
                         })
                     })
                     .collect::<Result<_, String>>()?,
@@ -367,12 +394,19 @@ fn canonical_type(
         }
         RuntimeType::Sum { cases, .. } => {
             let mut cases = cases.clone();
-            cases.sort_by(|left, right| left.name.cmp(&right.name));
+            if !admit_indirect {
+                cases.sort_by(|left, right| left.name.cmp(&right.name));
+            }
             AbiType::Variant {
                 cases: cases
                     .into_iter()
                     .map(|case_| {
-                        let payload = canonical_type(module, case_.payload_type, resolving)?;
+                        let payload = runtime_layout_type(
+                            module,
+                            case_.payload_type,
+                            resolving,
+                            admit_indirect,
+                        )?;
                         let payload = if matches!(payload, AbiType::Unit) {
                             None
                         } else {
@@ -391,7 +425,12 @@ fn canonical_type(
             representation_type,
         } => AbiType::Sealed {
             name: name.clone(),
-            inner: Box::new(canonical_type(module, *representation_type, resolving)?),
+            inner: Box::new(runtime_layout_type(
+                module,
+                *representation_type,
+                resolving,
+                admit_indirect,
+            )?),
         },
         RuntimeType::Vector { .. } | RuntimeType::Mask { .. } => {
             return Err(format!(
@@ -414,6 +453,7 @@ fn canonical_type(
 fn flattened_type(type_: &AbiType) -> Vec<ValType> {
     match type_ {
         AbiType::Unit => Vec::new(),
+        AbiType::InternalPointer => vec![ValType::I32],
         AbiType::SignedInteger64 => vec![ValType::I64],
         AbiType::Float32 => vec![ValType::F32],
         AbiType::Float64 => vec![ValType::F64],
@@ -1403,6 +1443,66 @@ fn emit_dynamic_operation(
         "sum.payload" => {
             let sum = locals_for(module, value_locals, operation.operands[0])?;
             assign_locals(instructions, result, &sum[1..1 + result.len()])?;
+        }
+        "indirect.make" => {
+            let RuntimeType::Indirect { target_type } = module
+                .types
+                .get(operation.type_id)
+                .ok_or_else(|| format!("{}: indirect.make has no result type", module.source))?
+            else {
+                return Err(format!(
+                    "{}: indirect.make result is not indirect",
+                    module.source
+                ));
+            };
+            let target_layout = runtime_layout_type(module, *target_type, &mut Vec::new(), true)?;
+            let layout = memory_layout(&target_layout);
+            let value = locals_for(module, value_locals, operation.operands[0])?;
+            instructions
+                .i32_const(0)
+                .i32_const(0)
+                .i32_const(layout.alignment as i32)
+                .i32_const(layout.size as i32)
+                .call(helpers.realloc)
+                .local_set(result[0]);
+            let mut flat_index = 0;
+            emit_store_canonical_result(
+                instructions,
+                &target_layout,
+                value,
+                &mut flat_index,
+                result[0],
+                0,
+            )?;
+            if flat_index != value.len() {
+                return Err(format!(
+                    "{}: indirect.make stored {flat_index} of {} values",
+                    module.source,
+                    value.len()
+                ));
+            }
+        }
+        "indirect.load" => {
+            let indirect_type = runtime_value_type(function, operation.operands[0])?;
+            let RuntimeType::Indirect { target_type } = module
+                .types
+                .get(indirect_type)
+                .ok_or_else(|| format!("{}: indirect.load has no operand type", module.source))?
+            else {
+                return Err(format!(
+                    "{}: indirect.load operand is not indirect",
+                    module.source
+                ));
+            };
+            if *target_type != operation.type_id {
+                return Err(format!(
+                    "{}: indirect.load target type differs from its result",
+                    module.source
+                ));
+            }
+            let target_layout = runtime_layout_type(module, *target_type, &mut Vec::new(), true)?;
+            let pointer = locals_for(module, value_locals, operation.operands[0])?;
+            emit_load_canonical_result(instructions, &target_layout, result, pointer[0], 0)?;
         }
         "store.empty" => {
             instructions
@@ -2468,6 +2568,7 @@ fn flattened_runtime_type(module: &RuntimeModule, type_id: usize) -> Result<Vec<
         RuntimeType::Float32 => Ok(vec![ValType::F32]),
         RuntimeType::Float64 => Ok(vec![ValType::F64]),
         RuntimeType::Text | RuntimeType::Store { .. } => Ok(vec![ValType::I32, ValType::I32]),
+        RuntimeType::Indirect { .. } => Ok(vec![ValType::I32]),
         RuntimeType::Vector { .. } | RuntimeType::Mask { .. } => Ok(vec![ValType::V128]),
         RuntimeType::Product { fields, .. } => {
             let mut result = Vec::new();
@@ -2515,6 +2616,7 @@ fn runtime_kind(type_: &RuntimeType) -> &'static str {
         RuntimeType::Vector { .. } => "vector",
         RuntimeType::Mask { .. } => "mask",
         RuntimeType::Store { .. } => "store",
+        RuntimeType::Indirect { .. } => "indirect",
         RuntimeType::Product { .. } => "product",
         RuntimeType::Sum { .. } => "sum",
         RuntimeType::Sealed { .. } => "sealed",
@@ -2807,6 +2909,17 @@ fn emit_load_canonical_result(
 ) -> Result<usize, String> {
     match type_ {
         AbiType::Unit => Ok(0),
+        AbiType::InternalPointer => {
+            instructions
+                .local_get(pointer)
+                .i32_load(wasm_encoder::MemArg {
+                    offset: u64::from(offset),
+                    align: 2,
+                    memory_index: 0,
+                })
+                .local_set(destination[0]);
+            Ok(1)
+        }
         AbiType::SignedInteger64 => {
             instructions
                 .local_get(pointer)
@@ -2851,7 +2964,7 @@ fn emit_load_canonical_result(
             instructions.local_set(destination[0]);
             Ok(1)
         }
-        AbiType::Text => {
+        AbiType::Text | AbiType::Array { .. } => {
             instructions
                 .local_get(pointer)
                 .i32_load(wasm_encoder::MemArg {
@@ -2883,13 +2996,58 @@ fn emit_load_canonical_result(
             }
             Ok(written)
         }
+        AbiType::Variant { cases } => {
+            let layout = variant_layout(cases);
+            let tag = destination[0];
+            instructions.local_get(pointer);
+            let memory_argument = wasm_encoder::MemArg {
+                offset: u64::from(offset),
+                align: layout.discriminant_size.trailing_zeros(),
+                memory_index: 0,
+            };
+            match layout.discriminant_size {
+                1 => {
+                    instructions.i32_load8_u(memory_argument);
+                }
+                2 => {
+                    instructions.i32_load16_u(memory_argument);
+                }
+                4 => {
+                    instructions.i32_load(memory_argument);
+                }
+                size => return Err(format!("unsupported variant discriminant size {size}")),
+            }
+            instructions.local_set(tag);
+            let flattened = flattened_type(type_);
+            for (local, type_) in destination[1..].iter().zip(flattened[1..].iter()) {
+                emit_zero_local(instructions, *type_, *local)?;
+            }
+            let mut payload_width = 0;
+            for (case_index, case_) in cases.iter().enumerate() {
+                let Some(payload) = &case_.payload else {
+                    continue;
+                };
+                let width = flattened_type(payload).len();
+                payload_width = payload_width.max(width);
+                instructions
+                    .local_get(tag)
+                    .i32_const(case_index as i32)
+                    .i32_eq()
+                    .if_(BlockType::Empty);
+                emit_load_canonical_result(
+                    instructions,
+                    payload,
+                    &destination[1..1 + width],
+                    pointer,
+                    offset + layout.payload_offset,
+                )?;
+                instructions.end();
+            }
+            Ok(1 + payload_width)
+        }
         AbiType::Sealed { inner, .. } => {
             emit_load_canonical_result(instructions, inner, destination, pointer, offset)
         }
-        _ => Err(format!(
-            "indirect dynamic {} results are not emitted yet",
-            abi_kind(type_)
-        )),
     }
 }
 
@@ -3084,6 +3242,13 @@ fn emit_store_canonical_result(
     };
     match type_ {
         AbiType::Unit => {}
+        AbiType::InternalPointer => {
+            instructions
+                .local_get(pointer)
+                .local_get(source[*flat_index])
+                .i32_store(memory_argument(offset, 2));
+            *flat_index += 1;
+        }
         AbiType::SignedInteger64 => {
             instructions
                 .local_get(pointer)
@@ -3797,6 +3962,7 @@ fn finish_call(instructions: &mut InstructionSink<'_>) {
 fn abi_kind(type_: &AbiType) -> &'static str {
     match type_ {
         AbiType::Unit => "unit",
+        AbiType::InternalPointer => "internal-pointer",
         AbiType::SignedInteger64 => "signed-integer-64",
         AbiType::Float32 => "float-32",
         AbiType::Float64 => "float-64",
@@ -3834,6 +4000,10 @@ fn memory_layout(type_: &AbiType) -> MemoryLayout {
         AbiType::Unit => MemoryLayout {
             alignment: 1,
             size: 0,
+        },
+        AbiType::InternalPointer => MemoryLayout {
+            alignment: 4,
+            size: 4,
         },
         AbiType::Boolean => MemoryLayout {
             alignment: 1,
@@ -3955,6 +4125,26 @@ mod tests {
         ]);
 
         assert!(!structured_loop_eligible(&function));
+    }
+
+    #[test]
+    fn recursive_representation_is_private_to_runtime_hir() {
+        let module = RuntimeModule {
+            format: "blot-runtime-hir",
+            schema_version: 2,
+            source: "recursive-boundary-test".to_owned(),
+            types: vec![RuntimeType::Unit, RuntimeType::Indirect { target_type: 0 }],
+            signatures: Vec::new(),
+            functions: Vec::new(),
+            capabilities: Vec::new(),
+            exports: Vec::new(),
+        };
+
+        let Err(error) = canonical_type(&module, 1, &mut Vec::new()) else {
+            panic!("a recursive value acquired an ABI 1 layout");
+        };
+
+        assert!(error.contains("cannot cross Blot Core Wasm ABI 1"));
     }
 
     fn runtime_function(blocks: Vec<RuntimeBlock>) -> RuntimeFunction {

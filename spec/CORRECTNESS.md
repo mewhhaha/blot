@@ -70,6 +70,14 @@ Each translation needs preservation plus simulation:
 | Runtime HIR to Wasm                | administrative machine state                  | returns, requests, traps, and divergence agree           |
 | private value to ABI               | private allocation identity                   | caller-visible values and ownership agree                |
 
+For a positive recursive result, the specialized-to-HIR relation is guarded by
+one private indirect root. Constructing the root stores a related non-recursive
+unfolding in scratch memory; loading it returns that unfolding; and every
+recursive child relates through the same one-word root. This makes the Runtime
+type graph finite and gives the simulation a decreasing step at each load rather
+than requiring an infinite flat layout. The ABI relation has no case for this
+root in ABI 1, so accepting it at a public boundary is an emitter error.
+
 ## 5. Trusted base
 
 The current trusted base contains:

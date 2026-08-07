@@ -116,6 +116,61 @@ Deno.test("full Rust compiler exports first-order recursive functions", async ()
   }
 });
 
+Deno.test("recursive algebraic values use a private indirect representation", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    const path = "experiments/generated-code/programs/recursive_list.blot";
+    const hir = validateBlotRuntimeModule(await compiler.prepare(path));
+    assertEquals(
+      hir.types.filter((type) => type.kind === "indirect").length,
+      1,
+    );
+
+    const artifact = await compiler.compile(path);
+    const instance = await WebAssembly.instantiate(
+      await WebAssembly.compile(Uint8Array.from(artifact.wasm).buffer),
+    );
+    const recursiveList = instance.exports["blot:recursive_list"];
+    if (!(recursiveList instanceof Function)) {
+      throw new Error("recursive list artifact omitted blot:recursive_list");
+    }
+    assertEquals(recursiveList(0n), 0n);
+    assertEquals(recursiveList(10n), 55n);
+    assertEquals(recursiveList(1_024n), 524_800n);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+Deno.test("mutually recursive algebraic values close one graph", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    const path =
+      "experiments/generated-code/programs/mutual_recursive_values.blot";
+    const hir = validateBlotRuntimeModule(await compiler.prepare(path));
+    assertEquals(
+      hir.types.filter((type) => type.kind === "indirect").length,
+      2,
+    );
+
+    const artifact = await compiler.compile(path);
+    const instance = await WebAssembly.instantiate(
+      await WebAssembly.compile(Uint8Array.from(artifact.wasm).buffer),
+    );
+    const total = instance.exports["blot:mutual_recursive_values"];
+    if (!(total instanceof Function)) {
+      throw new Error(
+        "mutual recursive value artifact omitted blot:mutual_recursive_values",
+      );
+    }
+    assertEquals(total(0n), 0n);
+    assertEquals(total(10n), 55n);
+    assertEquals(total(1_024n), 524_800n);
+  } finally {
+    compiler.destroy();
+  }
+});
+
 Deno.test("structured Runtime HIR preserves a nonlinear trapping loop", async () => {
   const compiler = await RustMiddleCompiler.create();
   try {

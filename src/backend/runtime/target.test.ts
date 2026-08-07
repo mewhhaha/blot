@@ -165,7 +165,7 @@ Deno.test("Blot Runtime target publishes ABI 1 metadata and a preserving allocat
 Deno.test("Blot Runtime target copies staged text into owned canonical memory", async () => {
   const module: BlotRuntimeModule = {
     format: "blot-runtime-hir",
-    schemaVersion: 1,
+    schemaVersion: 2,
     source: "target.blot",
     types: [{ kind: "unit" }, { kind: "text" }],
     signatures: [{ parameters: [], result: 1, effects: [] }],
@@ -804,7 +804,7 @@ Deno.test("Blot Runtime target uses Unicode-scalar text semantics", async () => 
   };
   const module: BlotRuntimeModule = {
     format: "blot-runtime-hir",
-    schemaVersion: 1,
+    schemaVersion: 2,
     source: "target.blot",
     types: [
       { kind: "unit" },
@@ -950,7 +950,7 @@ Deno.test("Blot Runtime target replays staged text effects through the canonical
   };
   const module: BlotRuntimeModule = {
     format: "blot-runtime-hir",
-    schemaVersion: 1,
+    schemaVersion: 2,
     source: "target.blot",
     types: [{ kind: "unit" }, { kind: "text" }],
     signatures: [
@@ -1038,7 +1038,7 @@ Deno.test("Blot Runtime target validates and reclaims dynamic canonical Text", a
 Deno.test("Blot Runtime target formats every dynamic I64 boundary as Text", async () => {
   const module: BlotRuntimeModule = {
     format: "blot-runtime-hir",
-    schemaVersion: 1,
+    schemaVersion: 2,
     source: "format-i64.blot",
     types: [
       { kind: "unit" },
@@ -1130,7 +1130,7 @@ Deno.test("Blot Runtime target exchanges dynamic I64 records with host effects",
   }));
   const module: BlotRuntimeModule = {
     format: "blot-runtime-hir",
-    schemaVersion: 1,
+    schemaVersion: 2,
     source: "records.blot",
     types: [
       { kind: "unit" },
@@ -1423,7 +1423,7 @@ function runtimeModule(
 ): BlotRuntimeModule {
   return {
     format: "blot-runtime-hir",
-    schemaVersion: 1,
+    schemaVersion: 2,
     source: "target.blot",
     types: [
       { kind: "unit" },
@@ -1452,7 +1452,7 @@ function dynamicTextModule(
   if (comparisonOperator === undefined) comparisonOperator = "equal";
   return {
     format: "blot-runtime-hir",
-    schemaVersion: 1,
+    schemaVersion: 2,
     source: "terminal.blot",
     types: [
       { kind: "unit" },

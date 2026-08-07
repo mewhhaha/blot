@@ -321,24 +321,24 @@ public artifact, or an explicit compiler command.
 
 ### 9.4 Normalization and representation closure
 
-| Responsibility                                                                 | Required result                          |
-| ------------------------------------------------------------------------------ | ---------------------------------------- |
-| distinguish static values from residual runtime computations                   | phase-safe erasure                       |
-| reuse compile-time results already demanded by checking                        | no second semantic derivation            |
-| inline or apply imported module closures under concrete arguments              | consumer-specific program meaning        |
-| specialize structural calls by concrete shape                                  | monomorphic runtime operations           |
-| instantiate higher-order representation variables from concrete arguments      | closed nested closure signatures         |
-| solve positive recursive representation equations by their least fixed point   | no residual self-only result alternative |
-| preserve compiler-local control envelopes while erasing their payload wrappers | one runtime sum for statement control    |
-| erase scalar refinements without changing their concrete layout                | equal layouts for refined and open facts |
-| erase first-class effect values at explicit sequencing boundaries              | one checked nullary call                 |
-| closure-convert runtime free variables into explicit function parameters       | lexically minimal residual environments  |
-| unfold static structural folds around dynamic scalar work                      | direct runtime projections               |
-| specialize handlers, effect identities, seals, and generated descriptors       | closed runtime identities                |
-| preserve source evaluation and host-request order                              | observationally equivalent residual code |
-| choose concrete scalar, product, sum, Store, text, and SIMD representations    | no open runtime type                     |
-| turn ownership and bounds evidence into permitted target operations            | checked mutation and eliminated checks   |
-| identify runtime exports and their source types                                | a closed public program boundary         |
+| Responsibility                                                                                | Required result                             |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| distinguish static values from residual runtime computations                                  | phase-safe erasure                          |
+| reuse compile-time results already demanded by checking                                       | no second semantic derivation               |
+| inline or apply imported module closures under concrete arguments                             | consumer-specific program meaning           |
+| specialize structural calls by concrete shape                                                 | monomorphic runtime operations              |
+| instantiate higher-order representation variables from concrete arguments                     | closed nested closure signatures            |
+| solve positive recursive representation equations by their least fixed point                  | a finite graph with private recursive roots |
+| preserve compiler-local control envelopes while erasing their payload wrappers                | one runtime sum for statement control       |
+| erase scalar refinements without changing their concrete layout                               | equal layouts for refined and open facts    |
+| erase first-class effect values at explicit sequencing boundaries                             | one checked nullary call                    |
+| closure-convert runtime free variables into explicit function parameters                      | lexically minimal residual environments     |
+| unfold static structural folds around dynamic scalar work                                     | direct runtime projections                  |
+| specialize handlers, effect identities, seals, and generated descriptors                      | closed runtime identities                   |
+| preserve source evaluation and host-request order                                             | observationally equivalent residual code    |
+| choose concrete scalar, product, sum, Store, text, SIMD, and private indirect representations | no open runtime type                        |
+| turn ownership and bounds evidence into permitted target operations                           | checked mutation and eliminated checks      |
+| identify runtime exports and their source types                                               | a closed public program boundary            |
 
 ### 9.5 Runtime program and ABI
 
@@ -502,7 +502,13 @@ post-analysis compiler artifact. Its Runtime HIR contains flat stable IDs,
 settled runtime types and effects, residual operations, concrete
 representations, and source origins. Its `PublicLayout` contains the closed
 caller representation. It contains no live inference variable, open structural
-row, or unresolved effect.
+row, or unresolved effect. Runtime HIR schema 2 adds an `indirect` type plus
+`indirect.make` and `indirect.load`. Representation closure allocates the
+recursive root ID before lowering its constructor body, fills the target edge
+after the positive body is known, and rejects a root with no finite constructor
+case. The emitter stores the target in call-local scratch memory and flattens a
+recursive edge to one `i32`; public-layout construction refuses that private
+type under ABI 1.
 
 The central judgment combines type elaboration with normalization:
 

@@ -145,6 +145,14 @@ export const WORKLOADS: readonly Workload[] = [
     "affine arena construction followed by linked traversal",
     (count) => count * (count + 1n) / 2n,
   ),
+  ...scalingWorkloads(
+    "recursive list",
+    "experiments/generated-code/programs/recursive_list.blot",
+    "workload_recursive_list",
+    "blot:recursive_list",
+    "direct recursive construction and traversal through private indirection",
+    (count) => count * (count + 1n) / 2n,
+  ),
 ];
 
 export interface BenchmarkInput {

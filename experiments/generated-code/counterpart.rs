@@ -106,6 +106,29 @@ fn arena_list(count: i64) -> i64 {
     total
 }
 
+enum RecursiveList {
+    Nil,
+    Cons(i64, Box<RecursiveList>),
+}
+
+fn recursive_list_build(count: i64) -> RecursiveList {
+    if count == 0 {
+        return RecursiveList::Nil;
+    }
+    RecursiveList::Cons(count, Box::new(recursive_list_build(count - 1)))
+}
+
+fn recursive_list_total(list: &RecursiveList) -> i64 {
+    match list {
+        RecursiveList::Nil => 0,
+        RecursiveList::Cons(value, tail) => value + recursive_list_total(tail),
+    }
+}
+
+fn recursive_list(count: i64) -> i64 {
+    recursive_list_total(&recursive_list_build(count))
+}
+
 fn benchmark_input() -> i64 {
     // SAFETY: the benchmark harness supplies the import with the declared
     // signature for the lifetime of the instance.
@@ -188,4 +211,10 @@ pub extern "C" fn run_retained_updates(count: i64) -> i64 {
 #[unsafe(export_name = "blot:arena_list")]
 pub extern "C" fn run_arena_list(count: i64) -> i64 {
     arena_list(count)
+}
+
+#[cfg(workload_recursive_list)]
+#[unsafe(export_name = "blot:recursive_list")]
+pub extern "C" fn run_recursive_list(count: i64) -> i64 {
+    recursive_list(count)
 }

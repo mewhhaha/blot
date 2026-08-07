@@ -120,7 +120,7 @@ export function exportResidualRuntimeHir(
   const function_ = builder.build(checked.core, wasmName);
   return {
     format: "blot-runtime-hir",
-    schemaVersion: 1,
+    schemaVersion: 2,
     source,
     types: builder.types,
     signatures: builder.signatures,

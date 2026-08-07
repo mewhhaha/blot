@@ -27,6 +27,10 @@ export type BlotRuntimeType =
     readonly elementType: number;
   }
   | {
+    readonly kind: "indirect";
+    readonly targetType: number;
+  }
+  | {
     readonly kind: "product";
     readonly name: string;
     readonly fields: readonly {
@@ -176,6 +180,9 @@ export type BlotRuntimeOperation =
       readonly case: number;
     }
     | {
+      readonly kind: "indirect.make" | "indirect.load";
+    }
+    | {
       readonly kind: "store.empty";
     }
     | {
@@ -292,7 +299,7 @@ export type BlotRuntimeExport =
 
 export type BlotRuntimeModule = {
   readonly format: "blot-runtime-hir";
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly source: string;
   readonly types: readonly BlotRuntimeType[];
   readonly signatures: readonly BlotRuntimeSignature[];
@@ -316,9 +323,9 @@ type BlotRuntimeValueDefinition = {
 export function validateBlotRuntimeModule(
   module: BlotRuntimeModule,
 ): ValidatedBlotRuntimeModule {
-  if (module.format !== "blot-runtime-hir" || module.schemaVersion !== 1) {
+  if (module.format !== "blot-runtime-hir" || module.schemaVersion !== 2) {
     throw new TypeError(
-      `Blot Runtime HIR requires format blot-runtime-hir schema 1; received ${module.format} schema ${module.schemaVersion}`,
+      `Blot Runtime HIR requires format blot-runtime-hir schema 2; received ${module.format} schema ${module.schemaVersion}`,
     );
   }
   if (module.types.length === 0) {
@@ -409,6 +416,10 @@ function validateType(
 ): void {
   if (type.kind === "store") {
     requireType(module, type.elementType, `store type ${typeId} element`);
+    return;
+  }
+  if (type.kind === "indirect") {
+    requireType(module, type.targetType, `indirect type ${typeId} target`);
     return;
   }
   if (type.kind === "product") {

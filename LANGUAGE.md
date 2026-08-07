@@ -2722,6 +2722,17 @@ loaded from the compiler-distributed prelude snapshot. Higher-order applications
 instantiate their representation variables before a nested recursive closure is
 lowered. These transformations change neither source scope nor the public ABI.
 
+A positive recursive result equation is closed automatically. Runtime HIR schema
+2 represents its root as one private indirect word whose target is allocated in
+the export call's scratch arena; constructor payloads may refer back to that
+root. Constructor matching loads the target before inspecting its tag, while a
+recursive edge copies only the indirect word. The representation is entirely
+compiler-owned: source programs do not name boxes, pointers, regions, or
+lifetimes. A recursive value may be used internally to produce an ABI-supported
+result, but the indirect root itself cannot cross Blot Core Wasm ABI 1. A
+self-only result equation with no constructor case is refused rather than given
+an invented inhabitant.
+
 A residual structurally polymorphic function is specialized to a concrete record
 shape before gpufuck. The shape is the one that _flows_ to the projection, not
 the narrower one the body reads: inference follows what flowed into the
