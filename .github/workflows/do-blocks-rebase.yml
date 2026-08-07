@@ -3,33 +3,10 @@ name: do-blocks-rebase
 on:
   push:
     branches:
-      - agent/do-blocks-ci
-
-permissions:
-  contents: write
+      - agent/disabled-do-blocks-ci
 
 jobs:
-  rebase:
+  disabled:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: do-blocks
-          fetch-depth: 0
-      - name: Rebase on handler and if cleanup
-        run: |
-          git config user.name "Jacob Torrång"
-          git config user.email "kopatheonlyone@hotmail.com"
-          git fetch origin simplify-handlers-and-if
-          set +e
-          GIT_EDITOR=true git rebase origin/simplify-handlers-and-if
-          status=$?
-          set -e
-          if [ "$status" -ne 0 ]; then
-            conflicts=$(git diff --name-only --diff-filter=U)
-            test "$conflicts" = "backend.test.ts"
-            git checkout --ours backend.test.ts
-            git add backend.test.ts
-            GIT_EDITOR=true git rebase --continue
-          fi
-          git push --force-with-lease origin HEAD:do-blocks
+      - run: true
