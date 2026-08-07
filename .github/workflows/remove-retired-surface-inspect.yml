@@ -29,6 +29,7 @@ jobs:
           python3 .github/remove_retired_surface.py
           python3 - <<'PY'
           from pathlib import Path
+
           path = Path('AGENTS.md')
           text = path.read_text()
           start = text.index('`try program with ... end`')
@@ -41,6 +42,47 @@ jobs:
               'convenience exists.'
           )
           path.write_text(text[:start] + replacement + text[end:])
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+
+          retired = {
+              'conditional',
+              'else_if_clause',
+              'else_clause',
+              'handler_composition',
+              'handler_composition_step',
+              'handler_composition_action',
+          }
+          path = Path('baba.json')
+          document = json.loads(path.read_text())
+          removed = 0
+
+          def prune(value):
+              global removed
+              if isinstance(value, dict):
+                  for key, child in list(value.items()):
+                      if key == 'islands' and isinstance(child, list):
+                          kept = []
+                          for entry in child:
+                              if isinstance(entry, dict) and entry.get('rule') in retired:
+                                  removed += 1
+                              else:
+                                  kept.append(entry)
+                          value[key] = kept
+                      else:
+                          prune(child)
+              elif isinstance(value, list):
+                  for child in value:
+                      prune(child)
+
+          prune(document)
+          if removed != len(retired):
+              raise SystemExit(
+                  f'expected to remove {len(retired)} retired islands, removed {removed}'
+              )
+          path.write_text(json.dumps(document, indent=2) + '\n')
           PY
       - name: Regenerate frontend and compiler artifacts
         run: |
@@ -90,7 +132,11 @@ jobs:
                   raise SystemExit(f'inspection omitted {key}: {sorted(inspection)}')
               value = display(key, inspection[key])
               pattern = re.compile(rf'^(\| `{re.escape(key)}`\s*\|)\s*[^|]*\|', re.M)
-              text, count = pattern.subn(lambda match: f'{match.group(1)} {value:>18} |', text, count=1)
+              text, count = pattern.subn(
+                  lambda match: f'{match.group(1)} {value:>18} |',
+                  text,
+                  count=1,
+              )
               if count != 1:
                   raise SystemExit(f'docs/gpu-profile.md has no row for {key}')
 
@@ -120,5 +166,6 @@ jobs:
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git reset --soft origin/main
           git commit -m 'Remove retired surface syntax'
-          git push origin HEAD:agent/remove-retired-surface-syntax
+          git push --force-with-lease origin HEAD:agent/remove-retired-surface-syntax
