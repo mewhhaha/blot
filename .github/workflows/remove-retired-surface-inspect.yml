@@ -111,6 +111,7 @@ jobs:
         run: |
           deno task generate
           deno task generate:rust-middle-schema
+          cargo fmt --manifest-path experiments/rust-middle/Cargo.toml
           deno task build:rust-middle
           deno task inspect > /tmp/blot-plan.json
           cat /tmp/blot-plan.json
@@ -167,7 +168,7 @@ jobs:
       - name: Format and validate
         run: |
           deno fmt
-          cargo fmt --manifest-path experiments/rust-middle/Cargo.toml
+          cargo fmt --manifest-path experiments/rust-middle/Cargo.toml --check
           git diff --check
           if ! command -v just >/dev/null 2>&1; then
             cargo install just --locked
