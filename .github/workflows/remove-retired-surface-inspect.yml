@@ -1,0 +1,27 @@
+name: remove-retired-surface-inspect
+
+on:
+  push:
+    branches:
+      - agent/remove-retired-surface-syntax
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Find retired surface references
+        run: |
+          printf '%s\n' '--- production code references ---'
+          rg -n 'handler_composition|BLOT_VALUE_IF_REMOVED|BLOT_TRY_REMOVED|discarded-value-if|discardedValueIf' \
+            --glob '!migration/**' --glob '!src/migration/**' || true
+          printf '%s\n' '--- documentation references ---'
+          rg -n 'expression `if`|value conditional|value-producing `if`|try .*with|`try|handler composition' \
+            README.md LANGUAGE.md AGENTS.md DOCS.md docs spec || true
+          printf '%s\n' '--- formatter references ---'
+          rg -n 'conditional|handler_composition' src/tooling/formatter.ts || true
