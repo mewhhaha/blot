@@ -6,6 +6,7 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { checkFile } from "./src/check/mod.ts";
 import { BlotError } from "./src/diagnostic.ts";
+import { verifyOwnershipCertificate } from "./src/linear/certificate.ts";
 
 const scratch = await Deno.makeTempDir();
 
@@ -326,6 +327,62 @@ let selected = select holder
 return selected ()
 `,
 );
+
+Deno.test("generated projection summaries preserve the selected ownership path", async () => {
+  for (let depth = 1; depth <= 6; depth += 1) {
+    const path = Array.from(
+      { length: depth },
+      (_, index) => `.level_${index}`,
+    ).join("") + ".value";
+    let holder = `{ .value = fn () => consume (!token); .label = 0; }`;
+    for (let index = depth - 1; index >= 0; index -= 1) {
+      holder = `{ .level_${index} = ${holder}; .label_${index} = ${index}; }`;
+    }
+    const { checked } = await analyze(
+      `let consume = fn !value => @int.add value 1
+let select = fn holder => holder${path}
+let !token = 41
+let holder = ${holder}
+let selected = select holder
+return selected ()
+`,
+    );
+    assert(verifyOwnershipCertificate(checked.ownershipCertificate) !== null);
+  }
+});
+
+Deno.test("generated projection summaries reject every omitted owned sibling", async () => {
+  for (let depth = 1; depth <= 6; depth += 1) {
+    const path = Array.from(
+      { length: depth },
+      (_, index) => `.level_${index}`,
+    ).join("") + ".value";
+    let holder = `{
+  .value = fn () => consume (!selected_token);
+  .other = fn () => consume (!other_token);
+  }`;
+    for (let index = depth - 1; index >= 0; index -= 1) {
+      holder = `{ .level_${index} = ${holder}; .label_${index} = ${index}; }`;
+    }
+    try {
+      await analyze(
+        `let consume = fn !value => @int.add value 1
+let select = fn holder => holder${path}
+let !selected_token = 40
+let !other_token = 41
+let holder = ${holder}
+let selected = select holder
+return selected ()
+`,
+      );
+    } catch (error) {
+      if (!(error instanceof BlotError)) throw error;
+      assertStringIncludes(error.message, "BLOT_LINEAR_ARGUMENT_NOT_OWNED");
+      continue;
+    }
+    throw new Error(`depth ${depth} lost an owned sibling`);
+  }
+});
 
 accepts(
   "a destructured parameter transfers its linear component",

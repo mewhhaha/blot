@@ -1203,7 +1203,7 @@ executable checker or lowering test, not only by documentation.
 | effect identity          | inference records each declaration's generative value by AST identity; lowering installs and compares those recorded atoms                                                       | generative atoms are allocated once and recorded                       | none for the current inference-to-lowering pipeline                                            |
 | seal identity            | equality compares the public name and invariant carrier                                                                                                                          | seals are applicative named types                                      | none                                                                                           |
 | arithmetic refinements   | public arithmetic types widen normally while `Phi` separately retains supported affine relationships                                                                             | refinement arithmetic is an independent entailment system              | none for the implemented affine fragment                                                       |
-| optimizer correctness    | generated pure programs and an ordered host-effect trace compare typed-Core evaluation with direct evaluation; refinement and ownership certificates have mutation tests         | demand and computation traces define observations                      | extend simulations to handlers, staging, generated ownership paths, and target traces          |
+| optimizer correctness    | generated pure, staged, handler, ownership-path, and emitted-Wasm host-trace tests compare independent observations; certificates have mutation tests                            | demand and computation traces define observations                      | generate target trap/divergence traces and mechanize preservation                              |
 | WebAssembly compiler     | the Rust/Wasm target supports only a subset of ABI/runtime HIR                                                                                                                   | target restriction is allowed if it refuses before artifact production | keep target gaps separate from source-language acceptance claims                               |
 
 ## 17. Migration plan
@@ -1374,6 +1374,14 @@ Build the proof/testing ladder from the small core outward.
 The first mechanized artifact should omit modules, reflection, SIMD, and the
 ABI. It should include live bindings, functions, variants, effects, handlers,
 and affine continuations, because those choices determine the rest.
+
+Generated pure and staged arithmetic programs now compare loaded-AST execution
+with a small typed-Core interpreter. Generated one-shot handler programs compare
+loaded-AST and production typed-Core execution. Nested ownership-path generators
+pair accepted selections with mutations that add an omitted owned sibling, and
+the accepted certificates are independently replayed. Generated ordered host
+traces compare the production evaluator with emitted WebAssembly. Target
+trap/divergence generation and the metatheory below remain.
 
 `formal/lean` is the first checked boundary. It pins Lean 4.32.2 and defines
 separate value and computation syntax with functions, variants, explicit effects

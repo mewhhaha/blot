@@ -7,6 +7,7 @@ import {
 } from "@std/assert";
 import { join } from "@std/path";
 import { BlotError } from "../diagnostic.ts";
+import { evaluateFile } from "../run.ts";
 import { Compiler } from "../compiler.ts";
 import { prepareGpupaperHir } from "./compile.ts";
 import { buildTypeScriptOracleBatch } from "./gpupaper.ts";
@@ -428,6 +429,37 @@ Deno.test("full Rust compiler residualizes a text-returning host effect", async 
   }
 });
 
+Deno.test("generated host traces agree between the evaluator and emitted Wasm", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "generated-host-trace.blot");
+  try {
+    let seed = 0x7aace;
+    const messages: string[] = [];
+    for (let index = 0; index < 24; index += 1) {
+      seed = generatedTraceSeed(seed);
+      messages.push(`event-${index}-${seed % 1000}`);
+    }
+    await Deno.writeTextFile(
+      path,
+      `open @import "blot:prelude" ()
+const Console = @effect.host { .write = Str -> Unit; }
+${messages.map((message) => `_ <- Console.write "${message}"`).join("\n")}
+return ()
+`,
+    );
+
+    const direct: string[] = [];
+    await evaluateFile(path, { write: (message) => direct.push(message) });
+    const artifact = await compiler.compile(path);
+    assertEquals(await runConsoleWrites(artifact.wasm), direct);
+    assertEquals(direct, messages);
+  } finally {
+    compiler.destroy();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
 Deno.test("full Rust compiler matches dynamic record effects", async () => {
   const compiler = await RustMiddleCompiler.create();
   const directory = await Deno.makeTempDir();
@@ -776,6 +808,40 @@ async function runTerminal(
   input: string,
 ): Promise<readonly string[]> {
   return await runTerminalBytes(wasm, new TextEncoder().encode(input));
+}
+
+function generatedTraceSeed(seed: number): number {
+  let value = seed;
+  value ^= value << 13;
+  value ^= value >>> 17;
+  value ^= value << 5;
+  return value >>> 0;
+}
+
+async function runConsoleWrites(wasm: Uint8Array): Promise<readonly string[]> {
+  const writes: string[] = [];
+  const module = await WebAssembly.compile(Uint8Array.from(wasm).buffer);
+  const runtime: { instance?: WebAssembly.Instance } = {};
+  const instance = await WebAssembly.instantiate(module, {
+    "blot:host/Console": {
+      write(pointer: number, length: number) {
+        const memory = runtime.instance?.exports.memory;
+        if (!(memory instanceof WebAssembly.Memory)) {
+          throw new Error("console module omitted canonical memory");
+        }
+        writes.push(new TextDecoder("utf-8", { fatal: true }).decode(
+          new Uint8Array(memory.buffer, pointer, length),
+        ));
+      },
+    },
+  });
+  runtime.instance = instance;
+  const run = instance.exports["blot:default"];
+  if (!(run instanceof Function)) {
+    throw new Error("console module omitted blot:default");
+  }
+  run();
+  return writes;
 }
 
 async function runTerminalBytes(

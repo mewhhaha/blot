@@ -94,6 +94,14 @@ Tests reduce risk but are not trusted proofs. An independent checker reduces the
 trusted implementation surface only when it is smaller than the producer and
 reconstructs every premise from stable identities.
 
+The executable evidence currently includes generated pure and staged arithmetic
+programs evaluated both as loaded source AST and as typed Core, generated
+one-shot handlers compared across the same boundary, independently replayed
+relationship and ownership certificates, generated nested ownership paths with
+owned-sibling mutations, evaluator/emitted-Wasm host traces, Runtime-HIR parity,
+and whole-corpus evaluator/oracle/Wasm observations. These are bounded
+simulations, not substitutes for the preservation and progress proofs above.
+
 ## 6. Evidence ladder
 
 The implementation should advance in this order:

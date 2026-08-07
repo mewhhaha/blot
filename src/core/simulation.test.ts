@@ -1,6 +1,10 @@
 import { assertEquals } from "@std/assert";
 import { checkFile } from "../check/mod.ts";
-import { evaluateFile } from "../run.ts";
+import type { Value } from "../comptime/value.ts";
+import { show, UNIT } from "../comptime/value.ts";
+import { apply, evaluationRuntime, run } from "../comptime/eval.ts";
+import { evaluateFile, grantsFor } from "../run.ts";
+import { load } from "../load.ts";
 import type { Pattern } from "../syntax/ast.ts";
 import type { CoreExpression, TypedCoreModule } from "./computation.ts";
 
@@ -42,6 +46,45 @@ function evaluateCore(
   return evaluateComputation(core, new Map(), runtime);
 }
 
+async function evaluateSurface(
+  path: string,
+  writes: string[] = [],
+): Promise<Value> {
+  const checked = await checkFile(path);
+  const loaded = await load(path);
+  const closure = loaded.closure;
+  if (closure.tag !== "closure") {
+    throw new Error("generated source module is not a closure");
+  }
+  let imports = closure.imports;
+  if (imports === undefined) imports = new Map();
+  return run(
+    apply(
+      closure,
+      grantsFor({ write: (line) => writes.push(line) }),
+      loaded.module.span,
+      evaluationRuntime(
+        imports,
+        "runtime",
+        undefined,
+        checked.recordAdaptations,
+      ),
+    ),
+    (perform) => {
+      if (
+        perform.host && perform.effectName === "Console" &&
+        perform.operation === "write"
+      ) {
+        let written = show(perform.argument);
+        if (perform.argument.tag === "text") written = perform.argument.value;
+        writes.push(written);
+        return UNIT;
+      }
+      return null;
+    },
+  );
+}
+
 function evaluateComputation(
   core: Pick<TypedCoreModule, "steps" | "result">,
   scope: Map<string, SimulatedValue>,
@@ -56,15 +99,7 @@ function evaluateComputation(
         );
       }
       const value = step.definition.value;
-      if (value.tag !== "effect") {
-        throw new Error(
-          "the generated core contains an unsupported static value",
-        );
-      }
-      scope.set(step.definition.pattern.name, {
-        tag: "host-effect",
-        name: value.name,
-      });
+      scope.set(step.definition.pattern.name, evaluateStaticValue(value));
       continue;
     }
     if (step.definition.tag === "static-shadow") {
@@ -141,6 +176,28 @@ function evaluateExpression(
     bindPattern(fn.parameter, argument, inner);
     return evaluateExpression(fn.body, inner, runtime);
   }
+  if (expression.tag === "intrinsic-apply") {
+    const arguments_ = expression.args.map((argument) =>
+      evaluateExpression(argument, scope, runtime)
+    );
+    if (
+      arguments_.length === 2 && typeof arguments_[0] === "bigint" &&
+      typeof arguments_[1] === "bigint"
+    ) {
+      if (expression.name === "@int.add") {
+        return arguments_[0] + arguments_[1];
+      }
+      if (expression.name === "@int.sub") {
+        return arguments_[0] - arguments_[1];
+      }
+      if (expression.name === "@int.mul") {
+        return arguments_[0] * arguments_[1];
+      }
+    }
+    throw new Error(
+      `generated Core contains unsupported intrinsic call ${expression.name}`,
+    );
+  }
   if (expression.tag === "field") {
     const target = evaluateExpression(expression.target, scope, runtime);
     if (isSimulatedHostEffect(target)) {
@@ -175,6 +232,15 @@ function evaluateExpression(
     );
   }
   throw new Error(`generated core contains unsupported ${expression.tag}`);
+}
+
+function evaluateStaticValue(value: Value): SimulatedValue {
+  if (value.tag === "int" || value.tag === "text") return value.value;
+  if (value.tag === "unit") return null;
+  if (value.tag === "effect" && value.host) {
+    return { tag: "host-effect", name: value.name };
+  }
+  throw new Error(`generated Core contains unsupported static ${value.tag}`);
 }
 
 function isSimulatedClosure(value: SimulatedValue): value is SimulatedClosure {
@@ -241,7 +307,7 @@ return (value_${first}, value_${second})
     await Deno.writeTextFile(path, source);
 
     const checked = await checkFile(path);
-    const direct = await evaluateFile(path, { write: () => {} });
+    const direct = await evaluateSurface(path);
     if (direct.tag !== "shape") {
       throw new Error("generated surface result is not a tuple");
     }
@@ -269,9 +335,7 @@ return result
 `,
   );
   const directWrites: string[] = [];
-  const direct = await evaluateFile(path, {
-    write: (line) => directWrites.push(line),
-  });
+  const direct = await evaluateSurface(path, directWrites);
   const checked = await checkFile(path);
   const coreRuntime: SimulatedRuntime = { writes: [] };
   const core = evaluateCore(checked.core, coreRuntime);
@@ -280,4 +344,60 @@ return result
   assertEquals(core, null);
   assertEquals(coreRuntime.writes, directWrites);
   assertEquals(coreRuntime.writes, ["compiled", "linked", "done"]);
+});
+
+Deno.test("typed Core simulates generated staged arithmetic", async () => {
+  const directory = await Deno.makeTempDir();
+  let seed = 0x51a9ed;
+  for (let example = 0; example < 32; example += 1) {
+    seed = next(seed);
+    const offset = BigInt(seed % 1000);
+    seed = next(seed);
+    const argument = BigInt(seed % 1000);
+    const source = `const offset = ${offset}
+let add_offset = fn value => @int.add value offset
+return add_offset ${argument}
+`;
+    const path = `${directory}/staged_${example}.blot`;
+    await Deno.writeTextFile(path, source);
+
+    const direct = await evaluateSurface(path);
+    if (direct.tag !== "int") {
+      throw new Error("generated staged program returned a non-integer");
+    }
+    const checked = await checkFile(path);
+    assertEquals(evaluateCore(checked.core), direct.value);
+  }
+});
+
+Deno.test("typed Core simulates generated one-shot handlers", async () => {
+  const directory = await Deno.makeTempDir();
+  let seed = 0xaff1ce;
+  for (let example = 0; example < 16; example += 1) {
+    seed = next(seed);
+    const first = BigInt(seed % 100);
+    seed = next(seed);
+    const second = BigInt(seed % 100);
+    seed = next(seed);
+    const offset = BigInt(seed % 100);
+    const source = `open @import "blot:prelude" ()
+const Shift = @effect { .by = Int -> Int; }
+let shifting =
+  { .by = fn (value, ?resume) =>
+    result <- resume (value + ${offset})
+    return result
+  ; }
+let work = fn () =>
+  left <- Shift.by ${first}
+  right <- Shift.by ${second}
+  return left + right
+return @handle (Shift, work, shifting)
+`;
+    const path = `${directory}/handler_${example}.blot`;
+    await Deno.writeTextFile(path, source);
+
+    const surface = await evaluateSurface(path);
+    const core = await evaluateFile(path, { write: () => {} });
+    assertEquals(show(core), show(surface));
+  }
 });
