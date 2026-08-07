@@ -687,6 +687,63 @@ Deno.test("a structural function remains specializable through a record", async 
   );
 });
 
+Deno.test("a structural function remains specializable through nested aggregates", async () => {
+  const path = await fixture("nested-aggregate-specialization.blot", [
+    `open @import "blot:prelude" ()
+`,
+    `let project = fn record => record.x
+`,
+    `let functions =
+  { .nested = { .first = { .project = project; }; .second = project; }; }
+`,
+    `let nested = functions.nested
+`,
+    `sig at = Int -> Int
+`,
+    "let at = fn n =>",
+    "  let from_record = nested.first.project { .x = n; .y = 0; }",
+    "  let from_tuple = nested.second { .x = n; .z = 0; }",
+    "  return from_record + from_tuple",
+    `return { .at = at; }
+`,
+  ]);
+  assertEquals(
+    await runLoweringExport(path, "at", [{
+      kind: "signed-integer-64",
+      value: 21n,
+    }]),
+    { kind: "signed-integer-64", value: 42n },
+  );
+});
+
+Deno.test("a known higher-order projection preserves structural specialization", async () => {
+  const path = await fixture("higher-order-aggregate-specialization.blot", [
+    `open @import "blot:prelude" ()
+`,
+    `let project = fn record => record.x
+`,
+    `let functions = { .nested = { .project = project; }; }
+`,
+    `let select = fn bundle => bundle.nested.project
+`,
+    `let selected = select functions
+`,
+    `sig at = Int -> Int
+`,
+    "let at = fn n => selected { .x = n; .y = 0; } +",
+    "  selected { .x = n; .z = 0; }",
+    `return { .at = at; }
+`,
+  ]);
+  assertEquals(
+    await runLoweringExport(path, "at", [{
+      kind: "signed-integer-64",
+      value: 21n,
+    }]),
+    { kind: "signed-integer-64", value: 42n },
+  );
+});
+
 Deno.test("an immutable alias preserves structural call specialization", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "aliased-shapes.blot");

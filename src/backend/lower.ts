@@ -469,6 +469,11 @@ interface RuntimeLambdaChoice {
   readonly alternate: RuntimeLambda;
 }
 
+interface RuntimeLambdaAggregate {
+  readonly members: ReadonlyMap<string, RuntimeLambda>;
+  readonly complete: boolean;
+}
+
 interface Scope {
   readonly names: Map<string, string>;
   /** Source binding identities behind names in this lexical scope. */
@@ -489,7 +494,7 @@ interface Scope {
   /** Specializable functions retained through a concrete aggregate binding. */
   readonly runtimeLambdaMembers: Map<
     string,
-    ReadonlyMap<string, RuntimeLambda>
+    RuntimeLambdaAggregate
   >;
   /** A runtime choice of lambdas, retained until each concrete application. */
   readonly runtimeLambdaChoices: Map<string, RuntimeLambdaChoice>;
@@ -629,7 +634,7 @@ function resolveRuntimeLambdaMember(
   while (current !== null) {
     const aggregate = current.runtimeLambdaMembers.get(name);
     if (aggregate !== undefined) {
-      const found = aggregate.get(member);
+      const found = aggregate.members.get(member);
       if (found === undefined) return null;
       return found;
     }
@@ -642,7 +647,7 @@ function resolveRuntimeLambdaMember(
 function resolveRuntimeLambdaMembers(
   scope: Scope,
   name: string,
-): ReadonlyMap<string, RuntimeLambda> | null {
+): RuntimeLambdaAggregate | null {
   let current: Scope | null = scope;
   while (current !== null) {
     const aggregate = current.runtimeLambdaMembers.get(name);
@@ -694,37 +699,89 @@ function runtimeLambdaChoice(
 function specializableLambda(expr: Expr, scope: Scope): RuntimeLambda | null {
   if (expr.tag === "lambda") return { expression: expr, environment: scope };
   if (expr.tag === "var") return resolveRuntimeLambda(scope, expr.name);
-  if (expr.tag === "field" && expr.target.tag === "var") {
+  const member = runtimeLambdaMemberReference(expr);
+  if (member !== null && member.path.length > 0) {
     return resolveRuntimeLambdaMember(
       scope,
-      expr.target.name,
-      expr.name,
+      member.root,
+      runtimeLambdaMemberKey(member.path),
     );
+  }
+  if (expr.tag !== "apply") return null;
+
+  const callable = specializableLambda(expr.fn, scope);
+  if (callable === null || callable.expression.parameter.tag !== "name") {
+    return null;
+  }
+  const argumentLambda = specializableLambda(expr.arg, scope);
+  const argumentAggregate = specializableRuntimeLambdaAggregate(
+    expr.arg,
+    scope,
+  );
+  if (argumentLambda === null && argumentAggregate === null) return null;
+
+  const inner = childScope(callable.environment);
+  const parameter = callable.expression.parameter.name;
+  if (argumentLambda !== null) {
+    inner.runtimeLambdas.set(parameter, argumentLambda);
+  }
+  if (argumentAggregate !== null) {
+    inner.runtimeLambdaMembers.set(parameter, argumentAggregate);
+  }
+  return specializableLambda(callable.expression.body, inner);
+}
+
+function runtimeLambdaMemberReference(
+  expr: Expr,
+): { readonly root: string; readonly path: readonly string[] } | null {
+  if (expr.tag === "var") return { root: expr.name, path: [] };
+  if (expr.tag === "field") {
+    const target = runtimeLambdaMemberReference(expr.target);
+    if (target === null) return null;
+    return { root: target.root, path: [...target.path, expr.name] };
   }
   if (expr.tag !== "apply") return null;
 
   const application = flatten(expr);
   if (
-    application.callee.tag === "intrinsic" &&
-    application.callee.name === "@array.get" &&
-    application.args.length === 2 &&
-    application.args[0].tag === "var" && application.args[1].tag === "int"
-  ) {
-    return resolveRuntimeLambdaMember(
-      scope,
-      application.args[0].name,
-      application.args[1].value.toString(),
-    );
-  }
-
-  const identity = specializableLambda(expr.fn, scope);
-  if (identity === null) return null;
-  if (identity.expression.parameter.tag !== "name") return null;
-  if (identity.expression.body.tag !== "var") return null;
-  if (
-    identity.expression.body.name !== identity.expression.parameter.name
+    application.callee.tag !== "intrinsic" ||
+    application.callee.name !== "@array.get" ||
+    application.args.length !== 2 || application.args[1].tag !== "int"
   ) return null;
-  return specializableLambda(expr.arg, scope);
+  const target = runtimeLambdaMemberReference(application.args[0]);
+  if (target === null) return null;
+  return {
+    root: target.root,
+    path: [...target.path, application.args[1].value.toString()],
+  };
+}
+
+function runtimeLambdaMemberKey(path: readonly string[]): string {
+  return path.join("\u0000");
+}
+
+function specializableRuntimeLambdaAggregate(
+  expr: Expr,
+  scope: Scope,
+): RuntimeLambdaAggregate | null {
+  const reference = runtimeLambdaMemberReference(expr);
+  if (reference !== null) {
+    const aggregate = resolveRuntimeLambdaMembers(scope, reference.root);
+    if (aggregate !== null) {
+      if (reference.path.length === 0) return aggregate;
+      const prefix = `${runtimeLambdaMemberKey(reference.path)}\u0000`;
+      const members = new Map<string, RuntimeLambda>();
+      for (const [key, lambda] of aggregate.members) {
+        if (key.startsWith(prefix)) {
+          members.set(key.slice(prefix.length), lambda);
+        }
+      }
+      if (members.size > 0) {
+        return { members, complete: aggregate.complete };
+      }
+    }
+  }
+  return aggregateRuntimeLambdas(expr, scope);
 }
 
 function handledLambda(expr: Expr, scope: Scope): RuntimeLambda | null {
@@ -859,35 +916,54 @@ function effectRowMayContain(
 function aggregateRuntimeLambdas(
   expr: Expr,
   scope: Scope,
-): ReadonlyMap<string, RuntimeLambda> | null {
-  const candidates: { readonly name: string; readonly value: Expr }[] = [];
-  if (expr.tag === "shape") {
-    if (expr.members.some((member) => member.tag !== "field")) return null;
-    for (const member of expr.members) {
-      if (member.tag !== "field") {
-        throw new Error("a checked direct shape member is a spread");
+): RuntimeLambdaAggregate | null {
+  if (expr.tag !== "shape" && expr.tag !== "tuple" && expr.tag !== "array") {
+    return null;
+  }
+  const members = new Map<string, RuntimeLambda>();
+
+  function collect(value: Expr, path: readonly string[]): boolean {
+    const lambda = specializableLambda(value, scope);
+    if (lambda !== null) {
+      members.set(runtimeLambdaMemberKey(path), lambda);
+      return true;
+    }
+
+    const candidates: { readonly name: string; readonly value: Expr }[] = [];
+    if (value.tag === "shape") {
+      if (value.members.some((member) => member.tag !== "field")) return false;
+      for (const member of value.members) {
+        if (member.tag !== "field") {
+          throw new Error("a checked direct shape member is a spread");
+        }
+        candidates.push({ name: member.name, value: member.value });
       }
-      candidates.push({ name: member.name, value: member.value });
     }
-  }
-  if (expr.tag === "tuple") {
-    for (const [index, value] of expr.elements.entries()) {
-      candidates.push({ name: String(index), value });
+    if (value.tag === "tuple") {
+      for (const [index, element] of value.elements.entries()) {
+        candidates.push({ name: String(index), value: element });
+      }
     }
-  }
-  if (expr.tag === "array") {
-    if (expr.elements.some((element) => element.spread)) return null;
-    for (const [index, element] of expr.elements.entries()) {
-      candidates.push({ name: String(index), value: element.value });
+    if (value.tag === "array") {
+      if (value.elements.some((element) => element.spread)) return false;
+      for (const [index, element] of value.elements.entries()) {
+        candidates.push({ name: String(index), value: element.value });
+      }
     }
+    if (candidates.length === 0) return false;
+
+    let complete = true;
+    for (const candidate of candidates) {
+      if (!collect(candidate.value, [...path, candidate.name])) {
+        complete = false;
+      }
+    }
+    return complete;
   }
-  const found = new Map<string, RuntimeLambda>();
-  for (const candidate of candidates) {
-    const lambda = specializableLambda(candidate.value, scope);
-    if (lambda !== null) found.set(candidate.name, lambda);
-  }
-  if (found.size === 0) return null;
-  return found;
+
+  const complete = collect(expr, []);
+  if (members.size === 0) return null;
+  return { members, complete };
 }
 
 function capturesRuntimeBinding(lambda: Expr, scope: Scope): boolean {
@@ -2076,20 +2152,13 @@ function lowerBlock(
     }
     let specializedAggregate = false;
     if (step.tag !== "bind" && declaration.pattern.tag === "name") {
-      const members = aggregateRuntimeLambdas(declaration.value, inner);
+      const members = specializableRuntimeLambdaAggregate(
+        declaration.value,
+        inner,
+      );
       if (members !== null) {
         inner.runtimeLambdaMembers.set(declaration.pattern.name, members);
-        let memberCount = 0;
-        if (declaration.value.tag === "shape") {
-          memberCount = declaration.value.members.length;
-        }
-        if (declaration.value.tag === "tuple") {
-          memberCount = declaration.value.elements.length;
-        }
-        if (declaration.value.tag === "array") {
-          memberCount = declaration.value.elements.length;
-        }
-        specializedAggregate = memberCount > 0 && members.size === memberCount;
+        specializedAggregate = members.complete;
       }
     }
     if (specializedAggregate) continue;

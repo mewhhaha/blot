@@ -2741,13 +2741,16 @@ of its callers, so `let get_x = fn v => v.x;` takes its record from the call
 sites. When nothing flows in — a parameter whose caller is outside the program —
 the fields the body demands decide instead, and they are unioned.
 
-An immutable alias or an application of a statically known identity function
-does not hide the lambda being specialized. The compiler follows the original
-lambda through either form and still clones it at each concrete call shape. A
-run-time conditional whose alternatives are statically known lambdas retains a
-single evaluated selector and specializes both alternatives at each concrete
-call shape. A general higher-order result is not assumed to be an identity and
-remains a residual representation boundary.
+An immutable alias does not hide the lambda being specialized. Function-valued
+leaves retain that identity through nested records, tuples, and literal arrays,
+including immutable aliases of a nested aggregate. A statically known
+higher-order function may pass such a value through a named parameter and return
+one of its statically selected leaves; the compiler follows that result and
+still clones the original lambda at each concrete call shape. A run-time
+conditional whose alternatives are statically known lambdas retains a single
+evaluated selector and specializes both alternatives at each concrete call
+shape. A closure produced only by run-time higher-order control remains a
+residual representation boundary.
 
 A shape parameter destructured in place is specialized by the same rule. For
 example, separate calls to `fn { .x = value; } => value` with `{ .x; .y; }` and
