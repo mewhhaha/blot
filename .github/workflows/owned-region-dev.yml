@@ -31,8 +31,8 @@ jobs:
           path = Path('experiments/owned-regions/apply_region_hir.py')
           text = path.read_text()
           text = text.replace(
-              '            "@array.len" if arguments.len() == 1 => {\\n',
-              '            "@array.len" => {\\n',
+              '            "@array.len" if arguments.len() == 1 => {\n',
+              '            "@array.len" => {\n',
           )
           text = text.replace(
               'WireConstant::SignedInteger64(0)',
