@@ -42,8 +42,6 @@ export function show(type: SimpleType): string {
   const nameFor = (variable: Variable): string => {
     const existing = names.get(variable.id);
     if (existing !== undefined) return existing;
-    // `e` is reserved for effect-row variables. They are already told apart by
-    // the missing `'`, but `'e` next to `e2` in one signature reads badly.
     const letters = "abcdfghijklmnopqrstuvwxyz";
     const index = names.size;
     const suffix = index >= letters.length
@@ -54,10 +52,6 @@ export function show(type: SimpleType): string {
     return name;
   };
 
-  // Effect-row variables are named `e`, `e1`, … rather than `'a`. A row is a
-  // set, not a structure, so it needs no `'` to be told apart from a label, and
-  // the different alphabet is what distinguishes a row from a value type at a
-  // glance.
   const rowNames = new Map<number, string>();
   const rowNameFor = (variable: Variable): string => {
     const existing = rowNames.get(variable.id);
@@ -67,15 +61,6 @@ export function show(type: SimpleType): string {
     return name;
   };
 
-  /**
-   * `~ { Console, e }` — the set of effects a function may perform.
-   *
-   * Braces without a leading `.` on each member: a row is a set of effect names,
-   * where a record is a set of `.field = type` pairs, and the two are different
-   * enough that they should not look alike. `e` is the rest of the row, shown
-   * only where the other polarity can observe it — otherwise every pure-looking
-   * function would carry a row variable that says nothing.
-   */
   const row = (effects: SimpleType, polarity: boolean): string => {
     const parts = rowParts(effects, polarity, occurrences, rowNameFor);
     return parts.length === 0 ? "" : ` ~ ${braces(parts)}`;
@@ -99,7 +84,6 @@ export function show(type: SimpleType): string {
           polarity,
         );
         const parts = [...new Set(bounds.map((bound) => go(bound, polarity)))];
-        // Keep the variable only where the other polarity can observe it.
         const observable = occurrences.positive.has(current.id) &&
           occurrences.negative.has(current.id);
         if (observable || parts.length === 0) parts.unshift(nameFor(current));
@@ -140,9 +124,6 @@ export function show(type: SimpleType): string {
       case "fun": {
         const param = go(current.param, !polarity);
         const result = go(current.result, polarity);
-        // Whether the parameter is an arrow is only knowable after coalescing —
-        // a variable whose bound is a function renders as one — so the check is
-        // on the rendered text, not on the node.
         const wrapped = hasTopLevelArrow(param) ? `(${param})` : param;
         return `${wrapped} -> ${result}${row(current.effects, polarity)}`;
       }
@@ -163,6 +144,9 @@ export function show(type: SimpleType): string {
 
       case "array":
         return `[${go(current.element, polarity)}]`;
+
+      case "region":
+        return `Region ${go(current.element, polarity)}`;
 
       case "variant": {
         const cases = [...current.cases].map(([name, payload]) =>
@@ -197,7 +181,6 @@ export function show(type: SimpleType): string {
   return go(type, true);
 }
 
-/** Which variables are reachable in which polarity. */
 function collect(type: SimpleType): Occurrences {
   const positive = new Set<number>();
   const negative = new Set<number>();
@@ -233,6 +216,7 @@ function collect(type: SimpleType): Occurrences {
         for (const member of current.members) walk(member, polarity);
         return;
       case "array":
+      case "region":
         walk(current.element, polarity);
         return;
       default:
@@ -244,11 +228,6 @@ function collect(type: SimpleType): Occurrences {
   return { positive, negative };
 }
 
-/**
- * Effect rows join by union, so several `effects` bounds on one variable are one
- * row. Without this every call site would add another `<>` to the printout and
- * the row would be unreadable exactly where it matters.
- */
 function merge(
   bounds: readonly SimpleType[],
   polarity: boolean,
@@ -266,9 +245,6 @@ function merge(
       for (const label of bound.labels) labels.add(label);
       continue;
     }
-    // An intersection of records with disjoint fields *is* one record. Two
-    // projections off the same parameter produce exactly that, and printing
-    // `{ .w = Int; } & { .h = Int; }` for `s.w` and `s.h` is noise.
     if (!polarity && bound.tag === "record") {
       sawRecord = true;
       for (const [name, member] of bound.fields) {
@@ -283,7 +259,6 @@ function merge(
   const merged = [...rest];
   if (sawRecord) {
     if (overlapping) {
-      // Distinct constraints on one field are a genuine intersection; keep them.
       for (const bound of bounds) {
         if (bound.tag === "record") merged.push(bound);
       }
@@ -312,13 +287,6 @@ function hasTopLevelArrow(rendered: string): boolean {
   return false;
 }
 
-/**
- * The labels a row carries, plus its tail variable when one is observable.
- *
- * A row variable accumulates `effects` bounds rather than being a structural
- * tail, so the labels are the union of those bounds and the variable stands for
- * whatever else may join later.
- */
 function rowParts(
   effects: SimpleType,
   polarity: boolean,
@@ -348,7 +316,6 @@ function rowParts(
   return [...[...labels].sort(), ...tails];
 }
 
-/** An effect's identity is `Name#id`; the id is for the checker, not the reader. */
 function stripId(label: string): string {
   return label.replace(/#\d+$/, "");
 }
@@ -374,15 +341,12 @@ export function showRange(
     return domain === "text" ? JSON.stringify(low) : String(low);
   }
   if (domain === "int" && low === I64_LOW && high === I64_HIGH) return "Int";
-  // `Str`, not `Text`: `Text` is the prelude's namespace record, so the name
-  // this printer gives a type has to be the name a `sig` accepts.
   if (low === null && high === null) {
     if (domain === "int") return "Int";
     if (domain === "float") return "F64";
     if (domain === "float32") return "F32";
     return "Str";
   }
-  // `""` is the bottom of the lexicographic order, so `""..` is every text.
   if (domain === "text" && low === "" && high === null) return "Str";
   return `${showEnd(domain, low)}..${showEnd(domain, high)}`;
 }
@@ -393,7 +357,6 @@ function showEnd(domain: Domain, bound: Bound): string {
   return String(bound);
 }
 
-/** The module-level row: empty means nothing escaped unhandled. */
 export function showModuleRow(effects: SimpleType): string {
   const parts = rowParts(effects, true);
   return parts.length === 0 ? "" : braces(parts);
