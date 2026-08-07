@@ -227,19 +227,15 @@ return value
   assertEquals(parsed.diagnostics[0]?.code, "BLOT_VALUE_IF_REMOVED");
 });
 
-Deno.test("try is retained only by concrete migration parsing", async () => {
+Deno.test("try-with is absent from the production grammar", async () => {
   const source = `let program = fn () => 1
 let handler = {}
 let value = try program with
   @handle (Effect, handler)
 return value
 `;
-  const concrete = await parseConcrete(source);
-  assert(concrete.ok);
-  const parsed = await parse(source);
+  const parsed = await parseConcrete(source);
   assert(!parsed.ok);
-  if (parsed.ok) return;
-  assertEquals(parsed.diagnostics[0]?.code, "BLOT_TRY_REMOVED");
 });
 
 function handledArguments(expression: Expr): readonly Expr[] | null {

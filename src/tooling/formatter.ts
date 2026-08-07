@@ -46,7 +46,6 @@ const layoutSensitiveRules = new Set([
   "conditional",
   "effect_row",
   "element_expression",
-  "handler_composition",
   "shape",
 ]);
 const blockRule = new Set(["block", "do_block"]);
@@ -55,7 +54,6 @@ const valueScopeBoundaryRules = new Set([
   "do_block",
   "case_expression",
   "conditional",
-  "handler_composition",
 ]);
 const indentedValueRuleNames = new Set([
   "continued_expression",
@@ -74,7 +72,6 @@ const INDENTED_RULES = new Set([
   "case_expression",
   "effect_row",
   "element_expression",
-  "handler_composition",
   "lambda",
   "operator_section",
   "parenthesized_or_tuple",
@@ -788,7 +785,6 @@ function preferDiscardSequencing(
 ): string {
   const bindings: ConcreteRule[] = [];
   collectRules(concrete, "rebinding", bindings);
-  collectRules(concrete, "handler_composition_step", bindings);
   const discardedNames = bindings.flatMap((binding) => {
     const name = directToken(binding, "_");
     const arrow = directToken(binding, "<-");

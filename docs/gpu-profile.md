@@ -17,18 +17,18 @@ Measured against Baba 9.0.0. These are checked into the repository so that a
 grammar change which quietly degrades parallelism shows up in a diff instead of
 in a benchmark months later.
 
-| counter                     |              blot | note                                               |
-| --------------------------- | ----------------: | -------------------------------------------------- |
-| `lexerStates`               |               124 | direct multiplier in the parallel DFA summary pass |
-| `maxCandidateMultiplicity`  |                31 | worst-case island candidates allocated per token   |
-| `islandCount`               |                87 | one island for every grammar rule                  |
-| `islandStates`              |               516 |                                                    |
-| `islandTransitions`         |               531 |                                                    |
-| `contractionRounds`         |                33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      |           897,840 | immutable device table                             |
-| `packedBytes`               |           686,913 | version-3 runtime section                          |
-| `rootLoopIsland`            | 5 (`declaration`) | root loop still proven under general throughput    |
-| `parallelLongRegionIslands` |                 9 | islands admitted to parallel long-region execution |
+| counter                     |    blot | note                                               |
+| --------------------------- | ------: | -------------------------------------------------- |
+| `lexerStates`               |     124 | direct multiplier in the parallel DFA summary pass |
+| `maxCandidateMultiplicity`  |      31 | worst-case island candidates allocated per token   |
+| `islandCount`               |      87 | one island for every grammar rule                  |
+| `islandStates`              |     518 |                                                    |
+| `islandTransitions`         |     533 |                                                    |
+| `contractionRounds`         |      33 | fixed dispatch bound                               |
+| `denseTransitionBytes`      | 901,320 | immutable device table                             |
+| `packedBytes`               | 689,487 | version-3 runtime section                          |
+| `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
+| `parallelLongRegionIslands` |       9 | islands admitted to parallel long-region execution |
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
