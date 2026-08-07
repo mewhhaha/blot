@@ -795,9 +795,8 @@ return @handle (Ask, work, cancelling)
 rejects(
   "cancellation rejects an ordinary function",
   `let ordinary = fn value => value
-return (
+return do:
   _ <- Continuation.cancel ordinary
-)
 `,
   "BLOT_CANCEL_NOT_CONTINUATION",
 );

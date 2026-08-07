@@ -53,7 +53,7 @@ return transformer
   },
 );
 
-Deno.test("handler pipelines become nested direct applications", async () => {
+Deno.test("handler pipelines become nested handled computations", async () => {
   const source = `open @import "blot:prelude" ()
 const First = @effect { .read = Unit -> Int; }
 const Second = @effect { .write = Int -> Unit; }
@@ -75,15 +75,18 @@ return handled
   );
   assert(binding !== undefined && binding.tag === "binding");
   if (binding === undefined || binding.tag !== "binding") return;
-  assertEquals(binding.value.tag, "apply");
-  if (binding.value.tag !== "apply") return;
-  assertEquals(transformerEffect(binding.value.fn), "Second");
-  assertEquals(binding.value.arg.tag, "apply");
-  if (binding.value.arg.tag !== "apply") return;
-  assertEquals(transformerEffect(binding.value.arg.fn), "First");
-  assertEquals(binding.value.arg.arg.tag, "var");
-  if (binding.value.arg.arg.tag !== "var") return;
-  assertEquals(binding.value.arg.arg.name, "program");
+
+  // Each step is the saturated call itself rather than an application of the
+  // transformer, so the written computation reaches `@handle` unchanged.
+  const outer = handledArguments(binding.value);
+  assert(outer !== null);
+  if (outer === null) return;
+  assertEquals(variableName(outer[0]), "Second");
+  const inner = handledArguments(outer[1]);
+  assert(inner !== null);
+  if (inner === null) return;
+  assertEquals(variableName(inner[0]), "First");
+  assertEquals(variableName(inner[1]), "program");
 });
 
 Deno.test("boolean case uses the internal conditional representation", async () => {
@@ -138,19 +141,24 @@ return value
   assertEquals(parsed.diagnostics[0]?.code, "BLOT_TRY_REMOVED");
 });
 
-function transformerEffect(expression: Expr): string | null {
-  if (expression.tag !== "lambda" || expression.body.tag !== "lambda") {
+function handledArguments(expression: Expr): readonly Expr[] | null {
+  if (expression.tag !== "lambda" || expression.parameter.tag !== "unit") {
     return null;
   }
-  const body = expression.body.body;
+  const body = expression.body;
   if (body.tag !== "block") return null;
   const declaration = body.declarations[0];
   if (declaration === undefined || declaration.tag !== "binding") return null;
   const call = declaration.value;
-  if (call.tag !== "apply" || call.arg.tag !== "tuple") return null;
-  const effect = call.arg.elements[0];
-  if (effect === undefined || effect.tag !== "var") return null;
-  return effect.name;
+  if (call.tag !== "apply" || call.fn.tag !== "intrinsic") return null;
+  if (call.fn.name !== "@handle") return null;
+  if (call.arg.tag !== "tuple" || call.arg.elements.length !== 3) return null;
+  return call.arg.elements;
+}
+
+function variableName(expression: Expr): string | null {
+  if (expression.tag !== "var") return null;
+  return expression.name;
 }
 
 function assertHandleCall(expression: Expr, effectName: string): void {

@@ -50,8 +50,10 @@ const Probes = {
 
   // The same equality, spelled with two comparisons. Refused: the occurrence
   // count is what licenses the factorization, and this body has four.
-  .twice = fn l => fn r => if is_less (@int.cmp l r) : False
-  else: not (is_less (@int.cmp r l));
+  .twice = fn l => fn r => case is_less (@int.cmp l r) of
+    #True => False
+    #False => not (is_less (@int.cmp r l))
+  ;
 
   // Hand-written, in terms of the intrinsic rather than the prelude's helpers.
   .handwritten = fn l => fn r => case @int.cmp l r of
@@ -63,15 +65,19 @@ const Probes = {
   .constantly = fn a => fn b => True;
   .never = fn a => fn b => False;
   // A parameter used outside the comparison.
-  .leaks = fn l => fn r => if is_equal (@int.cmp l r) : l == l
-  else: False;
+  .leaks = fn l => fn r => case is_equal (@int.cmp l r) of
+    #True => l == l
+    #False => False
+  ;
   // The right domain, the wrong answer type.
   .ordering = fn l => fn r => @int.cmp l r;
   // Unary.
   .unary = fn l => is_equal (@int.cmp l l);
   // Refuses on one probe. \`blot check\` must survive it.
-  .refusing = fn l => fn r => if is_less (@int.cmp l r) : @fail "no"
-  else: True;
+  .refusing = fn l => fn r => case is_less (@int.cmp l r) of
+    #True => @fail "no"
+    #False => True
+  ;
 }
 return 0
 `;
