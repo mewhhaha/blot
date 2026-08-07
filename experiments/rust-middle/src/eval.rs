@@ -2001,23 +2001,14 @@ fn apply_closure_choice(
     if let Some(branches) = &branches {
         trace.borrow_mut().select_block(branches.consequent);
     }
-    let environment =
+    let selected =
         match trace
             .borrow_mut()
-            .choice_environment(&context, &selector, index, &alternative, span)
+            .choice_function(&context, &selector, index, &alternative, span)
         {
-            Ok(environment) => environment,
+            Ok(selected) => selected,
             Err(error) => return Computation::error(error),
         };
-    let selected = Value::Closure {
-        module: alternative.module.clone(),
-        parameter: alternative.parameter,
-        body: alternative.body,
-        environment,
-        self_name: alternative.self_name.clone(),
-        imports: None,
-        signature: alternative.signature.clone(),
-    };
     let Some(branches) = branches else {
         return apply(context, selected, argument, span, runtime);
     };

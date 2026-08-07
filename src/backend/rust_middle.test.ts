@@ -175,6 +175,131 @@ Deno.test("mutually recursive algebraic values close one graph", async () => {
   }
 });
 
+Deno.test("a dynamic function choice becomes a private tagged table", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    const path =
+      "experiments/generated-code/programs/opaque_function_probe.blot";
+    const hir = validateBlotRuntimeModule(await compiler.prepare(path));
+    const tables = choiceTables(hir);
+    assertEquals(tables.length, 1);
+    assertEquals(tables[0].cases.length, 2);
+    // Both lambdas capture `flag` and nothing else, so both cases carry the
+    // same one-field capture product.
+    assertEquals(
+      new Set(tables[0].cases.map((case_) => case_.payloadType)).size,
+      1,
+    );
+    // The private layout is compiler bookkeeping and never reaches ABI 1.
+    assertEquals(
+      JSON.stringify(buildBlotAbiManifest(hir)).includes("choice$"),
+      false,
+    );
+
+    const checked = await checkFile(path);
+    const surface = await evaluateFile(path, { write() {} });
+    if (surface.tag !== "shape") {
+      throw new Error("the probe did not return a record");
+    }
+    const interpreted = surface.fields.get("run");
+    if (interpreted === undefined) throw new Error("the probe omitted run");
+
+    const artifact = await compiler.compile(path);
+    const instance = await WebAssembly.instantiate(
+      await WebAssembly.compile(Uint8Array.from(artifact.wasm).buffer),
+    );
+    const compiled = instance.exports["blot:run"];
+    if (!(compiled instanceof Function)) {
+      throw new Error("the probe artifact omitted blot:run");
+    }
+    // Both selectors, at two record widths per call, and the interpreter and
+    // the emitted Wasm agree on every one.
+    for (
+      const [flag, value, expected] of [
+        [2n, 10n, 24n],
+        [-3n, 10n, 26n],
+        [0n, 7n, 14n],
+        [5n, 5n, 20n],
+      ] as const
+    ) {
+      assertEquals(compiled(flag, value), expected);
+      assertEquals(
+        evaluateGeneratedPair(interpreted, flag, value, checked),
+        { tag: "int", value: expected },
+      );
+    }
+  } finally {
+    compiler.destroy();
+  }
+});
+
+Deno.test("nested function choices flatten into one alternative table", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    const path =
+      "experiments/generated-code/programs/closure_choice_table.blot";
+    const hir = validateBlotRuntimeModule(await compiler.prepare(path));
+    // The inner two-lambda choice is retagged onto the outer table rather than
+    // nested inside it, so every tag the emitted function reads is the same
+    // three-case table.
+    const constructed = new Set(
+      hir.functions.flatMap((function_) =>
+        function_.blocks.flatMap((block) =>
+          block.operations
+            .filter((operation) => operation.kind === "sum.make")
+            .map((operation) => operation.type)
+        )
+      ),
+    );
+    assertEquals(constructed.size, 1);
+    const table = hir.types[[...constructed][0]];
+    if (table.kind !== "sum") {
+      throw new Error("a function choice did not reach a sum type");
+    }
+    assertEquals(table.cases.length, 3);
+    // The three alternatives capture two, one, and one runtime value, so their
+    // capture products genuinely differ.
+    assertEquals(
+      new Set(table.cases.map((case_) => case_.payloadType)).size,
+      2,
+    );
+
+    const checked = await checkFile(path);
+    const surface = await evaluateFile(path, { write() {} });
+    if (surface.tag !== "shape") {
+      throw new Error("the choice table program did not return a record");
+    }
+    const interpreted = surface.fields.get("select");
+    if (interpreted === undefined) {
+      throw new Error("the choice table program omitted select");
+    }
+
+    const artifact = await compiler.compile(path);
+    const instance = await WebAssembly.instantiate(
+      await WebAssembly.compile(Uint8Array.from(artifact.wasm).buffer),
+    );
+    const compiled = instance.exports["blot:select"];
+    if (!(compiled instanceof Function)) {
+      throw new Error("the choice table artifact omitted blot:select");
+    }
+    for (
+      const [flag, value, expected] of [
+        [200n, 5n, 432n],
+        [50n, 5n, 112n],
+        [1n, 5n, 4n],
+      ] as const
+    ) {
+      assertEquals(compiled(flag, value), expected);
+      assertEquals(
+        evaluateGeneratedPair(interpreted, flag, value, checked),
+        { tag: "int", value: expected },
+      );
+    }
+  } finally {
+    compiler.destroy();
+  }
+});
+
 Deno.test("structured Runtime HIR preserves a nonlinear trapping loop", async () => {
   const compiler = await RustMiddleCompiler.create();
   try {
@@ -923,6 +1048,44 @@ return 0
     await Deno.remove(directory, { recursive: true });
   }
 });
+
+/** The private tables a defunctionalized function choice introduces. */
+function choiceTables(module: BlotRuntimeModule) {
+  return module.types.filter((type) =>
+    type.kind === "sum" &&
+    type.cases.every((case_) => case_.name.startsWith("choice$"))
+  ).map((type) => {
+    if (type.kind !== "sum") throw new Error("unreachable");
+    return type;
+  });
+}
+
+function evaluateGeneratedPair(
+  fn: Value,
+  first: bigint,
+  second: bigint,
+  checked: Awaited<ReturnType<typeof checkFile>>,
+): Value {
+  return run(
+    apply(
+      fn,
+      {
+        tag: "shape",
+        fields: new Map<string, Value>([
+          ["0", { tag: "int", value: first }],
+          ["1", { tag: "int", value: second }],
+        ]),
+      },
+      { start: 0, end: 0 },
+      evaluationRuntime(
+        new Map(),
+        "runtime",
+        undefined,
+        checked.recordAdaptations,
+      ),
+    ),
+  );
+}
 
 function directSelfCalls(module: BlotRuntimeModule) {
   return module.functions.flatMap((fn) =>

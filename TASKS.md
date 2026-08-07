@@ -9,82 +9,30 @@ part of this list.
 
 ## 1. Close residual runtime functions
 
-This is the last known case where a well-typed internal program can reach a
-representation refusal. The checked probe is
-[`experiments/generated-code/programs/opaque_function_probe.blot`](experiments/generated-code/programs/opaque_function_probe.blot).
-It currently fails during `build` with:
+**Done.** A dynamic branch that produces one of several functions no longer
+reaches a representation refusal. The join defunctionalizes the finite set:
+every arm normalizes to a closure source — a lambda's module and body with the
+environment it closed in, or a partially applied primitive with its already
+supplied arguments — plus that arm's ordered runtime captures from
+`runtime_captures`. The joined value is a private sum whose case selects an
+alternative and whose payload is that alternative's capture product. An arm that
+is already a choice contributes its own alternatives, so nested choices flatten
+into one table. Application dispatches on the tag, projects the payload back
+into the captures through the existing environment replacement, and applies the
+selected function, so each call site specializes for its argument
+representation. ABI 1 refuses the table by name, and only a genuinely open
+source set is rejected — with the offending value and the inferred signature.
 
-```text
-BLOT_UNSUPPORTED_LOWERING: <function> is outside the Rust residual value calculus.
-```
+`experiments/generated-code/programs/opaque_function_probe.blot` and
+`closure_choice_table.blot` compile and agree with the evaluator; the
+representation and validation rule is in `spec/COMPILER.md`, `spec/RUNTIME.md`,
+`spec/STAGING.md`, `spec/PAPER.md`, and `SUGGESTION.md`.
 
-The probe returns one of two lambdas from a dynamic `case`, then applies the
-selected function to two incompatible record widths. The lambda source set is
-finite, but the Rust residual evaluator loses it at the branch join.
-
-Implement finite closure defunctionalization at that join:
-
-1. Normalize every reachable alternative into a stable closure-source identity
-   plus its ordered runtime captures. Reuse `runtime_captures`; do not infer
-   another free-variable relation in the backend.
-2. Represent the joined value privately as a constructor tag whose payload is
-   that alternative's capture product. This is an internal Runtime-HIR type and
-   must remain refused by ABI 1.
-3. At application, dispatch on the tag, project the payload, replace the old
-   capture identities with the projected values using the existing environment
-   replacement machinery, and specialize the selected body for the concrete
-   argument representation.
-4. Normalize nested choices into one finite alternative table. Do not encode the
-   feature as a binary-only special case merely because the first probe has two
-   arms.
-5. Reject only a genuinely open source set, with the expression and inferred
-   signature in the diagnostic. A closed whole-program source set must compile.
-
-Tests must cover direct choices, branch-local captures, nested choices, mutually
-different capture products, repeated calls at different record widths,
-private-layout validation, ABI refusal, evaluator/Wasm agreement, and the
-probe's result for both selectors. Update `spec/COMPILER.md`, `spec/RUNTIME.md`,
-`spec/STAGING.md`, `spec/PAPER.md`, and `SUGGESTION.md` with the representation
-and validation rule.
-
-### Current state
-
-A first implementation of the representation and the dispatch exists in the Rust
-middle and compiles, but it is unverified: no program has been compiled through
-it yet, and none of the tests listed above have been written. What landed:
-
-- `Value::ClosureChoice` and `ClosureAlternative` in `experiments/rust-middle/src/value.rs`
-  carry the alternative table — closure-source identity, ordered runtime
-  captures from `runtime_captures`, and the capture product's runtime type.
-- `ResidualTrace::join_function_conditional` in `experiments/rust-middle/src/hir.rs`
-  builds the merged table at a join, deduplicates alternatives by
-  `ClosureAlternative::identity`, and tags each branch through `encode_choice`.
-  `retag_choice` rewrites an already-joined choice onto the merged table, so
-  nested choices flatten rather than nest.
-- `apply_closure_choice` in `experiments/rust-middle/src/eval.rs` dispatches on
-  the tag, rebuilds each alternative's environment with `choice_environment`,
-  and applies the selected body so it specializes per call site.
-
-What remains:
-
-1. Compile the probe and fix what that surfaces. The first unverified
-   assumptions are the block bookkeeping in `retag_choice` (it emits nested
-   conditionals inside a branch that a join is about to terminate) and whether
-   `sum_representation` accepts the private choice type everywhere
-   `choice_condition` and `choice_payload` consult it.
-2. Refuse the choice at the ABI boundary explicitly. `lower_value` currently
-   reaches its generic refusal for `Value::ClosureChoice`; ABI 1 must reject the
-   private layout with a diagnostic that names it.
-3. Confirm point 5 of the list above. `branch_alternatives` reports an open
-   source set when a branch joins a function with a non-function, but the
-   diagnostic does not yet carry the inferred signature, and a partially applied
-   `Value::Primitive` is refused rather than admitted as an alternative.
-4. Write the tests. `src/backend/rust_middle.test.ts` is where the probe belongs;
-   `CompilerSession` in `experiments/rust-middle/src/session.rs` compiles
-   layout-marked source directly, so the normalization and refusal cases can be
-   Rust unit tests that need no Deno.
-5. Rebuild the checked-in artifact with `deno task build:rust-middle` and update
-   the specifications listed above.
+Two latent defects surfaced on the way and were fixed with it:
+`export_parameter` appended a curried export's later parameters to whatever
+block the trace stood in rather than to the entry block, and
+`fold_sum_branch_roundtrips` folded a joined sum away while a later dispatch
+still read it.
 
 ## 2. Construct Runtime HIR progressively
 

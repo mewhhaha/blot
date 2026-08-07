@@ -2578,19 +2578,30 @@ fn flattened_runtime_type(module: &RuntimeModule, type_id: usize) -> Result<Vec<
             Ok(result)
         }
         RuntimeType::Sum { cases, .. } => {
-            let mut payload = Vec::new();
+            // One case's payload occupies the sum's payload locals from the
+            // first one on: `sum.make` zero-fills whatever it does not write and
+            // `sum.payload` reads back only its own case's width. A narrower
+            // case therefore costs nothing as long as it is a prefix of the
+            // widest, which is what lets a defunctionalized function choice give
+            // each alternative its own capture product.
+            let mut payload: Vec<ValType> = Vec::new();
             for case_ in cases {
                 let flattened = flattened_runtime_type(module, case_.payload_type)?;
                 if flattened.is_empty() {
                     continue;
                 }
-                if payload.is_empty() {
-                    payload = flattened;
-                } else if payload != flattened {
+                let (wide, narrow) = match flattened.len() > payload.len() {
+                    true => (&flattened, &payload),
+                    false => (&payload, &flattened),
+                };
+                if wide[..narrow.len()] != narrow[..] {
                     return Err(format!(
                         "{}: dynamic sum payloads require different Wasm layouts",
                         module.source
                     ));
+                }
+                if flattened.len() > payload.len() {
+                    payload = flattened;
                 }
             }
             let mut result = vec![ValType::I32];

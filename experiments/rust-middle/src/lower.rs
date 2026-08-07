@@ -2375,7 +2375,7 @@ fn lower_primary(
             lower_guards(target, &arms, span, arena)
         }
         "handler_composition" => lower_handler_composition(cst, rule, context, arena),
-        "block" => {
+        "block" | "do_block" => {
             let mut statements = cst.field_list(rule, "statements")?;
             let mut result = arena.expression(Expression::Unit { span });
             let mut result_effects = ResultEffects::Pure;

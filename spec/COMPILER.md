@@ -335,6 +335,7 @@ public artifact, or an explicit compiler command.
 | erase scalar refinements without changing their concrete layout                               | equal layouts for refined and open facts    |
 | erase first-class effect values at explicit sequencing boundaries                             | one checked nullary call                    |
 | closure-convert runtime free variables into explicit function parameters                      | lexically minimal residual environments     |
+| defunctionalize the finite function set a dynamic branch joins                                | one private choice table per join           |
 | unfold static structural folds around dynamic scalar work                                     | direct runtime projections                  |
 | specialize handlers, effect identities, seals, and generated descriptors                      | closed runtime identities                   |
 | preserve source evaluation and host-request order                                             | observationally equivalent residual code    |
@@ -513,6 +514,17 @@ case. An unresolved result without that certificate is a lowering refusal, not
 implicit permission to invent indirection. The emitter stores the target in
 call-local scratch memory and flattens a recursive edge to one `i32`;
 public-layout construction refuses that private type under ABI 1.
+
+A dynamic branch that joins functions produces the other private type: a sum
+whose case selects one normalized closure source and whose payload is that
+alternative's ordered runtime capture product. Alternatives whose capture
+products are prefixes of the widest are carried directly; otherwise every case
+carries a private indirection to its product. The table is built once per join
+and absorbs an already-joined arm rather than nesting, so it stays finite.
+Public-layout construction refuses it under ABI 1 with a diagnostic that names
+the layout, and a branch whose function source set is not closed is a lowering
+refusal that reports the value and the inferred signature — not permission to
+invent a runtime function pointer.
 
 The central judgment combines type elaboration with normalization:
 

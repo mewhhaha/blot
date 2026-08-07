@@ -9,8 +9,8 @@ use crate::eval::{
 };
 use crate::typecheck::{CheckedModule, Domain, Scalar, Type};
 use crate::value::{
-    ClosureAlternative, Environment, OrderedFields, RuntimeMeaning, RuntimeValue, Value, child_env,
-    lookup,
+    ChoiceSource, ClosureAlternative, Environment, OrderedFields, RuntimeMeaning, RuntimeValue,
+    Value, child_env, lookup,
 };
 
 #[derive(Clone, Serialize)]
@@ -425,7 +425,11 @@ impl ResidualTrace {
         let parameter = self.next_value();
         let ownership = self.ownership(type_id);
         let runtime_span = self.span(span);
-        self.current().parameters.push(RuntimeBlockParameter {
+        // An export's parameters are the entry block's parameters, whatever
+        // block the trace is standing in. A curried export applies one argument
+        // at a time, and applying an earlier one can leave the trace inside a
+        // branch — a defunctionalized function choice does exactly that.
+        self.blocks[0].parameters.push(RuntimeBlockParameter {
             value: parameter,
             type_id,
             ownership,
@@ -1356,8 +1360,11 @@ impl ResidualTrace {
         alternate: &Value,
         span: crate::ast::Span,
     ) -> Result<Value, Diagnostic> {
-        let consequent_alternatives = self.branch_alternatives(context, consequent, span)?;
-        let alternate_alternatives = self.branch_alternatives(context, alternate, span)?;
+        let signature = joined_signature(consequent).or_else(|| joined_signature(alternate));
+        let consequent_alternatives =
+            self.branch_alternatives(context, consequent, signature.as_ref(), span)?;
+        let alternate_alternatives =
+            self.branch_alternatives(context, alternate, signature.as_ref(), span)?;
         let mut alternatives: Vec<ClosureAlternative> = Vec::new();
         let mut consequent_cases = Vec::new();
         let mut alternate_cases = Vec::new();
@@ -1366,10 +1373,9 @@ impl ResidualTrace {
             (&alternate_alternatives, &mut alternate_cases),
         ] {
             for alternative in source {
-                let identity = alternative.identity();
                 let existing = alternatives
                     .iter()
-                    .position(|candidate| candidate.identity() == identity);
+                    .position(|candidate| candidate.same_source(alternative));
                 match existing {
                     Some(case) => cases.push(case),
                     None => {
@@ -1379,10 +1385,11 @@ impl ResidualTrace {
                 }
             }
         }
+        self.settle_payload_types(&mut alternatives);
         let case_names = alternatives
             .iter()
             .enumerate()
-            .map(|(case, alternative)| format!("choice${case}${}", alternative.source()))
+            .map(|(case, alternative)| format!("choice${case}${}", alternative.source_name()))
             .collect::<Vec<_>>();
         let payload_types = alternatives
             .iter()
@@ -1394,6 +1401,7 @@ impl ResidualTrace {
             consequent,
             &consequent_alternatives,
             &consequent_cases,
+            &alternatives,
             sum_type,
             span,
         )?;
@@ -1402,6 +1410,7 @@ impl ResidualTrace {
             alternate,
             &alternate_alternatives,
             &alternate_cases,
+            &alternatives,
             sum_type,
             span,
         )?;
@@ -1423,12 +1432,14 @@ impl ResidualTrace {
     }
 
     /// Normalize one branch value into its alternative table. A single lambda
-    /// contributes one alternative; an already-joined choice contributes the
-    /// alternatives it carries, so nested choices flatten into one finite table.
+    /// or partially applied primitive contributes one alternative; an
+    /// already-joined choice contributes the alternatives it carries, so nested
+    /// choices flatten into one finite table.
     fn branch_alternatives(
         &mut self,
         context: &Rc<Context>,
         value: &Value,
+        signature: Option<&Value>,
         span: crate::ast::Span,
     ) -> Result<Vec<ClosureAlternative>, Diagnostic> {
         match value {
@@ -1452,27 +1463,119 @@ impl ResidualTrace {
                         self_name: self_name.as_deref(),
                     },
                 )?;
-                let payload_type = self.capture_product_type(&captures);
+                let product_type = self.capture_product_type(&captures);
                 Ok(vec![ClosureAlternative {
-                    module: module.clone(),
-                    parameter: *parameter,
-                    body: *body,
-                    environment: environment.clone(),
-                    self_name: self_name.clone(),
-                    signature: signature.clone(),
+                    source: ChoiceSource::Lambda {
+                        module: module.clone(),
+                        parameter: *parameter,
+                        body: *body,
+                        environment: environment.clone(),
+                        self_name: self_name.clone(),
+                        signature: signature.clone(),
+                    },
                     captures,
-                    payload_type,
+                    product_type,
+                    payload_type: product_type,
+                }])
+            }
+            Value::Primitive {
+                name,
+                arity,
+                applied,
+            } => {
+                let captures = value_runtime_captures(context, value)?;
+                let product_type = self.capture_product_type(&captures);
+                Ok(vec![ClosureAlternative {
+                    source: ChoiceSource::Primitive {
+                        name: name.clone(),
+                        arity: *arity,
+                        applied: applied.clone(),
+                    },
+                    captures,
+                    product_type,
+                    payload_type: product_type,
                 }])
             }
             _ => Err(Diagnostic::new(
                 "BLOT_UNSUPPORTED_LOWERING",
                 format!(
-                    "A dynamic branch joins {} with a function, so the function source set is not closed.",
-                    crate::value::show(value)
+                    "A dynamic branch joins {} with a function{}, so the function source set is not closed. Defunctionalization needs every branch to name a lambda or a partially applied primitive.",
+                    crate::value::show(value),
+                    match signature {
+                        Some(signature) => format!(" of type `{}`", crate::value::show(signature)),
+                        None => String::new(),
+                    }
                 ),
                 span,
             )),
         }
+    }
+
+    /// Decide how the merged table carries its payloads. One case's payload
+    /// occupies the sum's payload slots from the first one on, so alternatives
+    /// whose capture products are prefixes of the widest can be carried
+    /// directly. Alternatives that capture mutually incompatible layouts —
+    /// an `Int` in one branch and a `F64` in another — get a private
+    /// indirection instead, which is one slot whatever it points at.
+    fn settle_payload_types(&mut self, alternatives: &mut [ClosureAlternative]) {
+        let layouts = alternatives
+            .iter()
+            .map(|alternative| self.product_field_types(alternative.product_type))
+            .collect::<Vec<_>>();
+        let widest = layouts
+            .iter()
+            .max_by_key(|layout| layout.len())
+            .cloned()
+            .unwrap_or_default();
+        let direct = layouts
+            .iter()
+            .all(|layout| widest[..layout.len()] == layout[..]);
+        for alternative in alternatives {
+            alternative.payload_type = match direct || alternative.product_type == 0 {
+                true => alternative.product_type,
+                false => self.indirect_type(alternative.product_type),
+            };
+        }
+    }
+
+    fn product_field_types(&self, type_id: usize) -> Vec<usize> {
+        let RuntimeType::Product { fields, .. } = &self.types[type_id] else {
+            return Vec::new();
+        };
+        fields.iter().map(|field| field.type_id).collect()
+    }
+
+    fn indirect_type(&mut self, target_type: usize) -> usize {
+        self.insert_type(
+            &format!("residual-indirect:{target_type}"),
+            RuntimeType::Indirect { target_type },
+        )
+    }
+
+    /// Move a capture product between the direct and indirect payload forms.
+    /// The alternative's product never changes; only how its case carries it.
+    fn coerce_payload(
+        &mut self,
+        payload: RuntimeValue,
+        target_type: usize,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        if payload.type_id == target_type {
+            return Ok(payload);
+        }
+        if matches!(self.types[target_type], RuntimeType::Indirect { target_type }
+            if target_type == payload.type_id)
+        {
+            return Ok(self.operation("indirect.make", target_type, vec![payload.id], span, None));
+        }
+        if matches!(self.types[payload.type_id], RuntimeType::Indirect { target_type: pointee }
+            if pointee == target_type)
+        {
+            return Ok(self.operation("indirect.load", target_type, vec![payload.id], span, None));
+        }
+        Err(hir_error(
+            "A function choice alternative changed its capture product.",
+        ))
     }
 
     fn capture_product_type(&mut self, captures: &[RuntimeValue]) -> usize {
@@ -1492,12 +1595,14 @@ impl ResidualTrace {
 
     /// Emit one branch's tagged selector, returning it with the block that now
     /// ends that branch. A nested choice is retagged onto the joined table.
+    #[allow(clippy::too_many_arguments)]
     fn encode_choice(
         &mut self,
         end_block: usize,
         value: &Value,
         alternatives: &[ClosureAlternative],
         cases: &[usize],
+        merged: &[ClosureAlternative],
         sum_type: usize,
         span: crate::ast::Span,
     ) -> Result<(RuntimeValue, usize), Diagnostic> {
@@ -1505,7 +1610,7 @@ impl ResidualTrace {
         match value {
             Value::ClosureChoice { selector, .. } => {
                 let selector = selector.clone();
-                self.retag_choice(&selector, alternatives, cases, sum_type, 0, span)
+                self.retag_choice(&selector, alternatives, cases, merged, sum_type, 0, span)
             }
             _ => {
                 let alternative = alternatives
@@ -1515,6 +1620,7 @@ impl ResidualTrace {
                     .first()
                     .ok_or_else(|| hir_error("A residual lambda produced no case."))?;
                 let payload = self.capture_product(&alternative.captures, span);
+                let payload = self.coerce_payload(payload, merged[case].payload_type, span)?;
                 let selector =
                     self.operation_with_case("sum.make", sum_type, vec![payload.id], span, case);
                 Ok((selector, self.current_block))
@@ -1555,6 +1661,7 @@ impl ResidualTrace {
         selector: &RuntimeValue,
         alternatives: &[ClosureAlternative],
         cases: &[usize],
+        merged: &[ClosureAlternative],
         sum_type: usize,
         index: usize,
         span: crate::ast::Span,
@@ -1563,8 +1670,10 @@ impl ResidualTrace {
             .get(index)
             .ok_or_else(|| hir_error("A retagged choice is outside its alternative table."))?;
         let alternative = &alternatives[index];
+        let target_type = merged[case].payload_type;
         if index + 1 == cases.len() {
             let payload = self.choice_payload(selector, index, alternative, span)?;
+            let payload = self.coerce_payload(payload, target_type, span)?;
             let retagged =
                 self.operation_with_case("sum.make", sum_type, vec![payload.id], span, case);
             return Ok((retagged, self.current_block));
@@ -1573,12 +1682,20 @@ impl ResidualTrace {
         let branches = self.begin_conditional(&condition, span)?;
         self.current_block = branches.consequent;
         let payload = self.choice_payload(selector, index, alternative, span)?;
+        let payload = self.coerce_payload(payload, target_type, span)?;
         let consequent =
             self.operation_with_case("sum.make", sum_type, vec![payload.id], span, case);
         let consequent_end = self.current_block;
         self.current_block = branches.alternate;
-        let (alternate, alternate_end) =
-            self.retag_choice(selector, alternatives, cases, sum_type, index + 1, span)?;
+        let (alternate, alternate_end) = self.retag_choice(
+            selector,
+            alternatives,
+            cases,
+            merged,
+            sum_type,
+            index + 1,
+            span,
+        )?;
         let joined = self.join_runtime_values(
             &branches,
             consequent_end,
@@ -1659,20 +1776,87 @@ impl ResidualTrace {
         })
     }
 
-    /// Rebuild one alternative's lexical environment inside a dispatch branch,
-    /// with its captures projected out of the selector's payload.
-    pub(crate) fn choice_environment(
+    /// Rebuild one alternative as an ordinary function value inside a dispatch
+    /// branch, with its captures projected out of the selector's payload. A
+    /// lambda gets its lexical environment back; a partially applied primitive
+    /// gets the arguments it already held.
+    pub(crate) fn choice_function(
         &mut self,
         context: &Rc<Context>,
         selector: &RuntimeValue,
         index: usize,
         alternative: &ClosureAlternative,
         span: crate::ast::Span,
-    ) -> Result<Environment, Diagnostic> {
+    ) -> Result<Value, Diagnostic> {
+        let replacements = self.choice_replacements(selector, index, alternative, span)?;
+        match &alternative.source {
+            ChoiceSource::Lambda {
+                module,
+                parameter,
+                body,
+                environment,
+                self_name,
+                signature,
+            } => {
+                let environment = match replacements.is_empty() {
+                    true => environment.clone(),
+                    false => replace_environment_runtime(
+                        context,
+                        LexicalClosure {
+                            module,
+                            parameter: *parameter,
+                            body: *body,
+                            environment,
+                            self_name: self_name.as_deref(),
+                        },
+                        &replacements,
+                    )?,
+                };
+                Ok(Value::Closure {
+                    module: module.clone(),
+                    parameter: *parameter,
+                    body: *body,
+                    environment,
+                    self_name: self_name.clone(),
+                    imports: None,
+                    signature: signature.clone(),
+                })
+            }
+            ChoiceSource::Primitive {
+                name,
+                arity,
+                applied,
+            } => {
+                let applied = match replacements.is_empty() {
+                    true => applied.clone(),
+                    false => applied
+                        .iter()
+                        .map(|argument| replace_runtime_in_value(context, argument, &replacements))
+                        .collect::<Result<Vec<_>, Diagnostic>>()?,
+                };
+                Ok(Value::Primitive {
+                    name: name.clone(),
+                    arity: *arity,
+                    applied,
+                })
+            }
+        }
+    }
+
+    /// Project this alternative's capture product out of the selector, one
+    /// field per capture the branch supplied.
+    fn choice_replacements(
+        &mut self,
+        selector: &RuntimeValue,
+        index: usize,
+        alternative: &ClosureAlternative,
+        span: crate::ast::Span,
+    ) -> Result<HashMap<(usize, usize), RuntimeValue>, Diagnostic> {
         if alternative.captures.is_empty() {
-            return Ok(alternative.environment.clone());
+            return Ok(HashMap::new());
         }
         let payload = self.choice_payload(selector, index, alternative, span)?;
+        let payload = self.load_indirect(&payload, span);
         let RuntimeType::Product { fields, .. } = self.types[payload.type_id].clone() else {
             return Err(hir_error(
                 "A function choice payload is not a capture product.",
@@ -1695,17 +1879,7 @@ impl ResidualTrace {
                 },
             );
         }
-        replace_environment_runtime(
-            context,
-            LexicalClosure {
-                module: &alternative.module,
-                parameter: alternative.parameter,
-                body: alternative.body,
-                environment: &alternative.environment,
-                self_name: alternative.self_name.as_deref(),
-            },
-            &replacements,
-        )
+        Ok(replacements)
     }
 
     fn project_field(
@@ -2712,6 +2886,11 @@ impl ResidualTrace {
                 );
                 Ok(self.array_operation("store.empty", store_type, Vec::new(), span, None))
             }
+            Value::ClosureChoice { alternatives, .. } => Err(Diagnostic::new(
+                "BLOT_UNSUPPORTED_LOWERING",
+                closure_choice_refusal(alternatives.len()),
+                span,
+            )),
             _ => Err(Diagnostic::new(
                 "BLOT_UNSUPPORTED_LOWERING",
                 format!(
@@ -2843,6 +3022,9 @@ impl ResidualTrace {
                 payload: None,
             } if name == "True" || name == "False" => Ok(1),
             Value::Shape(fields) => self.product_type(fields),
+            Value::ClosureChoice { alternatives, .. } => {
+                Err(hir_error(&closure_choice_refusal(alternatives.len())))
+            }
             Value::Array(elements) => {
                 let element = elements.first().ok_or_else(|| {
                     hir_error("An untyped empty residual array has no element representation.")
@@ -3813,7 +3995,23 @@ fn mark_reusable_stores(
 /// Is this the kind of value a dynamic branch can only join by
 /// defunctionalizing it?
 fn is_function_value(value: &Value) -> bool {
-    matches!(value, Value::Closure { .. } | Value::ClosureChoice { .. })
+    matches!(
+        value,
+        Value::Closure { .. } | Value::ClosureChoice { .. } | Value::Primitive { .. }
+    )
+}
+
+/// The signature the checker recorded for a joined function, for the diagnostic
+/// that reports an open source set. A choice reports the first signature it
+/// carries: every alternative has already been joined against the others.
+fn joined_signature(value: &Value) -> Option<Value> {
+    match value {
+        Value::Closure { signature, .. } => signature.as_deref().cloned(),
+        Value::ClosureChoice { alternatives, .. } => alternatives
+            .iter()
+            .find_map(|alternative| alternative.signature().cloned()),
+        _ => None,
+    }
 }
 
 fn capture_field_name(index: usize) -> String {
@@ -3897,81 +4095,261 @@ fn representation_shape_key(value: &Value) -> Option<String> {
     matches!(value, Value::Shape(_) | Value::Array(_)).then(|| format!("shape:{}", shape(value)))
 }
 
+fn collect_fields(
+    context: &Rc<Context>,
+    fields: &OrderedFields,
+    visited: &mut HashSet<(String, u32, usize)>,
+    captured: &mut BTreeMap<(usize, usize), RuntimeValue>,
+) -> Result<(), Diagnostic> {
+    for (_, value) in fields {
+        collect_value(context, value, visited, captured)?;
+    }
+    Ok(())
+}
+
+fn collect_closure(
+    context: &Rc<Context>,
+    closure: LexicalClosure<'_>,
+    visited: &mut HashSet<(String, u32, usize)>,
+    captured: &mut BTreeMap<(usize, usize), RuntimeValue>,
+) -> Result<(), Diagnostic> {
+    let identity = (
+        closure.module.to_owned(),
+        closure.body.0,
+        Rc::as_ptr(closure.environment) as usize,
+    );
+    if !visited.insert(identity) {
+        return Ok(());
+    }
+    for name in closure_free_names(
+        context,
+        closure.module,
+        closure.parameter,
+        closure.body,
+        closure.self_name,
+    )? {
+        if let Some(value) = lookup(closure.environment, &name) {
+            collect_value(context, &value, visited, captured)?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_value(
+    context: &Rc<Context>,
+    value: &Value,
+    visited: &mut HashSet<(String, u32, usize)>,
+    captured: &mut BTreeMap<(usize, usize), RuntimeValue>,
+) -> Result<(), Diagnostic> {
+    match value {
+        Value::Runtime(runtime) => {
+            captured
+                .entry((runtime.id, runtime.type_id))
+                .or_insert_with(|| runtime.clone());
+        }
+        Value::Shape(fields) => collect_fields(context, fields, visited, captured)?,
+        Value::Array(elements) | Value::IndexedStep { elements } | Value::Union(elements) => {
+            for element in elements {
+                collect_value(context, element, visited, captured)?;
+            }
+        }
+        Value::Tag { payload, .. } => {
+            if let Some(payload) = payload {
+                collect_value(context, payload, visited, captured)?;
+            }
+        }
+        Value::Closure {
+            module,
+            parameter,
+            body,
+            environment,
+            self_name,
+            ..
+        } => collect_closure(
+            context,
+            LexicalClosure {
+                module,
+                parameter: *parameter,
+                body: *body,
+                environment,
+                self_name: self_name.as_deref(),
+            },
+            visited,
+            captured,
+        )?,
+        Value::Primitive { applied, .. } => {
+            for argument in applied {
+                collect_value(context, argument, visited, captured)?;
+            }
+        }
+        Value::Range { low, high, .. } => {
+            collect_value(context, low, visited, captured)?;
+            collect_value(context, high, visited, captured)?;
+        }
+        Value::Arrow {
+            domain,
+            codomain,
+            effects,
+        } => {
+            collect_value(context, domain, visited, captured)?;
+            collect_value(context, codomain, visited, captured)?;
+            for effect in effects {
+                collect_value(context, effect, visited, captured)?;
+            }
+        }
+        Value::Forall { body, .. }
+        | Value::Operation { effect: body, .. }
+        | Value::Sealed { inner: body, .. } => {
+            collect_value(context, body, visited, captured)?;
+        }
+        Value::Effect { operations, .. } => {
+            collect_fields(context, operations, visited, captured)?;
+        }
+        Value::Extended { inner, members } => {
+            collect_value(context, inner, visited, captured)?;
+            collect_fields(context, members, visited, captured)?;
+        }
+        Value::ClosureChoice {
+            selector,
+            alternatives,
+        } => {
+            captured
+                .entry((selector.id, selector.type_id))
+                .or_insert_with(|| selector.clone());
+            for alternative in alternatives.iter() {
+                for capture in &alternative.captures {
+                    captured
+                        .entry((capture.id, capture.type_id))
+                        .or_insert_with(|| capture.clone());
+                }
+            }
+        }
+        Value::Int(_)
+        | Value::Float(_)
+        | Value::Float32(_)
+        | Value::Vector(_)
+        | Value::VectorMask(_)
+        | Value::IntegerVector { .. }
+        | Value::IntegerVectorMask { .. }
+        | Value::Text(_)
+        | Value::Unit
+        | Value::EmptyArray { .. }
+        | Value::ModuleClosure { .. }
+        | Value::Unbounded
+        | Value::TypeVariable(_)
+        | Value::OpaqueType(_)
+        | Value::Continuation { .. } => {}
+    }
+    Ok(())
+}
+
+/// The runtime values a closure closes over, in a stable order.
 fn runtime_captures(
     context: &Rc<Context>,
     closure: LexicalClosure<'_>,
 ) -> Result<Vec<RuntimeValue>, Diagnostic> {
-    fn collect_fields(
-        context: &Rc<Context>,
-        fields: &OrderedFields,
-        visited: &mut HashSet<(String, u32, usize)>,
-        captured: &mut BTreeMap<(usize, usize), RuntimeValue>,
-    ) -> Result<(), Diagnostic> {
-        for (_, value) in fields {
-            collect_value(context, value, visited, captured)?;
-        }
-        Ok(())
-    }
+    let mut captured = BTreeMap::new();
+    collect_closure(context, closure, &mut HashSet::new(), &mut captured)?;
+    Ok(captured.into_values().collect())
+}
 
-    fn collect_closure(
-        context: &Rc<Context>,
-        closure: LexicalClosure<'_>,
-        visited: &mut HashSet<(String, u32, usize)>,
-        captured: &mut BTreeMap<(usize, usize), RuntimeValue>,
-    ) -> Result<(), Diagnostic> {
-        let identity = (
-            closure.module.to_owned(),
-            closure.body.0,
-            Rc::as_ptr(closure.environment) as usize,
-        );
-        if !visited.insert(identity) {
-            return Ok(());
-        }
-        for name in closure_free_names(
-            context,
-            closure.module,
-            closure.parameter,
-            closure.body,
-            closure.self_name,
-        )? {
-            if let Some(value) = lookup(closure.environment, &name) {
-                collect_value(context, &value, visited, captured)?;
-            }
-        }
-        Ok(())
-    }
+/// The runtime values an already-applied value carries, in the same order
+/// relation `runtime_captures` uses. A partially applied primitive closes over
+/// its arguments rather than over a lexical environment.
+fn value_runtime_captures(
+    context: &Rc<Context>,
+    value: &Value,
+) -> Result<Vec<RuntimeValue>, Diagnostic> {
+    let mut captured = BTreeMap::new();
+    collect_value(context, value, &mut HashSet::new(), &mut captured)?;
+    Ok(captured.into_values().collect())
+}
 
-    fn collect_value(
-        context: &Rc<Context>,
-        value: &Value,
-        visited: &mut HashSet<(String, u32, usize)>,
-        captured: &mut BTreeMap<(usize, usize), RuntimeValue>,
-    ) -> Result<(), Diagnostic> {
-        match value {
-            Value::Runtime(runtime) => {
-                captured
-                    .entry((runtime.id, runtime.type_id))
-                    .or_insert_with(|| runtime.clone());
+fn replace_closure_environment(
+    context: &Rc<Context>,
+    closure: LexicalClosure<'_>,
+    replacements: &HashMap<(usize, usize), RuntimeValue>,
+    replaced: &mut HashMap<(String, u32, usize), Environment>,
+) -> Result<Environment, Diagnostic> {
+    let identity = (
+        closure.module.to_owned(),
+        closure.body.0,
+        Rc::as_ptr(closure.environment) as usize,
+    );
+    if let Some(environment) = replaced.get(&identity) {
+        return Ok(environment.clone());
+    }
+    let result = child_env(Some(closure.environment.clone()));
+    replaced.insert(identity, result.clone());
+    for name in closure_free_names(
+        context,
+        closure.module,
+        closure.parameter,
+        closure.body,
+        closure.self_name,
+    )? {
+        if let Some(value) = lookup(closure.environment, &name) {
+            result.names.borrow_mut().insert(
+                name,
+                replace_value(context, &value, replacements, replaced)?,
+            );
+        }
+    }
+    Ok(result)
+}
+
+fn replace_fields(
+    context: &Rc<Context>,
+    fields: &OrderedFields,
+    replacements: &HashMap<(usize, usize), RuntimeValue>,
+    replaced: &mut HashMap<(String, u32, usize), Environment>,
+) -> Result<OrderedFields, Diagnostic> {
+    fields
+        .iter()
+        .map(|(name, value)| {
+            Ok((
+                name.clone(),
+                replace_value(context, value, replacements, replaced)?,
+            ))
+        })
+        .collect()
+}
+
+fn replace_value(
+    context: &Rc<Context>,
+    value: &Value,
+    replacements: &HashMap<(usize, usize), RuntimeValue>,
+    replaced: &mut HashMap<(String, u32, usize), Environment>,
+) -> Result<Value, Diagnostic> {
+    let mut result = value.clone();
+    match &mut result {
+        Value::Runtime(runtime) => {
+            if let Some(replacement) = replacements.get(&(runtime.id, runtime.type_id)) {
+                *runtime = replacement.clone();
             }
-            Value::Shape(fields) => collect_fields(context, fields, visited, captured)?,
-            Value::Array(elements) | Value::IndexedStep { elements } | Value::Union(elements) => {
-                for element in elements {
-                    collect_value(context, element, visited, captured)?;
-                }
+        }
+        Value::Shape(fields) => {
+            *fields = replace_fields(context, fields, replacements, replaced)?;
+        }
+        Value::Array(elements) | Value::IndexedStep { elements } | Value::Union(elements) => {
+            for element in elements {
+                *element = replace_value(context, element, replacements, replaced)?;
             }
-            Value::Tag { payload, .. } => {
-                if let Some(payload) = payload {
-                    collect_value(context, payload, visited, captured)?;
-                }
+        }
+        Value::Tag { payload, .. } => {
+            if let Some(payload) = payload {
+                **payload = replace_value(context, payload, replacements, replaced)?;
             }
-            Value::Closure {
-                module,
-                parameter,
-                body,
-                environment,
-                self_name,
-                ..
-            } => collect_closure(
+        }
+        Value::Closure {
+            module,
+            parameter,
+            body,
+            environment,
+            self_name,
+            ..
+        } => {
+            *environment = replace_closure_environment(
                 context,
                 LexicalClosure {
                     module,
@@ -3980,266 +4358,125 @@ fn runtime_captures(
                     environment,
                     self_name: self_name.as_deref(),
                 },
-                visited,
-                captured,
-            )?,
-            Value::Primitive { applied, .. } => {
-                for argument in applied {
-                    collect_value(context, argument, visited, captured)?;
-                }
+                replacements,
+                replaced,
+            )?;
+        }
+        Value::Primitive { applied, .. } => {
+            for argument in applied {
+                *argument = replace_value(context, argument, replacements, replaced)?;
             }
-            Value::Range { low, high, .. } => {
-                collect_value(context, low, visited, captured)?;
-                collect_value(context, high, visited, captured)?;
+        }
+        Value::Range { low, high, .. } => {
+            **low = replace_value(context, low, replacements, replaced)?;
+            **high = replace_value(context, high, replacements, replaced)?;
+        }
+        Value::Arrow {
+            domain,
+            codomain,
+            effects,
+        } => {
+            **domain = replace_value(context, domain, replacements, replaced)?;
+            **codomain = replace_value(context, codomain, replacements, replaced)?;
+            for effect in effects {
+                *effect = replace_value(context, effect, replacements, replaced)?;
             }
-            Value::Arrow {
-                domain,
-                codomain,
-                effects,
-            } => {
-                collect_value(context, domain, visited, captured)?;
-                collect_value(context, codomain, visited, captured)?;
-                for effect in effects {
-                    collect_value(context, effect, visited, captured)?;
-                }
+        }
+        Value::Forall { body, .. }
+        | Value::Operation { effect: body, .. }
+        | Value::Sealed { inner: body, .. } => {
+            **body = replace_value(context, body, replacements, replaced)?;
+        }
+        Value::Effect { operations, .. } => {
+            *operations = replace_fields(context, operations, replacements, replaced)?;
+        }
+        Value::Extended { inner, members } => {
+            **inner = replace_value(context, inner, replacements, replaced)?;
+            *members = replace_fields(context, members, replacements, replaced)?;
+        }
+        Value::ClosureChoice {
+            selector,
+            alternatives,
+        } => {
+            if let Some(replacement) = replacements.get(&(selector.id, selector.type_id)) {
+                *selector = replacement.clone();
             }
-            Value::Forall { body, .. }
-            | Value::Operation { effect: body, .. }
-            | Value::Sealed { inner: body, .. } => {
-                collect_value(context, body, visited, captured)?;
-            }
-            Value::Effect { operations, .. } => {
-                collect_fields(context, operations, visited, captured)?;
-            }
-            Value::Extended { inner, members } => {
-                collect_value(context, inner, visited, captured)?;
-                collect_fields(context, members, visited, captured)?;
-            }
-            Value::ClosureChoice {
-                selector,
-                alternatives,
-            } => {
-                captured
-                    .entry((selector.id, selector.type_id))
-                    .or_insert_with(|| selector.clone());
-                for alternative in alternatives.iter() {
-                    for capture in &alternative.captures {
-                        captured
-                            .entry((capture.id, capture.type_id))
-                            .or_insert_with(|| capture.clone());
+            let mut replaced_alternatives = Vec::with_capacity(alternatives.len());
+            for alternative in alternatives.iter() {
+                let mut alternative = alternative.clone();
+                match &mut alternative.source {
+                    ChoiceSource::Lambda {
+                        module,
+                        parameter,
+                        body,
+                        environment,
+                        self_name,
+                        ..
+                    } => {
+                        *environment = replace_closure_environment(
+                            context,
+                            LexicalClosure {
+                                module,
+                                parameter: *parameter,
+                                body: *body,
+                                environment: &environment.clone(),
+                                self_name: self_name.as_deref(),
+                            },
+                            replacements,
+                            replaced,
+                        )?;
+                    }
+                    ChoiceSource::Primitive { applied, .. } => {
+                        for argument in applied {
+                            *argument = replace_value(context, argument, replacements, replaced)?;
+                        }
                     }
                 }
+                for capture in &mut alternative.captures {
+                    if let Some(replacement) = replacements.get(&(capture.id, capture.type_id)) {
+                        *capture = replacement.clone();
+                    }
+                }
+                replaced_alternatives.push(alternative);
             }
-            Value::Int(_)
-            | Value::Float(_)
-            | Value::Float32(_)
-            | Value::Vector(_)
-            | Value::VectorMask(_)
-            | Value::IntegerVector { .. }
-            | Value::IntegerVectorMask { .. }
-            | Value::Text(_)
-            | Value::Unit
-            | Value::EmptyArray { .. }
-            | Value::ModuleClosure { .. }
-            | Value::Unbounded
-            | Value::TypeVariable(_)
-            | Value::OpaqueType(_)
-            | Value::Continuation { .. } => {}
+            *alternatives = Rc::new(replaced_alternatives);
         }
-        Ok(())
+        Value::Int(_)
+        | Value::Float(_)
+        | Value::Float32(_)
+        | Value::Vector(_)
+        | Value::VectorMask(_)
+        | Value::IntegerVector { .. }
+        | Value::IntegerVectorMask { .. }
+        | Value::Text(_)
+        | Value::Unit
+        | Value::EmptyArray { .. }
+        | Value::ModuleClosure { .. }
+        | Value::Unbounded
+        | Value::TypeVariable(_)
+        | Value::OpaqueType(_)
+        | Value::Continuation { .. } => {}
     }
-
-    let mut captured = BTreeMap::new();
-    collect_closure(context, closure, &mut HashSet::new(), &mut captured)?;
-    Ok(captured.into_values().collect())
+    Ok(result)
 }
 
+/// Rebuild a closure's captured environment with the given runtime values
+/// substituted for the ones it closed over.
 fn replace_environment_runtime(
     context: &Rc<Context>,
     closure: LexicalClosure<'_>,
     replacements: &HashMap<(usize, usize), RuntimeValue>,
 ) -> Result<Environment, Diagnostic> {
-    fn replace_closure_environment(
-        context: &Rc<Context>,
-        closure: LexicalClosure<'_>,
-        replacements: &HashMap<(usize, usize), RuntimeValue>,
-        replaced: &mut HashMap<(String, u32, usize), Environment>,
-    ) -> Result<Environment, Diagnostic> {
-        let identity = (
-            closure.module.to_owned(),
-            closure.body.0,
-            Rc::as_ptr(closure.environment) as usize,
-        );
-        if let Some(environment) = replaced.get(&identity) {
-            return Ok(environment.clone());
-        }
-        let result = child_env(Some(closure.environment.clone()));
-        replaced.insert(identity, result.clone());
-        for name in closure_free_names(
-            context,
-            closure.module,
-            closure.parameter,
-            closure.body,
-            closure.self_name,
-        )? {
-            if let Some(value) = lookup(closure.environment, &name) {
-                result.names.borrow_mut().insert(
-                    name,
-                    replace_value(context, &value, replacements, replaced)?,
-                );
-            }
-        }
-        Ok(result)
-    }
-
-    fn replace_fields(
-        context: &Rc<Context>,
-        fields: &OrderedFields,
-        replacements: &HashMap<(usize, usize), RuntimeValue>,
-        replaced: &mut HashMap<(String, u32, usize), Environment>,
-    ) -> Result<OrderedFields, Diagnostic> {
-        fields
-            .iter()
-            .map(|(name, value)| {
-                Ok((
-                    name.clone(),
-                    replace_value(context, value, replacements, replaced)?,
-                ))
-            })
-            .collect()
-    }
-
-    fn replace_value(
-        context: &Rc<Context>,
-        value: &Value,
-        replacements: &HashMap<(usize, usize), RuntimeValue>,
-        replaced: &mut HashMap<(String, u32, usize), Environment>,
-    ) -> Result<Value, Diagnostic> {
-        let mut result = value.clone();
-        match &mut result {
-            Value::Runtime(runtime) => {
-                if let Some(replacement) = replacements.get(&(runtime.id, runtime.type_id)) {
-                    *runtime = replacement.clone();
-                }
-            }
-            Value::Shape(fields) => {
-                *fields = replace_fields(context, fields, replacements, replaced)?;
-            }
-            Value::Array(elements) | Value::IndexedStep { elements } | Value::Union(elements) => {
-                for element in elements {
-                    *element = replace_value(context, element, replacements, replaced)?;
-                }
-            }
-            Value::Tag { payload, .. } => {
-                if let Some(payload) = payload {
-                    **payload = replace_value(context, payload, replacements, replaced)?;
-                }
-            }
-            Value::Closure {
-                module,
-                parameter,
-                body,
-                environment,
-                self_name,
-                ..
-            } => {
-                *environment = replace_closure_environment(
-                    context,
-                    LexicalClosure {
-                        module,
-                        parameter: *parameter,
-                        body: *body,
-                        environment,
-                        self_name: self_name.as_deref(),
-                    },
-                    replacements,
-                    replaced,
-                )?;
-            }
-            Value::Primitive { applied, .. } => {
-                for argument in applied {
-                    *argument = replace_value(context, argument, replacements, replaced)?;
-                }
-            }
-            Value::Range { low, high, .. } => {
-                **low = replace_value(context, low, replacements, replaced)?;
-                **high = replace_value(context, high, replacements, replaced)?;
-            }
-            Value::Arrow {
-                domain,
-                codomain,
-                effects,
-            } => {
-                **domain = replace_value(context, domain, replacements, replaced)?;
-                **codomain = replace_value(context, codomain, replacements, replaced)?;
-                for effect in effects {
-                    *effect = replace_value(context, effect, replacements, replaced)?;
-                }
-            }
-            Value::Forall { body, .. }
-            | Value::Operation { effect: body, .. }
-            | Value::Sealed { inner: body, .. } => {
-                **body = replace_value(context, body, replacements, replaced)?;
-            }
-            Value::Effect { operations, .. } => {
-                *operations = replace_fields(context, operations, replacements, replaced)?;
-            }
-            Value::Extended { inner, members } => {
-                **inner = replace_value(context, inner, replacements, replaced)?;
-                *members = replace_fields(context, members, replacements, replaced)?;
-            }
-            Value::ClosureChoice {
-                selector,
-                alternatives,
-            } => {
-                if let Some(replacement) = replacements.get(&(selector.id, selector.type_id)) {
-                    *selector = replacement.clone();
-                }
-                let mut replaced_alternatives = Vec::with_capacity(alternatives.len());
-                for alternative in alternatives.iter() {
-                    let mut alternative = alternative.clone();
-                    alternative.environment = replace_closure_environment(
-                        context,
-                        LexicalClosure {
-                            module: &alternative.module,
-                            parameter: alternative.parameter,
-                            body: alternative.body,
-                            environment: &alternative.environment.clone(),
-                            self_name: alternative.self_name.as_deref(),
-                        },
-                        replacements,
-                        replaced,
-                    )?;
-                    for capture in &mut alternative.captures {
-                        if let Some(replacement) = replacements.get(&(capture.id, capture.type_id))
-                        {
-                            *capture = replacement.clone();
-                        }
-                    }
-                    replaced_alternatives.push(alternative);
-                }
-                *alternatives = Rc::new(replaced_alternatives);
-            }
-            Value::Int(_)
-            | Value::Float(_)
-            | Value::Float32(_)
-            | Value::Vector(_)
-            | Value::VectorMask(_)
-            | Value::IntegerVector { .. }
-            | Value::IntegerVectorMask { .. }
-            | Value::Text(_)
-            | Value::Unit
-            | Value::EmptyArray { .. }
-            | Value::ModuleClosure { .. }
-            | Value::Unbounded
-            | Value::TypeVariable(_)
-            | Value::OpaqueType(_)
-            | Value::Continuation { .. } => {}
-        }
-        Ok(result)
-    }
-
     replace_closure_environment(context, closure, replacements, &mut HashMap::new())
+}
+
+/// The same substitution over a value that is not a lexical closure.
+fn replace_runtime_in_value(
+    context: &Rc<Context>,
+    value: &Value,
+    replacements: &HashMap<(usize, usize), RuntimeValue>,
+) -> Result<Value, Diagnostic> {
+    replace_value(context, value, replacements, &mut HashMap::new())
 }
 
 fn runtime_effect_name(value: &Value) -> Option<String> {
@@ -4570,6 +4807,14 @@ fn folded_sum_dispatch(function: &RuntimeFunction, join: &RuntimeBlock) -> Optio
     if target_incoming(*consequent) != 1 || target_incoming(*alternate) != 1 {
         return None;
     }
+    // The fold deletes the joined sum: its `sum.make` in every predecessor, and
+    // the `sum.payload` that opens each target. A defunctionalized function
+    // choice consults its selector once per call site, so the same joined sum
+    // can be read again further down. Fold only when the tag test and the two
+    // payload projections are its only readers.
+    if value_uses(function, parameter.value) != 3 {
+        return None;
+    }
     let mut predecessors = Vec::new();
     for block in &function.blocks {
         match &block.terminator {
@@ -4615,6 +4860,46 @@ fn folded_sum_dispatch(function: &RuntimeFunction, join: &RuntimeBlock) -> Optio
         alternate: *alternate,
         predecessors,
     })
+}
+
+/// How many times a runtime value is read, counting each operand occurrence and
+/// each terminator that names it.
+fn value_uses(function: &RuntimeFunction, value: usize) -> usize {
+    function
+        .blocks
+        .iter()
+        .map(|block| {
+            let operands = block
+                .operations
+                .iter()
+                .flat_map(|operation| operation.operands.iter())
+                .filter(|operand| **operand == value)
+                .count();
+            let terminator = match &block.terminator {
+                RuntimeTerminator::Branch { arguments, .. } => arguments
+                    .iter()
+                    .filter(|argument| **argument == value)
+                    .count(),
+                RuntimeTerminator::Conditional {
+                    condition,
+                    consequent_arguments,
+                    alternate_arguments,
+                    ..
+                } => {
+                    usize::from(*condition == value)
+                        + consequent_arguments
+                            .iter()
+                            .chain(alternate_arguments)
+                            .filter(|argument| **argument == value)
+                            .count()
+                }
+                RuntimeTerminator::Return {
+                    value: returned, ..
+                } => usize::from(*returned == value),
+            };
+            operands + terminator
+        })
+        .sum()
 }
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
@@ -6148,6 +6433,15 @@ fn type_name(type_: &Type) -> &'static str {
         Type::Bottom => "bottom",
         _ => "runtime type",
     }
+}
+
+/// What ABI 1 says about the private function-choice layout. The tag and its
+/// capture product are Runtime HIR's own bookkeeping: they name compiler-local
+/// closure sources, so no caller could read one even if it were exported.
+fn closure_choice_refusal(alternatives: usize) -> String {
+    format!(
+        "A function choice over {alternatives} closure sources is a private Runtime HIR layout. Blot Core Wasm ABI 1 has no representation for it, so it cannot cross a runtime boundary; apply the function inside the program instead."
+    )
 }
 
 fn hir_error(message: &str) -> Diagnostic {
