@@ -77,7 +77,7 @@ grammar-check:
 
 check:
   deno run --allow-read scripts/generate_rust_middle_schema.ts --check
-  deno check mod.ts scripts/*.ts case-studies/*.ts experiments/generated-code/*.ts experiments/rust-middle/*.ts src/cli.ts src/backend/rust_middle.test.ts src/language_service.test.ts src/syntax/portable.test.ts src/syntax/surface.test.ts src/tooling/*.test.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts
+  deno check mod.ts scripts/*.ts case-studies/*.ts experiments/generated-code/*.ts experiments/owned-regions/*.ts experiments/rust-middle/*.ts src/cli.ts src/backend/rust_middle.test.ts src/language_service.test.ts src/syntax/portable.test.ts src/syntax/surface.test.ts src/tooling/*.test.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts
   deno fmt --check
   deno lint
   deno task corpus
