@@ -1,6 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
 import type { Expr } from "./ast.ts";
-import { parse } from "./parse.ts";
+import { parse, parseConcrete } from "./parse.ts";
 
 Deno.test(
   "two-argument @handle elaborates to a computation transformer",
@@ -88,6 +88,36 @@ return choose
   assertEquals(binding.value.body.branches.length, 1);
   assertEquals(binding.value.body.branches[0].consequence.tag, "int");
   assertEquals(binding.value.body.fallback?.tag, "int");
+});
+
+Deno.test("value if is retained only by concrete migration parsing", async () => {
+  const source = `let value = if True:
+  return 1
+else:
+  return 2
+return value
+`;
+  const concrete = await parseConcrete(source);
+  assert(concrete.ok);
+  const parsed = await parse(source);
+  assert(!parsed.ok);
+  if (parsed.ok) return;
+  assertEquals(parsed.diagnostics[0]?.code, "BLOT_VALUE_IF_REMOVED");
+});
+
+Deno.test("try is retained only by concrete migration parsing", async () => {
+  const source = `let program = fn () => 1
+let handler = {}
+let value = try program with
+  @handle (Effect, handler)
+return value
+`;
+  const concrete = await parseConcrete(source);
+  assert(concrete.ok);
+  const parsed = await parse(source);
+  assert(!parsed.ok);
+  if (parsed.ok) return;
+  assertEquals(parsed.diagnostics[0]?.code, "BLOT_TRY_REMOVED");
 });
 
 function transformerEffect(expression: Expr): string | null {
