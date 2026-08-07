@@ -63,9 +63,7 @@
   "case" @keyword.control.exception
   "of" @keyword.control.exception)
 
-(handler_composition
-  "try" @keyword.control.exception
-  "with" @keyword.control)
+
 
 (lambda_parameter
   "fn" @keyword.function)

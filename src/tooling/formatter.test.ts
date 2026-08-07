@@ -698,24 +698,6 @@ return ()
   assertEquals(await formatSource(explicit), { ok: true, source: sugared });
 });
 
-Deno.test("formatting prefers leading discard in handler composition", async () => {
-  const source = `let result = try program with
-  _ <- @handle (Console, console_handler)
-  @handle (Clock, clock_handler)
-return result
-`;
-  const expected = `let result = try program with
-  <- @handle (Console, console_handler)
-  @handle (Clock, clock_handler)
-return result
-`;
-  assertEquals(await formatSource(source), { ok: true, source: expected });
-  assertEquals(
-    semanticTree(await parse(source)),
-    semanticTree(await parse(expected)),
-  );
-});
-
 Deno.test("formatting the accepted corpus is idempotent", async () => {
   const pendingDirectories = ["examples", "src/prelude", "case-studies"];
   const sources: string[] = [];

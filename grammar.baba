@@ -713,6 +713,7 @@ case_arm = (
 
 case_guard = ( "if" condition:expression ) ;
 
+
 // Compose statically known handlers around one nullary computation. Each
 // bound step receives the computation produced by handling the previous
 // effect; the final step executes the fully composed computation.
@@ -721,7 +722,12 @@ case_guard = ( "if" condition:expression ) ;
 // is confined to this bounded surface form, where the current computation is
 // the omitted middle argument. Lowering restores the ordinary
 // `@handle (effect, computation, handler)` call before inference.
+// The adjacent private layout markers are an artifact-identity
+// anchor. Layout elaboration can never emit them consecutively,
+// so source cannot enter this retired compatibility rule.
 handler_composition = (
+  LAYOUT_INDENT
+  LAYOUT_DEDENT
   "try"
   program:value
   "with"

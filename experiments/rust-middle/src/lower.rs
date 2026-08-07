@@ -2476,11 +2476,6 @@ fn lower_primary(
             }
             lower_guards(target, &arms, span, arena)
         }
-        "handler_composition" => Err(concat!(
-            "BLOT_TRY_REMOVED: `try ... with` was removed. Compose ",
-            "`@handle (Effect, handler)` transformers with `|>` instead."
-        )
-        .to_owned()),
         // `do:` is the same statement scope written explicitly, so it lowers
         // through the same arm rather than gaining its own node.
         "block" | "do_block" => {

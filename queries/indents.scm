@@ -6,7 +6,6 @@
   (block)
   (statement_suite)
   (case_expression)
-  (handler_composition)
   (shape)
   (shape_pattern)
   (array)
