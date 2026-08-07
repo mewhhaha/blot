@@ -31,7 +31,8 @@ export type IntervalJoin =
   };
 
 export function validInterval(region: IntervalRegion): boolean {
-  return validId(region.origin) && integer(region.start) && integer(region.end) &&
+  return validId(region.origin) && integer(region.start) &&
+    integer(region.end) &&
     integer(region.extent) && region.extent >= 0 && region.start >= 0 &&
     region.start <= region.end && region.end <= region.extent;
 }
