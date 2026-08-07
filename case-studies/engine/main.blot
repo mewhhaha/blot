@@ -113,12 +113,11 @@ let render = fn (transforms, models) =>
           transforms,
           models,
           fn (transform, model) =>
-            <- if model.kind == KIND_MESH:
-              return draw.mesh (
+            <- case model.kind == KIND_MESH of
+              #True => draw.mesh (
                 transform.position, transform.angle, transform.scale, model.colour
               )
-            else:
-              return draw.sprite (
+              #False => draw.sprite (
                 transform.position,
                 transform.scale,
                 model.colour
