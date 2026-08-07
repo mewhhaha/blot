@@ -105,10 +105,15 @@ region_rules = r'''        if (name === "@region.array.claim" && application.arg
           return NONE;
         }
 '''
+array_anchor = '''        if (
+          (name === "@array.take" || name === "@array.split") &&
+          application.args.length === 2
+        ) {
+'''
 replace_once(
     "src/linear/check.ts",
-    '''        if (\n          (name === "@array.take" || name === "@array.split") &&\n          application.args.length === 2\n        ) {\n''',
-    region_rules + '''        if (\n          (name === "@array.take" || name === "@array.split") &&\n          application.args.length === 2\n        ) {\n''',
+    array_anchor,
+    region_rules + array_anchor,
 )
 
 join_helper = r'''function joinRegionParts(
@@ -199,10 +204,18 @@ replace_once(
     join_helper + "function extractionParts(\n",
 )
 
+certificate_anchor = '''  if (operation === "@array.take") return 2;
+  if (operation === "@array.split") return 3;
+  return null;
+'''
 replace_once(
     "src/linear/certificate.ts",
-    '''  if (operation === "@array.take") return 2;\n  if (operation === "@array.split") return 3;\n  return null;\n''',
-    '''  if (operation === "@array.take") return 2;\n  if (operation === "@array.split") return 3;\n  if (operation === "@region.array.split") return 2;\n  return null;\n''',
+    certificate_anchor,
+    '''  if (operation === "@array.take") return 2;
+  if (operation === "@array.split") return 3;
+  if (operation === "@region.array.split") return 2;
+  return null;
+''',
 )
 
 print("applied Region ownership lineage patch")
