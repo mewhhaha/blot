@@ -9,7 +9,8 @@ use crate::eval::{
 };
 use crate::typecheck::{CheckedModule, Domain, Scalar, Type};
 use crate::value::{
-    Environment, OrderedFields, RuntimeMeaning, RuntimeValue, Value, child_env, lookup,
+    ClosureAlternative, Environment, OrderedFields, RuntimeMeaning, RuntimeValue, Value, child_env,
+    lookup,
 };
 
 #[derive(Clone, Serialize)]
@@ -1253,8 +1254,10 @@ impl ResidualTrace {
         self.current_block
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn join_conditional(
         &mut self,
+        context: &Rc<Context>,
         branches: ResidualBranches,
         consequent_end: usize,
         consequent: Value,
@@ -1262,6 +1265,17 @@ impl ResidualTrace {
         alternate: Value,
         span: crate::ast::Span,
     ) -> Result<Value, Diagnostic> {
+        if is_function_value(&consequent) || is_function_value(&alternate) {
+            return self.join_function_conditional(
+                context,
+                branches,
+                consequent_end,
+                &consequent,
+                alternate_end,
+                &alternate,
+                span,
+            );
+        }
         let consequent_value = crate::value::show(&consequent);
         let alternate_value = crate::value::show(&alternate);
         let (consequent, alternate) =
@@ -1279,6 +1293,26 @@ impl ResidualTrace {
                 span,
             ));
         }
+        let joined = self.join_runtime_values(
+            &branches,
+            consequent_end,
+            consequent,
+            alternate_end,
+            alternate,
+            span,
+        );
+        self.symbolic_value(joined, span)
+    }
+
+    fn join_runtime_values(
+        &mut self,
+        branches: &ResidualBranches,
+        consequent_end: usize,
+        consequent: RuntimeValue,
+        alternate_end: usize,
+        alternate: RuntimeValue,
+        span: crate::ast::Span,
+    ) -> RuntimeValue {
         self.blocks[consequent_end].terminator = Some(RuntimeTerminator::Branch {
             target: branches.join,
             arguments: vec![consequent.id],
@@ -1300,12 +1334,394 @@ impl ResidualTrace {
         };
         self.blocks[branches.join].parameters.push(parameter);
         self.current_block = branches.join;
-        let joined = RuntimeValue {
+        RuntimeValue {
             id: joined,
             type_id: consequent.type_id,
             meaning,
+        }
+    }
+
+    /// Join two branches whose values are functions by defunctionalizing the
+    /// finite set of lambdas they can produce. The joined value is a private
+    /// constructor tag: its case selects a closure source and its payload is
+    /// that alternative's ordered capture product.
+    #[allow(clippy::too_many_arguments)]
+    fn join_function_conditional(
+        &mut self,
+        context: &Rc<Context>,
+        branches: ResidualBranches,
+        consequent_end: usize,
+        consequent: &Value,
+        alternate_end: usize,
+        alternate: &Value,
+        span: crate::ast::Span,
+    ) -> Result<Value, Diagnostic> {
+        let consequent_alternatives = self.branch_alternatives(context, consequent, span)?;
+        let alternate_alternatives = self.branch_alternatives(context, alternate, span)?;
+        let mut alternatives: Vec<ClosureAlternative> = Vec::new();
+        let mut consequent_cases = Vec::new();
+        let mut alternate_cases = Vec::new();
+        for (source, cases) in [
+            (&consequent_alternatives, &mut consequent_cases),
+            (&alternate_alternatives, &mut alternate_cases),
+        ] {
+            for alternative in source {
+                let identity = alternative.identity();
+                let existing = alternatives
+                    .iter()
+                    .position(|candidate| candidate.identity() == identity);
+                match existing {
+                    Some(case) => cases.push(case),
+                    None => {
+                        cases.push(alternatives.len());
+                        alternatives.push(alternative.clone());
+                    }
+                }
+            }
+        }
+        let case_names = alternatives
+            .iter()
+            .enumerate()
+            .map(|(case, alternative)| format!("choice${case}${}", alternative.source()))
+            .collect::<Vec<_>>();
+        let payload_types = alternatives
+            .iter()
+            .map(|alternative| alternative.payload_type)
+            .collect::<Vec<_>>();
+        let sum_type = self.sum_type(&case_names, &payload_types);
+        let (consequent_selector, consequent_end) = self.encode_choice(
+            consequent_end,
+            consequent,
+            &consequent_alternatives,
+            &consequent_cases,
+            sum_type,
+            span,
+        )?;
+        let (alternate_selector, alternate_end) = self.encode_choice(
+            alternate_end,
+            alternate,
+            &alternate_alternatives,
+            &alternate_cases,
+            sum_type,
+            span,
+        )?;
+        let selector = self.join_runtime_values(
+            &branches,
+            consequent_end,
+            consequent_selector,
+            alternate_end,
+            alternate_selector,
+            span,
+        );
+        Ok(Value::ClosureChoice {
+            selector: RuntimeValue {
+                meaning: RuntimeMeaning::Sum { cases: case_names },
+                ..selector
+            },
+            alternatives: Rc::new(alternatives),
+        })
+    }
+
+    /// Normalize one branch value into its alternative table. A single lambda
+    /// contributes one alternative; an already-joined choice contributes the
+    /// alternatives it carries, so nested choices flatten into one finite table.
+    fn branch_alternatives(
+        &mut self,
+        context: &Rc<Context>,
+        value: &Value,
+        span: crate::ast::Span,
+    ) -> Result<Vec<ClosureAlternative>, Diagnostic> {
+        match value {
+            Value::ClosureChoice { alternatives, .. } => Ok(alternatives.as_ref().clone()),
+            Value::Closure {
+                module,
+                parameter,
+                body,
+                environment,
+                self_name,
+                signature,
+                ..
+            } => {
+                let captures = runtime_captures(
+                    context,
+                    LexicalClosure {
+                        module,
+                        parameter: *parameter,
+                        body: *body,
+                        environment,
+                        self_name: self_name.as_deref(),
+                    },
+                )?;
+                let payload_type = self.capture_product_type(&captures);
+                Ok(vec![ClosureAlternative {
+                    module: module.clone(),
+                    parameter: *parameter,
+                    body: *body,
+                    environment: environment.clone(),
+                    self_name: self_name.clone(),
+                    signature: signature.clone(),
+                    captures,
+                    payload_type,
+                }])
+            }
+            _ => Err(Diagnostic::new(
+                "BLOT_UNSUPPORTED_LOWERING",
+                format!(
+                    "A dynamic branch joins {} with a function, so the function source set is not closed.",
+                    crate::value::show(value)
+                ),
+                span,
+            )),
+        }
+    }
+
+    fn capture_product_type(&mut self, captures: &[RuntimeValue]) -> usize {
+        if captures.is_empty() {
+            return 0;
+        }
+        let fields = captures
+            .iter()
+            .enumerate()
+            .map(|(index, capture)| RuntimeField {
+                name: capture_field_name(index),
+                type_id: capture.type_id,
+            })
+            .collect();
+        self.insert_product_type(fields)
+    }
+
+    /// Emit one branch's tagged selector, returning it with the block that now
+    /// ends that branch. A nested choice is retagged onto the joined table.
+    fn encode_choice(
+        &mut self,
+        end_block: usize,
+        value: &Value,
+        alternatives: &[ClosureAlternative],
+        cases: &[usize],
+        sum_type: usize,
+        span: crate::ast::Span,
+    ) -> Result<(RuntimeValue, usize), Diagnostic> {
+        self.current_block = end_block;
+        match value {
+            Value::ClosureChoice { selector, .. } => {
+                let selector = selector.clone();
+                self.retag_choice(&selector, alternatives, cases, sum_type, 0, span)
+            }
+            _ => {
+                let alternative = alternatives
+                    .first()
+                    .ok_or_else(|| hir_error("A residual lambda produced no alternative."))?;
+                let case = *cases
+                    .first()
+                    .ok_or_else(|| hir_error("A residual lambda produced no case."))?;
+                let payload = self.capture_product(&alternative.captures, span);
+                let selector =
+                    self.operation_with_case("sum.make", sum_type, vec![payload.id], span, case);
+                Ok((selector, self.current_block))
+            }
+        }
+    }
+
+    fn capture_product(
+        &mut self,
+        captures: &[RuntimeValue],
+        span: crate::ast::Span,
+    ) -> RuntimeValue {
+        if captures.is_empty() {
+            return self.constant(WireConstant::Unit, 0, span);
+        }
+        let type_id = self.capture_product_type(captures);
+        let RuntimeType::Product { fields, .. } = self.types[type_id].clone() else {
+            unreachable!("capture_product_type returned a non-product type");
         };
-        self.symbolic_value(joined, span)
+        let operands = fields
+            .iter()
+            .map(|field| {
+                let index = capture_field_index(&field.name)
+                    .expect("capture product field names are generated");
+                captures[index].id
+            })
+            .collect();
+        self.operation("product.make", type_id, operands, span, None)
+    }
+
+    /// Rewrite an already-tagged choice onto the joined alternative table by
+    /// dispatching on its own tag and reinjecting each payload under its new
+    /// case. The final alternative needs no test, so `n` cases cost `n - 1`
+    /// conditionals.
+    #[allow(clippy::too_many_arguments)]
+    fn retag_choice(
+        &mut self,
+        selector: &RuntimeValue,
+        alternatives: &[ClosureAlternative],
+        cases: &[usize],
+        sum_type: usize,
+        index: usize,
+        span: crate::ast::Span,
+    ) -> Result<(RuntimeValue, usize), Diagnostic> {
+        let case = *cases
+            .get(index)
+            .ok_or_else(|| hir_error("A retagged choice is outside its alternative table."))?;
+        let alternative = &alternatives[index];
+        if index + 1 == cases.len() {
+            let payload = self.choice_payload(selector, index, alternative, span)?;
+            let retagged =
+                self.operation_with_case("sum.make", sum_type, vec![payload.id], span, case);
+            return Ok((retagged, self.current_block));
+        }
+        let condition = self.choice_condition(selector, index, span)?;
+        let branches = self.begin_conditional(&condition, span)?;
+        self.current_block = branches.consequent;
+        let payload = self.choice_payload(selector, index, alternative, span)?;
+        let consequent =
+            self.operation_with_case("sum.make", sum_type, vec![payload.id], span, case);
+        let consequent_end = self.current_block;
+        self.current_block = branches.alternate;
+        let (alternate, alternate_end) =
+            self.retag_choice(selector, alternatives, cases, sum_type, index + 1, span)?;
+        let joined = self.join_runtime_values(
+            &branches,
+            consequent_end,
+            consequent,
+            alternate_end,
+            alternate,
+            span,
+        );
+        Ok((joined, self.current_block))
+    }
+
+    /// Test whether a choice selector holds its `index`th alternative.
+    pub(crate) fn choice_condition(
+        &mut self,
+        selector: &RuntimeValue,
+        index: usize,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        let sum = self.load_indirect(selector, span);
+        if self.sum_representation(sum.type_id).is_none() {
+            return Err(hir_error("A function choice lost its alternative table."));
+        }
+        let tag = self.operation("sum.tag", 2, vec![sum.id], span, None);
+        let expected = self.constant(WireConstant::SignedInteger32(index as i32), 2, span);
+        Ok(self.operation("scalar", 1, vec![tag.id, expected.id], span, Some("equal")))
+    }
+
+    fn choice_payload(
+        &mut self,
+        selector: &RuntimeValue,
+        index: usize,
+        alternative: &ClosureAlternative,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        let sum = self.load_indirect(selector, span);
+        let (sum_type, sum_cases) = self
+            .sum_representation(sum.type_id)
+            .map(|(sum_type, cases)| (sum_type, cases.to_vec()))
+            .ok_or_else(|| hir_error("A function choice lost its alternative table."))?;
+        if sum.type_id != sum_type {
+            return Err(hir_error("A function choice lost its alternative table."));
+        }
+        let payload_type = sum_cases
+            .get(index)
+            .ok_or_else(|| hir_error("A function choice case is outside its runtime type."))?
+            .payload_type;
+        if payload_type != alternative.payload_type {
+            return Err(hir_error(
+                "A function choice alternative changed its capture product.",
+            ));
+        }
+        let result = self.next_value();
+        let ownership = self.ownership(payload_type);
+        let runtime_span = self.span(span);
+        self.current().operations.push(RuntimeOperation {
+            kind: "sum.payload",
+            result,
+            type_id: payload_type,
+            operands: vec![sum.id],
+            ownership,
+            span: runtime_span,
+            value: None,
+            update: None,
+            case: Some(index),
+            capability: None,
+            operation: None,
+            operator: None,
+            conversion: None,
+            lane: None,
+            field: None,
+            function: None,
+            signature: None,
+        });
+        Ok(RuntimeValue {
+            id: result,
+            type_id: payload_type,
+            meaning: RuntimeMeaning::Plain,
+        })
+    }
+
+    /// Rebuild one alternative's lexical environment inside a dispatch branch,
+    /// with its captures projected out of the selector's payload.
+    pub(crate) fn choice_environment(
+        &mut self,
+        context: &Rc<Context>,
+        selector: &RuntimeValue,
+        index: usize,
+        alternative: &ClosureAlternative,
+        span: crate::ast::Span,
+    ) -> Result<Environment, Diagnostic> {
+        if alternative.captures.is_empty() {
+            return Ok(alternative.environment.clone());
+        }
+        let payload = self.choice_payload(selector, index, alternative, span)?;
+        let RuntimeType::Product { fields, .. } = self.types[payload.type_id].clone() else {
+            return Err(hir_error(
+                "A function choice payload is not a capture product.",
+            ));
+        };
+        let mut replacements = HashMap::new();
+        for (field_index, field) in fields.iter().enumerate() {
+            let capture_index = capture_field_index(&field.name)
+                .ok_or_else(|| hir_error("A capture product carries an unnamed field."))?;
+            let capture = alternative
+                .captures
+                .get(capture_index)
+                .ok_or_else(|| hir_error("A capture product is wider than its alternative."))?;
+            let projected = self.project_field(&payload, field_index, field.type_id, span);
+            replacements.insert(
+                (capture.id, capture.type_id),
+                RuntimeValue {
+                    meaning: capture.meaning.clone(),
+                    ..projected
+                },
+            );
+        }
+        replace_environment_runtime(
+            context,
+            LexicalClosure {
+                module: &alternative.module,
+                parameter: alternative.parameter,
+                body: alternative.body,
+                environment: &alternative.environment,
+                self_name: alternative.self_name.as_deref(),
+            },
+            &replacements,
+        )
+    }
+
+    fn project_field(
+        &mut self,
+        product: &RuntimeValue,
+        field: usize,
+        type_id: usize,
+        span: crate::ast::Span,
+    ) -> RuntimeValue {
+        let result = self.operation("product.project", type_id, vec![product.id], span, None);
+        self.current()
+            .operations
+            .last_mut()
+            .expect("just inserted operation")
+            .field = Some(field);
+        result
     }
 
     pub(crate) fn sum_condition(
@@ -3394,9 +3810,23 @@ fn mark_reusable_stores(
     value
 }
 
+/// Is this the kind of value a dynamic branch can only join by
+/// defunctionalizing it?
+fn is_function_value(value: &Value) -> bool {
+    matches!(value, Value::Closure { .. } | Value::ClosureChoice { .. })
+}
+
+fn capture_field_name(index: usize) -> String {
+    format!("capture${index}")
+}
+
+fn capture_field_index(name: &str) -> Option<usize> {
+    name.strip_prefix("capture$")?.parse().ok()
+}
+
 pub(crate) fn contains_runtime(value: &Value) -> bool {
     match value {
-        Value::Runtime(_) => true,
+        Value::Runtime(_) | Value::ClosureChoice { .. } => true,
         Value::Shape(fields) => fields.iter().any(|(_, value)| contains_runtime(value)),
         Value::Array(elements) => elements.iter().any(contains_runtime),
         Value::Tag { payload, .. } => payload.as_deref().is_some_and(contains_runtime),
@@ -3585,6 +4015,21 @@ fn runtime_captures(
                 collect_value(context, inner, visited, captured)?;
                 collect_fields(context, members, visited, captured)?;
             }
+            Value::ClosureChoice {
+                selector,
+                alternatives,
+            } => {
+                captured
+                    .entry((selector.id, selector.type_id))
+                    .or_insert_with(|| selector.clone());
+                for alternative in alternatives.iter() {
+                    for capture in &alternative.captures {
+                        captured
+                            .entry((capture.id, capture.type_id))
+                            .or_insert_with(|| capture.clone());
+                    }
+                }
+            }
             Value::Int(_)
             | Value::Float(_)
             | Value::Float32(_)
@@ -3742,6 +4187,38 @@ fn replace_environment_runtime(
             Value::Extended { inner, members } => {
                 **inner = replace_value(context, inner, replacements, replaced)?;
                 *members = replace_fields(context, members, replacements, replaced)?;
+            }
+            Value::ClosureChoice {
+                selector,
+                alternatives,
+            } => {
+                if let Some(replacement) = replacements.get(&(selector.id, selector.type_id)) {
+                    *selector = replacement.clone();
+                }
+                let mut replaced_alternatives = Vec::with_capacity(alternatives.len());
+                for alternative in alternatives.iter() {
+                    let mut alternative = alternative.clone();
+                    alternative.environment = replace_closure_environment(
+                        context,
+                        LexicalClosure {
+                            module: &alternative.module,
+                            parameter: alternative.parameter,
+                            body: alternative.body,
+                            environment: &alternative.environment.clone(),
+                            self_name: alternative.self_name.as_deref(),
+                        },
+                        replacements,
+                        replaced,
+                    )?;
+                    for capture in &mut alternative.captures {
+                        if let Some(replacement) = replacements.get(&(capture.id, capture.type_id))
+                        {
+                            *capture = replacement.clone();
+                        }
+                    }
+                    replaced_alternatives.push(alternative);
+                }
+                *alternatives = Rc::new(replaced_alternatives);
             }
             Value::Int(_)
             | Value::Float(_)
