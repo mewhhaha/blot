@@ -7,26 +7,31 @@ import {
 /**
  * Executable model for spec/OWNED_REGIONS.md.
  *
- * This is intentionally stricter than a convenient JavaScript slice API. A
- * Region is a linear authority token. Every state-changing operation consumes
- * its input token and returns a fresh token; attempting to use an old token is
- * a model error. Split and join change metadata only and never copy elements.
+ * `claim(shared)` models the source semantics: copy into a fresh private Store.
+ * `freshOwned` + `claimOwned` models the compiler's zero-copy path when Store
+ * provenance has independently proved uniqueness.
  *
- * The model checks soundness three ways:
- *
- * 1. `claim` is rooted in the fresh Store allocation performed here, so there
- *    is no older persistent alias to observe later destructive writes;
- * 2. live runtime permits are checked for pairwise-disjoint intervals after
- *    every successful operation; and
- * 3. every authority transition is recorded into the generic compiler-side
- *    certificate graph and replayed independently at freeze.
+ * Region state is stricter than a convenient JavaScript slice API. Every
+ * state-changing operation consumes its authority token and returns a fresh
+ * token; attempting to use an old token is a model error. Split and join change
+ * metadata only and never copy elements.
  */
 
 const REGION_BRAND: unique symbol = Symbol("blot-owned-region");
+const OWNED_STORE_BRAND: unique symbol = Symbol("blot-owned-store");
 const ARRAY_INTERVAL_FAMILY = "array-interval-v1";
 
 export interface Region<T> {
   readonly [REGION_BRAND]: T;
+}
+
+/**
+ * Model-only evidence for a Store whose allocation is already unique.
+ * Production obtains the equivalent fact from Store provenance, not from a
+ * source-visible wrapper.
+ */
+export interface OwnedStore<T> {
+  readonly [OWNED_STORE_BRAND]: T;
 }
 
 export interface Bounds {
@@ -37,12 +42,14 @@ export interface Bounds {
 
 export interface RegionStats {
   readonly storeAllocations: number;
+  /** Elements copied while acquiring a private Store from shared input. */
+  readonly acquisitionCopies: number;
   readonly permitAllocations: number;
   readonly splits: number;
   readonly joins: number;
   readonly writes: number;
   readonly swaps: number;
-  /** Element copies caused by region operations, excluding test observation. */
+  /** Element copies caused after acquisition by region operations. */
   readonly elementCopies: number;
 }
 
@@ -77,6 +84,7 @@ export type UpdateResult<T> =
 
 interface MutableStats {
   storeAllocations: number;
+  acquisitionCopies: number;
   permitAllocations: number;
   splits: number;
   joins: number;
@@ -108,48 +116,51 @@ class RegionImpl<T> implements Region<T> {
   constructor(readonly permit: Permit<T>) {}
 }
 
+class OwnedStoreImpl<T> implements OwnedStore<T> {
+  declare readonly [OWNED_STORE_BRAND]: T;
+  alive = true;
+  constructor(readonly store: Store<T>) {}
+}
+
 let nextStore = 1;
 let nextPermit = 1;
 
 /**
- * Models `@region.array.claim` on a freshly allocated Store.
+ * Source-semantic acquisition from an ordinary potentially shared array.
  *
- * Production `claim` cannot infer uniqueness merely from a `!` source binding:
- * an ordinary persistent alias may still point at the same Store. Here the
- * allocation itself is the external uniqueness proof and its identity is
- * recorded as the certificate root.
- *
- * Region operations never allocate another element Store.
+ * The model copies every element into a fresh private Store. A compiler may
+ * replace this path with `claimOwned` only when a Store-provenance proof shows
+ * that the input allocation has no persistent observer.
  */
 export function claim<T>(values: readonly T[]): Region<T> {
-  const id = nextStore++;
-  const store: Store<T> = {
-    id,
-    root: `fresh-store:${id}`,
-    cells: [...values],
-    live: new Map(),
-    stats: {
-      storeAllocations: 1,
-      permitAllocations: 0,
-      splits: 0,
-      joins: 0,
-      writes: 0,
-      swaps: 0,
-      elementCopies: 0,
-    },
-    authorityEvents: [],
-  };
-  const region = spawn(store, 0, store.cells.length);
-  const permit = unwrap(region);
-  store.authorityEvents.push({
-    tag: "claim",
-    root: store.root,
-    origin: store.id,
-    family: ARRAY_INTERVAL_FAMILY,
-    permit: permit.id,
-    operation: "@region.array.claim",
-  });
-  return region;
+  return claimStore(allocateStore(values, values.length));
+}
+
+/**
+ * Creates model-only unique Store provenance. Think of this as a fresh array
+ * allocation whose identity the compiler still owns, before it becomes an
+ * ordinary shareable source value.
+ */
+export function freshOwned<T>(values: readonly T[]): OwnedStore<T> {
+  return new OwnedStoreImpl(allocateStore(values, 0));
+}
+
+/**
+ * Zero-copy acquisition: transfer an independently unique Store into region
+ * authority. The backing id is unchanged and acquisitionCopies remains zero.
+ */
+export function claimOwned<T>(owned: OwnedStore<T>): Region<T> {
+  const token = liveOwned(owned);
+  token.alive = false;
+  return claimStore(token.store);
+}
+
+export function ownedBackingId<T>(owned: OwnedStore<T>): number {
+  return liveOwned(owned).store.id;
+}
+
+export function isOwnedLive<T>(owned: OwnedStore<T>): boolean {
+  return unwrapOwned(owned).alive;
 }
 
 /** Models a non-consuming metadata query. */
@@ -363,6 +374,50 @@ export class RegionModelError extends Error {
   }
 }
 
+function allocateStore<T>(
+  values: readonly T[],
+  acquisitionCopies: number,
+): Store<T> {
+  const id = nextStore++;
+  return {
+    id,
+    root: `fresh-store:${id}`,
+    cells: [...values],
+    live: new Map(),
+    stats: {
+      storeAllocations: 1,
+      acquisitionCopies,
+      permitAllocations: 0,
+      splits: 0,
+      joins: 0,
+      writes: 0,
+      swaps: 0,
+      elementCopies: 0,
+    },
+    authorityEvents: [],
+  };
+}
+
+function claimStore<T>(store: Store<T>): Region<T> {
+  if (store.live.size !== 0 || store.authorityEvents.length !== 0) {
+    throw new RegionModelError(
+      "REGION_ROOT_ALREADY_CLAIMED",
+      `Store ${store.id} already entered region authority`,
+    );
+  }
+  const region = spawn(store, 0, store.cells.length);
+  const permit = unwrap(region);
+  store.authorityEvents.push({
+    tag: "claim",
+    root: store.root,
+    origin: store.id,
+    family: ARRAY_INTERVAL_FAMILY,
+    permit: permit.id,
+    operation: "@region.array.claim",
+  });
+  return region;
+}
+
 function spawn<T>(store: Store<T>, start: number, end: number): Region<T> {
   const permit: Permit<T> = {
     id: nextPermit++,
@@ -413,6 +468,27 @@ function unwrap<T>(region: Region<T>): Permit<T> {
     );
   }
   return region.permit;
+}
+
+function liveOwned<T>(owned: OwnedStore<T>): OwnedStoreImpl<T> {
+  const token = unwrapOwned(owned);
+  if (!token.alive) {
+    throw new RegionModelError(
+      "REGION_STORE_ROOT_CONSUMED",
+      `Store ${token.store.id} uniqueness root was already consumed`,
+    );
+  }
+  return token;
+}
+
+function unwrapOwned<T>(owned: OwnedStore<T>): OwnedStoreImpl<T> {
+  if (!(owned instanceof OwnedStoreImpl)) {
+    throw new RegionModelError(
+      "REGION_STORE_ROOT_FORGED",
+      "unique Store evidence was not produced by the trusted model",
+    );
+  }
+  return owned;
 }
 
 function relativeIndex<T>(permit: Permit<T>, index: number): boolean {
