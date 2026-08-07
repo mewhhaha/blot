@@ -63,8 +63,8 @@ const describing = fn T => case reflect T of
   #Arrow _ => "a function"
   _ => "something else"
 
-  // Every check above is compile time, so a specialized generic leaves nothing
-  // behind: `const` forces the reflection to happen while compiling, and what
+// Every check above is compile time, so a specialized generic leaves nothing
+// behind: `const` forces the reflection to happen while compiling, and what
 // reaches WebAssembly is the `@int.add` it selected.
 const described_int = describing I32
 const described_double = describing F64

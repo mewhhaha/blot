@@ -618,10 +618,6 @@ reordered, inlined, or discarded when their values are not demanded; sequencing
 an effect before the tail therefore requires `<-` even when its result is
 ignored.
 
-The left-hand binding in a `try` handler step is a separate bounded surface
-form. Section 12.2 specifies how it binds the newly handled computation without
-executing it.
-
 ### 4.6 Element expressions and statements
 
 An element constructs an effect value which, when executed, applies an ordinary
@@ -1045,7 +1041,9 @@ nested scope. Falling through returns `()`; `return value` exits that block with
 block is the nearest return scope.
 
 A bare trailing expression is not permitted. The explicit `return` keeps a
-result beginning with a name distinct from `name := value`.
+result beginning with a name distinct from `name := value`, and it keeps every
+value that leaves a scope spelled one way, so a branch boundary stays visible
+where its result is short.
 
 ### 6.5 Recursion
 
@@ -2120,39 +2118,43 @@ statically visible. gpufuck has no runtime handler representation.
 
 ### 12.2 Handler composition
 
-`try` composes several statically known handlers around one nullary computation:
+Composing handlers is ordinary function composition. `@handle (effect, handler)`
+is a surface-only handler step: a computation transformer awaiting the middle
+argument. Piping a nullary computation through a sequence of steps discharges
+one effect per step, written inner-to-outer:
 
 ```blot
-let result = try program with
-  program_without_terminal <- @handle (Terminal, fake_terminal)
-  program_without_clock <- @handle (Clock, fake_clock)
-  @handle (Random, fake_random)
+let handled = program
+  |> @handle (Terminal, fake_terminal)
+  |> @handle (Clock, fake_clock)
+  |> @handle (Random, fake_random)
 ```
 
-The body contains zero or more bound handler steps followed by one final handler
-step. A step has the surface-only form `@handle (effect, handler)`; `try`
-supplies its current computation as the omitted middle argument.
+Each step produces another nullary computation, so `handled` is a computation
+like `program` and is executed by sequencing it with `<-`. Composition performs
+nothing on its own, and a composed computation may be executed more than once.
 
-Each bound step creates a nullary computation containing the corresponding
-ordinary three-argument `@handle`, binds that computation on the left of `<-`,
-and makes it current for the next step. Leading `<-` suppresses the visible name
-without interrupting the composition; `_ <-` is its non-canonical equivalent.
-The final step executes the fully composed computation and supplies the value of
-the `try` expression.
-
-The example lowers to the equivalent of:
+A piped step lowers during CST lowering to the ordinary three-argument `@handle`
+around the computation on its left. The example lowers to the equivalent of:
 
 ```blot
 let program_without_terminal =
   fn () => @handle (Terminal, program, fake_terminal)
 let program_without_clock =
   fn () => @handle (Clock, program_without_terminal, fake_clock)
-@handle (Random, program_without_clock, fake_random)
+let handled =
+  fn () => @handle (Random, program_without_clock, fake_random)
 ```
 
-Handler composition is a bounded list of handler steps, not a general statement
-block and not a dynamically scoped registry. Effect identities, handler shapes,
-and the resulting effect rows remain statically visible. It can discharge source
+The computation reaches `@handle` as itself rather than through the step's own
+parameter, so the ownership rule in section 12.1 answers to the written
+computation: clauses bind `?resume` unless that computation owns a linear
+resource. A step used as a first-class value keeps its transformer form, and its
+parameter is owned because it consumes that computation exactly once.
+
+Handler composition is a bounded sequence of statically known steps, not a
+dynamically scoped registry. Effect identities, handler shapes, and the
+resulting effect rows remain statically visible. It can discharge source
 effects; host effects remain caller capabilities.
 
 ### 12.3 Host boundary
@@ -2230,10 +2232,9 @@ the checker, at the `sig`.
 ## 13. Primitive namespace
 
 Every intrinsic is curried like an ordinary Blot function except `@handle`,
-which takes its three arguments in one tuple. The two-argument spelling inside
-`try` is surface syntax described in section 12.2, not partial application.
-Applying fewer arguments to other primitives returns a partially applied
-primitive.
+which takes its three arguments in one tuple. The two-argument spelling is the
+handler step described in section 12.2, not partial application. Applying fewer
+arguments to other primitives returns a partially applied primitive.
 
 Everything not listed here belongs in source, normally the prelude.
 

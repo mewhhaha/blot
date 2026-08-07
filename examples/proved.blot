@@ -13,7 +13,7 @@ let classify = fn i => case i < 3 of
       1 => "one"
       2 => "two"
 
-    // i is 1..2 here; complete
+      // i is 1..2 here; complete
     #False => "zero or less"
   #False => "three or more"
 

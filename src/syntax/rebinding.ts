@@ -59,6 +59,18 @@ function bindNames(scope: Scope, names: readonly string[]): void {
   for (const name of names) layer.names.add(name);
 }
 
+/**
+ * Whether the name is bound at all, in any frame.
+ *
+ * A `:=` on a name nothing ever introduced is unbound, not misframed, and
+ * saying so is the checker's job. Reporting the frame rule there would answer
+ * a program's root cause with advice — `let missing = missing` — that is
+ * unbound in its own right.
+ */
+function visible(scope: Scope, name: string): boolean {
+  return scope.layers.some((layer) => layer.names.has(name));
+}
+
 function rebindable(scope: Scope, name: string): boolean {
   const frame = scope.layers.at(-1)?.frame;
   if (frame === undefined) return false;
@@ -111,7 +123,7 @@ function visitStatement(
       bindNames(scope, [name]);
       return;
     }
-    if (arrow === ":=" && !rebindable(scope, name)) {
+    if (arrow === ":=" && visible(scope, name) && !rebindable(scope, name)) {
       validation.diagnostics.push({
         code: "BLOT_REBINDING_FRAME",
         message:

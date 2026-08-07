@@ -96,10 +96,27 @@ if (Deno.args.includes("--check")) {
   await Deno.writeFile(published, bytes);
 }
 
+/**
+ * Builds the compiler Wasm with every machine-specific path remapped out of it.
+ *
+ * A dependency's panic locations reach the binary as literal source paths, so
+ * without this the artifact records the registry directory it was built from
+ * and the byte comparison above can only succeed on the machine that produced
+ * it. The remapped names are arbitrary; what matters is that they are the same
+ * everywhere, which is what makes the checked-in artifact something another
+ * build can be held to.
+ */
 async function buildRustMiddle(): Promise<void> {
+  const home = Deno.env.get("CARGO_HOME") ?? `${Deno.env.get("HOME")}/.cargo`;
   const build = await new Deno.Command("cargo", {
     args: ["build", "--release", "--target", "wasm32-unknown-unknown"],
     cwd: crateRoot,
+    env: {
+      RUSTFLAGS: [
+        `--remap-path-prefix=${home}=/cargo`,
+        `--remap-path-prefix=${new URL(".", crateRoot).pathname}=/crate`,
+      ].join(" "),
+    },
     stdout: "inherit",
     stderr: "inherit",
   }).output();
