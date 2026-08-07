@@ -1,0 +1,39 @@
+name: do-blocks-plan-debug
+
+on:
+  push:
+    branches:
+      - agent/do-blocks-ci
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: do-blocks
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Inspect plan and TypeScript frontend
+        run: |
+          cat > scripts/_debug_do_plan.ts <<'TS'
+          import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
+          import { parseConcrete } from "../src/syntax/parse.ts";
+          const frontend = CpuFrontend.create(await Deno.readFile("generated/wasm/parser.plan"));
+          console.log("islands", frontend.plan.islands.length, "boundaries", frontend.plan.boundaries.length);
+          for (const [index, island] of frontend.plan.islands.entries()) {
+            if (index >= 60) {
+              console.log(index, island.ruleId, island.ruleName, JSON.stringify(frontend.plan.boundaries[index]));
+            }
+          }
+          const prelude = await Deno.readTextFile("src/prelude/prelude.blot");
+          const parsed = await parseConcrete(prelude);
+          console.log("TS prelude ok", parsed.ok);
+          if (!parsed.ok) console.log(JSON.stringify(parsed.diagnostics, null, 2));
+          const mini = `const pow2 =\n  rec (fn n =>\n    if is_less (@int.cmp n 1):\n      return 1\n    else:\n      return 2 * pow2 (@int.sub n 1)\n  )\nreturn pow2\n`;
+          const miniParsed = await parseConcrete(mini);
+          console.log("TS mini ok", miniParsed.ok);
+          if (!miniParsed.ok) console.log(JSON.stringify(miniParsed.diagnostics, null, 2));
+          TS
+          deno run --allow-read scripts/_debug_do_plan.ts
