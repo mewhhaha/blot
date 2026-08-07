@@ -5,49 +5,48 @@ on:
     branches:
       - agent/do-blocks-worker
 
-permissions:
-  contents: write
-
 jobs:
   debug:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/do-blocks-worker
-          fetch-depth: 0
+          ref: agent/do-blocks-debug
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Reproduce implementation
+      - name: Dump do block CST
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          text = Path('.github/workflows/do-blocks-worker.yml').read_text()
-          marker = '      - name: Implement explicit do blocks\n        run: |\n'
-          start = text.index(marker) + len(marker)
-          end = text.index('      - name: Generate parser\n', start)
-          lines = text[start:end].splitlines()
-          Path('/tmp/implement-do-blocks.sh').write_text('\n'.join(
-              line[10:] if line.startswith('          ') else line
-              for line in lines
-          ) + '\n')
-          PY
-          bash /tmp/implement-do-blocks.sh
-      - name: Generate and format
-        run: |
-          deno task generate
-          deno task generate:rust-middle-schema
-          deno fmt
-      - name: Capture focused test result
-        run: |
-          set +e
-          deno test --allow-read --allow-write src/syntax/layout.test.ts src/syntax/surface.test.ts syntax.test.ts examples.test.ts inference.test.ts > .worker-test-log.txt 2>&1
-          status=$?
-          set -e
-          git config user.name "Jacob Torrång"
-          git config user.email "kopatheonlyone@hotmail.com"
-          git add -A
-          git commit -m "debug: capture do block test failure"
-          git push --force origin HEAD:agent/do-blocks-debug
-          exit $status
+          cat > .worker-cst.ts <<'TS'
+          import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
+          import { elaborateLayout } from "./src/syntax/layout.ts";
+          import { ingestCpuSource } from "./src/syntax/parse.ts";
+          import { materializeCpuCst } from "./src/syntax/cpu_cst.ts";
+          import type { Rule, TokenCursor } from "./src/syntax/lower.ts";
+
+          const source = `let value = do:\n  let local = 1\n  return local\nreturn value\n`;
+          const layout = await elaborateLayout(source);
+          if (!layout.ok) throw new Error(JSON.stringify(layout.diagnostics));
+          console.log("LAYOUT", JSON.stringify(layout.layout.source));
+          const frontend = CpuFrontend.create(await Deno.readFile("generated/wasm/parser.plan"));
+          const parsed = ingestCpuSource(frontend, layout.layout.source);
+          if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
+          const root = materializeCpuCst(
+            frontend,
+            parsed.program,
+            layout.layout.source,
+            layout.layout.originalOffset,
+          );
+          type Cursor = Rule | TokenCursor;
+          function dump(cursor: Cursor, depth = 0): void {
+            const pad = "  ".repeat(depth);
+            if (cursor.type === "token") {
+              console.log(`${pad}TOKEN ${cursor.kind} ${JSON.stringify(cursor.text)}`);
+              return;
+            }
+            console.log(`${pad}RULE ${cursor.name}`);
+            for (const child of cursor.children()) dump(child, depth + 1);
+          }
+          dump(root);
+          TS
+          deno run --allow-read .worker-cst.ts
