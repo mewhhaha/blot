@@ -45,12 +45,17 @@ export async function migrateLayoutSource(
 
   const edits: Edit[] = [];
   collectEdits(legacy.cst, source, edits);
-  const migrated = applyEdits(source, edits)
+  const rewritten = applyEdits(source, edits)
     .split(/\r?\n/)
     .map((line) => line.trimEnd())
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd() + "\n";
+  // Rewriting the layout can leave a `return` around a conditional that is now
+  // the statement form's own control flow. The formatter already knows to drop
+  // one, and its result is what a migrated file should look like anyway.
+  const normalized = await formatSource(rewritten);
+  const migrated = normalized.ok ? normalized.source : rewritten;
   const reparsed = await parse(migrated);
   if (legacy.module === null) {
     if (legacy.diagnostic === null) {

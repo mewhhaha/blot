@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { parse } from "../syntax/parse.ts";
+import { parseConcrete } from "../syntax/parse.ts";
 import { formatSource } from "./formatter.ts";
 
 Deno.test("formatting applies structural indentation without losing comments", async () => {
@@ -25,8 +25,8 @@ return choose 1
   );
   assertEquals(await formatSource(formatted.source), formatted);
   assertEquals(
-    semanticTree(await parse(formatted.source)),
-    semanticTree(await parse(source)),
+    await formatterTree(formatted.source),
+    await formatterTree(source),
   );
 });
 
@@ -51,8 +51,8 @@ return minimum
   );
   assertEquals(await formatSource(formatted.source), formatted);
   assertEquals(
-    semanticTree(await parse(formatted.source)),
-    semanticTree(await parse(source)),
+    await formatterTree(formatted.source),
+    await formatterTree(source),
   );
 });
 
@@ -84,8 +84,8 @@ return choose
   );
   assertEquals(await formatSource(formatted.source), formatted);
   assertEquals(
-    semanticTree(await parse(formatted.source)),
-    semanticTree(await parse(source)),
+    await formatterTree(formatted.source),
+    await formatterTree(source),
   );
 });
 
@@ -119,8 +119,8 @@ return selected
   );
   assertEquals(await formatSource(formatted.source), formatted);
   assertEquals(
-    semanticTree(await parse(formatted.source)),
-    semanticTree(await parse(source)),
+    await formatterTree(formatted.source),
+    await formatterTree(source),
   );
 });
 
@@ -151,8 +151,8 @@ return chooseMinimum
   }
   assertEquals(await formatSource(formatted.source), formatted);
   assertEquals(
-    semanticTree(await parse(formatted.source)),
-    semanticTree(await parse(source)),
+    await formatterTree(formatted.source),
+    await formatterTree(source),
   );
 });
 
@@ -210,8 +210,8 @@ return remove_residence
   );
   assertEquals(await formatSource(formatted.source), formatted);
   assertEquals(
-    semanticTree(await parse(formatted.source)),
-    semanticTree(await parse(source)),
+    await formatterTree(formatted.source),
+    await formatterTree(source),
   );
 });
 
@@ -242,8 +242,8 @@ return render
   );
   assertEquals(await formatSource(formatted.source), formatted);
   assertEquals(
-    semanticTree(await parse(formatted.source)),
-    semanticTree(await parse(source)),
+    await formatterTree(formatted.source),
+    await formatterTree(source),
   );
 });
 
@@ -335,8 +335,8 @@ return factorial
   );
   assertEquals(await formatSource(formatted.source), formatted);
   assertEquals(
-    semanticTree(await parse(formatted.source)),
-    semanticTree(await parse(source)),
+    await formatterTree(formatted.source),
+    await formatterTree(source),
   );
 });
 
@@ -378,8 +378,8 @@ return World
   );
   assertEquals(await formatSource(formatted.source), formatted);
   assertEquals(
-    semanticTree(await parse(formatted.source)),
-    semanticTree(await parse(source)),
+    await formatterTree(formatted.source),
+    await formatterTree(source),
   );
 });
 
@@ -401,8 +401,8 @@ return components
   );
   assertEquals(await formatSource(formatted.source), formatted);
   assertEquals(
-    semanticTree(await parse(formatted.source)),
-    semanticTree(await parse(source)),
+    await formatterTree(formatted.source),
+    await formatterTree(source),
   );
 });
 
@@ -685,8 +685,8 @@ return ()
 return ()
 `;
   assertEquals(
-    semanticTree(await parse(sugared)),
-    semanticTree(await parse(explicit)),
+    await formatterTree(sugared),
+    await formatterTree(explicit),
   );
   assertEquals(await formatSource(sugared), { ok: true, source: sugared });
   assertEquals(await formatSource(explicit), { ok: true, source: sugared });
@@ -705,8 +705,8 @@ return result
 `;
   assertEquals(await formatSource(source), { ok: true, source: expected });
   assertEquals(
-    semanticTree(await parse(source)),
-    semanticTree(await parse(expected)),
+    await formatterTree(source),
+    await formatterTree(expected),
   );
 });
 
@@ -769,8 +769,8 @@ return (imported, atom, left, right, grouped)
 `,
   );
   assertEquals(
-    semanticTree(await parse(formatted.source)),
-    semanticTree(await parse(source)),
+    await formatterTree(formatted.source),
+    await formatterTree(source),
   );
 });
 
@@ -853,6 +853,17 @@ return outer
   assertEquals(await formatSource(formatted.source), formatted);
 });
 
+/**
+ * The formatter accepts forms the language removed so it can migrate one, so
+ * its semantic comparison parses concretely: `parse` rejects the very input
+ * these cases are written over.
+ */
+async function formatterTree(source: string): Promise<unknown> {
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) return semanticTree(parsed);
+  return semanticTree({ ok: true, module: parsed.module });
+}
+
 function semanticTree(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(semanticTree);
   if (typeof value === "bigint") return value.toString();
@@ -887,8 +898,8 @@ async function assertStableFormatting(
   assertEquals(formatted.source, expected);
   assertEquals(await formatSource(formatted.source), formatted);
   assertEquals(
-    semanticTree(await parse(formatted.source)),
-    semanticTree(await parse(source)),
+    await formatterTree(formatted.source),
+    await formatterTree(source),
   );
 }
 
