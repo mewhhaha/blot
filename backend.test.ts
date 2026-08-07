@@ -17,10 +17,7 @@ import {
   decodeAbi,
   encodeAbi,
 } from "./src/backend/abi.ts";
-import {
-  buildRuntimeHir,
-  type ClosedProgram,
-} from "./src/backend/close.ts";
+import { buildRuntimeHir, type ClosedProgram } from "./src/backend/close.ts";
 import {
   type BlotValue,
   Compiler,
@@ -69,8 +66,11 @@ const EXAMPLE_FILES = [
 Deno.test("the checked-in compiler artifact contains a current prelude snapshot", async () => {
   const compiler = await Compiler.create({ compilerWasm });
   try {
-    const source = "open @import \"blot:prelude\" ()\nreturn 42\n";
-    const result = await compiler.compileSource("embedded-prelude.blot", source);
+    const source = 'open @import "blot:prelude" ()\nreturn 42\n';
+    const result = await compiler.compileSource(
+      "embedded-prelude.blot",
+      source,
+    );
     assertEquals(result.abi.exports[0]?.sourceName, "main");
   } finally {
     compiler.destroy();
@@ -104,7 +104,7 @@ Deno.test("the checked-in compiler artifact is self-contained after creation", a
     const renamed = `${preludeSnapshot}.hidden-${crypto.randomUUID()}`;
     await Deno.rename(preludeSnapshot, renamed);
     try {
-      const source = "open @import \"blot:prelude\" ()\nreturn 42\n";
+      const source = 'open @import "blot:prelude" ()\nreturn 42\n';
       const result = await compiler.compileSource(
         "self-contained-prelude.blot",
         source,
@@ -212,9 +212,12 @@ Deno.test("the public compiler resolves imported source through its host", async
   const compiler = await Compiler.create({ compilerWasm });
   try {
     const files = new Map([
-      ["/workspace/main.blot", `const lib = @import "./lib.blot"
+      [
+        "/workspace/main.blot",
+        `const lib = @import "./lib.blot"
 return lib ()
-`],
+`,
+      ],
       ["/workspace/lib.blot", "return 42\n"],
     ]);
     const artifact = await compiler.compileSource(
@@ -239,7 +242,7 @@ Deno.test("the public compiler resolves included files through its host", async 
   const compiler = await Compiler.create({ compilerWasm });
   try {
     const files = new Map([
-      ["/workspace/data.json", "{\"answer\": 42}"],
+      ["/workspace/data.json", '{"answer": 42}'],
     ]);
     const source = `open @import "blot:prelude" ()
 const data = @include "./data.json" as_const_json
@@ -291,13 +294,16 @@ Deno.test("the public compiler prefers package capsules without reading source",
       })),
     });
     const files = new Map([
-      ["/workspace/node_modules/pkg/blot.json", JSON.stringify({
-        schema: "blot-package",
-        version: 3,
-        exports: {
-          ".": { source: "./src/mod.blot", built: "./dist/mod.blotc" },
-        },
-      })],
+      [
+        "/workspace/node_modules/pkg/blot.json",
+        JSON.stringify({
+          schema: "blot-package",
+          version: 3,
+          exports: {
+            ".": { source: "./src/mod.blot", built: "./dist/mod.blotc" },
+          },
+        }),
+      ],
       ["/workspace/node_modules/pkg/dist/mod.blotc", capsule],
     ]);
     const source = `const pkg = @import "pkg"
@@ -328,13 +334,16 @@ Deno.test("the public compiler falls back when a package capsule is corrupt", as
   const compiler = await Compiler.create({ compilerWasm });
   try {
     const files = new Map([
-      ["/workspace/node_modules/pkg/blot.json", JSON.stringify({
-        schema: "blot-package",
-        version: 3,
-        exports: {
-          ".": { source: "./src/mod.blot", built: "./dist/mod.blotc" },
-        },
-      })],
+      [
+        "/workspace/node_modules/pkg/blot.json",
+        JSON.stringify({
+          schema: "blot-package",
+          version: 3,
+          exports: {
+            ".": { source: "./src/mod.blot", built: "./dist/mod.blotc" },
+          },
+        }),
+      ],
       ["/workspace/node_modules/pkg/dist/mod.blotc", "corrupt"],
       ["/workspace/node_modules/pkg/src/mod.blot", "return 42\n"],
     ]);
@@ -594,15 +603,21 @@ Deno.test("the public compiler handles imported helpers after specialization", a
   const compiler = await Compiler.create({ compilerWasm });
   try {
     const files = new Map([
-      ["/workspace/main.blot", `open @import "blot:prelude" ()
+      [
+        "/workspace/main.blot",
+        `open @import "blot:prelude" ()
 const lib = @import "./lib.blot"
 let helper = lib ()
 return helper.double 21
-`],
-      ["/workspace/lib.blot", `open @import "blot:prelude" ()
+`,
+      ],
+      [
+        "/workspace/lib.blot",
+        `open @import "blot:prelude" ()
 let double = fn n => n * 2
 return { .double = double; }
-`],
+`,
+      ],
     ]);
     const artifact = await compiler.compileSource(
       "/workspace/main.blot",
@@ -719,8 +734,14 @@ Deno.test("the public compiler emits the same ABI in the custom section", async 
 Deno.test("the public compiler accepts an already-created compiler instance", async () => {
   const compiler = await Compiler.create({ compilerWasm });
   try {
-    const artifact = await compiler.compileSource("instance.blot", "return 42\n");
-    const second = await compiler.compileSource("instance-2.blot", "return 43\n");
+    const artifact = await compiler.compileSource(
+      "instance.blot",
+      "return 42\n",
+    );
+    const second = await compiler.compileSource(
+      "instance-2.blot",
+      "return 43\n",
+    );
     const one = await WebAssembly.instantiate(artifact.wasm, {});
     const two = await WebAssembly.instantiate(second.wasm, {});
     assertEquals((one.exports.main as () => number)(), 42);
@@ -990,7 +1011,7 @@ Deno.test("buildSource supports includes", async () => {
   const directory = await Deno.makeTempDir();
   const main = join(directory, "main.blot");
   const data = join(directory, "data.json");
-  await Deno.writeTextFile(data, "{\"answer\": 42}");
+  await Deno.writeTextFile(data, '{"answer": 42}');
   const source = `open @import "blot:prelude" ()
 const value = @include "./data.json" as_const_json
 return value.answer
@@ -1181,7 +1202,8 @@ return seal ("Meter", 42)
 
 Deno.test("the ABI refuses an unsupported function value", async () => {
   await assertRejects(
-    () => compile({ path: "function-result.blot", source: "return fn x => x\n" }),
+    () =>
+      compile({ path: "function-result.blot", source: "return fn x => x\n" }),
     BlotError,
     "BLOT_UNSUPPORTED_ABI",
   );
@@ -1249,9 +1271,10 @@ return length (make 128)
 `;
   const checked = await checkSource("recursive-scale.blot", source);
   const hir = buildRuntimeHir(checked);
-  const indirections = hir.functions.flatMap((fn) => fn.body).filter((operation) =>
-    operation.op === "indirect.make"
-  ).length;
+  const indirections =
+    hir.functions.flatMap((fn) => fn.body).filter((operation) =>
+      operation.op === "indirect.make"
+    ).length;
   assertEquals(indirections <= 3, true);
 });
 
@@ -1299,9 +1322,9 @@ return loop ${size}
 `;
     const checked = await checkSource(`tail-${size}.blot`, source);
     const hir = buildRuntimeHir(checked);
-    const backedges = hir.functions.flatMap((fn) => fn.body).filter((operation) =>
-      operation.op === "loop.backedge"
-    ).length;
+    const backedges = hir.functions.flatMap((fn) =>
+      fn.body
+    ).filter((operation) => operation.op === "loop.backedge").length;
     assertEquals(backedges, 1);
   }
 });
@@ -1587,7 +1610,9 @@ Deno.test("the Rust compiler executes the handler pipeline example", async () =>
   const source = await Deno.readTextFile(path);
   const artifact = await rustCompileSource(path, source);
   const instance = await WebAssembly.instantiate(artifact.wasm, {});
-  const main = artifact.abi.exports.find((entry) => entry.sourceName === "main");
+  const main = artifact.abi.exports.find((entry) =>
+    entry.sourceName === "main"
+  );
   if (main === undefined) throw new Error("handler pipeline emitted no main");
   const result = (instance.exports[main.wasmName] as () => number)();
   assertEquals(result, 42);

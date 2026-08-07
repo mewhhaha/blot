@@ -2153,9 +2153,20 @@ function lowerOperand(rule: Rule, context: Context): Expr {
   return result;
 }
 
+function isDoBlockPrimary(rule: Rule): boolean {
+  if (
+    rule.name !== "primary_expression" &&
+    rule.name !== "continued_primary_expression" &&
+    rule.name !== "element_child_primary_expression"
+  ) return false;
+  const first = rule.child(0);
+  return first?.type === "token" && first.text === "do";
+}
+
 function lowerPostfix(rule: Rule, context: Context): Expr {
+  const primary = asRule(field(rule, "value"), "value");
   let result = lowerPrimary(
-    unwrap(asRule(field(rule, "value"), "value")),
+    isDoBlockPrimary(primary) ? primary : unwrap(primary),
     context,
   );
   result = applySuffixes(result, fieldList(rule, "suffixes"));
@@ -2600,7 +2611,7 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     };
   }
 
-  if (rule.name === "block") {
+  if (rule.name === "block" || isDoBlockPrimary(rule)) {
     let statements = fieldList(rule, "statements");
     let result: Expr = { tag: "unit", span: rule.span };
     let resultEffects: "pure" | "ambient" = "pure";

@@ -10,8 +10,8 @@ import { BlotError } from "../diagnostic.ts";
 import {
   importExpressions,
   load,
-  loadLegacySource,
   type Loaded,
+  loadLegacySource,
   loadSource,
 } from "../load.ts";
 import {

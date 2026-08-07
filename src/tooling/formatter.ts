@@ -292,7 +292,7 @@ function formatOneStatementValue(
       let expression = directRule(value, "expression");
       if (value.name === "continued_expression") expression = value;
       if (expression !== null) {
-        let valueScopeOwnsLayout = false;
+        let valueScopeOwnsLayout = expressionPrimaryIsDo(expression);
         for (const layoutRule of valueScopeBoundaryRules) {
           if (expressionPrimaryIs(expression, layoutRule)) {
             valueScopeOwnsLayout = true;
@@ -371,7 +371,8 @@ function separateStatementSuites(
     if (node.type !== "rule") return;
     const siblingName = node.name === "program"
       ? "declaration"
-      : node.name === "block" || node.name === "statement_suite"
+      : node.name === "block" || node.name === "statement_suite" ||
+          isDoBlockPrimaryRule(node)
       ? "statement"
       : null;
     if (siblingName !== null) {
@@ -641,7 +642,9 @@ function formatOneLambda(source: string, root: ConcreteRule): string {
     const original = source.slice(lambdaSpan.start, lambdaSpan.end);
     if (original.includes("//")) continue;
     if (
-      original.includes("\n") && containsRule(body, layoutSensitiveRules) &&
+      original.includes("\n") &&
+      (containsRule(body, layoutSensitiveRules) ||
+        expressionPrimaryIsDo(body)) &&
       !expressionPrimaryIs(body, "conditional")
     ) {
       continue;
@@ -715,7 +718,9 @@ function closesDelimitedLayout(
   if (node === target) {
     for (const ancestor of ancestors.toReversed()) {
       if (delimitedLayoutRules.has(ancestor.name)) return true;
-      if (blockRule.has(ancestor.name)) return false;
+      if (blockRule.has(ancestor.name) || isDoBlockPrimaryRule(ancestor)) {
+        return false;
+      }
     }
     return false;
   }
@@ -821,7 +826,8 @@ function valueIsBlock(value: ConcreteRule): boolean {
 }
 
 function expressionIsBlock(expression: ConcreteRule): boolean {
-  return expressionPrimaryIs(expression, "block");
+  return expressionPrimaryIs(expression, "block") ||
+    expressionPrimaryIsDo(expression);
 }
 
 function expressionPrimaryIs(
@@ -835,6 +841,23 @@ function expressionPrimaryIs(
   const primary = directRule(postfix, "primary_expression");
   if (primary === null) return false;
   return directRule(primary, name) !== null;
+}
+
+function expressionPrimaryIsDo(expression: ConcreteRule): boolean {
+  const operand = directRule(expression, "operand");
+  if (operand === null) return false;
+  const postfix = directRule(operand, "postfix_expression");
+  if (postfix === null) return false;
+  const primary = directRule(postfix, "primary_expression");
+  return primary !== null && isDoBlockPrimaryRule(primary);
+}
+
+function isDoBlockPrimaryRule(rule: ConcreteRule): boolean {
+  return (
+    rule.name === "primary_expression" ||
+    rule.name === "continued_primary_expression" ||
+    rule.name === "element_child_primary_expression"
+  ) && directToken(rule, "do") !== null;
 }
 
 function directToken(rule: ConcreteRule, text: string): ConcreteToken | null {
@@ -1150,6 +1173,21 @@ function collectIndentRegions(
           extraInteriorIndent: false,
         });
       }
+    }
+  }
+  if (isDoBlockPrimaryRule(node)) {
+    const startsAtLine = lineAtOffset(lineStarts, node.span.start);
+    const endsAtLine = lineAtOffset(
+      lineStarts,
+      Math.max(node.span.start, ruleContentSpan(node).end - 1),
+    );
+    if (startsAtLine < endsAtLine) {
+      regions.push({
+        startsAtLine,
+        endsAtLine,
+        includesLastLine: true,
+        extraInteriorIndent: false,
+      });
     }
   }
   if (INDENTED_RULES.has(node.name)) {

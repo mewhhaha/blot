@@ -1096,19 +1096,17 @@ const integer_width = fn bits => case is_greater (@int.cmp bits 0) of
   #False =>
     @fail (Text.append "integer bit width must be positive, found " (Text.of_int bits))
 
-const U = fn bits => (
+const U = fn bits => do:
   let width = integer_width bits
   return range (0, @int.sub (pow2 width) 1) <+ { .bit_width = width; }
-)
 
-const I = fn bits => (
+const I = fn bits => do:
   let width = integer_width bits
   let magnitude = pow2 (@int.sub width 1)
   return range (
     @int.neg magnitude,
     @int.sub magnitude 1
   ) <+ { .bit_width = width; }
-)
 
 const I8 = I 8
 const I16 = I 16
@@ -1124,7 +1122,7 @@ const Unit = @type.unit
 // Byte offsets and widths in declaration order, with no padding at all. This
 // is the raw hook; `aligned` and `packed` below are written over the same
 // idea rather than built in.
-const layout = fn (shape, width_of) => (
+const layout = fn (shape, width_of) => do:
   let offset = 0
   let fields = Array.empty
   for name in Iter.items (@shape.names shape):
@@ -1133,7 +1131,6 @@ const layout = fn (shape, width_of) => (
     offset := @int.add offset width
 
   return { .size = offset; .fields = fields; }
-)
 
 // --- reflection -------------------------------------------------------------
 //

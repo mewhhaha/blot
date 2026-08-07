@@ -62,7 +62,7 @@ The reserved words are:
 module operators infixl infixr infix prefix
 let const sig return
 if else case of rec comptime open
-for in break try fn
+for in break try do fn
 ```
 
 Reserved words and capitalized names remain valid field names: `.return`,
@@ -355,26 +355,27 @@ above the reader or the two belong in one recursive group.
 Physical line breaks terminate declarations. A continuation may be indented, but
 indentation opens a statement suite only after a suite introducer. The
 introducers are `=`, `=>`, `<-`, `of`, `with`, `:`, and an opening element's
-`>`. An opening `(` also introduces an explicit block when its next physical
-line starts with a statement form. A suite may use any indentation width, but
-every line at that depth must agree; a dedent must return to an active suite
-width or to the introducer's width. Other indentation is expression continuation
-and does not silently create a scope. A closing delimiter does not select a
-suite width, so its indentation is ignored and canonicalized by the formatter.
-The formatter writes the accepted structure with two-space indentation and
-expands lines toward an 80-column limit. When a binding or `return` line is too
-wide, its value moves to the following line at one additional indentation level.
-A delimited value that is already multiline likewise moves as a whole, so its
-opening and closing delimiters share the value's indentation scope rather than
-the declaration's prefix. A vertical delimiter indents its contents one level
-and closes one level outside them. The formatter writes value conditionals
-vertically, expanding each direct branch value into a block whose explicit
-`return` supplies that value. When the conditional is itself the terminal result
-of a scope, the formatter omits the redundant outer `return` and lets those
-branch returns target the scope directly. Arrays use one line when they fit
-within their value scope and otherwise place one element on each line. After a
-standalone `if` or `for` suite closes before another statement, the formatter
-writes one empty line to make the dedent visible.
+`>`. `do:` is the explicit value-producing statement scope. Parentheses only
+group values or form tuples; they never introduce a statement suite. A suite may
+use any indentation width, but every line at that depth must agree; a dedent
+must return to an active suite width or to the introducer's width. Other
+indentation is expression continuation and does not silently create a scope. A
+closing delimiter does not select a suite width, so its indentation is ignored
+and canonicalized by the formatter. The formatter writes the accepted structure
+with two-space indentation and expands lines toward an 80-column limit. When a
+binding or `return` line is too wide, its value moves to the following line at
+one additional indentation level. A delimited value that is already multiline
+likewise moves as a whole, so its opening and closing delimiters share the
+value's indentation scope rather than the declaration's prefix. A vertical
+delimiter indents its contents one level and closes one level outside them. The
+formatter writes value conditionals vertically, expanding each direct branch
+value into a block whose explicit `return` supplies that value. When the
+conditional is itself the terminal result of a scope, the formatter omits the
+redundant outer `return` and lets those branch returns target the scope
+directly. Arrays use one line when they fit within their value scope and
+otherwise place one element on each line. After a standalone `if` or `for` suite
+closes before another statement, the formatter writes one empty line to make the
+dedent visible.
 
 ### 4.1 Runtime and compile-time bindings
 
@@ -759,23 +760,28 @@ unlisted fields out of scope:
 const { .source = target; .value; } = record
 ```
 
-### 4.8 Return
+### 4.8 Explicit blocks and return
 
 ```blot
+let value = do:
+  let local = 1
+  return local
+
 return value
 
 return
   value
 ```
 
-The value may follow `return` on the same line or in an indented continuation.
-`return` exits the nearest enclosing module or explicit indentation block with
-that value. Statement conditionals and `for` bodies do not establish return
-scopes, so a return crosses them. Value-producing `if` and `case` expressions
-are separate result scopes and do not inherit that surrounding target. Their
-branches are values, so an indented branch may contain statements; a return in
-that block supplies the branch, and therefore the expression, rather than
-escaping farther.
+`do:` introduces a lexical scope whose ordinary fallthrough value is `()`. A
+`return` inside it supplies the block value. The value may follow `return` on
+the same line or in an indented continuation. `return` exits the nearest
+enclosing module or explicit `do` block with that value. Statement conditionals
+and `for` bodies do not establish return scopes, so a return crosses them.
+Value-producing `if` and `case` expressions are separate result scopes and do
+not inherit that surrounding target. Their branches are values, so an indented
+branch may contain statements; a return in that block supplies the branch, and
+therefore the expression, rather than escaping farther.
 
 ## 5. Patterns
 

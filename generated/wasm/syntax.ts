@@ -163,6 +163,7 @@ export type LiteralKind =
   | "of"
   | "try"
   | "with"
+  | "do"
   | "fn"
   | "..."
   | "=>";
@@ -307,6 +308,7 @@ export type RuleName =
   | "handler_composition_step"
   | "handler_composition_action"
   | "block"
+  | "do_block"
   | "statement_suite"
   | "qualified_name"
   | "qualified_name_part";
@@ -847,6 +849,12 @@ export interface BlockCursor extends RuleCursorBase<"block"> {
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
+export interface DoBlockCursor extends RuleCursorBase<"do_block"> {
+  field(name: "statements"): ReadonlyArray<StatementCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
 export interface StatementSuiteCursor extends RuleCursorBase<"statement_suite"> {
   field(name: "statements"): ReadonlyArray<StatementCursor>;
   field(name: string): CursorFieldValue | undefined;
@@ -950,6 +958,7 @@ export type AnyRuleCursor =
   | HandlerCompositionStepCursor
   | HandlerCompositionActionCursor
   | BlockCursor
+  | DoBlockCursor
   | StatementSuiteCursor
   | QualifiedNameCursor
   | QualifiedNamePartCursor;
