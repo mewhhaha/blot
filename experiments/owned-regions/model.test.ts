@@ -1,8 +1,4 @@
-import {
-  assert,
-  assertEquals,
-  assertThrows,
-} from "@std/assert";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import {
   backingId,
   bounds,
