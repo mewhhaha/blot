@@ -87,6 +87,11 @@ jobs:
               1,
           )
           text = text.replace(
+              '        let valueScopeOwnsLayout = expressionPrimaryIsDo(expression);',
+              '        let valueScopeOwnsLayout = expressionPrimaryIs(expression, "do_block");',
+              1,
+          )
+          text = text.replace(
               '      : node.name === "block" || node.name === "statement_suite" ||\n          isDoBlockPrimaryRule(node)\n      ? "statement"',
               '      : blockRule.has(node.name) || node.name === "statement_suite"\n      ? "statement"',
               1,
