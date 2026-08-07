@@ -277,6 +277,57 @@ return consume (!returned)
 );
 
 accepts(
+  "an inferred ownership summary follows a known call",
+  `let consume = fn !value => @int.add value 1
+let identity = fn value => value
+let forward = fn value => identity value
+let !token = 41
+let returned = forward (!token)
+return consume (!returned)
+`,
+);
+
+accepts(
+  "an inferred ownership summary returns a projected field",
+  `let consume = fn !value => @int.add value 1
+let select = fn holder => holder.value
+let !token = 41
+let holder = { .value = fn () => consume (!token); .label = 0; }
+let selected = select holder
+return selected ()
+`,
+);
+
+rejects(
+  "a projected ownership summary rejects an omitted owned sibling",
+  `let consume = fn !value => @int.add value 1
+let select = fn holder => holder.value
+let !left = 40
+let !right = 41
+let holder = {
+  .value = fn () => consume (!left);
+  .other = fn () => consume (!right);
+  }
+let selected = select holder
+return selected ()
+`,
+  "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
+);
+
+accepts(
+  "an inferred ownership summary follows destructuring",
+  `let consume = fn !value => @int.add value 1
+let select = fn holder =>
+  let { .value; .label; } = holder
+  return value
+let !token = 41
+let holder = { .value = fn () => consume (!token); .label = 0; }
+let selected = select holder
+return selected ()
+`,
+);
+
+accepts(
   "a destructured parameter transfers its linear component",
   `let consume = fn !value => @int.add value 1
 let first = fn (!value, _) => value

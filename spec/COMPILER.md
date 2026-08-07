@@ -315,7 +315,7 @@ public artifact, or an explicit compiler command.
 | record record fields, constructor sets, adaptations, grants, and declaration tags | type-directed elaboration decisions           |
 | check finite pattern coverage                                                     | no missing accepted match arm                 |
 | derive and replay relational array-index proofs                                   | safe proof-requiring operations               |
-| track moves, partial moves, borrows, affine use, and exact linear consumption     | ownership-safe source execution               |
+| infer path-sensitive function usage, then track moves, borrows, and exact use     | ownership-safe source execution               |
 | erase unused pure bindings without erasing demanded divergence or effects         | source-equivalent live computation            |
 | report all source failures at the module and span that caused them                | ordered diagnostics                           |
 

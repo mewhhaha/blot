@@ -125,10 +125,14 @@ at a time rather than being a special case.
 An owned value may cross a higher-order call only when the callee promises an
 appropriate parameter use. `fn !f => f ()` promises exactly one consumption; an
 ordinary parameter may duplicate or discard its argument and therefore cannot
-accept an owned scalar, aggregate, or closure. If a linear parameter is
-returned, its ownership summary is instantiated with the caller's actual
-argument, so `fn !value => value` transfers ownership without inventing it for
-an unrestricted argument. The same substitution continues through returned
+accept an owned scalar, aggregate, or closure. The checker infers the same
+promise for a value carried exactly once through a known consuming call, a fixed
+projection, or direct destructuring. Projection summaries retain their path, so
+selecting `.value` accepts unrestricted sibling fields but rejects an owned
+sibling the result would lose. If a linear parameter is returned, its ownership
+summary is instantiated with the caller's actual argument at that path, so
+`fn !value => value` transfers ownership without inventing it for an
+unrestricted argument. The same substitution continues through returned
 closures.
 
 ## Aggregates carry obligations

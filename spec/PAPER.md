@@ -1196,7 +1196,7 @@ executable checker or lowering test, not only by documentation.
 | array proofs             | comparison branches, immutable aliases, and proof-producing iteration populate `Phi`; direct access carries independently replayed evidence                                      | proofs live in `Phi` and reach lowering explicitly                     | none for arrays                                                                                |
 | indexed loops            | `@array.indexed` yields an ordinary iterator plus unforgeable erased packages propagated through projections and patterns                                                        | iterator yields an erased relational package                           | generalize the relational-value channel when another proof-producing collection needs it       |
 | ownership of structures  | aggregate obligations propagate; certificates publish every path-specific consumption and gate reuse at that exact site; extraction preserves every branch                       | ownership propagates structurally                                      | publish structural extraction lineage beyond the certified consumption sites                   |
-| higher-order ownership   | explicit contracts and ownership-transparent unannotated name parameters carry checked usage summaries; caller obligations substitute through returned closures                  | functions carry separate usage summaries                               | infer summaries through calls, projections, and destructuring                                  |
+| higher-order ownership   | explicit and inferred path-sensitive usage summaries follow known calls, projections, destructuring, and returned closures; callers reject omitted owned paths                   | functions carry separate usage summaries                               | none for statically known functions; unknown callees require an explicit contract              |
 | recursion and ownership  | a certified SCC may transfer shared spendable captures through exactly one ownership-tail recursive edge per path; other recursion refuses closed                                | recursive ownership requires a semantic call-count proof               | none for the certified ownership-tail class                                                    |
 | borrow scope             | transient borrow evidence follows structural arguments; storage, return, ordinary or host passage, and retained closure capture are rejected                                     | borrows are lexical non-escaping views                                 | none for lexical borrows; first-class references would require explicit regions and provenance |
 | handler abort            | a continuation that owns a linear capture requires `!resume`, consumed exactly once by resuming or explicit sequenced cancellation                                               | a continuation owning linear resources has a linear `resume`           | none for statically known handlers                                                             |
@@ -1339,13 +1339,14 @@ Replace the closure-only escape restriction with obligations on aggregates.
 Known aggregates now carry one structural obligation derivation. Checked
 function contracts substitute caller obligations through ordinary and returned
 results, and ownership-transparent unannotated name parameters infer the same
-summary. Transient borrow evidence is rejected at every retaining boundary, and
-a linear handler continuation may be cancelled explicitly. A separately verified
-certificate now gates backend reuse permissions. General summary inference
-through calls, projections, and destructuring remains. The certificate retains
-every branch-specific consumption and authorizes reuse only at those exact
-occurrences; publishing the structural lineage of each extracted component
-remains.
+summary through statically known consuming calls, fixed projections, and direct
+destructuring. A projection records its selected path, and caller checking
+rejects any owned sibling the result would omit. Transient borrow evidence is
+rejected at every retaining boundary, and a linear handler continuation may be
+cancelled explicitly. A separately verified certificate gates backend reuse
+permissions. The certificate retains every branch-specific consumption and
+authorizes reuse only at those exact occurrences; publishing the structural
+lineage of each extracted component remains.
 
 ### M7: Separate numeric values from storage descriptions — complete
 

@@ -1938,17 +1938,21 @@ A known function parameter is an ownership contract. An unannotated name
 parameter whose result structurally carries that parameter exactly once infers a
 consuming contract. This includes direct identity, a single position in a tuple,
 array, record, or constructor, and branches whose every result carries the
-parameter. Calls, projections, and destructuring do not guess: without a proved
-summary they remain ordinary parameters. Passing any owned value to an ordinary
-parameter is rejected; a `!parameter` explicitly promises one consumption and
-may accept it. An affine parameter may accept an affine value but cannot accept
-a linear one because it may discard the argument. Ownership returned from a
-consuming parameter is instantiated with the caller's actual obligation,
-including through a returned closure; passing an unrestricted value therefore
-does not invent ownership. This usage summary remains separate from the type
-lattice. A module result may not retain an ownership obligation because the ABI
-has no implicit ownership contract. Last-use and proved-consumption facts are
-recorded for the backend.
+parameter. The summary follows statically known consuming calls, fixed field
+projections, and direct `case` or declaration destructuring. A projected summary
+records the selected path: a caller may supply unrestricted sibling fields, but
+an owned sibling not returned by the function is rejected rather than silently
+treated as moved. An unknown call remains an ordinary parameter unless its
+source parameter carries an explicit contract. Passing any owned value to an
+ordinary parameter is rejected; a `!parameter` explicitly promises one
+consumption and may accept it. An affine parameter may accept an affine value
+but cannot accept a linear one because it may discard the argument. Ownership
+returned from a consuming parameter is instantiated with the caller's actual
+obligation at the recorded path, including through a returned closure; passing
+an unrestricted value therefore does not invent ownership. This usage summary
+remains separate from the type lattice. A module result may not retain an
+ownership obligation because the ABI has no implicit ownership contract.
+Last-use and proved-consumption facts are recorded for the backend.
 
 ### 11.1 A recursive group
 

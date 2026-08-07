@@ -64,6 +64,8 @@ interface Binding {
   partial: boolean;
   /** The ownership contract of this function's parameter, when statically known. */
   parameter: Qualifier | null;
+  /** Symbolic ownership positions the parameter contract consumes. */
+  parameterInput: Produced;
   /** Parameter structure substituted when a function returns caller ownership. */
   parameterPattern: Pattern | null;
   /** Obligations returned by one call, when this binding is a known function. */
@@ -148,6 +150,8 @@ class Analysis {
   readonly recursiveGroupBindings = new Map<NamePattern, readonly Binding[]>();
   /** Usage summaries inferred for unannotated, ownership-transparent lambdas. */
   readonly inferredParameters = new Map<Pattern, Qualifier>();
+  /** Path-sensitive parameter ownership inferred beside the qualifier. */
+  readonly inferredParameterInputs = new Map<Pattern, Produced>();
 
   report(code: string, message: string, span: Span): void {
     this.diagnostics.push({ code, message, span });
@@ -313,6 +317,7 @@ function declareProduced(
         owned,
         partial: false,
         parameter: null,
+        parameterInput: NONE,
         parameterPattern: null,
         result: NONE,
         value: null,
@@ -474,6 +479,7 @@ function use(
       owned: binding.owned,
       partial: binding.partial,
       parameter: binding.parameter,
+      parameterInput: binding.parameterInput,
       parameterPattern: binding.parameterPattern,
       result: binding.result,
       value: binding.value,
@@ -516,6 +522,7 @@ function use(
       owned: binding.owned,
       partial: binding.partial,
       parameter: binding.parameter,
+      parameterInput: binding.parameterInput,
       parameterPattern: binding.parameterPattern,
       result: binding.result,
       value: binding.value,
@@ -606,6 +613,7 @@ function walkDeclarations(
           analysis,
         );
         binding.parameter = contract.parameter;
+        binding.parameterInput = contract.input;
         binding.parameterPattern = contract.pattern;
         binding.result = contract.result;
         binding.value = declaration.value;
@@ -689,7 +697,7 @@ function walkRecursiveGroup(
     );
   }
 
-  declareGroup(members, settled, scope);
+  declareGroup(members, settled, scope, analysis);
   if (recursiveCaptures !== null && recursiveCaptures.length > 0) {
     const bindings = members.filter((member) =>
       recursiveMembers.has(member.name)
@@ -896,8 +904,8 @@ function settleQualifiers(
   const attempts = 2 * members.length + 2;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const undo = checkpoint(scope);
-    declareGroup(members, settled, scope);
     const probe = new Analysis();
+    declareGroup(members, settled, scope, probe);
     let raised = false;
     for (const [index, member] of members.entries()) {
       const produced = walk(member.declaration.value, scope, probe, "move");
@@ -922,6 +930,7 @@ function declareGroup(
   members: readonly RecursiveMember[],
   settled: readonly Qualifier[],
   scope: Scope,
+  analysis: Analysis,
 ): void {
   for (const [index, member] of members.entries()) {
     scope.bindings.set(member.name, {
@@ -929,6 +938,7 @@ function declareGroup(
       qualifier: settled[index],
       owned: writtenObligation(settled[index], null),
       parameter: patternQualifier(member.lambda.parameter),
+      parameterInput: parameterOwnership(member.lambda.parameter, analysis),
       parameterPattern: member.lambda.parameter,
       result: NONE,
       value: member.declaration.value,
@@ -1025,6 +1035,7 @@ type Produced =
     readonly tag: "leaf";
     readonly qualifier: "affine" | "linear";
     readonly source: NamePattern | null;
+    readonly path: readonly OwnershipPathSegment[];
   }
   | {
     readonly tag: "closure";
@@ -1043,12 +1054,16 @@ type Produced =
 
 const NONE: Produced = { tag: "none" };
 
+type OwnershipPathSegment =
+  | { readonly tag: "field"; readonly name: string }
+  | { readonly tag: "element"; readonly index: number };
+
 function writtenObligation(
   qualifier: Qualifier,
   source: NamePattern | null,
 ): Produced {
   if (qualifier === "linear" || qualifier === "affine") {
-    return { tag: "leaf", qualifier, source };
+    return { tag: "leaf", qualifier, source, path: [] };
   }
   return NONE;
 }
@@ -1379,12 +1394,14 @@ function patternQualifier(pattern: Pattern): Qualifier | null {
 
 interface FunctionContract {
   readonly parameter: Qualifier | null;
+  readonly input: Produced;
   readonly pattern: Pattern | null;
   readonly result: Produced;
 }
 
 const NO_FUNCTION_CONTRACT: FunctionContract = {
   parameter: null,
+  input: NONE,
   pattern: null,
   result: NONE,
 };
@@ -1398,6 +1415,7 @@ function functionContract(
   if (produced.tag === "closure") {
     return {
       parameter: inferredParameterQualifier(produced.parameter, analysis),
+      input: parameterOwnership(produced.parameter, analysis),
       pattern: produced.parameter,
       result: produced.result,
     };
@@ -1408,6 +1426,7 @@ function functionContract(
     if (result !== undefined) knownResult = result;
     return {
       parameter: inferredParameterQualifier(expr.parameter, analysis),
+      input: parameterOwnership(expr.parameter, analysis),
       pattern: expr.parameter,
       result: knownResult,
     };
@@ -1418,6 +1437,7 @@ function functionContract(
     if (result !== undefined) knownResult = result;
     return {
       parameter: inferredParameterQualifier(expr.lambda.parameter, analysis),
+      input: parameterOwnership(expr.lambda.parameter, analysis),
       pattern: expr.lambda.parameter,
       result: knownResult,
     };
@@ -1427,6 +1447,7 @@ function functionContract(
   if (binding === null) return NO_FUNCTION_CONTRACT;
   return {
     parameter: binding.parameter,
+    input: binding.parameterInput,
     pattern: binding.parameterPattern,
     result: binding.result,
   };
@@ -1443,72 +1464,352 @@ function inferredParameterQualifier(
   return inferred;
 }
 
-/**
- * A deliberately small inference class whose result structurally carries its
- * parameter exactly once. Calls and projections are excluded because proving
- * either safe needs another function's summary or omitted-field obligations.
- */
-function ownershipTransparent(expr: Expr, parameter: string): boolean {
-  if (expr.tag === "var") return expr.name === parameter;
+function parameterOwnership(pattern: Pattern, analysis: Analysis): Produced {
+  if (pattern.tag === "name") {
+    const inferred = analysis.inferredParameterInputs.get(pattern);
+    if (inferred !== undefined) return inferred;
+    return writtenObligation(pattern.qualifier, pattern);
+  }
+  if (pattern.tag === "tuple" || pattern.tag === "array") {
+    return {
+      tag: "sequence",
+      elements: pattern.elements.map((element) =>
+        parameterOwnership(element, analysis)
+      ),
+    };
+  }
+  if (pattern.tag === "shape") {
+    return {
+      tag: "shape",
+      fields: new Map(pattern.fields.map((field) => [
+        field.name,
+        parameterOwnership(field.pattern, analysis),
+      ])),
+    };
+  }
+  if (pattern.tag === "constructor" && pattern.payload !== null) {
+    return {
+      tag: "variant",
+      payload: parameterOwnership(pattern.payload, analysis),
+    };
+  }
+  return NONE;
+}
+
+type OwnershipAliases = ReadonlyMap<
+  string,
+  readonly OwnershipPathSegment[]
+>;
+
+function ownershipTransparent(
+  expr: Expr,
+  parameter: NamePattern,
+  scope: Scope,
+  analysis: Analysis,
+): Produced | null {
+  return transparentOwnership(
+    expr,
+    parameter,
+    new Map([[parameter.name, []]]),
+    scope,
+    analysis,
+  );
+}
+
+function transparentOwnership(
+  expr: Expr,
+  parameter: NamePattern,
+  aliases: OwnershipAliases,
+  scope: Scope,
+  analysis: Analysis,
+): Produced | null {
+  const path = ownershipAliasPath(expr, aliases);
+  if (path !== null) return ownershipAtPath(parameter, path);
   if (
     expr.tag === "int" || expr.tag === "float" || expr.tag === "text" ||
     expr.tag === "unit" || expr.tag === "intrinsic" || expr.tag === "tag" ||
-    expr.tag === "field"
-  ) return false;
+    expr.tag === "var" || expr.tag === "field"
+  ) return null;
   if (expr.tag === "apply") {
-    return expr.fn.tag === "tag" &&
-      ownershipTransparent(expr.arg, parameter);
+    if (expr.fn.tag === "tag") {
+      return transparentOwnership(
+        expr.arg,
+        parameter,
+        aliases,
+        scope,
+        analysis,
+      );
+    }
+    if (mentionsOwnershipAlias(expr.fn, aliases)) return null;
+    const argument = transparentOwnership(
+      expr.arg,
+      parameter,
+      aliases,
+      scope,
+      analysis,
+    );
+    if (argument === null) return null;
+    const contract = functionContract(expr.fn, NONE, scope, analysis);
+    if (!returnsConsumedParameter(contract)) return null;
+    return argument;
   }
   if (expr.tag === "lambda") {
-    if (patternNames(expr.parameter).includes(parameter)) return false;
-    return ownershipTransparent(expr.body, parameter);
+    const shadowed = patternNames(expr.parameter).some((name) =>
+      aliases.has(name)
+    );
+    if (shadowed) return null;
+    return transparentOwnership(expr.body, parameter, aliases, scope, analysis);
   }
-  if (expr.tag === "rec" || expr.tag === "comptime") return false;
+  if (expr.tag === "rec" || expr.tag === "comptime") return null;
   if (expr.tag === "tuple") {
-    return oneTransparent(expr.elements, parameter);
+    return oneTransparent(expr.elements, parameter, aliases, scope, analysis);
   }
   if (expr.tag === "array") {
     return oneTransparent(
       expr.elements.map((element) => element.value),
       parameter,
+      aliases,
+      scope,
+      analysis,
     );
   }
   if (expr.tag === "shape") {
     return oneTransparent(
       expr.members.map((member) => member.value),
       parameter,
+      aliases,
+      scope,
+      analysis,
     );
   }
   if (expr.tag === "if") {
     if (
-      expr.branches.some((branch) => freeNames(branch.condition).has(parameter))
-    ) return false;
-    if (
-      !expr.branches.every((branch) =>
-        ownershipTransparent(branch.consequence, parameter)
+      expr.branches.some((branch) =>
+        mentionsOwnershipAlias(branch.condition, aliases)
       )
-    ) return false;
-    return expr.fallback !== null &&
-      ownershipTransparent(expr.fallback, parameter);
+    ) return null;
+    const alternatives = expr.branches.map((branch) =>
+      transparentOwnership(
+        branch.consequence,
+        parameter,
+        aliases,
+        scope,
+        analysis,
+      )
+    );
+    if (expr.fallback === null) return null;
+    alternatives.push(
+      transparentOwnership(
+        expr.fallback,
+        parameter,
+        aliases,
+        scope,
+        analysis,
+      ),
+    );
+    return agreeingOwnership(alternatives);
   }
-  if (expr.tag === "case") return false;
-  if (expr.declarations.length > 0) return false;
-  return ownershipTransparent(expr.result, parameter);
+  if (expr.tag === "case") {
+    const target = ownershipAliasPath(expr.target, aliases);
+    if (target === null) return null;
+    return agreeingOwnership(expr.arms.map((arm) => {
+      const inner = new Map(aliases);
+      bindOwnershipAliases(arm.pattern, target, inner);
+      return transparentOwnership(
+        arm.body,
+        parameter,
+        inner,
+        scope,
+        analysis,
+      );
+    }));
+  }
+
+  const inner = new Map(aliases);
+  for (const declaration of expr.declarations) {
+    if (declaration.tag === "open" || declaration.tag === "shadow") return null;
+    if (declaration.kind === "sig") continue;
+    const value = ownershipAliasPath(declaration.value, inner);
+    if (value === null) return null;
+    bindOwnershipAliases(declaration.pattern, value, inner);
+  }
+  return transparentOwnership(
+    expr.result,
+    parameter,
+    inner,
+    scope,
+    analysis,
+  );
 }
 
 function oneTransparent(
   expressions: readonly Expr[],
-  parameter: string,
-): boolean {
-  let carrying = 0;
+  parameter: NamePattern,
+  aliases: OwnershipAliases,
+  scope: Scope,
+  analysis: Analysis,
+): Produced | null {
+  let carried: Produced | null = null;
   for (const expression of expressions) {
-    if (ownershipTransparent(expression, parameter)) {
-      carrying += 1;
+    const found = transparentOwnership(
+      expression,
+      parameter,
+      aliases,
+      scope,
+      analysis,
+    );
+    if (found !== null) {
+      if (carried !== null) return null;
+      carried = found;
       continue;
     }
-    if (freeNames(expression).has(parameter)) return false;
+    if (mentionsOwnershipAlias(expression, aliases)) return null;
   }
-  return carrying === 1;
+  return carried;
+}
+
+function ownershipAliasPath(
+  expr: Expr,
+  aliases: OwnershipAliases,
+): readonly OwnershipPathSegment[] | null {
+  if (expr.tag === "var") return aliases.get(expr.name) ?? null;
+  if (expr.tag !== "field") return null;
+  const target = ownershipAliasPath(expr.target, aliases);
+  if (target === null) return null;
+  return [...target, { tag: "field", name: expr.name }];
+}
+
+function bindOwnershipAliases(
+  pattern: Pattern,
+  path: readonly OwnershipPathSegment[],
+  aliases: Map<string, readonly OwnershipPathSegment[]>,
+): void {
+  if (pattern.tag === "name") {
+    aliases.set(pattern.name, path);
+    return;
+  }
+  if (pattern.tag === "tuple" || pattern.tag === "array") {
+    for (const [index, element] of pattern.elements.entries()) {
+      bindOwnershipAliases(
+        element,
+        [...path, { tag: "element", index }],
+        aliases,
+      );
+    }
+    return;
+  }
+  if (pattern.tag === "shape") {
+    for (const field of pattern.fields) {
+      bindOwnershipAliases(
+        field.pattern,
+        [...path, { tag: "field", name: field.name }],
+        aliases,
+      );
+    }
+    return;
+  }
+  if (pattern.tag === "constructor" && pattern.payload !== null) {
+    bindOwnershipAliases(pattern.payload, path, aliases);
+  }
+}
+
+function ownershipAtPath(
+  parameter: NamePattern,
+  path: readonly OwnershipPathSegment[],
+): Produced {
+  let result: Produced = {
+    tag: "leaf",
+    qualifier: "linear",
+    source: parameter,
+    path,
+  };
+  for (let index = path.length - 1; index >= 0; index -= 1) {
+    const segment = path[index];
+    if (segment.tag === "field") {
+      result = { tag: "shape", fields: new Map([[segment.name, result]]) };
+      continue;
+    }
+    const elements = Array.from({ length: segment.index + 1 }, () => NONE);
+    elements[segment.index] = result;
+    result = { tag: "sequence", elements };
+  }
+  return result;
+}
+
+function mentionsOwnershipAlias(
+  expr: Expr,
+  aliases: OwnershipAliases,
+): boolean {
+  for (const name of aliases.keys()) {
+    if (freeNames(expr).has(name)) return true;
+  }
+  return false;
+}
+
+function agreeingOwnership(
+  values: readonly (Produced | null)[],
+): Produced | null {
+  if (values.length === 0 || values[0] === null) return null;
+  const first = values[0];
+  if (first === null) return null;
+  if (values.some((value) => value === null || !sameProduced(value, first))) {
+    return null;
+  }
+  return first;
+}
+
+function returnsConsumedParameter(contract: FunctionContract): boolean {
+  if (contract.parameter !== "linear") return false;
+  return sameOwnershipLeaves(contract.input, contract.result);
+}
+
+function sameOwnershipLeaves(left: Produced, right: Produced): boolean {
+  const leftLeaves = ownershipLeaves(left);
+  const rightLeaves = ownershipLeaves(right);
+  if (leftLeaves.length !== rightLeaves.length) return false;
+  return leftLeaves.every((leaf, index) => {
+    const compared = rightLeaves[index];
+    return leaf.source === compared.source &&
+      samePath(leaf.path, compared.path);
+  });
+}
+
+function ownershipLeaves(
+  produced: Produced,
+): readonly Extract<Produced, { readonly tag: "leaf" }>[] {
+  if (produced.tag === "none" || produced.tag === "borrow") return [];
+  if (produced.tag === "leaf") return [produced];
+  if (produced.tag === "closure") {
+    return [
+      ...ownershipLeaves(produced.captures),
+      ...ownershipLeaves(produced.result),
+    ];
+  }
+  if (produced.tag === "variant") return ownershipLeaves(produced.payload);
+  if (produced.tag === "choice") {
+    return [...produced.cases.values()].flatMap(ownershipLeaves);
+  }
+  if (produced.tag === "many") return produced.values.flatMap(ownershipLeaves);
+  if (produced.tag === "sequence") {
+    return produced.elements.flatMap(ownershipLeaves);
+  }
+  return [...produced.fields.values()].flatMap(ownershipLeaves);
+}
+
+function samePath(
+  left: readonly OwnershipPathSegment[],
+  right: readonly OwnershipPathSegment[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((segment, index) => {
+    const compared = right[index];
+    if (segment.tag !== compared.tag) return false;
+    if (segment.tag === "field" && compared.tag === "field") {
+      return segment.name === compared.name;
+    }
+    return segment.tag === "element" && compared.tag === "element" &&
+      segment.index === compared.index;
+  });
 }
 
 function substituteParameter(
@@ -1525,7 +1826,9 @@ function substituteParameter(
     };
   }
   if (produced.tag === "leaf") {
-    if (produced.source === parameter) return argument;
+    if (produced.source === parameter) {
+      return ownershipAtArgumentPath(argument, produced.path);
+    }
     return produced;
   }
   if (produced.tag === "closure") {
@@ -1580,6 +1883,27 @@ function substituteParameter(
   };
 }
 
+function ownershipAtArgumentPath(
+  argument: Produced,
+  path: readonly OwnershipPathSegment[],
+): Produced {
+  let selected = argument;
+  for (const segment of path) {
+    if (segment.tag === "field") {
+      if (selected.tag !== "shape") return NONE;
+      const field = selected.fields.get(segment.name);
+      if (field === undefined) return NONE;
+      selected = field;
+      continue;
+    }
+    if (selected.tag !== "sequence") return NONE;
+    const element = selected.elements[segment.index];
+    if (element === undefined) return NONE;
+    selected = element;
+  }
+  return selected;
+}
+
 function substituteParameters(
   produced: Produced,
   parameter: Pattern | null,
@@ -1620,6 +1944,7 @@ function parameterAcceptsOwnership(
   parameter: Pattern | null,
   argument: Produced,
   inferred: Qualifier | null = null,
+  input: Produced = NONE,
 ): boolean {
   const ownership = obligation(argument);
   if (ownership === "none") return true;
@@ -1627,7 +1952,10 @@ function parameterAcceptsOwnership(
   if (parameter.tag === "name") {
     let qualifier = parameter.qualifier;
     if (qualifier === "none" && inferred !== null) qualifier = inferred;
-    if (qualifier === "linear") return true;
+    if (qualifier === "linear") {
+      if (input.tag === "none" || input.tag === "leaf") return true;
+      return ownershipInputAccepts(input, argument);
+    }
     return qualifier === "affine" && ownership === "affine";
   }
   if (
@@ -1654,6 +1982,35 @@ function parameterAcceptsOwnership(
       if (!parameterAcceptsOwnership(field.pattern, value)) return false;
     }
     return true;
+  }
+  return false;
+}
+
+function ownershipInputAccepts(input: Produced, argument: Produced): boolean {
+  if (obligation(argument) === "none") return true;
+  if (input.tag === "leaf") return true;
+  if (input.tag === "shape" && argument.tag === "shape") {
+    for (const [name, value] of argument.fields) {
+      if (obligation(value) === "none") continue;
+      const expected = input.fields.get(name);
+      if (expected === undefined || !ownershipInputAccepts(expected, value)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (input.tag === "sequence" && argument.tag === "sequence") {
+    for (const [index, value] of argument.elements.entries()) {
+      if (obligation(value) === "none") continue;
+      const expected = input.elements[index];
+      if (expected === undefined || !ownershipInputAccepts(expected, value)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (input.tag === "variant" && argument.tag === "variant") {
+    return ownershipInputAccepts(input.payload, argument.payload);
   }
   return false;
 }
@@ -2012,6 +2369,7 @@ function walk(
           contract.pattern,
           argument,
           contract.parameter,
+          contract.input,
         ) || trustedScalarOperation(expr.fn, argument, scope);
         if (!accepted) {
           analysis.report(
@@ -2059,15 +2417,19 @@ function walk(
       const inner = childScope(scope, true);
       let parameterOwnership = NONE;
       if (
-        expr.parameter.tag === "name" && expr.parameter.qualifier === "none" &&
-        ownershipTransparent(expr.body, expr.parameter.name)
+        expr.parameter.tag === "name" && expr.parameter.qualifier === "none"
       ) {
-        analysis.inferredParameters.set(expr.parameter, "linear");
-        parameterOwnership = {
-          tag: "leaf",
-          qualifier: "linear",
-          source: expr.parameter,
-        };
+        const inferred = ownershipTransparent(
+          expr.body,
+          expr.parameter,
+          scope,
+          analysis,
+        );
+        if (inferred !== null) {
+          analysis.inferredParameters.set(expr.parameter, "linear");
+          analysis.inferredParameterInputs.set(expr.parameter, inferred);
+          parameterOwnership = inferred;
+        }
       }
       declareProduced(
         expr.parameter,
@@ -2321,6 +2683,7 @@ function installRecursiveCapture(
     qualifier: binding.qualifier,
     owned: binding.owned,
     parameter: binding.parameter,
+    parameterInput: binding.parameterInput,
     parameterPattern: binding.parameterPattern,
     result: binding.result,
     value: binding.value,
@@ -2341,6 +2704,7 @@ function extractionParts(
     tag: "leaf" as const,
     qualifier,
     source: null,
+    path: [],
   }));
 }
 
@@ -2428,7 +2792,8 @@ function sameProduced(left: Produced, right: Produced): boolean {
   if (left.tag !== right.tag) return false;
   if (left.tag === "none" && right.tag === "none") return true;
   if (left.tag === "leaf" && right.tag === "leaf") {
-    return left.qualifier === right.qualifier && left.source === right.source;
+    return left.qualifier === right.qualifier && left.source === right.source &&
+      samePath(left.path, right.path);
   }
   if (left.tag === "borrow" && right.tag === "borrow") {
     return sameProduced(left.value, right.value);
@@ -2442,6 +2807,15 @@ function sameProduced(left: Produced, right: Produced): boolean {
       }
     }
     return true;
+  }
+  if (left.tag === "sequence" && right.tag === "sequence") {
+    return left.elements.length === right.elements.length &&
+      left.elements.every((value, index) =>
+        sameProduced(value, right.elements[index])
+      );
+  }
+  if (left.tag === "variant" && right.tag === "variant") {
+    return sameProduced(left.payload, right.payload);
   }
   return false;
 }
