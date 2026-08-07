@@ -533,7 +533,6 @@ pub fn evaluate_expression(
         Expression::Block {
             declarations,
             result,
-            result_effects: _,
             ..
         } => {
             let scope = child_env(Some(environment));
