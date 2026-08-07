@@ -212,9 +212,13 @@ opening = (
   LAYOUT_NEWLINE
 ) ;
 
+// The indented branch is the formatter's vertical form. Keeping it explicit
+// lets the raw Tree-sitter target distinguish continuation indentation from a
+// following statement without changing the compiler's whitespace-equivalent
+// inline form.
 result = (
   "return"
-  value:value
+  value:(value | indented_value)
   LAYOUT_NEWLINE
 ) ;
 

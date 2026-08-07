@@ -1,140 +1,32 @@
-// An immutable linked list over a compact arena. The named API and its
-// operators are ordinary Blot values, so the same implementation runs at
-// compile time and at runtime.
+// The prelude list is a polymorphic immutable arena with ordinary operator,
+// pattern-matching, fold, mapping, and iterator APIs. The same implementation
+// runs at compile time and at runtime.
 
 operators {
-  infixr 70 (::) = prepend;
-  infixl 50 (++) = append;
+  infixr 70 (::) = List.prepend;
+  infixl 50 (++) = List.append;
 }
 
 open @import "blot:prelude" ()
 
-const IntList = ([(Int, Int)], Int)
-const ListView = #Nil | #Cons (Int, IntList)
-
-sig empty = Unit -> IntList
-const empty = fn () => (Arena.singleton (0, 0), 0)
-
-sig prepend = Int -> IntList -> IntList
-const prepend = fn value => fn list =>
-  let (nodes, head) = list
-  let address = Arena.length (&nodes)
-  return (@array.push nodes (value, head), address)
-
-// A one-step view keeps arena storage private while exposing ordinary
-// constructor patterns. The tail reuses the same arena at the next address.
-sig uncons = IntList -> ListView
-const uncons = fn list =>
-  let (nodes, head) = list
-  if head == 0:
-    return #Nil
-  else:
-    return case Arena.get ((&nodes), head) of
-      #Some node => #Cons (node.0, (nodes, node.1))
-      #None => #Nil
-
-const list_items = fn list => {
-  .state = list;
-  .step = fn state => case uncons state of
-    #Nil => None
-    #Cons (value, tail) => Some (value, tail)
-  ;
-}
-
-const fold_nodes =
-  rec (fn (&nodes, address, state, visit) =>
-    if address == 0:
-      return state
-    else:
-      return case Arena.get ((&nodes), address) of
-        #Some node => fold_nodes (
-          (&nodes),
-          node.1,
-          visit (state, node.0),
-          visit
-        )
-        #None => state
-  )
-
-const fold_list = fn (list, state, visit) =>
-  let (nodes, head) = list
-  return fold_nodes ((&nodes), head, state, visit)
-
-sig reverse_nodes = ([(Int, Int)], Int, IntList) -> IntList
-const reverse_nodes =
-  rec (fn (&nodes, address, target) =>
-    if address == 0:
-      return target
-    else:
-      return case Arena.get ((&nodes), address) of
-        #Some node => reverse_nodes (
-          (&nodes),
-          node.1,
-          (node.0 :: target)
-        )
-        #None => target
-  )
-
-sig reverse_onto = (IntList, IntList) -> IntList
-const reverse_onto = fn (source, target) =>
-  let (nodes, head) = source
-  return reverse_nodes ((&nodes), head, target)
-
-sig reverse = IntList -> IntList
-const reverse = fn list => reverse_onto (list, empty ())
-
-sig append = IntList -> IntList -> IntList
-const append = fn left => fn right => reverse_onto (reverse left, right)
-
-sig from_array = [Int] -> IntList
-const from_array = fn values =>
-  let reversed = fold (values, empty (), fn (list, value) => (value :: list))
-  return reverse reversed
-
-sig map_list = (IntList, (Int -> Int)) -> IntList
-const map_list = fn (list, transform) =>
-  let reversed =
-    fold_list (
-      list,
-      empty (),
-      fn (result, value) =>
-        return (transform value :: result)
-    )
-  return reverse reversed
-
-sig to_array = IntList -> [Int]
-const to_array = fn list =>
-  return fold_list (list, [], fn (values, value) => @array.push values value)
-
-sig sum_list = IntList -> Int
-const sum_list = fn list => fold_list (list, 0, fn (sum, value) => sum + value)
+const IntList = List.of Int
 
 sig sum_matching = IntList -> Int
 const sum_matching =
-  rec (fn list => case uncons list of
+  rec (fn list => case List.uncons list of
     #Nil => 0
     #Cons (value, tail) => value + sum_matching tail
   )
 
-const List =
-  {
-    .empty = empty;
-    .prepend = prepend;
-    .uncons = uncons;
-    .items = list_items;
-    .append = append;
-    .from_array = from_array;
-    .fold = fold_list;
-    .map = map_list;
-    .reverse = reverse;
-    .to_array = to_array;
-    .sum = sum_list;
-  }
-
-const Primes = comptime (2 :: 3 :: 5 :: 7 :: List.empty ())
+const Primes = comptime (2 :: 3 :: 5 :: 7 :: List.empty)
 const Doubled = comptime List.map (Primes, fn value => value * 2)
 const Combined = comptime (Primes ++ Doubled)
-const compile_time_total = comptime List.sum Combined
+const compile_time_total =
+  comptime List.fold (
+    Combined,
+    0,
+    fn (total, value) => total + value
+  )
 const compile_time_values = comptime List.to_array Combined
 
 let runtime_list = List.from_array (upto (1, 11))
@@ -148,12 +40,20 @@ for value in List.items runtime_list:
   iterated_total := iterated_total + value
 
 return {
-  .runtime_total = List.sum runtime_list;
+  .runtime_total = List.fold (
+    runtime_list,
+    0,
+    fn (total, value) => total + value
+  );
   .iterated_total = iterated_total;
   .matched_total = sum_matching runtime_list;
   .matched_head = matched_head;
   .prefixed = List.to_array prefixed;
-  .repeated_total = List.sum repeated;
+  .repeated_total = List.fold (
+    repeated,
+    0,
+    fn (total, value) => total + value
+  );
   .compile_time_total = compile_time_total;
   .compile_time_values = compile_time_values;
 }

@@ -446,7 +446,7 @@ export interface OpeningCursor extends RuleCursorBase<"opening"> {
 }
 
 export interface ResultCursor extends RuleCursorBase<"result"> {
-  field(name: "value"): ValueCursor;
+  field(name: "value"): IndentedValueCursor | ValueCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }

@@ -20,7 +20,7 @@ const Small = 1 | 2 | 3 | #Woop | "hello"
 const NonZero = Int \ 0
 const JustOne = Int & 1
 
-// Set algebra over unions. `|` and `\` are `Set.union` and `Set.diff` — no
+// Set algebra over unions. `|` and `\` are `Type.union` and `Type.diff` — no
 // more built in than `+` is.
 const Value = I32 | Str
 const Verb = Method \ "PUT"

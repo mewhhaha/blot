@@ -22,11 +22,11 @@ in a benchmark months later.
 | `lexerStates`               |               122 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |                31 | worst-case island candidates allocated per token   |
 | `islandCount`               |                86 | one island for every grammar rule                  |
-| `islandStates`              |               504 |                                                    |
-| `islandTransitions`         |               517 |                                                    |
+| `islandStates`              |               505 |                                                    |
+| `islandTransitions`         |               519 |                                                    |
 | `contractionRounds`         |                33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      |           864,864 | immutable device table                             |
-| `packedBytes`               |           662,943 | version-3 runtime section                          |
+| `denseTransitionBytes`      |           866,580 | immutable device table                             |
+| `packedBytes`               |           664,297 | version-3 runtime section                          |
 | `rootLoopIsland`            | 5 (`declaration`) | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |                 9 | islands admitted to parallel long-region execution |
 
@@ -47,6 +47,12 @@ tokens for logical newline, indent, and dedent, and then gives that elaborated
 stream to the generated compact CPU frontend. Physical offsets are retained for
 diagnostics. Because the layout tokens have fixed terminal identities, all 86
 rules still satisfy the general profile and no parser resolution is required.
+
+Giving `return` the same explicit indented-value branch as a binding adds one
+island state, two island transitions, 1,716 dense-transition bytes, and 1,354
+packed bytes. It lets the Tree-sitter target recognize the formatter's vertical
+`return` form without changing island count, candidate multiplicity, contraction
+rounds, scratch factors, or parallel long-region admission.
 
 Requiring explicit `<-` for an element in an ordinary statement region removes
 two island states, two island transitions, 3,216 dense-transition bytes, and

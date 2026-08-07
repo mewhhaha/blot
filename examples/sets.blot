@@ -1,13 +1,13 @@
 // Set algebra, and what "overloading an operator" means here.
 //
 // `|`, `&`, and `\` are not syntax. The fixity table binds each spelling to a
-// field of a record named `TypeSet`, exactly the way `+` is bound to `Num.add`:
+// field of a record named `Type`, exactly the way `+` is bound to `Num.add`:
 //
-//   infixl 45 (|)  = TypeSet.union;
-//   infixl 45 (&)  = TypeSet.intersect;
-//   infixl 45 (\)  = TypeSet.diff;
+//   infixl 45 (|)  = Type.union;
+//   infixl 45 (&)  = Type.intersect;
+//   infixl 45 (\)  = Type.diff;
 //
-// `TypeSet` operates on types because types are sets. The value-level `Set`
+// `Type` provides set algebra because types denote sets. The value-level `Set`
 // below is an ordinary polymorphic collection factory with explicit equality.
 
 open @import "blot:prelude" ()
@@ -16,9 +16,9 @@ const Method = "GET" | "POST" | "PUT" | "DELETE"
 const Safe = Method \ "PUT" \ "DELETE"
 const Tag = (#X | #Y | #Z) & (#Y | #Z | #W)
 
-// A field is a function, so an operator is a function. `TypeSet.diff Method` is the
+// A field is a function, so an operator is a function. `Type.diff Method` is the
 // section "everything in Method except", which is not a special form either.
-const without = TypeSet.diff Method
+const without = Type.diff Method
 const readonly = without "PUT"
 
 const IntSet = Set.with Ord.eq

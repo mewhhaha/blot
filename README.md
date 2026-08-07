@@ -454,14 +454,15 @@ instead, which is what derivation wants anyway.
 
 `struct` is prelude source — about forty lines over `@shape.*` and
 `@type.attach` — not a compiler builtin. Types are sets, so `|`, `&`, and `\`
-are bound to `Set.union`, `Set.intersect`, and `Set.diff` the same way `+` is
+are bound to `Type.union`, `Type.intersect`, and `Type.diff` the same way `+` is
 bound to `Num.add` — at a prelude record, never at a primitive. Because the
-binding resolves by name at the use site, a module that defines its own `Set`
+binding resolves by name at the use site, a module that defines its own `Type`
 with those three fields rebinds all three operators for itself; structural width
 subtyping is the whole of the dispatch, and there is no coherence rule because
-there is no instance table. `examples/sets.blot` does exactly that over arrays.
-Ranges, arrows, and seals are ordinary calls too, and reflection over a shape's
-fields is a `fold`, which is why `derive` is a function rather than a macro.
+there is no instance table. The runtime `Set` collection is a separate prelude
+record and does not affect the type operators. Ranges, arrows, and seals are
+ordinary calls too, and reflection over a shape's fields is a `fold`, which is
+why `derive` is a function rather than a macro.
 
 Effects are a shape of operation types handed to one primitive, and performing
 one is an ordinary call, so the row is inferred rather than declared. It is

@@ -63,9 +63,9 @@ export const DEFAULT_FIXITIES: readonly Fixity[] = [
   // Set algebra mirrors arithmetic: intersection is the product, union and
   // difference are the sum and the remainder, and the product binds tighter.
   // `A | B & C` is `A | (B & C)`.
-  entry("|", "left", 40, "TypeSet.union"),
-  entry("\\", "left", 40, "TypeSet.diff"),
-  entry("&", "left", 45, "TypeSet.intersect"),
+  entry("|", "left", 40, "Type.union"),
+  entry("\\", "left", 40, "Type.diff"),
+  entry("&", "left", 45, "Type.intersect"),
 
   entry("<+", "left", 50, "attach"),
 

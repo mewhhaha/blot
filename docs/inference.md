@@ -255,8 +255,8 @@ meaningless anyway.
 | 24    | `&&`                        | right  | `Logic.and`                     |
 | 25    | `->`                        | right  | `@type.arrow`                   |
 | 30    | `==` `!=` `<` `<=` `>` `>=` | none   | `Eq.*`, `Ord.*`                 |
-| 40    | `\|` `\\`                   | left   | `TypeSet.union`, `TypeSet.diff` |
-| 45    | `&`                         | left   | `TypeSet.intersect`             |
+| 40    | `\|` `\\`                   | left   | `Type.union`, `Type.diff`       |
+| 45    | `&`                         | left   | `Type.intersect`                |
 | 50    | `<+`                        | left   | `attach`                        |
 | 55    | `<>`                        | right  | `Text.append`                   |
 | 60    | `+` `-`                     | left   | `Num.add`, `Num.sub`            |

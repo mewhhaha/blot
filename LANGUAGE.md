@@ -763,10 +763,14 @@ const { .source = target; .value; } = record
 
 ```blot
 return value
+
+return
+  value
 ```
 
+The value may follow `return` on the same line or in an indented continuation.
 `return` exits the nearest enclosing module or explicit indentation block with
-its value. Statement conditionals and `for` bodies do not establish return
+that value. Statement conditionals and `for` bodies do not establish return
 scopes, so a return crosses them. Value-producing `if` and `case` expressions
 are separate result scopes and do not inherit that surrounding target. Their
 branches are values, so an indented branch may contain statements; a return in
@@ -1130,8 +1134,8 @@ Default fixities, from loosest to tightest:
 | 24    | `&&`                        | right           | `Logic.and`                     |
 | 25    | `->`                        | right           | `@type.arrow`                   |
 | 30    | `==` `!=` `<` `<=` `>` `>=` | non-associative | `Eq.*`, `Ord.*`                 |
-| 40    | `\|` `\`                    | left            | `TypeSet.union`, `TypeSet.diff` |
-| 45    | `&`                         | left            | `TypeSet.intersect`             |
+| 40    | `\|` `\`                    | left            | `Type.union`, `Type.diff`       |
+| 45    | `&`                         | left            | `Type.intersect`                |
 | 50    | `<+`                        | left            | `attach`                        |
 | 55    | `<>`                        | right           | `Text.append`                   |
 | 60    | `+` `-`                     | left            | `Num.add`, `Num.sub`            |
@@ -2567,9 +2571,9 @@ record currently exports:
 - collections: `List`, `Map`, `Set`, and the text-keyed `Dict` specialization;
 - iterators: `ever`, `Iter`, `iterate`, and `collect`;
 - variants: `Option`, `None`, `Some`, `unwrap_or`, `Result`, `Ok`, `Error`;
-- type tools: `Type`, `TypeSet`, `attach`, `seal`, `unseal`, `Reflect`,
-  `reflect`, `refines`, `members`, `union_of`, `Extract`, `Exclude`, `Pick`,
-  `Omit`, `opened`, and `range`;
+- type tools: `Type`, `attach`, `seal`, `unseal`, `Reflect`, `reflect`,
+  `refines`, `members`, `union_of`, `Extract`, `Exclude`, `Pick`, `Omit`,
+  `opened`, and `range`;
 - storage tools: `struct`, `reorder`, `layout`, `aligned`, `bit_width`, and
   `packed`; and
 - standard types and integer range constructors: `I`, `I8`, `I16`, `I32`, `I64`,
@@ -2619,15 +2623,13 @@ concrete source and result instantiation. A polymorphic namespace such as `List`
 or `Array` structurally satisfies every compatible instantiation; callers still
 pass or name that namespace explicitly.
 
-`List.of A` is an immutable arena-backed list represented as
-`([(A, Int)],
-Int)`, where the second value is the head address and `-1` is
-empty. `List.view
-A` is `#Nil | #Cons (A, List.of A)`, and `List.uncons`
-produces that one-step view for pattern matching. `List` also supplies `empty`,
-`singleton`, `prepend`, `append`, `fold`, `map`, `filter`, `reverse`, array
-conversion, `length`, and an `items` iterator. These are ordinary source
-functions and can execute during comptime evaluation.
+`List.of A` is an immutable arena-backed list. Its representation is an array of
+`(A, Int)` nodes paired with the head address; `-1` is empty. `List.view A` is
+`#Nil | #Cons (A, List.of A)`, and `List.uncons` produces that one-step view for
+pattern matching. `List` also supplies `empty`, `singleton`, `prepend`,
+`append`, `fold`, `map`, `filter`, `reverse`, array conversion, `length`, and an
+`items` iterator. These are ordinary source functions and can execute during
+comptime evaluation.
 
 `Set.of A` is an insertion-ordered array of unique values. `Set.with equal`
 returns operations for the supplied equality: construction, membership,
@@ -2635,15 +2637,22 @@ returns operations for the supplied equality: construction, membership,
 `map`, `map_with`, `length`, and `items`. `insert` and `remove` return
 `(previous, updated)` so replacing or removing an owned value never silently
 discards it. `map` uses the namespace's equality for an endomorphic transform.
-When mapping changes the element type,
-`map_with (values, mapped_equal,
-transform)` takes the result equality
-explicitly and removes mapped duplicates.
+When mapping changes the element type, `map_with` takes the result equality
+explicitly and removes mapped duplicates:
 
-`Map.with` and `Set.with` require curried equality, such as `Ord.eq` or
-`fn left
-=> fn right => text_eq (left, right)`. Equality selection is visible at
-the construction site; there is no implicit instance lookup.
+```blot
+set.map_with (values, mapped_equal, transform)
+```
+
+`Map.with` and `Set.with` require curried equality. `Ord.eq` already has that
+shape; text equality can be adapted explicitly:
+
+```blot
+Set.with (fn left => fn right => text_eq (left, right))
+```
+
+Equality selection is visible at the construction site; there is no implicit
+instance lookup.
 
 Important conventional values include:
 

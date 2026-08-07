@@ -1,0 +1,88 @@
+// Polymorphic collection namespaces are ordinary structural implementations.
+// Equality-dependent collections are created explicitly, so no hidden
+// typeclass lookup chooses how keys or values compare.
+
+open @import "blot:prelude" ()
+
+sig map_lengths =
+  Mappable (List.of Str, List.of Int, Str, Int) -> List.of Str -> List.of Int
+let map_lengths = fn implementation => fn values =>
+  return implementation.map (values, Text.length)
+
+sig total_lengths = Foldable (List.of Str, Str, Int) -> List.of Str -> Int
+let total_lengths = fn implementation => fn values =>
+  return implementation.fold (
+    values,
+    0,
+    fn (total, value) => total + Text.length value
+  )
+
+sig retain_long = Filterable (List.of Str, Str) -> List.of Str -> List.of Str
+let retain_long = fn implementation => fn values =>
+  return implementation.filter (values, fn value => Text.length value > 3)
+
+sig collect_words =
+  Iterable (List.of Str, Str, List.of Str) -> List.of Str -> [Str]
+let collect_words = fn implementation => fn values =>
+  let collected = Array.empty
+  for value in implementation.items values:
+    collected := @array.push collected value
+
+  return collected
+
+sig map_name_lengths =
+  Mappable (
+    Map.of (Int, Str),
+    Map.of (Int, Int),
+    Str,
+    Int
+  ) -> Map.of (Int, Str) -> Map.of (Int, Int)
+let map_name_lengths = fn implementation => fn names =>
+  return implementation.map (names, Text.length)
+
+sig increment_members =
+  Mappable (
+    Set.of Int,
+    Set.of Int,
+    Int,
+    Int
+  ) -> Set.of Int -> Set.of Int
+let increment_members = fn implementation => fn members =>
+  return implementation.map (members, fn value => value + 1)
+
+let words = List.from_array ["one", "two", "three"]
+let lengths = map_lengths List words
+let long_words = retain_long List words
+
+const IntMap = Map.with Ord.eq
+sig names = Map.of (Int, Str)
+let names = IntMap.empty
+let names = (IntMap.put (names, 2, "two")).1
+let names = (IntMap.put (names, 1, "one")).1
+let replaced = IntMap.put (names, 2, "deux")
+sig previous = Option Str
+let previous = replaced.0
+let name_lengths = map_name_lengths IntMap replaced.1
+
+const TextSet = Set.with (fn left => fn right => text_eq (left, right))
+sig colours = Set.of Str
+let colours = TextSet.empty
+let colours = (TextSet.insert (colours, "red")).1
+let colours = (TextSet.insert (colours, "green")).1
+let more_colours = ["green", "tan", "blue"]
+let colours = TextSet.union colours more_colours
+let colour_lengths = TextSet.map_with (colours, Ord.eq, Text.length)
+let incremented_lengths = increment_members (Set.with Ord.eq) colour_lengths
+
+return {
+  .lengths = List.to_array lengths;
+  .total_length = total_lengths List words;
+  .long_words = List.to_array long_words;
+  .iterated = collect_words List words;
+  .map_previous = previous;
+  .map_keys = IntMap.keys replaced.1;
+  .map_values = IntMap.values name_lengths;
+  .set_values = colours;
+  .set_lengths = colour_lengths;
+  .incremented_lengths = incremented_lengths;
+}

@@ -1,0 +1,1 @@
+{ .lengths = [3, 3, 5]; .total_length = 11; .long_words = ["three"]; .iterated = ["one", "two", "three"]; .map_previous = #Some "two"; .map_keys = [2, 1]; .map_values = [4, 3]; .set_values = ["red", "green", "tan", "blue"]; .set_lengths = [3, 5, 4]; .incremented_lengths = [4, 6, 5]; }

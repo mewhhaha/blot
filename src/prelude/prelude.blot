@@ -11,15 +11,15 @@
 //   * every other multi-argument function takes one shape, because naming beats
 //     position and a tuple is still one parameter.
 
-// --- sets -------------------------------------------------------------------
+// --- types ------------------------------------------------------------------
 //
-// Types are sets, so the three set operations are one namespace rather than
-// three loose primitives. `|` names `TypeSet.union` exactly the way `+` names
-// `Num.add`: the operator points at prelude source, and the prelude decides
-// which primitive answers. Nothing about `|` is privileged, and this has to
-// come first because the declarations below already use it.
+// `|` names `Type.union` exactly the way `+` names `Num.add`: the operator
+// points at prelude source, and the prelude decides which primitive answers.
+// Nothing about `|` is privileged. This initial namespace has to precede the
+// declarations that use it; the complete namespace is assembled after its
+// remaining operations have been defined.
 
-const TypeSet =
+const Type =
   {
     .union = fn left => fn right => @type.union left right;
     .intersect = fn left => fn right => @type.intersect left right;
@@ -972,6 +972,13 @@ const set_with = fn equal =>
       left,
       fn (values, value) => (insert (values, value)).1
     )
+  let map_with_equal = fn (values, mapped_equal, transform) =>
+    return fold (
+      values,
+      Array.empty,
+      fn (mapped, value) =>
+        return (set_insert (mapped_equal, mapped, transform value)).1
+    )
   return {
     .of = set_type;
     .empty = Array.empty;
@@ -995,14 +1002,8 @@ const set_with = fn equal =>
     ;
     .fold = fold;
     .filter = array_filter;
-    .map = fn (values, mapped_equal, transform) =>
-      return fold (
-        values,
-        Array.empty,
-        fn (mapped, value) =>
-          return (set_insert (mapped_equal, mapped, transform value)).1
-      )
-    ;
+    .map = fn (values, transform) => map_with_equal (values, equal, transform);
+    .map_with = map_with_equal;
     .length = Array.length;
     .items = array_items;
   }
@@ -1536,10 +1537,8 @@ const packed = fn shape =>
 
 const Type =
   {
+    ...Type;
     .range = range;
-    .union = TypeSet.union;
-    .intersect = TypeSet.intersect;
-    .diff = TypeSet.diff;
     .arrow = arrow;
     .of = type_of;
     .seal = seal;
@@ -1618,7 +1617,6 @@ return {
   .Error = Error;
 
   .Type = Type;
-  .TypeSet = TypeSet;
   .attach = attach;
   .seal = seal;
   .unseal = unseal;
