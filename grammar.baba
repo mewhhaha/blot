@@ -337,6 +337,7 @@ continued_primary_expression = (
   | unit
   | case_expression
   | handler_composition
+  | do_block
   | array
   | shape
   | effect_row
@@ -384,7 +385,7 @@ keyword = (
   "module" | "operators" | "infixl" | "infixr" | "infix" | "prefix"
   | "let" | "const" | "sig" | "return"
   | "if" | "else" | "case" | "of" | "rec" | "comptime" | "open"
-  | "for" | "in" | "break" | "try" | "with" | "fn"
+  | "for" | "in" | "break" | "try" | "with" | "do" | "fn"
 ) ;
 
 primary_expression = (
@@ -399,6 +400,7 @@ primary_expression = (
   | conditional
   | case_expression
   | handler_composition
+  | do_block
   | block
   | array
   | shape
@@ -547,6 +549,7 @@ element_child_primary_expression = (
   | conditional
   | case_expression
   | handler_composition
+  | do_block
   | block
   | array
   | parenthesized_or_tuple
@@ -746,10 +749,20 @@ handler_composition_action = (
   ")"
 ) ;
 
-// A block normally produces `()`. `return value` is a statement, so it can
-// leave the block from a nested statement branch without making a bare tail
-// expression compete with `name := value;` on IDENT.
+// Construct-owned suites lower through this internal block form. It has no
+// opening source token of its own.
 block = (
+  LAYOUT_NEWLINE
+  LAYOUT_INDENT
+  statements:statement*
+  LAYOUT_DEDENT
+) ;
+
+// `do:` is the explicit statement scope available as a value. Parentheses are
+// only grouping/tuple syntax and never announce a statement suite.
+do_block = (
+  "do"
+  ":"
   LAYOUT_NEWLINE
   LAYOUT_INDENT
   statements:statement*
