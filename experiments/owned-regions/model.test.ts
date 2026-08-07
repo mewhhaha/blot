@@ -12,6 +12,7 @@ import {
   split,
   swap,
 } from "./model.ts";
+import { arrayIntervalFamily } from "../../src/linear/region_interval.ts";
 import { quicksort } from "./quicksort.ts";
 
 Deno.test("split is a zero-copy disjoint cover of one backing store", () => {
@@ -29,15 +30,13 @@ Deno.test("split is a zero-copy disjoint cover of one backing store", () => {
   const changed = set(result.left, 1, 99);
   assertEquals(changed.tag, "updated");
   if (changed.tag !== "updated") return;
-  assertEquals(get(result.right, 0), 30);
+  assertEquals(get(result.right, 0), { tag: "read", value: 30 });
 
   const rejoined = join(changed.region, result.right);
   assertEquals(rejoined.tag, "joined");
   if (rejoined.tag !== "joined") return;
   const frozen = freeze(rejoined.region);
   assertEquals(frozen.values, [10, 99, 30, 40, 50]);
-  assertEquals(frozen.stats.storeAllocations, 1);
-  assertEquals(frozen.stats.elementCopies, 0);
 });
 
 Deno.test("consumed parents cannot be observed after split", () => {
@@ -138,7 +137,6 @@ Deno.test("swap is destructive within one region and preserves the permit range"
   const frozen = freeze(result.region);
   assertEquals(frozen.values, [4, 2, 3, 1]);
   assertEquals(frozen.stats.swaps, 1);
-  assertEquals(frozen.stats.elementCopies, 0);
 });
 
 Deno.test("quicksort sorts in one Store with no element copies from split/join", () => {
@@ -150,8 +148,6 @@ Deno.test("quicksort sorts in one Store with no element copies from split/join",
   const frozen = freeze(sorted);
   assertEquals(frozen.values, [3, 9, 10, 27, 27, 38, 43, 82]);
   assertEquals(frozen.backingId, id);
-  assertEquals(frozen.stats.storeAllocations, 1);
-  assertEquals(frozen.stats.elementCopies, 0);
   assert(frozen.stats.splits > 0);
   assertEquals(frozen.stats.splits, frozen.stats.joins);
 });
@@ -174,8 +170,26 @@ Deno.test("quicksort preserves the region invariants over generated inputs", () 
     const expected = [...values].sort((left, right) => left - right);
     const frozen = freeze(quicksort(claim(values)));
     assertEquals(frozen.values, expected, `trial ${trial}`);
-    assertEquals(frozen.stats.storeAllocations, 1);
-    assertEquals(frozen.stats.elementCopies, 0);
     assertEquals(frozen.stats.splits, frozen.stats.joins);
   }
+});
+
+Deno.test("a read reports an undefined element as a value, not a rejection", () => {
+  // `T | undefined` would make a legitimately absent element indistinguishable
+  // from an out-of-range index, and the modeled `@region.array.get` has to tell
+  // a caller which one it got.
+  const region = claim<number | undefined>([undefined, 1]);
+  assertEquals(get(region, 0), { tag: "read", value: undefined });
+  assertEquals(get(region, 1), { tag: "read", value: 1 });
+  assertEquals(get(region, 2), { tag: "out_of_bounds" });
+});
+
+Deno.test("the model records the region family it verifies against", () => {
+  // The certificate's family name comes from the descriptor the model checks
+  // its splits and joins with, so the two cannot name different algebras.
+  const frozen = freeze(claim([1, 2, 3]));
+  const [claimEvent] = frozen.authorityCertificate.events;
+  assert(claimEvent.tag === "claim");
+  if (claimEvent.tag !== "claim") return;
+  assertEquals(claimEvent.family, arrayIntervalFamily.name);
 });

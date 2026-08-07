@@ -214,3 +214,28 @@ Deno.test("release cannot consume one authority twice", () => {
   };
   assertEquals(verifyRegionAuthorityCertificate(certificate, ROOTS), null);
 });
+
+Deno.test("an event carrying an unrecognized tag is rejected", () => {
+  // A trace is data. The union constrains well-typed callers, but a hostile
+  // certificate can carry anything, and an unknown tag must not reach the
+  // release rule by falling through the tag matches.
+  const events = [
+    {
+      tag: "claim",
+      root: ROOT,
+      origin: 7,
+      family: "array-interval-v1",
+      permit: 0,
+      operation: "@region.array.claim",
+    },
+    { tag: "retire", permit: 0, operation: "not a real event" },
+  ] as unknown as RegionAuthorityCertificate["events"];
+
+  assertEquals(
+    verifyRegionAuthorityCertificate(
+      { tag: "region-authority", schema: 1, events },
+      ROOTS,
+    ),
+    null,
+  );
+});

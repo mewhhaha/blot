@@ -17,9 +17,8 @@ Deno.test("shared acquisition copies once then sorts without further copies", ()
 
   assertEquals(source, [4, 1, 3, 2]);
   assertEquals(frozen.values, [1, 2, 3, 4]);
-  assertEquals(frozen.stats.storeAllocations, 1);
+  assertEquals(frozen.stats.acquisition, "copy");
   assertEquals(frozen.stats.acquisitionCopies, source.length);
-  assertEquals(frozen.stats.elementCopies, 0);
 });
 
 Deno.test("unique acquisition transfers the exact Store without copying", () => {
@@ -33,9 +32,8 @@ Deno.test("unique acquisition transfers the exact Store without copying", () => 
   const frozen = freeze(quicksort(slice));
   assertEquals(frozen.backingId, sourceBacking);
   assertEquals(frozen.values, [1, 2, 3, 4]);
-  assertEquals(frozen.stats.storeAllocations, 1);
+  assertEquals(frozen.stats.acquisition, "transfer");
   assertEquals(frozen.stats.acquisitionCopies, 0);
-  assertEquals(frozen.stats.elementCopies, 0);
 });
 
 Deno.test("a unique Store root can enter region authority only once", () => {

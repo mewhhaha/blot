@@ -18,6 +18,4 @@ Deno.test("quicksort runtime invariant and compiler authority graph agree", () =
       roots,
     ) !== null,
   );
-  assertEquals(frozen.stats.storeAllocations, 1);
-  assertEquals(frozen.stats.elementCopies, 0);
 });

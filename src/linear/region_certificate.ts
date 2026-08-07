@@ -15,6 +15,10 @@
  * carry region derivation alongside the existing path-sensitive ownership
  * certificate, as specified in `spec/OWNED_REGIONS.md`.
  *
+ * Every event tag is matched explicitly. A trace is data, not a typed value:
+ * the union below constrains well-typed callers, and an event carrying any
+ * other tag is rejected rather than falling through to the release rule.
+ *
  * A region-family validator supplies the semantic half for each trace event:
  * e.g. an array-interval partition must be a disjoint cover, a combine must
  * join compatible regions, and a write must stay inside its carried interval.
@@ -235,6 +239,7 @@ export function verifyRegionAuthorityCertificate(
       continue;
     }
 
+    if (event.tag !== "release") return null;
     if (consume(event.permit, index) === null) return null;
     released.add(event.permit);
   }

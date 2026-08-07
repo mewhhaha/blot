@@ -18,6 +18,12 @@ first sketch but are not interchangeable:
 `quicksort.ts` sorts one backing Store after acquisition. Split and join
 allocate permission metadata but perform zero element copies.
 
+It recurses on both partitions without a depth bound, so it is a model of the
+region algebra rather than a sorting implementation: an already-ordered input of
+a few thousand elements exhausts the host stack. A production quicksort would
+recurse on the smaller side and iterate on the larger; that choice is about
+sorting, and it would not change which authorities the algorithm consumes.
+
 ## Two acquisition paths, one source meaning
 
 A plain `claim(values)` models the safe source semantics. It copies a
@@ -34,8 +40,15 @@ shared/unknown input -> copy -> fresh Store root -> region authority
 proved unique input ---------> existing Store root -> region authority
 ```
 
-The tests distinguish `acquisitionCopies` from `elementCopies`. Quicksort should
-perform no element copies after acquisition on either path.
+The tests distinguish the two paths by `acquisition` (`copy` or `transfer`) and
+by backing identity: the transfer path freezes the very Store `freshOwned`
+allocated. `acquisitionCopies` is derived from the acquisition kind and the
+Store's own length rather than recorded by the call site that allocated it.
+
+There is deliberately no counter for element copies after acquisition. Nothing
+in the model can perform one — split and join produce permit metadata only, and
+set and swap write cells in place — so a counter would report zero whatever the
+code did. A stat that cannot vary is not evidence.
 
 This distinction came from an important counterexample. A linear binding alone
 is not a Store-uniqueness proof:

@@ -85,8 +85,8 @@ function swapOrThrow<T>(
 }
 
 function requiredGet<T>(region: Region<T>, index: number): T {
-  const value = get(region, index);
-  if (value !== undefined) return value;
+  const result = get(region, index);
+  if (result.tag === "read") return result.value;
   throw new RegionModelError(
     "REGION_INTERNAL_GET",
     `proved quicksort read ${index} was rejected`,

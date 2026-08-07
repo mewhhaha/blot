@@ -3,6 +3,11 @@ import {
   type RegionAuthorityEvent,
   verifyRegionAuthorityCertificate,
 } from "../../src/linear/region_certificate.ts";
+import { pairwiseDisjoint } from "../../src/linear/region_family.ts";
+import {
+  arrayIntervalFamily,
+  type IntervalRegion,
+} from "../../src/linear/region_interval.ts";
 
 /**
  * Executable model for spec/OWNED_REGIONS.md.
@@ -19,7 +24,7 @@ import {
 
 const REGION_BRAND: unique symbol = Symbol("blot-owned-region");
 const OWNED_STORE_BRAND: unique symbol = Symbol("blot-owned-store");
-const ARRAY_INTERVAL_FAMILY = "array-interval-v1";
+const ARRAY_INTERVAL_FAMILY = arrayIntervalFamily.name;
 
 export interface Region<T> {
   readonly [REGION_BRAND]: T;
@@ -40,8 +45,20 @@ export interface Bounds {
   readonly extent: number;
 }
 
+/**
+ * What one region graph did to its Store.
+ *
+ * These count operations the model performs; they are not evidence that no
+ * other copy happened. Nothing after acquisition can copy elements, because
+ * split and join only produce permit metadata and set and swap write cells in
+ * place — that property is structural, so there is no counter for it.
+ */
 export interface RegionStats {
-  readonly storeAllocations: number;
+  /**
+   * How this graph obtained its Store. `copy` is the source semantics of
+   * `claim`; `transfer` is the zero-copy path a Store-provenance proof unlocks.
+   */
+  readonly acquisition: Acquisition;
   /** Elements copied while acquiring a private Store from shared input. */
   readonly acquisitionCopies: number;
   readonly permitAllocations: number;
@@ -49,9 +66,9 @@ export interface RegionStats {
   readonly joins: number;
   readonly writes: number;
   readonly swaps: number;
-  /** Element copies caused after acquisition by region operations. */
-  readonly elementCopies: number;
 }
+
+export type Acquisition = "copy" | "transfer";
 
 export interface FrozenArray<T> {
   readonly backingId: number;
@@ -78,19 +95,21 @@ export type JoinResult<T> =
     readonly right: Region<T>;
   };
 
+export type ReadResult<T> =
+  | { readonly tag: "read"; readonly value: T }
+  | { readonly tag: "out_of_bounds" };
+
 export type UpdateResult<T> =
   | { readonly tag: "updated"; readonly region: Region<T> }
   | { readonly tag: "out_of_bounds"; readonly original: Region<T> };
 
 interface MutableStats {
-  storeAllocations: number;
-  acquisitionCopies: number;
+  acquisition: Acquisition;
   permitAllocations: number;
   splits: number;
   joins: number;
   writes: number;
   swaps: number;
-  elementCopies: number;
 }
 
 interface Store<T> {
@@ -133,7 +152,7 @@ let nextPermit = 1;
  * that the input allocation has no persistent observer.
  */
 export function claim<T>(values: readonly T[]): Region<T> {
-  return claimStore(allocateStore(values, values.length));
+  return claimStore(allocateStore(values, "copy"));
 }
 
 /**
@@ -142,7 +161,7 @@ export function claim<T>(values: readonly T[]): Region<T> {
  * ordinary shareable source value.
  */
 export function freshOwned<T>(values: readonly T[]): OwnedStore<T> {
-  return new OwnedStoreImpl(allocateStore(values, 0));
+  return new OwnedStoreImpl(allocateStore(values, "transfer"));
 }
 
 /**
@@ -198,6 +217,17 @@ export function split<T>(region: Region<T>, offset: number): SplitResult<T> {
   const store = permit.store;
   const source = permit.id;
   const middle = permit.start + offset;
+  // The spatial law is the family's, not the model's, and it is checked before
+  // any authority moves so a disagreement conserves the original permit.
+  const sourceRegion = interval(permit);
+  requireFamily(
+    arrayIntervalFamily.verifyPartition(sourceRegion, { offset }, [
+      { ...sourceRegion, end: middle },
+      { ...sourceRegion, start: middle },
+    ]),
+    "@region.split",
+    "partition is not an exact disjoint cover of its source",
+  );
   consume(permit);
   const left = spawn(store, permit.start, middle);
   const right = spawn(store, middle, permit.end);
@@ -234,6 +264,16 @@ export function join<T>(
   const rightId = rightPermit.id;
   const start = leftPermit.start;
   const end = rightPermit.end;
+  const parts = [interval(leftPermit), interval(rightPermit)];
+  requireFamily(
+    arrayIntervalFamily.verifyCombine(parts, "ordered-adjacent", {
+      ...parts[0],
+      start,
+      end,
+    }),
+    "@region.join",
+    "combination is not the ordered union of its parts",
+  );
   consume(leftPermit);
   consume(rightPermit);
   const region = spawn(store, start, end);
@@ -248,11 +288,17 @@ export function join<T>(
   return { tag: "joined", region };
 }
 
-/** Models total borrowed relative indexing. */
-export function get<T>(region: Region<T>, index: number): T | undefined {
+/**
+ * Models total borrowed relative indexing.
+ *
+ * The result is discriminated rather than `T | undefined`: an element may
+ * legitimately be `undefined`, and a modeled `@region.array.get` must not
+ * report a value that exists as a rejected index.
+ */
+export function get<T>(region: Region<T>, index: number): ReadResult<T> {
   const permit = live(region);
-  if (!relativeIndex(permit, index)) return undefined;
-  return permit.store.cells[permit.start + index];
+  if (!relativeIndex(permit, index)) return { tag: "out_of_bounds" };
+  return { tag: "read", value: permit.store.cells[permit.start + index] };
 }
 
 /**
@@ -351,7 +397,7 @@ export function freeze<T>(region: Region<T>): FrozenArray<T> {
   };
   return {
     backingId: store.id,
-    stats: snapshotStats(store.stats),
+    stats: snapshotStats(store),
     authorityCertificate,
     authorityVerified: verifyRegionAuthorityCertificate(
       authorityCertificate,
@@ -375,7 +421,7 @@ export class RegionModelError extends Error {
 
 function allocateStore<T>(
   values: readonly T[],
-  acquisitionCopies: number,
+  acquisition: Acquisition,
 ): Store<T> {
   const id = nextStore++;
   return {
@@ -384,14 +430,12 @@ function allocateStore<T>(
     cells: [...values],
     live: new Map(),
     stats: {
-      storeAllocations: 1,
-      acquisitionCopies,
+      acquisition,
       permitAllocations: 0,
       splits: 0,
       joins: 0,
       writes: 0,
       swaps: 0,
-      elementCopies: 0,
     },
     authorityEvents: [],
   };
@@ -491,44 +535,81 @@ function unwrapOwned<T>(owned: OwnedStore<T>): OwnedStoreImpl<T> {
 }
 
 function relativeIndex<T>(permit: Permit<T>, index: number): boolean {
-  return integer(index) && index >= 0 && index < permit.end - permit.start;
+  return arrayIntervalFamily.contains(interval(permit), index);
 }
 
 function integer(value: number): boolean {
   return Number.isSafeInteger(value);
 }
 
+/**
+ * Every live authority for one Store must be a well-formed region of that
+ * Store, and no two may authorize the same location.
+ *
+ * Both halves are the family's rules rather than the model's: `valid` decides
+ * what a region is and `disjoint` decides what simultaneous write authority
+ * means, including how empty regions behave. Restating either here would let
+ * the model and the family it claims to implement drift apart.
+ */
 function assertInvariant<T>(store: Store<T>): void {
   const permits = [...store.live.values()];
   for (const permit of permits) {
     if (!permit.alive) {
       throw new Error(`dead permit ${permit.id} remained in live set`);
     }
-    if (
-      !integer(permit.start) || !integer(permit.end) ||
-      permit.start < 0 || permit.start > permit.end ||
-      permit.end > store.cells.length
-    ) {
+    if (!arrayIntervalFamily.valid(interval(permit))) {
       throw new Error(
         `invalid permit ${permit.id} [${permit.start},${permit.end})`,
       );
     }
   }
-  for (let left = 0; left < permits.length; left += 1) {
-    for (let right = left + 1; right < permits.length; right += 1) {
-      const a = permits[left];
-      const b = permits[right];
-      // Empty permits authorize no location and may share an endpoint/range.
-      if (a.start === a.end || b.start === b.end) continue;
-      if (a.end <= b.start || b.end <= a.start) continue;
-      throw new Error(
-        `overlapping live permits ${a.id} [${a.start},${a.end}) and ` +
-          `${b.id} [${b.start},${b.end})`,
-      );
-    }
+  if (!pairwiseDisjoint(arrayIntervalFamily, permits.map(interval))) {
+    throw new Error(
+      `overlapping live permits for Store ${store.id}: ${
+        permits.map((permit) => `${permit.id} [${permit.start},${permit.end})`)
+          .join(", ")
+      }`,
+    );
   }
 }
 
-function snapshotStats(stats: MutableStats): RegionStats {
-  return { ...stats };
+/** The family region one permit authorizes. */
+function interval<T>(permit: Permit<T>): IntervalRegion {
+  return {
+    origin: permit.store.id,
+    start: permit.start,
+    end: permit.end,
+    extent: permit.store.cells.length,
+  };
+}
+
+/**
+ * A family law the model believed it had already established. Unlike a bounds
+ * rejection this is not a program error the caller can recover from: it means
+ * the model and the family disagree about the algebra.
+ */
+function requireFamily(
+  held: boolean,
+  operation: string,
+  detail: string,
+): void {
+  if (held) return;
+  throw new RegionModelError(
+    "REGION_FAMILY_LAW",
+    `${operation}: ${detail}`,
+  );
+}
+
+/**
+ * `acquisitionCopies` is derived from how the Store was obtained and how large
+ * it actually is, rather than recorded by whichever call site allocated it. A
+ * path that copied the wrong array, or copied twice, cannot report zero.
+ */
+function snapshotStats<T>(store: Store<T>): RegionStats {
+  return {
+    ...store.stats,
+    acquisitionCopies: store.stats.acquisition === "copy"
+      ? store.cells.length
+      : 0,
+  };
 }
