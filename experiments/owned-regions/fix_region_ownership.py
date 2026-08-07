@@ -92,4 +92,32 @@ replace_once(
 ''',
 )
 
-print("fixed fresh Region roots and branch authority joins")
+replace_once(
+    "src/linear/check.ts",
+    '''  return {
+    tag: "leaf",
+    qualifier: leftLeaf.qualifier,
+    source: null,
+    path: [],
+    origins: [{
+      source: leftOrigin.source,
+      path: leftOrigin.path,
+      extractions: leftExtractions.slice(0, last),
+    }],
+  };
+''',
+    '''  return {
+    tag: "leaf",
+    qualifier: leftLeaf.qualifier,
+    source: leftOrigin.source,
+    path: leftOrigin.path,
+    origins: [{
+      source: leftOrigin.source,
+      path: leftOrigin.path,
+      extractions: leftExtractions.slice(0, last),
+    }],
+  };
+''',
+)
+
+print("fixed fresh Region roots and exact join identity restoration")
