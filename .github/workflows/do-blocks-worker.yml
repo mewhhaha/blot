@@ -19,6 +19,6 @@ jobs:
       - name: Inspect block lowering and tests
         run: |
           echo '--- lower.ts block contexts ---'
-          rg -n -C 5 'block' src/syntax/lower.ts | head -n 180
+          grep -n -C 5 'block' src/syntax/lower.ts | head -n 220 || true
           echo '--- syntax tests block contexts ---'
-          rg -n -C 4 'block|parenthes' src/syntax/*.test.ts syntax.test.ts | head -n 240
+          grep -n -E -C 4 'block|parenthes' src/syntax/*.test.ts syntax.test.ts | head -n 280 || true
