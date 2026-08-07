@@ -22,27 +22,15 @@ jobs:
           from pathlib import Path
           p = Path('experiments/rust-middle/src/eval.rs')
           text = p.read_text()
-          old = '''        Expression::Block {
-            declarations,
-            result,
-            result_effects: _,
-            ..
-        } => {
-'''
-          new = '''        Expression::Block {
-            declarations,
-            result,
-            ..
-        } => {
-'''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one evaluator block pattern, found {text.count(old)}')
-          p.write_text(text.replace(old, new, 1))
+          needle = '            result_effects: _,\n'
+          if text.count(needle) != 1:
+              raise SystemExit(f'expected one redundant field, found {text.count(needle)}')
+          p.write_text(text.replace(needle, '', 1))
           PY
       - name: Commit fix
         run: |
           git config user.name "Jacob Torrång"
           git config user.email "kopatheonlyone@hotmail.com"
           git add experiments/rust-middle/src/eval.rs
-          git commit -m "rust: satisfy current clippy" 
+          git commit -m "rust: satisfy current clippy"
           git push origin HEAD:do-blocks-artifact-fix
