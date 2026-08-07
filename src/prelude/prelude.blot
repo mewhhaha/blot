@@ -838,10 +838,9 @@ const map_type = fn (key, value) => [(key, value)]
 const map_get = fn (equal, entries, key) =>
   let find =
     rec (fn index => case array_get (entries, index) of
-      #Some entry => if equal entry.0 key:
-        return Some entry.1
-      else:
-        return find (@int.add index 1)
+      #Some entry => case equal entry.0 key of
+        #True => Some entry.1
+        #False => find (@int.add index 1)
 
       #None => None
     )
@@ -864,10 +863,9 @@ const map_put = fn (equal, entries, key, value) =>
         else:
           return (@array.push state.0 entry, state.1, state.2)
     )
-  let updated = if replaced.2:
-    return replaced.0
-  else:
-    return @array.push replaced.0 (key, value)
+  let updated = case replaced.2 of
+    #True => replaced.0
+    #False => @array.push replaced.0 (key, value)
   return (replaced.1, updated)
 
 const map_remove = fn (equal, entries, key) =>
@@ -943,10 +941,9 @@ const set_insert = fn (equal, values, inserted) =>
         else:
           return (@array.push state.0 value, state.1, state.2)
     )
-  let updated = if replaced.2:
-    return replaced.0
-  else:
-    return @array.push replaced.0 inserted
+  let updated = case replaced.2 of
+    #True => replaced.0
+    #False => @array.push replaced.0 inserted
   return (replaced.1, updated)
 
 const set_remove = fn (equal, values, needle) =>
@@ -1026,16 +1023,14 @@ const sort_by = fn (values, before) =>
     let placed = False
     for existing in Iter.items sorted:
       let goes_first = not placed && before (value, existing)
-      out := if goes_first:
-        return @array.push (@array.push out value) existing
-      else:
-        return @array.push out existing
+      out := case goes_first of
+        #True => @array.push (@array.push out value) existing
+        #False => @array.push out existing
       placed := placed || goes_first
 
-    sorted := if placed:
-      return out
-    else:
-      return @array.push out value
+    sorted := case placed of
+      #True => out
+      #False => @array.push out value
 
   return sorted
 
@@ -1096,12 +1091,10 @@ const unlikely = fn condition => @branch.unlikely condition
 // Fixed-width integer types are ranges rather than another numeric domain.
 // The width is compile-time information for storage tools; arithmetic still
 // uses `Int` and has to prove a narrower result when a signature asks for one.
-const integer_width = fn bits => (if is_greater (@int.cmp bits 0):
-  return bits
-else:
-  return
+const integer_width = fn bits => case is_greater (@int.cmp bits 0) of
+  #True => bits
+  #False =>
     @fail (Text.append "integer bit width must be positive, found " (Text.of_int bits))
-)
 
 const U = fn bits => (
   let width = integer_width bits
@@ -1274,8 +1267,8 @@ const refines =
       _ => False
 
     #Array wide_elements => case reflect narrow of
-      #Array narrow_elements => if Ord.eq (@array.len narrow_elements) (@array.len wide_elements):
-        return every (
+      #Array narrow_elements => case Ord.eq (@array.len narrow_elements) (@array.len wide_elements) of
+        #True => every (
           upto (0, @int.sub (@array.len wide_elements) 1),
           fn index => case (
             array_get (narrow_elements, index),
@@ -1284,8 +1277,7 @@ const refines =
             (#Some narrow_element, #Some wide_element) => refines (narrow_element, wide_element)
             _ => False
         )
-      else:
-        return False
+        #False => False
       _ => False
 
     #Arrow w => case reflect narrow of
@@ -1369,10 +1361,9 @@ const Omit = fn (shape, names) =>
 // when `t` is a `List` of something, which is the blot reading of writing
 // `case t of List a => ...` in a language that had a type-level `case`.
 const opened = fn (name, t) => case reflect t of
-  #Sealed s => if text_eq (s.name, name):
-    return Some s.inner
-  else:
-    return None
+  #Sealed s => case text_eq (s.name, name) of
+    #True => Some s.inner
+    #False => None
   _ => None
 
 const Reflect =
@@ -1489,10 +1480,9 @@ const aligned = fn (shape, order, width_of) =>
   for name in Iter.items order:
     let width = width_of (@shape.get shape name)
     let slack = @int.rem offset width
-    let pad = if Ord.eq slack 0:
-      return 0
-    else:
-      return @int.sub width slack
+    let pad = case Ord.eq slack 0 of
+      #True => 0
+      #False => @int.sub width slack
     let start = @int.add offset pad
     fields := @array.push fields { .name = name; .offset = start; .width = width; }
     padding := @int.add padding pad
