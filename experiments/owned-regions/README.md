@@ -55,13 +55,14 @@ different semantic validator.
 
 ## Feedback that changed the theory
 
-### `!` is not enough to claim a Store
+### `!` is not enough for zero-copy claim
 
 This was the most important implementation finding. Linearity says how often a
 binding may be consumed; it does not by itself prove that the Store reachable
 through that binding has no persistent alias.
 
-Conceptually, this is unsafe if `claim` trusts only the `!` marker:
+Conceptually, this would be unsafe if a zero-copy claim trusted only the `!`
+marker:
 
 ```blot
 let shared = [1, 2, 3]
@@ -70,13 +71,20 @@ let !candidate = shared
 let slice = @region.array.claim candidate
 ```
 
-A production claim therefore needs a stronger external **Store-root proof**:
-either the Store is freshly allocated into unique ownership, or uniqueness has
-been preserved through operations already certified for destructive reuse. The
-region certificate names that proof by `root`; it does not manufacture it from a
-linear binding.
+The better source semantics is therefore: `claim` always acquires a private
+buffer initialized from the input. If no uniqueness proof exists, that means one
+copy into a fresh Store. If Store provenance proves the input allocation is
+already uniquely reusable, lowering may steal that Store and elide the copy.
 
-This gives the complete proof stack:
+So the proof is required for the **optimization**, not for accepting ordinary
+code:
+
+```text
+shared/unknown input -> copy -> fresh Store root -> region claim
+proved unique input ---------> existing Store root -> region claim
+```
+
+This gives the complete destructive-reuse proof stack:
 
 ```text
 Store-root proof
@@ -121,16 +129,20 @@ the smaller proof surface.
 
 The intended compiler implementation is deliberately staged.
 
-### A. Store provenance
+### A. Store provenance and acquisition
 
 Extend the existing destructive-reuse evidence so it can name a Store allocation
-root, not just a consuming source occurrence. Fresh Store construction should be
-the simplest root. A reusable destructive update can preserve that root into its
-result. Persistent copies/aliases must not.
+root, not just a consuming source occurrence. Fresh Store construction is the
+simplest root. A destructive update proven to have no surviving observer may
+preserve that root into its result. Persistent copies/aliases do not.
 
-`@region.array.claim` is accepted only when its source carries such a root. The
-claim consumes that root generation into region authority, so the ordinary whole
-Store cannot simultaneously remain destructively usable.
+`@region.array.claim` has two lowering modes with the same source result:
+
+- **fresh:** allocate/copy the input into a private Store and create a root;
+- **reuse:** consume a separately verified Store root and reuse its allocation.
+
+The evaluator can always use the fresh path. The Runtime HIR optimizer chooses
+reuse only when the provenance proof is present.
 
 ### B. Checker/certificate
 
@@ -188,11 +200,12 @@ application code does not depend on `@region.*` spellings.
 Before changing `LANGUAGE.md`, require all of:
 
 - Store-root/provenance tamper tests;
+- a test showing shared input takes the copy-safe acquisition path;
+- a test showing zero-copy acquisition requires a valid Store root;
 - region-authority certificate tamper tests;
 - split/join failure-conservation tests;
 - evaluator vs emitted-Wasm agreement;
-- a quicksort corpus entry showing one element Store allocation;
-- a negative test showing claim from a merely linear alias is refused;
+- a quicksort corpus entry showing no element-Store allocation after claim;
 - a negative test showing use of a parent after split is refused;
 - a negative test showing two different roots/origins cannot join; and
 - a negative test showing a partial region cannot freeze.
