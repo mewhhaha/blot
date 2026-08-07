@@ -587,10 +587,25 @@ intentionally discarded; `_ <- expression` is the explicit equivalent but is
 usually noisier. Never use `let` merely to force an effect to happen; pure `let`
 values may be discarded or reordered.
 
-Keep the explicit `()` on nullary operations:
+An effect value can be retained and explicitly executed:
 
 ```blot
-generation <- Assets.generation ()
+let effect = Assets.generation
+generation <- effect
+<- effect
+```
+
+Stored effects can be passed to a parent as children without executing them or
+adding another suspension:
+
+```blot
+let foreground = <Mesh />
+let lighting = <DirectionalLight />
+let scene =
+  <Camera>
+    {foreground}
+    {lighting}
+  </Camera>
 ```
 
 Define an effect as a compile-time operation shape:

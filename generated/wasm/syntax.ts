@@ -232,6 +232,7 @@ export type RuleName =
   | "declaration"
   | "statement"
   | "binding"
+  | "indented_element_value"
   | "declaration_tag"
   | "rebinding"
   | "sequencing"
@@ -276,6 +277,10 @@ export type RuleName =
   | "element_body"
   | "element_child"
   | "element_child_value"
+  | "element_child_expression"
+  | "element_child_operand"
+  | "element_child_postfix_expression"
+  | "element_child_primary_expression"
   | "value"
   | "shape"
   | "shape_member"
@@ -375,7 +380,13 @@ export interface BindingCursor extends RuleCursorBase<"binding"> {
   field(name: "kind"): TokenCursor<"literal", "const"> | TokenCursor<"literal", "let"> | TokenCursor<"literal", "sig">;
   field(name: "pattern"): BindingPatternCursor;
   field(name: "tags"): ReadonlyArray<DeclarationTagCursor>;
-  field(name: "value"): ValueCursor;
+  field(name: "value"): IndentedElementValueCursor | ValueCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface IndentedElementValueCursor extends RuleCursorBase<"indented_element_value"> {
+  field(name: "value"): ElementExpressionCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -612,12 +623,14 @@ export interface ElementSelfCloseCursor extends RuleCursorBase<"element_self_clo
 }
 
 export interface ElementBodyCursor extends RuleCursorBase<"element_body"> {
-  field(name: "body"): readonly [TokenCursor<"named", "LAYOUT_NEWLINE">, TokenCursor<"named", "LAYOUT_INDENT">, ReadonlyArray<ElementChildCursor | ElementLineCursor>, TokenCursor<"named", "LAYOUT_DEDENT">] | null;
+  field(name: "body"): ReadonlyArray<readonly [TokenCursor<"literal", "{">, ValueCursor, TokenCursor<"literal", "}">]> | readonly [TokenCursor<"named", "LAYOUT_NEWLINE">, TokenCursor<"named", "LAYOUT_INDENT">, ReadonlyArray<ElementChildCursor | ElementLineCursor | readonly [TokenCursor<"literal", "{">, ValueCursor, TokenCursor<"literal", "}">, TokenCursor<"named", "LAYOUT_NEWLINE">]>, TokenCursor<"named", "LAYOUT_DEDENT">] | null;
   field(name: "body_end"): TokenCursor<"named", "LAYOUT_DEDENT"> | null;
   field(name: "body_start"): TokenCursor<"named", "LAYOUT_NEWLINE"> | null;
-  field(name: "children"): ReadonlyArray<ElementChildCursor | ElementLineCursor> | null;
+  field(name: "children"): ReadonlyArray<ElementChildCursor | ElementLineCursor | readonly [TokenCursor<"literal", "{">, ValueCursor, TokenCursor<"literal", "}">, TokenCursor<"named", "LAYOUT_NEWLINE">]> | ReadonlyArray<readonly [TokenCursor<"literal", "{">, ValueCursor, TokenCursor<"literal", "}">]> | null;
   field(name: "closing"): ElementNameCursor;
+  field(name: "effects"): ReadonlyArray<ValueCursor>;
   field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: "effects"): ReadonlyArray<ValueCursor>;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
@@ -628,6 +641,31 @@ export interface ElementChildCursor extends RuleCursorBase<"element_child"> {
 }
 
 export interface ElementChildValueCursor extends RuleCursorBase<"element_child_value"> {
+}
+
+export interface ElementChildExpressionCursor extends RuleCursorBase<"element_child_expression"> {
+  field(name: "first"): ElementChildOperandCursor;
+  field(name: "rest"): ReadonlyArray<InfixOperationCursor>;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ElementChildOperandCursor extends RuleCursorBase<"element_child_operand"> {
+  field(name: "prefixes"): ReadonlyArray<PrefixOperatorCursor>;
+  field(name: "value"): ElementChildPostfixExpressionCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ElementChildPostfixExpressionCursor extends RuleCursorBase<"element_child_postfix_expression"> {
+  field(name: "arguments"): ReadonlyArray<ApplicationArgumentCursor>;
+  field(name: "suffixes"): ReadonlyArray<FieldSuffixCursor>;
+  field(name: "value"): ElementChildPrimaryExpressionCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface ElementChildPrimaryExpressionCursor extends RuleCursorBase<"element_child_primary_expression"> {
 }
 
 export interface ValueCursor extends RuleCursorBase<"value"> {
@@ -808,6 +846,7 @@ export type AnyRuleCursor =
   | DeclarationCursor
   | StatementCursor
   | BindingCursor
+  | IndentedElementValueCursor
   | DeclarationTagCursor
   | RebindingCursor
   | SequencingCursor
@@ -852,6 +891,10 @@ export type AnyRuleCursor =
   | ElementBodyCursor
   | ElementChildCursor
   | ElementChildValueCursor
+  | ElementChildExpressionCursor
+  | ElementChildOperandCursor
+  | ElementChildPostfixExpressionCursor
+  | ElementChildPrimaryExpressionCursor
   | ValueCursor
   | ShapeCursor
   | ShapeMemberCursor

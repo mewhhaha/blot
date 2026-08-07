@@ -198,8 +198,19 @@ fn lower_declaration(
                     cst.text(value_cursor)?
                 ));
             }
-            let mut value = lower_value(cst, value_cursor, context, arena)
-                .map_err(|error| format!("while lowering its value: {error}"))?;
+            let mut value = if let Cursor::Rule(value) = value_cursor
+                && cst.rule_name(value)? == "indented_element_value"
+            {
+                lower_element(
+                    cst,
+                    as_rule(required(cst, value, "value")?)?,
+                    context,
+                    arena,
+                )
+            } else {
+                lower_value(cst, value_cursor, context, arena)
+            }
+            .map_err(|error| format!("while lowering its value: {error}"))?;
             if !tags.is_empty() {
                 value = lower_tagged_value(kind, pattern, value, &tags, span, arena);
             }
@@ -236,21 +247,6 @@ fn lower_declaration(
         }
         "sequencing" => {
             let value = lower_value(cst, required(cst, rule, "value")?, context, arena)?;
-            let pattern = arena.pattern(Pattern::Name {
-                name: "_".to_owned(),
-                qualifier: Qualifier::None,
-                span,
-            });
-            Ok(arena.declaration(Declaration::Binding {
-                kind: DeclarationKind::Effect,
-                tags: Vec::new(),
-                pattern,
-                value,
-                span,
-            }))
-        }
-        "element_line" => {
-            let value = lower_primary(cst, required(cst, rule, "value")?, context, arena)?;
             let pattern = arena.pattern(Pattern::Name {
                 name: "_".to_owned(),
                 qualifier: Qualifier::None,
@@ -2068,7 +2064,10 @@ fn lower_expression(
     context: &LoweringContext<'_>,
     arena: &mut AstArena,
 ) -> Result<ExpressionId, String> {
-    require_rule(cst, rule, "expression")?;
+    let rule_name = cst.rule_name(rule)?;
+    if rule_name != "expression" && rule_name != "element_child_expression" {
+        return Err(format!("expected expression, found `{rule_name}`"));
+    }
     let first = lower_operand(cst, as_rule(required(cst, rule, "first")?)?, context, arena)
         .map_err(|error| format!("while lowering first operand: {error}"))?;
     let mut steps = Vec::new();
@@ -2874,21 +2873,40 @@ fn lower_element(
                 "BLOT_MISMATCHED_ELEMENT: element `<{name}>` is closed by `</{closing}>`"
             ));
         }
-        let children = cst.field_list(ending, "children")?;
+        let mut children = cst.field_list(ending, "children")?;
+        children.extend(cst.field_list(ending, "effects")?);
+        let mut children = children
+            .into_iter()
+            .map(|child| Ok((cst.span(child)?.start, child)))
+            .collect::<Result<Vec<_>, String>>()?;
+        children.sort_by_key(|(start, _)| *start);
         let child_context = context.body();
-        for child in children {
+        for (_, child) in children {
             let child = as_rule(child)?;
             let child_rule = cst.rule_name(child)?;
-            if child_rule != "element_line" && child_rule != "element_child" {
+            if child_rule != "element_line"
+                && child_rule != "value"
+                && child_rule != "element_child"
+            {
                 return Err(format!("unknown element child `{child_rule}`"));
             }
-            let child_span = cst.span(Cursor::Rule(child))?;
+            if child_rule == "value" {
+                child_elements.push(ArrayElement {
+                    spread: false,
+                    value: lower_value(cst, Cursor::Rule(child), &child_context, arena)?,
+                });
+                continue;
+            }
             let child_value = required(cst, child, "value")?;
-            let value = if child_rule == "element_line" {
-                lower_primary(cst, child_value, &child_context, arena)?
-            } else {
-                lower_value(cst, child_value, &child_context, arena)?
-            };
+            if child_rule == "element_line" {
+                child_elements.push(ArrayElement {
+                    spread: false,
+                    value: lower_primary(cst, child_value, &child_context, arena)?,
+                });
+                continue;
+            }
+            let child_span = cst.span(Cursor::Rule(child))?;
+            let value = lower_value(cst, child_value, &child_context, arena)?;
             let result_name = format!("elementChild${}${}", child_span.start, child_span.end);
             let result_pattern = arena.pattern(Pattern::Name {
                 name: result_name.clone(),
@@ -2944,9 +2962,21 @@ fn lower_element(
         argument: property_shape,
         span,
     });
-    Ok(arena.expression(Expression::Apply {
+    let application = arena.expression(Expression::Apply {
         function: with_properties,
         argument: children,
+        span,
+    });
+    let body = arena.expression(Expression::Block {
+        declarations: Vec::new(),
+        result: application,
+        result_effects: ResultEffects::Ambient,
+        span,
+    });
+    let parameter = arena.pattern(Pattern::Unit { span });
+    Ok(arena.expression(Expression::Lambda {
+        parameter,
+        body,
         span,
     }))
 }

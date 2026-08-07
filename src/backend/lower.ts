@@ -2075,7 +2075,7 @@ function lowerBlock(
       inner.literals.set(declaration.pattern.name, declaration.value);
     }
     let specializedAggregate = false;
-    if (declaration.pattern.tag === "name") {
+    if (step.tag !== "bind" && declaration.pattern.tag === "name") {
       const members = aggregateRuntimeLambdas(declaration.value, inner);
       if (members !== null) {
         inner.runtimeLambdaMembers.set(declaration.pattern.name, members);
@@ -2127,7 +2127,7 @@ function lowerBlock(
     }
     if (declaration.kind === "sig") continue;
 
-    if (declaration.pattern.tag === "name") {
+    if (step.tag !== "bind" && declaration.pattern.tag === "name") {
       const choice = runtimeLambdaChoice(declaration.value, inner);
       if (choice !== null) {
         const selector = lowering.fresh(`${declaration.pattern.name}$choice`);
@@ -2161,6 +2161,7 @@ function lowerBlock(
     }
 
     if (
+      step.tag !== "bind" &&
       declaration.value.tag === "lambda" &&
       declaration.pattern.tag === "name" &&
       !capturesRuntimeBinding(declaration.value, inner)
@@ -2182,11 +2183,18 @@ function lowerBlock(
     ) {
       inner.literals.set(declaration.pattern.name, declaration.value);
     }
-    const value = lower(declaration.value, inner, lowering);
+    let value = lower(declaration.value, inner, lowering);
+    const effectType = lowering.facts.expressionTypes.get(declaration.value);
+    if (step.tag === "bind" && isNullaryEffectValue(effectType)) {
+      value = surface.apply(value, surface.name(UNIT_CONSTRUCTOR_NAME));
+    }
     // A lifted lambda is already a definition, so the binding is a name for
     // one rather than a local holding a function.
     const definition = lowering.lifted.get(declaration.value);
-    if (definition !== undefined && declaration.pattern.tag === "name") {
+    if (
+      step.tag !== "bind" && definition !== undefined &&
+      declaration.pattern.tag === "name"
+    ) {
       bindName(declaration.pattern, definition, inner);
       continue;
     }
@@ -2202,6 +2210,20 @@ function lowerBlock(
     body = wrappers[index](body);
   }
   return body;
+}
+
+function isNullaryEffectValue(
+  type: SimpleType | undefined,
+  seen = new Set<number>(),
+): boolean {
+  if (type === undefined) return false;
+  if (type.tag === "forall") return isNullaryEffectValue(type.body, seen);
+  if (type.tag === "fun") return type.param.tag === "unit";
+  if (type.tag !== "var" || seen.has(type.id)) return false;
+  seen.add(type.id);
+  return [...type.lower, ...type.upper].some((bound) =>
+    isNullaryEffectValue(bound, seen)
+  );
 }
 
 /**

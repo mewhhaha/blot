@@ -28,6 +28,7 @@ import {
   childEnv,
   type Env,
   equal,
+  inferredTypeOf,
   lookup,
   moduleEnv,
   moduleParameterEnv,
@@ -437,6 +438,9 @@ function* runCoreSteps(
         value = namedEffect(value, definition.pattern.name);
       }
     }
+    if (step.tag === "bind" && effectValueRunsWithUnit(value)) {
+      value = yield* apply(value, { tag: "unit" }, definition.span, runtime);
+    }
     if (!match(definition.pattern, value, scope)) {
       fail(
         "BLOT_BINDING_MISMATCH",
@@ -828,12 +832,15 @@ function* runDeclarations(
         recordAdaptations: runtime.recordAdaptations,
       };
     }
-    const value = yield* bind(
+    let value = yield* bind(
       declaration.pattern,
       declaration.value,
       scope,
       declarationRuntime,
     );
+    if (step.tag === "bind" && effectValueRunsWithUnit(value)) {
+      value = yield* apply(value, { tag: "unit" }, declaration.span, runtime);
+    }
     if (!match(declaration.pattern, value, scope)) {
       fail(
         "BLOT_BINDING_MISMATCH",
@@ -842,6 +849,17 @@ function* runDeclarations(
       );
     }
   }
+}
+
+function effectValueRunsWithUnit(value: Value): boolean {
+  if (value.tag === "closure" || value.tag === "core-closure") {
+    if (value.parameter.tag === "unit") return true;
+    const inferred = inferredTypeOf(value);
+    return inferred?.tag === "arrow" && inferred.domain.tag === "unit";
+  }
+  if (value.tag !== "operation" || value.effect.tag !== "effect") return false;
+  const signature = value.effect.operations.get(value.name);
+  return signature?.tag === "arrow" && signature.domain.tag === "unit";
 }
 
 /**

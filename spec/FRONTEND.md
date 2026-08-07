@@ -91,11 +91,15 @@ binding used by the folded application.
 Surface forms translate to the smaller AST described by
 [`LANGUAGE.md`](../LANGUAGE.md). In particular, loops become recursion and
 cases, statement control becomes compiler-local result constructors, element
-syntax becomes ordinary applications, and sequencing `x <- e` remains explicit
-sequencing of the already-applied expression `e`. Each element child becomes a
-fresh nullary function in the array passed to that application. A bare element
-statement effect-binds and discards the application result; a value-position
-element leaves the same application unsequenced.
+syntax becomes a nullary effect value around an ordinary application, and
+sequencing `x <- e` executes `e`. When `e` has the erased effect-value shape
+`Unit -> A ~ E`, sequencing supplies `()` and binds the resulting `A`. Each
+element child is an effect value in the array passed to the parent application.
+A nested element and a braced existing effect value enter that array unchanged;
+an ordinary bare child computation receives one nullary suspension. A binding
+may place a multiline element after an indented newline; CST lowering removes
+that layout wrapper before performing the same element elaboration. A bare
+element is a child only; ordinary statement regions require explicit sequencing.
 
 Write `surface(s) ⇓ a` for elaboration and `~` for observational equivalence in
 the source semantics. Every translation has the obligation

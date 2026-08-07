@@ -3959,26 +3959,19 @@ function inferDeclarations(
       type = typeClosure(bound, declarationContext, level);
     }
     if (type === null) {
-      if (signature !== null && declaration.value.tag === "lambda") {
-        if (declaration.kind === "effect") {
-          type = checkAgainst(
-            declaration.value,
-            signature,
-            context,
-            level,
-            row,
-          );
-        } else {
-          type = checkAgainstPure(
-            declaration.value,
-            signature,
-            declarationContext,
-            level,
-            "A `let` value",
-          );
-        }
+      if (
+        signature !== null && declaration.value.tag === "lambda" &&
+        declaration.kind !== "effect"
+      ) {
+        type = checkAgainstPure(
+          declaration.value,
+          signature,
+          declarationContext,
+          level,
+          "A `let` value",
+        );
       } else if (declaration.kind === "effect") {
-        type = generalize(declaration.value, context, level, row);
+        type = generalizeEffect(declaration.value, context, level, row);
       } else {
         let description = "A `let` value";
         if (declaration.kind === "const") description = "A `const` value";
@@ -4989,6 +4982,36 @@ function generalize(
 ): Typing {
   const inner = infer(expr, context, level + 1, row);
   return scheme(inner, level);
+}
+
+function generalizeEffect(
+  expr: Expr,
+  context: Context,
+  level: Level,
+  row: SimpleType,
+): Typing {
+  const inferred = infer(expr, context, level + 1, row);
+  const suspended = effectValueSignature(inferred);
+  if (suspended === null) return scheme(inferred, level);
+  located(expr.span, () => constrain(suspended.effects, row));
+  return scheme(suspended.result, level);
+}
+
+function effectValueSignature(
+  type: SimpleType,
+  seen = new Set<number>(),
+): { readonly effects: SimpleType; readonly result: SimpleType } | null {
+  if (type.tag === "forall") return effectValueSignature(type.body, seen);
+  if (type.tag === "fun" && type.param.tag === "unit") {
+    return { effects: type.effects, result: type.result };
+  }
+  if (type.tag !== "var" || seen.has(type.id)) return null;
+  seen.add(type.id);
+  for (const bound of [...type.lower, ...type.upper]) {
+    const found = effectValueSignature(bound, seen);
+    if (found !== null) return found;
+  }
+  return null;
 }
 
 function generalizePure(

@@ -440,6 +440,9 @@ class ResidualHirBuilder {
       } else {
         value = this.evaluate(definition.value, environment);
       }
+      if (step.tag === "bind") {
+        value = this.forceEffectValue(value, definition.span);
+      }
       this.bind(definition.pattern, value, environment, definition.span);
     }
   }
@@ -494,8 +497,39 @@ class ResidualHirBuilder {
       } else {
         value = this.evaluate(declaration.value, environment);
       }
+      if (step.tag === "bind") {
+        value = this.forceEffectValue(value, declaration.span);
+      }
       this.bind(declaration.pattern, value, environment, declaration.span);
     }
+  }
+
+  private forceEffectValue(value: ResidualValue, span: Span): ResidualValue {
+    if (value.kind === "closure" && value.parameter.tag === "unit") {
+      return this.apply(
+        value,
+        { kind: "static", value: { tag: "unit" } },
+        span,
+      );
+    }
+    if (value.kind !== "static") return value;
+    if (value.value.tag === "closure" && value.value.parameter.tag === "unit") {
+      return this.apply(
+        value,
+        { kind: "static", value: { tag: "unit" } },
+        span,
+      );
+    }
+    if (
+      value.value.tag !== "operation" || value.value.effect.tag !== "effect"
+    ) {
+      return value;
+    }
+    const signature = value.value.effect.operations.get(value.value.name);
+    if (signature?.tag !== "arrow" || signature.domain.tag !== "unit") {
+      return value;
+    }
+    return this.apply(value, { kind: "static", value: { tag: "unit" } }, span);
   }
 
   private apply(

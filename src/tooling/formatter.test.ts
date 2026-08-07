@@ -227,7 +227,7 @@ return render
   assertEquals(
     formatted.source,
     `let render = fn state =>
-  <Object .material={material (
+  <- <Object .material={material (
       color (180000, 850000, 1000000),
       if state == 3:
         return 800000
@@ -266,7 +266,40 @@ Deno.test("formatting indents suspended element children under their parent", as
   return ()
 return render
 `;
-  const expected = source.replace("<- <Camera", "<Camera");
+  assertEquals(await formatSource(source), { ok: true, source });
+});
+
+Deno.test("formatting preserves inline stored effects as element children", async () => {
+  const source = `let first = <A />
+let second = <B />
+let parent = <C>{first}{second}</C>
+return parent
+`;
+  assertEquals(await formatSource(source), { ok: true, source });
+});
+
+Deno.test("formatting gives a multiline element binding its own value scope", async () => {
+  const source = `let view = fn () =>
+  let effect1 = <A />
+  let effect2 = <B />
+  let parent = <C>
+    {effect1}
+    {effect2}
+  </C>
+  return parent
+return view
+`;
+  const expected = `let view = fn () =>
+  let effect1 = <A />
+  let effect2 = <B />
+  let parent =
+    <C>
+      {effect1}
+      {effect2}
+    </C>
+  return parent
+return view
+`;
   assertEquals(await formatSource(source), { ok: true, source: expected });
   assertEquals(await formatSource(expected), { ok: true, source: expected });
 });

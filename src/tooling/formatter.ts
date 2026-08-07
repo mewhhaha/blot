@@ -91,18 +91,6 @@ export async function formatSource(source: string): Promise<FormatResult> {
       parsed = reparsed;
     }
   }
-  const preferredElements = preferElementStatements(source, parsed.cst);
-  if (preferredElements !== source) {
-    const reparsed = await parseConcrete(preferredElements);
-    if (
-      reparsed.ok &&
-      moduleWithoutSpans(reparsed.module) === moduleWithoutSpans(parsed.module)
-    ) {
-      source = preferredElements;
-      parsed = reparsed;
-    }
-  }
-
   const redundantParentheses: Span[] = [];
   collectRedundantParentheses(parsed.cst, [], source, redundantParentheses);
 
@@ -130,6 +118,14 @@ export async function formatSource(source: string): Promise<FormatResult> {
   while (true) {
     const current = await parseConcrete(laidOut);
     if (!current.ok) break;
+    const elementBinding = formatOneMultilineElementBinding(
+      laidOut,
+      current.cst,
+    );
+    if (elementBinding !== laidOut) {
+      laidOut = elementBinding;
+      continue;
+    }
     const array = formatOneArray(laidOut, current.cst);
     if (array !== laidOut) {
       laidOut = array;
@@ -241,6 +237,47 @@ export async function formatSource(source: string): Promise<FormatResult> {
     throw new Error("formatter could not separate statement suites");
   }
   return { ok: true, source: separatedLayout };
+}
+
+function formatOneMultilineElementBinding(
+  source: string,
+  root: ConcreteRule,
+): string {
+  const bindings: ConcreteRule[] = [];
+  collectRules(root, "binding", bindings);
+  for (const binding of bindings) {
+    const equals = directToken(binding, "=");
+    if (equals === null) continue;
+    const elements: ConcreteRule[] = [];
+    collectRules(binding, "element_expression", elements);
+    const element = elements.find((candidate) => {
+      if (candidate.span.start <= equals.span.end) return false;
+      return /^[ \t]*$/.test(
+        source.slice(equals.span.end, candidate.span.start),
+      );
+    });
+    if (element === undefined) continue;
+    const elementSource = source.slice(element.span.start, element.span.end);
+    if (!elementSource.includes("\n")) continue;
+    const bindingLineStart = source.lastIndexOf("\n", binding.span.start - 1) +
+      1;
+    const indent = source.slice(bindingLineStart).match(/^[ \t]*/)?.[0];
+    if (indent === undefined) {
+      throw new Error("binding line has no indentation");
+    }
+    const elementLines = reindentFragment(
+      source,
+      element.span,
+      `${indent}  `,
+      "",
+    );
+    return replaceSpan(
+      source,
+      { start: equals.span.end, end: element.span.end },
+      `\n${elementLines.join("\n")}`,
+    );
+  }
+  return source;
 }
 
 function separateStatementSuites(
@@ -702,54 +739,6 @@ function preferDiscardSequencing(
   return preferred;
 }
 
-function preferElementStatements(
-  source: string,
-  concrete: ConcreteRule,
-): string {
-  const sequencingRules: ConcreteRule[] = [];
-  collectRules(concrete, "sequencing", sequencingRules);
-  const prefixes = sequencingRules.flatMap((sequencing) => {
-    const value = directRule(sequencing, "value");
-    const element = value === null ? null : bareElement(value);
-    const arrow = directToken(sequencing, "<-");
-    if (
-      element === null || arrow === null || arrow.span.end > element.span.start
-    ) {
-      return [];
-    }
-    if (!/^[ \t]*$/.test(source.slice(arrow.span.end, element.span.start))) {
-      return [];
-    }
-    return [{ start: arrow.span.start, end: element.span.start }];
-  }).sort((left, right) => right.start - left.start);
-
-  let preferred = source;
-  for (const prefix of prefixes) preferred = replaceSpan(preferred, prefix, "");
-  return preferred;
-}
-
-function bareElement(value: ConcreteRule): ConcreteRule | null {
-  const directElement = directRule(value, "element_expression");
-  if (directElement !== null) return directElement;
-  const expression = directRule(value, "expression");
-  if (
-    expression === null || directRules(expression, "infix_operation").length > 0
-  ) return null;
-  const operand = directRule(expression, "operand");
-  if (operand === null || directRules(operand, "prefix_operator").length > 0) {
-    return null;
-  }
-  const postfix = directRule(operand, "postfix_expression");
-  if (
-    postfix === null ||
-    directRules(postfix, "application_argument").length > 0 ||
-    directRules(postfix, "field_suffix").length > 0
-  ) return null;
-  const primary = directRule(postfix, "primary_expression");
-  if (primary === null) return null;
-  return directRule(primary, "element_expression");
-}
-
 function containsRule(
   node: ConcreteNode,
   names: ReadonlySet<string>,
@@ -1056,6 +1045,28 @@ function collectIndentRegions(
   ancestors: readonly ConcreteRule[] = [],
 ): void {
   if (node.type !== "rule") return;
+  if (node.name === "binding") {
+    const indentedValue = directRules(node, "indented_element_value")[0];
+    let indentedElement: ConcreteRule | undefined;
+    if (indentedValue !== undefined) {
+      indentedElement = directRules(indentedValue, "element_expression")[0];
+    }
+    if (indentedElement !== undefined) {
+      const startsAtLine = lineAtOffset(lineStarts, node.span.start);
+      const endsAtLine = lineAtOffset(
+        lineStarts,
+        Math.max(indentedElement.span.start, indentedElement.span.end - 1),
+      );
+      if (startsAtLine < endsAtLine) {
+        regions.push({
+          startsAtLine,
+          endsAtLine,
+          includesLastLine: true,
+          extraInteriorIndent: false,
+        });
+      }
+    }
+  }
   if (INDENTED_RULES.has(node.name)) {
     let startsAtLine = lineAtOffset(lineStarts, node.span.start);
     if (

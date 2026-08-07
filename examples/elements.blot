@@ -7,7 +7,7 @@ const Draw = @effect {
 let element = fn name => fn _properties => fn children =>
   <- Draw.write ("<" <> name <> ">")
   for child in Iter.items children:
-    <- child ()
+    <- child
 
   <- Draw.write ("</" <> name <> ">")
   return name
@@ -40,15 +40,17 @@ let Button = fn properties => fn children =>
   <- Draw.write ("<button" <> disabled <> order <> ">")
   <- text properties.label
   for child in Iter.items children:
-    <- child ()
+    <- child
 
   <- Draw.write "</button>"
 
 let view = fn () =>
+  let save = <Button .label="Save" />
+  let delete = <Button .label="Delete" .disabled=True .order=2 />
   root <- <div .class="counter" .hidden=False>
     text "Count: "
-    <Button .label="Save" />
-    <Button .label="Delete" .disabled=True .order=2 />
+    {save}
+    {delete}
     <icon />
   </div>
   return root

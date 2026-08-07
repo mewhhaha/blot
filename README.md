@@ -251,23 +251,24 @@ from a statement branch or across a loop. Bare `break` only exits a `for`. A
 bare trailing expression remains invalid because a trailing name and the start
 of `name := ...` have the same one-token prefix.
 
-Elements are ordinary component calls with property records and an array of
-suspended child computations:
+Elements are effect values around ordinary component calls with property records
+and an array of child effect values:
 
 ```blot
-<div .class="counter" .hidden={hidden}>
+<- <div .class="counter" .hidden={hidden}>
   text "Count: "
   <Button .disabled=True />
 </div>
 ```
 
-The element lowers only to
-`div { .class = "counter"; .hidden = hidden; } children`. A bare element
-statement sequences and discards that application; value-position elements
-preserve its result. Both `div` and `Button` are ordinary lexical bindings. The
-syntax supplies no implicit renderer or text operation. Each body value is
-suspended as one nullary function in the child array, so the component decides
-which children execute and in which order. A component's expected record makes
+The element lowers to a nullary effect value containing
+`div { .class = "counter"; .hidden = hidden; } children`. Use
+`result <- <div />` to execute and retain its result or `<- <div />` to execute
+and discard it. Both `div` and `Button` are ordinary lexical bindings. The
+syntax supplies no implicit renderer or text operation. Each body value is an
+effect value in the child array, so the component decides which children execute
+and in which order. `{effect}` passes a previously constructed effect value
+without executing or suspending it again. A component's expected record makes
 ordinary fields required. Writing `.field? = T` in that record means
 `.field = T | ()`, so the field may be omitted and receives `()` at the call.
 
@@ -469,14 +470,15 @@ printer prints, a bare `->` is the empty row rather than an unwritten one, and a
 row names effects that are in scope, so it is closed — there is no way to write
 the row variable inference uses for a callback's effects.
 
-`x <- expression` sequences one. The expression is evaluated as written, so a
-nullary operation keeps its explicit `()`; `let` remains a pure definition:
+`x <- expression` sequences one. A nullary effect value is forced with `()`, so
+it can be stored before it is executed; `let` remains a pure definition:
 
 ```blot
 const Terminal = @effect { .read = Unit -> Str; }
 
 let ask = fn () =>
-  answer <- Terminal.read ()
+  let effect = Terminal.read
+  answer <- effect
   return answer <> "!"
 ```
 

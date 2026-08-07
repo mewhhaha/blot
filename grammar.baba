@@ -85,7 +85,7 @@ fixity_declaration = (
 // reference language collapse into `const`, because types are ordinary
 // compile-time values.
 declaration =
-  binding | rebinding | sequencing | element_line
+  binding | rebinding | sequencing
   | opening | iteration | breaking
   | conditional_statement | result ;
 
@@ -93,7 +93,7 @@ declaration =
 // mechanical and keeps declaration and nested statement regions distinct in
 // the compact CST.
 statement =
-  binding | rebinding | sequencing | element_line
+  binding | rebinding | sequencing
   | opening | iteration | breaking
   | conditional_statement | result ;
 
@@ -102,8 +102,16 @@ binding = (
   kind:("let" | "const" | "sig")
   pattern:binding_pattern
   "="
-  value:value
+  value:(value | indented_element_value)
   LAYOUT_NEWLINE
+) ;
+
+indented_element_value = (
+  LAYOUT_NEWLINE
+  LAYOUT_INDENT
+  value:element_expression
+  LAYOUT_NEWLINE
+  LAYOUT_DEDENT
 ) ;
 
 // A declaration tag is a compile-time descriptor whose transformer wraps the
@@ -128,9 +136,9 @@ declaration_tag = (
 // arrow out is the design fix, and it says something true: both are a name, an
 // arrow, and a value, and neither takes a pattern.
 //
-// `<-` is not a second spelling for `let`. It sequences the already-applied
-// expression on its right, so a nullary operation is written explicitly:
-// `input <- Terminal.read ();`.
+// `<-` is not a second spelling for `let`. It executes the effect value on its
+// right and binds the produced result. An already-applied effectful expression
+// remains valid; a nullary effect value is forced with `()` by this declaration.
 rebinding = (
   name:(IDENT | TYPE_IDENT)
   arrow:(":=" | "<-")
@@ -148,8 +156,9 @@ sequencing = (
   LAYOUT_NEWLINE
 ) ;
 
-// A bare element executes its component and discards that component's result.
-// Its children are still suspended values; only the outer element is sequenced.
+// Inside an element body, a bare nested element is one suspended child value.
+// Ordinary statement regions require `<- <Element />` to execute and discard
+// an element effect.
 element_line = (
   value:element_expression
   LAYOUT_NEWLINE
@@ -441,10 +450,16 @@ element_self_close = (ANGLE_SELF_CLOSE) ;
 element_body = (
   ANGLE_RIGHT
   body:(
-    body_start:LAYOUT_NEWLINE
-    LAYOUT_INDENT
-    children:(element_line | element_child)+
-    body_end:LAYOUT_DEDENT
+    children:("{" effects:value "}")+
+    |
+      body_start:LAYOUT_NEWLINE
+      LAYOUT_INDENT
+      children:(
+        element_line
+        | ("{" effects:value "}" LAYOUT_NEWLINE)
+        | element_child
+      )+
+      body_end:LAYOUT_DEDENT
   )?
   ANGLE_CLOSE
   closing:element_name
@@ -456,10 +471,44 @@ element_child = (
   LAYOUT_NEWLINE
 ) ;
 
-// A nested bare element uses `element_line`; every other child uses the
-// ordinary non-element value alternatives. Parentheses remain available when
-// an element result participates in a larger expression.
-element_child_value = lambda | expression ;
+// A nested bare element uses `element_line`. A braced child is reserved for an
+// existing effect value, so a bare child expression cannot begin with braces.
+// Shapes and effect rows remain available as application arguments and infix
+// right operands.
+element_child_value = lambda | element_child_expression ;
+
+element_child_expression = (
+  first:element_child_operand
+  rest:infix_operation*
+) ;
+
+element_child_operand = (
+  prefixes:prefix_operator*
+  value:element_child_postfix_expression
+) ;
+
+element_child_postfix_expression = (
+  value:element_child_primary_expression
+  suffixes:field_suffix*
+  arguments:application_argument*
+) ;
+
+element_child_primary_expression = (
+  IDENT
+  | TYPE_IDENT
+  | INTEGER
+  | FLOAT
+  | TEXT
+  | INTRINSIC
+  | constructor_expression
+  | unit
+  | conditional
+  | case_expression
+  | handler_composition
+  | block
+  | array
+  | parenthesized_or_tuple
+) ;
 
 // A lambda is admissible wherever a value is. The two alternatives are told
 // apart by their first token — `fn` begins one and nothing else — so this is a

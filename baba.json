@@ -57,6 +57,12 @@
         }
       },
       {
+        "rule": "indented_element_value",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
         "rule": "declaration_tag",
         "boundary": {
           "kind": "root"
@@ -332,6 +338,30 @@
       },
       {
         "rule": "element_child_value",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "element_child_expression",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "element_child_operand",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "element_child_postfix_expression",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "element_child_primary_expression",
         "boundary": {
           "kind": "root"
         }

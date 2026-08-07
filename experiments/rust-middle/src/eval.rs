@@ -1489,6 +1489,8 @@ fn evaluate_declarations(
             let binding_context = context.clone();
             let binding_module = module_path.clone();
             let binding_environment = environment.clone();
+            let effect_context = context.clone();
+            let effect_runtime = binding_runtime.clone();
             evaluate_binding(
                 context,
                 module_path,
@@ -1497,6 +1499,13 @@ fn evaluate_declarations(
                 environment,
                 binding_runtime,
             )
+            .and_then(move |value| {
+                if kind == DeclarationKind::Effect {
+                    force_effect_value(effect_context, value, span, effect_runtime)
+                } else {
+                    Computation::value(value)
+                }
+            })
             .and_then(move |mut value| {
                 let module = match module(&binding_context, &binding_module) {
                     Ok(module) => module,
@@ -1650,6 +1659,45 @@ fn named_effect(value: Value, name: &str) -> Value {
         operations,
         host,
     }
+}
+
+pub(crate) fn force_effect_value(
+    context: Rc<Context>,
+    value: Value,
+    span: Span,
+    runtime: Runtime,
+) -> Computation {
+    let runs_with_unit = match &value {
+        Value::Closure {
+            module,
+            parameter,
+            signature,
+            ..
+        } => match self::module(&context, module) {
+            Ok(module) => {
+                matches!(
+                    module.arena.patterns[parameter.0 as usize],
+                    Pattern::Unit { .. }
+                ) || matches!(
+                    signature.as_deref().map(signature_body),
+                    Some(Value::Arrow { domain, .. }) if matches!(domain.as_ref(), Value::Unit)
+                )
+            }
+            Err(error) => return Computation::error(error),
+        },
+        Value::Operation { effect, name } => match effect.as_ref() {
+            Value::Effect { operations, .. } => matches!(
+                operations.get(name),
+                Some(Value::Arrow { domain, .. }) if matches!(domain.as_ref(), Value::Unit)
+            ),
+            _ => false,
+        },
+        _ => false,
+    };
+    if !runs_with_unit {
+        return Computation::value(value);
+    }
+    apply(context, value, Value::Unit, span, runtime)
 }
 
 pub fn apply(

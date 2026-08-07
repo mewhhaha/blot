@@ -323,7 +323,7 @@ function statementsContainEffect(cursors: readonly Cursor[]): boolean {
   for (const cursor of cursors) {
     const rule = statementRule(cursor);
     if (
-      rule.name === "sequencing" || rule.name === "element_line" ||
+      rule.name === "sequencing" ||
       (rule.name === "rebinding" &&
         tokenOf(required(rule, "arrow")).text === "<-")
     ) {
@@ -1513,7 +1513,17 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       );
     }
     const pattern = lowerPattern(asRule(field(rule, "pattern"), "pattern"));
-    let value = lowerValue(asRule(field(rule, "value"), "value"), context);
+    const valueCursor = field(rule, "value");
+    expect(valueCursor !== null, "a binding has no value");
+    let value: Expr;
+    if (isRule(valueCursor) && valueCursor.name === "indented_element_value") {
+      value = lowerPrimary(
+        asRule(required(valueCursor, "value"), "element_expression"),
+        context,
+      );
+    } else {
+      value = lowerValue(asRule(valueCursor, "value"), context);
+    }
     if (tags.length > 0) {
       expect(kind !== "sig", "a tagged signature reached value lowering");
       value = lowerTaggedValue(kind, pattern, value, tags, rule.span);
@@ -1720,8 +1730,9 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     if (tokenOf(required(rule, "arrow")).text === ":=") {
       return { tag: "shadow", name, value, span: rule.span };
     }
-    // `<-` sequences the expression as written. It does not insert a call:
-    // nullary operations therefore keep their explicit `()` at the source.
+    // The effect declaration is the forcing boundary. Type-directed
+    // elaboration applies a nullary effect value once and otherwise sequences
+    // the already-applied expression as written.
     return {
       tag: "binding",
       kind: "effect",
@@ -1738,16 +1749,6 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       tags: [],
       pattern: { tag: "name", name: "_", qualifier: "none", span: rule.span },
       value: lowerValue(asRule(field(rule, "value"), "value"), context),
-      span: rule.span,
-    };
-  }
-  if (rule.name === "element_line") {
-    return {
-      tag: "binding",
-      kind: "effect",
-      tags: [],
-      pattern: { tag: "name", name: "_", qualifier: "none", span: rule.span },
-      value: lowerPrimary(required(rule, "value"), context),
       span: rule.span,
     };
   }
@@ -2103,7 +2104,10 @@ function lowerLambda(rule: Rule, context: Context): Expr {
 }
 
 function lowerExpression(rule: Rule, context: Context): Expr {
-  expect(rule.name === "expression", `expected expression, got ${rule.name}`);
+  expect(
+    rule.name === "expression" || rule.name === "element_child_expression",
+    `expected expression, got ${rule.name}`,
+  );
   const first = lowerOperand(asRule(field(rule, "first"), "first"), context);
   const steps: ChainStep[] = fieldList(rule, "rest").map((cursor) => {
     const step = asRule(cursor, "infix_operation");
@@ -2264,7 +2268,10 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
           closingName.span,
         );
       }
-      const children = fieldList(ending, "children");
+      const children = [
+        ...fieldList(ending, "children"),
+        ...fieldList(ending, "effects"),
+      ].toSorted((left, right) => left.span.start - right.span.start);
       const childContext: Context = {
         ...context,
         loop: null,
@@ -2274,7 +2281,9 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
       for (const cursor of children) {
         const child = asRule(cursor, "element child");
         if (
-          child.name !== "element_line" && child.name !== "element_child"
+          child.name !== "element_line" &&
+          child.name !== "value" &&
+          child.name !== "element_child"
         ) {
           fail(
             "BLOT_UNKNOWN_ELEMENT_CHILD",
@@ -2282,11 +2291,23 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
             child.span,
           );
         }
-        const resultName = `elementChild$${child.span.start}$${child.span.end}`;
+        if (child.name === "value") {
+          childElements.push({
+            spread: false,
+            value: lowerValue(child, childContext),
+          });
+          continue;
+        }
         const childValue = required(child, "value");
-        const value = child.name === "element_line"
-          ? lowerPrimary(childValue, childContext)
-          : lowerValue(asRule(childValue, "value"), childContext);
+        if (child.name === "element_line") {
+          childElements.push({
+            spread: false,
+            value: lowerPrimary(childValue, childContext),
+          });
+          continue;
+        }
+        const resultName = `elementChild$${child.span.start}$${child.span.end}`;
+        const value = lowerValue(asRule(childValue, "value"), childContext);
         childElements.push({
           spread: false,
           value: {
@@ -2337,10 +2358,22 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
       arg: { tag: "shape", members: properties, span: rule.span },
       span: rule.span,
     };
-    return {
+    const application: Expr = {
       tag: "apply",
       fn: withProperties,
       arg: children,
+      span: rule.span,
+    };
+    return {
+      tag: "lambda",
+      parameter: { tag: "unit", span: rule.span },
+      body: {
+        tag: "block",
+        declarations: [],
+        result: application,
+        resultEffects: "ambient",
+        span: rule.span,
+      },
       span: rule.span,
     };
   }

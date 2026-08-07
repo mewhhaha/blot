@@ -558,16 +558,25 @@ name <- expression
 ```
 
 This is the only declaration form that admits an effectful expression. It binds
-one name, not a pattern, and evaluates the expression exactly as written. The
-leading form discards the result and is exactly equivalent to `_ <- expression`;
-it is sequencing syntax, not a prefix operator. The formatter uses the leading
-form as the canonical spelling. Neither form inserts a unit argument, so a
-nullary operation is explicit:
+one name, not a pattern, and executes the effect value on its right. The leading
+form discards the result and is exactly equivalent to `_ <- expression`; it is
+sequencing syntax, not a prefix operator. The formatter uses the leading form as
+the canonical spelling.
+
+An effect value has the erased representation `Unit -> A ~ E`. Sequencing it
+supplies `()` and binds the resulting `A`, so it can be constructed, retained,
+and executed later:
 
 ```blot
-request <- Runtime.request ()
-<- Console.write "ready"
+let effect = <Camera />
+camera <- effect
+<- effect
 ```
+
+An already-applied expression that performs while it is evaluated remains valid
+on the right of `<-`; its result is bound directly. A projected nullary
+operation is itself an effect value, so `time <- Clock.now` and
+`time <- Clock.now ()` have the same result and effect row.
 
 `let`, `const`, `:=`, `open`, function results written without a block, and
 module results are pure value positions. The expression in `return value` is a
@@ -583,22 +592,43 @@ executing it.
 
 ### 4.6 Element expressions and statements
 
-An element applies an ordinary component binding to a property record and an
-array of suspended child computations. Written as a bare statement, it executes
-the component and discards that component's result:
+An element constructs an effect value which, when executed, applies an ordinary
+component binding to a property record and an array of child effect values.
+Executing while discarding the component result is explicit:
 
 ```blot
-<div .class="counter" .hidden={hidden}>
+<- <div .class="counter" .hidden={hidden}>
   text "Count: "
   <Button .disabled=True />
 </div>
 ```
 
-Element syntax remains a value in every value position. A named effect binding
-retains its result as `reference <- <div />`, and `return <div />` makes it the
-tail computation. Only the bare statement spelling supplies the discard. An
-element is a complete value form; parenthesize it before projecting from its
-result or placing it in a larger operator expression.
+Element syntax is pure at construction: `let effect = <div />` retains the
+effect without executing the component, `reference <- effect` executes it and
+retains its result, and `<- effect` executes it while discarding that result. A
+bare element is accepted only as a nested child; ordinary statement suites
+require one of the explicit sequencing forms. An element is a complete value
+form; parenthesize it before placing the effect value in a larger operator
+expression.
+
+Braces in an element body pass an existing effect value to the parent without
+executing or suspending it again:
+
+```blot
+let effect1 = <A />
+let effect2 = <B />
+let parent =
+  <C>
+    {effect1}
+    {effect2}
+  </C>
+```
+
+Short bodies may remain inline as `<C>{effect1}{effect2}</C>`. A multiline
+element binding places its value on the following indented line, so the opening
+and closing tags visibly share the value's scope. The braces distinguish an
+existing effect value from a bare child computation, which element syntax
+suspends once for convenience.
 
 The tag is a lexical binding with exactly the name written. Lower-case and
 capitalized tags have the same semantics: `<div>` reaches `div`, and `<Button>`
@@ -646,7 +676,7 @@ A component is otherwise an ordinary curried function. For example:
 ```blot
 let component = fn properties => fn children =>
   for child in Iter.items children:
-    <- child ()
+    <- child
 
   return ()
 ```
@@ -657,20 +687,24 @@ child propagates that child's inferred effects into the component. Projecting
 fields or attaching a signature constrains the property argument to a record;
 performing renderer operations adds their effects to the outer row.
 
-The component's result type is unchanged by element syntax:
+The component's result and effect row become the element effect value's result
+and effect row:
 
 ```blot
 let draw_twice = fn () =>
-  <div />
-  return <div />
+  let effect = <div />
+  <- effect
+  result <- effect
+  return result
 ```
 
-Each value between paired tags becomes one `fn () => value` entry in the child
-array. Its value is sequenced only when that function is called, and its result
-is returned from the function. A self-closing element receives `[]`. The
-component may inspect the computations, reorder them, keep only some of them, or
-execute them in source order. Control inside one child has that child's lambda
-as its boundary.
+Each child between paired tags becomes one effect value in the child array. A
+nested element already is such a value. `{effect}` passes an existing effect
+value unchanged, while a bare non-element expression is suspended as
+`fn () => expression`. Sequencing the child executes it and binds its result. A
+self-closing element receives `[]`. The component may inspect the effects,
+reorder them, keep only some of them, or execute them in source order. Control
+inside one suspended child has that child's suspension as its boundary.
 
 The first example lowers conceptually to the equivalent of:
 
@@ -679,20 +713,21 @@ let first_child = fn () =>
   child <- text "Count: "
   return child
 let second_child = fn () =>
-  child <- Button { .disabled = True; } []
-  return child
-<- div { .class = "counter"; .hidden = hidden; } [first_child, second_child]
+  return Button { .disabled = True; } []
+let effect = fn () =>
+  return div { .class = "counter"; .hidden = hidden; } [first_child, second_child]
+<- effect
 ```
 
-The outer `<-` in that expansion is the bare element statement's discard; a
-value-position element lowers to the application without it. The source form
-lowers completely during CST lowering. There is no element AST node, element
-type, renderer primitive, implicit effect, or backend path. Opening and closing
-names must match exactly. `</` and `/>` are reserved element delimiters; exact
-`<` and `>` remain available as fixity operators, while longer operator
-spellings continue to lex as operators. The exact brackets are infix operators
-only; using `<` as a prefix would be indistinguishable from opening an element
-expression.
+The nullary closures in that expansion are the erased representation of effect
+values; they are not a second surface calling convention. The source form lowers
+completely during CST lowering, and effect binding performs the one erased `()`
+application. There is no element AST node, element type, renderer primitive,
+implicit execution, or backend path. Opening and closing names must match
+exactly. `</` and `/>` are reserved element delimiters; exact `<` and `>` remain
+available as fixity operators, while longer operator spellings continue to lex
+as operators. The exact brackets are infix operators only; using `<` as a prefix
+would be indistinguishable from opening an element expression.
 
 ### 4.7 Opening a record
 

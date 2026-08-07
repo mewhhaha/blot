@@ -331,6 +331,7 @@ public artifact, or an explicit compiler command.
 | solve positive recursive representation equations by their least fixed point   | no residual self-only result alternative |
 | preserve compiler-local control envelopes while erasing their payload wrappers | one runtime sum for statement control    |
 | erase scalar refinements without changing their concrete layout                | equal layouts for refined and open facts |
+| erase first-class effect values at explicit sequencing boundaries              | one checked nullary call                 |
 | closure-convert runtime free variables into explicit function parameters       | lexically minimal residual environments  |
 | unfold static structural folds around dynamic scalar work                      | direct runtime projections               |
 | specialize handlers, effect identities, seals, and generated descriptors       | closed runtime identities                |

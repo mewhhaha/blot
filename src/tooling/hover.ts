@@ -705,7 +705,7 @@ const PUNCTUATION_DOCUMENTATION: Readonly<Record<string, string>> = {
   "=": "Associates a binding, signature, field, or pattern with its value.",
   ":=": "Rebinds an existing name while preserving its stable type.",
   "<-":
-    "Sequences an already-applied effectful expression. `name <- effect` binds its result; leading `<- effect` discards it.",
+    "Executes an effect value. `name <- effect` binds its result; leading `<- effect` discards it. A nullary effect value is forced with `()`.",
   "=>": "Separates a function parameter or case pattern from its body.",
   ":": "Introduces an indentation-delimited statement or branch suite.",
   "...": "Spreads the members or elements of the following value.",

@@ -1,0 +1,5 @@
+let Camera = fn _properties => fn _children => ()
+let view = fn () =>
+  <Camera />
+  return ()
+return view

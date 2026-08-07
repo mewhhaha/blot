@@ -51,8 +51,8 @@ The proposed foundation is a two-phase, fine-grain call-by-value calculus with
 liveness-erased pure bindings. Surface expressions elaborate into a small core
 that distinguishes values from computations. `let` introduces a shareable pure
 definition and does not itself establish evaluation order. `x <- c` is the
-sequencing operation for a computation `c`; it does not insert an application
-and it is not an alternative spelling of `let`.
+sequencing operation for an effect value `c`; its erased nullary representation
+is applied once, and it is not an alternative spelling of `let`.
 
 The ordinary type lattice contains structural records, variants, homogeneous
 arrays, ordered ranges, functions, effect rows, unions, intersections, and
@@ -219,18 +219,20 @@ An element has no built-in DOM, renderer, node type, or text operation.
 </Button>
 ```
 
-The element expression itself elaborates to an ordinary component call whose
-second argument is an array of suspended child computations:
+The element expression elaborates to an effect value around an ordinary
+component call whose second argument is an array of child effect values. Nested
+elements and braced existing effect values enter that array unchanged; a bare
+non-element child computation receives one nullary suspension:
 
 ```blot
-Button { .label = "Save"; } [fn () => text "ready"]
+fn () => Button { .label = "Save"; } [fn () => text "ready"]
 ```
 
-A bare element statement sequences and discards that application. A named bind
-retains the component's result, and a tail element returns it as the tail of the
-enclosing computation. Each child effect remains suspended until the component
-calls its corresponding nullary function. Element syntax therefore changes
-neither the component's result nor its effect row.
+An effect binding executes that value, supplying its erased unit argument. A
+named bind retains the component's result and a leading bind discards it. A bare
+element is valid only as a nested child. Each child effect remains suspended
+until the component sequences it. Element syntax therefore preserves the
+component's result and effect row inside a first-class effect value.
 
 The component decides whether and how often to execute its children, subject to
 the child's ownership contract. An unrestricted child may be called repeatedly;
@@ -354,20 +356,23 @@ definition receives a fresh value identity for refinement and ownership facts.
 ### 4.4 Computation sequencing
 
 `x <- c` is the only surface declaration that incorporates the effects of `c`
-into the current computation. The expression on the right is already applied:
-
-```blot
-request <- Runtime.request ()
-```
-
-does not elaborate by adding `()`. It elaborates as:
+into the current computation. When the right side has type
+`Unit -> A ~ epsilon`, it is an effect value and sequencing elaborates to:
 
 ```text
-bind request <- elaborate(Runtime.request ()) in ...
+bind x <- apply c () in ...
 ```
 
-`let x = c` is rejected when `c` has a non-empty effect row. It creates neither
-an implicit bind nor an effect thunk.
+An already-applied effectful expression remains a computation and elaborates
+without another call:
+
+```text
+bind x <- elaborate(c) in ...
+```
+
+`let x = c` is rejected when evaluating `c` has a non-empty effect row. It may
+bind an effect value because constructing its erased nullary closure is pure;
+only a later `<-` executes the suspended body.
 
 The value carried by a scoped return is a tail computation rather than an
 intermediate definition. It contributes its effects and result directly to the

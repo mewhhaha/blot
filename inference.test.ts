@@ -1711,14 +1711,16 @@ return { .adjust = adjust; }
 );
 
 check(
-  "an element expression preserves its component result in tail position",
+  "an element effect can be stored and explicitly executed",
   `const Draw = @effect { .create = Unit -> Int; }
 let div = fn _ => fn _children =>
   result <- Draw.create ()
   return result
 let view = fn () =>
-  <- <div></div>
-  return <div></div>
+  let effect = <div></div>
+  <- effect
+  result <- effect
+  return result
 return { .view = view; }
 `,
   "{ .view = () -> Int ~ { Draw }; }",
@@ -1732,13 +1734,34 @@ let Child = fn _ => fn _children =>
   result <- Draw.write "not run"
   return result
 let view = fn () =>
-  <Ignore>
+  <- <Ignore>
     <Child />
   </Ignore>
   return ()
 return { .view = view; }
 `,
   "{ .view = () -> (); }",
+);
+
+check(
+  "stored element effects pass through child braces without another suspension",
+  `const Draw = @effect { .write = Str -> Unit; }
+sig Parent = {} -> [Unit -> Unit ~ { Draw }] -> Unit ~ { Draw }
+let Parent = fn _ => fn children =>
+  for child in Iter.items children:
+    <- child
+
+  return ()
+let Child = fn properties => fn _children =>
+  <- Draw.write properties.name
+let view = fn () =>
+  let first = <Child .name="first" />
+  let second = <Child .name="second" />
+  <- <Parent>{first}{second}</Parent>
+  return ()
+return { .view = view; }
+`,
+  "{ .view = () -> () ~ { Draw }; }",
 );
 
 check(
@@ -1790,14 +1813,14 @@ return <Button .lable="Save" />
 );
 
 check(
-  "effect binding sequences the expression without inserting a call",
+  "effect binding executes a nullary effect value",
   `const Clock = @effect { .now = Unit -> Int; }
 let operation = fn () =>
   read <- Clock.now
   return read
 return { .operation = operation; }
 `,
-  "{ .operation = () -> () -> Int ~ { Clock }; }",
+  "{ .operation = () -> Int ~ { Clock }; }",
 );
 
 check(

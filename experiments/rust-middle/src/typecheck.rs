@@ -11,7 +11,8 @@ use crate::ast::{
 };
 use crate::diagnostic::Diagnostic;
 use crate::eval::{
-    Context, Phase, Runtime, apply, evaluate_binding, evaluate_expression, match_pattern, run,
+    Context, Phase, Runtime, apply, evaluate_binding, evaluate_expression, force_effect_value,
+    match_pattern, run,
 };
 use crate::value::{
     Domain as ValueDomain, Environment as ValueEnvironment, OpenedValues, Value, attach_signature,
@@ -1306,22 +1307,33 @@ impl Checker {
                 if kind == DeclarationKind::Const {
                     self.phase.set(Phase::Comptime);
                 }
-                let inferred = match &signature {
-                    Some(expected) => self.infer_against(
-                        path,
-                        module,
-                        value,
-                        expected.clone(),
-                        types,
-                        values,
-                        dependencies,
-                        span,
-                    ),
-                    None => self.infer(path, module, value, types, values, dependencies),
+                let inferred = match (&signature, kind) {
+                    (Some(expected), declaration_kind)
+                        if declaration_kind != DeclarationKind::Effect =>
+                    {
+                        self.infer_against(
+                            path,
+                            module,
+                            value,
+                            expected.clone(),
+                            types,
+                            values,
+                            dependencies,
+                            span,
+                        )
+                    }
+                    _ => self.infer(path, module, value, types, values, dependencies),
                 };
                 self.phase.set(previous_phase);
                 self.level.set(self.level.get() - 1);
                 let mut inferred = inferred?;
+                if kind == DeclarationKind::Effect
+                    && let Some((suspended_effects, result)) =
+                        self.effect_value_signature(&inferred.type_)
+                {
+                    inferred.effects = self.join_effects(inferred.effects, suspended_effects)?;
+                    inferred.type_ = result;
+                }
                 if kind != DeclarationKind::Effect {
                     self.constrain(
                         inferred.effects.clone(),
@@ -1364,6 +1376,22 @@ impl Checker {
                         values,
                         Phase::Runtime,
                     ) {
+                        Ok(value) if kind == DeclarationKind::Effect => {
+                            match run(force_effect_value(
+                                self.context.clone(),
+                                value,
+                                span,
+                                Runtime::new(Phase::Runtime, path.to_owned()),
+                            )) {
+                                Ok(value) => Some(value),
+                                Err(_) => {
+                                    self.incomplete_evaluations
+                                        .borrow_mut()
+                                        .insert(path.to_owned());
+                                    None
+                                }
+                            }
+                        }
                         Ok(value) => Some(value),
                         Err(_) => {
                             self.incomplete_evaluations
@@ -1424,6 +1452,9 @@ impl Checker {
                     Vec::new()
                 };
                 if let Some(signature) = signature {
+                    if kind == DeclarationKind::Effect {
+                        self.constrain(inferred.type_.clone(), signature.clone(), span)?;
+                    }
                     inferred.type_ = signature;
                 }
                 for bound in recursive_bounds {
@@ -3646,6 +3677,21 @@ impl Checker {
                 Ok(joined)
             }
         }
+    }
+
+    fn effect_value_signature(&self, type_: &Type) -> Option<(Type, Type)> {
+        let Type::Function {
+            parameter,
+            effects,
+            result,
+        } = type_
+        else {
+            return None;
+        };
+        if !matches!(self.settle((**parameter).clone(), false), Type::Unit) {
+            return None;
+        }
+        Some(((**effects).clone(), (**result).clone()))
     }
 
     fn bind_pattern(
