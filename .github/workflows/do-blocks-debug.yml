@@ -1,0 +1,53 @@
+name: do-blocks-debug
+
+on:
+  push:
+    branches:
+      - agent/do-blocks-worker
+
+permissions:
+  contents: write
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/do-blocks-worker
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Reproduce implementation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('.github/workflows/do-blocks-worker.yml').read_text()
+          marker = '      - name: Implement explicit do blocks\n        run: |\n'
+          start = text.index(marker) + len(marker)
+          end = text.index('      - name: Generate parser\n', start)
+          lines = text[start:end].splitlines()
+          Path('/tmp/implement-do-blocks.sh').write_text('\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in lines
+          ) + '\n')
+          PY
+          bash /tmp/implement-do-blocks.sh
+      - name: Generate and format
+        run: |
+          deno task generate
+          deno task generate:rust-middle-schema
+          deno fmt
+      - name: Capture focused test result
+        run: |
+          set +e
+          deno test --allow-read --allow-write src/syntax/layout.test.ts src/syntax/surface.test.ts syntax.test.ts examples.test.ts inference.test.ts > .worker-test-log.txt 2>&1
+          status=$?
+          set -e
+          git config user.name "Jacob Torrång"
+          git config user.email "kopatheonlyone@hotmail.com"
+          git add -A
+          git commit -m "debug: capture do block test failure"
+          git push --force origin HEAD:agent/do-blocks-debug
+          exit $status
