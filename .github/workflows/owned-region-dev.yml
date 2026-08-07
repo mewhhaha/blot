@@ -23,14 +23,16 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
           components: rustfmt,clippy
-      - name: Apply Rust Region ownership proof
+      - name: Apply Region Runtime HIR lowering
         run: |
           git pull --rebase origin codex/owned-slices
-          python3 experiments/owned-regions/apply_rust_region_ownership.py
+          python3 experiments/owned-regions/apply_region_hir.py
           cargo fmt --manifest-path experiments/rust-middle/Cargo.toml
           cargo check --manifest-path experiments/rust-middle/Cargo.toml --target wasm32-unknown-unknown
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add experiments/rust-middle/src/ownership.rs
-          git commit -m 'feat: prove Region split and join in Rust ownership'
+          git add \
+            experiments/rust-middle/src/hir.rs \
+            experiments/rust-middle/src/backend.rs
+          git commit -m 'feat: lower Region operations to Runtime HIR'
           git push origin HEAD:codex/owned-slices
