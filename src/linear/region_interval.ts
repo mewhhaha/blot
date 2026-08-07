@@ -1,8 +1,10 @@
+import { pairwiseDisjoint, type RegionFamily } from "./region_family.ts";
+
 /**
  * Array-interval region algebra for partitioned ownership.
  *
- * This module contains no ownership graph. It answers only the semantic
- * questions for one region family: validity, disjointness, split coverage,
+ * This module contains no source ownership graph. It is one implementation of
+ * the generic RegionFamily contract: validity, disjointness, exact split cover,
  * ordered combination, relative indexing, and full-extent coverage.
  */
 
@@ -12,6 +14,14 @@ export interface IntervalRegion {
   readonly end: number;
   readonly extent: number;
 }
+
+export interface IntervalPartitionWitness {
+  /** Offset relative to the source region's start. */
+  readonly offset: number;
+}
+
+export type IntervalCombineWitness = "ordered-adjacent";
+export type IntervalAccessWitness = number;
 
 export type IntervalSplit =
   | {
@@ -121,13 +131,7 @@ export function intervalsDisjoint(
 export function pairwiseDisjointIntervals(
   regions: readonly IntervalRegion[],
 ): boolean {
-  if (regions.some((region) => !validInterval(region))) return false;
-  for (let left = 0; left < regions.length; left += 1) {
-    for (let right = left + 1; right < regions.length; right += 1) {
-      if (!intervalsDisjoint(regions[left], regions[right])) return false;
-    }
-  }
-  return true;
+  return pairwiseDisjoint(arrayIntervalFamily, regions);
 }
 
 /**
@@ -166,6 +170,37 @@ export function sameInterval(
   return left.origin === right.origin && left.start === right.start &&
     left.end === right.end && left.extent === right.extent;
 }
+
+/**
+ * Concrete family descriptor used by generic region-lineage validation.
+ *
+ * The descriptor verifies supplied results rather than constructing them. That
+ * is the compiler boundary we want: Runtime HIR carries the concrete operation
+ * and its witness, while this reusable family proves the local spatial law.
+ */
+export const arrayIntervalFamily: RegionFamily<
+  IntervalRegion,
+  IntervalPartitionWitness,
+  IntervalCombineWitness,
+  IntervalAccessWitness
+> = {
+  name: "array-interval-v1",
+  valid: validInterval,
+  disjoint: intervalsDisjoint,
+  verifyPartition: (source, witness, parts) => {
+    if (parts.length !== 2) return false;
+    if (!integer(witness.offset)) return false;
+    const [left, right] = parts;
+    return validSplitCover(source, left, right) &&
+      left.end === source.start + witness.offset;
+  },
+  verifyCombine: (parts, witness, result) => {
+    if (witness !== "ordered-adjacent" || parts.length !== 2) return false;
+    return validJoinCover(parts[0], parts[1], result);
+  },
+  contains: intervalContainsRelativeIndex,
+  full: isFullInterval,
+};
 
 function integer(value: number): boolean {
   return Number.isSafeInteger(value);
