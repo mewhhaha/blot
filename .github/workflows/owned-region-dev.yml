@@ -30,6 +30,7 @@ jobs:
         run: |
           git pull --rebase origin codex/owned-slices
           python3 experiments/owned-regions/apply_rust_region.py
+          python3 experiments/owned-regions/finish_rust_region_compile.py
           cargo fmt --manifest-path experiments/rust-middle/Cargo.toml
           cargo check --manifest-path experiments/rust-middle/Cargo.toml --target wasm32-unknown-unknown
           git config user.name github-actions[bot]
@@ -37,6 +38,8 @@ jobs:
           git add \
             experiments/rust-middle/src/value.rs \
             experiments/rust-middle/src/primitives.rs \
-            experiments/rust-middle/src/typecheck.rs
+            experiments/rust-middle/src/typecheck.rs \
+            experiments/rust-middle/src/hir.rs \
+            experiments/rust-middle/src/session.rs
           git commit -m 'feat: add Region type and evaluator to Rust middle'
           git push origin HEAD:codex/owned-slices
