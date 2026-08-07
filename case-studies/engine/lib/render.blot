@@ -177,12 +177,11 @@ const to_view = fn (point, camera) =>
 // View to screen. The two lenses differ in what the view point is measured
 // against: focal axes over its own depth, or zoom axes and no divide at all.
 // That is the whole of "2D is an orthographic camera".
-const to_screen = fn (view, camera) => if camera.lens == 0:
-  return Vec4.add
+const to_screen = fn (view, camera) => case camera.lens == 0 of
+  #True => Vec4.add
       SCREEN_CENTRE
       (Vec4.div (Vec4.mul view FOCAL_AXES) (Vec4.splat (Vec4.z view)))
-else:
-  return Vec4.add SCREEN_CENTRE (Vec4.mul view camera.zoom_axes)
+  #False => Vec4.add SCREEN_CENTRE (Vec4.mul view camera.zoom_axes)
 
 // Where the camera sits, and the three rows that take a world point to it.
 // Built once a frame rather than per vertex, because every vertex wants the
@@ -236,10 +235,9 @@ const camera_of = fn (yaw, pitch, distance, lens) =>
 // four lanes are for — one multiply and one horizontal sum.
 const shade_of = fn normal =>
   let dot = Vec4.dot normal LIGHT
-  let lit = if is_less (Float32.cmp dot ZERO):
-    return ZERO
-  else:
-    return dot
+  let lit = case is_less (Float32.cmp dot ZERO) of
+    #True => ZERO
+    #False => dot
   return 60 + Float32.truncate (Float32.mul lit (lane 195.0))
 
 // One face of one box: place its corners, project them, and hand the host two
@@ -277,8 +275,9 @@ const draw_face = fn (position, angle, scale, colour, camera, face) =>
   let near = fn z => is_less (Float32.cmp z NEAR)
   let behind = near za || near zb || near zc || near zd
   let hidden = is_greater (Float32.cmp outward ZERO)
-  <- if behind || hidden : ()
-  else:
+  <- case behind || hidden of
+    #True => ()
+    #False =>
       // Pixels, and the last place a float exists in this function. `Canvas` is
       // a module import, so its record is the boundary a float cannot cross.
       let pixel = fn point => {
@@ -325,21 +324,20 @@ const draw_mesh = fn (position, angle, scale, colour, camera) =>
 const draw_sprite = fn (position, scale, texture, camera) =>
   let view = to_view (position, camera)
   let depth = Vec4.z view
-  <- if is_less (Float32.cmp depth NEAR):
-    return ()
-  else:
-    let point = to_screen (view, camera)
-    let size = if camera.lens == 0:
-      return Float32.div (Float32.mul scale FOCAL) depth
-    else:
-      return Float32.mul scale camera.zoom
-    <- Canvas.sprite {
-      .x = Float32.truncate (Vec4.x point);
-      .y = Float32.truncate (Vec4.y point);
-      .size = Float32.truncate size;
-      .depth = Float32.truncate (Float32.mul depth (lane 1000.0));
-      .texture = texture;
-    }
+  <- case is_less (Float32.cmp depth NEAR) of
+    #True => ()
+    #False =>
+      let point = to_screen (view, camera)
+      let size = case camera.lens == 0 of
+        #True => Float32.div (Float32.mul scale FOCAL) depth
+        #False => Float32.mul scale camera.zoom
+      <- Canvas.sprite {
+        .x = Float32.truncate (Vec4.x point);
+        .y = Float32.truncate (Vec4.y point);
+        .size = Float32.truncate size;
+        .depth = Float32.truncate (Float32.mul depth (lane 1000.0));
+        .texture = texture;
+      }
 
 // A frame: clear, read the camera the host is holding, let the application say
 // what is in the world, and present. The camera stays inside this module and

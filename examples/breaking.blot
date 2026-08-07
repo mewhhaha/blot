@@ -44,10 +44,9 @@ let guard_steps = 0
 let guard_total = 0
 for ever:
   guard_steps := guard_steps + 1
-  let candidate = if guard_steps < 3:
-    return Some guard_steps
-  else:
-    return None
+  let candidate = case guard_steps < 3 of
+    #True => Some guard_steps
+    #False => None
   if let #Some value = candidate else:
     break
 

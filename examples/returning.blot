@@ -1,5 +1,5 @@
-// `return` exits the nearest module or explicit `do`, including from a
-// statement branch or across a loop. A nested `do` catches its own return.
+// `return` exits the nearest module or explicit block, including from a
+// statement branch or across a loop. A nested block catches its own return.
 
 open @import "blot:prelude" ()
 
@@ -46,11 +46,12 @@ let count_or_stop = fn limit =>
 
   return -1
 
+// A Boolean value choice uses `case`; `return` keeps its one surrounding-scope
+// meaning instead of becoming a branch-local yield.
 let nested_if = fn () =>
-  let inner = if 1 < 2:
-    return 41
-  else:
-    return 0
+  let inner = case 1 < 2 of
+    #True => 41
+    #False => 0
   return inner + 1
 
 let nested_case = fn () =>

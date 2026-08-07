@@ -41,6 +41,7 @@ const delimitedLayoutRules = new Set([
 const layoutSensitiveRules = new Set([
   "array",
   "block",
+  "do_block",
   "case_expression",
   "conditional",
   "effect_row",
@@ -48,9 +49,10 @@ const layoutSensitiveRules = new Set([
   "handler_composition",
   "shape",
 ]);
-const blockRule = new Set(["block"]);
+const blockRule = new Set(["block", "do_block"]);
 const valueScopeBoundaryRules = new Set([
   "block",
+  "do_block",
   "case_expression",
   "conditional",
   "handler_composition",
@@ -292,7 +294,7 @@ function formatOneStatementValue(
       let expression = directRule(value, "expression");
       if (value.name === "continued_expression") expression = value;
       if (expression !== null) {
-        let valueScopeOwnsLayout = false;
+        let valueScopeOwnsLayout = expressionPrimaryIs(expression, "do_block");
         for (const layoutRule of valueScopeBoundaryRules) {
           if (expressionPrimaryIs(expression, layoutRule)) {
             valueScopeOwnsLayout = true;
@@ -371,7 +373,7 @@ function separateStatementSuites(
     if (node.type !== "rule") return;
     const siblingName = node.name === "program"
       ? "declaration"
-      : node.name === "block" || node.name === "statement_suite"
+      : blockRule.has(node.name) || node.name === "statement_suite"
       ? "statement"
       : null;
     if (siblingName !== null) {
@@ -641,7 +643,8 @@ function formatOneLambda(source: string, root: ConcreteRule): string {
     const original = source.slice(lambdaSpan.start, lambdaSpan.end);
     if (original.includes("//")) continue;
     if (
-      original.includes("\n") && containsRule(body, layoutSensitiveRules) &&
+      original.includes("\n") &&
+      containsRule(body, layoutSensitiveRules) &&
       !expressionPrimaryIs(body, "conditional")
     ) {
       continue;
@@ -821,7 +824,8 @@ function valueIsBlock(value: ConcreteRule): boolean {
 }
 
 function expressionIsBlock(expression: ConcreteRule): boolean {
-  return expressionPrimaryIs(expression, "block");
+  return expressionPrimaryIs(expression, "block") ||
+    expressionPrimaryIs(expression, "do_block");
 }
 
 function expressionPrimaryIs(
@@ -1152,6 +1156,21 @@ function collectIndentRegions(
       }
     }
   }
+  if (node.name === "do_block") {
+    const startsAtLine = lineAtOffset(lineStarts, node.span.start);
+    const endsAtLine = lineAtOffset(
+      lineStarts,
+      Math.max(node.span.start, ruleContentSpan(node).end - 1),
+    );
+    if (startsAtLine < endsAtLine) {
+      regions.push({
+        startsAtLine,
+        endsAtLine,
+        includesLastLine: true,
+        extraInteriorIndent: false,
+      });
+    }
+  }
   if (INDENTED_RULES.has(node.name)) {
     let startsAtLine = lineAtOffset(lineStarts, node.span.start);
     if (
@@ -1180,7 +1199,7 @@ function collectIndentRegions(
           }
           if (
             delimitedLayoutRules.has(ancestor.name) ||
-            ancestor.name === "block" || ancestor.name === "lambda"
+            blockRule.has(ancestor.name) || ancestor.name === "lambda"
           ) {
             break;
           }

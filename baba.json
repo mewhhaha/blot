@@ -521,6 +521,13 @@
         }
       },
       {
+        "rule": "do_block",
+        "boundary": {
+          "kind": "terminated",
+          "terminal": "LAYOUT_DEDENT"
+        }
+      },
+      {
         "rule": "block",
         "boundary": {
           "kind": "terminated",
@@ -596,6 +603,7 @@
         "program",
         "lambda",
         "block",
+        "do_block",
         "case_arm"
       ],
       "namespaces": [

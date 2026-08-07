@@ -1,6 +1,7 @@
-// A handler composition is static sugar over nested `@handle` calls. Each
-// bound step names the program with that effect discharged; the final step
-// executes the fully handled program.
+// Handler composition is ordinary function composition. Each two-argument
+// `@handle (Effect, handler)` is a computation transformer, so `|>` makes the
+// written order inner-to-outer. Sequencing the final effect value executes the
+// fully handled program.
 
 open @import "blot:prelude" ()
 
@@ -36,15 +37,14 @@ let fake_random =
     ;
   }
 
-let result = try program with
-  program_without_terminal <- @handle (Terminal, fake_terminal)
-  program_without_clock <- @handle (Clock, fake_clock)
-  @handle (Random, fake_random)
+let handled =
+  program
+    |> @handle (Terminal, fake_terminal)
+    |> @handle (Clock, fake_clock)
+    |> @handle (Random, fake_random)
 
-let discarded = try program with
-  <- @handle (Terminal, fake_terminal)
-  <- @handle (Clock, fake_clock)
-  @handle (Random, fake_random)
+result <- handled
+discarded <- handled
 
 return {
   .named = result;

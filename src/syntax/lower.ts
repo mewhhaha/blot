@@ -2600,7 +2600,7 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     };
   }
 
-  if (rule.name === "block") {
+  if (rule.name === "block" || rule.name === "do_block") {
     let statements = fieldList(rule, "statements");
     let result: Expr = { tag: "unit", span: rule.span };
     let resultEffects: "pure" | "ambient" = "pure";

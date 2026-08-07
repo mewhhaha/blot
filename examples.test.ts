@@ -255,20 +255,12 @@ const REJECTIONS: Record<
   },
   "guard_payload_type": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "handler_wrong_operation": { code: "BLOT_TYPE_ERROR", stage: "check" },
-  "handler_composition_action": {
-    code: "BLOT_BAD_HANDLER_COMPOSITION",
-    stage: "check",
-  },
   "break_outside_loop": {
     code: "BLOT_BREAK_OUTSIDE_LOOP",
     stage: "check",
   },
   "break_in_function": {
     code: "BLOT_BREAK_OUTSIDE_LOOP",
-    stage: "check",
-  },
-  "break_in_value_if": {
-    code: "BLOT_BREAK_IN_VALUE_CONDITION",
     stage: "check",
   },
   // A phase error, not a type error: the program checks and the interpreter

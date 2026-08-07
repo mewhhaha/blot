@@ -1,0 +1,5 @@
+let value = (
+  let local = 1
+  return local
+)
+return value

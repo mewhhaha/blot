@@ -11,10 +11,9 @@ let build =
     if value > 10:
       return nodes
     else:
-      let next = if value == 10:
-        return 0
-      else:
-        return value + 1
+      let next = case value == 10 of
+        #True => 0
+        #False => value + 1
       let (nodes, _) = Arena.insert (?nodes, node (value, value - 1, next))
       return build (value + 1, nodes)
   )

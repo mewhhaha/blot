@@ -107,8 +107,7 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
     }
     const gap = source.slice(previous.span.end, token.span.start);
     const newline = lastNewlineEnd(gap);
-    const suiteIntroducer = opensSuite(previous, elementSuiteIntroducers) ||
-      opensParenthesizedSuite(previous, token, tokens[tokenIndex + 1]);
+    const suiteIntroducer = opensSuite(previous, elementSuiteIntroducers);
     const frame = frames[frames.length - 1];
     const insideActiveSuite = frames.length > 1 &&
       delimiters.brackets === frame.brackets &&
@@ -335,24 +334,6 @@ function opensSuite(
     elementSuiteIntroducers.has(token.span.start)
   ) return true;
   return token.kind === "OPERATOR" && token.text === ":";
-}
-
-function opensParenthesizedSuite(
-  previous: Token,
-  first: Token,
-  second: Token | undefined,
-): boolean {
-  if (previous.type !== "literal" || previous.literal !== "(") return false;
-  if (first.type === "literal") {
-    return first.literal === "<-" || first.literal === "let" ||
-      first.literal === "const" ||
-      first.literal === "sig" || first.literal === "return" ||
-      first.literal === "for" || first.literal === "break" ||
-      first.literal === "open";
-  }
-  if (first.type !== "named" || second?.type !== "literal") return false;
-  if (first.kind !== "IDENT" && first.kind !== "TYPE_IDENT") return false;
-  return second.literal === "<-" || second.literal === ":=";
 }
 
 function updateDelimiters(

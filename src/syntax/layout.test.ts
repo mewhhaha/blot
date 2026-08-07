@@ -46,19 +46,30 @@ return outer;
   assertEquals(result.diagnostics[0]?.code, "BLOT_INCONSISTENT_INDENT");
 });
 
-Deno.test("layout elaboration opens a parenthesized suite with discard sequencing", async () => {
-  const source = `let run = fn condition =>
-  <- effect (
-      if condition:
-        return 1
-      else:
-        return 2
-    )
-  return ()
-return run
+Deno.test("layout elaboration opens an explicit do suite", async () => {
+  const source = `let value = do:
+  let local = 1
+  return local
+return value
 `;
   const result = await elaborateLayout(source);
   if (!result.ok) throw new Error(result.diagnostics[0]?.message);
+  assertEquals(
+    visible(result.layout.source).includes("<IN>let local = 1"),
+    true,
+  );
+});
+
+Deno.test("parentheses do not introduce statement suites", async () => {
+  const source = `let value = (
+  let local = 1
+  return local
+)
+return value
+`;
+  const result = await elaborateLayout(source);
+  if (!result.ok) throw new Error(result.diagnostics[0]?.message);
+  assertEquals(visible(result.layout.source).includes("(<NL><IN>"), false);
 });
 
 Deno.test("layout markers precede a trailing line comment", async () => {

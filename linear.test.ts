@@ -4,7 +4,7 @@
 // definition is discarded before ownership, so no resource exists to leak.
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { checkFile } from "./src/check/mod.ts";
+import { checkLegacySource } from "./src/check/mod.ts";
 import { BlotError } from "./src/diagnostic.ts";
 import { verifyOwnershipCertificate } from "./src/linear/certificate.ts";
 
@@ -18,8 +18,7 @@ const PRELUDE = `open @import "blot:prelude" ()
 
 async function analyze(source: string) {
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
-  await Deno.writeTextFile(path, PRELUDE + source);
-  const checked = await checkFile(path);
+  const checked = await checkLegacySource(path, PRELUDE + source);
   // The facts cover every module the backend would inline, the prelude
   // included, so a test about this snippet has to say which file it means.
   const own = [...checked.ownership].filter(([, fact]) => fact.path === path);

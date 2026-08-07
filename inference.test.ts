@@ -6,7 +6,7 @@
 // inferred `⊤` for everything.
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { checkFile } from "./src/check/mod.ts";
+import { checkFile, checkLegacySource } from "./src/check/mod.ts";
 import { BlotError, render } from "./src/diagnostic.ts";
 
 const scratch = await Deno.makeTempDir();
@@ -19,16 +19,14 @@ const PRELUDE = `open @import "blot:prelude" ()
 
 async function typeOf(source: string): Promise<string> {
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
-  await Deno.writeTextFile(path, PRELUDE + source);
-  const checked = await checkFile(path);
+  const checked = await checkLegacySource(path, PRELUDE + source);
   return checked.type;
 }
 
 async function errorOf(source: string): Promise<string> {
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
-  await Deno.writeTextFile(path, PRELUDE + source);
   try {
-    await checkFile(path);
+    await checkLegacySource(path, PRELUDE + source);
   } catch (error) {
     if (error instanceof BlotError) return error.message;
     throw error;
@@ -2544,11 +2542,10 @@ return plain (ping 5)
 
 check(
   "a group inside a nested block sees itself",
-  `return (
+  `return do:
   let up = rec (fn n => if n == 0 : 0 else: down (n - 1))
   let down = rec (fn n => if n == 0 : 1 else: up (n - 1))
   return up 9
-)
 `,
   "(0 | 1)",
 );

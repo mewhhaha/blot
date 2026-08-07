@@ -7,7 +7,13 @@
 
 import type { Diagnostic } from "../diagnostic.ts";
 import { BlotError } from "../diagnostic.ts";
-import { importExpressions, load, type Loaded, loadSource } from "../load.ts";
+import {
+  importExpressions,
+  load,
+  type Loaded,
+  loadLegacySource,
+  loadSource,
+} from "../load.ts";
 import {
   type Env as ValueEnv,
   moduleEnv,
@@ -51,8 +57,8 @@ import {
  *
  * The path is part of the fact rather than of the result, for the same reason a
  * diagnostic carries its origin: a dependency's spans index the dependency's
- * source, and an importer that resolved them against its own file would name
- * the wrong line. Anything turning one of these into a location has to read the
+ * source, and an importer that resolved them against its own file would name the
+ * wrong line. Anything turning one of these into a location has to read the
  * file the fact came from.
  */
 export interface OwnedBinding {
@@ -158,6 +164,18 @@ export async function checkSource(
   source: string,
 ): Promise<CheckResult> {
   const loaded = await loadSource(path, source);
+  return checkLoadedProgram(loaded);
+}
+
+/**
+ * Checks one legacy root revision for migration and internal regression tests.
+ * Imported modules still have to satisfy the current source language.
+ */
+export async function checkLegacySource(
+  path: string,
+  source: string,
+): Promise<CheckResult> {
+  const loaded = await loadLegacySource(path, source);
   return checkLoadedProgram(loaded);
 }
 

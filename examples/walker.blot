@@ -21,9 +21,10 @@ let program = [1, 0, 4, 5, 0, 6, 7]
 // A read past the end is a malformed tree rather than a trap. The guard is
 // what proves the index, exactly as in `indexed.blot`.
 sig token = [Int] -> Int -> Int
-let token = fn source => fn at => if at >= 0 && at < @array.len source:
-  return @array.get source at
-else:
+let token = fn source => fn at =>
+  if at >= 0 && at < @array.len source:
+    return @array.get source at
+
   return 0
 
 // Each walker returns the value it read and the position after it, so the
