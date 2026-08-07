@@ -6,6 +6,9 @@ import {
   assertThrows,
 } from "@std/assert";
 import { join } from "@std/path";
+import { apply, evaluationRuntime, run } from "../comptime/eval.ts";
+import type { Value } from "../comptime/value.ts";
+import { checkFile } from "../check/mod.ts";
 import { BlotError } from "../diagnostic.ts";
 import { evaluateFile } from "../run.ts";
 import { Compiler } from "../compiler.ts";
@@ -624,6 +627,134 @@ return ()
   }
 });
 
+Deno.test("generated checked integer traces agree with emitted Wasm", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "generated-integer-traces.blot");
+  const scenarios = [
+    { operation: "add", expression: "pair.left + pair.right" },
+    { operation: "subtract", expression: "pair.left - pair.right" },
+    { operation: "multiply", expression: "pair.left * pair.right" },
+    { operation: "divide", expression: "pair.left / pair.right" },
+    { operation: "remainder", expression: "pair.left % pair.right" },
+    { operation: "negate", expression: "@int.neg pair.left" },
+  ] as const;
+  try {
+    for (const scenario of scenarios) {
+      await Deno.writeTextFile(
+        path,
+        `open @import "blot:prelude" ()
+const Host = @effect.host {
+  .read = Unit -> { .left = Int; .right = Int; };
+  .write = Int -> Unit;
+}
+pair <- Host.read ()
+_ <- Host.write (${scenario.expression})
+return ()
+`,
+      );
+      const artifact = await compiler.compile(path);
+      const module = await WebAssembly.compile(
+        Uint8Array.from(artifact.wasm).buffer,
+      );
+      let seed = 0x1a64c0de;
+      for (let example = 0; example < 24; example += 1) {
+        const generated = generatedIntegerOperands(seed, example);
+        seed = generated.seed;
+        const expected = checkedIntegerResult(
+          scenario.operation,
+          generated.left,
+          generated.right,
+        );
+        if (expected === null) {
+          await assertRejects(
+            () =>
+              runDynamicIntegerModule(
+                module,
+                generated.left,
+                generated.right,
+              ),
+            WebAssembly.RuntimeError,
+          );
+          continue;
+        }
+        assertEquals(
+          await runDynamicIntegerModule(
+            module,
+            generated.left,
+            generated.right,
+          ),
+          expected,
+        );
+      }
+    }
+  } finally {
+    compiler.destroy();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("generated recursive divergence agrees with emitted Wasm", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "generated-divergence.blot");
+  const stops = [0n, 1n, -1n, 17n, -23n, 1_024n];
+  const declarations = stops.flatMap((stop, index) => [
+    `sig spin_${index} = Int -> Int`,
+    `let spin_${index} = rec (fn value => if value == ${stop}: value else: spin_${index} value)`,
+  ]);
+  const exports = stops.map((_, index) => `.spin_${index} = spin_${index};`);
+  try {
+    await Deno.writeTextFile(
+      path,
+      `open @import "blot:prelude" ()
+${declarations.join("\n")}
+return {
+  ${exports.join("\n  ")}
+}
+`,
+    );
+    const checked = await checkFile(path);
+    const surface = await evaluateFile(path, { write() {} });
+    if (surface.tag !== "shape") {
+      throw new Error("generated divergence module did not return a record");
+    }
+    const artifact = await compiler.compile(path);
+    const wasmModule = await WebAssembly.compile(
+      Uint8Array.from(artifact.wasm).buffer,
+    );
+
+    for (const [index, stop] of stops.entries()) {
+      const name = `spin_${index}`;
+      const fn = surface.fields.get(name);
+      if (fn === undefined) {
+        throw new Error(`generated divergence module omitted ${name}`);
+      }
+      const returned = evaluateGeneratedFunction(fn, stop, checked);
+      assertEquals(returned, { tag: "int", value: stop });
+
+      const divergent = stop + 1n;
+      try {
+        evaluateGeneratedFunction(fn, divergent, checked);
+        throw new Error(`${name} unexpectedly returned for ${divergent}`);
+      } catch (error) {
+        if (error instanceof BlotError) {
+          assertEquals(error.diagnostic.code, "BLOT_EVALUATION_LIMIT");
+        } else if (!(error instanceof RangeError)) {
+          throw error;
+        }
+      }
+      assertEquals(
+        await classifyWasmCall(wasmModule, `blot:${name}`, divergent),
+        "diverged",
+      );
+    }
+  } finally {
+    compiler.destroy();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
 Deno.test("Rust middle reuses an unchanged resident revision", async () => {
   const compiler = await RustMiddleCompiler.create();
   const directory = await Deno.makeTempDir();
@@ -954,8 +1085,17 @@ async function runDynamicIntegerEffect(
   wasm: Uint8Array,
   left: bigint,
   right: bigint,
-): Promise<void> {
+): Promise<bigint> {
   const module = await WebAssembly.compile(Uint8Array.from(wasm).buffer);
+  return await runDynamicIntegerModule(module, left, right);
+}
+
+async function runDynamicIntegerModule(
+  module: WebAssembly.Module,
+  left: bigint,
+  right: bigint,
+): Promise<bigint> {
+  let written: bigint | undefined;
   const instance = await WebAssembly.instantiate(module, {
     "blot:host/Host": {
       read(resultPointer: number) {
@@ -967,7 +1107,9 @@ async function runDynamicIntegerEffect(
         view.setBigInt64(resultPointer, left, true);
         view.setBigInt64(resultPointer + 8, right, true);
       },
-      write(_value: bigint) {},
+      write(value: bigint) {
+        written = value;
+      },
     },
   });
   const run = instance.exports["blot:default"];
@@ -975,4 +1117,149 @@ async function runDynamicIntegerEffect(
     throw new Error("integer module omitted blot:default");
   }
   run();
+  if (written === undefined) {
+    throw new Error("integer module did not publish its result");
+  }
+  return written;
+}
+
+function generatedIntegerOperands(
+  seed: number,
+  ordinal: number,
+): { readonly seed: number; readonly left: bigint; readonly right: bigint } {
+  const boundary = [
+    -(1n << 63n),
+    -(1n << 63n) + 1n,
+    -2n,
+    -1n,
+    0n,
+    1n,
+    2n,
+    (1n << 63n) - 2n,
+    (1n << 63n) - 1n,
+  ];
+  seed = generatedTraceSeed(seed);
+  let left = BigInt.asIntN(64, BigInt(seed) << 32n);
+  if (ordinal % 3 !== 0) left = boundary[seed % boundary.length]!;
+  seed = generatedTraceSeed(seed);
+  left = BigInt.asIntN(64, left | BigInt(seed));
+  seed = generatedTraceSeed(seed);
+  let right = BigInt.asIntN(64, BigInt(seed) << 32n);
+  if (ordinal % 4 !== 0) right = boundary[seed % boundary.length]!;
+  seed = generatedTraceSeed(seed);
+  right = BigInt.asIntN(64, right | BigInt(seed));
+  return { seed, left, right };
+}
+
+function checkedIntegerResult(
+  operation:
+    | "add"
+    | "subtract"
+    | "multiply"
+    | "divide"
+    | "remainder"
+    | "negate",
+  left: bigint,
+  right: bigint,
+): bigint | null {
+  const minimum = -(1n << 63n);
+  const maximum = (1n << 63n) - 1n;
+  if ((operation === "divide" || operation === "remainder") && right === 0n) {
+    return null;
+  }
+  if (operation === "divide" && left === minimum && right === -1n) {
+    return null;
+  }
+  let result: bigint;
+  if (operation === "add") result = left + right;
+  else if (operation === "subtract") result = left - right;
+  else if (operation === "multiply") result = left * right;
+  else if (operation === "divide") result = left / right;
+  else if (operation === "remainder") result = left % right;
+  else result = -left;
+  if (result < minimum || result > maximum) return null;
+  return result;
+}
+
+function evaluateGeneratedFunction(
+  fn: Value,
+  argument: bigint,
+  checked: Awaited<ReturnType<typeof checkFile>>,
+): Value {
+  return run(
+    apply(
+      fn,
+      { tag: "int", value: argument },
+      { start: 0, end: 0 },
+      evaluationRuntime(
+        new Map(),
+        "runtime",
+        undefined,
+        checked.recordAdaptations,
+      ),
+    ),
+  );
+}
+
+async function classifyWasmCall(
+  module: WebAssembly.Module,
+  exportName: string,
+  argument: bigint,
+): Promise<"diverged" | "returned" | "trapped"> {
+  const workerSource = `
+let instance;
+self.onmessage = async (event) => {
+  if (event.data.kind === "initialize") {
+    instance = await WebAssembly.instantiate(event.data.module, {});
+    self.postMessage({ kind: "ready" });
+    return;
+  }
+  try {
+    const exported = instance.exports[event.data.exportName];
+    if (!(exported instanceof Function)) throw new Error("missing export");
+    exported(BigInt(event.data.argument));
+    self.postMessage({ kind: "returned" });
+  } catch (_error) {
+    self.postMessage({ kind: "trapped" });
+  }
+};
+`;
+  const sourceUrl = URL.createObjectURL(
+    new Blob([workerSource], { type: "application/javascript" }),
+  );
+  const worker = new Worker(sourceUrl, { type: "module" });
+  URL.revokeObjectURL(sourceUrl);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      worker.onmessage = (event) => {
+        if (event.data?.kind === "ready") resolve();
+      };
+      worker.onerror = (event) => {
+        event.preventDefault();
+        reject(event.error);
+      };
+      worker.postMessage({ kind: "initialize", module });
+    });
+    return await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => resolve("diverged"), 250);
+      worker.onmessage = (event) => {
+        clearTimeout(timeout);
+        if (event.data?.kind === "returned") resolve("returned");
+        else if (event.data?.kind === "trapped") resolve("trapped");
+        else reject(new Error("divergence worker returned an unknown result"));
+      };
+      worker.onerror = (event) => {
+        clearTimeout(timeout);
+        event.preventDefault();
+        reject(event.error);
+      };
+      worker.postMessage({
+        kind: "call",
+        exportName,
+        argument: argument.toString(),
+      });
+    });
+  } finally {
+    worker.terminate();
+  }
 }

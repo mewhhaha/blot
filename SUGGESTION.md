@@ -132,10 +132,10 @@ one unfinished feature list:
   and publish structural extraction lineage in ownership certificates. These
   remove duplicate derivations or strengthen evidence; they do not need new
   surface syntax.
-- **Evidence:** generate target trap and divergence traces and mechanize
-  preservation/progress for the stable core. Current generated tests cover
-  returns, staging, handlers, ownership-path mutations, host order, and
-  evaluator/Wasm agreement, but remain bounded simulations.
+- **Evidence:** mechanize preservation/progress for the stable core. Generated
+  tests now cover returns, staging, handlers, ownership-path mutations, host
+  order, checked-integer traps, divergence, and evaluator/Wasm agreement, but
+  remain bounded simulations rather than a proof.
 
 Capacity-bearing Stores, another proof-producing collection, first-class
 references, and a full-width word domain are contingent extensions. The current
