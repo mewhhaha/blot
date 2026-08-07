@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
-import type { Decl, Expr } from "./ast.ts";
+import type { Expr } from "./ast.ts";
 import { parse } from "./parse.ts";
 
 Deno.test("two-argument @handle elaborates to a computation transformer", async () => {
