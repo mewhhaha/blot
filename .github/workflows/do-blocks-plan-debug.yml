@@ -15,49 +15,33 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Locate former parenthesized suites
+      - name: Isolate prelude parser regression
         run: |
           cat > scripts/_debug_do_plan.ts <<'TS'
-          import { createParserAsync, type Token } from "../generated/wasm/mod.ts";
-          const lexer = await createParserAsync({
-            url: new URL("../generated/wasm/parser.wasm", import.meta.url),
-            planUrl: new URL("../generated/wasm/parser.plan", import.meta.url),
-          });
-
-          function oldSuite(previous: Token, first: Token, second: Token | undefined): boolean {
-            if (previous.type !== "literal" || previous.literal !== "(") return false;
-            if (first.type === "literal") {
-              return first.literal === "<-" || first.literal === "let" || first.literal === "const" ||
-                first.literal === "sig" || first.literal === "return" || first.literal === "for" ||
-                first.literal === "break" || first.literal === "open";
-            }
-            if (first.type !== "named" || second?.type !== "literal") return false;
-            if (first.kind !== "IDENT" && first.kind !== "TYPE_IDENT") return false;
-            return second.literal === "<-" || second.literal === ":=";
+          import { parseConcrete } from "../src/syntax/parse.ts";
+          const source = await Deno.readTextFile("src/prelude/prelude.blot");
+          async function check(label: string, text: string) {
+            const result = await parseConcrete(text);
+            console.log(label, result.ok ? "OK" : JSON.stringify(result.diagnostics));
           }
-
-          const command = new Deno.Command("git", { args: ["ls-files", "*.blot"], stdout: "piped" });
-          const files = new TextDecoder().decode((await command.output()).stdout).trim().split("\n").filter(Boolean);
-          let count = 0;
-          for (const path of files) {
-            const source = await Deno.readTextFile(path);
-            const lexed = lexer.lex(source, { preserveTrivia: true });
-            const tokens: Token[] = [];
-            for (let i = 0; i < lexed.tokenTape.length; i++) {
-              const t = lexed.tokenTape.token(i);
-              if (t?.channel === "main" && t.type !== "eof") tokens.push(t);
-            }
-            for (let i = 1; i < tokens.length; i++) {
-              const previous = tokens[i - 1]!;
-              const first = tokens[i]!;
-              const gap = source.slice(previous.span.end, first.span.start);
-              if (!/[\r\n]/.test(gap) || !oldSuite(previous, first, tokens[i + 1])) continue;
-              const before = source.slice(0, previous.span.start);
-              const line = before.split("\n").length;
-              console.log(`${path}:${line}: ${JSON.stringify(source.slice(previous.span.start, Math.min(source.length, first.span.end + 80)))}`);
-              count++;
-            }
+          const anchors = [
+            "const sort_by =",
+            "const range =",
+            "const pow2 =",
+            "const Int =",
+            "const F64 =",
+            "const likely =",
+            "const integer_width =",
+            "const U =",
+          ];
+          for (const anchor of anchors) {
+            const cut = source.indexOf(anchor);
+            if (cut < 0) throw new Error(`missing ${anchor}`);
+            await check(`prefix before ${anchor}`, source.slice(0, cut) + "\nreturn ()\n");
           }
-          console.log("former parenthesized suite count", count);
+          const pow2 = `const pow2 =\n  rec (fn n =>\n    if is_less (@int.cmp n 1):\n      return 1\n    else:\n      return 2 * pow2 (@int.sub n 1)\n  )\n`;
+          await check("pow2 only", pow2 + "return pow2\n");
+          await check("pow2 then const", pow2 + "const Int = @type.int\nreturn Int\n");
+          await check("pow2 many consts", pow2 + `const Int = @type.int\nconst Str = @type.text\nconst F64 = @type.float\nconst likely = fn condition => @branch.likely condition\nreturn likely\n`);
           TS
-          deno run --allow-read --allow-run=git scripts/_debug_do_plan.ts
+          deno run --allow-read scripts/_debug_do_plan.ts
