@@ -206,10 +206,12 @@ shapes, as `recursive_linear_capture.blot` and
 
 ## What is not proven
 
-**Owned arrays do not yet have consuming random access.** Ordinary array reads
-would copy an owned element, while replacement could discard it. Those cases
-remain rejected until a `take` or `split` operation can return the selected
-element together with a remainder carrying every other obligation.
+**Owned arrays use consuming random access.** Ordinary array reads still reject
+an owned element because they would copy its obligation. `@array.take` instead
+returns `#Taken (selected, remainder)` or `#TakeOutOfBounds original`, while
+`@array.split` returns `#Split (before, selected, after)` or
+`#SplitOutOfBounds original`. Every result path therefore exposes the selected
+obligation and every remainder obligation without copying or discarding one.
 
 **Reuse requires the stronger proof.** The pass records both traversal-order
 last uses and the linear bindings proved consumed exactly once on every path.
