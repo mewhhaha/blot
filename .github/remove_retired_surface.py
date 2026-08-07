@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import subprocess
 
 # These inert markers are intentionally present once each. The temporary
@@ -192,3 +193,25 @@ write("LANGUAGE.md", language)
 recipe = recipe[:docs_start] + current_docs + recipe[docs_end:]
 
 exec(compile(recipe, ".github/remove_retired_surface.py", "exec"))
+
+# The temporary workflow still removes an explicit ignored field that current
+# main already replaced with `..`. Reintroduce it only for that workflow step;
+# the final generated change is identical to current main at this site.
+eval_path = Path("experiments/rust-middle/src/eval.rs")
+eval_text = eval_path.read_text()
+eval_old = """        Expression::Block {
+            declarations,
+            result,
+            ..
+        } => {
+"""
+eval_new = """        Expression::Block {
+            declarations,
+            result,
+            result_effects: _,
+            ..
+        } => {
+"""
+if eval_text.count(eval_old) != 1:
+    raise SystemExit("Rust block evaluator compatibility marker changed")
+eval_path.write_text(eval_text.replace(eval_old, eval_new, 1))
