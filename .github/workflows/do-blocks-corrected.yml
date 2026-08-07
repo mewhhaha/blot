@@ -1,0 +1,61 @@
+name: do-blocks-corrected
+
+on:
+  push:
+    branches:
+      - agent/do-blocks-worker
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/do-blocks-worker
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Apply corrected implementation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('.github/workflows/do-blocks-worker.yml').read_text()
+          marker = '      - name: Implement explicit do blocks\n        run: |\n'
+          start = text.index(marker) + len(marker)
+          end = text.index('      - name: Regenerate parser and Rust schema\n', start)
+          lines = text[start:end].splitlines()
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
+          old = '''needle = '  | handler_composition\\n  | array\\n'\nif text.count(needle) != 3:\n    raise SystemExit(f'grammar.baba: expected 3 primary sites, found {text.count(needle)}')\ntext = text.replace(needle, '  | handler_composition\\n  | do_block\\n  | array\\n')'''
+          new = '''continued = '  | handler_composition\\n  | array\\n'\nif text.count(continued) != 1:\n    raise SystemExit(f'grammar.baba: continued-primary site changed: {text.count(continued)}')\ntext = text.replace(continued, '  | handler_composition\\n  | do_block\\n  | array\\n', 1)\nblocked = '  | handler_composition\\n  | block\\n  | array\\n'\nif text.count(blocked) != 2:\n    raise SystemExit(f'grammar.baba: block-primary sites changed: {text.count(blocked)}')\ntext = text.replace(blocked, '  | handler_composition\\n  | do_block\\n  | block\\n  | array\\n')'''
+          if old not in script:
+              raise SystemExit('worker grammar transform not found')
+          script = script.replace(old, new, 1)
+          script = script.replace('    let local = 1\\n      return local', '    let local = 1\\n    return local', 1)
+          Path('/tmp/implement.sh').write_text(script)
+          PY
+          bash /tmp/implement.sh
+      - name: Regenerate parser and Rust schema
+        run: |
+          deno task generate
+          deno task generate:rust-middle-schema
+      - name: Format
+        run: deno fmt
+      - name: Focused tests
+        run: |
+          deno test --allow-read --allow-write src/syntax/layout.test.ts
+          deno test --allow-read --allow-write src/syntax/surface.test.ts --filter "do is an explicit"
+          deno test --allow-read --allow-write src/tooling/formatter.test.ts --filter "explicit do block"
+          deno test --allow-read --allow-write examples.test.ts --filter "do_blocks"
+      - name: Inspect parser profile
+        run: deno task inspect
+      - name: Commit candidate
+        run: |
+          git config user.name "Jacob Torrång"
+          git config user.email "kopatheonlyone@hotmail.com"
+          git add -A
+          git commit -m "language: add explicit do blocks"
+          git push --force origin HEAD:do-blocks
