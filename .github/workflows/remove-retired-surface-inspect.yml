@@ -67,7 +67,7 @@ jobs:
       - name: Generate and inspect compact field identifiers
         run: |
           deno task generate
-          deno eval --allow-read <<'TS'
+          deno eval <<'TS'
           import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
           import { compactFieldNames } from "./src/syntax/compact_schema.ts";
           import { elaborateLayout } from "./src/syntax/layout.ts";
