@@ -14,11 +14,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: do-blocks
+          ref: simplify-handlers-and-if
           fetch-depth: 0
-      - name: Inspect block lowering and tests
+      - name: Show parenthesized statement block contexts
         run: |
-          echo '--- lower.ts block contexts ---'
-          grep -n -C 5 'block' src/syntax/lower.ts | head -n 220 || true
-          echo '--- syntax tests block contexts ---'
-          grep -n -E -C 4 'block|parenthes' src/syntax/*.test.ts syntax.test.ts | head -n 280 || true
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          pattern = re.compile(r'\(\r?\n(?=[ \t]+(?:let|const|sig|return|for|break|open|<-|[A-Za-z_][A-Za-z0-9_]*[ \t]*(?:<-|:=))\b)')
+          for path in sorted(Path('.').rglob('*')):
+              if not path.is_file() or '.git' in path.parts or 'generated' in path.parts:
+                  continue
+              if path.suffix not in {'.blot', '.ts', '.md', '.baba'}:
+                  continue
+              try: text = path.read_text()
+              except UnicodeDecodeError: continue
+              lines = text.splitlines()
+              for m in pattern.finditer(text):
+                  line = text.count('\n', 0, m.start())
+                  print(f'--- {path}:{line + 1} ---')
+                  for i in range(max(0, line - 1), min(len(lines), line + 8)):
+                      print(f'{i+1:5}: {lines[i]}')
+          PY
