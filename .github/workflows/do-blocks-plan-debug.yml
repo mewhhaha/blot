@@ -11,11 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: do-blocks
+          ref: main
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Reduce case arm parser regression
+      - name: Check reduced forms on main
         run: |
           cat > scripts/_debug_do_plan.ts <<'TS'
           import { parseConcrete } from "../src/syntax/parse.ts";
