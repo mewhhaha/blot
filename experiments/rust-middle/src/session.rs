@@ -476,6 +476,7 @@ fn json_value(value: &Value) -> serde_json::Value {
             "tag": "runtime", "value": value.id, "type": value.type_id,
         }),
         Value::Closure { .. }
+        | Value::ClosureChoice { .. }
         | Value::ModuleClosure { .. }
         | Value::IndexedStep { .. }
         | Value::Primitive { .. }
@@ -1061,6 +1062,136 @@ mod tests {
         let dependencies = module_dependencies(&module);
         assert_eq!(dependencies.imports, ["first.blot", "second.blot"]);
         assert_eq!(dependencies.includes, ["shader.wgsl"]);
+    }
+
+    const DIRECT_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}sig pick = @type.int -> { .x = @type.int; } -> @type.int\n\u{e000}let pick = fn flag =>\n  \u{e000}\u{e001}return case positive flag of\n    \u{e000}\u{e001}#True => fn record => @int.add record.x flag\n    \u{e000}#False => fn record => @int.sub record.x flag\n\n\u{e000}\u{e002}\u{e000}\u{e002}\u{e000}return { .pick = pick; }\u{e000}\n";
+
+    const SHARED_BODY_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const bump = fn step => fn value => @int.add value step\n\n\u{e000}sig run = @type.int -> @type.int\n\u{e000}let run = fn flag =>\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => bump 1\n    \u{e000}#False => bump 2\n  \u{e000}\u{e002}\u{e000}return selected flag\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
+
+    const PRIMITIVE_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}sig run = @type.int -> @type.int\n\u{e000}let run = fn flag =>\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => @int.add flag\n    \u{e000}#False => @int.sub flag\n  \u{e000}\u{e002}\u{e000}let first = selected 10\n  \u{e000}let second = selected 20\n  \u{e000}return @int.add first second\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
+
+    const EXPORTED_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}sig hold = @type.int -> { .apply = { .x = @type.int; } -> @type.int; }\n\u{e000}let hold = fn flag =>\n  \u{e000}\u{e001}let chosen = case positive flag of\n    \u{e000}\u{e001}#True => fn record => @int.add record.x flag\n    \u{e000}#False => fn record => @int.sub record.x flag\n  \u{e000}\u{e002}\u{e000}return { .apply = chosen; }\n\n\u{e000}\u{e002}\u{e000}return { .hold = hold; }\u{e000}\n";
+
+    const INCOMPATIBLE_CAPTURES: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}sig run = @type.int -> @type.int\n\u{e000}let run = fn flag =>\n  \u{e000}\u{e001}let ratio = @float.of_int flag\n  \u{e000}let selected = case positive flag of\n    \u{e000}\u{e001}#True => fn n => @int.add n flag\n    \u{e000}#False => do:\n      \u{e000}\u{e001}let scaled = @float.mul ratio 2.0\n      \u{e000}return fn n => @int.add n (@int.of_float scaled)\n  \u{e000}\u{e002}\u{e000}\u{e002}\u{e000}let first = selected 10\n  \u{e000}let second = selected 20\n  \u{e000}return @int.add first second\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
+
+    #[test]
+    fn a_dynamic_function_choice_becomes_a_private_tagged_table() {
+        let (session, module) = prepared(DIRECT_CHOICE);
+        let cases = choice_cases(&module);
+        assert_eq!(cases.len(), 2);
+        // One case per closure source, each carrying the branch's capture
+        // product. Both lambdas capture `flag` alone, so both payloads agree.
+        assert_eq!(cases[0]["payloadType"], cases[1]["payloadType"]);
+        assert!(
+            session.compile_module("main.blot").is_ok(),
+            "a closed function source set must compile"
+        );
+    }
+
+    #[test]
+    fn two_closures_from_one_body_stay_separate_alternatives() {
+        // `bump 1` and `bump 2` share a body and capture no runtime value: only
+        // the environment they closed over tells them apart. Merging them would
+        // silently make one branch compute the other's answer.
+        let (session, module) = prepared(SHARED_BODY_CHOICE);
+        let cases = choice_cases(&module);
+        assert_eq!(cases.len(), 2);
+        assert!(session.compile_module("main.blot").is_ok());
+    }
+
+    #[test]
+    fn a_partially_applied_primitive_is_a_choice_alternative() {
+        let (session, module) = prepared(PRIMITIVE_CHOICE);
+        let cases = choice_cases(&module);
+        let names = cases
+            .iter()
+            .map(|case_| case_["name"].as_str().unwrap_or_default().to_owned())
+            .collect::<Vec<_>>();
+        assert!(names[0].ends_with("@int.add/1"), "{names:?}");
+        assert!(names[1].ends_with("@int.sub/1"), "{names:?}");
+        assert!(session.compile_module("main.blot").is_ok());
+    }
+
+    #[test]
+    fn alternatives_with_incompatible_captures_share_an_indirect_payload() {
+        // One branch captures an `Int` and the other an `F64`, so the two
+        // capture products cannot occupy the same payload slots directly.
+        let (session, module) = prepared(INCOMPATIBLE_CAPTURES);
+        let cases = choice_cases(&module);
+        assert_eq!(cases.len(), 2);
+        for case_ in &cases {
+            let payload = case_["payloadType"].as_u64().expect("payload type");
+            assert_eq!(
+                module["types"][payload as usize]["kind"], "indirect",
+                "an incompatible capture product must be carried indirectly"
+            );
+        }
+        assert!(session.compile_module("main.blot").is_ok());
+    }
+
+    #[test]
+    fn a_function_choice_cannot_cross_the_abi_boundary() {
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source(EXPORTED_CHOICE))
+            .expect("source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("source should configure");
+        let prepared = session.prepare_runtime_hir("main.blot");
+        assert_eq!(prepared["ok"], false);
+        assert_eq!(prepared["diagnostic"]["code"], "BLOT_UNSUPPORTED_LOWERING");
+        let message = prepared["diagnostic"]["message"]
+            .as_str()
+            .expect("a diagnostic message");
+        assert!(
+            message.contains("function choice") && message.contains("ABI 1"),
+            "the refusal must name the private layout: {message}"
+        );
+    }
+
+    fn prepared(text: &str) -> (CompilerSession, serde_json::Value) {
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source(text))
+            .expect("source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("source should configure");
+        let prepared = session.prepare_runtime_hir("main.blot");
+        assert_eq!(
+            prepared["ok"], true,
+            "preparation failed: {}",
+            prepared["diagnostic"]
+        );
+        let module = prepared["module"].clone();
+        (session, module)
+    }
+
+    /// The cases of the one private table a defunctionalized choice built.
+    fn choice_cases(module: &serde_json::Value) -> Vec<serde_json::Value> {
+        let mut tables = module["types"]
+            .as_array()
+            .expect("a type table")
+            .iter()
+            .filter_map(|type_| {
+                let cases = type_["cases"].as_array()?;
+                cases
+                    .iter()
+                    .all(|case_| {
+                        case_["name"]
+                            .as_str()
+                            .is_some_and(|name| name.starts_with("choice$"))
+                    })
+                    .then(|| cases.clone())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tables.len(),
+            1,
+            "expected exactly one function-choice table"
+        );
+        tables.remove(0)
     }
 
     fn source(value: &str) -> Vec<u16> {
