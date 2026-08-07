@@ -17,7 +17,6 @@ import { buildPackage } from "./package.ts";
 import { Compiler } from "./compiler.ts";
 import { formatSource } from "./tooling/formatter.ts";
 import { runLanguageServer } from "./lsp.ts";
-import { migrateLayoutSource } from "./migration/layout.ts";
 
 const [command, ...rest] = Deno.args;
 
@@ -51,8 +50,6 @@ if (command === "build") {
   failures += await buildPackages(rest);
 } else if (command === "fmt") {
   failures += await formatFiles(rest);
-} else if (command === "migrate-layout") {
-  failures += await migrateLayoutFiles(rest);
 } else {
   for (const path of rest) {
     try {
@@ -95,58 +92,12 @@ type BuiltFileArtifact = {
 
 function printUsage(): void {
   console.error(
-    "usage: blot <check|test|eval|ast|ownership|fmt|migrate-layout> <path>...",
+    "usage: blot <check|test|eval|ast|ownership|fmt> <path>...",
   );
   console.error("       blot fmt [--check] <file.blot>...");
-  console.error("       blot migrate-layout <file-or-directory>...");
   console.error("       blot build <file.blot>...");
   console.error("       blot package <blot.json>...");
   console.error("       blot lsp");
-}
-
-async function migrateLayoutFiles(paths: readonly string[]): Promise<number> {
-  const files = await blotFiles(paths);
-  if (files.length === 0) {
-    console.error("blot migrate-layout requires a .blot file or directory");
-    return 1;
-  }
-  let failures = 0;
-  for (const path of files) {
-    const source = await Deno.readTextFile(path);
-    const migrated = await migrateLayoutSource(source);
-    if (!migrated.ok) {
-      const current = await parse(source);
-      if (current.ok) continue;
-      failures += 1;
-      for (const diagnostic of migrated.diagnostics) {
-        console.error(render(path, source, diagnostic));
-      }
-      continue;
-    }
-    if (migrated.source === source) continue;
-    await Deno.writeTextFile(path, migrated.source);
-    console.log(path);
-  }
-  return failures;
-}
-
-async function blotFiles(paths: readonly string[]): Promise<readonly string[]> {
-  const files = new Set<string>();
-  const pending = [...paths];
-  while (pending.length > 0) {
-    const path = pending.pop();
-    if (path === undefined) break;
-    const stat = await Deno.stat(path);
-    if (stat.isFile) {
-      if (path.endsWith(".blot")) files.add(path);
-      continue;
-    }
-    if (!stat.isDirectory) continue;
-    for await (const entry of Deno.readDir(path)) {
-      pending.push(`${path}/${entry.name}`);
-    }
-  }
-  return [...files].sort();
 }
 
 async function formatFiles(arguments_: readonly string[]): Promise<number> {
