@@ -313,6 +313,10 @@ pub enum Value {
         imports: Option<BTreeMap<String, String>>,
         signature: Option<Box<Value>>,
     },
+    ClosureChoice {
+        selector: RuntimeValue,
+        alternatives: Rc<Vec<ClosureAlternative>>,
+    },
     ModuleClosure {
         module: String,
     },
@@ -372,6 +376,37 @@ pub struct RuntimeValue {
     pub id: usize,
     pub type_id: usize,
     pub meaning: RuntimeMeaning,
+}
+
+/// One reachable lambda in a residual function choice, normalized to its stable
+/// closure-source identity and the ordered runtime captures its branch supplied.
+#[derive(Clone)]
+pub struct ClosureAlternative {
+    pub module: Rc<String>,
+    pub parameter: PatternId,
+    pub body: ExpressionId,
+    pub environment: Environment,
+    pub self_name: Option<String>,
+    pub signature: Option<Box<Value>>,
+    pub captures: Vec<RuntimeValue>,
+    pub payload_type: usize,
+}
+
+impl ClosureAlternative {
+    /// The closure-source identity two branches must agree on to share a case.
+    pub fn source(&self) -> String {
+        format!("{}#{}", self.module, self.body.0)
+    }
+
+    pub fn identity(&self) -> String {
+        let captures = self
+            .captures
+            .iter()
+            .map(|capture| format!("{}:{}", capture.id, capture.type_id))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("{}[{captures}]", self.source())
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -626,6 +661,9 @@ pub fn show(value: &Value) -> String {
         },
         Value::Closure { .. } | Value::ModuleClosure { .. } | Value::IndexedStep { .. } => {
             "<function>".to_owned()
+        }
+        Value::ClosureChoice { alternatives, .. } => {
+            format!("<function choice of {}>", alternatives.len())
         }
         Value::Primitive { name, .. } => format!("<primitive {name}>"),
         Value::Range { low, high, .. } => format!("{}..{}", show(low), show(high)),

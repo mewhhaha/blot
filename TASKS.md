@@ -47,6 +47,45 @@ probe's result for both selectors. Update `spec/COMPILER.md`, `spec/RUNTIME.md`,
 `spec/STAGING.md`, `spec/PAPER.md`, and `SUGGESTION.md` with the representation
 and validation rule.
 
+### Current state
+
+A first implementation of the representation and the dispatch exists in the Rust
+middle and compiles, but it is unverified: no program has been compiled through
+it yet, and none of the tests listed above have been written. What landed:
+
+- `Value::ClosureChoice` and `ClosureAlternative` in `experiments/rust-middle/src/value.rs`
+  carry the alternative table — closure-source identity, ordered runtime
+  captures from `runtime_captures`, and the capture product's runtime type.
+- `ResidualTrace::join_function_conditional` in `experiments/rust-middle/src/hir.rs`
+  builds the merged table at a join, deduplicates alternatives by
+  `ClosureAlternative::identity`, and tags each branch through `encode_choice`.
+  `retag_choice` rewrites an already-joined choice onto the merged table, so
+  nested choices flatten rather than nest.
+- `apply_closure_choice` in `experiments/rust-middle/src/eval.rs` dispatches on
+  the tag, rebuilds each alternative's environment with `choice_environment`,
+  and applies the selected body so it specializes per call site.
+
+What remains:
+
+1. Compile the probe and fix what that surfaces. The first unverified
+   assumptions are the block bookkeeping in `retag_choice` (it emits nested
+   conditionals inside a branch that a join is about to terminate) and whether
+   `sum_representation` accepts the private choice type everywhere
+   `choice_condition` and `choice_payload` consult it.
+2. Refuse the choice at the ABI boundary explicitly. `lower_value` currently
+   reaches its generic refusal for `Value::ClosureChoice`; ABI 1 must reject the
+   private layout with a diagnostic that names it.
+3. Confirm point 5 of the list above. `branch_alternatives` reports an open
+   source set when a branch joins a function with a non-function, but the
+   diagnostic does not yet carry the inferred signature, and a partially applied
+   `Value::Primitive` is refused rather than admitted as an alternative.
+4. Write the tests. `src/backend/rust_middle.test.ts` is where the probe belongs;
+   `CompilerSession` in `experiments/rust-middle/src/session.rs` compiles
+   layout-marked source directly, so the normalization and refusal cases can be
+   Rust unit tests that need no Deno.
+5. Rebuild the checked-in artifact with `deno task build:rust-middle` and update
+   the specifications listed above.
+
 ## 2. Construct Runtime HIR progressively
 
 Checking and Runtime-HIR preparation still traverse overlapping semantic work.

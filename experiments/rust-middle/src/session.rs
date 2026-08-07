@@ -476,6 +476,7 @@ fn json_value(value: &Value) -> serde_json::Value {
             "tag": "runtime", "value": value.id, "type": value.type_id,
         }),
         Value::Closure { .. }
+        | Value::ClosureChoice { .. }
         | Value::ModuleClosure { .. }
         | Value::IndexedStep { .. }
         | Value::Primitive { .. }
