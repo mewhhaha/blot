@@ -184,26 +184,16 @@ without a way out.
 
 ## Language design improvements
 
-### D1. Allow a bare trailing expression as a scope's value
+### D1. Explicit `return` — reviewed and retained
 
-The `return`-everywhere style is the biggest readability tax in the language.
-Three distinct meanings share one keyword — supply a value-`if`/`case` branch,
-exit an explicit block, exit the module — disambiguated by an invisible
-property (whether the enclosing form is a "result scope"). The formatter makes
-it heavier still by rewriting direct branch values into blocks with explicit
-`return`. Every function body pays.
-
-The stated reason a bare trailing expression is refused is keeping
-`name := value` distinct (§6.4). But the ambiguity exists only for a final
-line of the exact shape `name := …`, and `:=` as the last statement of a block
-is already dead code in a value position (its rebinding is read by nobody).
-Refusing that one dead shape — "a block's final statement may not be `:=`" —
-resolves the grammar with one local rule and frees every other block to end in
-its value. `return` remains for early exit, which is what the keyword means
-everywhere else. If the parser cannot afford the lookahead, the smaller
-version — allow direct expressions (no block) as value-`if`/`case` branches
-without `return`, and stop the formatter expanding them — recovers most of the
-reading cost at zero grammar risk.
+The first draft of this review proposed allowing a bare trailing expression as
+a scope's value. The proposal is withdrawn: explicit `return` stays. The
+visibility argument wins — every value that leaves a scope is spelled the same
+way, a branch boundary is visible even when its result is short, and a block's
+result is never a line whose role depends on what precedes it. It also keeps
+`name := value` unambiguous with no lookahead rule, and keeps the formatter's
+vertical conditional layout uniform between statement and value forms. Recorded
+here so the trade-off is a decision rather than an accident.
 
 ### D2. Compile-time-dispatched arithmetic and equality
 
@@ -375,10 +365,10 @@ If only five things get done:
    thing a new user hits.
 3. **T3** — Phi across `i + 1`. Makes hand-written indexed loops provable; the
    machinery exists.
-4. **D1** — bare trailing expression (or at least direct branch values).
-   Biggest single readability win, purely local grammar rule.
-5. **D5** — text primitives. The language's own Done criterion is unreachable
+4. **D5** — text primitives. The language's own Done criterion is unreachable
    without them.
+5. **T4** — total four-way float comparison. Deletes a runtime trap and turns
+   it into an exhaustiveness obligation.
 
-T4 (total float compare) and D3 (`&&` desugar) are next: both delete a trap or
-a recognition machine rather than adding anything.
+D3 (`&&` desugar) is next: it deletes a recognition machine rather than adding
+anything.
