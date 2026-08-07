@@ -25,6 +25,12 @@ enum Produced {
     Sequence(Vec<Produced>),
     Shape(BTreeMap<String, Produced>),
     Variant(Box<Produced>),
+    Choice(BTreeMap<String, Produced>),
+    Region {
+        qualifier: Qualifier,
+        root: Option<PatternId>,
+        splits: Vec<(Span, u8)>,
+    },
 }
 
 struct Binding {
@@ -136,11 +142,16 @@ fn declare(pattern: PatternId, produced: Produced, scope: &ScopeRef, analysis: &
             name, qualifier, ..
         } => {
             let written = written_obligation(*qualifier);
-            let owned = if relevant(&produced) {
+            let mut owned = if relevant(&produced) {
                 produced
             } else {
                 written
             };
+            if let Produced::Region { root, .. } = &mut owned
+                && root.is_none()
+            {
+                *root = Some(pattern);
+            }
             let qualifier = inherited(*qualifier, &owned);
             scope.borrow_mut().bindings.insert(
                 name.clone(),
@@ -668,7 +679,8 @@ fn walk(
                         pattern_span(analysis.module, arm.pattern),
                     );
                 }
-                declare(arm.pattern, target.clone(), &inner, analysis);
+                let arm_target = choice_for_pattern(&target, arm.pattern, analysis.module);
+                declare(arm.pattern, arm_target, &inner, analysis);
                 produced.push(walk(arm.body, &inner, analysis, kind));
                 close_scope(&inner, analysis);
                 outcomes.push(snapshot(scope));
@@ -813,6 +825,108 @@ fn walk_apply(
             walk(handle_arguments[0], scope, analysis, Use::Move);
             if handle_arguments.len() == 3 {
                 walk(handle_arguments[2], scope, analysis, Use::Move);
+            }
+            return Produced::None;
+        }
+        if name == "@region.array.claim" && arguments.len() == 1 {
+            let source = walk(arguments[0], scope, analysis, Use::Project);
+            if obligation(&source) != Obligation::None {
+                analysis.report(
+                    "BLOT_REGION_OWNED_ELEMENT",
+                    "The first Region implementation copies its input, so arrays containing owned elements cannot be claimed yet.",
+                    analysis.module.arena.expression_span(arguments[0]),
+                );
+            }
+            return Produced::Region {
+                qualifier: Qualifier::Linear,
+                root: None,
+                splits: Vec::new(),
+            };
+        }
+        if name == "@region.array.length" && arguments.len() == 1 {
+            walk(arguments[0], scope, analysis, Use::Borrow);
+            return Produced::None;
+        }
+        if name == "@region.array.get" && arguments.len() == 2 {
+            walk(arguments[0], scope, analysis, Use::Borrow);
+            walk(arguments[1], scope, analysis, Use::Move);
+            return Produced::None;
+        }
+        if name == "@region.array.set" && arguments.len() == 3 {
+            let region = walk(arguments[0], scope, analysis, Use::Move);
+            walk(arguments[1], scope, analysis, Use::Move);
+            let replacement = walk(arguments[2], scope, analysis, Use::Move);
+            if obligation(&replacement) != Obligation::None {
+                analysis.report(
+                    "BLOT_REGION_OWNED_ELEMENT",
+                    "Region replacement cannot move an owned element in the first implementation.",
+                    analysis.module.arena.expression_span(arguments[2]),
+                );
+            }
+            return region;
+        }
+        if name == "@region.array.swap" && arguments.len() == 3 {
+            let region = walk(arguments[0], scope, analysis, Use::Move);
+            walk(arguments[1], scope, analysis, Use::Move);
+            walk(arguments[2], scope, analysis, Use::Move);
+            return region;
+        }
+        if name == "@region.array.split" && arguments.len() == 2 {
+            let region = walk(arguments[0], scope, analysis, Use::Move);
+            walk(arguments[1], scope, analysis, Use::Move);
+            let Produced::Region {
+                qualifier,
+                root,
+                splits,
+            } = region.clone()
+            else {
+                analysis.report(
+                    "BLOT_REGION_SPLIT_NOT_OWNED",
+                    "Region split requires one owned Region authority.",
+                    analysis.module.arena.expression_span(arguments[0]),
+                );
+                return Produced::None;
+            };
+            let mut left_splits = splits.clone();
+            left_splits.push((span, 0));
+            let mut right_splits = splits;
+            right_splits.push((span, 1));
+            return Produced::Choice(BTreeMap::from([
+                (
+                    "Split".to_owned(),
+                    Produced::Variant(Box::new(Produced::Sequence(vec![
+                        Produced::Region {
+                            qualifier,
+                            root,
+                            splits: left_splits,
+                        },
+                        Produced::Region {
+                            qualifier,
+                            root,
+                            splits: right_splits,
+                        },
+                    ]))),
+                ),
+                (
+                    "SplitOutOfBounds".to_owned(),
+                    Produced::Variant(Box::new(region)),
+                ),
+            ]));
+        }
+        if name == "@region.array.join" && arguments.len() == 2 {
+            let left = walk(arguments[0], scope, analysis, Use::Move);
+            let right = walk(arguments[1], scope, analysis, Use::Move);
+            return join_region(left, right, span, analysis);
+        }
+        if name == "@region.array.freeze" && arguments.len() == 1 {
+            let region = walk(arguments[0], scope, analysis, Use::Move);
+            match region {
+                Produced::Region { splits, .. } if splits.is_empty() => {}
+                _ => analysis.report(
+                    "BLOT_REGION_PARTIAL_FREEZE",
+                    "Only a complete root Region authority can be frozen. Rejoin every split first.",
+                    analysis.module.arena.expression_span(arguments[0]),
+                ),
             }
             return Produced::None;
         }
@@ -1174,7 +1288,15 @@ fn obligation(produced: &Produced) -> Obligation {
         Produced::Leaf(Qualifier::Linear) => Obligation::Linear,
         Produced::Leaf(Qualifier::Affine) => Obligation::Affine,
         Produced::Leaf(_) => Obligation::None,
+        Produced::Region { qualifier, .. } => match qualifier {
+            Qualifier::Linear => Obligation::Linear,
+            Qualifier::Affine => Obligation::Affine,
+            _ => Obligation::None,
+        },
         Produced::Closure { captures, .. } | Produced::Variant(captures) => obligation(captures),
+        Produced::Choice(cases) => cases.values().fold(Obligation::None, |found, value| {
+            merge_obligation(found, obligation(value))
+        }),
         Produced::Many(values) | Produced::Sequence(values) => {
             values.iter().fold(Obligation::None, |found, value| {
                 merge_obligation(found, obligation(value))
@@ -1199,13 +1321,14 @@ fn merge_obligation(left: Obligation, right: Obligation) -> Obligation {
 fn contains_borrow(produced: &Produced) -> bool {
     match produced {
         Produced::Borrow(_) => true,
-        Produced::None | Produced::Leaf(_) => false,
+        Produced::None | Produced::Leaf(_) | Produced::Region { .. } => false,
         Produced::Closure {
             captures, result, ..
         } => contains_borrow(captures) || contains_borrow(result),
         Produced::Many(values) | Produced::Sequence(values) => values.iter().any(contains_borrow),
         Produced::Shape(fields) => fields.values().any(contains_borrow),
         Produced::Variant(payload) => contains_borrow(payload),
+        Produced::Choice(cases) => cases.values().any(contains_borrow),
     }
 }
 
@@ -1214,6 +1337,9 @@ fn relevant(produced: &Produced) -> bool {
 }
 
 fn combine(left: Produced, right: Produced) -> Produced {
+    if left == right {
+        return left;
+    }
     if !relevant(&left) {
         return right;
     }
@@ -1234,6 +1360,76 @@ fn combine(left: Produced, right: Produced) -> Produced {
 
 fn join(values: impl IntoIterator<Item = Produced>) -> Produced {
     values.into_iter().fold(Produced::None, combine)
+}
+
+fn choice_for_pattern(target: &Produced, pattern: PatternId, module: &Module) -> Produced {
+    let Produced::Choice(cases) = target else {
+        return target.clone();
+    };
+    match &module.arena.patterns[pattern.0 as usize] {
+        Pattern::Constructor { name, .. } => cases.get(name).cloned().unwrap_or(Produced::None),
+        _ => join(cases.values().cloned()),
+    }
+}
+
+fn join_region(left: Produced, right: Produced, span: Span, analysis: &mut Analysis) -> Produced {
+    let (
+        Produced::Region {
+            qualifier: left_qualifier,
+            root: left_root,
+            splits: mut left_splits,
+        },
+        Produced::Region {
+            qualifier: right_qualifier,
+            root: right_root,
+            splits: right_splits,
+        },
+    ) = (left, right)
+    else {
+        analysis.report(
+            "BLOT_REGION_JOIN_UNPROVED",
+            "Region join needs exactly one authority on each side.",
+            span,
+        );
+        return Produced::None;
+    };
+    let Some((left_split, left_part)) = left_splits.last().copied() else {
+        analysis.report(
+            "BLOT_REGION_JOIN_UNPROVED",
+            "Region join needs two sibling authorities produced by a split.",
+            span,
+        );
+        return Produced::None;
+    };
+    let Some((right_split, right_part)) = right_splits.last().copied() else {
+        analysis.report(
+            "BLOT_REGION_JOIN_UNPROVED",
+            "Region join needs two sibling authorities produced by a split.",
+            span,
+        );
+        return Produced::None;
+    };
+    let siblings = left_qualifier == right_qualifier
+        && left_root == right_root
+        && left_splits.len() == right_splits.len()
+        && left_splits[..left_splits.len() - 1] == right_splits[..right_splits.len() - 1]
+        && left_split == right_split
+        && left_part == 0
+        && right_part == 1;
+    if !siblings {
+        analysis.report(
+            "BLOT_REGION_JOIN_UNPROVED",
+            "Region join accepts only the ordered sibling pair produced by one Region split.",
+            span,
+        );
+        return Produced::None;
+    }
+    left_splits.pop();
+    Produced::Region {
+        qualifier: left_qualifier,
+        root: left_root,
+        splits: left_splits,
+    }
 }
 
 fn pattern_binds(pattern: PatternId, module: &Module) -> bool {
@@ -1362,7 +1558,10 @@ fn trusted_borrow_operation(function: ExpressionId, module: &Module) -> bool {
                 || name.starts_with("@i16x8.")
                 || name.starts_with("@i8x16.")
                 || name.starts_with("@text.")
-                || matches!(name.as_str(), "@array.len" | "@shape.has")
+                || matches!(
+                    name.as_str(),
+                    "@array.len" | "@shape.has" | "@region.array.length" | "@region.array.get"
+                )
         }
         Expression::Field { target, name, .. } => {
             matches!(
