@@ -294,7 +294,6 @@ replace_once(
             }
 ''',
 )
-# The public same-type relation mirrors the arena relation.
 replace_once(
     path,
     '''        (Type::Array(left), Type::Array(right)) => same_type_with_rigids(left, right, rigids),
@@ -303,7 +302,6 @@ replace_once(
         | (Type::Region(left), Type::Region(right)) => same_type_with_rigids(left, right, rigids),
 ''',
 )
-# Runtime/comptime bridge values.
 replace_once(
     path,
     '''            Value::Array(elements) => Type::Array(Box::new(join_types(
@@ -340,7 +338,6 @@ replace_once(
             Type::Region(element) => format!("Region {}", self.show(&element)),
 ''',
 )
-# Do not expose Region through type reflection/reification.
 replace_once(
     path,
     '''        Type::Array(element) => Some(Value::Array(vec![reify_type_with_holes(
@@ -353,7 +350,6 @@ replace_once(
         Type::Region(_) => None,
 ''',
 )
-# Primitive schemes.
 primitive_anchor = '''        "@array.empty" => Type::Array(Box::new(checker.fresh())),
 '''
 region_types = '''        "@region.array.type" => curried(vec![Type::Opaque("Type".to_owned())], Type::Opaque("Type".to_owned())),
@@ -402,24 +398,23 @@ region_types = '''        "@region.array.type" => curried(vec![Type::Opaque("Typ
 '''
 replace_once(path, primitive_anchor, region_types + primitive_anchor)
 
-# Region is invariant in constraints. We add this beside the existing Array rule
-# by rewriting the source-level Type relation; any arena-only missing cases are
-# left for cargo to enumerate.
+# The constraint arena is the actual subtype relation. Region is invariant,
+# so both element directions must hold before the capability can flow.
 replace_once(
     path,
-    '''            (Type::Array(left), Type::Array(right)) => {
-                self.constrain(*left, *right, span)?;
-                Ok(())
+    '''            (ConstraintTypeNode::Array(left), ConstraintTypeNode::Array(right)) => {
+                self.constrain_ids(left, right, span, seen)?;
+                true
             }
 ''',
-    '''            (Type::Array(left), Type::Array(right)) => {
-                self.constrain(*left, *right, span)?;
-                Ok(())
+    '''            (ConstraintTypeNode::Array(left), ConstraintTypeNode::Array(right)) => {
+                self.constrain_ids(left, right, span, seen)?;
+                true
             }
-            (Type::Region(left), Type::Region(right)) => {
-                self.constrain((*left).clone(), (*right).clone(), span)?;
-                self.constrain(*right, *left, span)?;
-                Ok(())
+            (ConstraintTypeNode::Region(left), ConstraintTypeNode::Region(right)) => {
+                self.constrain_ids(left, right, span, seen)?;
+                self.constrain_ids(right, left, span, seen)?;
+                true
             }
 ''',
 )
