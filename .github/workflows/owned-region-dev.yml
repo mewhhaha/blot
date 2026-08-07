@@ -19,27 +19,18 @@ jobs:
         with:
           ref: codex/owned-slices
           fetch-depth: 0
-      - uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
           components: rustfmt,clippy
-      - name: Apply Rust Region type and evaluator patch
+      - name: Apply Rust Region ownership proof
         run: |
           git pull --rebase origin codex/owned-slices
-          python3 experiments/owned-regions/apply_rust_region.py
-          python3 experiments/owned-regions/finish_rust_region_compile.py
+          python3 experiments/owned-regions/apply_rust_region_ownership.py
           cargo fmt --manifest-path experiments/rust-middle/Cargo.toml
           cargo check --manifest-path experiments/rust-middle/Cargo.toml --target wasm32-unknown-unknown
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add \
-            experiments/rust-middle/src/value.rs \
-            experiments/rust-middle/src/primitives.rs \
-            experiments/rust-middle/src/typecheck.rs \
-            experiments/rust-middle/src/hir.rs \
-            experiments/rust-middle/src/session.rs
-          git commit -m 'feat: add Region type and evaluator to Rust middle'
+          git add experiments/rust-middle/src/ownership.rs
+          git commit -m 'feat: prove Region split and join in Rust ownership'
           git push origin HEAD:codex/owned-slices
