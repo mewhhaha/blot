@@ -16,10 +16,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Stack on the active artifact-fix branch
+      - name: Stack on current main
         run: |
           cp .github/remove_retired_surface.py /tmp/remove_retired_surface.py
-          git reset --hard origin/do-blocks-artifact-fix
+          git fetch origin main
+          git reset --hard origin/main
           mkdir -p .github
           cp /tmp/remove_retired_surface.py .github/remove_retired_surface.py
       - uses: denoland/setup-deno@v2
@@ -167,14 +168,24 @@ jobs:
           PY
       - name: Format and validate
         run: |
-          deno fmt
-          cargo fmt --manifest-path experiments/rust-middle/Cargo.toml --check
-          git diff --check
-          if ! command -v just >/dev/null 2>&1; then
-            cargo install just --locked
-          fi
-          just check
-          just test
+          set -o pipefail
+          {
+            deno fmt
+            cargo fmt --manifest-path experiments/rust-middle/Cargo.toml --check
+            git diff --check
+            if ! command -v just >/dev/null 2>&1; then
+              cargo install just --locked
+            fi
+            just check
+            just test
+          } 2>&1 | tee /tmp/remove-retired-surface-validation.log
+      - name: Upload validation log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: retired-surface-validation
+          path: /tmp/remove-retired-surface-validation.log
+          if-no-files-found: error
       - name: Verify cleanup boundaries
         run: |
           ! grep -R -n -E 'BLOT_VALUE_IF_REMOVED|BLOT_TRY_REMOVED|handler_composition|isValueConditional|discarded-value-if|discardedValueIf' \
