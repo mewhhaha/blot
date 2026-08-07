@@ -1,5 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
 import {
+  arrayIntervalFamily,
   intervalAbsoluteIndex,
   type IntervalRegion,
   intervalsDisjoint,
@@ -24,9 +25,29 @@ Deno.test("interval split is a disjoint exact cover", () => {
   assert(result.ok);
   if (!result.ok) return;
   assert(validSplitCover(whole, result.left, result.right));
+  assert(
+    arrayIntervalFamily.verifyPartition(
+      whole,
+      { offset: 4 },
+      [result.left, result.right],
+    ),
+  );
   assert(intervalsDisjoint(result.left, result.right));
   assertEquals(result.left, { origin: 7, start: 0, end: 4, extent: 10 });
   assertEquals(result.right, { origin: 7, start: 4, end: 10, extent: 10 });
+});
+
+Deno.test("generic family verifier rejects a dishonest split witness", () => {
+  const result = splitInterval(whole, 4);
+  assert(result.ok);
+  if (!result.ok) return;
+  assert(
+    !arrayIntervalFamily.verifyPartition(
+      whole,
+      { offset: 5 },
+      [result.left, result.right],
+    ),
+  );
 });
 
 Deno.test("interval split failure returns the exact original region", () => {
@@ -44,7 +65,26 @@ Deno.test("ordered join is the inverse cover of split", () => {
   assert(joined.ok);
   if (!joined.ok) return;
   assert(validJoinCover(result.left, result.right, joined.region));
+  assert(
+    arrayIntervalFamily.verifyCombine(
+      [result.left, result.right],
+      "ordered-adjacent",
+      joined.region,
+    ),
+  );
   assert(sameInterval(joined.region, whole));
+});
+
+Deno.test("generic family verifier rejects a gapped combine", () => {
+  const left: IntervalRegion = { origin: 1, start: 0, end: 2, extent: 8 };
+  const right: IntervalRegion = { origin: 1, start: 3, end: 8, extent: 8 };
+  assert(
+    !arrayIntervalFamily.verifyCombine(
+      [left, right],
+      "ordered-adjacent",
+      { origin: 1, start: 0, end: 8, extent: 8 },
+    ),
+  );
 });
 
 Deno.test("nested joins may reassociate without a split-tree identity", () => {
@@ -78,6 +118,8 @@ Deno.test("relative indexing cannot escape the interval", () => {
   assertEquals(intervalAbsoluteIndex(region, 2), 6);
   assertEquals(intervalAbsoluteIndex(region, 3), null);
   assertEquals(intervalAbsoluteIndex(region, -1), null);
+  assert(arrayIntervalFamily.contains(region, 2));
+  assert(!arrayIntervalFamily.contains(region, 3));
 });
 
 Deno.test("endpoint splits produce safe empty regions", () => {
@@ -91,6 +133,7 @@ Deno.test("endpoint splits produce safe empty regions", () => {
 
 Deno.test("only the complete extent is a full interval", () => {
   assert(isFullInterval(whole));
+  assert(arrayIntervalFamily.full(whole));
   assert(!isFullInterval({ ...whole, start: 1 }));
   assert(!isFullInterval({ ...whole, end: 9 }));
 });
