@@ -51,7 +51,10 @@ return handled
   assert(parsed.ok);
   if (!parsed.ok) return;
 
-  const binding = parsed.module.declarations[5];
+  const binding = parsed.module.declarations.find((declaration) =>
+    declaration.tag === "binding" && declaration.pattern.tag === "name" &&
+    declaration.pattern.name === "handled"
+  );
   assert(binding !== undefined && binding.tag === "binding");
   if (binding === undefined || binding.tag !== "binding") return;
   assertEquals(binding.value.tag, "apply");
