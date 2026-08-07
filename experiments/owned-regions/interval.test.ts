@@ -1,5 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
 import {
+  type IntervalRegion,
   intervalAbsoluteIndex,
   intervalsDisjoint,
   isFullInterval,
@@ -7,7 +8,6 @@ import {
   pairwiseDisjointIntervals,
   sameInterval,
   splitInterval,
-  type IntervalRegion,
   validJoinCover,
   validSplitCover,
 } from "../../src/linear/region_interval.ts";
