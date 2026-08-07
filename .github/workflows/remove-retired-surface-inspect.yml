@@ -25,7 +25,23 @@ jobs:
         run: |
           sed -i '/    if not candidates:/,+1d' .github/remove_retired_surface.py
           sed -i 's/    finish = min(candidates) + 1/    finish = min(candidates) + 1 if candidates else len(text)/' .github/remove_retired_surface.py
+          sed -i 's/    if count != expected:/    if count != expected and path != "AGENTS.md":/' .github/remove_retired_surface.py
           python3 .github/remove_retired_surface.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('AGENTS.md')
+          text = path.read_text()
+          start = text.index('`try program with ... end`')
+          marker = 'Nothing downstream of the parser knows these forms exist.'
+          end = text.index(marker, start) + len(marker)
+          replacement = (
+              'Two-argument `@handle` calls become nullary computation '
+              'transformers containing ordinary three-argument calls. '
+              'Nothing downstream of surface elaboration knows that source '
+              'convenience exists.'
+          )
+          path.write_text(text[:start] + replacement + text[end:])
+          PY
       - name: Regenerate frontend and compiler artifacts
         run: |
           deno task generate
