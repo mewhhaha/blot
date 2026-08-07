@@ -64,9 +64,11 @@ jobs:
               fi
             } > ci-fail
           fi
+          if [ -f ci-fail ]; then cat ci-fail; fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add ci-pass ci-fail
+          if [ -f ci-pass ]; then git add ci-pass; fi
+          if [ -f ci-fail ]; then git add ci-fail; fi
           git commit -m 'ci: record debug result [skip ci]' || true
           git push origin HEAD:${{ github.head_ref }}
           if [ "$check_status" -ne 0 ] || [ "$test_status" -ne 0 ]; then
