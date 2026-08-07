@@ -27,6 +27,25 @@ import { checkFile } from "./src/check/mod.ts";
 import { BlotError } from "./src/diagnostic.ts";
 import { load, refreshLoadedModules } from "./src/load.ts";
 
+/**
+ * `build` compiles through gpufuck's GPU compiler, so the few tests that read
+ * what it emitted need a device. Every other backend test goes through
+ * `validateLowering`, the CPU oracle, and the agreement between the two
+ * compilers is `just wasm`'s gate rather than this suite's — so a machine
+ * without an adapter should run everything else instead of failing here.
+ */
+const gpuAdapter = await (async () => {
+  const gpu =
+    (navigator as { gpu?: { requestAdapter: () => Promise<unknown> } })
+      .gpu;
+  if (gpu === undefined) return false;
+  try {
+    return await gpu.requestAdapter() !== null;
+  } catch {
+    return false;
+  }
+})();
+
 async function blotFiles(directory: string): Promise<string[]> {
   const found: string[] = [];
   for await (const entry of Deno.readDir(directory)) {
@@ -1356,30 +1375,34 @@ return { ...base; .a = 3; }
   );
 });
 
-Deno.test("proved array reads reach gpufuck with their bounds checks removed", async () => {
-  // blot emits the proved read anyway; removing the check is gpufuck's range
-  // analysis, and the only way to know it recognises the Core blot emits is to
-  // read the count back. A proof nothing downstream acts on is a diagnostic
-  // wearing an optimization's clothes.
-  const directory = await Deno.makeTempDir();
-  const path = join(directory, "proved-read.blot");
-  await Deno.writeTextFile(
-    path,
-    `open @import "blot:prelude" ()
+Deno.test({
+  name: "proved array reads reach gpufuck with their bounds checks removed",
+  ignore: !gpuAdapter,
+  fn: async () => {
+    // blot emits the proved read anyway; removing the check is gpufuck's range
+    // analysis, and the only way to know it recognises the Core blot emits is to
+    // read the count back. A proof nothing downstream acts on is a diagnostic
+    // wearing an optimization's clothes.
+    const directory = await Deno.makeTempDir();
+    const path = join(directory, "proved-read.blot");
+    await Deno.writeTextFile(
+      path,
+      `open @import "blot:prelude" ()
 sig at = Int -> Int
 let at = fn value =>
   let [only] = [value]
   return only
 return { .at = at; }
 `,
-  );
+    );
 
-  const built = await build(path);
-  assert(
-    built.storeReads.total > 0,
-    "the fixture must keep a Store read for this to measure anything",
-  );
-  assertEquals(built.storeReads.proven, built.storeReads.total);
+    const built = await build(path);
+    assert(
+      built.storeReads.total > 0,
+      "the fixture must keep a Store read for this to measure anything",
+    );
+    assertEquals(built.storeReads.proven, built.storeReads.total);
+  },
 });
 
 Deno.test("a reachable @panic traps with the reason the program gave", async () => {
@@ -1469,26 +1492,30 @@ function simdOpcodes(bytes: Uint8Array): Set<number> {
   return opcodes;
 }
 
-Deno.test("four-lane operations become SIMD instructions", async () => {
-  // The scalar bodies gpufuck ships are what the comptime evaluator agrees
-  // with, so a program whose vectors all fold is proof of meaning and not of
-  // instructions — `examples/vectors.blot` is exactly that program.
-  // `examples/simd.blot` is the one that cannot fold: its lanes come out of a
-  // block only the host can run, so the whole chain has to reach the artifact.
-  // Compiling a file from the catalog rather than a string literal is the
-  // point — the program these opcodes belong to is one a reader can run.
-  const built = await build(join("examples", "simd.blot"));
-  const opcodes = simdOpcodes(built.wasm);
-  assert(opcodes.has(19), "expected f32x4.splat");
-  assert(opcodes.has(228), "expected f32x4.add");
-  assert(opcodes.has(229), "expected f32x4.sub");
-  assert(opcodes.has(230), "expected f32x4.mul");
-  assert(opcodes.has(231), "expected f32x4.div");
-  assert(opcodes.has(65), "expected f32x4.eq");
-  assert(opcodes.has(67), "expected f32x4.less");
-  assert(opcodes.has(82), "expected v128.bitselect");
-  assert(opcodes.has(13), "expected i8x16.shuffle");
-  assert(opcodes.has(31), "expected f32x4.extract_lane");
+Deno.test({
+  name: "four-lane operations become SIMD instructions",
+  ignore: !gpuAdapter,
+  fn: async () => {
+    // The scalar bodies gpufuck ships are what the comptime evaluator agrees
+    // with, so a program whose vectors all fold is proof of meaning and not of
+    // instructions — `examples/vectors.blot` is exactly that program.
+    // `examples/simd.blot` is the one that cannot fold: its lanes come out of a
+    // block only the host can run, so the whole chain has to reach the artifact.
+    // Compiling a file from the catalog rather than a string literal is the
+    // point — the program these opcodes belong to is one a reader can run.
+    const built = await build(join("examples", "simd.blot"));
+    const opcodes = simdOpcodes(built.wasm);
+    assert(opcodes.has(19), "expected f32x4.splat");
+    assert(opcodes.has(228), "expected f32x4.add");
+    assert(opcodes.has(229), "expected f32x4.sub");
+    assert(opcodes.has(230), "expected f32x4.mul");
+    assert(opcodes.has(231), "expected f32x4.div");
+    assert(opcodes.has(65), "expected f32x4.eq");
+    assert(opcodes.has(67), "expected f32x4.less");
+    assert(opcodes.has(82), "expected v128.bitselect");
+    assert(opcodes.has(13), "expected i8x16.shuffle");
+    assert(opcodes.has(31), "expected f32x4.extract_lane");
+  },
 });
 
 Deno.test("integer vector operations become SIMD instructions", async () => {
@@ -1540,58 +1567,62 @@ Deno.test("integer vector operations become SIMD instructions", async () => {
   assert(opcodes.has(27), `expected i32x4.extract_lane, found ${found}`);
 });
 
-Deno.test("unlikely conditions become Wasm branch metadata", async () => {
-  const directory = await Deno.makeTempDir();
-  const path = join(directory, "unlikely.blot");
-  await Deno.writeTextFile(
-    path,
-    `open @import "blot:prelude" ()
+Deno.test({
+  name: "unlikely conditions become Wasm branch metadata",
+  ignore: !gpuAdapter,
+  fn: async () => {
+    const directory = await Deno.makeTempDir();
+    const path = join(directory, "unlikely.blot");
+    await Deno.writeTextFile(
+      path,
+      `open @import "blot:prelude" ()
 const Source = @effect.host { .ready = Unit -> Bool; }
 ready <- Source.ready ()
 return if unlikely ready : 1
 else: 2
 `,
-  );
-  const built = await build(path);
-  const module = new WebAssembly.Module(Uint8Array.from(built.wasm));
-  const [section] = WebAssembly.Module.customSections(
-    module,
-    "metadata.code.branch_hint",
-  );
-  assert(section !== undefined, "branch metadata custom section is missing");
+    );
+    const built = await build(path);
+    const module = new WebAssembly.Module(Uint8Array.from(built.wasm));
+    const [section] = WebAssembly.Module.customSections(
+      module,
+      "metadata.code.branch_hint",
+    );
+    assert(section !== undefined, "branch metadata custom section is missing");
 
-  const bytes = new Uint8Array(section);
-  let offset = 0;
-  const unsigned = () => {
-    let value = 0;
-    let shift = 0;
-    while (true) {
-      const byte = bytes[offset++];
-      assert(byte !== undefined, "branch metadata ended inside an integer");
-      value |= (byte & 0x7f) << shift;
-      if ((byte & 0x80) === 0) return value;
-      shift += 7;
-    }
-  };
-  const directions: number[] = [];
-  const functionCount = unsigned();
-  for (
-    let functionIndex = 0;
-    functionIndex < functionCount;
-    functionIndex += 1
-  ) {
-    unsigned();
-    const hintCount = unsigned();
-    for (let hintIndex = 0; hintIndex < hintCount; hintIndex += 1) {
+    const bytes = new Uint8Array(section);
+    let offset = 0;
+    const unsigned = () => {
+      let value = 0;
+      let shift = 0;
+      while (true) {
+        const byte = bytes[offset++];
+        assert(byte !== undefined, "branch metadata ended inside an integer");
+        value |= (byte & 0x7f) << shift;
+        if ((byte & 0x80) === 0) return value;
+        shift += 7;
+      }
+    };
+    const directions: number[] = [];
+    const functionCount = unsigned();
+    for (
+      let functionIndex = 0;
+      functionIndex < functionCount;
+      functionIndex += 1
+    ) {
       unsigned();
-      assertEquals(unsigned(), 1);
-      directions.push(unsigned());
+      const hintCount = unsigned();
+      for (let hintIndex = 0; hintIndex < hintCount; hintIndex += 1) {
+        unsigned();
+        assertEquals(unsigned(), 1);
+        directions.push(unsigned());
+      }
     }
-  }
-  assert(
-    directions.includes(0),
-    "the annotated condition was not marked likely false",
-  );
+    assert(
+      directions.includes(0),
+      "the annotated condition was not marked likely false",
+    );
+  },
 });
 
 Deno.test("a horizontal sum lowers to gpufuck's reduction", async () => {
@@ -1699,70 +1730,78 @@ Deno.test("a prelude wrapper over a primitive is not a definition", async () => 
   assertEquals(names.includes("dot"), true);
 });
 
-Deno.test("a program with no vectors carries none of their machinery", async () => {
-  // The declarations and the scalar bodies are emitted only when a module used
-  // them, so this is what keeps them out of every other artifact.
-  const directory = await Deno.makeTempDir();
-  const path = join(directory, "plain.blot");
-  await Deno.writeTextFile(
-    path,
-    `open @import "blot:prelude" ()
+Deno.test({
+  name: "a program with no vectors carries none of their machinery",
+  ignore: !gpuAdapter,
+  fn: async () => {
+    // The declarations and the scalar bodies are emitted only when a module used
+    // them, so this is what keeps them out of every other artifact.
+    const directory = await Deno.makeTempDir();
+    const path = join(directory, "plain.blot");
+    await Deno.writeTextFile(
+      path,
+      `open @import "blot:prelude" ()
 const Source = @effect.host { .read = Unit -> Int; }
 value <- Source.read ()
 return value + 1
 `,
-  );
+    );
 
-  const built = await build(path);
-  // The declarations and the scalar bodies are the thing being kept out, and
-  // their names survive into the artifact as text — so this looks for them
-  // rather than for instructions, which a scalar module would lack anyway and
-  // which would therefore pass without testing the claim.
-  const text = new TextDecoder("utf-8", { fatal: false })
-    .decode(new Uint8Array(built.wasm));
-  assertEquals(text.includes("$FunctionalF32x4"), false);
-  assertEquals([...simdOpcodes(built.wasm)], []);
+    const built = await build(path);
+    // The declarations and the scalar bodies are the thing being kept out, and
+    // their names survive into the artifact as text — so this looks for them
+    // rather than for instructions, which a scalar module would lack anyway and
+    // which would therefore pass without testing the claim.
+    const text = new TextDecoder("utf-8", { fatal: false })
+      .decode(new Uint8Array(built.wasm));
+    assertEquals(text.includes("$FunctionalF32x4"), false);
+    assertEquals([...simdOpcodes(built.wasm)], []);
+  },
 });
 
-Deno.test("scalar floats cross the boundary while F32x4 remains private", async () => {
-  // The domain switches that produce a boundary type used to end in a `text`
-  // fallthrough, so a domain none of them named was published as `Text` and
-  // the diagnostic arrived from inside gpufuck as a type mismatch. Both float
-  // domains and the vector now say what they are. Scalars have canonical ABI
-  // layouts; the private four-lane representation still does not.
-  const directory = await Deno.makeTempDir();
-  const write = async (name: string, result: string) => {
-    const path = join(directory, `${name}.blot`);
-    await Deno.writeTextFile(
-      path,
-      [
-        `open @import "blot:prelude" ()
+Deno.test({
+  name: "scalar floats cross the boundary while F32x4 remains private",
+  ignore: !gpuAdapter,
+  fn: async () => {
+    // The domain switches that produce a boundary type used to end in a `text`
+    // fallthrough, so a domain none of them named was published as `Text` and
+    // the diagnostic arrived from inside gpufuck as a type mismatch. Both float
+    // domains and the vector now say what they are. Scalars have canonical ABI
+    // layouts; the private four-lane representation still does not.
+    const directory = await Deno.makeTempDir();
+    const write = async (name: string, result: string) => {
+      const path = join(directory, `${name}.blot`);
+      await Deno.writeTextFile(
+        path,
+        [
+          `open @import "blot:prelude" ()
 `,
-        `return ${result}
+          `return ${result}
 `,
-      ].join(
-        "\n",
-      ),
-    );
-    return path;
-  };
+        ].join(
+          "\n",
+        ),
+      );
+      return path;
+    };
 
-  const vector = await write("vector", "Vec4.splat (Float32.of_int 1)");
-  const single = await write("single", "Float32.of_int 1");
-  await assertRejects(
-    () => validateLowering(vector),
-    Error,
-    "BLOT_VECTOR_AT_BOUNDARY",
-  );
-  const manifest = await validateLowering(single);
-  assertEquals(manifest.exports[0]?.function?.result, { kind: "float-32" });
-  const built = await build(single);
-  const { instance } = await WebAssembly.instantiate(
-    Uint8Array.from(built.wasm),
-  );
-  const exported = instance.exports["blot:default"];
-  assert(typeof exported === "function");
-  assertEquals(exported(), Math.fround(1));
+    const vector = await write("vector", "Vec4.splat (Float32.of_int 1)");
+    const single = await write("single", "Float32.of_int 1");
+    await assertRejects(
+      () => validateLowering(vector),
+      Error,
+      "BLOT_VECTOR_AT_BOUNDARY",
+    );
+    const manifest = await validateLowering(single);
+    assertEquals(manifest.exports[0]?.function?.result, { kind: "float-32" });
+    const built = await build(single);
+    const { instance } = await WebAssembly.instantiate(
+      Uint8Array.from(built.wasm),
+    );
+    const exported = instance.exports["blot:default"];
+    assert(typeof exported === "function");
+    assertEquals(exported(), Math.fround(1));
+  },
 });
 
 /**
