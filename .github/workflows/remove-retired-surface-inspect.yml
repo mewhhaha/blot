@@ -32,6 +32,22 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
+          path = Path('src/tooling/formatter.ts')
+          text = path.read_text()
+          for start, end in (
+              ('\nfunction indentedValueLines(', '\nfunction reindentFragment('),
+              ('\nfunction valueIsBlock(', '\nfunction expressionIsBlock('),
+          ):
+              if text.count(start) != 1 or text.count(end) != 1:
+                  raise SystemExit(f'formatter helper markers changed: {start!r}')
+              begin = text.index(start)
+              finish = text.index(end, begin)
+              text = text[:begin] + text[finish:]
+          path.write_text(text)
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
+
           path = Path('AGENTS.md')
           text = path.read_text()
           start = text.index('`try program with ... end`')
