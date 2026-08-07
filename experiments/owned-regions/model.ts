@@ -12,11 +12,13 @@ import {
  * its input token and returns a fresh token; attempting to use an old token is
  * a model error. Split and join change metadata only and never copy elements.
  *
- * The model checks soundness twice:
+ * The model checks soundness three ways:
  *
- * 1. live runtime permits are checked for pairwise-disjoint intervals after
+ * 1. `claim` is rooted in the fresh Store allocation performed here, so there
+ *    is no older persistent alias to observe later destructive writes;
+ * 2. live runtime permits are checked for pairwise-disjoint intervals after
  *    every successful operation; and
- * 2. every authority transition is recorded into the generic compiler-side
+ * 3. every authority transition is recorded into the generic compiler-side
  *    certificate graph and replayed independently at freeze.
  */
 
@@ -85,6 +87,8 @@ interface MutableStats {
 
 interface Store<T> {
   readonly id: number;
+  /** External proof identity authorizing the one root claim in this model. */
+  readonly root: string;
   readonly cells: T[];
   readonly live: Map<number, Permit<T>>;
   readonly stats: MutableStats;
@@ -108,14 +112,20 @@ let nextStore = 1;
 let nextPermit = 1;
 
 /**
- * Models `@region.array.claim` on a freshly/uniquely owned Store.
+ * Models `@region.array.claim` on a freshly allocated Store.
  *
- * The input values establish the one backing allocation for the experiment.
+ * Production `claim` cannot infer uniqueness merely from a `!` source binding:
+ * an ordinary persistent alias may still point at the same Store. Here the
+ * allocation itself is the external uniqueness proof and its identity is
+ * recorded as the certificate root.
+ *
  * Region operations never allocate another element Store.
  */
 export function claim<T>(values: readonly T[]): Region<T> {
+  const id = nextStore++;
   const store: Store<T> = {
-    id: nextStore++,
+    id,
+    root: `fresh-store:${id}`,
     cells: [...values],
     live: new Map(),
     stats: {
@@ -133,6 +143,7 @@ export function claim<T>(values: readonly T[]): Region<T> {
   const permit = unwrap(region);
   store.authorityEvents.push({
     tag: "claim",
+    root: store.root,
     origin: store.id,
     family: ARRAY_INTERVAL_FAMILY,
     permit: permit.id,
@@ -332,7 +343,10 @@ export function freeze<T>(region: Region<T>): FrozenArray<T> {
     stats: snapshotStats(store.stats),
     authorityCertificate,
     authorityVerified:
-      verifyRegionAuthorityCertificate(authorityCertificate) !== null,
+      verifyRegionAuthorityCertificate(
+        authorityCertificate,
+        new Set([store.root]),
+      ) !== null,
     values: [...store.cells],
   };
 }
