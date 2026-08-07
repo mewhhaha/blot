@@ -1,3 +1,4 @@
+import "../comptime/region_primitives.ts";
 import { scheme } from "./constrain.ts";
 import { PRIMITIVE_TYPES } from "./primitives.ts";
 import {
@@ -9,6 +10,7 @@ import {
   type SimpleType,
   tupleType,
   UNIT,
+  variant,
 } from "./type.ts";
 
 const PURE = effects([]);
@@ -74,12 +76,24 @@ export const REGION_PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map([
     }),
   ],
   [
-    "@region.array.with_split",
+    "@region.array.split",
     poly((fresh) => {
       const element = fresh();
       const region: SimpleType = { tag: "region", element };
-      const callback = curried([tupleType([region, region])], UNIT);
-      return curried([region, INT, callback], region);
+      return curried(
+        [region, INT],
+        variant([
+          ["Split", tupleType([region, region])],
+          ["SplitOutOfBounds", region],
+        ]),
+      );
+    }),
+  ],
+  [
+    "@region.array.join",
+    poly((fresh) => {
+      const region: SimpleType = { tag: "region", element: fresh() };
+      return curried([region, region], region);
     }),
   ],
   [
@@ -94,10 +108,6 @@ export const REGION_PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map([
   ],
 ]);
 
-// The core primitive table predates proof-producing private types and is kept
-// intentionally small. Install this private extension when the checker bridge
-// is loaded; the table is an ordinary Map at runtime even though consumers see
-// it through a read-only interface.
 const table = PRIMITIVE_TYPES as Map<string, Scheme>;
 for (const [name, type] of REGION_PRIMITIVE_TYPES) {
   table.set(name, type);
