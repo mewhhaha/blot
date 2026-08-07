@@ -28,6 +28,7 @@ jobs:
           sed -i 's/    if count != expected:/    if count != expected and path != "AGENTS.md":/' .github/remove_retired_surface.py
           python3 .github/remove_retired_surface.py
           sed -i '/^  "result",$/d' src/syntax/compact_schema.ts
+          sed -i 's/        "block" => {/        "block" | "do_block" => {/' experiments/rust-middle/src/lower.rs
           python3 - <<'PY'
           from pathlib import Path
 
