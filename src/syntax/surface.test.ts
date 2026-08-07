@@ -17,6 +17,9 @@ return transformer
   if (binding === undefined || binding.tag !== "binding") return;
   assertEquals(binding.value.tag, "lambda");
   if (binding.value.tag !== "lambda") return;
+  assertEquals(binding.value.parameter.tag, "name");
+  if (binding.value.parameter.tag !== "name") return;
+  assertEquals(binding.value.parameter.qualifier, "linear");
   assertEquals(binding.value.body.tag, "lambda");
 
   const delayed = binding.value.body;
