@@ -27,6 +27,7 @@ jobs:
           deno fmt \
             spec/OWNED_REGIONS.md \
             src/linear/region_certificate.ts \
+            src/linear/region_family.ts \
             src/linear/region_interval.ts \
             experiments/owned-regions
           git config user.name github-actions[bot]
@@ -34,43 +35,22 @@ jobs:
           git add \
             spec/OWNED_REGIONS.md \
             src/linear/region_certificate.ts \
+            src/linear/region_family.ts \
             src/linear/region_interval.ts \
             experiments/owned-regions
           git commit -m 'fmt: normalize owned-region draft [skip ci]' || true
           git push origin HEAD:${{ github.head_ref }}
-      - name: Run gates and record result
+      - name: Check owned-region experiment
         shell: bash
         run: |
-          set +e
-          just check > check.log 2>&1
-          check_status=$?
-          just test > test.log 2>&1
-          test_status=$?
-          rm -f ci-pass ci-fail
-          if [ "$check_status" -eq 0 ] && [ "$test_status" -eq 0 ]; then
-            printf 'just check: PASS\njust test: PASS\n' > ci-pass
-          else
-            {
-              printf 'just check: %s\n' "$([ "$check_status" -eq 0 ] && echo PASS || echo FAIL)"
-              printf 'just test: %s\n\n' "$([ "$test_status" -eq 0 ] && echo PASS || echo FAIL)"
-              if [ "$check_status" -ne 0 ]; then
-                echo '--- just check tail ---'
-                tail -n 160 check.log
-              fi
-              if [ "$test_status" -ne 0 ]; then
-                echo
-                echo '--- just test tail ---'
-                tail -n 160 test.log
-              fi
-            } > ci-fail
-          fi
-          if [ -f ci-fail ]; then cat ci-fail; fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          if [ -f ci-pass ]; then git add ci-pass; fi
-          if [ -f ci-fail ]; then git add ci-fail; fi
-          git commit -m 'ci: record debug result [skip ci]' || true
-          git push origin HEAD:${{ github.head_ref }}
-          if [ "$check_status" -ne 0 ] || [ "$test_status" -ne 0 ]; then
-            exit 1
-          fi
+          deno check \
+            src/linear/region_certificate.ts \
+            src/linear/region_family.ts \
+            src/linear/region_interval.ts \
+            experiments/owned-regions/*.ts
+          deno lint \
+            src/linear/region_certificate.ts \
+            src/linear/region_family.ts \
+            src/linear/region_interval.ts \
+            experiments/owned-regions
+          deno test experiments/owned-regions/*.test.ts
