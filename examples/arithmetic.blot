@@ -13,10 +13,9 @@ let equal = 21 * 2 == 42
 // makes `|>` work at all.
 let piped = 20 |> Num.add 2 |> Num.mul 2
 
-let branch = if 3 < 4:
-  return "less"
-else:
-  return "not less"
+let branch = case 3 < 4 of
+  #True => "less"
+  #False => "not less"
 
 return {
   .sum = sum;

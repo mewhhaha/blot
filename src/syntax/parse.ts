@@ -8,6 +8,7 @@ import type { Module } from "./ast.ts";
 import { lowerModule, type Rule } from "./lower.ts";
 import { materializeCpuCst } from "./cpu_cst.ts";
 import { elaborateLayout } from "./layout.ts";
+import { elaborateSurface } from "./surface.ts";
 
 const planUrl = new URL("../../generated/wasm/parser.plan", import.meta.url);
 
@@ -26,6 +27,8 @@ export type ParseResult =
 export async function parse(source: string): Promise<ParseResult> {
   const result = await parseConcrete(source);
   if (!result.ok) return result;
+  const removed = removedSurfaceDiagnostics(result.cst);
+  if (removed.length > 0) return { ok: false, diagnostics: removed };
   return { ok: true, module: result.module };
 }
 
@@ -64,7 +67,7 @@ export async function parseConcrete(
     );
     return {
       ok: true,
-      module: lowerModule(cst, source),
+      module: elaborateSurface(lowerModule(cst, source)),
       cst,
     };
   } catch (error) {
@@ -73,6 +76,33 @@ export async function parseConcrete(
     }
     throw error;
   }
+}
+
+function removedSurfaceDiagnostics(root: Rule): readonly Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+  const visit = (rule: Rule): void => {
+    if (rule.name === "conditional") {
+      diagnostics.push({
+        code: "BLOT_VALUE_IF_REMOVED",
+        message:
+          "`if` is control flow and cannot be used as a value. Match `#True` and `#False` with `case` instead.",
+        span: rule.span,
+      });
+    }
+    if (rule.name === "handler_composition") {
+      diagnostics.push({
+        code: "BLOT_TRY_REMOVED",
+        message:
+          "`try ... with` was removed. Compose `@handle (Effect, handler)` transformers with `|>` instead.",
+        span: rule.span,
+      });
+    }
+    for (const child of rule.children()) {
+      if (child.type === "rule") visit(child);
+    }
+  };
+  visit(root);
+  return diagnostics;
 }
 
 export function ingestCpuSource(

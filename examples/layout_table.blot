@@ -17,12 +17,11 @@ let layout =
       return frames
     else:
       let node = @array.get nodes index
-      let parent_x = if node.parent < 0:
-        return 0
-      else:
-        return case Array.get ((&frames), node.parent) of
-            #Some parent => parent.x
-            #None => 0
+      let parent_x = case node.parent < 0 of
+        #True => 0
+        #False => case Array.get ((&frames), node.parent) of
+          #Some parent => parent.x
+          #None => 0
 
       let frame =
         {

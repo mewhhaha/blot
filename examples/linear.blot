@@ -52,12 +52,11 @@ let choose = fn ?resume =>
 let chosen = choose (fn n => n)
 
 // Branches have to agree about what a *linear* value spent, so this consumes on
-// both.
+// both. `case` is the value-producing choice; `if` is reserved for control flow.
 let !coin = 1
-let flipped = if 1 < 2:
-  return consume (!coin)
-else:
-  return consume (!coin)
+let flipped = case 1 < 2 of
+  #True => consume (!coin)
+  #False => consume (!coin)
 
 return {
   .owned = owned;

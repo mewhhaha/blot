@@ -6,7 +6,7 @@
 // inferred `⊤` for everything.
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { checkFile } from "./src/check/mod.ts";
+import { checkFile, checkLegacySource } from "./src/check/mod.ts";
 import { BlotError, render } from "./src/diagnostic.ts";
 
 const scratch = await Deno.makeTempDir();
@@ -19,16 +19,14 @@ const PRELUDE = `open @import "blot:prelude" ()
 
 async function typeOf(source: string): Promise<string> {
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
-  await Deno.writeTextFile(path, PRELUDE + source);
-  const checked = await checkFile(path);
+  const checked = await checkLegacySource(path, PRELUDE + source);
   return checked.type;
 }
 
 async function errorOf(source: string): Promise<string> {
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
-  await Deno.writeTextFile(path, PRELUDE + source);
   try {
-    await checkFile(path);
+    await checkLegacySource(path, PRELUDE + source);
   } catch (error) {
     if (error instanceof BlotError) return error.message;
     throw error;

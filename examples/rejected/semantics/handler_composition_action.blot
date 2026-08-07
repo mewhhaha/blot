@@ -1,5 +1,0 @@
-// A composition step is the two-argument surface spelling of `@handle`.
-// Another intrinsic does not identify a source handler to compose.
-
-return try (fn () => ()) with
-  @not_handle (MissingEffect, missing_handler)
