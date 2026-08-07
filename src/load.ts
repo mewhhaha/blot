@@ -11,7 +11,7 @@ import { dirname, fromFileUrl, isAbsolute, relative, resolve } from "@std/path";
 import type { Expr, Module } from "./syntax/ast.ts";
 import type { Diagnostic } from "./diagnostic.ts";
 import { BlotError, render } from "./diagnostic.ts";
-import { parse } from "./syntax/parse.ts";
+import { parse, parseConcrete } from "./syntax/parse.ts";
 import { decodePortableModule } from "./syntax/portable.ts";
 import { childEnv, type Env, shapeOf, type Value } from "./comptime/value.ts";
 import { includedFileKey, moduleClosure } from "./comptime/eval.ts";
@@ -301,7 +301,7 @@ export async function load(
   }
 
   const source = await Deno.readTextFile(absolute);
-  return await loadSourceRevision(absolute, source, cache, nextActive);
+  return await loadSourceRevision(absolute, source, cache, nextActive, false);
 }
 
 /** Loads an editor revision without writing it over the source on disk. */
@@ -310,7 +310,19 @@ export async function loadSource(
   source: string,
 ): Promise<Loaded> {
   const absolute = resolve(path);
-  return await loadSourceRevision(absolute, source, new Map(), [absolute]);
+  return await loadSourceRevision(absolute, source, new Map(), [absolute], false);
+}
+
+/**
+ * Loads one legacy root revision for migration/regression tooling.
+ * Dependencies still use the current source language through ordinary `load`.
+ */
+export async function loadLegacySource(
+  path: string,
+  source: string,
+): Promise<Loaded> {
+  const absolute = resolve(path);
+  return await loadSourceRevision(absolute, source, new Map(), [absolute], true);
 }
 
 async function loadSourceRevision(
@@ -318,8 +330,11 @@ async function loadSourceRevision(
   source: string,
   cache: Map<string, Loaded>,
   active: readonly string[],
+  allowRemovedSurface: boolean,
 ): Promise<Loaded> {
-  const parsed = await parse(source);
+  const parsed = allowRemovedSurface
+    ? await parseConcrete(source)
+    : await parse(source);
   if (!parsed.ok) {
     throw new LoadError(absolute, source, parsed.diagnostics);
   }
