@@ -64,17 +64,18 @@ replace_once(
         }
 ''',
 )
-# Public runtime constant/export lowering must not accidentally expose the
-# compiler-private capability representation. Internal residual lowering gets a
-# separate Region representation in the next patch.
+# This HirBuilder path is only for staged constants/exports. A live Region is
+# compiler-private and must be consumed/frozen before reaching that boundary.
 replace_once(
     path,
     '''            Type::Array(element) => {
+                let (elements, element_value) = match value {
 ''',
     '''            Type::Region(_) => Err(hir_error(
                 "A live Region is compiler-private and cannot cross the runtime export boundary.",
             )),
             Type::Array(element) => {
+                let (elements, element_value) = match value {
 ''',
 )
 
@@ -98,8 +99,6 @@ replace_once(
         Type::Region(_) => return None,
 ''',
 )
-# A second residual-type walker around this area recursively visits structural
-# types to find representation variables.
 replace_once(
     path,
     '''                Type::Array(element) => pending.push(element),
