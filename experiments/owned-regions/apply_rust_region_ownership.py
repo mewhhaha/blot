@@ -11,9 +11,6 @@ def replace_once(path: str, old: str, new: str) -> None:
 
 path = "experiments/rust-middle/src/ownership.rs"
 
-# A small path-sensitive sum in the ownership domain. This matches the TS
-# checker and lets a constructor pattern receive only the obligation carried by
-# that constructor instead of every arm receiving the whole scrutinee.
 replace_once(
     path,
     '''    Shape(BTreeMap<String, Produced>),
@@ -31,8 +28,6 @@ replace_once(
 }
 ''',
 )
-
-# A fresh Region root is assigned when the result of claim is actually bound.
 replace_once(
     path,
     '''            let owned = if relevant(&produced) {
@@ -55,8 +50,6 @@ replace_once(
             let qualifier = inherited(*qualifier, &owned);
 ''',
 )
-
-# Case arms consume only the constructor-specific ownership payload.
 replace_once(
     path,
     '''                declare(arm.pattern, target.clone(), &inner, analysis);
@@ -67,8 +60,6 @@ replace_once(
                 produced.push(walk(arm.body, &inner, analysis, kind));
 ''',
 )
-
-# Install Region primitive ownership before ordinary array rules.
 anchor = '''        if name == "@array.get" && arguments.len() == 2 {
 '''
 region_rules = r'''        if name == "@region.array.claim" && arguments.len() == 1 {
@@ -175,8 +166,6 @@ region_rules = r'''        if name == "@region.array.claim" && arguments.len() =
         }
 '''
 replace_once(path, anchor, region_rules + anchor)
-
-# Region/Choice participate in the general obligation operations.
 replace_once(
     path,
     '''        Produced::Leaf(_) => Obligation::None,
@@ -211,9 +200,6 @@ replace_once(
         Produced::Choice(cases) => cases.values().any(contains_borrow),
 ''',
 )
-
-# Alternative paths that produce literally the same authority are one value,
-# not two simultaneous obligations.
 replace_once(
     path,
     '''fn combine(left: Produced, right: Produced) -> Produced {
@@ -226,8 +212,6 @@ replace_once(
     if !relevant(&left) {
 ''',
 )
-
-# Choice constructor selection and exact sibling-join proof.
 helper_anchor = '''fn pattern_binds(pattern: PatternId, module: &Module) -> bool {
 '''
 helpers = r'''fn choice_for_pattern(target: &Produced, pattern: PatternId, module: &Module) -> Produced {
@@ -236,9 +220,6 @@ helpers = r'''fn choice_for_pattern(target: &Produced, pattern: PatternId, modul
     };
     match &module.arena.patterns[pattern.0 as usize] {
         Pattern::Constructor { name, .. } => cases.get(name).cloned().unwrap_or(Produced::None),
-        // A catch-all arm may represent several distinct linear capabilities.
-        // Keep them all; ordinary linear pattern rules will refuse ambiguity if
-        // the arm tries to bind/discard them unsafely.
         _ => join(cases.values().cloned()),
     }
 }
@@ -248,7 +229,7 @@ fn join_region(left: Produced, right: Produced, span: Span, analysis: &mut Analy
         Produced::Region {
             qualifier: left_qualifier,
             root: left_root,
-            mut splits: left_splits,
+            splits: mut left_splits,
         },
         Produced::Region {
             qualifier: right_qualifier,
@@ -305,8 +286,6 @@ fn join_region(left: Produced, right: Produced, span: Span, analysis: &mut Analy
 
 '''
 replace_once(path, helper_anchor, helpers + helper_anchor)
-
-# Trusted borrowing/scalar operations include Region metadata/read primitives.
 replace_once(
     path,
     '''                || matches!(name.as_str(), "@array.len" | "@shape.has")
@@ -317,5 +296,4 @@ replace_once(
                 )
 ''',
 )
-
 print("applied Rust Region path-sensitive ownership proof")
