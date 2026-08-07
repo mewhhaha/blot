@@ -195,6 +195,29 @@ outside the earlier run-to-run range. The changed-module profile is still
 dominated by checking and Runtime-HIR preparation; emission is not the next
 compiler-speed target.
 
+A 2026-08-07 profile after recursive Runtime HIR and path-sensitive ownership
+used compiler hash
+`2cb2071fd52da08068846c071052ca366ba1475fcf7aa829751926b2b83f3186`. Each row is
+one nine-sample median. The benchmark's changed-module edit inserts a dead
+revision binding: it changes the lowered module and invalidates the revision,
+but deliberately does not change the observation. It therefore measures the
+current invalidation and re-derivation boundary, not a general semantic-edit
+distribution.
+
+| source                     | changed module |   check | prepare after check | emit after prepare |
+| -------------------------- | -------------: | ------: | ------------------: | -----------------: |
+| `examples/minimal.blot`    |        2.21 ms | 1.79 ms |            0.142 ms |           0.103 ms |
+| `examples/storage.blot`    |        7.11 ms | 5.10 ms |             1.70 ms |           0.314 ms |
+| `examples/arena_list.blot` |        23.6 ms | 6.60 ms |             14.4 ms |           0.293 ms |
+
+The list-heavy source emits only 63 Runtime-HIR operations, so its 14.4 ms
+preparation time is not proportional to final HIR size. It is dominated by
+re-running staged recursive evaluation and reconstructing the residual trace.
+The evidence therefore supports the existing architectural next step:
+progressively commit settled Runtime HIR while checking and retain it across
+irrelevant edits. Emission remains roughly three tenths of a millisecond even
+for the two larger programs and is not an optimization target.
+
 ## Package capsule comparison
 
 `experiment:package` compares an npm-linked package containing the 45,191-byte

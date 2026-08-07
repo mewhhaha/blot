@@ -96,13 +96,45 @@ performance measurement counts.
 ## 5. Keep compiler optimization profile-driven
 
 The resident compiler already returns unchanged artifacts in tens of
-microseconds; semantic edits are dominated by checking and Runtime-HIR
-preparation rather than emission. The next compiler work should continue the
-existing flat-arena plan: progressively emit settled Runtime HIR during checking
-and delete request-local fact-map reconstruction. Parallelism and SIMD should
-wait for a profile that shows independent ready modules or contiguous set scans
-dominating wall time.
+microseconds; lowered-module edits are dominated by checking and Runtime-HIR
+preparation rather than emission. A current nine-sample profile measured the
+list-heavy example at 23.6 ms: 6.60 ms checking, 14.4 ms preparing HIR, and only
+0.293 ms emitting. Its final HIR has 63 operations, so the preparation cost is
+staged recursive evaluation and residual-trace reconstruction rather than final
+graph size. The next compiler work should continue the existing flat-arena plan:
+progressively emit settled Runtime HIR during checking and delete request-local
+fact-map reconstruction. Parallelism and SIMD should wait for a profile that
+shows independent ready modules or contiguous set scans dominating wall time.
 
 An optimization is successful only when it removes a derivation or makes its
 data contiguous. Moving the same derivation between TypeScript, Rust, and Wasm
 is not a compiler-speed improvement.
+
+## 6. Current theory/implementation frontier
+
+The representative scalar tight-loop gap is closed: equal-semantics Blot and
+Rust Wasm are within 0.91--1.06x on the measured loops, and the indexed arena is
+about 1.5x Rust's `Vec`. Recursive values, nested static function aggregates,
+known higher-order selection, path-sensitive ownership summaries, and generated
+staging/handler/target simulations now have executable boundaries.
+
+What remains falls into three different classes and should not be described as
+one unfinished feature list:
+
+- **Semantic closure:** functions produced only by unknown run-time higher-order
+  control still need closure conversion with a closed parameter representation
+  or a representation dictionary. This is the remaining source program that can
+  be well typed yet reach a structural representation refusal.
+- **Compiler architecture:** discover recursive representation SCCs in the
+  settled checker graph, progressively commit typed Runtime HIR during checking,
+  and publish structural extraction lineage in ownership certificates. These
+  remove duplicate derivations or strengthen evidence; they do not need new
+  surface syntax.
+- **Evidence:** generate target trap and divergence traces and mechanize
+  preservation/progress for the stable core. Current generated tests cover
+  returns, staging, handlers, ownership-path mutations, host order, and
+  evaluator/Wasm agreement, but remain bounded simulations.
+
+Capacity-bearing Stores, another proof-producing collection, first-class
+references, and a full-width word domain are contingent extensions. The current
+profiles and examples do not justify adding them to the language or runtime.
