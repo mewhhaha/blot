@@ -125,6 +125,30 @@ export interface Ownership {
    * anything that would read a death off `lastUses` has to refuse here instead.
    */
   readonly reentrant: ReadonlySet<NamePattern>;
+  /** Structural paths by which an owning binding received earlier obligations. */
+  readonly lineage: ReadonlyMap<NamePattern, readonly OwnershipLineage[]>;
+}
+
+export type OwnershipPathSegment =
+  | { readonly tag: "field"; readonly name: string }
+  | { readonly tag: "element"; readonly index: number };
+
+export type OwnershipTargetPathSegment =
+  | OwnershipPathSegment
+  | { readonly tag: "case"; readonly name: string }
+  | { readonly tag: "member"; readonly index: number };
+
+export interface OwnershipExtraction {
+  readonly operation: "@array.take" | "@array.split";
+  readonly part: number;
+  readonly span: Span;
+}
+
+export interface OwnershipLineage {
+  readonly source: NamePattern;
+  readonly sourcePath: readonly OwnershipPathSegment[];
+  readonly targetPath: readonly OwnershipTargetPathSegment[];
+  readonly extractions: readonly OwnershipExtraction[];
 }
 
 export interface LinearResult {
@@ -141,6 +165,7 @@ class Analysis {
   readonly reads = new Map<NamePattern, Set<number>>();
   /** The bindings some closure reached from outside its own body. */
   readonly crossed = new Set<NamePattern>();
+  readonly lineage = new Map<NamePattern, readonly OwnershipLineage[]>();
   readonly functionResults = new Map<Expr, Produced>();
   /** Certified recursive callees and the captures transferred by their call. */
   readonly recursiveTransfers = new Map<NamePattern, readonly string[]>();
@@ -265,6 +290,7 @@ export function checkLinearity(module: Module): LinearResult {
       linear: analysis.linear,
       consumptions: analysis.consumptions,
       reentrant,
+      lineage: analysis.lineage,
     },
   };
 }
@@ -308,9 +334,12 @@ function declareProduced(
       const written = writtenObligation(
         pattern.qualifier,
         source,
+        pattern,
       );
       let owned = produced;
       if (!relevant(owned)) owned = written;
+      const lineage = structuralLineage(pattern, owned);
+      if (lineage.length > 0) analysis.lineage.set(pattern, lineage);
       scope.bindings.set(pattern.name, {
         pattern,
         qualifier: inherited(pattern.qualifier, owned),
@@ -936,7 +965,7 @@ function declareGroup(
     scope.bindings.set(member.name, {
       pattern: member.pattern,
       qualifier: settled[index],
-      owned: writtenObligation(settled[index], null),
+      owned: writtenObligation(settled[index], null, member.pattern),
       parameter: patternQualifier(member.lambda.parameter),
       parameterInput: parameterOwnership(member.lambda.parameter, analysis),
       parameterPattern: member.lambda.parameter,
@@ -1036,6 +1065,7 @@ type Produced =
     readonly qualifier: "affine" | "linear";
     readonly source: NamePattern | null;
     readonly path: readonly OwnershipPathSegment[];
+    readonly origins: readonly OwnershipOrigin[];
   }
   | {
     readonly tag: "closure";
@@ -1054,18 +1084,133 @@ type Produced =
 
 const NONE: Produced = { tag: "none" };
 
-type OwnershipPathSegment =
-  | { readonly tag: "field"; readonly name: string }
-  | { readonly tag: "element"; readonly index: number };
+interface OwnershipOrigin {
+  readonly source: NamePattern;
+  readonly path: readonly OwnershipPathSegment[];
+  readonly extractions: readonly OwnershipExtraction[];
+}
 
 function writtenObligation(
   qualifier: Qualifier,
   source: NamePattern | null,
+  origin: NamePattern | null = source,
 ): Produced {
   if (qualifier === "linear" || qualifier === "affine") {
-    return { tag: "leaf", qualifier, source, path: [] };
+    const origins: OwnershipOrigin[] = [];
+    if (origin !== null) {
+      origins.push({ source: origin, path: [], extractions: [] });
+    }
+    return { tag: "leaf", qualifier, source, path: [], origins };
   }
   return NONE;
+}
+
+function structuralLineage(
+  destination: NamePattern,
+  produced: Produced,
+): readonly OwnershipLineage[] {
+  const lineage: OwnershipLineage[] = [];
+  const visit = (
+    value: Produced,
+    targetPath: readonly OwnershipTargetPathSegment[],
+  ): void => {
+    if (value.tag === "none") return;
+    if (value.tag === "leaf") {
+      for (const origin of value.origins) {
+        if (
+          origin.source === destination && origin.extractions.length === 0 &&
+          sameTargetPath(origin.path, targetPath)
+        ) continue;
+        const entry = {
+          source: origin.source,
+          sourcePath: origin.path,
+          targetPath,
+          extractions: origin.extractions,
+        } satisfies OwnershipLineage;
+        if (lineage.some((existing) => sameLineage(existing, entry))) continue;
+        lineage.push(entry);
+      }
+      return;
+    }
+    if (value.tag === "borrow") {
+      visit(value.value, targetPath);
+      return;
+    }
+    if (value.tag === "variant") {
+      visit(value.payload, targetPath);
+      return;
+    }
+    if (value.tag === "closure") {
+      visit(
+        value.captures,
+        [...targetPath, { tag: "member", index: 0 }],
+      );
+      visit(value.result, [...targetPath, { tag: "member", index: 1 }]);
+      return;
+    }
+    if (value.tag === "many") {
+      for (const [index, member] of value.values.entries()) {
+        visit(member, [...targetPath, { tag: "member", index }]);
+      }
+      return;
+    }
+    if (value.tag === "sequence") {
+      for (const [index, element] of value.elements.entries()) {
+        visit(element, [...targetPath, { tag: "element", index }]);
+      }
+      return;
+    }
+    if (value.tag === "shape") {
+      for (const [name, field] of value.fields) {
+        visit(field, [...targetPath, { tag: "field", name }]);
+      }
+      return;
+    }
+    for (const [name, payload] of value.cases) {
+      visit(payload, [...targetPath, { tag: "case", name }]);
+    }
+  };
+  visit(produced, []);
+  return lineage;
+}
+
+function sameLineage(
+  left: OwnershipLineage,
+  right: OwnershipLineage,
+): boolean {
+  if (
+    left.source !== right.source ||
+    !samePath(left.sourcePath, right.sourcePath) ||
+    !sameTargetPath(left.targetPath, right.targetPath) ||
+    left.extractions.length !== right.extractions.length
+  ) return false;
+  return left.extractions.every((extraction, index) => {
+    const compared = right.extractions[index];
+    return extraction.operation === compared.operation &&
+      extraction.part === compared.part &&
+      extraction.span.start === compared.span.start &&
+      extraction.span.end === compared.span.end;
+  });
+}
+
+function sameTargetPath(
+  left: readonly OwnershipTargetPathSegment[],
+  right: readonly OwnershipTargetPathSegment[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((segment, index) => {
+    const compared = right[index];
+    if (segment.tag !== compared.tag) return false;
+    if (segment.tag === "field" && compared.tag === "field") {
+      return segment.name === compared.name;
+    }
+    if (segment.tag === "case" && compared.tag === "case") {
+      return segment.name === compared.name;
+    }
+    return (segment.tag === "element" || segment.tag === "member") &&
+      (compared.tag === "element" || compared.tag === "member") &&
+      segment.tag === compared.tag && segment.index === compared.index;
+  });
 }
 
 function obligation(produced: Produced): "none" | "affine" | "linear" {
@@ -1335,7 +1480,14 @@ function renameParameter(
   }
   if (produced.tag === "leaf") {
     if (produced.source !== from) return produced;
-    return { ...produced, source: to };
+    return {
+      ...produced,
+      source: to,
+      origins: produced.origins.map((origin) => {
+        if (origin.source !== from) return origin;
+        return { ...origin, source: to };
+      }),
+    };
   }
   if (produced.tag === "closure") {
     return {
@@ -1722,6 +1874,7 @@ function ownershipAtPath(
     qualifier: "linear",
     source: parameter,
     path,
+    origins: [{ source: parameter, path, extractions: [] }],
   };
   for (let index = path.length - 1; index >= 0; index -= 1) {
     const segment = path[index];
@@ -2255,10 +2408,14 @@ function walk(
         ) {
           const array = walk(application.args[0], scope, analysis, "move");
           walk(application.args[1], scope, analysis, "move");
-          let failure = extractionParts(array, 1)[0];
-          if (array.tag === "sequence") failure = array;
+          const failure = array;
           if (name === "@array.take") {
-            let selected = extractionParts(array, 2);
+            let selected = extractionParts(
+              array,
+              "@array.take",
+              2,
+              expr.span,
+            );
             if (
               array.tag === "sequence" && application.args[1].tag === "int"
             ) {
@@ -2284,7 +2441,12 @@ function walk(
               ]),
             };
           }
-          const separated = extractionParts(array, 3);
+          const separated = extractionParts(
+            array,
+            "@array.split",
+            3,
+            expr.span,
+          );
           return {
             tag: "choice",
             cases: new Map([
@@ -2696,15 +2858,25 @@ function installRecursiveCapture(
 
 function extractionParts(
   source: Produced,
+  operation: OwnershipExtraction["operation"],
   count: number,
+  span: Span,
 ): Produced[] {
   const qualifier = obligation(source);
   if (qualifier === "none") return Array.from({ length: count }, () => NONE);
-  return Array.from({ length: count }, () => ({
+  const origins = ownershipLeaves(source).flatMap((leaf) => leaf.origins);
+  return Array.from({ length: count }, (_, part) => ({
     tag: "leaf" as const,
     qualifier,
     source: null,
     path: [],
+    origins: origins.map((origin) => ({
+      ...origin,
+      extractions: [
+        ...origin.extractions,
+        { operation, part, span },
+      ],
+    })),
   }));
 }
 
@@ -2793,7 +2965,8 @@ function sameProduced(left: Produced, right: Produced): boolean {
   if (left.tag === "none" && right.tag === "none") return true;
   if (left.tag === "leaf" && right.tag === "leaf") {
     return left.qualifier === right.qualifier && left.source === right.source &&
-      samePath(left.path, right.path);
+      samePath(left.path, right.path) &&
+      sameOrigins(left.origins, right.origins);
   }
   if (left.tag === "borrow" && right.tag === "borrow") {
     return sameProduced(left.value, right.value);
@@ -2818,4 +2991,26 @@ function sameProduced(left: Produced, right: Produced): boolean {
     return sameProduced(left.payload, right.payload);
   }
   return false;
+}
+
+function sameOrigins(
+  left: readonly OwnershipOrigin[],
+  right: readonly OwnershipOrigin[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((origin, index) => {
+    const compared = right[index];
+    if (
+      origin.source !== compared.source ||
+      !samePath(origin.path, compared.path) ||
+      origin.extractions.length !== compared.extractions.length
+    ) return false;
+    return origin.extractions.every((extraction, extractionIndex) => {
+      const expected = compared.extractions[extractionIndex];
+      return extraction.operation === expected.operation &&
+        extraction.part === expected.part &&
+        extraction.span.start === expected.span.start &&
+        extraction.span.end === expected.span.end;
+    });
+  });
 }

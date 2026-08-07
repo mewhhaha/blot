@@ -117,17 +117,17 @@ exists y'. y ->* y' and x' ~ erase_P(y')
 
 The concrete contracts are:
 
-| Pass           | Produces                             | Must establish                                                |
-| -------------- | ------------------------------------ | ------------------------------------------------------------- |
-| frontend       | compact CST and elaborated AST       | deterministic parse, faithful spans, defined desugaring       |
-| inference      | typed AST and inference facts        | declarative typing, principal rank-1 result where promised    |
-| safety         | coverage and relational certificates | no missing finite case or forged proved operation             |
-| ownership      | structural use certificates          | no double move, illegal borrow, or path-dependent linear loss |
-| staging        | residual program and phase facts     | erased compile-time values cannot be observed at runtime      |
-| specialization | representation-closed program        | no residual polymorphic shape or dynamic structural fold      |
-| Runtime HIR    | validated monomorphic graph          | every operation has a closed target representation            |
-| public layout  | checked ABI manifest and adapters    | Blot representations and public adapters agree                |
-| emitter        | WebAssembly bytes                    | emitted machine steps simulate validated Runtime HIR          |
+| Pass           | Produces                                | Must establish                                                                    |
+| -------------- | --------------------------------------- | --------------------------------------------------------------------------------- |
+| frontend       | compact CST and elaborated AST          | deterministic parse, faithful spans, defined desugaring                           |
+| inference      | typed AST and inference facts           | declarative typing, principal rank-1 result where promised                        |
+| safety         | coverage and relational certificates    | no missing finite case or forged proved operation                                 |
+| ownership      | structural use and lineage certificates | no double move, illegal borrow, omitted extraction, or path-dependent linear loss |
+| staging        | residual program and phase facts        | erased compile-time values cannot be observed at runtime                          |
+| specialization | representation-closed program           | no residual polymorphic shape or dynamic structural fold                          |
+| Runtime HIR    | validated monomorphic graph             | every operation has a closed target representation                                |
+| public layout  | checked ABI manifest and adapters       | Blot representations and public adapters agree                                    |
+| emitter        | WebAssembly bytes                       | emitted machine steps simulate validated Runtime HIR                              |
 
 The detailed contracts are in [`FRONTEND.md`](FRONTEND.md),
 [`TYPECHECKING.md`](TYPECHECKING.md), [`SAFETY.md`](SAFETY.md),
@@ -156,10 +156,12 @@ that identity. Representation facts additionally record the concrete call-site
 layout of a residual type expression and of an unambiguous structural product
 shape. A conflicting observation invalidates the fact; it never selects one
 observation by order. Safety owns coverage decisions and relational proofs.
-Ownership owns path consumption and reuse permission. Staging owns compile-time
-values and residualization decisions. Specialization owns concrete
-representations. A later pass verifies and consumes these facts; it does not
-infer them again.
+Ownership owns path consumption, extraction lineage, and reuse permission.
+Ownership certificate schema 2 identifies every lineage source by module-local
+binding identity and requires a complete dynamic extraction partition. Staging
+owns compile-time values and residualization decisions. Specialization owns
+concrete representations. A later pass verifies and consumes these facts; it
+does not infer them again.
 
 An identity is valid only within its source revision. Serializing a fact
 requires a closed certificate whose premises name stable serialized identities.

@@ -530,6 +530,48 @@ return case @array.split values index of
 `,
 );
 
+Deno.test("array split publishes every dynamic partition lineage", async () => {
+  const { checked, path } = await analyze(
+    `${CONSUME}let !token = 41
+let values = [fn () => consume (!token)]
+let index = (if 1 < 2 : 0 else: 1)
+return case @array.split values index of
+  #Split (before, selected, after) =>
+    return case before of
+      _ => case after of
+        _ => selected ()
+  #SplitOutOfBounds original => case original of
+    _ => 0
+`,
+  );
+  const local = checked.ownershipCertificate.entries.filter((entry) =>
+    entry.path === path
+  );
+  const token = local.find((entry) => entry.name === "token");
+  assert(token !== undefined);
+  const splitLineage = local.flatMap((entry) => entry.lineage).filter((
+    lineage,
+  ) =>
+    lineage.extractions.some((extraction) =>
+      extraction.operation === "@array.split"
+    )
+  );
+  assertEquals(splitLineage.length, 3);
+  assert(
+    splitLineage.every((lineage) =>
+      lineage.sourceBindingId === token.bindingId
+    ),
+  );
+  assertEquals(
+    splitLineage.flatMap((lineage) =>
+      lineage.extractions
+        .filter((extraction) => extraction.operation === "@array.split")
+        .map((extraction) => extraction.part)
+    ).sort(),
+    [0, 1, 2],
+  );
+});
+
 rejects(
   "a record spread cannot obscure an owned field",
   `let consume = fn !value => @int.add value 1

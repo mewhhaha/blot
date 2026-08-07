@@ -26,9 +26,10 @@ used to produce a scalar can safely die with the export call's scratch arena.
 
 The executable probes cover direct and mutually recursive values, empty and
 singleton cases, constructor projection, exhaustive matching, ABI refusal, and
-scaling against the indexed `Arena` baseline. Structural ownership lineage
-through an extracted recursive edge remains part of the broader ownership
-summary work below.
+scaling against the indexed `Arena` baseline. The private indirect edge is not a
+source ownership location: it remains call-local and cannot cross ABI 1.
+Source-level variant, record, and consuming-array extraction lineage is instead
+published by ownership certificate schema 2.
 
 ## 2. Give Store an explicit capacity only when profiles require it
 
@@ -129,9 +130,8 @@ one unfinished feature list:
   remaining source program that can be well typed yet reach a structural
   representation refusal.
 - **Compiler architecture:** progressively commit typed Runtime HIR during
-  checking and publish structural extraction lineage in ownership certificates.
-  These remove duplicate derivations or strengthen evidence; they do not need
-  new surface syntax.
+  checking. This removes duplicate derivations and does not need new surface
+  syntax.
 - **Evidence:** mechanize preservation/progress for the stable core. Generated
   tests now cover returns, staging, handlers, ownership-path mutations, host
   order, checked-integer traps, divergence, and evaluator/Wasm agreement, but

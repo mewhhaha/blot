@@ -74,6 +74,14 @@ The no-double-move lemma and exact branch rules live in
 by an ownership certificate for the final consuming update; source arrays remain
 immutable whether or not the target reuses storage.
 
+Ownership certificate schema 2 also publishes structural lineage. Each owning
+destination path names its earlier binding identity and source path. Dynamic
+`@array.take` lineage contains exactly the selected and remainder parts;
+`@array.split` contains exactly the prefix, selected, and suffix parts. The
+independent verifier rejects an unknown source identity, malformed path,
+duplicate lineage, invalid part, or incomplete partition. A failed extraction
+returns the unchanged source lineage and therefore does not mint a partition.
+
 ## 5. Certificate discipline
 
 A certificate contains:
@@ -101,7 +109,8 @@ Accepted safety certificates establish:
 - proved array operations do not reach an array-bounds trap;
 - no ownership path is moved twice or moved through a borrow;
 - affine obligations are consumed at most once;
-- linear obligations are consumed exactly once on every terminating exit; and
+- linear obligations are consumed exactly once on every terminating exit;
+- every certified consuming extraction accounts for each output partition; and
 - permitted target mutation is observationally equal to immutable source update.
 
 Independent certificate replay, generated finite-domain coverage tests,

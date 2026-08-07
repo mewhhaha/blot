@@ -1,4 +1,16 @@
-import type { NamePattern } from "./check.ts";
+import type {
+  NamePattern,
+  OwnershipExtraction,
+  OwnershipPathSegment,
+  OwnershipTargetPathSegment,
+} from "./check.ts";
+
+export interface PublishedOwnershipLineage {
+  readonly sourceBindingId: number;
+  readonly sourcePath: readonly OwnershipPathSegment[];
+  readonly targetPath: readonly OwnershipTargetPathSegment[];
+  readonly extractions: readonly OwnershipExtraction[];
+}
 
 export interface PublishedOwnershipFact {
   readonly path: string;
@@ -10,6 +22,7 @@ export interface PublishedOwnershipFact {
     readonly end: number;
   }[];
   readonly reentrant: boolean;
+  readonly lineage: readonly PublishedOwnershipLineage[];
 }
 
 export interface OwnershipCertificateEntry extends PublishedOwnershipFact {
@@ -24,6 +37,7 @@ export interface OwnershipCertificateEntry extends PublishedOwnershipFact {
 
 export interface OwnershipCertificate {
   readonly tag: "ownership";
+  readonly schema: 2;
   readonly entries: readonly OwnershipCertificateEntry[];
 }
 
@@ -32,6 +46,7 @@ export function ownershipCertificate(
 ): OwnershipCertificate {
   return {
     tag: "ownership",
+    schema: 2,
     entries: [...ownership].map(([pattern, fact]) => ({
       ...fact,
       binding: pattern.span,
@@ -43,13 +58,16 @@ export function ownershipCertificate(
 
 export interface VerifiedOwnershipCertificate {
   readonly reusable: ReadonlySet<string>;
+  readonly lineage: ReadonlyMap<string, readonly PublishedOwnershipLineage[]>;
 }
 
 export function verifyOwnershipCertificate(
   certificate: OwnershipCertificate,
 ): VerifiedOwnershipCertificate | null {
+  if (certificate.schema !== 2) return null;
   const identities = new Set<string>();
   const reusable = new Set<string>();
+  const lineage = new Map<string, readonly PublishedOwnershipLineage[]>();
   for (const entry of certificate.entries) {
     if (!Number.isSafeInteger(entry.bindingId) || entry.bindingId < 0) {
       return null;
@@ -69,7 +87,85 @@ export function verifyOwnershipCertificate(
       reusable.add(ownershipUseIdentity(entry, span));
     }
   }
-  return { reusable };
+
+  const extractionGroups = new Map<
+    string,
+    {
+      readonly operation: OwnershipExtraction["operation"];
+      readonly parts: Set<number>;
+    }
+  >();
+  for (const entry of certificate.entries) {
+    const entryLineage = new Set<string>();
+    for (const origin of entry.lineage) {
+      if (
+        !Number.isSafeInteger(origin.sourceBindingId) ||
+        origin.sourceBindingId < 0
+      ) return null;
+      const sourceIdentity = `${entry.path}:${origin.sourceBindingId}`;
+      if (!identities.has(sourceIdentity)) return null;
+      if (!validOwnershipPath(origin.sourcePath)) return null;
+      if (!validOwnershipPath(origin.targetPath)) return null;
+      const identity = publishedLineageIdentity(origin);
+      if (entryLineage.has(identity)) return null;
+      entryLineage.add(identity);
+      for (const extraction of origin.extractions) {
+        if (!validSpan(extraction.span)) return null;
+        const count = extractionPartCount(extraction.operation);
+        if (count === null || extraction.part < 0 || extraction.part >= count) {
+          return null;
+        }
+        const group = `${sourceIdentity}:` +
+          `${JSON.stringify(origin.sourcePath)}:` +
+          `${extraction.operation}@${extraction.span.start}:${extraction.span.end}`;
+        let extractionGroup = extractionGroups.get(group);
+        if (extractionGroup === undefined) {
+          extractionGroup = {
+            operation: extraction.operation,
+            parts: new Set(),
+          };
+          extractionGroups.set(group, extractionGroup);
+        }
+        extractionGroup.parts.add(extraction.part);
+      }
+    }
+    lineage.set(ownershipIdentity(entry), entry.lineage);
+  }
+  for (const extractionGroup of extractionGroups.values()) {
+    const count = extractionPartCount(extractionGroup.operation);
+    if (count === null || extractionGroup.parts.size !== count) return null;
+  }
+  return { reusable, lineage };
+}
+
+function validOwnershipPath(
+  path: readonly (
+    | OwnershipPathSegment
+    | OwnershipTargetPathSegment
+  )[],
+): boolean {
+  for (const segment of path) {
+    if (segment.tag === "field" || segment.tag === "case") {
+      if (segment.name.length === 0) return false;
+      continue;
+    }
+    if (!Number.isSafeInteger(segment.index) || segment.index < 0) return false;
+  }
+  return true;
+}
+
+function extractionPartCount(
+  operation: string,
+): number | null {
+  if (operation === "@array.take") return 2;
+  if (operation === "@array.split") return 3;
+  return null;
+}
+
+function publishedLineageIdentity(
+  lineage: PublishedOwnershipLineage,
+): string {
+  return JSON.stringify(lineage);
 }
 
 function reusableSites(

@@ -654,7 +654,9 @@ authority rather than duplicating it:
 - The ownership pass stores the live structural remainder of a binding. A field
   move replaces exactly one leaf by `none`, blocks whole-value reuse while the
   root is partial, and snapshots that remainder at branches and speculative
-  ownership transactions.
+  ownership transactions. Ownership leaves also retain their source binding and
+  path. Certificate schema 2 publishes that lineage and independently requires
+  both `take` outputs or all three `split` outputs at one extraction identity.
 - Element desugaring preserves one compiler-local span identity for its property
   argument. Inference uses it to select `<=closed`; no element node or
   record-row type survives the parser.

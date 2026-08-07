@@ -37,10 +37,12 @@ import {
   checkLinearity,
   type NamePattern,
   type Ownership,
+  type OwnershipLineage,
 } from "../linear/check.ts";
 import {
   type OwnershipCertificate,
   ownershipCertificate,
+  type PublishedOwnershipLineage,
   verifyOwnershipCertificate,
 } from "../linear/certificate.ts";
 
@@ -73,6 +75,8 @@ export interface OwnedBinding {
    * death has to refuse when this is set.
    */
   readonly reentrant: boolean;
+  /** Every earlier obligation structurally carried by this binding. */
+  readonly lineage: readonly PublishedOwnershipLineage[];
 }
 
 export interface CheckResult {
@@ -446,16 +450,22 @@ function rowLabels(type: SimpleType, seen: Set<number>): string[] {
 /**
  * Stamps one module's ownership facts with the file its spans index.
  *
- * A binding appears if the pass said anything about it: a linear one it proved
- * discharged is worth recording even where the surrounding expression never
- * read it back, and a plain one that was read is worth recording even though it
- * owes nothing.
+ * A binding appears if the pass recorded a use, discharge, or lineage edge.
+ * Lineage endpoints need identities even when the surrounding expression never
+ * reads the destination back.
  */
 function own(
   path: string,
   ownership: Ownership,
 ): ReadonlyMap<NamePattern, OwnedBinding> {
-  const facts = new Map<NamePattern, OwnedBinding>();
+  const patterns = new Set<NamePattern>();
+  for (const pattern of ownership.lastUses.keys()) patterns.add(pattern);
+  for (const pattern of ownership.linear) patterns.add(pattern);
+  for (const pattern of ownership.consumptions.keys()) patterns.add(pattern);
+  for (const [pattern, lineage] of ownership.lineage) {
+    patterns.add(pattern);
+    for (const origin of lineage) patterns.add(origin.source);
+  }
   const bindingIds = new Map<NamePattern, number>();
   let nextBindingId = 0;
   const bindingId = (pattern: NamePattern): number => {
@@ -466,9 +476,16 @@ function own(
     bindingIds.set(pattern, allocated);
     return allocated;
   };
-  for (const [pattern, lastUse] of ownership.lastUses) {
+  for (const pattern of patterns) bindingId(pattern);
+
+  const facts = new Map<NamePattern, OwnedBinding>();
+  for (const pattern of patterns) {
+    let lastUse: Span | null | undefined = ownership.lastUses.get(pattern);
+    if (lastUse === undefined) lastUse = null;
     let consumptions = ownership.consumptions.get(pattern);
     if (consumptions === undefined) consumptions = [];
+    let lineage = ownership.lineage.get(pattern);
+    if (lineage === undefined) lineage = [];
     facts.set(pattern, {
       path,
       bindingId: bindingId(pattern),
@@ -476,23 +493,24 @@ function own(
       spent: ownership.linear.has(pattern),
       consumptions,
       reentrant: ownership.reentrant.has(pattern),
-    });
-  }
-  for (const pattern of ownership.linear) {
-    if (facts.has(pattern)) continue;
-    // Nothing read it, so there is no read to be wrong about when it happened.
-    let consumptions = ownership.consumptions.get(pattern);
-    if (consumptions === undefined) consumptions = [];
-    facts.set(pattern, {
-      path,
-      bindingId: bindingId(pattern),
-      lastUse: null,
-      spent: true,
-      consumptions,
-      reentrant: false,
+      lineage: lineage.map((origin) =>
+        publishOwnershipLineage(origin, bindingId(origin.source))
+      ),
     });
   }
   return facts;
+}
+
+function publishOwnershipLineage(
+  lineage: OwnershipLineage,
+  sourceBindingId: number,
+): PublishedOwnershipLineage {
+  return {
+    sourceBindingId,
+    sourcePath: lineage.sourcePath,
+    targetPath: lineage.targetPath,
+    extractions: lineage.extractions,
+  };
 }
 
 /** Facts from every module that contributed code; keys are node identities. */
