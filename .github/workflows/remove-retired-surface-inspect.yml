@@ -38,6 +38,15 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
+          path = Path('examples/composed_handlers.blot')
+          text = path.read_text()
+          if text.count('?resume') != 3:
+              raise SystemExit('composed handler resume qualifiers changed')
+          path.write_text(text.replace('?resume', '!resume'))
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
+
           path = Path('src/tooling/formatter.ts')
           text = path.read_text()
           for start, end in (
