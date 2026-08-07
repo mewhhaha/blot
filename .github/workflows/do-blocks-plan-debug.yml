@@ -15,33 +15,20 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Isolate prelude parser regression
+      - name: Reduce case arm parser regression
         run: |
           cat > scripts/_debug_do_plan.ts <<'TS'
           import { parseConcrete } from "../src/syntax/parse.ts";
-          const source = await Deno.readTextFile("src/prelude/prelude.blot");
-          async function check(label: string, text: string) {
-            const result = await parseConcrete(text);
+          async function check(label: string, body: string) {
+            const result = await parseConcrete(`${body}\nreturn ()\n`);
             console.log(label, result.ok ? "OK" : JSON.stringify(result.diagnostics));
           }
-          const anchors = [
-            "const sort_by =",
-            "const range =",
-            "const pow2 =",
-            "const Int =",
-            "const F64 =",
-            "const likely =",
-            "const integer_width =",
-            "const U =",
-          ];
-          for (const anchor of anchors) {
-            const cut = source.indexOf(anchor);
-            if (cut < 0) throw new Error(`missing ${anchor}`);
-            await check(`prefix before ${anchor}`, source.slice(0, cut) + "\nreturn ()\n");
-          }
-          const pow2 = `const pow2 =\n  rec (fn n =>\n    if is_less (@int.cmp n 1):\n      return 1\n    else:\n      return 2 * pow2 (@int.sub n 1)\n  )\n`;
-          await check("pow2 only", pow2 + "return pow2\n");
-          await check("pow2 then const", pow2 + "const Int = @type.int\nreturn Int\n");
-          await check("pow2 many consts", pow2 + `const Int = @type.int\nconst Str = @type.text\nconst F64 = @type.float\nconst likely = fn condition => @branch.likely condition\nreturn likely\n`);
+          await check("exact", `const integer_width = fn bits => case is_greater (@int.cmp bits 0) of\n  #True => bits\n  #False =>\n    @fail (Text.append "integer bit width must be positive, found " (Text.of_int bits))`);
+          await check("short multiline", `const f = fn bits => case bits of\n  #True => bits\n  #False =>\n    @fail bits`);
+          await check("short inline", `const f = fn bits => case bits of\n  #True => bits\n  #False => @fail bits`);
+          await check("case no lambda", `const f = case x of\n  #True => x\n  #False =>\n    @fail x`);
+          await check("case multiline literal", `const f = fn x => case x of\n  #True => x\n  #False =>\n    1`);
+          await check("case parenthesized app", `const f = fn x => case x of\n  #True => x\n  #False =>\n    g (h x)`);
+          await check("indented non-case", `const f = fn x =>\n  g (h x)`);
           TS
           deno run --allow-read scripts/_debug_do_plan.ts
