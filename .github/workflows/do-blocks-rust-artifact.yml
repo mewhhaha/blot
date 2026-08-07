@@ -1,0 +1,36 @@
+name: do-blocks-rust-artifact
+
+on:
+  push:
+    branches:
+      - agent/do-blocks-ci
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: do-blocks
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt,clippy
+      - name: Rebuild Rust-middle compiler
+        run: deno task build:rust-middle
+      - name: Check corpus with rebuilt compiler
+        run: deno task corpus
+      - name: Commit artifact
+        run: |
+          git config user.name "Jacob Torrång"
+          git config user.email "kopatheonlyone@hotmail.com"
+          git add generated/rust-middle/compiler.wasm generated/rust-middle/prelude.snapshot
+          git commit -m "build: refresh Rust compiler for do blocks" || true
+          git push origin HEAD:do-blocks
