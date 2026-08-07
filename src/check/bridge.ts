@@ -5,12 +5,6 @@
 // program, and whatever it produces has to become a lattice element before it
 // can constrain anything. There is no type-level sublanguage to translate from,
 // only values.
-//
-// Not every value is a type. A closure is not — its type has to be inferred
-// from its body, not read off the value — so bridging returns `null` and the
-// caller falls back to inference. Returning `null` rather than `⊤` matters:
-// silently widening to "anything" would turn a missing case into a passing
-// check.
 
 import {
   effectExtension,
@@ -38,19 +32,10 @@ import {
   variant,
 } from "./type.ts";
 
-/** A stable label for an effect, so two effects with one operation name differ. */
 export function effectLabel(value: Value & { tag: "effect" }): string {
   return `${value.name}#${value.id}`;
 }
 
-/**
- * Labels of effects the host implements.
- *
- * A host effect's row is the program's declared interface — its operations
- * become WebAssembly imports — so it is allowed to reach the module boundary
- * where an ordinary effect nothing handles is an error. Effect ids are globally
- * unique, so one registry is enough.
- */
 const hostLabels = new Set<string>();
 const effectValues = new Map<string, Value>();
 
@@ -93,11 +78,6 @@ function bridgeValue(
       const domain = bridgeValue(value.domain, variables);
       const codomain = bridgeValue(value.codomain, variables);
       if (domain === null || codomain === null) return null;
-      // The row is written or it is empty, and an empty one is the claim that
-      // the function performs nothing — not the absence of a claim. A fresh
-      // variable here would be the licence version of "says nothing": it
-      // satisfies every later constraint, so the effect the body performs would
-      // pass the `sig` and then vanish from what the caller is told.
       const labels: string[] = [];
       for (const effect of value.effects) {
         if (effect.tag !== "effect") return null;
@@ -153,9 +133,12 @@ function bridgeValue(
       return { tag: "array", element: union(elements as SimpleType[]) };
     }
 
-    // Reaching into an effect names an operation, and performing it is an
-    // ordinary call — so an effect's type is a record of functions whose rows
-    // carry that effect. This is the whole mechanism behind effect inference.
+    case "region-type": {
+      const element = bridgeValue(value.element, variables);
+      if (element === null) return null;
+      return { tag: "region", element };
+    }
+
     case "effect": {
       const label = effectLabel(value);
       effectValues.set(label, effectExtension(value) ?? value);
@@ -187,8 +170,6 @@ function bridgeValue(
       return record(operations);
     }
 
-    // Transparent: a struct's type is its storage. The members it carries are
-    // a compile-time namespace and have no business in the lattice.
     case "extended":
       if (value.inner.tag === "effect") {
         effectValues.set(effectLabel(value.inner), value);
@@ -210,18 +191,12 @@ function bridgeValue(
       return { tag: "forall", variables: [variable.id], body };
     }
 
-    // Opaque on both sides, and the name is the whole of the identity — which
-    // is why `F32x4` bridges without the lattice learning anything about lanes.
     case "opaque-type":
       return { tag: "opaque", name: value.name };
 
     case "sealed":
-      // A sealed type is identified by its name and its carrier, so the
-      // opaque name has to carry both — otherwise `List I32` and `List Str`
-      // would bridge to the same invariant type.
       return { tag: "opaque", name: `${value.name}#${show(value.inner)}` };
 
-    // A closure's type comes from its body, not from the value.
     default:
       return null;
   }
@@ -241,26 +216,9 @@ function domainOf(value: Value): Domain | null {
 
 export { INT, TEXT };
 
-/**
- * The reverse of `bridge`: an inferred type, as a compile-time value.
- *
- * `bridge` exists because a program writes types as values and inference needs
- * them as lattice elements. This goes the other way, and it exists for one
- * reason: `@type.satisfies` hands a predicate the type of an expression, and
- * the type of an expression that is not itself compile-time lives only in the
- * lattice. Without this there is nothing to hand over — `@type.of` cannot do
- * it, because it answers the type of a *value* and so has to evaluate one.
- *
- * Partial on purpose. An inference variable has no compile-time reading, and
- * neither does an effect row or a bound this cannot name, so those answer
- * `null` and the caller reports which type it could not reify. Inventing a
- * value for them is the mistake that made an unconstrained variable mean
- * "satisfies anything" everywhere else in this checker.
- */
 export function reify(type: SimpleType): Value | null {
   switch (type.tag) {
     case "unit":
-      // `UNIT` in this file is the lattice's; the value domain has its own.
       return { tag: "unit" };
     case "top":
       return { tag: "unbounded" };
@@ -273,10 +231,6 @@ export function reify(type: SimpleType): Value | null {
         ? { tag: "unbounded" as const }
         : reifyBound(type.high, type.domain);
       if (low === null || high === null) return null;
-      // A singleton is the literal, not a range from a value to itself. That
-      // is how a program writes it, and a predicate compares what it was given
-      // against what its caller wrote — `Is { .value = 12; }` against a range
-      // of twelve to twelve is a mismatch nobody could see.
       if (low.tag !== "unbounded" && equal(low, high)) return low;
       return { tag: "range", low, high, domain: type.domain };
     }
@@ -297,10 +251,13 @@ export function reify(type: SimpleType): Value | null {
       return { tag: "array", elements: [element] };
     }
 
+    // Region is deliberately not reified. Source code may name it only through
+    // the trusted constructor; reflection never gains the private capability
+    // representation or a way to synthesize one.
+    case "region":
+      return null;
+
     case "variant": {
-      // An open variant is "these constructors and possibly others", which no
-      // union of tags can say. Refusing is what keeps a predicate from reading
-      // a partial set as the whole one.
       if (type.open) return null;
       const members: Value[] = [];
       for (const [name, payload] of type.cases) {
@@ -340,18 +297,10 @@ export function reify(type: SimpleType): Value | null {
     }
 
     case "var": {
-      // A binding's type is a variable whose lower bounds are what flowed into
-      // it, so one bound is the type the value has. Several would be a join
-      // this cannot name, and none means nothing has flowed in yet — both are
-      // refusals rather than guesses, because a predicate given the wrong type
-      // answers confidently about a program that does not exist.
       if (type.lower.length !== 1) return null;
       return reify(type.lower[0]);
     }
 
-    // A rigid, a `forall`, an effect row, an opaque, and bottom. None of them
-    // is a value a program could have written, so none is a value a predicate
-    // can be handed.
     default:
       return null;
   }
@@ -370,9 +319,6 @@ function reifiedEffectLabels(
 function reifyBound(bound: Bound, domain: Domain): Value | null {
   if (typeof bound === "bigint") return { tag: "int", value: bound };
   if (typeof bound === "string") return { tag: "text", value: bound };
-  // A length bound names an array a program cannot name back, and a float
-  // range is open at both ends by construction, so a closed one is a bug
-  // rather than something to translate.
   void domain;
   return null;
 }
