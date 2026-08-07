@@ -99,13 +99,6 @@ replace_once(
         Type::Region(_) => return None,
 ''',
 )
-replace_once(
-    path,
-    '''                Type::Array(element) => pending.push(element),
-''',
-    '''                Type::Array(element) | Type::Region(element) => pending.push(element),
-''',
-)
 
 # Session/debug JSON can describe the private type but never serializes the
 # mutable Store contents as a stable/public value.
