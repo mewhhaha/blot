@@ -1,3 +1,9 @@
+import {
+  type RegionAuthorityCertificate,
+  type RegionAuthorityEvent,
+  verifyRegionAuthorityCertificate,
+} from "../../src/linear/region_certificate.ts";
+
 /**
  * Executable model for spec/OWNED_REGIONS.md.
  *
@@ -5,9 +11,17 @@
  * Region is a linear authority token. Every state-changing operation consumes
  * its input token and returns a fresh token; attempting to use an old token is
  * a model error. Split and join change metadata only and never copy elements.
+ *
+ * The model checks soundness twice:
+ *
+ * 1. live runtime permits are checked for pairwise-disjoint intervals after
+ *    every successful operation; and
+ * 2. every authority transition is recorded into the generic compiler-side
+ *    certificate graph and replayed independently at freeze.
  */
 
 const REGION_BRAND: unique symbol = Symbol("blot-owned-region");
+const ARRAY_INTERVAL_FAMILY = "array-interval-v1";
 
 export interface Region<T> {
   readonly [REGION_BRAND]: T;
@@ -33,6 +47,8 @@ export interface RegionStats {
 export interface FrozenArray<T> {
   readonly backingId: number;
   readonly stats: RegionStats;
+  readonly authorityCertificate: RegionAuthorityCertificate;
+  readonly authorityVerified: boolean;
   /** Test/debug observation. Not a modeled Blot allocation. */
   readonly values: readonly T[];
 }
@@ -72,6 +88,7 @@ interface Store<T> {
   readonly cells: T[];
   readonly live: Map<number, Permit<T>>;
   readonly stats: MutableStats;
+  readonly authorityEvents: RegionAuthorityEvent[];
 }
 
 interface Permit<T> {
@@ -110,8 +127,18 @@ export function claim<T>(values: readonly T[]): Region<T> {
       swaps: 0,
       elementCopies: 0,
     },
+    authorityEvents: [],
   };
-  return spawn(store, 0, store.cells.length);
+  const region = spawn(store, 0, store.cells.length);
+  const permit = unwrap(region);
+  store.authorityEvents.push({
+    tag: "claim",
+    origin: store.id,
+    family: ARRAY_INTERVAL_FAMILY,
+    permit: permit.id,
+    operation: "@region.array.claim",
+  });
+  return region;
 }
 
 /** Models a non-consuming metadata query. */
@@ -147,10 +174,17 @@ export function split<T>(region: Region<T>, offset: number): SplitResult<T> {
   }
 
   const store = permit.store;
+  const source = permit.id;
   const middle = permit.start + offset;
   consume(permit);
   const left = spawn(store, permit.start, middle);
   const right = spawn(store, middle, permit.end);
+  store.authorityEvents.push({
+    tag: "partition",
+    source,
+    parts: [unwrap(left).id, unwrap(right).id],
+    operation: "@region.split",
+  });
   store.stats.splits += 1;
   assertInvariant(store);
   return { tag: "split", left, right };
@@ -174,11 +208,19 @@ export function join<T>(
   }
 
   const store = leftPermit.store;
+  const leftId = leftPermit.id;
+  const rightId = rightPermit.id;
   const start = leftPermit.start;
   const end = rightPermit.end;
   consume(leftPermit);
   consume(rightPermit);
   const region = spawn(store, start, end);
+  store.authorityEvents.push({
+    tag: "combine",
+    parts: [leftId, rightId],
+    result: unwrap(region).id,
+    operation: "@region.join",
+  });
   store.stats.joins += 1;
   assertInvariant(store);
   return { tag: "joined", region };
@@ -205,9 +247,16 @@ export function set<T>(
     return { tag: "out_of_bounds", original: region };
   }
   const store = permit.store;
+  const source = permit.id;
   store.cells[permit.start + index] = value;
   store.stats.writes += 1;
   const next = replace(permit);
+  store.authorityEvents.push({
+    tag: "transform",
+    source,
+    result: unwrap(next).id,
+    operation: "@region.array.set",
+  });
   assertInvariant(store);
   return { tag: "updated", region: next };
 }
@@ -226,6 +275,7 @@ export function swap<T>(
     return { tag: "out_of_bounds", original: region };
   }
   const store = permit.store;
+  const source = permit.id;
   const leftIndex = permit.start + left;
   const rightIndex = permit.start + right;
   const held = store.cells[leftIndex];
@@ -233,6 +283,12 @@ export function swap<T>(
   store.cells[rightIndex] = held;
   store.stats.swaps += 1;
   const next = replace(permit);
+  store.authorityEvents.push({
+    tag: "transform",
+    source,
+    result: unwrap(next).id,
+    operation: "@region.array.swap",
+  });
   assertInvariant(store);
   return { tag: "updated", region: next };
 }
@@ -259,10 +315,24 @@ export function freeze<T>(region: Region<T>): FrozenArray<T> {
       `cannot freeze while ${store.live.size - 1} other permit(s) remain live`,
     );
   }
+  const permitId = permit.id;
   consume(permit);
+  store.authorityEvents.push({
+    tag: "release",
+    permit: permitId,
+    operation: "@region.array.freeze",
+  });
+  const authorityCertificate: RegionAuthorityCertificate = {
+    tag: "region-authority",
+    schema: 1,
+    events: [...store.authorityEvents],
+  };
   return {
     backingId: store.id,
     stats: snapshotStats(store.stats),
+    authorityCertificate,
+    authorityVerified:
+      verifyRegionAuthorityCertificate(authorityCertificate) !== null,
     values: [...store.cells],
   };
 }
