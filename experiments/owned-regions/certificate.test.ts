@@ -4,12 +4,16 @@ import {
   verifyRegionAuthorityCertificate,
 } from "../../src/linear/region_certificate.ts";
 
+const ROOT = "fresh-store:7";
+const ROOTS = new Set([ROOT]);
+
 const valid: RegionAuthorityCertificate = {
   tag: "region-authority",
   schema: 1,
   events: [
     {
       tag: "claim",
+      root: ROOT,
       origin: 7,
       family: "array-interval-v1",
       permit: 0,
@@ -42,7 +46,14 @@ const valid: RegionAuthorityCertificate = {
 };
 
 Deno.test("region authority verifier accepts a closed linear graph", () => {
-  assertNotEquals(verifyRegionAuthorityCertificate(valid), null);
+  assertNotEquals(verifyRegionAuthorityCertificate(valid, ROOTS), null);
+});
+
+Deno.test("a claim must be rooted in an external uniqueness proof", () => {
+  assertEquals(
+    verifyRegionAuthorityCertificate(valid, new Set()),
+    null,
+  );
 });
 
 Deno.test("partition consumes its parent authority", () => {
@@ -58,7 +69,7 @@ Deno.test("partition consumes its parent authority", () => {
       },
     ],
   };
-  assertEquals(verifyRegionAuthorityCertificate(certificate), null);
+  assertEquals(verifyRegionAuthorityCertificate(certificate, ROOTS), null);
 });
 
 Deno.test("partition outputs cannot alias one permit identity", () => {
@@ -75,7 +86,10 @@ Deno.test("partition outputs cannot alias one permit identity", () => {
       },
     ],
   };
-  assertEquals(verifyRegionAuthorityCertificate(certificate, true), null);
+  assertEquals(
+    verifyRegionAuthorityCertificate(certificate, ROOTS, true),
+    null,
+  );
 });
 
 Deno.test("a permit id is produced exactly once", () => {
@@ -92,16 +106,18 @@ Deno.test("a permit id is produced exactly once", () => {
       },
     ],
   };
-  assertEquals(verifyRegionAuthorityCertificate(certificate), null);
+  assertEquals(verifyRegionAuthorityCertificate(certificate, ROOTS), null);
 });
 
-Deno.test("combine cannot merge authorities from different origins", () => {
+Deno.test("combine cannot merge authorities from different roots", () => {
+  const roots = new Set(["root:a", "root:b"]);
   const certificate: RegionAuthorityCertificate = {
     tag: "region-authority",
     schema: 1,
     events: [
       {
         tag: "claim",
+        root: "root:a",
         origin: 1,
         family: "array-interval-v1",
         permit: 0,
@@ -109,6 +125,7 @@ Deno.test("combine cannot merge authorities from different origins", () => {
       },
       {
         tag: "claim",
+        root: "root:b",
         origin: 2,
         family: "array-interval-v1",
         permit: 1,
@@ -120,23 +137,20 @@ Deno.test("combine cannot merge authorities from different origins", () => {
         result: 2,
         operation: "bad cross-store join",
       },
-      {
-        tag: "release",
-        permit: 2,
-        operation: "release",
-      },
     ],
   };
-  assertEquals(verifyRegionAuthorityCertificate(certificate), null);
+  assertEquals(verifyRegionAuthorityCertificate(certificate, roots, true), null);
 });
 
 Deno.test("combine cannot merge different region families", () => {
+  const roots = new Set(["root:interval", "root:tile"]);
   const certificate: RegionAuthorityCertificate = {
     tag: "region-authority",
     schema: 1,
     events: [
       {
         tag: "claim",
+        root: "root:interval",
         origin: 1,
         family: "array-interval-v1",
         permit: 0,
@@ -144,7 +158,8 @@ Deno.test("combine cannot merge different region families", () => {
       },
       {
         tag: "claim",
-        origin: 1,
+        root: "root:tile",
+        origin: 2,
         family: "matrix-tile-v1",
         permit: 1,
         operation: "claim tile",
@@ -157,7 +172,7 @@ Deno.test("combine cannot merge different region families", () => {
       },
     ],
   };
-  assertEquals(verifyRegionAuthorityCertificate(certificate, true), null);
+  assertEquals(verifyRegionAuthorityCertificate(certificate, roots, true), null);
 });
 
 Deno.test("closed verification rejects leaked authorities", () => {
@@ -166,8 +181,11 @@ Deno.test("closed verification rejects leaked authorities", () => {
     schema: 1,
     events: valid.events.slice(0, 2),
   };
-  assertEquals(verifyRegionAuthorityCertificate(open), null);
-  assertNotEquals(verifyRegionAuthorityCertificate(open, true), null);
+  assertEquals(verifyRegionAuthorityCertificate(open, ROOTS), null);
+  assertNotEquals(
+    verifyRegionAuthorityCertificate(open, ROOTS, true),
+    null,
+  );
 });
 
 Deno.test("release cannot consume one authority twice", () => {
@@ -188,5 +206,5 @@ Deno.test("release cannot consume one authority twice", () => {
       },
     ],
   };
-  assertEquals(verifyRegionAuthorityCertificate(certificate), null);
+  assertEquals(verifyRegionAuthorityCertificate(certificate, ROOTS), null);
 });
