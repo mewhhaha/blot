@@ -23,22 +23,8 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
       - name: Remove retired production syntax
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('.github/remove_retired_surface.py')
-          text = path.read_text()
-          old = '''    candidates = [offset for offset in (next_test, next_const) if offset >= 0]
-    if not candidates:
-        raise SystemExit(f"{path}: cannot find end of test {title!r}")
-    finish = min(candidates) + 1
-'''
-          new = '''    candidates = [offset for offset in (next_test, next_const) if offset >= 0]
-    finish = min(candidates) + 1 if candidates else len(text)
-'''
-          if text.count(old) != 1:
-              raise SystemExit('replace_test helper changed')
-          path.write_text(text.replace(old, new))
-          PY
+          sed -i '/    if not candidates:/,+1d' .github/remove_retired_surface.py
+          sed -i 's/    finish = min(candidates) + 1/    finish = min(candidates) + 1 if candidates else len(text)/' .github/remove_retired_surface.py
           python3 .github/remove_retired_surface.py
       - name: Regenerate frontend and compiler artifacts
         run: |
