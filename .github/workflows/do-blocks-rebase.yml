@@ -21,5 +21,15 @@ jobs:
           git config user.name "Jacob Torrång"
           git config user.email "kopatheonlyone@hotmail.com"
           git fetch origin simplify-handlers-and-if
-          git rebase origin/simplify-handlers-and-if
+          set +e
+          GIT_EDITOR=true git rebase origin/simplify-handlers-and-if
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            conflicts=$(git diff --name-only --diff-filter=U)
+            test "$conflicts" = "backend.test.ts"
+            git checkout --ours backend.test.ts
+            git add backend.test.ts
+            GIT_EDITOR=true git rebase --continue
+          fi
           git push --force-with-lease origin HEAD:do-blocks
