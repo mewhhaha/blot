@@ -372,6 +372,12 @@ fn runtime_layout_type(
                 module.source
             ));
         }
+        RuntimeType::Product { name, .. } if name.starts_with("$region:") => {
+            return Err(format!(
+                "{}: live Region type {type_id} cannot cross Blot Core Wasm ABI 1",
+                module.source
+            ));
+        }
         RuntimeType::Product { fields, .. } => {
             let mut fields = fields.clone();
             fields.sort_by(|left, right| left.name.cmp(&right.name));
