@@ -28,8 +28,8 @@
     "experiment:rust-middle-eval-parity": "deno run --allow-read experiments/rust-middle/eval_parity.ts examples/*.blot",
     "experiment:rust-middle-hir-parity": "deno run --allow-read experiments/rust-middle/hir_parity.ts",
     "generate:rust-middle-schema": "deno run --allow-read --allow-write=experiments/rust-middle/src/schema.rs,experiments/rust-middle/src/frontend_plan.rs scripts/generate_rust_middle_schema.ts",
-    "build:rust-middle": "deno run --allow-read --allow-write=generated/rust-middle --allow-run=cargo scripts/build_rust_middle.ts",
-    "check:rust-middle-artifact": "deno run --allow-read --allow-run=cargo scripts/build_rust_middle.ts --check",
+    "build:rust-middle": "deno run --allow-read --allow-write=generated/rust-middle --allow-env=CARGO_HOME,HOME --allow-run=cargo scripts/build_rust_middle.ts",
+    "check:rust-middle-artifact": "deno run --allow-read --allow-env=CARGO_HOME,HOME --allow-run=cargo scripts/build_rust_middle.ts --check",
     "publish:dry-run": "deno publish --dry-run"
   },
   "imports": {
