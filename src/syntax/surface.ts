@@ -60,13 +60,25 @@ function elaborateExpression(expression: Expr): Expr {
       return { ...expression, fn, arg };
     }
     case "field":
-      return { ...expression, target: elaborateExpression(expression.target) };
+      return {
+        ...expression,
+        target: elaborateExpression(expression.target),
+      };
     case "lambda":
-      return { ...expression, body: elaborateExpression(expression.body) };
+      return {
+        ...expression,
+        body: elaborateExpression(expression.body),
+      };
     case "rec":
-      return { ...expression, lambda: elaborateExpression(expression.lambda) };
+      return {
+        ...expression,
+        lambda: elaborateExpression(expression.lambda),
+      };
     case "comptime":
-      return { ...expression, body: elaborateExpression(expression.body) };
+      return {
+        ...expression,
+        body: elaborateExpression(expression.body),
+      };
     case "array":
       return {
         ...expression,
@@ -189,7 +201,7 @@ function handlerTransformer(
     parameter: {
       tag: "name",
       name: computationName,
-      qualifier: "none",
+      qualifier: "linear",
       span,
     },
     body: delayed,
