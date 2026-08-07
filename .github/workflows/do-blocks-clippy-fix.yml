@@ -1,4 +1,4 @@
-name: do-blocks-clippy-fix
+name: do-blocks-artifact-refresh
 
 on:
   push:
@@ -9,28 +9,26 @@ permissions:
   contents: write
 
 jobs:
-  fix:
+  refresh:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: do-blocks-artifact-fix
           fetch-depth: 0
-      - name: Remove redundant wildcard field
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('experiments/rust-middle/src/eval.rs')
-          text = p.read_text()
-          needle = '            result_effects: _,\n'
-          if text.count(needle) != 1:
-              raise SystemExit(f'expected one redundant field, found {text.count(needle)}')
-          p.write_text(text.replace(needle, '', 1))
-          PY
-      - name: Commit fix
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt,clippy
+      - name: Rebuild checked-in Rust-middle artifact
+        run: deno task build:rust-middle
+      - name: Commit artifact refresh
         run: |
           git config user.name "Jacob Torrång"
           git config user.email "kopatheonlyone@hotmail.com"
-          git add experiments/rust-middle/src/eval.rs
-          git commit -m "rust: satisfy current clippy"
+          git add generated/rust-middle/compiler.wasm generated/rust-middle/prelude.snapshot
+          git commit -m "build: refresh Rust compiler artifact"
           git push origin HEAD:do-blocks-artifact-fix
