@@ -19,10 +19,12 @@ jobs:
       - name: Stack on current main
         run: |
           cp .github/remove_retired_surface.py /tmp/remove_retired_surface.py
+          cp .github/fix_boolean_case_parity.py /tmp/fix_boolean_case_parity.py
           git fetch origin main
           git reset --hard origin/main
           mkdir -p .github
           cp /tmp/remove_retired_surface.py .github/remove_retired_surface.py
+          cp /tmp/fix_boolean_case_parity.py .github/fix_boolean_case_parity.py
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
@@ -67,6 +69,7 @@ jobs:
           path.write_text(text)
           PY
           python3 .github/remove_retired_surface.py
+          python3 .github/fix_boolean_case_parity.py
           sed -i '/^  "result",$/d' src/syntax/compact_schema.ts
           python3 - <<'PY'
           from pathlib import Path
@@ -246,6 +249,7 @@ jobs:
       - name: Commit cleanup
         run: |
           rm -f .github/remove_retired_surface.py
+          rm -f .github/fix_boolean_case_parity.py
           rm -f .github/workflows/remove-retired-surface-inspect.yml
           rm -f .github/inspect_fields.ts
           git add -A
