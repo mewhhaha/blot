@@ -77,11 +77,10 @@ while changing its type.
 becomes an unspellable compiler-local tagged result eliminated by a `case` at
 the nearest module or explicit `do` boundary. A standalone `if` becomes an ordinary
 conditional over those results, and `x <- e` explicitly sequences the already
-applied expression `e`, all during CST lowering. `try program with ... end`
-likewise becomes named nullary
-computations containing ordinary three-argument `@handle` calls; its bounded
-left-hand `<-` binds that computation rather than using the general declaration
-form. Nothing downstream of the parser knows these forms exist. A desugaring
+applied expression `e`, all during CST lowering. Two-argument `@handle (effect, handler)` calls become computation
+transformers, and `|>` composition saturates them to ordinary three-argument
+`@handle` calls before inference. Nothing downstream of surface elaboration
+knows that convenience exists. A desugaring
 emits the recursion rather than calling a prelude function that contains it: a
 keyword whose meaning depends on a name being in scope is a dependency the
 program cannot see. A new form earns an AST node only when no existing one can

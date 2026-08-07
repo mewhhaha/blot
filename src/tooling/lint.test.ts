@@ -565,9 +565,9 @@ const Host = @effect.host { .write = Unit -> Unit; }
 let run = fn () =>
   value <- Console.write ()
   return value
-let composed = try run with
-  without_host <- @handle (Host, host_handler)
-  @handle (Console, handler)
+let composed = run
+  |> @handle (Host, host_handler)
+  |> @handle (Console, handler)
 return (
   Empty Int,
   Length Str,
@@ -611,8 +611,6 @@ return (
       "@type.arrow",
       "@type.performs",
       "effect-binding",
-      "handler_composition",
-      "handler_composition_step",
       "Empty",
       "Length",
       "Semigroup",

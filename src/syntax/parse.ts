@@ -102,14 +102,6 @@ function removedSurfaceDiagnostics(root: Rule): readonly Diagnostic[] {
         span: rule.span,
       });
     }
-    if (rule.name === "handler_composition") {
-      diagnostics.push({
-        code: "BLOT_TRY_REMOVED",
-        message:
-          "`try ... with` was removed. Compose `@handle (Effect, handler)` transformers with `|>` instead.",
-        span: rule.span,
-      });
-    }
     for (const child of rule.children()) {
       if (child.type === "rule") visit(child);
     }
