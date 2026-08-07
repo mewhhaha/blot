@@ -98,6 +98,14 @@ jobs:
               text,
               count=1,
           )
+          text = text.replace(
+              '        expressionPrimaryIsDo(body)) &&',
+              '        expressionPrimaryIs(body, "do_block")) &&',
+          )
+          text = text.replace(
+              '    expressionPrimaryIsDo(expression);',
+              '    expressionPrimaryIs(expression, "do_block");',
+          )
           text = re.sub(
               r'\n  if \(isDoBlockPrimaryRule\(node\)\) \{[\s\S]*?\n  \}\n  if \(INDENTED_RULES\.has\(node\.name\)\)',
               '\n  if (INDENTED_RULES.has(node.name))',
