@@ -23,10 +23,11 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
           components: rustfmt,clippy
-      - name: Teach Rust lowering about do blocks
+      - name: Prepare Rust lowering and fixture
         run: |
           python3 - <<'PY'
           from pathlib import Path
+
           p = Path('experiments/rust-middle/src/lower.rs')
           text = p.read_text()
           old = '        "block" => {\n'
@@ -38,16 +39,26 @@ jobs:
           elif new not in text:
               raise SystemExit('block lowering match changed')
           p.write_text(text)
+
+          p = Path('examples/composed_handlers.blot')
+          text = p.read_text()
+          old = '    .add = fn (value, ?resume) =>\n'
+          new = '    .add = fn (value, !resume) =>\n'
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit('composed handler add clause changed')
+          p.write_text(text)
           PY
           cargo fmt --manifest-path experiments/rust-middle/Cargo.toml
       - name: Rebuild checked-in compiler
         run: deno task build:rust-middle
       - name: Run production corpus
         run: deno task corpus
-      - name: Commit lowerer and artifact
+      - name: Commit lowerer, fixture, and artifact
         run: |
           git config user.name "Jacob Torrång"
           git config user.email "kopatheonlyone@hotmail.com"
-          git add experiments/rust-middle/src/lower.rs generated/rust-middle/compiler.wasm generated/rust-middle/prelude.snapshot
+          git add experiments/rust-middle/src/lower.rs examples/composed_handlers.blot generated/rust-middle/compiler.wasm generated/rust-middle/prelude.snapshot
           git commit -m "build: refresh Rust compiler for do blocks" || true
           git push origin HEAD:do-blocks
