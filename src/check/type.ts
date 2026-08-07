@@ -96,6 +96,8 @@ export type SimpleType =
     readonly param: SimpleType;
     readonly effects: SimpleType;
     readonly result: SimpleType;
+    /** The caller suspends the source argument until this parameter is read. */
+    readonly deferred?: boolean;
   }
   | { readonly tag: "record"; readonly fields: ReadonlyMap<string, SimpleType> }
   | { readonly tag: "array"; readonly element: SimpleType }
@@ -263,7 +265,9 @@ export function fun(
   param: SimpleType,
   result: SimpleType,
   effects: SimpleType,
+  deferred = false,
 ): SimpleType {
+  if (deferred) return { tag: "fun", param, effects, result, deferred: true };
   return { tag: "fun", param, effects, result };
 }
 

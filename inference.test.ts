@@ -102,6 +102,41 @@ Deno.test("generative effect identities are recorded once per declaration", asyn
   assertEquals(new Set(identities).size, 2);
 });
 
+check(
+  "a deferred parameter appears in the inferred arrow",
+  `let lazy = fn ~value => value
+return lazy
+`,
+  "~'a -> 'a",
+);
+
+check(
+  "a deferred arrow can be written in a signature",
+  `sig lazy = ~Int -> Int
+let lazy = fn ~value => value
+return lazy 42
+`,
+  "Int",
+);
+
+rejects(
+  "a strict implementation does not satisfy a deferred arrow",
+  `sig lazy = ~Int -> Int
+let lazy = fn value => value
+return lazy
+`,
+  "function",
+);
+
+rejects(
+  "a deferred argument must be pure",
+  `const Console = @effect { .write = Str -> Unit; }
+let lazy = fn ~value => value
+return lazy (Console.write "hello")
+`,
+  "deferred argument",
+);
+
 // --- literals are singleton types -------------------------------------------
 
 check(

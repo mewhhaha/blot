@@ -135,7 +135,21 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
       if (found === undefined) {
         fail("BLOT_UNBOUND", `\`${expr.name}\` is not in scope.`, expr.span);
       }
-      return found;
+      if (found.tag !== "deferred") return found;
+      if (found.state.used) {
+        fail(
+          "BLOT_DEFERRED_DEMANDED_TWICE",
+          `Deferred parameter \`${expr.name}\` was demanded more than once. Force it once into an ordinary \`let\` binding before reusing the value.`,
+          expr.span,
+        );
+      }
+      found.state.used = true;
+      let value = yield* evaluate(found.expression, found.env, runtime);
+      const adaptation = runtime.recordAdaptations.get(found.expression);
+      if (adaptation !== undefined) {
+        value = adaptRecord(value, adaptation, found.expression.span);
+      }
+      return value;
     }
 
     case "intrinsic": {
@@ -168,6 +182,19 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
 
     case "apply": {
       const fn = yield* evaluate(expr.fn, env, runtime);
+      if (fn.tag === "closure" && fn.deferred === true) {
+        return yield* apply(
+          fn,
+          {
+            tag: "deferred",
+            expression: expr.arg,
+            env,
+            state: { used: false },
+          },
+          expr.span,
+          runtime,
+        );
+      }
       let argument = yield* evaluate(expr.arg, env, runtime);
       const adaptation = runtime.recordAdaptations.get(expr.arg);
       if (adaptation !== undefined) {
@@ -189,6 +216,7 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
         env,
         self: null,
         source: expr,
+        deferred: expr.deferred,
       };
 
     case "rec":

@@ -144,7 +144,10 @@ export function show(type: SimpleType): string {
         // a variable whose bound is a function renders as one — so the check is
         // on the rendered text, not on the node.
         const wrapped = hasTopLevelArrow(param) ? `(${param})` : param;
-        return `${wrapped} -> ${result}${row(current.effects, polarity)}`;
+        const demand = current.deferred === true ? "~" : "";
+        return `${demand}${wrapped} -> ${result}${
+          row(current.effects, polarity)
+        }`;
       }
 
       case "record": {

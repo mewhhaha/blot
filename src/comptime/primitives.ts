@@ -869,6 +869,7 @@ function reflect(value: Value): Value {
           domain: value.domain,
           codomain: value.codomain,
           effects: { tag: "array", elements: [...value.effects] },
+          deferred: bool(value.deferred === true),
         }),
       );
     case "sealed":
@@ -1115,14 +1116,29 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     arity: 2,
     run: ([left, right], span) => difference(left, right, span),
   }],
+  ["@type.defer", {
+    arity: 1,
+    run: ([inner]) => ({ tag: "deferred-type", inner }),
+  }],
   ["@type.arrow", {
     arity: 2,
-    run: ([domain, codomain]) => ({
-      tag: "arrow",
-      domain,
-      codomain,
-      effects: [],
-    }),
+    run: ([domain, codomain]) => {
+      if (domain.tag === "deferred-type") {
+        return {
+          tag: "arrow",
+          domain: domain.inner,
+          codomain,
+          effects: [],
+          deferred: true,
+        };
+      }
+      return {
+        tag: "arrow",
+        domain,
+        codomain,
+        effects: [],
+      };
+    },
   }],
   ["@type.performs", {
     arity: 2,

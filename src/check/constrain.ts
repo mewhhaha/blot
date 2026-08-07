@@ -163,6 +163,9 @@ function constrainWithState(
   }
 
   if (lhs.tag === "fun" && rhs.tag === "fun") {
+    if ((lhs.deferred ?? false) !== (rhs.deferred ?? false)) {
+      mismatch(lhs, rhs);
+    }
     constrainWithState(rhs.param, lhs.param, state);
     constrainWithState(lhs.result, rhs.result, state);
     constrainWithState(lhs.effects, rhs.effects, state);
@@ -374,6 +377,7 @@ function extrude(
         param: extrude(type.param, !polarity, level, seen, state),
         effects: extrude(type.effects, polarity, level, seen, state),
         result: extrude(type.result, polarity, level, seen, state),
+        deferred: type.deferred,
       };
     case "forall":
       return {
@@ -525,6 +529,7 @@ function freshenAbove(
           freshenedTypes,
           instances,
         ),
+        deferred: type.deferred,
       };
       freshenedTypes.set(type, freshened);
       return freshened;
@@ -640,6 +645,7 @@ function substituteRigid(
         param: substituteRigid(type.param, replacements),
         effects: substituteRigid(type.effects, replacements),
         result: substituteRigid(type.result, replacements),
+        deferred: type.deferred,
       };
     case "record":
       return {
