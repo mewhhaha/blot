@@ -53,21 +53,22 @@ indexed arena. Private indirection is therefore linear and competitive with the
 matching recursive Rust representation, while the compact arena remains the
 throughput-oriented choice.
 
-## 3. Move recursive discovery into the settled checker graph
+## 3. Keep recursive discovery in the checker graph
 
-Runtime HIR closing now allocates type identities before their children and
-fills recursive edges afterward, so inferred recursive lists no longer fail on
-an unresolved call-site representation variable. The remaining architectural
-step is to discover the SCC directly in the checker's settled graph instead of
-recognizing an unresolved positive result at residual-function preparation:
+The checker now builds the free-name graph of each typed `rec` group and finds
+its strongly connected components in `O(V + E)`. Certificate schema 3 persists
+the recursive closure bodies. Runtime HIR closing allocates a private root only
+when that certificate authorizes the exact body, then fills its positive
+constructor edge and validates the finite graph:
 
 ```text
 discover SCCs -> allocate RuntimeTypeId placeholders -> fill edges -> validate
 ```
 
-The work is `O(V + E)` in the settled type graph. It also removes formatted type
-strings from recursive specialization keys and should improve compiler time on
-large structural programs.
+An unresolved result without the certificate is refused. Formatted type strings
+remain in specialization cache keys; replacing those with structural identities
+belongs to the broader progressive checked-to-HIR construction work rather than
+recursive representation soundness.
 
 ## 4. Require evidence before adding algebraic loop rewrites
 
@@ -127,11 +128,10 @@ one unfinished feature list:
   closed parameter representation or a representation dictionary. This is the
   remaining source program that can be well typed yet reach a structural
   representation refusal.
-- **Compiler architecture:** discover recursive representation SCCs in the
-  settled checker graph, progressively commit typed Runtime HIR during checking,
-  and publish structural extraction lineage in ownership certificates. These
-  remove duplicate derivations or strengthen evidence; they do not need new
-  surface syntax.
+- **Compiler architecture:** progressively commit typed Runtime HIR during
+  checking and publish structural extraction lineage in ownership certificates.
+  These remove duplicate derivations or strengthen evidence; they do not need
+  new surface syntax.
 - **Evidence:** mechanize preservation/progress for the stable core. Generated
   tests now cover returns, staging, handlers, ownership-path mutations, host
   order, checked-integer traps, divergence, and evaluator/Wasm agreement, but

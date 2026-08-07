@@ -778,6 +778,14 @@ reverse-import invalidation removes both caches. Thus a cache hit cannot retain
 code produced from a stale dependency, and `prepare` followed by `compile`
 shares work without introducing a second authority.
 
+Checked-module certificate schema 3 also carries the closure bodies belonging to
+recursive components. The checker builds the free-name graph for each prebound
+`rec` group and finds its strongly connected components with forward and reverse
+graph traversals. A singleton is recursive only when it has a self-edge. The
+serialized body set must be duplicate-free and a subset of the certificate's
+closure signatures. Runtime lowering may allocate a private recursive
+representation only for a body in that set.
+
 ### Flat constraint graph
 
 Let `intern(t)` append immutable children before their parent and return the

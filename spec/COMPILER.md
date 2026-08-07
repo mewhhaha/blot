@@ -504,11 +504,13 @@ representations, and source origins. Its `PublicLayout` contains the closed
 caller representation. It contains no live inference variable, open structural
 row, or unresolved effect. Runtime HIR schema 2 adds an `indirect` type plus
 `indirect.make` and `indirect.load`. Representation closure allocates the
-recursive root ID before lowering its constructor body, fills the target edge
-after the positive body is known, and rejects a root with no finite constructor
-case. The emitter stores the target in call-local scratch memory and flattens a
-recursive edge to one `i32`; public-layout construction refuses that private
-type under ABI 1.
+recursive root ID only for a closure body named by the checked recursive-SCC
+certificate, before lowering its constructor body. It fills the target edge
+after the positive body is known and rejects a root with no finite constructor
+case. An unresolved result without that certificate is a lowering refusal, not
+implicit permission to invent indirection. The emitter stores the target in
+call-local scratch memory and flattens a recursive edge to one `i32`;
+public-layout construction refuses that private type under ABI 1.
 
 The central judgment combines type elaboration with normalization:
 

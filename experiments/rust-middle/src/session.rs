@@ -353,6 +353,10 @@ impl CompilerSession {
             .closure_signatures
             .borrow_mut()
             .retain(|(path, _), _| !invalidated.contains(path));
+        self.context
+            .recursive_closures
+            .borrow_mut()
+            .retain(|(path, _)| !invalidated.contains(path));
         self.module_interfaces
             .borrow_mut()
             .retain(|path, _| !invalidated.contains(path));

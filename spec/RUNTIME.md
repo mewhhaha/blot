@@ -25,8 +25,10 @@ where `Delta_rep` maps every residual binding to a concrete representation and
 2. every projection and constructor names a complete structural layout;
 3. every effect operation has a concrete capability, operation, and signature;
 4. every proved operation carries valid evidence;
-5. every destructive Store operation carries ownership permission; and
-6. every export and import is admitted by the selected ABI policy.
+5. every destructive Store operation carries ownership permission;
+6. every private recursive root was authorized by a checked closure-SCC
+   certificate and has a finite constructor case; and
+7. every export and import is admitted by the selected ABI policy.
 
 Validation does not infer a missing source fact. A well-typed internal program
 that reaches an open shape or polymorphic operation exposes a specialization or

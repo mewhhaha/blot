@@ -11,8 +11,8 @@ use crate::ast::{
 };
 use crate::diagnostic::Diagnostic;
 use crate::eval::{
-    Context, Phase, Runtime, apply, evaluate_binding, evaluate_expression, force_effect_value,
-    match_pattern, run,
+    Context, Phase, Runtime, apply, closure_free_names, evaluate_binding, evaluate_expression,
+    force_effect_value, match_pattern, run,
 };
 use crate::value::{
     Domain as ValueDomain, Environment as ValueEnvironment, OpenedValues, Value, attach_signature,
@@ -482,6 +482,7 @@ pub struct CheckedModule {
     pub parameter: Option<Type>,
     pub evaluated: Option<ValueEnvironment>,
     pub closure_signatures: Vec<(ExpressionId, Type)>,
+    pub recursive_closures: Vec<ExpressionId>,
 }
 
 #[derive(Clone)]
@@ -492,9 +493,10 @@ pub struct CachedModuleInterface {
     parameter: Option<FlatTypeId>,
     evaluated: Option<ValueEnvironment>,
     closure_signatures: Vec<(ExpressionId, FlatTypeId)>,
+    recursive_closures: Vec<ExpressionId>,
 }
 
-pub const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 2;
+pub const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 3;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct CheckedModuleCertificate {
@@ -504,6 +506,7 @@ pub struct CheckedModuleCertificate {
     effects: FlatTypeId,
     parameter: Option<FlatTypeId>,
     closure_signatures: Vec<(ExpressionId, FlatTypeId)>,
+    recursive_closures: Vec<ExpressionId>,
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -577,6 +580,7 @@ impl CachedModuleInterface {
             parameter,
             evaluated: checked.evaluated.clone(),
             closure_signatures,
+            recursive_closures: checked.recursive_closures.clone(),
         })
     }
 
@@ -588,6 +592,7 @@ impl CachedModuleInterface {
             effects: self.effects,
             parameter: self.parameter,
             closure_signatures: self.closure_signatures.clone(),
+            recursive_closures: self.recursive_closures.clone(),
         }
     }
 
@@ -602,6 +607,7 @@ impl CachedModuleInterface {
             parameter: certificate.parameter,
             evaluated: None,
             closure_signatures: certificate.closure_signatures,
+            recursive_closures: certificate.recursive_closures,
         })
     }
 }
@@ -624,6 +630,26 @@ impl CheckedModuleCertificate {
         }
         for (_, signature) in &self.closure_signatures {
             validate_certificate_type(&arena, *signature, &mut HashSet::new())?;
+        }
+        let closure_bodies = self
+            .closure_signatures
+            .iter()
+            .map(|(body, _)| *body)
+            .collect::<HashSet<_>>();
+        let mut recursive_bodies = HashSet::new();
+        for body in &self.recursive_closures {
+            if !closure_bodies.contains(body) {
+                return Err(format!(
+                    "checked-module certificate marks unknown closure expression {} as recursive",
+                    body.0
+                ));
+            }
+            if !recursive_bodies.insert(*body) {
+                return Err(format!(
+                    "checked-module certificate repeats recursive closure expression {}",
+                    body.0
+                ));
+            }
         }
         Ok(())
     }
@@ -722,6 +748,7 @@ pub struct Checker {
     active: RefCell<Vec<String>>,
     closed_record_arguments: RefCell<HashSet<(String, ExpressionId)>>,
     closure_types: RefCell<HashMap<(String, ExpressionId), Type>>,
+    recursive_closure_bodies: RefCell<HashSet<(String, ExpressionId)>>,
     incomplete_evaluations: RefCell<HashSet<String>>,
     module_interfaces: Rc<RefCell<HashMap<String, CachedModuleInterface>>>,
     module_analyses: Rc<RefCell<HashMap<String, CachedModuleAnalyses>>>,
@@ -756,6 +783,7 @@ impl Checker {
             active: RefCell::new(Vec::new()),
             closed_record_arguments: RefCell::new(HashSet::new()),
             closure_types: RefCell::new(HashMap::new()),
+            recursive_closure_bodies: RefCell::new(HashSet::new()),
             incomplete_evaluations: RefCell::new(HashSet::new()),
             module_interfaces,
             module_analyses,
@@ -876,6 +904,9 @@ impl Checker {
         self.closure_types
             .borrow_mut()
             .retain(|(path, _), _| !paths.contains(path));
+        self.recursive_closure_bodies
+            .borrow_mut()
+            .retain(|(path, _)| !paths.contains(path));
         self.incomplete_evaluations
             .borrow_mut()
             .retain(|path| !paths.contains(path));
@@ -952,6 +983,7 @@ impl Checker {
                 Rc::make_mut(&mut types.forward),
             );
             prebind_recursive_group(
+                path,
                 &loaded.module,
                 &loaded.module.declarations,
                 index,
@@ -1000,14 +1032,30 @@ impl Checker {
         let analyses = self.cached_analyses(path, &loaded.module, &values);
         analyses.ownership?;
         analyses.safety?;
-        let mut closure_signatures = self
+        let mut analyzed_closure_signatures = self
             .closure_types
             .borrow()
             .iter()
             .filter(|((module, _), _)| module == path)
-            .map(|((_, body), type_)| (*body, self.residual_signature(type_.clone())))
+            .map(|((_, body), type_)| {
+                let (signature, type_recursive) = self.residual_signature_analysis(type_.clone());
+                let recursive = type_recursive
+                    || self
+                        .recursive_closure_bodies
+                        .borrow()
+                        .contains(&(path.to_owned(), *body));
+                (*body, signature, recursive)
+            })
             .collect::<Vec<_>>();
-        closure_signatures.sort_by_key(|(body, _)| body.0);
+        analyzed_closure_signatures.sort_by_key(|(body, _, _)| body.0);
+        let recursive_closures = analyzed_closure_signatures
+            .iter()
+            .filter_map(|(body, _, recursive)| recursive.then_some(*body))
+            .collect::<Vec<_>>();
+        let closure_signatures = analyzed_closure_signatures
+            .into_iter()
+            .map(|(body, signature, _)| (body, signature))
+            .collect::<Vec<_>>();
         let reified_closure_signatures = closure_signatures
             .iter()
             .filter_map(|(body, type_)| {
@@ -1019,12 +1067,18 @@ impl Checker {
             .closure_signatures
             .borrow_mut()
             .extend(reified_closure_signatures);
+        self.context.recursive_closures.borrow_mut().extend(
+            recursive_closures
+                .iter()
+                .map(|body| (path.to_owned(), *body)),
+        );
         let checked = CheckedModule {
             result: self.settle(inferred.type_, true),
             effects,
             parameter: parameter.map(|parameter| self.settle(parameter, false)),
             evaluated: (!self.incomplete_evaluations.borrow().contains(path)).then_some(values),
             closure_signatures,
+            recursive_closures,
         };
         self.cache_module_result(path, &loaded.module, &checked);
         Ok(checked)
@@ -1098,6 +1152,12 @@ impl Checker {
                 self.reify_runtime_type(type_)
                     .map(|signature| ((path.to_owned(), *body), signature))
             }));
+        self.context.recursive_closures.borrow_mut().extend(
+            cached
+                .recursive_closures
+                .iter()
+                .map(|body| (path.to_owned(), *body)),
+        );
         CheckedModule {
             result: self.inflate_interface_type(&cached.types, cached.result, &mut rigids),
             effects: self.inflate_interface_type(&cached.types, cached.effects, &mut rigids),
@@ -1106,6 +1166,7 @@ impl Checker {
             }),
             evaluated: cached.evaluated,
             closure_signatures,
+            recursive_closures: cached.recursive_closures,
         }
     }
 
@@ -2297,7 +2358,7 @@ impl Checker {
                         *declaration,
                         Rc::make_mut(&mut scope.forward),
                     );
-                    prebind_recursive_group(module, &declarations, index, &mut scope, self)?;
+                    prebind_recursive_group(path, module, &declarations, index, &mut scope, self)?;
                     let declaration = module.arena.declarations[declaration.0 as usize].clone();
                     let declaration_effects = self.check_declaration(
                         path,
@@ -3374,12 +3435,18 @@ impl Checker {
     }
 
     fn residual_signature(&self, type_: Type) -> Type {
+        self.residual_signature_analysis(type_).0
+    }
+
+    fn residual_signature_analysis(&self, type_: Type) -> (Type, bool) {
         let mut unresolved = BTreeSet::new();
+        let mut recursive = HashSet::new();
         let body = self.residual_signature_type(
             type_,
             &mut HashSet::new(),
             &mut HashMap::new(),
             &mut unresolved,
+            &mut recursive,
         );
         unresolved.clear();
         let mut pending = vec![(&body, BTreeSet::<VariableId>::new())];
@@ -3424,13 +3491,15 @@ impl Checker {
                 | Type::Bottom => {}
             }
         }
-        if unresolved.is_empty() {
-            return body;
-        }
-        Type::Forall {
-            variables: unresolved.into_iter().collect(),
-            body: Box::new(body),
-        }
+        let signature = if unresolved.is_empty() {
+            body
+        } else {
+            Type::Forall {
+                variables: unresolved.into_iter().collect(),
+                body: Box::new(body),
+            }
+        };
+        (signature, !recursive.is_empty())
     }
 
     fn reify_runtime_type(&self, type_: &Type) -> Option<Value> {
@@ -3446,6 +3515,7 @@ impl Checker {
         seen: &mut HashSet<VariableId>,
         resolved: &mut HashMap<VariableId, Type>,
         unresolved: &mut BTreeSet<VariableId>,
+        recursive: &mut HashSet<VariableId>,
     ) -> Type {
         match type_ {
             Type::Variable(id) => {
@@ -3454,10 +3524,12 @@ impl Checker {
                 }
                 if !seen.insert(id) {
                     unresolved.insert(id);
+                    recursive.insert(id);
                     return Type::Rigid(id);
                 }
                 let resolved_before_evidence = resolved.clone();
                 let unresolved_before_evidence = unresolved.clone();
+                let recursive_before_evidence = recursive.clone();
                 let variable = self.variables.borrow()[id as usize].clone();
                 let mut lower_evidence = variable
                     .lower
@@ -3485,7 +3557,7 @@ impl Checker {
                     }
                 };
                 let mut result = if let Some(evidence) = evidence {
-                    self.residual_signature_type(evidence, seen, resolved, unresolved)
+                    self.residual_signature_type(evidence, seen, resolved, unresolved, recursive)
                 } else {
                     unresolved.insert(id);
                     Type::Rigid(id)
@@ -3495,15 +3567,23 @@ impl Checker {
                 {
                     let lower_resolved = resolved.clone();
                     let lower_unresolved = unresolved.clone();
+                    let lower_recursive = recursive.clone();
                     *resolved = resolved_before_evidence;
                     *unresolved = unresolved_before_evidence;
-                    let upper =
-                        self.residual_signature_type(upper_evidence, seen, resolved, unresolved);
+                    *recursive = recursive_before_evidence;
+                    let upper = self.residual_signature_type(
+                        upper_evidence,
+                        seen,
+                        resolved,
+                        unresolved,
+                        recursive,
+                    );
                     if !unresolved.contains(&id) {
                         result = upper;
                     } else {
                         *resolved = lower_resolved;
                         *unresolved = lower_unresolved;
+                        *recursive = lower_recursive;
                     }
                 }
                 seen.remove(&id);
@@ -3512,7 +3592,9 @@ impl Checker {
             }
             Type::Forall { variables, body } => Type::Forall {
                 variables,
-                body: Box::new(self.residual_signature_type(*body, seen, resolved, unresolved)),
+                body: Box::new(
+                    self.residual_signature_type(*body, seen, resolved, unresolved, recursive),
+                ),
             },
             Type::Function {
                 parameter,
@@ -3520,10 +3602,12 @@ impl Checker {
                 result,
             } => Type::Function {
                 parameter: Box::new(
-                    self.residual_signature_type(*parameter, seen, resolved, unresolved),
+                    self.residual_signature_type(*parameter, seen, resolved, unresolved, recursive),
                 ),
                 effects: Box::new(self.settle(*effects, true)),
-                result: Box::new(self.residual_signature_type(*result, seen, resolved, unresolved)),
+                result: Box::new(
+                    self.residual_signature_type(*result, seen, resolved, unresolved, recursive),
+                ),
             },
             Type::Record(fields) => Type::Record(
                 fields
@@ -3531,13 +3615,15 @@ impl Checker {
                     .map(|(name, type_)| {
                         (
                             name,
-                            self.residual_signature_type(type_, seen, resolved, unresolved),
+                            self.residual_signature_type(
+                                type_, seen, resolved, unresolved, recursive,
+                            ),
                         )
                     })
                     .collect(),
             ),
             Type::Array(element) => Type::Array(Box::new(
-                self.residual_signature_type(*element, seen, resolved, unresolved),
+                self.residual_signature_type(*element, seen, resolved, unresolved, recursive),
             )),
             Type::Variant { cases, open } => Type::Variant {
                 cases: cases
@@ -3545,7 +3631,9 @@ impl Checker {
                     .map(|(name, type_)| {
                         (
                             name,
-                            self.residual_signature_type(type_, seen, resolved, unresolved),
+                            self.residual_signature_type(
+                                type_, seen, resolved, unresolved, recursive,
+                            ),
                         )
                     })
                     .collect(),
@@ -3554,7 +3642,9 @@ impl Checker {
             Type::Union(members) => {
                 let members = members
                     .into_iter()
-                    .map(|member| self.residual_signature_type(member, seen, resolved, unresolved))
+                    .map(|member| {
+                        self.residual_signature_type(member, seen, resolved, unresolved, recursive)
+                    })
                     .collect::<Vec<_>>();
                 let mut control_cases = BTreeMap::<String, Vec<Type>>::new();
                 for member in &members {
@@ -5398,6 +5488,7 @@ fn add_function_effect(type_: &mut Type, label: String) {
 }
 
 fn prebind_recursive_group(
+    path: &str,
     module: &Module,
     declarations: &[DeclarationId],
     index: usize,
@@ -5419,6 +5510,7 @@ fn prebind_recursive_group(
         return Ok(());
     }
     let mut names = HashSet::new();
+    let mut closures = Vec::new();
     for declaration_id in &declarations[index..] {
         if signature_declaration(module, *declaration_id) {
             continue;
@@ -5435,8 +5527,8 @@ fn prebind_recursive_group(
         else {
             break;
         };
-        let _ = value;
-        for name in pattern_names(module, *pattern) {
+        let bound_names = pattern_names(module, *pattern);
+        for name in &bound_names {
             if !names.insert(name.clone()) {
                 return Err(Diagnostic::new(
                     "BLOT_DUPLICATE_RECURSIVE_BINDING",
@@ -5445,10 +5537,106 @@ fn prebind_recursive_group(
                 ));
             }
             Rc::make_mut(&mut environment.names)
-                .insert(name, Typing::Mono(checker.fresh_at_next_level()));
+                .insert(name.clone(), Typing::Mono(checker.fresh_at_next_level()));
+        }
+        let Expression::Rec { lambda, .. } = module.arena.expressions[value.0 as usize] else {
+            continue;
+        };
+        let Expression::Lambda {
+            parameter, body, ..
+        } = module.arena.expressions[lambda.0 as usize]
+        else {
+            continue;
+        };
+        for name in bound_names {
+            closures.push((name, parameter, body));
         }
     }
+    certify_recursive_components(path, checker, closures)?;
     Ok(())
+}
+
+fn certify_recursive_components(
+    path: &str,
+    checker: &Checker,
+    closures: Vec<(String, PatternId, ExpressionId)>,
+) -> Result<(), Diagnostic> {
+    let positions = closures
+        .iter()
+        .enumerate()
+        .map(|(position, (name, _, _))| (name.clone(), position))
+        .collect::<HashMap<_, _>>();
+    let mut graph = vec![Vec::new(); closures.len()];
+    for (position, (_, parameter, body)) in closures.iter().enumerate() {
+        for free in closure_free_names(&checker.context, path, *parameter, *body, None)? {
+            if let Some(target) = positions.get(&free) {
+                graph[position].push(*target);
+            }
+        }
+    }
+    let mut visited = vec![false; graph.len()];
+    let mut order = Vec::with_capacity(graph.len());
+    for node in 0..graph.len() {
+        finish_component(node, &graph, &mut visited, &mut order);
+    }
+    let mut reverse = vec![Vec::new(); graph.len()];
+    for (source, targets) in graph.iter().enumerate() {
+        for target in targets {
+            reverse[*target].push(source);
+        }
+    }
+    visited.fill(false);
+    while let Some(node) = order.pop() {
+        if visited[node] {
+            continue;
+        }
+        let mut component = Vec::new();
+        collect_component(node, &reverse, &mut visited, &mut component);
+        let recursive = component.len() > 1 || graph[node].contains(&node);
+        if !recursive {
+            continue;
+        }
+        checker
+            .recursive_closure_bodies
+            .borrow_mut()
+            .extend(component.into_iter().map(|member| {
+                let (_, _, body) = closures[member];
+                (path.to_owned(), body)
+            }));
+    }
+    Ok(())
+}
+
+fn finish_component(
+    node: usize,
+    graph: &[Vec<usize>],
+    visited: &mut [bool],
+    order: &mut Vec<usize>,
+) {
+    if visited[node] {
+        return;
+    }
+    visited[node] = true;
+    for target in &graph[node] {
+        finish_component(*target, graph, visited, order);
+    }
+    order.push(node);
+}
+
+fn collect_component(
+    node: usize,
+    reverse: &[Vec<usize>],
+    visited: &mut [bool],
+    component: &mut Vec<usize>,
+) {
+    if visited[node] {
+        return;
+    }
+    visited[node] = true;
+    component.push(node);
+    for source in &reverse[node] {
+        collect_component(*source, reverse, visited, component);
+    }
 }
 
 fn future_binding_names(module: &Module, declarations: &[DeclarationId]) -> BTreeSet<String> {
@@ -6268,9 +6456,32 @@ mod tests {
             variables[variable as usize].upper = vec![store_bound];
         }
 
-        let residual = checker.residual_signature(recursive);
+        let (residual, recursive) = checker.residual_signature_analysis(recursive);
 
         assert!(same_type(&residual, &store));
+        assert!(!recursive);
+    }
+
+    #[test]
+    fn residual_signature_certifies_a_recursive_type_back_edge() {
+        let checker = Checker::new(Rc::new(Context::default()));
+        let recursive = checker.fresh();
+        let Type::Variable(variable) = recursive.clone() else {
+            unreachable!("fresh always returns a variable")
+        };
+        let recursive_bound = checker.constraint_type(&Type::Variant {
+            cases: vec![
+                ("Nil".to_owned(), Type::Unit),
+                ("Cons".to_owned(), recursive.clone()),
+            ],
+            open: false,
+        });
+        checker.variables.borrow_mut()[variable as usize].lower = vec![recursive_bound];
+
+        let (residual, recursive) = checker.residual_signature_analysis(recursive);
+
+        assert!(recursive);
+        assert!(matches!(residual, Type::Forall { .. }));
     }
 
     #[test]
@@ -6316,6 +6527,7 @@ mod tests {
             parameter: None,
             evaluated: None,
             closure_signatures: Vec::new(),
+            recursive_closures: Vec::new(),
         };
         let cached = CachedModuleInterface::from_checked(&checked)
             .expect("a quantified closed interface is cacheable");
@@ -6351,9 +6563,31 @@ mod tests {
             parameter: None,
             evaluated: None,
             closure_signatures: Vec::new(),
+            recursive_closures: Vec::new(),
         };
 
         assert!(CachedModuleInterface::from_checked(&checked).is_none());
+    }
+
+    #[test]
+    fn recursive_closure_certificate_rejects_an_unknown_body() {
+        let checked = CheckedModule {
+            result: Type::Unit,
+            effects: Type::Effects(BTreeSet::new()),
+            parameter: None,
+            evaluated: None,
+            closure_signatures: vec![(ExpressionId(7), Type::Unit)],
+            recursive_closures: vec![ExpressionId(8)],
+        };
+        let cached =
+            CachedModuleInterface::from_checked(&checked).expect("a closed interface is cacheable");
+
+        assert!(
+            cached
+                .certificate()
+                .validate()
+                .is_err_and(|error| error.contains("unknown closure expression 8"))
+        );
     }
 
     #[test]

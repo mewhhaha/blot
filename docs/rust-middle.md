@@ -59,6 +59,11 @@ revision. A changed preceding declaration or dependency mapping discards the
 suffix. `prepare` and `compile` consequently share one cached `ClosedProgram`
 instead of staging or planning the module twice.
 
+Checked-module certificate schema 3 records the closure bodies in recursive
+components of each typed `rec` group. Runtime-HIR preparation may introduce a
+private indirect root only for one of those bodies; an unresolved result is no
+longer sufficient authorization by itself.
+
 ## Release gates
 
 The compiler is checked at each observable boundary:

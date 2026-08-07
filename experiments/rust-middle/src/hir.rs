@@ -1492,13 +1492,19 @@ impl ResidualTrace {
         }
         let caller_argument =
             self.lower_residual_argument(argument, domain, &substitutions, span)?;
+        let recursive_result = context
+            .recursive_closures
+            .borrow()
+            .contains(&(module.to_owned(), body));
         let result_type = match self.specialized_type_from_type_value(
             codomain,
             &mut substitutions,
             &representation_facts,
         ) {
             Ok(result_type) => result_type,
-            Err(_) if has_unresolved_representation(codomain, &substitutions) => {
+            Err(_)
+                if recursive_result && has_unresolved_representation(codomain, &substitutions) =>
+            {
                 let key = format!(
                     "recursive-result:{module}:{}:{}:{}",
                     body.0,
