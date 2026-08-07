@@ -18,10 +18,10 @@ jobs:
       - name: Find retired surface references
         run: |
           printf '%s\n' '--- production code references ---'
-          rg -n 'handler_composition|BLOT_VALUE_IF_REMOVED|BLOT_TRY_REMOVED|discarded-value-if|discardedValueIf' \
-            --glob '!migration/**' --glob '!src/migration/**' || true
+          grep -R -n -E 'handler_composition|BLOT_VALUE_IF_REMOVED|BLOT_TRY_REMOVED|discarded-value-if|discardedValueIf|isValueConditional' \
+            --exclude-dir=.git --exclude-dir=migration --exclude='parser.plan' . || true
           printf '%s\n' '--- documentation references ---'
-          rg -n 'expression `if`|value conditional|value-producing `if`|try .*with|`try|handler composition' \
+          grep -R -n -E 'expression `if`|value conditional|value-producing `if`|try .*with|`try|handler composition' \
             README.md LANGUAGE.md AGENTS.md DOCS.md docs spec || true
           printf '%s\n' '--- formatter references ---'
-          rg -n 'conditional|handler_composition' src/tooling/formatter.ts || true
+          grep -n -E 'conditional|handler_composition' src/tooling/formatter.ts || true
