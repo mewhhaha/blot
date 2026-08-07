@@ -24,7 +24,7 @@ jobs:
           targets: wasm32-unknown-unknown
           components: rustfmt,clippy
       - name: Build Rust-middle compiler
-        run: cargo build --release --target wasm32-unknown-unknown --manifest-path experiments/rust-middle/Cargo.toml
+        run: cargo build --target wasm32-unknown-unknown --manifest-path experiments/rust-middle/Cargo.toml
       - name: Diagnose prelude frontend
         run: |
           cat > /tmp/diagnose.ts <<'TS'
@@ -37,7 +37,7 @@ jobs:
             console.log(JSON.stringify(layout, null, 2));
             Deno.exit(1);
           }
-          const wasm = await Deno.readFile("experiments/rust-middle/target/wasm32-unknown-unknown/release/blot_rust_middle.wasm");
+          const wasm = await Deno.readFile("experiments/rust-middle/target/wasm32-unknown-unknown/debug/blot_rust_middle.wasm");
           const rust = await RustMiddle.load(wasm);
           const session = rust.createCompilerSession();
           try {
@@ -59,4 +59,4 @@ jobs:
             rust.destroyCompilerSession(session);
           }
           TS
-          deno run --allow-read /tmp/diagnose.ts
+          deno run --config deno.json --allow-read /tmp/diagnose.ts
