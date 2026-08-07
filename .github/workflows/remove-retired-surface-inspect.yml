@@ -67,18 +67,19 @@ jobs:
       - name: Generate and inspect compact field identifiers
         run: |
           deno task generate
-          deno eval <<'TS'
+          cat > .github/inspect_fields.ts <<'TS'
           import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
-          import { compactFieldNames } from "./src/syntax/compact_schema.ts";
-          import { elaborateLayout } from "./src/syntax/layout.ts";
+          import { compactFieldNames } from "../src/syntax/compact_schema.ts";
+          import { elaborateLayout } from "../src/syntax/layout.ts";
 
           const frontend = CpuFrontend.create(
             await Deno.readFile("generated/wasm/parser.plan"),
           );
-          console.log("plan keys", Object.keys(frontend.plan));
-          for (const key of Object.keys(frontend.plan)) {
+          const plan = frontend.plan as unknown as Record<string, unknown>;
+          console.log("plan keys", Object.keys(plan));
+          for (const [key, value] of Object.entries(plan)) {
             if (key.toLowerCase().includes("field")) {
-              console.log("plan field property", key, frontend.plan[key]);
+              console.log("plan field property", key, value);
             }
           }
           console.log(
@@ -97,7 +98,7 @@ jobs:
           );
           const nodes = parsed.program.nodes;
           const edges = parsed.program.edges;
-          const selected = [];
+          const selected: Array<{ id: number; name: string; fields: number[] }> = [];
           for (let id = 0; id < nodes.length / 8; id += 1) {
             const base = id * 8;
             const name = names.get(nodes[base]);
@@ -106,7 +107,7 @@ jobs:
             }
             const edgeStart = nodes[base + 4];
             const edgeCount = nodes[base + 5];
-            const fields = [];
+            const fields: number[] = [];
             for (let offset = 0; offset < edgeCount; offset += 1) {
               fields.push(edges[(edgeStart + offset) * 4]);
             }
@@ -122,3 +123,4 @@ jobs:
             selected.filter((entry) => entry.name === "binding").slice(0, 5),
           );
           TS
+          deno run --allow-read .github/inspect_fields.ts
