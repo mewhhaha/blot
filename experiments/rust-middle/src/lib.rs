@@ -12,6 +12,7 @@ mod primitives;
 mod recognise;
 mod safety;
 mod session;
+mod surface;
 mod typecheck;
 mod value;
 

@@ -138,8 +138,9 @@ let positive = fn () =>
   value <- Source.value 0
   return value > 0
 present <- positive ()
-return if present : 42
-else: 0
+return case present of
+  #True => 42
+  #False => 0
 `,
   );
 
@@ -748,8 +749,9 @@ Deno.test("a known higher-order runtime choice preserves structural specializati
   const path = await fixture("higher-order-runtime-choice.blot", [
     `open @import "blot:prelude" ()
 `,
-    `let choose = fn flag => if flag > 0 : fn value => value.x + flag
-else: fn value => value.x - flag
+    `let choose = fn flag => case flag > 0 of
+  #True => fn value => value.x + flag
+  #False => fn value => value.x - flag
 `,
     `sig run = Int -> Int
 `,
@@ -879,8 +881,9 @@ Deno.test("a runtime function choice specializes once per concrete shape", async
     `open @import "blot:prelude" ()
 sig run = Int -> Int
 let run = fn flag =>
-  let selected = if flag > 0 : fn value => value.x
-  else: fn value => value.x
+  let selected = case flag > 0 of
+    #True => fn value => value.x
+    #False => fn value => value.x
   let left = selected { .x = 20; .y = 1; }
   let right = selected { .x = 22; .z = 2; }
   return left + right
@@ -1228,8 +1231,9 @@ let is_some = fn option => case option of
   #Some _ => True
   _ => False
 sig at = Int -> Bool
-let at = fn value => if value > 0 : is_some (Some value)
-else: is_some None
+let at = fn value => case value > 0 of
+  #True => is_some (Some value)
+  #False => is_some None
 return { .at = at; }
 `,
   );
@@ -1980,10 +1984,16 @@ Deno.test("a `let` recursive group reaches WebAssembly", async () => {
   await Deno.writeTextFile(
     path,
     `open @import "blot:prelude" ()
-let is_even = rec (fn n => if n == 0 : 1
-else: is_odd (n - 1))
-let is_odd = rec (fn n => if n == 0 : 0
-else: is_even (n - 1))
+let is_even =
+  rec (fn n => case n == 0 of
+    #True => 1
+    #False => is_odd (n - 1)
+  )
+let is_odd =
+  rec (fn n => case n == 0 of
+    #True => 0
+    #False => is_even (n - 1)
+  )
 return is_even 11
 `,
   );
@@ -2004,8 +2014,11 @@ Deno.test("a recursive group's members keep what they captured", async () => {
     path,
     `open @import "blot:prelude" ()
 let total = fn step =>
-  let down = rec (fn n => if n < step : 0
-  else: n + up (n - step))
+  let down =
+    rec (fn n => case n < step of
+      #True => 0
+      #False => n + up (n - step)
+    )
   let up = rec (fn n => down n)
   return up 10
 return total 3
@@ -2027,10 +2040,16 @@ Deno.test("a `const` recursive group reaches WebAssembly", async () => {
   await Deno.writeTextFile(
     path,
     `open @import "blot:prelude" ()
-const even = rec (fn n => if n == 0 : 1
-else: odd (n - 1))
-const odd = rec (fn n => if n == 0 : 0
-else: even (n - 1))
+const even =
+  rec (fn n => case n == 0 of
+    #True => 1
+    #False => odd (n - 1)
+  )
+const odd =
+  rec (fn n => case n == 0 of
+    #True => 0
+    #False => even (n - 1)
+  )
 let counted = fn n => even n
 return counted 12
 `,

@@ -37,14 +37,17 @@ let fake_random =
     ;
   }
 
-let handled =
-  program
+// A transformer owns the computation it wraps and consumes it exactly once, so
+// the composition is written over the computation and applied per run rather
+// than bound once and sequenced twice.
+let handled = fn computation =>
+  return computation
     |> @handle (Terminal, fake_terminal)
     |> @handle (Clock, fake_clock)
     |> @handle (Random, fake_random)
 
-result <- handled
-discarded <- handled
+result <- handled program ()
+discarded <- handled program ()
 
 return {
   .named = result;

@@ -59,6 +59,40 @@ impl<'a> LoweringContext<'a> {
     }
 }
 
+/// `if` as a value and `try ... with` are gone from the language while their
+/// grammar rules remain, so a module that still writes one is rejected here
+/// rather than lowered into a form the language no longer has. The walk is the
+/// document order the TypeScript parser reports in, so both frontends name the
+/// same first offence.
+fn removed_surface_form(cst: &CompactCst<'_>, cursor: Cursor) -> Result<Option<String>, String> {
+    let Cursor::Rule(rule) = cursor else {
+        return Ok(None);
+    };
+    match cst.rule_name(rule)? {
+        "conditional" => {
+            return Ok(Some(
+                "BLOT_VALUE_IF_REMOVED: `if` is control flow and cannot be used as a value. Match `#True` and `#False` with `case` instead."
+                    .to_owned(),
+            ));
+        }
+        "handler_composition" => {
+            return Ok(Some(
+                "BLOT_TRY_REMOVED: `try ... with` was removed. Compose `@handle (Effect, handler)` transformers with `|>` instead."
+                    .to_owned(),
+            ));
+        }
+        _ => {}
+    }
+    let mut index = 0;
+    while let Some(child) = cst.child(rule, index)? {
+        if let Some(found) = removed_surface_form(cst, child)? {
+            return Ok(Some(found));
+        }
+        index += 1;
+    }
+    Ok(None)
+}
+
 pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
     let root = as_rule(cst.root())?;
     require_rule(cst, root, "program")?;
@@ -119,7 +153,7 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
         }
         (lowered, ResultEffects::Pure)
     };
-    Ok(Module {
+    let mut module = Module {
         parameter,
         fixities,
         declarations: lowered_declarations,
@@ -127,7 +161,12 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
         result_effects,
         span,
         arena,
-    })
+    };
+    crate::surface::elaborate_surface(&mut module);
+    if let Some(diagnostic) = removed_surface_form(cst, cst.root())? {
+        return Err(diagnostic);
+    }
+    Ok(module)
 }
 
 fn lower_fixity(cst: &CompactCst<'_>, cursor: Cursor) -> Result<Fixity, String> {
