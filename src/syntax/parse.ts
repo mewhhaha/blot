@@ -8,6 +8,7 @@ import type { Module } from "./ast.ts";
 import { lowerModule, type Rule } from "./lower.ts";
 import { materializeCpuCst } from "./cpu_cst.ts";
 import { elaborateLayout } from "./layout.ts";
+import { rebindingFrameDiagnostics } from "./rebinding.ts";
 import { elaborateSurface } from "./surface.ts";
 
 const planUrl = new URL("../../generated/wasm/parser.plan", import.meta.url);
@@ -29,12 +30,24 @@ export async function parse(source: string): Promise<ParseResult> {
   if (!result.ok) return result;
   const removed = removedSurfaceDiagnostics(result.cst);
   if (removed.length > 0) return { ok: false, diagnostics: removed };
+  const rebinding = rebindingFrameDiagnostics(result.cst);
+  if (rebinding.length > 0) return { ok: false, diagnostics: rebinding };
   return { ok: true, module: result.module };
 }
 
 export type ConcreteParseResult =
   | { readonly ok: true; readonly module: Module; readonly cst: Rule }
   | { readonly ok: false; readonly diagnostics: readonly Diagnostic[] };
+
+/** Rebinding-only source validation shared with the public Rust compiler wrapper. */
+export async function rebindingSourceDiagnostics(
+  source: string,
+): Promise<readonly Diagnostic[]> {
+  if (!source.includes(":=")) return [];
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) return [];
+  return rebindingFrameDiagnostics(parsed.cst);
+}
 
 /** Parses source while retaining Baba's concrete tree for source tooling. */
 export async function parseConcrete(

@@ -2,6 +2,7 @@ import { dirname, isAbsolute, relative, resolve } from "@std/path";
 import { BlotError, type Diagnostic } from "../diagnostic.ts";
 import { LoadError, resolvePath } from "../load.ts";
 import { elaborateLayout } from "../syntax/layout.ts";
+import { rebindingSourceDiagnostics } from "../syntax/parse.ts";
 import {
   type CapsuleModule,
   decodeModuleCapsuleForRust,
@@ -254,6 +255,10 @@ export class RustMiddleCompiler {
         message: `Import cycle: ${cycle.join(" -> ")}.`,
         span: { start: 0, end: 0 },
       });
+    }
+    const rebindingDiagnostics = await rebindingSourceDiagnostics(source);
+    if (rebindingDiagnostics.length > 0) {
+      throw new LoadError(path, source, rebindingDiagnostics);
     }
     let resident = this.#modules.get(path);
     if (resident === undefined || resident.inputRevision !== source) {
