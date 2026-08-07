@@ -8,19 +8,29 @@ on:
       - experiments/owned-regions/.production-patch-trigger
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  check:
+  patch:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: codex/owned-slices
+          fetch-depth: 0
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Check Region source surface
+      - name: Fix fresh Region ownership roots
         run: |
+          git pull --rebase origin codex/owned-slices
+          python3 experiments/owned-regions/fix_region_ownership.py
+          deno fmt src/linear/check.ts
           deno check src/cli.ts experiments/owned-regions/*.ts
           deno test --allow-read --allow-write experiments/owned-regions/source_surface.test.ts
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/linear/check.ts
+          git commit -m 'fix: root fresh Region authority at its binding'
+          git push origin HEAD:codex/owned-slices
