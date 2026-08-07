@@ -50,9 +50,6 @@ function describe(type: SimpleType): string {
     case "forall":
       return "a polymorphic type";
     case "range":
-      // A range is ground, so naming it needs nothing from a finished
-      // inference — and naming it is the point: `0..` says which bound `-1`
-      // fell outside of, where "an integer" does not.
       return `\`${showRange(type.domain, type.low, type.high)}\``;
     case "unit":
       return "()";
@@ -64,6 +61,8 @@ function describe(type: SimpleType): string {
       }`;
     case "array":
       return "an array";
+    case "region":
+      return "an owned array region";
     case "variant": {
       const shown = [...type.cases.keys()].map((n) => `#${n}`).join(" | ");
       if (type.open) return `${shown} | ..`;
@@ -72,10 +71,6 @@ function describe(type: SimpleType): string {
     case "effects":
       return `<${[...type.labels].join(", ")}>`;
     case "opaque":
-      // `F32x4` is a name the reader can write; a seal's is not — it bridges
-      // to `${name}#${carrier}` (see `bridge.ts`), which is a compiler-local
-      // identity. Quoting only the ones without a `#` keeps the backticks
-      // meaning "you can write this".
       if (type.name.includes("#")) return type.name;
       return `\`${type.name}\``;
     case "union":
@@ -139,9 +134,6 @@ function constrainWithState(
 ): void {
   if (lhs === rhs) return;
   if (state.cache.has(lhs, rhs)) return;
-  // Recursion is admitted rather than rejected: revisiting a pair means the
-  // constraint is already being proved, which is what makes recursive types
-  // fall out instead of tripping an occurs check.
   if (lhs.tag === "var" || rhs.tag === "var") {
     state.cache.add(lhs, rhs);
   }
@@ -170,8 +162,6 @@ function constrainWithState(
   }
 
   if (lhs.tag === "record" && rhs.tag === "record") {
-    // Width subtyping: a wider value satisfies a narrower requirement. This is
-    // the whole of what a `duck` contract needed to be.
     for (const [name, required] of rhs.fields) {
       const present = lhs.fields.get(name);
       if (present === undefined) {
@@ -190,13 +180,18 @@ function constrainWithState(
     return;
   }
 
+  if (lhs.tag === "region" && rhs.tag === "region") {
+    // Region elements are readable and replaceable through the same capability,
+    // so the element is invariant even though persistent arrays are covariant.
+    constrainWithState(lhs.element, rhs.element, state);
+    constrainWithState(rhs.element, lhs.element, state);
+    return;
+  }
+
   if (lhs.tag === "variant" && rhs.tag === "variant") {
-    // Fewer cases is a subtype: `#Ready` fits wherever `#Ready | #Failed` does.
     for (const [name, payload] of lhs.cases) {
       const accepted = rhs.cases.get(name);
       if (accepted === undefined) {
-        // An open requirement names the constructors it reads and admits the
-        // rest, which is exactly what an arm matching everything leaves behind.
         if (rhs.open) continue;
         throw new TypeError_(
           `\`#${name}\` is not one of ${describe(rhs)}`,
@@ -213,8 +208,6 @@ function constrainWithState(
   }
 
   if (lhs.tag === "effects" && rhs.tag === "effects") {
-    // Fewer effects is a subtype, by the same reasoning as variants. This one
-    // line is the entirety of effect-row inference.
     for (const label of lhs.labels) {
       if (!rhs.labels.has(label)) {
         throw new TypeError_(`effect \`${label}\` is not handled`);
@@ -280,8 +273,6 @@ function constrainWithState(
     throw new TypeError_(`${describe(lhs)} is not one of ${describe(rhs)}`);
   }
 
-  // One side is a variable from a deeper level. Copy the other side down so the
-  // constraint is recorded where the variable can see it.
   if (lhs.tag === "var") {
     constrainWithState(
       lhs,
@@ -405,6 +396,11 @@ function extrude(
         tag: "array",
         element: extrude(type.element, polarity, level, seen, state),
       };
+    case "region":
+      return {
+        tag: "region",
+        element: extrude(type.element, polarity, level, seen, state),
+      };
     default:
       return type;
   }
@@ -424,35 +420,13 @@ function levelBelow(type: SimpleType, level: Level): boolean {
     case "variant":
       return [...type.cases.values()].every((t) => levelBelow(t, level));
     case "array":
+    case "region":
       return levelBelow(type.element, level);
     default:
       return true;
   }
 }
 
-/**
- * Where each definition-site variable's instantiation copies went.
- *
- * `extrude` links its copies into the bound graph — `type.upper.push(copy)` —
- * so a constraint recorded on the copy is visible from the original. It is the
- * only copier that can: a `let`-bound scheme's whole point is that its
- * instantiations do not constrain each other, so `freshenAbove` must leave the
- * definition-site variable alone. That leaves the backend with no way to learn
- * what a generalized projection was actually applied to.
- *
- * The edge is recorded here instead, beside the lattice rather than in it.
- * `constrain` never reads this map, so biunification propagates exactly the
- * bounds it propagated before and stays polynomial; only fact collection walks
- * it, and only to answer "what shapes reached this node".
- *
- * One map per program checked, held in its `Staging`: a dependency's
- * definition-site variable and its importer's instantiation of it have to be
- * one edge, or a field set read inside the dependency could not find the record
- * the importer built. Hanging the edge off the `Variable` instead would attach
- * unbounded growth to `PRIMITIVE_TYPES`, whose scheme variables are
- * process-global and outlive every check — and would let one program's records
- * be seen while checking another's.
- */
 export type Instances = Map<Variable, Variable[]>;
 
 export function instantiate(
@@ -484,8 +458,6 @@ function freshenAbove(
       const evidence = evidenceOf(type);
       const copy = freshVar(level, evidence === null ? undefined : evidence);
       freshenedTypes.set(type, copy);
-      // Not a bound. The copy is where this use's constraints land, and the
-      // edge is what lets a fact read at the definition find them again.
       const recorded = instances.get(type);
       if (recorded === undefined) instances.set(type, [copy]);
       else recorded.push(copy);
@@ -589,6 +561,20 @@ function freshenAbove(
       freshenedTypes.set(type, freshened);
       return freshened;
     }
+    case "region": {
+      const freshened: SimpleType = {
+        tag: "region",
+        element: freshenAbove(
+          type.element,
+          limit,
+          level,
+          freshenedTypes,
+          instances,
+        ),
+      };
+      freshenedTypes.set(type, freshened);
+      return freshened;
+    }
     default:
       return type;
   }
@@ -654,6 +640,11 @@ function substituteRigid(
     case "array":
       return {
         tag: "array",
+        element: substituteRigid(type.element, replacements),
+      };
+    case "region":
+      return {
+        tag: "region",
         element: substituteRigid(type.element, replacements),
       };
     case "variant":
