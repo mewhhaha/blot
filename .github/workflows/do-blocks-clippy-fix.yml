@@ -1,0 +1,48 @@
+name: do-blocks-clippy-fix
+
+on:
+  push:
+    branches:
+      - agent/do-blocks-ci
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: do-blocks-artifact-fix
+          fetch-depth: 0
+      - name: Remove redundant wildcard field
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('experiments/rust-middle/src/eval.rs')
+          text = p.read_text()
+          old = '''        Expression::Block {
+            declarations,
+            result,
+            result_effects: _,
+            ..
+        } => {
+'''
+          new = '''        Expression::Block {
+            declarations,
+            result,
+            ..
+        } => {
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one evaluator block pattern, found {text.count(old)}')
+          p.write_text(text.replace(old, new, 1))
+          PY
+      - name: Commit fix
+        run: |
+          git config user.name "Jacob Torrång"
+          git config user.email "kopatheonlyone@hotmail.com"
+          git add experiments/rust-middle/src/eval.rs
+          git commit -m "rust: satisfy current clippy" 
+          git push origin HEAD:do-blocks-artifact-fix
