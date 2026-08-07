@@ -26,152 +26,170 @@ jobs:
           from pathlib import Path
           import re
 
-          def edit(path, old, new, count=1):
+          def replace(path, old, new, expected=1):
               p = Path(path)
               text = p.read_text()
-              actual = text.count(old)
-              if actual < count:
-                  raise SystemExit(f'{path}: expected at least {count} occurrences, found {actual}: {old[:80]!r}')
-              p.write_text(text.replace(old, new, count))
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f"{path}: expected {expected} occurrences, found {count}: {old[:100]!r}")
+              p.write_text(text.replace(old, new))
 
-          # Grammar: `do:` is the only explicit statement scope expression.
-          edit('grammar.baba',
-               '  | case_expression\n  | handler_composition\n  | array\n',
-               '  | case_expression\n  | handler_composition\n  | do_block\n  | array\n', 1)
-          edit('grammar.baba',
-               '  | "for" | "in" | "break" | "try" | "with" | "fn"\n',
-               '  | "for" | "in" | "break" | "try" | "with" | "do" | "fn"\n', 1)
-          edit('grammar.baba',
-               '  | handler_composition\n  | block\n  | array\n',
-               '  | handler_composition\n  | do_block\n  | block\n  | array\n', 1)
-          edit('grammar.baba',
-               '  | handler_composition\n  | block\n  | array\n  | parenthesized_or_tuple\n) ;\n\n// A lambda',
-               '  | handler_composition\n  | do_block\n  | block\n  | array\n  | parenthesized_or_tuple\n) ;\n\n// A lambda', 1)
-          edit('grammar.baba',
-               '// A block normally produces `()`. `return value` is a statement, so it can\n// leave the block from a nested statement branch without making a bare tail\n// expression compete with `name := value;` on IDENT.\nblock = (\n  LAYOUT_NEWLINE\n  LAYOUT_INDENT\n  statements:statement*\n  LAYOUT_DEDENT\n) ;\n',
-               '// Construct-owned suites lower through this internal block form. It has no\n// opening source token of its own.\nblock = (\n  LAYOUT_NEWLINE\n  LAYOUT_INDENT\n  statements:statement*\n  LAYOUT_DEDENT\n) ;\n\n// `do:` is the explicit statement scope available as a value. It deliberately\n// has a lexical introducer; parentheses remain grouping/tuple syntax only.\ndo_block = (\n  "do"\n  ":"\n  LAYOUT_NEWLINE\n  LAYOUT_INDENT\n  statements:statement*\n  LAYOUT_DEDENT\n) ;\n', 1)
+          # Grammar: `do:` is a lexically explicit value-producing statement scope.
+          p = Path('grammar.baba')
+          text = p.read_text()
+          needle = '  | handler_composition\n  | array\n'
+          if text.count(needle) != 3:
+              raise SystemExit(f'grammar.baba: expected 3 primary sites, found {text.count(needle)}')
+          text = text.replace(needle, '  | handler_composition\n  | do_block\n  | array\n')
+          old = '  | "for" | "in" | "break" | "try" | "with" | "fn"\n'
+          if text.count(old) != 1:
+              raise SystemExit('grammar.baba: keyword row changed')
+          text = text.replace(old, '  | "for" | "in" | "break" | "try" | "with" | "do" | "fn"\n')
+          block = '''// A block normally produces `()`. `return value` is a statement, so it can\n// leave the block from a nested statement branch without making a bare tail\n// expression compete with `name := value;` on IDENT.\nblock = (\n  LAYOUT_NEWLINE\n  LAYOUT_INDENT\n  statements:statement*\n  LAYOUT_DEDENT\n) ;\n'''
+          replacement = '''// Construct-owned suites lower through this internal block form. It has no\n// opening source token of its own.\nblock = (\n  LAYOUT_NEWLINE\n  LAYOUT_INDENT\n  statements:statement*\n  LAYOUT_DEDENT\n) ;\n\n// `do:` is the explicit statement scope available as a value. Parentheses are\n// only grouping/tuple syntax and never announce a statement suite.\ndo_block = (\n  "do"\n  ":"\n  LAYOUT_NEWLINE\n  LAYOUT_INDENT\n  statements:statement*\n  LAYOUT_DEDENT\n) ;\n'''
+          if text.count(block) != 1:
+              raise SystemExit('grammar.baba: block definition changed')
+          p.write_text(text.replace(block, replacement))
 
-          # Layout no longer guesses that a parenthesis opens a statement suite.
+          # Layout no longer guesses that a parenthesis opens a suite.
           p = Path('src/syntax/layout.ts')
           text = p.read_text()
-          text = text.replace(
-              '    const suiteIntroducer = opensSuite(previous, elementSuiteIntroducers) ||\n      opensParenthesizedSuite(previous, token, tokens[tokenIndex + 1]);',
-              '    const suiteIntroducer = opensSuite(previous, elementSuiteIntroducers);',
-              1,
-          )
-          text, n = re.subn(
-              r'\nfunction opensParenthesizedSuite\([\s\S]*?\n}\n\nfunction ',
-              '\nfunction ',
-              text,
-              count=1,
-          )
+          old = '''    const suiteIntroducer = opensSuite(previous, elementSuiteIntroducers) ||\n      opensParenthesizedSuite(previous, token, tokens[tokenIndex + 1]);'''
+          if text.count(old) != 1:
+              raise SystemExit('layout.ts: suite introducer expression changed')
+          text = text.replace(old, '    const suiteIntroducer = opensSuite(previous, elementSuiteIntroducers);')
+          text, n = re.subn(r'\nfunction opensParenthesizedSuite\([\s\S]*?\n}\n\nfunction ', '\nfunction ', text, count=1)
           if n != 1:
-              raise SystemExit('layout.ts: opensParenthesizedSuite function not found')
+              raise SystemExit('layout.ts: opensParenthesizedSuite not found')
           p.write_text(text)
 
-          # The new surface rule is erased to the existing AST block.
-          edit('src/syntax/lower.ts',
-               '  if (rule.name === "block") {\n',
-               '  if (rule.name === "block" || rule.name === "do_block") {\n', 1)
-          edit('src/syntax/compact_schema.ts',
-               '  "block.statements",\n',
-               '  "block.statements",\n  "do_block.statements",\n', 1)
+          # Regenerated lexer specs follow grammar declaration order. Keep the compact
+          # materializer's lexical identities in that same order.
+          replace('src/syntax/compact_schema.ts', '''  "QUESTION",\n  "OPERATOR",\n  "LAYOUT_NEWLINE",\n  "LAYOUT_INDENT",\n  "LAYOUT_DEDENT",\n''', '''  "QUESTION",\n  "LAYOUT_NEWLINE",\n  "LAYOUT_INDENT",\n  "LAYOUT_DEDENT",\n  "OPERATOR",\n''')
+          replace('src/syntax/compact_schema.ts', '  "block.statements",\n', '''  "block.statements",\n  "continued_primary_expression.statements",\n  "element_child_primary_expression.statements",\n  "primary_expression.statements",\n''')
 
-          # Formatter treats explicit do scopes as value-scope boundaries while
-          # retaining their own opening line (unlike implicit block suites).
-          edit('src/tooling/formatter.ts',
-               '  "block",\n  "case_expression",\n',
-               '  "block",\n  "do_block",\n  "case_expression",\n', 1)
-          edit('src/tooling/formatter.ts',
-               'const blockRule = new Set(["block"]);',
-               'const blockRule = new Set(["block", "do_block"]);', 1)
-          edit('src/tooling/formatter.ts',
-               'const valueScopeBoundaryRules = new Set([\n  "block",\n',
-               'const valueScopeBoundaryRules = new Set([\n  "block",\n  "do_block",\n', 1)
-          # Add to INDENTED_RULES, which has a second block occurrence after array_pattern.
-          marker = '  "array_pattern",\n  "block",\n'
-          edit('src/tooling/formatter.ts', marker,
-               '  "array_pattern",\n  "block",\n  "do_block",\n', 1)
+          # Baba deliberately inlines this bounded rule into the surrounding primary
+          # expression in the compact CST. Recognize that concrete shape and lower it
+          # through the existing block AST path.
+          p = Path('src/syntax/lower.ts')
+          text = p.read_text()
+          old = '''function lowerPostfix(rule: Rule, context: Context): Expr {\n  let result = lowerPrimary(\n    unwrap(asRule(field(rule, "value"), "value")),\n    context,\n  );'''
+          new = '''function lowerPostfix(rule: Rule, context: Context): Expr {\n  const primary = asRule(field(rule, "value"), "value");\n  let result = lowerPrimary(\n    isDoBlockPrimary(primary) ? primary : unwrap(primary),\n    context,\n  );'''
+          if text.count(old) != 1:
+              raise SystemExit('lower.ts: lowerPostfix changed')
+          text = text.replace(old, new)
+          marker = 'function lowerPostfix(rule: Rule, context: Context): Expr {'
+          helper = '''function isDoBlockPrimary(rule: Rule): boolean {\n  if (\n    rule.name !== "primary_expression" &&\n    rule.name !== "continued_primary_expression" &&\n    rule.name !== "element_child_primary_expression"\n  ) return false;\n  const first = rule.child(0);\n  return first?.type === "token" && first.text === "do";\n}\n\n'''
+          text = text.replace(marker, helper + marker, 1)
+          old = '  if (rule.name === "block") {\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'lower.ts: expected one block primary, found {text.count(old)}')
+          text = text.replace(old, '  if (rule.name === "block" || isDoBlockPrimary(rule)) {\n', 1)
+          p.write_text(text)
+
+          # Formatter: concrete tooling sees the flattened primary shape too.
           p = Path('src/tooling/formatter.ts')
           text = p.read_text()
           text = text.replace(
-              'return expressionPrimaryIs(expression, "block");',
-              'return expressionPrimaryIs(expression, "block") ||\n    expressionPrimaryIs(expression, "do_block");',
+              '        let valueScopeOwnsLayout = false;\n',
+              '        let valueScopeOwnsLayout = expressionPrimaryIsDo(expression);\n',
+              1,
           )
           text = text.replace(
-              'return primary.name === "block";',
-              'return primary.name === "block" || primary.name === "do_block";',
+              '      original.includes("\\n") && containsRule(body, layoutSensitiveRules) &&\n',
+              '      original.includes("\\n") &&\n      (containsRule(body, layoutSensitiveRules) || expressionPrimaryIsDo(body)) &&\n',
+              1,
           )
+          text = text.replace(
+              '      : node.name === "block" || node.name === "statement_suite"\n      ? "statement"\n      : null;',
+              '      : node.name === "block" || node.name === "statement_suite" ||\n          isDoBlockPrimaryRule(node)\n      ? "statement"\n      : null;',
+              1,
+          )
+          text = text.replace(
+              '      if (blockRule.has(ancestor.name)) return false;\n',
+              '      if (blockRule.has(ancestor.name) || isDoBlockPrimaryRule(ancestor)) return false;\n',
+              1,
+          )
+          text = text.replace(
+              'function expressionIsBlock(expression: ConcreteRule): boolean {\n  return expressionPrimaryIs(expression, "block");\n}\n',
+              'function expressionIsBlock(expression: ConcreteRule): boolean {\n  return expressionPrimaryIs(expression, "block") || expressionPrimaryIsDo(expression);\n}\n',
+              1,
+          )
+          anchor = '''function directToken(rule: ConcreteRule, text: string): ConcreteToken | null {\n'''
+          helper = '''function expressionPrimaryIsDo(expression: ConcreteRule): boolean {\n  const operand = directRule(expression, "operand");\n  if (operand === null) return false;\n  const postfix = directRule(operand, "postfix_expression");\n  if (postfix === null) return false;\n  const primary = directRule(postfix, "primary_expression");\n  return primary !== null && isDoBlockPrimaryRule(primary);\n}\n\nfunction isDoBlockPrimaryRule(rule: ConcreteRule): boolean {\n  return (\n    rule.name === "primary_expression" ||\n    rule.name === "continued_primary_expression" ||\n    rule.name === "element_child_primary_expression"\n  ) && directToken(rule, "do") !== null;\n}\n\n'''
+          if text.count(anchor) != 1:
+              raise SystemExit('formatter.ts: directToken anchor changed')
+          text = text.replace(anchor, helper + anchor, 1)
+          indent_anchor = '  if (INDENTED_RULES.has(node.name)) {\n'
+          do_indent = '''  if (isDoBlockPrimaryRule(node)) {\n    const startsAtLine = lineAtOffset(lineStarts, node.span.start);\n    const endsAtLine = lineAtOffset(\n      lineStarts,\n      Math.max(node.span.start, ruleContentSpan(node).end - 1),\n    );\n    if (startsAtLine < endsAtLine) {\n      regions.push({\n        startsAtLine,\n        endsAtLine,\n        includesLastLine: true,\n        extraInteriorIndent: false,\n      });\n    }\n  }\n'''
+          if text.count(indent_anchor) != 1:
+              raise SystemExit('formatter.ts: indentation anchor changed')
+          text = text.replace(indent_anchor, do_indent + indent_anchor, 1)
           p.write_text(text)
 
-          # Migrate the actual source uses of the old parenthesized statement scope.
-          edit('src/prelude/prelude.blot',
-               '''const U = fn bits => (\n  let width = integer_width bits\n  return range (0, @int.sub (pow2 width) 1) <+ { .bit_width = width; }\n)''',
-               '''const U = fn bits => do:\n  let width = integer_width bits\n  return range (0, @int.sub (pow2 width) 1) <+ { .bit_width = width; }''', 1)
-          edit('src/prelude/prelude.blot',
-               '''const I = fn bits => (\n  let width = integer_width bits\n  let magnitude = pow2 (@int.sub width 1)\n  return range (\n    @int.neg magnitude,\n    @int.sub magnitude 1\n  ) <+ { .bit_width = width; }\n)''',
-               '''const I = fn bits => do:\n  let width = integer_width bits\n  let magnitude = pow2 (@int.sub width 1)\n  return range (\n    @int.neg magnitude,\n    @int.sub magnitude 1\n  ) <+ { .bit_width = width; }''', 1)
-          p = Path('src/prelude/prelude.blot')
+          # Migrate the real users of the old parenthesized statement block.
+          replace('src/prelude/prelude.blot', '''const U = fn bits => (\n  let width = integer_width bits\n  return range (0, @int.sub (pow2 width) 1) <+ { .bit_width = width; }\n)''', '''const U = fn bits => do:\n  let width = integer_width bits\n  return range (0, @int.sub (pow2 width) 1) <+ { .bit_width = width; }''')
+          replace('src/prelude/prelude.blot', '''const I = fn bits => (\n  let width = integer_width bits\n  let magnitude = pow2 (@int.sub width 1)\n  return range (\n    @int.neg magnitude,\n    @int.sub magnitude 1\n  ) <+ { .bit_width = width; }\n)''', '''const I = fn bits => do:\n  let width = integer_width bits\n  let magnitude = pow2 (@int.sub width 1)\n  return range (\n    @int.neg magnitude,\n    @int.sub magnitude 1\n  ) <+ { .bit_width = width; }''')
+          replace('src/prelude/prelude.blot', '''const layout = fn (shape, width_of) => (\n  let offset = 0\n  let fields = Array.empty\n  for name in Iter.items (@shape.names shape):\n    let width = width_of (@shape.get shape name)\n    fields := @array.push fields { .name = name; .offset = offset; .width = width; }\n    offset := @int.add offset width\n\n  return { .size = offset; .fields = fields; }\n)''', '''const layout = fn (shape, width_of) => do:\n  let offset = 0\n  let fields = Array.empty\n  for name in Iter.items (@shape.names shape):\n    let width = width_of (@shape.get shape name)\n    fields := @array.push fields { .name = name; .offset = offset; .width = width; }\n    offset := @int.add offset width\n\n  return { .size = offset; .fields = fields; }''')
+
+          p = Path('inference.test.ts')
           text = p.read_text()
-          old = 'const layout = fn (shape, width_of) => (\n'
-          if old not in text:
-              raise SystemExit('prelude layout parenthesized block not found')
-          start = text.index(old)
-          body_start = start + len(old)
-          # This helper is followed by the next blank line + declaration; its old
-          # scope-closing parenthesis is the line immediately before that boundary.
-          boundary = text.index('\n\n', body_start)
-          while boundary > body_start and text[boundary-2:boundary] != '\n)':
-              boundary = text.index('\n\n', boundary + 2)
-          segment = text[start:boundary]
-          if not segment.endswith('\n)'):
-              raise SystemExit('prelude layout closing block parenthesis not found')
-          replacement = segment.replace(old, 'const layout = fn (shape, width_of) => do:\n', 1)[:-2]
-          p.write_text(text[:start] + replacement + text[boundary:])
+          old = '''`return (\n  let up = rec (fn n => if n == 0 : 0 else: down (n - 1))\n  let down = rec (fn n => if n == 0 : 1 else: up (n - 1))\n  return up 9\n)\n`,'''
+          new = '''`return do:\n  let up = rec (fn n => if n == 0 : 0 else: down (n - 1))\n  let down = rec (fn n => if n == 0 : 1 else: up (n - 1))\n  return up 9\n`,'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          p.write_text(text)
 
-          edit('inference.test.ts',
-               '''`return (\n  let up = rec (fn n => if n == 0 : 0 else: down (n - 1))\n  let down = rec (fn n => if n == 0 : 1 else: up (n - 1))\n  return up 9\n)\n`,''',
-               '''`return do:\n  let up = rec (fn n => if n == 0 : 0 else: down (n - 1))\n  let down = rec (fn n => if n == 0 : 1 else: up (n - 1))\n  return up 9\n`,''', 1)
+          # Normative language text.
+          replace('LANGUAGE.md', 'for in break try fn\n', 'for in break try do fn\n')
+          replace('LANGUAGE.md', '''The\nintroducers are `=`, `=>`, `<-`, `of`, `with`, `:`, and an opening element's\n`>`. An opening `(` also introduces an explicit block when its next physical\nline starts with a statement form.''', '''The\nintroducers are `=`, `=>`, `<-`, `of`, `with`, `:`, and an opening element's\n`>`. `do:` is the explicit value-producing statement scope. Parentheses only\ngroup values or form tuples; they never introduce a statement suite.''')
+          replace('LANGUAGE.md', '### 4.8 Return\n', '### 4.8 Explicit blocks and return\n')
+          replace('LANGUAGE.md', '''```blot\nreturn value\n\nreturn\n  value\n```\n\nThe value may follow `return` on the same line or in an indented continuation.\n`return` exits the nearest enclosing module or explicit indentation block with\nthat value.''', '''```blot\nlet value = do:\n  let local = 1\n  return local\n\nreturn value\n\nreturn\n  value\n```\n\n`do:` introduces a lexical scope whose ordinary fallthrough value is `()`. A\n`return` inside it supplies the block value. The value may follow `return` on\nthe same line or in an indented continuation. `return` exits the nearest\nenclosing module or explicit `do` block with that value.''')
 
-          # Normative docs: parentheses never establish statement scope.
-          edit('LANGUAGE.md',
-               'for in break try fn\n',
-               'for in break try do fn\n', 1)
-          edit('LANGUAGE.md',
-               'The\nintroducers are `=`, `=>`, `<-`, `of`, `with`, `:`, and an opening element\'s\n`>`. An opening `(` also introduces an explicit block when its next physical\nline starts with a statement form.',
-               'The\nintroducers are `=`, `=>`, `<-`, `of`, `with`, `:`, and an opening element\'s\n`>`. `do:` is the explicit value-producing statement scope. Parentheses only\ngroup values or form tuples; they never introduce a statement suite.', 1)
-          edit('LANGUAGE.md', '### 4.8 Return\n', '### 4.8 Explicit blocks and return\n', 1)
-          edit('LANGUAGE.md',
-               '```blot\nreturn value\n\nreturn\n  value\n```\n\nThe value may follow `return` on the same line or in an indented continuation.\n`return` exits the nearest enclosing module or explicit indentation block with\nthat value.',
-               '```blot\nlet value = do:\n  let local = 1\n  return local\n\nreturn value\n\nreturn\n  value\n```\n\n`do:` introduces a lexical scope whose ordinary fallthrough value is `()`. A\n`return` inside it supplies the block value. The value may follow `return` on\nthe same line or in an indented continuation. `return` exits the nearest\nenclosing module or explicit `do` block with that value.', 1)
+          # Replace the old layout-special-case test with the explicit spelling.
+          p = Path('src/syntax/layout.test.ts')
+          text = p.read_text()
+          old = '''Deno.test("layout elaboration opens a parenthesized suite with discard sequencing", async () => {\n  const source = `let run = fn condition =>\n  <- effect (\n      if condition:\n        return 1\n      else:\n        return 2\n    )\n  return ()\nreturn run\n`;\n  const result = await elaborateLayout(source);\n  if (!result.ok) throw new Error(result.diagnostics[0]?.message);\n});\n'''
+          new = '''Deno.test("layout elaboration opens an explicit do suite", async () => {\n  const source = `let value = do:\n  let local = 1\n  return local\nreturn value\n`;\n  const result = await elaborateLayout(source);\n  if (!result.ok) throw new Error(result.diagnostics[0]?.message);\n  assertEquals(visible(result.layout.source).includes("do:<NL><IN>"), true);\n});\n\nDeno.test("parentheses do not introduce statement suites", async () => {\n  const source = `let value = (\n  let local = 1\n  return local\n)\nreturn value\n`;\n  const result = await elaborateLayout(source);\n  if (!result.ok) throw new Error(result.diagnostics[0]?.message);\n  assertEquals(visible(result.layout.source).includes("(<NL><IN>"), false);\n});\n'''
+          if text.count(old) != 1:
+              raise SystemExit('layout.test.ts: parenthesized suite test changed')
+          p.write_text(text.replace(old, new))
 
-          # Focused parser/lowering coverage and executable catalog entries.
           p = Path('src/syntax/surface.test.ts')
           text = p.read_text()
-          insertion = '''\nDeno.test("do is an explicit value-producing statement scope", async () => {\n  const source = `let value = do:\n  let local = 1\n  return local\nreturn value\n`;\n  const parsed = await parse(source);\n  assert(parsed.ok);\n  if (!parsed.ok) return;\n  const binding = parsed.module.declarations[0];\n  assert(binding !== undefined && binding.tag === "binding");\n  if (binding === undefined || binding.tag !== "binding") return;\n  assertEquals(binding.value.tag, "block");\n  if (binding.value.tag !== "block") return;\n  assertEquals(binding.value.declarations.length, 1);\n  assertEquals(binding.value.result.tag, "var");\n});\n'''
+          test = '''\nDeno.test("do is an explicit value-producing statement scope", async () => {\n  const source = `let value = do:\n  let local = 1\n  return local\nreturn value\n`;\n  const parsed = await parse(source);\n  assert(parsed.ok);\n  if (!parsed.ok) return;\n  const binding = parsed.module.declarations[0];\n  assert(binding !== undefined && binding.tag === "binding");\n  if (binding === undefined || binding.tag !== "binding") return;\n  assertEquals(binding.value.tag, "block");\n  if (binding.value.tag !== "block") return;\n  assertEquals(binding.value.declarations.length, 1);\n  assertEquals(binding.value.result.tag, "var");\n});\n'''
           anchor = '\nDeno.test(\n  "two-argument @handle elaborates to a computation transformer",'
           if anchor not in text:
-              raise SystemExit('surface test anchor not found')
-          p.write_text(text.replace(anchor, insertion + anchor, 1))
+              raise SystemExit('surface.test.ts: anchor changed')
+          p.write_text(text.replace(anchor, test + anchor, 1))
+
+          p = Path('src/tooling/formatter.test.ts')
+          text = p.read_text()
+          text += '''\nDeno.test("formatting preserves explicit do block scope", async () => {\n  const source = `let value = do:\n    let local = 1\n      return local\nreturn value\n`;\n  const formatted = await formatSource(source);\n  if (!formatted.ok) throw new Error("valid do block did not format");\n  assertEquals(\n    formatted.source,\n    `let value = do:\n  let local = 1\n  return local\nreturn value\n`,\n  );\n  assertEquals(await formatSource(formatted.source), formatted);\n});\n'''
+          p.write_text(text)
 
           Path('examples/do_blocks.blot').write_text('''let value = do:\n  let a = 1\n  let b = 2\n  return a\n\nreturn value\n''')
           Path('examples/expected/do_blocks.txt').write_text('1\n')
           Path('examples/rejected/syntax/parenthesized_block.blot').write_text('''let value = (\n  let local = 1\n  return local\n)\nreturn value\n''')
           PY
-      - name: Generate parser
-        run: deno task generate
-      - name: Generate Rust middle schema
-        run: deno task generate:rust-middle-schema
-      - name: Format changes
+      - name: Regenerate parser and Rust schema
+        run: |
+          deno task generate
+          deno task generate:rust-middle-schema
+      - name: Format
         run: deno fmt
-      - name: Run focused tests
-        run: deno test --allow-read --allow-write src/syntax/layout.test.ts src/syntax/surface.test.ts syntax.test.ts examples.test.ts inference.test.ts
+      - name: Focused tests
+        run: |
+          deno test --allow-read --allow-write src/syntax/layout.test.ts
+          deno test --allow-read --allow-write src/syntax/surface.test.ts --filter "do is an explicit"
+          deno test --allow-read --allow-write src/tooling/formatter.test.ts --filter "explicit do block"
+          deno test --allow-read --allow-write examples.test.ts --filter "do_blocks"
       - name: Inspect parser profile
-        run: deno task inspect
-      - name: Commit and push branch
+        run: deno task inspect | tee /tmp/inspect.txt
+      - name: Commit candidate
         run: |
           git config user.name "Jacob Torrång"
           git config user.email "kopatheonlyone@hotmail.com"
           git add -A
           git commit -m "language: add explicit do blocks"
-          git push --force-with-lease origin HEAD:do-blocks
+          git push --force origin HEAD:do-blocks
