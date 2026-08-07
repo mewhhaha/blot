@@ -22,21 +22,8 @@ export interface Env {
 
 export type Value =
   | { readonly tag: "int"; readonly value: bigint }
-  /**
-   * A double. Blot's only inexact number, and deliberately not a singleton
-   * type: `1.5` inhabits `Float` and nothing narrower (see `Domain`).
-   */
   | { readonly tag: "float"; readonly value: number }
-  /**
-   * A single-precision float. `value` is always already rounded to f32, so the
-   * interpreter holds exactly what the emitted `f32` holds and the two cannot
-   * drift apart between operations.
-   */
   | { readonly tag: "float32"; readonly value: number }
-  /**
-   * Four single-precision lanes. Always exactly four, and each already rounded
-   * to f32, so the interpreter holds what one SIMD register holds.
-   */
   | {
     readonly tag: "vector";
     readonly element: SimdElement;
@@ -47,22 +34,23 @@ export type Value =
     readonly element: SimdElement;
     readonly lanes: readonly boolean[];
   }
-  /**
-   * A type with no parts to take apart, including every SIMD vector and mask.
-   *
-   * It is not a range, because a vector is not an interval: a range answers
-   * questions about bounds, and `<1.0 2.0 3.0 4.0>` sits between nothing. It
-   * passed as one only because every float-ish range is open at both ends, so
-   * nothing ever asked. The checker's lattice spells the same thing `opaque`
-   * and identity is the name in both, so `equal` compares names and the bridge
-   * carries the name across unchanged.
-   */
   | { readonly tag: "opaque-type"; readonly name: string }
   | { readonly tag: "text"; readonly value: string }
   | { readonly tag: "unit" }
-  /** Records and tuples. Tuples use `"0"`, `"1"`, … as labels. */
   | { readonly tag: "shape"; readonly fields: ReadonlyMap<string, Value> }
   | { readonly tag: "array"; readonly elements: readonly Value[] }
+  /** Private type value produced only by `@region.array.type`. */
+  | { readonly tag: "region-type"; readonly element: Value }
+  /**
+   * Compiler-private mutable slice. Multiple scoped children may share `store`,
+   * but the ownership checker prevents overlapping capabilities from escaping.
+   */
+  | {
+    readonly tag: "region-array";
+    readonly store: { readonly cells: Value[] };
+    readonly start: number;
+    readonly end: number;
+  }
   | {
     readonly tag: "tag";
     readonly name: string;
@@ -74,25 +62,10 @@ export type Value =
     readonly body: Expr;
     readonly env: Env;
     readonly self: string | null;
-    /**
-     * The lambda this closure was written as.
-     *
-     * A closure's type comes from its body, and the checker needs the node the
-     * body was written as rather than an equivalent one: facts are keyed by AST
-     * node identity, so a synthesized lambda would key a second set of them.
-     * Absent on a module closure, whose body is assembled from the module's
-     * declarations rather than written as a lambda anywhere.
-     */
     readonly source?: Expr;
-    /**
-     * Set only on a module closure. Two files may write the same relative
-     * specifier and mean different targets, so the import table belongs to the
-     * module, not to the program.
-     */
     readonly imports?: ReadonlyMap<string, Value>;
   }
   | {
-    /** A checked runtime closure whose body no longer depends on source AST. */
     readonly tag: "core-closure";
     readonly parameter: Pattern;
     readonly body: CoreExpression;
@@ -105,11 +78,6 @@ export type Value =
     readonly arity: number;
     readonly applied: readonly Value[];
   }
-  /**
-   * A function the host supplied. Opaque: a program can call it and nothing
-   * else. This is the whole of the capability story — authority arrives in the
-   * entry module's parameter and cannot be forged, imported, or ambient.
-   */
   | {
     readonly tag: "native";
     readonly name: string;
@@ -117,10 +85,6 @@ export type Value =
     readonly applied: readonly Value[];
     readonly run: (args: readonly Value[]) => Value;
   }
-  /**
-   * An inclusive interval over one ordered domain. `domain` is set only when
-   * both ends are open, where the bounds cannot say which domain is meant.
-   */
   | {
     readonly tag: "range";
     readonly low: Value;
@@ -129,12 +93,6 @@ export type Value =
   }
   | { readonly tag: "union"; readonly members: readonly Value[] }
   | { readonly tag: "unbounded" }
-  /**
-   * A function type. `effects` is the row it performs, written `~ { Console }`
-   * and empty for a bare `->`: a function type that names no effect is the one
-   * that performs none, which is what makes a row part of a `sig` rather than
-   * a hint attached to one.
-   */
   | {
     readonly tag: "arrow";
     readonly domain: Value;
@@ -152,54 +110,19 @@ export type Value =
     readonly id: number;
     readonly name: string;
     readonly operations: ReadonlyMap<string, Value>;
-    /**
-     * Whether the host implements it.
-     *
-     * A blot effect is discharged by a blot handler and specialized away. A
-     * host effect's operations become typed WebAssembly imports, so its row is
-     * the program's declared interface rather than something left unhandled —
-     * which is why it may reach the module boundary and an ordinary one may
-     * not.
-     */
     readonly host: boolean;
   }
-  /** A performable operation: an effect plus one of its operation names. */
   | { readonly tag: "operation"; readonly effect: Value; readonly name: string }
-  /**
-   * A type value carrying a namespace.
-   *
-   * This is what makes `struct` return the storage type itself rather than a
-   * record beside it. `extended` is *transparent* everywhere that matters —
-   * equality, inhabitation, and the bridge into inference all see straight
-   * through to `inner`, so `sig p = Point` means `p` is the tuple `Point`
-   * describes. The members are reachable by field access and invisible to
-   * typing, which is the only way one binding can be both the type and the
-   * namespace of its accessors.
-   */
   | {
     readonly tag: "extended";
     readonly inner: Value;
     readonly members: ReadonlyMap<string, Value>;
   }
-  /**
-   * A nominal wrapper. Invariant, and never confused with its carrier.
-   *
-   * Identity is the name together with the carrier, not the `seal` call site.
-   * A fresh brand per call would make `List I32` a different type every time
-   * the constructor ran, which is exactly what a parameterized nominal must
-   * not be. Distinctness therefore comes from choosing a distinct name, which
-   * is what "nominal" means everywhere else.
-   */
   | {
     readonly tag: "sealed";
     readonly name: string;
     readonly inner: Value;
   }
-  /**
-   * A captured continuation, handed to a handler operation as `resume`. Affine:
-   * calling it twice is an error, which is what makes one-shot handlers
-   * checkable rather than merely conventional.
-   */
   | {
     readonly tag: "continuation";
     readonly resume: (value: Value) => unknown;
@@ -221,13 +144,6 @@ export function effectExtension(
   return effectExtensions.get(effect.id);
 }
 
-/**
- * The name of the four-lane vector type, spelled once.
- *
- * The evaluator mints the type value, `show` prints it, the bridge hands it to
- * the lattice, and the backend matches on it to pick the vector layout. Four
- * readers is how a name drifts, so there is one string.
- */
 export const F32X4_NAME = "F32x4";
 export const F32X4_MASK_NAME = "F32x4Mask";
 export const I32X4_NAME = "I32x4";
@@ -254,14 +170,6 @@ export const UNIT: Value = { tag: "unit" };
 export const TRUE: Value = { tag: "tag", name: "True", payload: null };
 export const FALSE: Value = { tag: "tag", name: "False", payload: null };
 
-/**
- * A compile-time value may carry a wider inferred type without changing what
- * evaluating, comparing, showing, or lowering that value observes.
- *
- * The map is weak because the annotation belongs to this value identity. A
- * producer must only attach a type the value inhabits; `as_json` uses this to
- * distinguish ordinary JSON inference from literal-preserving `as_const_json`.
- */
 const inferredTypes = new WeakMap<object, Value>();
 
 export function withInferredType(value: Value, type: Value): Value {
@@ -287,7 +195,6 @@ export function tupleOf(elements: readonly Value[]): Value {
   );
 }
 
-/** Tuples are shapes with `0..n-1` labels; this recovers the positional view. */
 export function asTuple(value: Value, arity: number): readonly Value[] | null {
   if (value.tag !== "shape" || value.fields.size !== arity) return null;
   const elements: Value[] = [];
@@ -311,7 +218,6 @@ export function childEnv(parent: Env | null): Env {
   };
 }
 
-/** The fresh body scope of one application of a source module. */
 export function moduleEnv(parent: Env, module: object): Env {
   return {
     names: new Map(),
@@ -320,7 +226,6 @@ export function moduleEnv(parent: Env, module: object): Env {
   };
 }
 
-/** The parameter scope immediately outside a source module body. */
 export function moduleParameterEnv(parent: Env, module: object): Env {
   return {
     names: new Map(),
@@ -359,8 +264,6 @@ export function show(value: Value): string {
     return `${shown}f`;
   }
   if (value.tag === "float") {
-    // A float always prints with a point, so `2` and `2.0` stay distinguishable
-    // in a diagnostic and in a recorded example's expected output.
     if (Number.isFinite(value.value) && Number.isInteger(value.value)) {
       return `${value.value}.0`;
     }
@@ -370,6 +273,10 @@ export function show(value: Value): string {
   if (value.tag === "unit") return "()";
   if (value.tag === "unbounded") return "@type.unbounded";
   if (value.tag === "opaque-type") return value.name;
+  if (value.tag === "region-type") return `Region ${show(value.element)}`;
+  if (value.tag === "region-array") {
+    return `<region ${value.start}..${value.end}>`;
+  }
   if (value.tag === "type-variable") return `'t${value.id}`;
   if (value.tag === "forall") {
     return `forall 't${value.variable}. ${show(value.body)}`;
@@ -387,11 +294,6 @@ export function show(value: Value): string {
   if (value.tag === "extended") return show(value.inner);
   if (value.tag === "sealed") return `${value.name} ${show(value.inner)}`;
   if (value.tag === "range") {
-    // The same names the checker's printer uses. A range unbounded at both
-    // ends is `Int` or `Str`; anything else shows its bounds. Rendering `Int`
-    // as `@type.unbounded..@type.unbounded` was true and unreadable, and it
-    // reached the user through every printed type value and every diagnostic
-    // that quoted one.
     const open = value.low.tag === "unbounded";
     const shut = value.high.tag === "unbounded";
     const domain = value.domain !== undefined
@@ -416,9 +318,6 @@ export function show(value: Value): string {
     return `${left}..${right}`;
   }
   if (value.tag === "arrow") {
-    // The checker's printer spells a row the same way, sorted for the same
-    // reason: a row is a set, and a type value is read next to an inferred type
-    // often enough that the two must agree down to the order.
     const row = value.effects.length === 0
       ? ""
       : ` ~ { ${value.effects.map(effectName).sort().join(", ")} }`;
@@ -443,14 +342,11 @@ export function show(value: Value): string {
   return `{ ${members.join("; ")}${members.length === 0 ? "" : ";"} }`;
 }
 
-/** The name a row shows an effect under: `Console`, not `<effect Console>`. */
 function effectName(value: Value): string {
   if (value.tag === "effect") return value.name;
   return show(value);
 }
 
-/** Structural equality. Closures and primitives are compared by identity. */
-/** Which ordered domain a range lives in: its own label, else its bounds. */
 export function rangeDomainOf(
   value: Value & { tag: "range" },
 ): "int" | "text" | "float" | "float32" {
@@ -479,8 +375,6 @@ export function equal(left: Value, right: Value): boolean {
     return Object.is(left.value, right.value);
   }
   if (left.tag === "float" && right.tag === "float") {
-    // Bit equality, so `equal` stays an equivalence: `NaN` is the same value as
-    // itself here even though `@float.cmp` refuses to order it.
     return Object.is(left.value, right.value);
   }
   if (left.tag === "text" && right.tag === "text") {
@@ -500,6 +394,13 @@ export function equal(left: Value, right: Value): boolean {
         equal(element, right.elements[index])
       );
   }
+  if (left.tag === "region-type" && right.tag === "region-type") {
+    return equal(left.element, right.element);
+  }
+  if (left.tag === "region-array" && right.tag === "region-array") {
+    return left.store === right.store && left.start === right.start &&
+      left.end === right.end;
+  }
   if (left.tag === "shape" && right.tag === "shape") {
     if (left.fields.size !== right.fields.size) return false;
     for (const [name, member] of left.fields) {
@@ -509,16 +410,10 @@ export function equal(left: Value, right: Value): boolean {
     return true;
   }
   if (left.tag === "range" && right.tag === "range") {
-    // The domain is part of the identity. `Int` and `Str` are both
-    // `unbounded..unbounded` and comparing only the bounds made them equal, so
-    // `@type.union` deduplicated them and `Int | Str` silently became `Int`.
     if (rangeDomainOf(left) !== rangeDomainOf(right)) return false;
     return equal(left.low, right.low) && equal(left.high, right.high);
   }
   if (left.tag === "arrow" && right.tag === "arrow") {
-    // The row is part of the identity. Two arrows that agree on what they
-    // accept and return but not on what they perform are two types, and
-    // treating them as one would let `@type.diff` remove the effectful one.
     return equal(left.domain, right.domain) &&
       equal(left.codomain, right.codomain) &&
       left.effects.length === right.effects.length &&
