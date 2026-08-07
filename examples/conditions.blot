@@ -19,24 +19,22 @@
 open @import "blot:prelude" ()
 
 sig name = 1 | 2 | 3 -> Str
-let name = fn n => if n == 1:
-  return case n of
+let name = fn n => case n == 1 of
+  #True => case n of
     1 => "one"
-else:
-  return case n of
+  #False => case n of
     2 => "two"
     3 => "three"
 
 // The chain accumulates: the fallback knows that none of the earlier conditions
 // fired, so `n` is `3` there and one arm covers it.
 sig ordinal = 1 | 2 | 3 -> Str
-let ordinal = fn n => if n == 1:
-  return "first"
-else if n == 2:
-  return "second"
-else:
-  return case n of
-    3 => "third"
+let ordinal = fn n => case n == 1 of
+  #True => "first"
+  #False => case n == 2 of
+    #True => "second"
+    #False => case n of
+      3 => "third"
 
 // Nothing is enumerated. `@int.cmp` answers on every pair of integers, so a
 // comparison narrows an unbounded domain the same way it narrows a finite one:
