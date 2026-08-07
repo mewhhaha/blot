@@ -19,21 +19,29 @@ in a benchmark months later.
 
 | counter                     |              blot | note                                               |
 | --------------------------- | ----------------: | -------------------------------------------------- |
-| `lexerStates`               |               122 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`               |               124 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |                31 | worst-case island candidates allocated per token   |
-| `islandCount`               |                86 | one island for every grammar rule                  |
-| `islandStates`              |               505 |                                                    |
-| `islandTransitions`         |               519 |                                                    |
+| `islandCount`               |                87 | one island for every grammar rule                  |
+| `islandStates`              |               516 |                                                    |
+| `islandTransitions`         |               531 |                                                    |
 | `contractionRounds`         |                33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      |           866,580 | immutable device table                             |
-| `packedBytes`               |           664,297 | version-3 runtime section                          |
+| `denseTransitionBytes`      |           897,840 | immutable device table                             |
+| `packedBytes`               |           686,913 | version-3 runtime section                          |
 | `rootLoopIsland`            | 5 (`declaration`) | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |                 9 | islands admitted to parallel long-region execution |
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
-and edge arrays directly. Declaring all 86 rules as islands is what preserves
+and edge arrays directly. Declaring all 87 rules as islands is what preserves
 the full CST shape needed by source lowering.
+
+Adding the explicit `do:` value scope adds two lexer states, one island, eleven
+island states, twelve island transitions, 31,260 dense-transition bytes, and
+22,616 packed bytes relative to the pre-`do:` profile. Candidate multiplicity,
+contraction rounds, scratch factors, the root loop, and parallel long-region
+admission are unchanged. `do_block` is retained as its own island and lowers to
+the existing block AST. Removing the old parenthesized-suite inference happens
+in layout elaboration before parsing and therefore changes no parser counter.
 
 ## Historical strict-profile measurements
 
@@ -45,7 +53,7 @@ The current source is indentation-sensitive without making Baba's lexer
 contextual. Blot first runs the generated lexer, inserts three reserved private
 tokens for logical newline, indent, and dedent, and then gives that elaborated
 stream to the generated compact CPU frontend. Physical offsets are retained for
-diagnostics. Because the layout tokens have fixed terminal identities, all 86
+diagnostics. Because the layout tokens have fixed terminal identities, all 87
 rules still satisfy the general profile and no parser resolution is required.
 
 Giving `return` the same explicit indented-value branch as a binding adds one
