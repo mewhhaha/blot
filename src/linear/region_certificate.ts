@@ -2,10 +2,10 @@
  * Generic certificate graph for partitioned ownership authorities.
  *
  * This module deliberately knows nothing about arrays or intervals. It proves
- * only the linear authority graph: one origin generation is claimed once, a
- * permit is produced once and consumed once, partitions do not retain their
- * parent, combinations consume every input, and all parts preserve one
- * origin/family.
+ * only the linear authority graph: one externally authorized Store root is
+ * claimed once, one origin generation is claimed once, a permit is produced
+ * once and consumed once, partitions do not retain their parent, combinations
+ * consume every input, and all parts preserve one root/origin/family.
  *
  * A region-family validator is responsible for the semantic half: e.g. an
  * array-interval partition must be a disjoint cover, a combine must join
@@ -26,6 +26,12 @@ export interface RegionAuthorityCertificate {
 export type RegionAuthorityEvent =
   | {
     readonly tag: "claim";
+    /**
+     * Identity of an external Store-uniqueness proof. In production this should
+     * name a fresh-allocation/reuse lineage fact, not merely a linear binding.
+     */
+    readonly root: string;
+    /** One acquisition generation derived from `root`. */
     readonly origin: RegionOriginId;
     readonly family: string;
     readonly permit: RegionPermitId;
@@ -61,6 +67,7 @@ export interface VerifiedRegionAuthorityCertificate {
 }
 
 export interface VerifiedRegionPermit {
+  readonly root: string;
   readonly origin: RegionOriginId;
   readonly family: string;
   readonly producedBy: number;
@@ -68,6 +75,7 @@ export interface VerifiedRegionPermit {
 }
 
 interface LivePermit {
+  readonly root: string;
   readonly origin: RegionOriginId;
   readonly family: string;
   readonly producedBy: number;
@@ -78,16 +86,23 @@ interface LivePermit {
  * Partial compilation can use `allowLive=true` while constructing a graph, but
  * Runtime HIR validation should require the default closed form.
  *
+ * `authorizedRoots` is deliberately external to this certificate. The ordinary
+ * ownership/allocation proof establishes that the Store has no persistent alias
+ * which could observe a destructive write; this verifier establishes that the
+ * region authority derived from that proof is never duplicated.
+ *
  * `origin` names one acquisition generation, not merely a raw pointer. Releasing
- * an authority and later reacquiring unique access to the same Store creates a
- * fresh origin id. That keeps "claimed exactly once" local and auditable.
+ * an authority and later reacquiring unique access to the same Store uses a
+ * fresh authorized root and a fresh origin id.
  */
 export function verifyRegionAuthorityCertificate(
   certificate: RegionAuthorityCertificate,
+  authorizedRoots: ReadonlySet<string>,
   allowLive = false,
 ): VerifiedRegionAuthorityCertificate | null {
   if (certificate.schema !== 1) return null;
 
+  const claimedRoots = new Set<string>();
   const claimedOrigins = new Set<RegionOriginId>();
   const produced = new Map<RegionPermitId, number>();
   const live = new Map<RegionPermitId, LivePermit>();
@@ -96,14 +111,18 @@ export function verifyRegionAuthorityCertificate(
 
   const produce = (
     permit: RegionPermitId,
+    root: string,
     origin: RegionOriginId,
     family: string,
     event: number,
   ): boolean => {
-    if (!validId(permit) || !validId(origin) || family.length === 0) return false;
+    if (
+      !validId(permit) || !validId(origin) || root.length === 0 ||
+      family.length === 0
+    ) return false;
     if (produced.has(permit)) return false;
     produced.set(permit, event);
-    live.set(permit, { origin, family, producedBy: event });
+    live.set(permit, { root, origin, family, producedBy: event });
     return true;
   };
 
@@ -126,8 +145,21 @@ export function verifyRegionAuthorityCertificate(
     if (event.operation.length === 0) return null;
 
     if (event.tag === "claim") {
-      if (!validId(event.origin) || claimedOrigins.has(event.origin)) return null;
-      if (!produce(event.permit, event.origin, event.family, index)) return null;
+      if (
+        event.root.length === 0 || !authorizedRoots.has(event.root) ||
+        claimedRoots.has(event.root) || !validId(event.origin) ||
+        claimedOrigins.has(event.origin)
+      ) return null;
+      if (
+        !produce(
+          event.permit,
+          event.root,
+          event.origin,
+          event.family,
+          index,
+        )
+      ) return null;
+      claimedRoots.add(event.root);
       claimedOrigins.add(event.origin);
       continue;
     }
@@ -137,7 +169,15 @@ export function verifyRegionAuthorityCertificate(
       const source = consume(event.source, index);
       if (source === null) return null;
       for (const part of event.parts) {
-        if (!produce(part, source.origin, source.family, index)) return null;
+        if (
+          !produce(
+            part,
+            source.root,
+            source.origin,
+            source.family,
+            index,
+          )
+        ) return null;
       }
       continue;
     }
@@ -155,20 +195,37 @@ export function verifyRegionAuthorityCertificate(
       const first = inputs[0];
       if (
         inputs.some((input) =>
-          input.origin !== first.origin || input.family !== first.family
+          input.root !== first.root || input.origin !== first.origin ||
+          input.family !== first.family
         )
       ) return null;
       for (const part of event.parts) {
         if (consume(part, index) === null) return null;
       }
-      if (!produce(event.result, first.origin, first.family, index)) return null;
+      if (
+        !produce(
+          event.result,
+          first.root,
+          first.origin,
+          first.family,
+          index,
+        )
+      ) return null;
       continue;
     }
 
     if (event.tag === "transform") {
       const source = consume(event.source, index);
       if (source === null) return null;
-      if (!produce(event.result, source.origin, source.family, index)) return null;
+      if (
+        !produce(
+          event.result,
+          source.root,
+          source.origin,
+          source.family,
+          index,
+        )
+      ) return null;
       continue;
     }
 
