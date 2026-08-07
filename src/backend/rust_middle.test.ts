@@ -43,6 +43,28 @@ Deno.test("compiler check omits an empty effect row", async () => {
   }
 });
 
+Deno.test("public Rust compiler rejects cross-frame rebinding", async () => {
+  const compiler = await RustMiddleCompiler.create();
+  try {
+    await assertRejects(
+      () =>
+        compiler.checkSource(
+          "rebinding-frame.blot",
+          `let x = 0
+let change = fn () => do:
+  x := 1
+  return x
+return change
+`,
+        ),
+      Error,
+      "BLOT_REBINDING_FRAME",
+    );
+  } finally {
+    compiler.destroy();
+  }
+});
+
 Deno.test("Rust HIR matches the bounded TypeScript ABI oracle", async () => {
   const rust = validateBlotRuntimeModule(
     await prepareRustGpupaperHir("examples/minimal.blot"),
