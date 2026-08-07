@@ -176,8 +176,8 @@ stays an ordinary fixity entry whose target is source with type
 a -> a -> Bool
 ```
 
-and whose body resolves the implementation by interface lookup on the
-argument's type.
+and whose body resolves the implementation by interface lookup on the argument's
+type.
 
 Both carriers exist. Attached namespace members (`@type.attach`, the `struct`
 precedent) hold `.eq` for sealed and constructed types, so a nominal type
