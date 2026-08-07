@@ -28,7 +28,7 @@ let rejoined = case @region.array.split (!whole) 1 of
 return @region.array.freeze (!rejoined)
 `,
   );
-  assertEquals(checked.type, "[1 | 2 | 3]");
+  assertEquals(checked.type, "[(3 | 1 | 2)]");
 });
 
 Deno.test("Region claim is copy-safe for a shared source array", async () => {
