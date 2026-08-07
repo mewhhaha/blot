@@ -23,40 +23,31 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
           components: rustfmt,clippy
-      - name: Build Rust-middle compiler
-        run: cargo build --target wasm32-unknown-unknown --manifest-path experiments/rust-middle/Cargo.toml
-      - name: Diagnose prelude frontend
+      - name: Teach Rust lowering about do blocks
         run: |
-          cat > /tmp/diagnose.ts <<'TS'
-          import { RustMiddle } from "${{ github.workspace }}/src/backend/rust_middle_wasm.ts";
-          import { elaborateLayout } from "${{ github.workspace }}/src/syntax/layout.ts";
-
-          const source = await Deno.readTextFile("src/prelude/prelude.blot");
-          const layout = await elaborateLayout(source);
-          if (!layout.ok) {
-            console.log(JSON.stringify(layout, null, 2));
-            Deno.exit(1);
-          }
-          const wasm = await Deno.readFile("experiments/rust-middle/target/wasm32-unknown-unknown/debug/blot_rust_middle.wasm");
-          const rust = await RustMiddle.load(wasm);
-          const session = rust.createCompilerSession();
-          try {
-            const added = rust.addCompilerSessionModule(session, "snapshot:prelude", layout.layout.source);
-            console.log(JSON.stringify(added, null, 2));
-            if (!added.ok) {
-              for (const diagnostic of added.diagnostics ?? []) {
-                const start = layout.layout.originalOffset(diagnostic.span.start);
-                const end = layout.layout.originalOffset(diagnostic.span.end);
-                const before = source.slice(0, start);
-                const line = before.split("\n").length;
-                const column = start - before.lastIndexOf("\n");
-                console.log(`original ${line}:${column} [${start}, ${end})`);
-                console.log(source.slice(Math.max(0, start - 160), Math.min(source.length, end + 160)));
-              }
-              Deno.exit(1);
-            }
-          } finally {
-            rust.destroyCompilerSession(session);
-          }
-          TS
-          deno run --config deno.json --allow-read /tmp/diagnose.ts
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('experiments/rust-middle/src/lower.rs')
+          text = p.read_text()
+          old = '        "block" => {\n'
+          new = '        "block" | "do_block" => {\n'
+          if old in text:
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected one block lowering match, found {text.count(old)}')
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit('block lowering match changed')
+          p.write_text(text)
+          PY
+          cargo fmt --manifest-path experiments/rust-middle/Cargo.toml
+      - name: Rebuild checked-in compiler
+        run: deno task build:rust-middle
+      - name: Run production corpus
+        run: deno task corpus
+      - name: Commit lowerer and artifact
+        run: |
+          git config user.name "Jacob Torrång"
+          git config user.email "kopatheonlyone@hotmail.com"
+          git add experiments/rust-middle/src/lower.rs generated/rust-middle/compiler.wasm generated/rust-middle/prelude.snapshot
+          git commit -m "build: refresh Rust compiler for do blocks" || true
+          git push origin HEAD:do-blocks
