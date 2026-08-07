@@ -1,17 +1,23 @@
 /**
- * Generic certificate graph for partitioned ownership authorities.
+ * Single-path trace oracle for partitioned ownership authorities.
  *
- * This module deliberately knows nothing about arrays or intervals. It proves
- * only the linear authority graph: one externally authorized Store root is
- * claimed once, one origin generation is claimed once, a permit is produced
- * once and consumed once, partitions do not retain their parent, combinations
- * consume every input, and all parts preserve one root/origin/family.
+ * This module deliberately knows nothing about arrays or intervals. Given one
+ * concrete execution trace, it proves the linear authority graph: one
+ * externally authorized Store root is claimed once, one origin generation is
+ * claimed once, a permit is produced once and consumed once, partitions do not
+ * retain their parent, combinations consume every input, and all parts preserve
+ * one root/origin/family.
  *
- * A region-family validator is responsible for the semantic half: e.g. an
- * array-interval partition must be a disjoint cover, a combine must join
- * compatible regions, and a write must stay inside the carried interval.
- * Runtime HIR must bind each certificate event to the corresponding trusted
- * operation before destructive reuse is permitted.
+ * This is executable evidence for the region algebra and a hostile-input
+ * verifier for evaluator/runtime experiments. It is NOT sufficient as Blot's
+ * static source ownership certificate: mutually exclusive branch consumptions
+ * are alternatives, not sequential trace events. Production integration must
+ * carry region derivation alongside the existing path-sensitive ownership
+ * certificate, as specified in `spec/OWNED_REGIONS.md`.
+ *
+ * A region-family validator supplies the semantic half for each trace event:
+ * e.g. an array-interval partition must be a disjoint cover, a combine must
+ * join compatible regions, and a write must stay inside its carried interval.
  */
 
 export type RegionPermitId = number;
@@ -27,8 +33,9 @@ export type RegionAuthorityEvent =
   | {
     readonly tag: "claim";
     /**
-     * Identity of an external Store-uniqueness proof. In production this should
-     * name a fresh-allocation/reuse lineage fact, not merely a linear binding.
+     * Identity of an external Store-uniqueness proof. A production reuse path
+     * would name a fresh-allocation/reuse lineage fact, not merely a linear
+     * binding. The executable model always roots this in a fresh Store.
      */
     readonly root: string;
     /** One acquisition generation derived from `root`. */
@@ -82,14 +89,13 @@ interface LivePermit {
 }
 
 /**
- * Replays the authority graph. A complete certificate must release every leaf.
- * Partial compilation can use `allowLive=true` while constructing a graph, but
- * Runtime HIR validation should require the default closed form.
+ * Replays one authority trace. A complete trace must release every leaf.
+ * `allowLive=true` is useful while constructing/debugging a trace.
  *
- * `authorizedRoots` is deliberately external to this certificate. The ordinary
- * ownership/allocation proof establishes that the Store has no persistent alias
- * which could observe a destructive write; this verifier establishes that the
- * region authority derived from that proof is never duplicated.
+ * `authorizedRoots` is deliberately external. Store provenance establishes
+ * that a destructive allocation has no persistent observer; this verifier only
+ * establishes that authority derived from that root is not duplicated along
+ * the represented execution path.
  *
  * `origin` names one acquisition generation, not merely a raw pointer. Releasing
  * an authority and later reacquiring unique access to the same Store uses a
