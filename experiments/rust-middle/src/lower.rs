@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use num_bigint::BigInt;
@@ -119,6 +120,7 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
         }
         (lowered, ResultEffects::Pure)
     };
+    elaborate_handler_steps(&mut arena);
     Ok(Module {
         parameter,
         fixities,
@@ -128,6 +130,142 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
         span,
         arena,
     })
+}
+
+/// Mirrors the handler rules source elaboration applies in
+/// `src/syntax/surface.ts`. Both compilers must hand the checker the same
+/// tree, so the two-argument `@handle` step and the `|>` that saturates it are
+/// resolved here rather than in either backend.
+///
+/// Lowering allocates a node after its children, so walking the arena forward
+/// visits an inner step before the pipe that consumes it — the order the
+/// recursive elaboration has for free.
+fn elaborate_handler_steps(arena: &mut AstArena) {
+    let mut steps: HashMap<u32, (ExpressionId, ExpressionId)> = HashMap::new();
+    for index in 0..arena.expressions.len() {
+        let Expression::Apply {
+            function,
+            argument,
+            span,
+        } = arena.expressions[index]
+        else {
+            continue;
+        };
+        if let Some(&(effect, handler)) = steps.get(&argument.0)
+            && let Expression::Apply {
+                function: piped,
+                argument: computation,
+                ..
+            } = arena.expressions[function.0 as usize]
+            && is_pipe(arena, piped)
+        {
+            arena.expressions[index] =
+                handled_computation(effect, computation, handler, span, arena);
+            continue;
+        }
+        if !matches!(
+            &arena.expressions[function.0 as usize],
+            Expression::Intrinsic { name, .. } if name == "@handle"
+        ) {
+            continue;
+        }
+        let Expression::Tuple { elements, .. } = &arena.expressions[argument.0 as usize] else {
+            continue;
+        };
+        let [effect, handler] = elements[..] else {
+            continue;
+        };
+        arena.expressions[index] = handler_transformer(effect, handler, span, arena);
+        steps.insert(index as u32, (effect, handler));
+    }
+}
+
+fn is_pipe(arena: &AstArena, expression: ExpressionId) -> bool {
+    let Expression::Field { target, name, .. } = &arena.expressions[expression.0 as usize] else {
+        return false;
+    };
+    if name != "pipe" {
+        return false;
+    }
+    matches!(
+        &arena.expressions[target.0 as usize],
+        Expression::Var { name, .. } if name == "Fn"
+    )
+}
+
+/// `@handle (effect, handler)` as a value: the computation is still to come,
+/// and the parameter owns it because the step consumes it exactly once.
+fn handler_transformer(
+    effect: ExpressionId,
+    handler: ExpressionId,
+    span: Span,
+    arena: &mut AstArena,
+) -> Expression {
+    let name = format!("handlerInput${}${}", span.start, span.end);
+    let parameter = arena.pattern(Pattern::Name {
+        name: name.clone(),
+        qualifier: Qualifier::Linear,
+        span,
+    });
+    let computation = variable(&name, span, arena);
+    let body = handled_computation(effect, computation, handler, span, arena);
+    let body = arena.expression(body);
+    Expression::Lambda {
+        parameter,
+        body,
+        span,
+    }
+}
+
+/// The nullary computation a step produces around a known computation. The
+/// computation reaches `@handle` as itself rather than through the step's
+/// parameter, so a handler clause answers to what the program owns.
+fn handled_computation(
+    effect: ExpressionId,
+    computation: ExpressionId,
+    handler: ExpressionId,
+    span: Span,
+    arena: &mut AstArena,
+) -> Expression {
+    let name = format!("handlerResult${}${}", span.start, span.end);
+    let intrinsic = arena.expression(Expression::Intrinsic {
+        name: "@handle".to_owned(),
+        span,
+    });
+    let argument = arena.expression(Expression::Tuple {
+        elements: vec![effect, computation, handler],
+        span,
+    });
+    let saturated = arena.expression(Expression::Apply {
+        function: intrinsic,
+        argument,
+        span,
+    });
+    let pattern = arena.pattern(Pattern::Name {
+        name: name.clone(),
+        qualifier: Qualifier::None,
+        span,
+    });
+    let binding = arena.declaration(Declaration::Binding {
+        kind: DeclarationKind::Effect,
+        tags: Vec::new(),
+        pattern,
+        value: saturated,
+        span,
+    });
+    let result = variable(&name, span, arena);
+    let body = arena.expression(Expression::Block {
+        declarations: vec![binding],
+        result,
+        result_effects: ResultEffects::Ambient,
+        span,
+    });
+    let parameter = arena.pattern(Pattern::Unit { span });
+    Expression::Lambda {
+        parameter,
+        body,
+        span,
+    }
 }
 
 fn lower_fixity(cst: &CompactCst<'_>, cursor: Cursor) -> Result<Fixity, String> {
@@ -2292,51 +2430,15 @@ fn lower_primary(
             Ok(arena.expression(Expression::Shape { members, span }))
         }
         "element_expression" => lower_element(cst, rule, context, arena),
-        "conditional" => {
-            let mut branches = vec![Branch {
-                condition: lower_expression(
-                    cst,
-                    as_rule(required(cst, rule, "condition")?)?,
-                    &context.value_condition(),
-                    arena,
-                )?,
-                consequence: lower_value(
-                    cst,
-                    required(cst, rule, "consequence")?,
-                    &context.value_condition(),
-                    arena,
-                )?,
-            }];
-            for alternative in cst.field_list(rule, "alternatives")? {
-                let alternative = as_rule(alternative)?;
-                branches.push(Branch {
-                    condition: lower_expression(
-                        cst,
-                        as_rule(required(cst, alternative, "condition")?)?,
-                        &context.value_condition(),
-                        arena,
-                    )?,
-                    consequence: lower_value(
-                        cst,
-                        required(cst, alternative, "consequence")?,
-                        &context.value_condition(),
-                        arena,
-                    )?,
-                });
-            }
-            let fallback = as_rule(required(cst, rule, "fallback")?)?;
-            let fallback = lower_value(
-                cst,
-                required(cst, fallback, "alternative")?,
-                &context.value_condition(),
-                arena,
-            )?;
-            Ok(arena.expression(Expression::If {
-                branches,
-                fallback: Some(fallback),
-                span,
-            }))
-        }
+        // Both removed forms still parse: the concrete syntax keeps them so the
+        // formatter can migrate a program that predates their removal. What the
+        // compiler accepts is decided here, with the diagnostic source
+        // elaboration gives.
+        "conditional" => Err(concat!(
+            "BLOT_VALUE_IF_REMOVED: `if` is control flow and cannot be used as a ",
+            "value. Match `#True` and `#False` with `case` instead."
+        )
+        .to_owned()),
         "case_expression" => {
             let target = lower_expression(
                 cst,
@@ -2374,7 +2476,11 @@ fn lower_primary(
             }
             lower_guards(target, &arms, span, arena)
         }
-        "handler_composition" => lower_handler_composition(cst, rule, context, arena),
+        "handler_composition" => Err(concat!(
+            "BLOT_TRY_REMOVED: `try ... with` was removed. Compose ",
+            "`@handle (Effect, handler)` transformers with `|>` instead."
+        )
+        .to_owned()),
         // `do:` is the same statement scope written explicitly, so it lowers
         // through the same arm rather than gaining its own node.
         "block" | "do_block" => {
@@ -2531,6 +2637,46 @@ struct GuardedArm {
     body: ExpressionId,
 }
 
+/// Builds a `case`, folding the two-arm Boolean form into the internal
+/// conditional the way source elaboration does. `case` is the source
+/// value-selection form; the conditional node is what the checker's branch
+/// refinement already reads, and both compilers must produce the same tree.
+fn case_expression(
+    target: ExpressionId,
+    arms: Vec<Arm>,
+    span: Span,
+    arena: &mut AstArena,
+) -> ExpressionId {
+    if arms.len() == 2 {
+        let consequence = boolean_arm(&arms, "True", arena);
+        let fallback = boolean_arm(&arms, "False", arena);
+        if let (Some(consequence), Some(fallback)) = (consequence, fallback) {
+            return arena.expression(Expression::If {
+                branches: vec![Branch {
+                    condition: target,
+                    consequence,
+                }],
+                fallback: Some(fallback),
+                span,
+            });
+        }
+    }
+    arena.expression(Expression::Case { target, arms, span })
+}
+
+fn boolean_arm(arms: &[Arm], name: &str, arena: &AstArena) -> Option<ExpressionId> {
+    arms.iter()
+        .find(|arm| match &arena.patterns[arm.pattern.0 as usize] {
+            Pattern::Constructor {
+                name: constructor,
+                payload: None,
+                ..
+            } => constructor == name,
+            _ => false,
+        })
+        .map(|arm| arm.body)
+}
+
 fn lower_guards(
     target: ExpressionId,
     arms: &[GuardedArm],
@@ -2538,17 +2684,14 @@ fn lower_guards(
     arena: &mut AstArena,
 ) -> Result<ExpressionId, String> {
     if arms.iter().all(|arm| arm.guard.is_none()) {
-        return Ok(arena.expression(Expression::Case {
-            target,
-            arms: arms
-                .iter()
-                .map(|arm| Arm {
-                    pattern: arm.pattern,
-                    body: arm.body,
-                })
-                .collect(),
-            span,
-        }));
+        let arms: Vec<Arm> = arms
+            .iter()
+            .map(|arm| Arm {
+                pattern: arm.pattern,
+                body: arm.body,
+            })
+            .collect();
+        return Ok(case_expression(target, arms, span, arena));
     }
     if matches!(arena.expressions[target.0 as usize], Expression::Var { .. }) {
         return guard_level(target, arms, span, 0, arena);
@@ -2584,17 +2727,14 @@ fn guard_level(
     arena: &mut AstArena,
 ) -> Result<ExpressionId, String> {
     let Some(index) = arms.iter().position(|arm| arm.guard.is_some()) else {
-        return Ok(arena.expression(Expression::Case {
-            target: subject,
-            arms: arms
-                .iter()
-                .map(|arm| Arm {
-                    pattern: arm.pattern,
-                    body: arm.body,
-                })
-                .collect(),
-            span,
-        }));
+        let arms: Vec<Arm> = arms
+            .iter()
+            .map(|arm| Arm {
+                pattern: arm.pattern,
+                body: arm.body,
+            })
+            .collect();
+        return Ok(case_expression(subject, arms, span, arena));
     };
     let guarded = arms[index];
     let condition = guarded
@@ -2713,123 +2853,6 @@ fn erase_binders(pattern: PatternId, arena: &mut AstArena) -> PatternId {
         }
         pattern => arena.pattern(pattern),
     }
-}
-
-fn lower_handler_composition(
-    cst: &CompactCst<'_>,
-    rule: u32,
-    context: &LoweringContext<'_>,
-    arena: &mut AstArena,
-) -> Result<ExpressionId, String> {
-    let span = cst.span(Cursor::Rule(rule))?;
-    let mut current = lower_value(cst, required(cst, rule, "program")?, context, arena)?;
-    let mut declarations = Vec::new();
-    for step in cst.field_list(rule, "steps")? {
-        let step = as_rule(step)?;
-        let step_span = cst.span(Cursor::Rule(step))?;
-        let action = as_rule(required(cst, step, "action")?)?;
-        let (effect, handler) = lower_handler_action(cst, action, context, arena)?;
-        let tuple = arena.expression(Expression::Tuple {
-            elements: vec![effect, current, handler],
-            span: step_span,
-        });
-        let intrinsic = arena.expression(Expression::Intrinsic {
-            name: "@handle".to_owned(),
-            span: step_span,
-        });
-        let handled_call = arena.expression(Expression::Apply {
-            function: intrinsic,
-            argument: tuple,
-            span: step_span,
-        });
-        let handled_name = format!("handled${}${}", step_span.start, step_span.end);
-        let handled_pattern = arena.pattern(Pattern::Name {
-            name: handled_name.clone(),
-            qualifier: Qualifier::None,
-            span: step_span,
-        });
-        let handled_binding = arena.declaration(Declaration::Binding {
-            kind: DeclarationKind::Effect,
-            tags: Vec::new(),
-            pattern: handled_pattern,
-            value: handled_call,
-            span: step_span,
-        });
-        let handled_result = variable(&handled_name, step_span, arena);
-        let handled_body = arena.expression(Expression::Block {
-            declarations: vec![handled_binding],
-            result: handled_result,
-            result_effects: ResultEffects::Ambient,
-            span: step_span,
-        });
-        let unit = arena.pattern(Pattern::Unit { span: step_span });
-        let handled = arena.expression(Expression::Lambda {
-            parameter: unit,
-            body: handled_body,
-            span: step_span,
-        });
-        let name = match cst.field(step, "name")? {
-            Some(name) => token_text(cst, name)?,
-            None => "_".to_owned(),
-        };
-        if name == "_" {
-            current = handled;
-            continue;
-        }
-        let pattern = arena.pattern(Pattern::Name {
-            name: name.clone(),
-            qualifier: Qualifier::None,
-            span: step_span,
-        });
-        declarations.push(arena.declaration(Declaration::Binding {
-            kind: DeclarationKind::Let,
-            tags: Vec::new(),
-            pattern,
-            value: handled,
-            span: step_span,
-        }));
-        current = variable(&name, step_span, arena);
-    }
-    let action = as_rule(required(cst, rule, "result")?)?;
-    let action_span = cst.span(Cursor::Rule(action))?;
-    let (effect, handler) = lower_handler_action(cst, action, context, arena)?;
-    let tuple = arena.expression(Expression::Tuple {
-        elements: vec![effect, current, handler],
-        span: action_span,
-    });
-    let intrinsic = arena.expression(Expression::Intrinsic {
-        name: "@handle".to_owned(),
-        span: action_span,
-    });
-    let result = arena.expression(Expression::Apply {
-        function: intrinsic,
-        argument: tuple,
-        span: action_span,
-    });
-    Ok(arena.expression(Expression::Block {
-        declarations,
-        result,
-        result_effects: ResultEffects::Ambient,
-        span,
-    }))
-}
-
-fn lower_handler_action(
-    cst: &CompactCst<'_>,
-    rule: u32,
-    context: &LoweringContext<'_>,
-    arena: &mut AstArena,
-) -> Result<(ExpressionId, ExpressionId), String> {
-    let intrinsic = required(cst, rule, "intrinsic")?;
-    let name = token_text(cst, intrinsic)?;
-    if name != "@handle" {
-        return Err(format!(
-            "BLOT_BAD_HANDLER_COMPOSITION: expected `@handle`, found `{name}`"
-        ));
-    }
-    let effect = lower_value(cst, required(cst, rule, "effect")?, context, arena)?;
-    let handler = lower_value(cst, required(cst, rule, "handler")?, context, arena)?;
-    Ok((effect, handler))
 }
 
 fn lower_element(

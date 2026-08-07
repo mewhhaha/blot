@@ -138,8 +138,9 @@ let positive = fn () =>
   value <- Source.value 0
   return value > 0
 present <- positive ()
-return if present : 42
-else: 0
+return case present of
+  #True => 42
+  #False => 0
 `,
   );
 
