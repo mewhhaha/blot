@@ -25,9 +25,8 @@ for index in Iter.range (0, line_count):
   if matching:
     <- Console.write line
 
-  count := if matching:
-    return count + 1
-  else:
-    return count
+  count := case matching of
+    #True => count + 1
+    #False => count
 
 return count
