@@ -38,24 +38,28 @@ jobs:
 
           path = Path('.github/remove_retired_surface.py')
           text = path.read_text()
-          source_tail = '''  const removed = removedSurfaceDiagnostics(result.cst);
-  if (removed.length > 0) return { ok: false, diagnostics: removed };
-  return { ok: true, module: result.module };
-'''
-          current_source_tail = '''  const removed = removedSurfaceDiagnostics(result.cst);
-  if (removed.length > 0) return { ok: false, diagnostics: removed };
-  const rebinding = rebindingFrameDiagnostics(result.cst);
-  if (rebinding.length > 0) return { ok: false, diagnostics: rebinding };
-  return { ok: true, module: result.module };
-'''
-          replacement_tail = '''  if (!result.ok) return result;
-  return { ok: true, module: result.module };
-'''
-          current_replacement_tail = '''  if (!result.ok) return result;
-  const rebinding = rebindingFrameDiagnostics(result.cst);
-  if (rebinding.length > 0) return { ok: false, diagnostics: rebinding };
-  return { ok: true, module: result.module };
-'''
+          source_tail = (
+              '  const removed = removedSurfaceDiagnostics(result.cst);\n'
+              '  if (removed.length > 0) return { ok: false, diagnostics: removed };\n'
+              '  return { ok: true, module: result.module };\n'
+          )
+          current_source_tail = (
+              '  const removed = removedSurfaceDiagnostics(result.cst);\n'
+              '  if (removed.length > 0) return { ok: false, diagnostics: removed };\n'
+              '  const rebinding = rebindingFrameDiagnostics(result.cst);\n'
+              '  if (rebinding.length > 0) return { ok: false, diagnostics: rebinding };\n'
+              '  return { ok: true, module: result.module };\n'
+          )
+          replacement_tail = (
+              '  if (!result.ok) return result;\n'
+              '  return { ok: true, module: result.module };\n'
+          )
+          current_replacement_tail = (
+              '  if (!result.ok) return result;\n'
+              '  const rebinding = rebindingFrameDiagnostics(result.cst);\n'
+              '  if (rebinding.length > 0) return { ok: false, diagnostics: rebinding };\n'
+              '  return { ok: true, module: result.module };\n'
+          )
           if text.count(source_tail) != 1 or text.count(replacement_tail) != 1:
               raise SystemExit('parse cleanup recipe changed')
           text = text.replace(source_tail, current_source_tail, 1)
