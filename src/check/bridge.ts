@@ -6,6 +6,7 @@
 // can constrain anything. There is no type-level sublanguage to translate from,
 // only values.
 
+import "./region_primitives.ts";
 import {
   effectExtension,
   equal,
