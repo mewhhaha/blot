@@ -449,21 +449,16 @@ return (
 )
 
 # The production Rust frontend has no migration mode, so remove its now-dead
-# concrete lowering branches. TypeScript's lowerer retains them for migration.
+# diagnostic arms. TypeScript's lowerer retains migration-only AST support.
 remove_between(
     "experiments/rust-middle/src/lower.rs",
-    '        "conditional" => {\n',
+    "        // Both removed forms still parse: the concrete syntax keeps them so the\n",
     '        "case_expression" => {\n',
 )
-replace(
-    "experiments/rust-middle/src/lower.rs",
-    '        "handler_composition" => lower_handler_composition(cst, rule, context, arena),\n',
-    "",
-)
 remove_between(
     "experiments/rust-middle/src/lower.rs",
-    "\nfn lower_handler_composition(\n",
-    "\nfn lower_element(\n",
+    '        "handler_composition" => Err(concat!(\n',
+    "        // `do:` is the same statement scope written explicitly, so it lowers\n",
 )
 
 # Documentation: one accepted source language, with migration explicitly
