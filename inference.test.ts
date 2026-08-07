@@ -2544,11 +2544,10 @@ return plain (ping 5)
 
 check(
   "a group inside a nested block sees itself",
-  `return (
+  `return do:
   let up = rec (fn n => if n == 0 : 0 else: down (n - 1))
   let down = rec (fn n => if n == 0 : 1 else: up (n - 1))
   return up 9
-)
 `,
   "(0 | 1)",
 );

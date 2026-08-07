@@ -2,6 +2,24 @@ import { assert, assertEquals } from "@std/assert";
 import type { Expr } from "./ast.ts";
 import { parse, parseConcrete } from "./parse.ts";
 
+Deno.test("do is an explicit value-producing statement scope", async () => {
+  const source = `let value = do:
+  let local = 1
+  return local
+return value
+`;
+  const parsed = await parse(source);
+  assert(parsed.ok);
+  if (!parsed.ok) return;
+  const binding = parsed.module.declarations[0];
+  assert(binding !== undefined && binding.tag === "binding");
+  if (binding === undefined || binding.tag !== "binding") return;
+  assertEquals(binding.value.tag, "block");
+  if (binding.value.tag !== "block") return;
+  assertEquals(binding.value.declarations.length, 1);
+  assertEquals(binding.value.result.tag, "var");
+});
+
 Deno.test(
   "two-argument @handle elaborates to a computation transformer",
   async () => {

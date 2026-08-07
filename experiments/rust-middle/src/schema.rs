@@ -82,6 +82,7 @@ pub(crate) const RULE_NAMES: &[&str] = &[
     "handler_composition_step",
     "handler_composition_action",
     "block",
+
     "statement_suite",
     "qualified_name",
     "qualified_name_part",
@@ -175,6 +176,7 @@ pub(crate) const REPEATED_FIELDS: &[(&str, &str)] = &[
     ("array_pattern", "elements"),
     ("binding", "tags"),
     ("block", "statements"),
+    ("do_block", "statements"),
     ("case_expression", "rest"),
     ("conditional", "alternatives"),
     ("conditional_statement_branches", "alternatives"),

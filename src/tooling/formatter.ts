@@ -41,6 +41,7 @@ const delimitedLayoutRules = new Set([
 const layoutSensitiveRules = new Set([
   "array",
   "block",
+  "do_block",
   "case_expression",
   "conditional",
   "effect_row",
@@ -48,9 +49,10 @@ const layoutSensitiveRules = new Set([
   "handler_composition",
   "shape",
 ]);
-const blockRule = new Set(["block"]);
+const blockRule = new Set(["block", "do_block"]);
 const valueScopeBoundaryRules = new Set([
   "block",
+  "do_block",
   "case_expression",
   "conditional",
   "handler_composition",
@@ -69,6 +71,7 @@ const INDENTED_RULES = new Set([
   "array",
   "array_pattern",
   "block",
+  "do_block",
   "case_expression",
   "effect_row",
   "element_expression",
@@ -821,7 +824,8 @@ function valueIsBlock(value: ConcreteRule): boolean {
 }
 
 function expressionIsBlock(expression: ConcreteRule): boolean {
-  return expressionPrimaryIs(expression, "block");
+  return expressionPrimaryIs(expression, "block") ||
+    expressionPrimaryIs(expression, "do_block");
 }
 
 function expressionPrimaryIs(

@@ -86,6 +86,7 @@ export const compactRepeatedFields = [
   "array_pattern.elements",
   "binding.tags",
   "block.statements",
+  "do_block.statements",
   "case_expression.rest",
   "conditional.alternatives",
   "conditional_statement_branches.alternatives",
