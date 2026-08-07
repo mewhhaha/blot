@@ -167,6 +167,7 @@ jobs:
       - name: Format and validate
         run: |
           deno fmt
+          cargo fmt --manifest-path experiments/rust-middle/Cargo.toml
           git diff --check
           if ! command -v just >/dev/null 2>&1; then
             cargo install just --locked
