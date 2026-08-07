@@ -11,7 +11,7 @@
     "corpus": "deno run --allow-read scripts/compile_corpus.ts",
     "verify:runtime": "deno run --allow-read scripts/verify_runtime.ts",
     "verify:rust-compiler": "deno run --allow-read scripts/verify_runtime.ts --full-rust",
-    "check": "deno run --allow-read scripts/generate_rust_middle_schema.ts --check && deno check mod.ts scripts/*.ts case-studies/*.ts case-studies/engine/serve.ts experiments/generated-code/*.ts experiments/package/*.ts experiments/rust-middle/*.ts src/cli.ts src/backend/rust_middle.test.ts src/language_service.test.ts src/lsp.test.ts src/load.test.ts src/package.test.ts src/syntax/portable.test.ts src/syntax/surface.test.ts src/tooling/*.test.ts src/check/setops.test.ts src/check/narrow.test.ts src/check/type.test.ts src/check/coverage.test.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts",
+    "check": "deno run --allow-read scripts/generate_rust_middle_schema.ts --check && deno check mod.ts scripts/*.ts case-studies/*.ts case-studies/engine/serve.ts experiments/generated-code/*.ts experiments/owned-regions/*.ts experiments/package/*.ts experiments/rust-middle/*.ts src/cli.ts src/backend/rust_middle.test.ts src/language_service.test.ts src/lsp.test.ts src/load.test.ts src/package.test.ts src/syntax/portable.test.ts src/syntax/surface.test.ts src/tooling/*.test.ts src/check/setops.test.ts src/check/narrow.test.ts src/check/type.test.ts src/check/coverage.test.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts",
     "test": "deno test --allow-read --allow-write",
     "blot": "deno run --allow-read --allow-write src/cli.ts",
     "lsp": "deno run --allow-read src/cli.ts lsp",
