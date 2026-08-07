@@ -8,10 +8,9 @@ import type { Decl, Expr, Module, Pattern, Span } from "./ast.ts";
  * - `@handle (Effect, handler)` is a computation transformer. Applying the
  *   resulting value to a nullary computation produces another nullary
  *   computation containing the ordinary saturated
- *   `@handle (Effect, computation, handler)` call. This makes ordinary `|>`
- *   composition preserve the same inner-to-outer order as the former
- *   `try ... with` surface form without hiding the generative effect identity
- *   behind an ordinary function parameter.
+ *   `@handle (Effect, computation, handler)` call. A `|>` whose right operand
+ *   is one of these compiler-local transformers becomes direct application so
+ *   an owned computation never passes through generic `Fn.pipe`.
  * - a two-arm `case` over `#True` and `#False` becomes the existing internal
  *   conditional node. `case` is the source value-selection form, while this
  *   keeps the checker's existing branch-refinement machinery and does not add a
@@ -57,6 +56,8 @@ function elaborateExpression(expression: Expr): Expr {
           expression.span,
         );
       }
+      const piped = handlerPipeline(fn, arg, expression.span);
+      if (piped !== null) return piped;
       return { ...expression, fn, arg };
     }
     case "field":
@@ -148,6 +149,23 @@ function booleanPattern(
 ): boolean {
   return pattern.tag === "constructor" && pattern.name === name &&
     pattern.payload === null;
+}
+
+function handlerPipeline(fn: Expr, arg: Expr, span: Span): Expr | null {
+  if (!isHandlerTransformer(arg)) return null;
+  if (fn.tag !== "apply" || !isFnPipe(fn.fn)) return null;
+  return { tag: "apply", fn: arg, arg: fn.arg, span };
+}
+
+function isFnPipe(expression: Expr): boolean {
+  return expression.tag === "field" && expression.name === "pipe" &&
+    expression.target.tag === "var" && expression.target.name === "Fn";
+}
+
+function isHandlerTransformer(expression: Expr): boolean {
+  return expression.tag === "lambda" && expression.parameter.tag === "name" &&
+    expression.parameter.qualifier === "linear" &&
+    expression.parameter.name.startsWith("handlerInput$");
 }
 
 function handlerTransformer(
