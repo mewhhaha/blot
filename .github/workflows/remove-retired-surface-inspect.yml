@@ -16,6 +16,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Stack on the active artifact-fix branch
+        run: |
+          cp .github/remove_retired_surface.py /tmp/remove_retired_surface.py
+          git reset --hard origin/do-blocks-artifact-fix
+          mkdir -p .github
+          cp /tmp/remove_retired_surface.py .github/remove_retired_surface.py
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
@@ -28,7 +34,6 @@ jobs:
           sed -i 's/    if count != expected:/    if count != expected and path != "AGENTS.md":/' .github/remove_retired_surface.py
           python3 .github/remove_retired_surface.py
           sed -i '/^  "result",$/d' src/syntax/compact_schema.ts
-          sed -i 's/        "block" => {/        "block" | "do_block" => {/' experiments/rust-middle/src/lower.rs
           python3 - <<'PY'
           from pathlib import Path
 
@@ -178,13 +183,12 @@ jobs:
           grep -q 'conditional = (' migration/layout-v1/grammar.baba
       - name: Commit cleanup
         run: |
-          rm .github/remove_retired_surface.py
-          rm .github/workflows/remove-retired-surface-inspect.yml
+          rm -f .github/remove_retired_surface.py
+          rm -f .github/workflows/remove-retired-surface-inspect.yml
           rm -f .github/inspect_fields.ts
           git add -A
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git reset --soft origin/main
           git commit -m 'Remove retired surface syntax'
           git push --force-with-lease origin HEAD:agent/remove-retired-surface-syntax
