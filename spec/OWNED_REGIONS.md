@@ -59,8 +59,8 @@ Region checking never invents Store roots.
 
 ### 1.2 Existing ownership: is this authority used on every path correctly?
 
-Region authority is a linear obligation carried by an ordinary source value.
-Its branch, loop, closure, and recursive-call behavior belongs to the existing
+Region authority is a linear obligation carried by an ordinary source value. Its
+branch, loop, closure, and recursive-call behavior belongs to the existing
 ownership checker.
 
 This matters because a static compiler certificate is not a runtime event log.
@@ -102,8 +102,8 @@ A partition witnesses:
 
 where `*` is defined only for disjoint regions whose ordered union is valid.
 This is a small separation algebra: split factors one permission; join composes
-compatible permissions; a transform preserves the permission while changing
-the resource contents.
+compatible permissions; a transform preserves the permission while changing the
+resource contents.
 
 A new proof-producing collection can reuse the ownership integration after it
 supplies its own checked region algebra.
@@ -185,7 +185,7 @@ This separates acceptance from optimization:
 - ordinary code can always claim a slice of copyable elements; and
 - zero-copy acquisition requires a verified Store root.
 
-Arrays containing owned elements need a consuming acquisition which *moves*
+Arrays containing owned elements need a consuming acquisition which _moves_
 those obligations rather than copying them. That extension should be built on
 existing consuming-array lineage and is deliberately outside the first patch.
 
@@ -364,8 +364,8 @@ branches into one fake execution order.
 
 ## 7. What `region_certificate.ts` currently proves
 
-`src/linear/region_certificate.ts` is an executable **single-path trace oracle**,
-not yet the production static source certificate.
+`src/linear/region_certificate.ts` is an executable **single-path trace
+oracle**, not yet the production static source certificate.
 
 It checks the linear graph for one concrete trace:
 
@@ -391,8 +391,8 @@ the existing path-sensitive ownership certificate.
 
 ## 8. Failure conservation
 
-Every total operation must return all authority it received on failure. Otherwise
-an error path could silently leak a linear resource.
+Every total operation must return all authority it received on failure.
+Otherwise an error path could silently leak a linear resource.
 
 Bad:
 
@@ -420,8 +420,8 @@ occurred.
 Assume a valid Store root for allocation `S`: no persistent source-visible alias
 may observe destructive changes to `S` while that root is active.
 
-Let `Live(S)` be the intervals authorized by the live linear ownership leaves for
-that root. Maintain:
+Let `Live(S)` be the intervals authorized by the live linear ownership leaves
+for that root. Maintain:
 
 ```text
 forall R1 != R2 in Live(S). disjoint(R1,R2)
@@ -443,8 +443,8 @@ duplicated later.
 ### Join
 
 Replacing adjacent `[lo,mid)` and `[mid,hi)` with `[lo,hi)` preserves the
-invariant: any third live interval overlapping the union would have overlapped at
-least one input. The ownership checker proves both inputs are consumed by the
+invariant: any third live interval overlapping the union would have overlapped
+at least one input. The ownership checker proves both inputs are consumed by the
 join path.
 
 ### Set/swap
@@ -543,8 +543,8 @@ Before moving any of this into `LANGUAGE.md`, require:
 - failure-conservation tests on every total operation;
 - evaluator/Runtime-HIR/Wasm agreement;
 - ABI refusal for live slice values;
-- an in-place quicksort corpus entry whose recursive split/join path allocates no
-  element Stores after acquisition; and
+- an in-place quicksort corpus entry whose recursive split/join path allocates
+  no element Stores after acquisition; and
 - a benchmark separating acquisition-copy cost from partition/sort cost.
 
 Until those gates pass, `@region.*` remains an experimental trusted boundary,
