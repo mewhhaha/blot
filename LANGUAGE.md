@@ -1130,8 +1130,8 @@ Default fixities, from loosest to tightest:
 | 24    | `&&`                        | right           | `Logic.and`                     |
 | 25    | `->`                        | right           | `@type.arrow`                   |
 | 30    | `==` `!=` `<` `<=` `>` `>=` | non-associative | `Eq.*`, `Ord.*`                 |
-| 40    | `\|` `\`                    | left            | `Set.union`, `Set.diff`         |
-| 45    | `&`                         | left            | `Set.intersect`                 |
+| 40    | `\|` `\`                    | left            | `TypeSet.union`, `TypeSet.diff` |
+| 45    | `&`                         | left            | `TypeSet.intersect`             |
 | 50    | `<+`                        | left            | `attach`                        |
 | 55    | `<>`                        | right           | `Text.append`                   |
 | 60    | `+` `-`                     | left            | `Num.add`, `Num.sub`            |
@@ -2336,24 +2336,29 @@ record has no one element type, and width subtyping hides its complete field
 set. Runtime `@shape.get`, `@shape.set`, or `@shape.remove` with such a name is
 `BLOT_DYNAMIC_SHAPE_FIELD`. Compile-time shape folds may use dynamic names while
 evaluating; their unevidenced result variables cannot prove a `sig`. Runtime
-dynamic keys belong in the prelude's homogeneous `Dict` abstraction. When the
-name is static, all three operations may project or rebuild a record whose field
-values are available only at runtime.
+dynamic keys belong in the prelude's homogeneous `Map` abstraction. When the
+name is static, all three shape operations may project or rebuild a record whose
+field values are available only at runtime.
 
-`Dict.of A` is represented by an association array of `(Str, A)` pairs. The
-first matching key is visible. Its operations are ordinary prelude source:
+`Map.of (K, V)` is represented by an association array of `(K, V)` pairs.
+`Map.with equal` supplies key equality explicitly and returns the operations for
+that equality. The first matching key is visible. Its operations are ordinary
+prelude source:
 
-- `Dict.empty` creates an empty dictionary;
-- `Dict.get (entries, key)` and `Dict.has (entries, key)` observe the
-  dictionary;
-- `Dict.put (entries, key, value)` returns `(previous, updated)`; and
-- `Dict.remove (entries, key)` returns `(removed, updated)`.
+- `empty` and `singleton (key, value)` construct maps;
+- `get (entries, key)` and `has (entries, key)` observe a map;
+- `put (entries, key, value)` returns `(previous, updated)`;
+- `remove (entries, key)` returns `(removed, updated)`;
+- `append left right` inserts the right map's entries into the left map; and
+- `fold`, `map`, `filter`, `length`, `keys`, `values`, and `items` provide the
+  collection operations.
 
 The previous or removed value is an `Option`. Returning it is significant for
 ownership: replacing or removing an owned value does not silently discard it.
-Starting from `Dict.empty`, these operations keep keys unique. A manually built
-association array with duplicate keys has defined first-match behavior; `put` or
-`remove` affects only that visible entry.
+Starting from `empty`, these operations keep keys unique. A manually built
+association array with duplicate keys has defined first-match behavior; `put`
+or `remove` affects only that visible entry. `Dict` is `Map.with` text equality,
+so `Dict.of V` remains the concise type constructor for `(Str, V)` maps.
 
 #### Safe indexed access
 
@@ -2554,14 +2559,15 @@ record currently exports:
   `Ord`, `Eq`, `Num`;
 - floats and lanes: `Float`, `Float32`, and `Vec4`;
 - branch hints: `likely` and `unlikely` (§15.1);
-- structural interfaces: `Empty`, `Length`, `Semigroup`, and `Monoid`;
+- structural interfaces: `Empty`, `Length`, `Semigroup`, `Monoid`, `Mappable`,
+  `Foldable`, `Filterable`, and `Iterable`;
 - text: `Text`, `text_eq`;
 - arrays: `Array`, `fold`, `each`, `map`, `filter`, `sum`, `upto`, `any`,
   `every`, and `sort_by`;
-- homogeneous dynamic keys: `Dict`;
+- collections: `List`, `Map`, `Set`, and the text-keyed `Dict` specialization;
 - iterators: `ever`, `Iter`, `iterate`, and `collect`;
 - variants: `Option`, `None`, `Some`, `unwrap_or`, `Result`, `Ok`, `Error`;
-- type tools: `Type`, `Set`, `attach`, `seal`, `unseal`, `Reflect`, `reflect`,
+- type tools: `Type`, `TypeSet`, `attach`, `seal`, `unseal`, `Reflect`, `reflect`,
   `refines`, `members`, `union_of`, `Extract`, `Exclude`, `Pick`, `Omit`,
   `opened`, and `range`;
 - storage tools: `struct`, `reorder`, `layout`, `aligned`, `bit_width`, and
@@ -2590,6 +2596,49 @@ remains a separate flow property rather than part of the structural interface
 type. The default `<>` remains the concrete text operation `Text.append`. A
 module that wants the same spelling for arrays declares `Array.append` as its
 operator target.
+
+Collection interfaces are structural too:
+
+```blot
+const Mappable = fn (F_A, F_B, A, B) => {
+  .map = (F_A, (A -> B)) -> F_B;
+}
+const Foldable = fn (F_A, A, S) => {
+  .fold = (F_A, S, ((S, A) -> S)) -> S;
+}
+const Filterable = fn (F_A, A) => {
+  .filter = (F_A, (A -> Bool)) -> F_A;
+}
+const Iterable = fn (F_A, A, S) => {
+  .items = F_A -> { .state = S; .step = S -> Option (A, S); };
+}
+```
+
+Blot has no higher-kinded inference variable, so these interfaces describe one
+concrete source and result instantiation. A polymorphic namespace such as
+`List` or `Array` structurally satisfies every compatible instantiation; callers
+still pass or name that namespace explicitly.
+
+`List.of A` is an immutable arena-backed list represented as `([(A, Int)],
+Int)`, where the second value is the head address and `-1` is empty. `List.view
+A` is `#Nil | #Cons (A, List.of A)`, and `List.uncons` produces that one-step
+view for pattern matching. `List` also supplies `empty`, `singleton`, `prepend`,
+`append`, `fold`, `map`, `filter`, `reverse`, array conversion, `length`, and an
+`items` iterator. These are ordinary source functions and can execute during
+comptime evaluation.
+
+`Set.of A` is an insertion-ordered array of unique values. `Set.with equal`
+returns operations for the supplied equality: construction, membership,
+`insert`, `remove`, `append`/`union`, `intersect`, `diff`, `fold`, `filter`,
+`map`, `map_with`, `length`, and `items`. `insert` and `remove` return
+`(previous, updated)` so replacing or removing an owned value never silently
+discards it. `map` uses the namespace's equality for an endomorphic transform.
+When mapping changes the element type, `map_with (values, mapped_equal,
+transform)` takes the result equality explicitly and removes mapped duplicates.
+
+`Map.with` and `Set.with` require curried equality, such as `Ord.eq` or `fn left
+=> fn right => text_eq (left, right)`. Equality selection is visible at the
+construction site; there is no implicit instance lookup.
 
 Important conventional values include:
 

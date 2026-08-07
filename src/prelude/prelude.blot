@@ -1514,9 +1514,9 @@ const packed = fn shape =>
 const Type =
   {
     .range = range;
-    .union = Set.union;
-    .intersect = Set.intersect;
-    .diff = Set.diff;
+    .union = TypeSet.union;
+    .intersect = TypeSet.intersect;
+    .diff = TypeSet.diff;
     .arrow = arrow;
     .of = type_of;
     .seal = seal;
@@ -1563,6 +1563,10 @@ return {
   .as_const_json = as_const_json;
   .Semigroup = Semigroup;
   .Monoid = Monoid;
+  .Mappable = Mappable;
+  .Foldable = Foldable;
+  .Filterable = Filterable;
+  .Iterable = Iterable;
 
   .Array = Array;
   .Arena = Arena;
@@ -1577,6 +1581,9 @@ return {
   .Iter = Iter;
   .iterate = iterate;
   .collect = collect;
+  .List = List;
+  .Map = Map;
+  .Set = Set;
   .Dict = Dict;
 
   .Option = Option;
@@ -1588,7 +1595,7 @@ return {
   .Error = Error;
 
   .Type = Type;
-  .Set = Set;
+  .TypeSet = TypeSet;
   .attach = attach;
   .seal = seal;
   .unseal = unseal;
