@@ -891,3 +891,22 @@ async function assertStableFormatting(
     semanticTree(await parse(source)),
   );
 }
+
+Deno.test("formatting preserves explicit do block scope", async () => {
+  const source = `let value = do:
+    let local = 1
+    return local
+return value
+`;
+  const formatted = await formatSource(source);
+  if (!formatted.ok) throw new Error("valid do block did not format");
+  assertEquals(
+    formatted.source,
+    `let value = do:
+  let local = 1
+  return local
+return value
+`,
+  );
+  assertEquals(await formatSource(formatted.source), formatted);
+});

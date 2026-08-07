@@ -310,7 +310,13 @@ export async function loadSource(
   source: string,
 ): Promise<Loaded> {
   const absolute = resolve(path);
-  return await loadSourceRevision(absolute, source, new Map(), [absolute], false);
+  return await loadSourceRevision(
+    absolute,
+    source,
+    new Map(),
+    [absolute],
+    false,
+  );
 }
 
 /**
@@ -322,7 +328,13 @@ export async function loadLegacySource(
   source: string,
 ): Promise<Loaded> {
   const absolute = resolve(path);
-  return await loadSourceRevision(absolute, source, new Map(), [absolute], true);
+  return await loadSourceRevision(
+    absolute,
+    source,
+    new Map(),
+    [absolute],
+    true,
+  );
 }
 
 async function loadSourceRevision(
