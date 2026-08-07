@@ -100,8 +100,6 @@ export type Expr =
   | {
     readonly tag: "lambda";
     readonly parameter: Pattern;
-    /** The source argument is suspended until this parameter is demanded. */
-    readonly deferred?: boolean;
     readonly body: Expr;
     readonly span: Span;
   }
