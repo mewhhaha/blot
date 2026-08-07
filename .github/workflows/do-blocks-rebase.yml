@@ -1,0 +1,25 @@
+name: do-blocks-rebase
+
+on:
+  push:
+    branches:
+      - agent/do-blocks-ci
+
+permissions:
+  contents: write
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: do-blocks
+          fetch-depth: 0
+      - name: Rebase on handler and if cleanup
+        run: |
+          git config user.name "Jacob Torrång"
+          git config user.email "kopatheonlyone@hotmail.com"
+          git fetch origin simplify-handlers-and-if
+          git rebase origin/simplify-handlers-and-if
+          git push --force-with-lease origin HEAD:do-blocks
