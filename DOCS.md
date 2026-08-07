@@ -389,6 +389,11 @@ let name = fn phase => case phase of
   #Stopped reason => reason
 ```
 
+The linter offers this rewrite for equality ladders, including a terminal
+statement ladder and one nested directly under `else`. Equality may put the
+literal on either side; the generated `case` still evaluates the shared target
+once.
+
 Use a guarded arm when a pattern identifies the data and a predicate refines
 that arm:
 
@@ -417,6 +422,10 @@ else:
 
 Treat those branch returns as supplying the conditional's value. They do not
 return from the surrounding function.
+
+Write a direct fallback decision as `else if`, not as another `if` nested in an
+otherwise empty `else` suite. The linter flattens that shape for both value and
+statement conditionals, while leaving a suite with additional work nested.
 
 When a function is choosing its final result, skip the outer value conditional
 and return directly from statement branches:

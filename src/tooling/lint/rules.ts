@@ -3,6 +3,7 @@ import { booleanIf } from "./rules/boolean_if.ts";
 import { discardedValueIf } from "./rules/discarded_value_if.ts";
 import { equalityIfChain } from "./rules/equality_if_chain.ts";
 import { guardShapedCase } from "./rules/guard_shaped_case.ts";
+import { nestedIfChain } from "./rules/nested_if_chain.ts";
 import { noopRebinding } from "./rules/noop_rebinding.ts";
 import { operatorSpelling } from "./rules/operator_spelling.ts";
 import { persistentArrayCopy } from "./rules/persistent_array_copy.ts";
@@ -22,6 +23,7 @@ export const DEFAULT_LINT_RULES: readonly LintRule[] = [
   redundantIf,
   booleanIf,
   equalityIfChain,
+  nestedIfChain,
   discardedValueIf,
   guardShapedCase,
   quadraticArrayAppend,

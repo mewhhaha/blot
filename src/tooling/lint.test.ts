@@ -4,6 +4,22 @@ import { DEFAULT_FIXITIES } from "../syntax/fixity.ts";
 import { lintModule } from "./lint.ts";
 import type { LintRule } from "./lint.ts";
 
+async function applyLintFix(source: string, code: string): Promise<string> {
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error(`lint fixture for ${code} did not parse`);
+  const diagnostic = lintModule(parsed.module, source, parsed.cst).find(
+    (candidate) => candidate.code === code,
+  );
+  if (diagnostic === undefined) throw new Error(`${code} was not reported`);
+  if (diagnostic.fix === null) throw new Error(`${code} did not provide a fix`);
+  const fixed = source.slice(0, diagnostic.fix.span.start) +
+    diagnostic.fix.replacement + source.slice(diagnostic.fix.span.end);
+  if (!(await parseConcrete(fixed)).ok) {
+    throw new Error(`${code} produced syntax the parser rejected`);
+  }
+  return fixed;
+}
+
 Deno.test("an equality if chain prefers one case match", async () => {
   const source = `let label = fn n => if n == 1:
   return "one"
@@ -21,6 +37,178 @@ return label
       diagnostic.code
     ),
     ["BLOT_LINT_IF_CHAIN"],
+  );
+});
+
+Deno.test("a nested equality ladder becomes one case match", async () => {
+  const source = `let label = fn n => if n == 1:
+  return "one"
+else:
+  return if 2 == n:
+    return "two"
+  else:
+    return "other"
+return label
+`;
+
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_IF_CHAIN"),
+    `let label = fn n => case n of
+  1 => "one"
+  2 => "two"
+  _ => "other"
+return label
+`,
+  );
+});
+
+Deno.test("a terminal statement equality ladder becomes a returned case", async () => {
+  const source = `let label = fn n =>
+  if n == 1:
+    return "one"
+  else:
+    if 2 == n:
+      return "two"
+    else:
+      return "other"
+return label
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("terminal equality fixture did not parse");
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_NESTED_IF_CHAIN"
+    ),
+    [],
+  );
+  const fixed = await applyLintFix(source, "BLOT_LINT_IF_CHAIN");
+
+  assertEquals(
+    fixed,
+    `let label = fn n =>
+  return case n of
+    1 => "one"
+    2 => "two"
+    _ => "other"
+return label
+`,
+  );
+  const fixedParse = await parseConcrete(fixed);
+  assert(fixedParse.ok);
+  if (!fixedParse.ok) return;
+  assertEquals(
+    lintModule(fixedParse.module, fixed, fixedParse.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_NESTED_IF_CHAIN"
+    ),
+    [],
+  );
+});
+
+Deno.test("a nested value conditional becomes an else-if ladder", async () => {
+  const source = `let choice = if first:
+  return 1
+else:
+  return if second:
+    return 2
+  else:
+    return if third:
+      return 3
+    else:
+      return 4
+return choice
+`;
+
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_NESTED_IF_CHAIN"),
+    `let choice = if first:
+  return 1
+else if second:
+  return 2
+else if third:
+  return 3
+else:
+  return 4
+return choice
+`,
+  );
+});
+
+Deno.test("a nested statement conditional becomes an else-if ladder", async () => {
+  const source = `let choose = fn () =>
+  let choice = 0
+  if first:
+    choice := 1
+  else:
+    if second:
+      choice := 2
+    else:
+      choice := 3
+  return choice
+return choose
+`;
+
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_NESTED_IF_CHAIN"),
+    `let choose = fn () =>
+  let choice = 0
+  if first:
+    choice := 1
+  else if second:
+    choice := 2
+  else:
+    choice := 3
+  return choice
+return choose
+`,
+  );
+});
+
+Deno.test("an else suite with work after its conditional stays nested", async () => {
+  const source = `let choose = fn () =>
+  if first:
+    _ <- one ()
+  else:
+    if second:
+      _ <- two ()
+    _ <- finish ()
+  return ()
+return choose
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("nested statement fixture did not parse");
+
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_NESTED_IF_CHAIN"
+    ),
+    [],
+  );
+});
+
+Deno.test("different equality subjects prefer else-if rather than case", async () => {
+  const source = `let choice = if left == 1:
+  return 1
+else:
+  return if right == 2:
+    return 2
+  else:
+    return 3
+return choice
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("different-subject fixture did not parse");
+  const diagnostics = lintModule(parsed.module, source, parsed.cst);
+
+  assertEquals(
+    diagnostics.filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_IF_CHAIN"
+    ),
+    [],
+  );
+  assert(
+    diagnostics.some((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_NESTED_IF_CHAIN"
+    ),
   );
 });
 
