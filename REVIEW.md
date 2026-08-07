@@ -195,30 +195,53 @@ result is never a line whose role depends on what precedes it. It also keeps
 vertical conditional layout uniform between statement and value forms. Recorded
 here so the trade-off is a decision rather than an accident.
 
-### D2. Compile-time-dispatched arithmetic and equality
+### D2. `==` as a source operator over an `Eq` interface looked up on the type
 
-Two facts currently combine badly: no operator serves more than one numeric
-domain (§2.2), and `==` targets `Eq.eq` over `@int.cmp` — so `"a" == "a"` is a
-type error (still true per the roadmap), and float code cannot use `+`. The
-"one binding by name, no runtime dispatch" invariant is right; but the
-language's own comptime machinery is the way through, and it needs exactly one
-new capability: a compile-time branch on the *inferred type* of an argument
-(the checker has it; source cannot ask for a runtime value — `@type.of`
-evaluates). Give the prelude a `@type.case`-style primitive (or specializer
-support for it) and:
+Two facts currently combine badly: no operator serves more than one domain
+(§2.2), and `==` targets `Eq.eq` over `@int.cmp` — so `"a" == "a"` is a type
+error (still true per the roadmap). The fix is not a new equality primitive
+and not runtime dispatch. `==` stays an ordinary fixity entry naming a
+source-defined target with type
 
-- `Num.add` becomes one binding whose specialization is `@int.add`,
-  `@float.add`, or `@f32.add` per instantiation — dispatch at compile time,
-  zero runtime cost, one name for `+`;
-- `Eq.eq` covers `Int` and `Str`, the two domains the pin rule already
-  identifies as having exact equality in every execution.
+```text
+a -> a -> Bool
+```
+
+whose body resolves the implementation by **interface lookup on the
+argument's type**: a compile-time function from the type value to its `.eq`.
+The language already has both carriers the lookup needs:
+
+- attached namespace members (`@type.attach`; the `struct` and `bit_width`
+  precedent) carry `.eq` for sealed and constructed types — a `seal`ed
+  nominal type participates by attaching its own equality, with no new
+  syntax; and
+- `reflect` dispatch covers the built-in domains — `#Range` with
+  `.domain = #Int` resolves to `@int.cmp`, `#Text` to `@text.cmp` — which is
+  ordinary prelude source over the reflection that exists today.
+
+One checker capability is missing: compile-time code cannot see the inferred
+type of a runtime argument (`@type.of` evaluates its operand, which on a
+runtime value is an error by design, §13.3.1). The lookup needs the
+instantiation's type value delivered to the target's body at specialization —
+either a designated `@type.of_argument` usable only in this position, or a
+typing rule that treats the interface-lookup function specially, the way
+`@handle` is already special for its own reason.
+
+What falls out is better than a dispatch table:
+
+- `"a" == "a"` works, resolved to `@text.cmp` at compile time;
+- `F64` attaches no `.eq`, so float equality stays refused *by construction*
+  — the deliberate absence in §2.2 becomes a property of the type rather
+  than a rule about an operator;
+- there is no instance scope and no orphan problem, because the
+  implementation travels on the type value itself — consistent with "nothing
+  is implicitly in scope"; and
+- the same mechanism generalizes: `Num.add`'s target looks up `.add` the
+  same way, giving `+` over `Int`, `F64`, and `F32` with zero runtime cost
+  and one name per operation.
 
 This composes with T2: after specialization the residual comparison is the
-single-primitive form narrowing recognizes, so dispatched `==` still narrows.
-If a new primitive is unacceptable, the fallback is the OCaml answer — distinct
-float operators (`+.` family) in the default fixity table, and retargeting `==`
-at a new `@scalar.cmp` covering `Int` and `Str`. Either way, `"a" == "a"`
-failing must not survive to a language anyone is asked to write.
+single-primitive form narrowing recognizes, so looked-up `==` still narrows.
 
 ### D3. Desugar `&&` and `||` to `if`
 
@@ -361,8 +384,8 @@ If only five things get done:
 
 1. **T1** — signature-level effect-row tail. Smallest change, unblocks every
    higher-order signature.
-2. **D2** — comptime-dispatched `Num`/`Eq`. `"a" == "a"` failing is the first
-   thing a new user hits.
+2. **D2** — `==` over an `Eq` interface looked up on the type. `"a" == "a"`
+   failing is the first thing a new user hits.
 3. **T3** — Phi across `i + 1`. Makes hand-written indexed loops provable; the
    machinery exists.
 4. **D5** — text primitives. The language's own Done criterion is unreachable
