@@ -7,22 +7,22 @@ draft before the production compiler learns the proposed `@region.*` operations.
 The experiment separates three proof obligations which looked similar in the
 first sketch but are not interchangeable:
 
-1. **Store provenance** says whether a backing allocation has an older persistent
-   observer and may therefore be stolen for destructive reuse.
+1. **Store provenance** says whether a backing allocation has an older
+   persistent observer and may therefore be stolen for destructive reuse.
 2. **Path-sensitive ownership** says whether the value carrying an authority is
    consumed exactly once along each execution path. Production Blot already has
    this analysis; the experiment does not replace it.
 3. **Region derivation** says which part of the private resource the authority
    may touch and how trusted partitions/combinations transform that permission.
 
-`quicksort.ts` sorts one backing Store after acquisition. Split and join allocate
-permission metadata but perform zero element copies.
+`quicksort.ts` sorts one backing Store after acquisition. Split and join
+allocate permission metadata but perform zero element copies.
 
 ## Two acquisition paths, one source meaning
 
-A plain `claim(values)` models the safe source semantics. It copies a potentially
-shared input into one fresh private Store, then gives the slice full authority
-over that Store.
+A plain `claim(values)` models the safe source semantics. It copies a
+potentially shared input into one fresh private Store, then gives the slice full
+authority over that Store.
 
 `freshOwned(values)` plus `claimOwned(owned)` is a model-only probe of the
 compiler optimization: when a separate Store-provenance proof establishes that
@@ -51,7 +51,8 @@ allocation provenance than `!`.
 
 ## The trace verifier is not the source ownership checker
 
-`src/linear/region_certificate.ts` replays a **single concrete authority trace**:
+`src/linear/region_certificate.ts` replays a **single concrete authority
+trace**:
 
 ```text
 claim(root, origin, family) -> p
@@ -61,9 +62,9 @@ transform(p)                -> p'
 release(p)
 ```
 
-It is useful for the executable runtime model and hostile-input tests. It rejects
-untrusted or multiply claimed roots, duplicate permits, use-after-partition,
-incompatible joins, double releases, and leaked leaves.
+It is useful for the executable runtime model and hostile-input tests. It
+rejects untrusted or multiply claimed roots, duplicate permits,
+use-after-partition, incompatible joins, double releases, and leaked leaves.
 
 It must not become Blot's only static ownership certificate. Source branches are
 alternatives, not sequential events:
@@ -90,8 +91,8 @@ oracle for the local authority algebra, not a second control-flow analysis.
 array intervals. It knows validity, disjointness, exact split cover, adjacency,
 relative indexing, and full-extent coverage.
 
-The ownership checker should not hard-code intervals. A trusted operation names a
-region family, and the family supplies the local laws needed to validate its
+The ownership checker should not hard-code intervals. A trusted operation names
+a region family, and the family supplies the local laws needed to validate its
 partition/combine/access witnesses. A future matrix tile, byte-buffer segment,
 or arena range can reuse the same path-sensitive ownership integration with a
 different region validator.
@@ -122,16 +123,16 @@ a proof token.
 
 ### Adjacency is enough for interval join
 
-A join does not need an exact split-tree identity. If two live intervals from one
-origin are adjacent, their union is still disjoint from every other live interval:
-anything overlapping the union would have overlapped one input. This permits
-reassociation of nested partitions.
+A join does not need an exact split-tree identity. If two live intervals from
+one origin are adjacent, their union is still disjoint from every other live
+interval: anything overlapping the union would have overlapped one input. This
+permits reassociation of nested partitions.
 
 ### Owned elements need a consuming acquisition
 
-The copy-safe `claim(values)` model is sound for arrays whose element values carry
-no linear or affine obligations. Copying an element that owns a resource would
-duplicate its obligation.
+The copy-safe `claim(values)` model is sound for arrays whose element values
+carry no linear or affine obligations. Copying an element that owns a resource
+would duplicate its obligation.
 
 A later owned-element version should move obligations into the private Store and
 reuse Blot's existing consuming-array extraction lineage. The first production
@@ -149,11 +150,12 @@ it while authority is live.
 
 ### A. Store provenance and acquisition
 
-Extend destructive-reuse evidence with an allocation-root identity. Fresh private
-Store construction creates a root. A proven owned update may preserve it;
-persistent aliases/copies do not.
+Extend destructive-reuse evidence with an allocation-root identity. Fresh
+private Store construction creates a root. A proven owned update may preserve
+it; persistent aliases/copies do not.
 
-`@region.array.claim` then has two lowering paths with identical source behavior:
+`@region.array.claim` then has two lowering paths with identical source
+behavior:
 
 - **fresh:** allocate/copy and create a new root;
 - **reuse:** consume a valid Store root and retain its allocation.
