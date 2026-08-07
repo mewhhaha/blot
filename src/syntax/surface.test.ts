@@ -20,6 +20,28 @@ if match is None:
 script = base64.b64decode("".join(match.group(1).split())).decode()
 exec(compile(script, "/tmp/deferred_type_patch.py", "exec"), {})
 PY
+python3 - <<'PY'
+from pathlib import Path
+
+def replace_once(path, old, new):
+    file = Path(path)
+    text = file.read_text()
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{path}: expected one replacement, found {count}")
+    file.write_text(text.replace(old, new, 1))
+
+replace_once(
+    "src/check/infer.ts",
+    '''  const scope = childTypeEnv(context.types);\n  const inner: Context = { ...context, types: scope };\n  bindPatternAgainst(expr.parameter, expected.param, inner, level + 1);''',
+    '''  if ((expr.deferred ?? false) !== (expected.deferred ?? false)) {\n    fail(\n      "BLOT_TYPE_ERROR",\n      expected.deferred === true\n        ? "This function signature requires a deferred parameter; write `fn ~name => ...`."\n        : "This function signature requires a strict parameter; remove `~` from the lambda parameter.",\n      expr.span,\n    );\n  }\n\n  const scope = childTypeEnv(context.types);\n  const inner: Context = { ...context, types: scope };\n  bindPatternAgainst(expr.parameter, expected.param, inner, level + 1);''',
+)
+replace_once(
+    "src/check/infer.ts",
+    '''  if (type.tag === "fun") {\n    return {\n      tag: "fun",\n      param: stableRebindingType(type.param),\n      effects: stableRebindingType(type.effects),\n      result: stableRebindingType(type.result),\n    };\n  }''',
+    '''  if (type.tag === "fun") {\n    return {\n      tag: "fun",\n      param: stableRebindingType(type.param),\n      effects: stableRebindingType(type.effects),\n      result: stableRebindingType(type.result),\n      deferred: type.deferred,\n    };\n  }''',
+)
+PY
 
 deno fmt src/check/type.ts src/check/constrain.ts src/check/print.ts src/check/bridge.ts src/check/primitives.ts src/check/infer.ts src/comptime/value.ts src/comptime/primitives.ts src/comptime/eval.ts src/syntax/fixity.ts inference.test.ts comptime.test.ts
 deno check src/check/type.ts src/check/constrain.ts src/check/print.ts src/check/bridge.ts src/check/primitives.ts src/check/infer.ts src/comptime/value.ts src/comptime/primitives.ts src/comptime/eval.ts src/syntax/fixity.ts inference.test.ts comptime.test.ts
