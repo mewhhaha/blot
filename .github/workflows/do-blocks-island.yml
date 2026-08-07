@@ -1,0 +1,129 @@
+name: do-blocks-island
+
+on:
+  push:
+    branches:
+      - agent/do-blocks-worker
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: do-blocks
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Preserve the do-block CST wrapper
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, re
+
+          # Keep the repo invariant that every grammar rule is an island.
+          p = Path('baba.json')
+          data = json.loads(p.read_text())
+          islands = data['gpuFrontend']['islands']
+          if not any(item['rule'] == 'do_block' for item in islands):
+              index = next(i for i, item in enumerate(islands) if item['rule'] == 'block')
+              islands.insert(index, {
+                  'rule': 'do_block',
+                  'boundary': {'kind': 'terminated', 'terminal': 'LAYOUT_DEDENT'},
+              })
+          scopes = data['gpuFrontend']['semantics']['scopes']
+          if 'do_block' not in scopes:
+              scopes.insert(scopes.index('block') + 1, 'do_block')
+          p.write_text(json.dumps(data, indent=2) + '\n')
+
+          # Repeated statement fields now live on the explicit island.
+          p = Path('src/syntax/compact_schema.ts')
+          text = p.read_text()
+          text = text.replace(
+              '  "block.statements",\n  "continued_primary_expression.statements",\n  "element_child_primary_expression.statements",\n  "primary_expression.statements",\n',
+              '  "block.statements",\n  "do_block.statements",\n',
+          )
+          p.write_text(text)
+
+          # With an island wrapper, ordinary unwrap reaches do_block directly.
+          p = Path('src/syntax/lower.ts')
+          text = p.read_text()
+          text = re.sub(
+              r'\nfunction isDoBlockPrimary\(rule: Rule\): boolean \{[\s\S]*?\n\}\n\nfunction lowerPostfix',
+              '\nfunction lowerPostfix',
+              text,
+              count=1,
+          )
+          text = text.replace(
+              '''function lowerPostfix(rule: Rule, context: Context): Expr {\n  const primary = asRule(field(rule, "value"), "value");\n  let result = lowerPrimary(\n    isDoBlockPrimary(primary) ? primary : unwrap(primary),\n    context,\n  );''',
+              '''function lowerPostfix(rule: Rule, context: Context): Expr {\n  let result = lowerPrimary(\n    unwrap(asRule(field(rule, "value"), "value")),\n    context,\n  );''',
+          )
+          text = text.replace(
+              '  if (rule.name === "block" || isDoBlockPrimary(rule)) {',
+              '  if (rule.name === "block" || rule.name === "do_block") {',
+          )
+          p.write_text(text)
+
+          # Formatter can use the normal rule-name machinery once do_block is retained.
+          p = Path('src/tooling/formatter.ts')
+          text = p.read_text()
+          text = text.replace('  "block",\n  "case_expression",', '  "block",\n  "do_block",\n  "case_expression",', 1)
+          text = text.replace('const blockRule = new Set(["block"]);', 'const blockRule = new Set(["block", "do_block"]);')
+          text = text.replace('  "block",\n  "case_expression",', '  "block",\n  "do_block",\n  "case_expression",', 1)
+          text = text.replace('  "array_pattern",\n  "block",\n', '  "array_pattern",\n  "block",\n  "do_block",\n', 1)
+          text = text.replace('        let valueScopeOwnsLayout = expressionPrimaryIsDo(expression);', '        let valueScopeOwnsLayout = false;')
+          text = text.replace(
+              '      original.includes("\\n") &&\n      (containsRule(body, layoutSensitiveRules) || expressionPrimaryIsDo(body)) &&',
+              '      original.includes("\\n") && containsRule(body, layoutSensitiveRules) &&',
+          )
+          text = text.replace(
+              '      : node.name === "block" || node.name === "statement_suite" ||\n          isDoBlockPrimaryRule(node)\n      ? "statement"',
+              '      : blockRule.has(node.name) || node.name === "statement_suite"\n      ? "statement"',
+          )
+          text = text.replace(
+              '      if (blockRule.has(ancestor.name) || isDoBlockPrimaryRule(ancestor)) {\n        return false;\n      }',
+              '      if (blockRule.has(ancestor.name)) return false;',
+          )
+          text = text.replace(
+              '  return expressionPrimaryIs(expression, "block") || expressionPrimaryIsDo(expression);',
+              '  return expressionPrimaryIs(expression, "block") ||\n    expressionPrimaryIs(expression, "do_block");',
+          )
+          text = re.sub(
+              r'\nfunction expressionPrimaryIsDo\(expression: ConcreteRule\): boolean \{[\s\S]*?\n\}\n\nfunction isDoBlockPrimaryRule\(rule: ConcreteRule\): boolean \{[\s\S]*?\n\}\n',
+              '\n',
+              text,
+              count=1,
+          )
+          text = re.sub(
+              r'\n  if \(isDoBlockPrimaryRule\(node\)\) \{[\s\S]*?\n  \}\n  if \(INDENTED_RULES\.has\(node\.name\)\)',
+              '\n  if (INDENTED_RULES.has(node.name))',
+              text,
+              count=1,
+          )
+          p.write_text(text)
+          PY
+      - name: Regenerate
+        run: |
+          deno task generate
+          deno task generate:rust-middle-schema
+      - name: Format touched files
+        run: deno fmt baba.json src/syntax/compact_schema.ts src/syntax/lower.ts src/tooling/formatter.ts experiments/rust-middle/src/schema.rs experiments/rust-middle/src/frontend_plan.rs generated/wasm/syntax.ts generated/.baba-manifest.json
+      - name: Focused tests
+        run: |
+          deno test --allow-read --allow-write src/syntax/layout.test.ts
+          deno test --allow-read --allow-write src/syntax/surface.test.ts --filter "do is an explicit"
+          deno test --allow-read --allow-write src/tooling/formatter.test.ts --filter "explicit do block"
+          deno test --allow-read --allow-write examples.test.ts --filter "do_blocks"
+      - name: Inspect
+        run: deno task inspect
+      - name: Commit refinement
+        run: |
+          git config user.name "Jacob Torrång"
+          git config user.email "kopatheonlyone@hotmail.com"
+          git add -A
+          git commit -m "parser: retain explicit do block scope"
+          git push origin HEAD:do-blocks
