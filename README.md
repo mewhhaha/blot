@@ -172,20 +172,6 @@ appending a second copy. It finishes by proving the editor grammar and the
 compiler agree about what the language is — see [docs/editor.md](docs/editor.md)
 for why that check exists.
 
-To migrate source written with `do`/`end` and declaration semicolons, or the
-previous value-conditional `if condition then value else value` spelling, run
-the one-shot rewrite over a file or directory:
-
-```bash
-deno task migrate:layout -- path/to/source
-# or: just migrate-layout path/to/source
-```
-
-The command parses delimiter syntax with the frozen legacy grammar and verifies
-that its normalized AST is unchanged. Previous indentation syntax has a direct
-token mapping to the colon branches, then passes through the current parser and
-formatter. Directories are traversed recursively.
-
 ## The language
 
 Declarations end at a logical newline; indentation delimits suites:
