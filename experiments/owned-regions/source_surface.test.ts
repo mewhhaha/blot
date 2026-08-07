@@ -16,13 +16,13 @@ async function expectDiagnostic(source: string, code: string): Promise<void> {
   }
 }
 
-Deno.test("Region split and join preserve one owned root", async () => {
+Deno.test("Region split and join preserve one fresh root", async () => {
   const checked = await checkSource(
     path,
     `open @import "blot:prelude" ()
-let !values = [3, 1, 2]
-let !whole = @region.array.claim (!values)
-let !rejoined = case @region.array.split (!whole) 1 of
+let values = [3, 1, 2]
+let whole = @region.array.claim values
+let rejoined = case @region.array.split (!whole) 1 of
   #Split (!left, !right) => @region.array.join (!left) (!right)
   #SplitOutOfBounds !original => original
 return @region.array.freeze (!rejoined)
@@ -31,23 +31,31 @@ return @region.array.freeze (!rejoined)
   assertEquals(checked.type, "[1 | 2 | 3]");
 });
 
-Deno.test("Region claim requires an owned source authority", async () => {
-  await expectDiagnostic(
+Deno.test("Region claim is copy-safe for a shared source array", async () => {
+  const checked = await checkSource(
+    path,
     `open @import "blot:prelude" ()
 let values = [3, 1, 2]
 let region = @region.array.claim values
-return 0
+let shared_first = case Array.get (values, 0) of
+  #Some value => value
+  #None => 0
+let frozen = @region.array.freeze (!region)
+let frozen_first = case Array.get (frozen, 0) of
+  #Some value => value
+  #None => 0
+return shared_first * 10 + frozen_first
 `,
-    "BLOT_REGION_CLAIM_NOT_OWNED",
   );
+  assertEquals(checked.type, "Int");
 });
 
 Deno.test("Region join rejects reversed siblings", async () => {
   await expectDiagnostic(
     `open @import "blot:prelude" ()
-let !values = [3, 1, 2]
-let !whole = @region.array.claim (!values)
-let !rejoined = case @region.array.split (!whole) 1 of
+let values = [3, 1, 2]
+let whole = @region.array.claim values
+let rejoined = case @region.array.split (!whole) 1 of
   #Split (!left, !right) => @region.array.join (!right) (!left)
   #SplitOutOfBounds !original => original
 return @region.array.freeze (!rejoined)
@@ -63,9 +71,9 @@ Deno.test("Region evaluator mutates only its private Store", async () => {
     await Deno.writeTextFile(
       file,
       `open @import "blot:prelude" ()
-let !values = [3, 1, 2]
-let !region = @region.array.claim (!values)
-let !changed = @region.array.swap (!region) 0 2
+let values = [3, 1, 2]
+let region = @region.array.claim values
+let changed = @region.array.swap (!region) 0 2
 return @region.array.freeze (!changed)
 `,
     );
