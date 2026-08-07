@@ -378,6 +378,49 @@ the decision to forbid it) and the ownership story (a linear value captured by
 a suspended computation is exactly the `!resume` case, generalized). A one-page
 design note now is cheap; retrofitting after ABI 1 accretes exports is not.
 
+### D12. Reflection: package evidence instead of adding primitives
+
+Measured against Zig and OCaml, blot's reflection surface is already the easy
+kind. `@type.reflect` is `@typeInfo`; `@shape.get`, `@shape.has`, and
+`@shape.names` are `@field`, `@hasField`, and the field list; a comptime fold
+over a field-name array partial-evaluating into direct projections (§15) is
+`inline for`; and blot needs no `@Type()` reify because construction and
+description live in one value domain — a record type is a record of types.
+OCaml's deriving story, ppx, is syntactic preprocessing outside the language;
+declaration tags are already its semantic superior.
+
+Where blot is harder than Zig is not a missing primitive but *where checking
+happens*. Zig checks a reflective body only at instantiation, so evidence is
+never a question — everything is concrete by the time anything is checked.
+Blot wants principal checking, so §13.4 marks a reflect payload that cannot be
+related back to the reflected input as unevidenced: manipulable at compile
+time, unable to discharge a runtime `sig`. That marking is the real tax on
+derive-style code. Two moves address it, one novel and one borrowed:
+
+1. **Evidence-packaged reflection.** Blot already invented the pattern for
+   arrays: `Iter.indexed` packages the bounds proof with the value at the one
+   primitive that has the authority to mint it. Apply the same rule to
+   reflection — let the shape and variant cases yield operations, not just
+   descriptions: each field as
+   `{ .name; .type; .get = T -> F; .set = (T, F) -> T; }`, with `.get` and
+   `.set` born typed against the reflected `T`. Deriving `eq`, `show`,
+   serializers, and lenses then composes minted accessors instead of
+   re-deriving projections from names, and the unevidenced marking never
+   arises on the dominant uses. No dependent types; the compiler mints the
+   evidence where it has it, exactly like the index proof.
+
+2. **Check the reflective fragment at instantiation.** The specializer
+   already visits every concrete instantiation. Letting that visit be the
+   authoritative check for functions the conservative pass marked unevidenced
+   turns "cannot discharge a `sig`" into "checked where the types are
+   concrete". The cost is Zig's cost — use-site errors — confined to the
+   code that opted into reflection.
+
+A third step is pure prelude: a canonical sum-of-products view derived over
+`reflect` (Scala 3's `Mirror`, generics-sop). Most derive-style code needs
+only "sums of products of scalars, plus the iso", and folding a
+two-constructor view is far easier than the full reflection variant.
+
 ## Priorities
 
 If only five things get done:
