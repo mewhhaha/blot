@@ -35,6 +35,11 @@ jobs:
               raise SystemExit('worker grammar transform not found')
           script = script.replace(old, new, 1)
           script = script.replace('    let local = 1\\n      return local', '    let local = 1\\n    return local', 1)
+          script = script.replace(
+              'assertEquals(visible(result.layout.source).includes("do:<NL><IN>"), true);',
+              'assertEquals(visible(result.layout.source).includes("<IN>let local = 1"), true);',
+              1,
+          )
           Path('/tmp/implement.sh').write_text(script)
           PY
           bash /tmp/implement.sh
