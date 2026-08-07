@@ -338,6 +338,20 @@ function declareProduced(
       );
       let owned = produced;
       if (!relevant(owned)) owned = written;
+      // A trusted primitive may create a fresh linear resource rather than
+      // transfer an older one. Once that value is named, the binding itself is
+      // the stable root identity used by downstream extraction lineage.
+      if (
+        owned.tag === "leaf" && owned.source === null &&
+        owned.origins.length === 0 &&
+        (owned.qualifier === "linear" || owned.qualifier === "affine")
+      ) {
+        owned = {
+          ...owned,
+          source: pattern,
+          origins: [{ source: pattern, path: [], extractions: [] }],
+        };
+      }
       const lineage = structuralLineage(pattern, owned);
       if (lineage.length > 0) analysis.lineage.set(pattern, lineage);
       scope.bindings.set(pattern.name, {
@@ -1281,6 +1295,8 @@ function joinProduced(values: readonly Produced[]): Produced {
 function joinAlternatives(values: readonly Produced[]): Produced {
   if (values.length === 0) return NONE;
   if (values.every((value) => value.tag === "none")) return NONE;
+  const first = values[0];
+  if (values.every((value) => sameProduced(value, first))) return first;
   if (values.every((value) => value.tag === "sequence")) {
     const sequences = values.map((value) => {
       if (value.tag !== "sequence") throw new Error("expected a sequence");
@@ -2403,21 +2419,25 @@ function walk(
       if (application.callee.tag === "intrinsic") {
         const name = application.callee.name;
         if (name === "@region.array.claim" && application.args.length === 1) {
-          const source = walk(application.args[0], scope, analysis, "move");
-          if (obligation(source) === "none") {
-            analysis.report(
-              "BLOT_REGION_CLAIM_NOT_OWNED",
-              "Region claim needs an explicitly owned array (`!array`). The claim copies into a private Store, while the owned source supplies the unique static authority root.",
-              application.args[0].span,
-            );
-          } else if (source.tag !== "leaf" || source.origins.length === 0) {
+          const source = walk(application.args[0], scope, analysis, "project");
+          if (obligation(source) !== "none") {
             analysis.report(
               "BLOT_REGION_OWNED_ELEMENT",
-              "The first Region implementation accepts arrays whose elements carry no ownership obligations. Consume or unpack owned elements before claiming the array.",
+              "The first Region implementation copies its input, so arrays containing owned elements cannot be claimed yet. Consume or unpack those elements first.",
               application.args[0].span,
             );
           }
-          return source;
+          // `claim` semantically creates a fresh private Store. The declaration
+          // receiving this leaf roots it at that new binding; no source-array
+          // identity is reused unless a later Store-provenance optimization
+          // proves that stealing the allocation is observationally equivalent.
+          return {
+            tag: "leaf",
+            qualifier: "linear",
+            source: null,
+            path: [],
+            origins: [],
+          };
         }
         if (name === "@region.array.length" && application.args.length === 1) {
           walk(application.args[0], scope, analysis, "borrow");
@@ -3022,8 +3042,8 @@ function joinRegionParts(
   return {
     tag: "leaf",
     qualifier: leftLeaf.qualifier,
-    source: null,
-    path: [],
+    source: leftOrigin.source,
+    path: leftOrigin.path,
     origins: [{
       source: leftOrigin.source,
       path: leftOrigin.path,
