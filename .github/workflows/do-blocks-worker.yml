@@ -1,0 +1,39 @@
+name: do-blocks-worker
+
+on:
+  push:
+    branches:
+      - agent/do-blocks-worker
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: do-blocks
+          fetch-depth: 0
+      - name: Find parenthesized statement blocks
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          roots = [Path('.')]
+          pattern = re.compile(r'\(\r?\n(?=[ \t]+(?:let|const|sig|return|for|break|open|<-|[A-Za-z_][A-Za-z0-9_]*[ \t]*(?:<-|:=))\b)')
+          for path in sorted(Path('.').rglob('*')):
+              if not path.is_file() or '.git' in path.parts or 'generated' in path.parts:
+                  continue
+              if path.suffix not in {'.blot', '.ts', '.md', '.baba'}:
+                  continue
+              try:
+                  text = path.read_text()
+              except UnicodeDecodeError:
+                  continue
+              for match in pattern.finditer(text):
+                  line = text.count('\n', 0, match.start()) + 1
+                  print(f'{path}:{line}')
+          PY
