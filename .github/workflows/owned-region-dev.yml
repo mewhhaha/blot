@@ -26,6 +26,20 @@ jobs:
       - name: Apply Region Runtime HIR lowering
         run: |
           git pull --rebase origin codex/owned-slices
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('experiments/owned-regions/apply_region_hir.py')
+          text = path.read_text()
+          text = text.replace(
+              '            "@array.len" if arguments.len() == 1 => {\\n',
+              '            "@array.len" => {\\n',
+          )
+          text = text.replace(
+              'WireConstant::SignedInteger64(0)',
+              'WireConstant::SignedInteger64("0".to_owned())',
+          )
+          path.write_text(text)
+          PY
           python3 experiments/owned-regions/apply_region_hir.py
           cargo fmt --manifest-path experiments/rust-middle/Cargo.toml
           cargo check --manifest-path experiments/rust-middle/Cargo.toml --target wasm32-unknown-unknown
