@@ -26,7 +26,7 @@ Deno.test("the generated plan carries a general version-3 frontend", () => {
   );
   assertEquals(inspection.version, 3);
   assertEquals(inspection.throughput, "general");
-  assertEquals(frontend.plan.islands.length, 82);
+  assertEquals(frontend.plan.islands.length, 86);
 });
 
 // The prelude and case-study libraries are Blot source too, so they are held to

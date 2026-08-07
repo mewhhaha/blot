@@ -762,7 +762,8 @@ const list_fold = fn (list, state, visit) =>
   return list_fold_nodes ((&nodes), head, state, visit)
 
 const list_reverse_onto = fn (source, target) =>
-  return list_fold (source, target, fn (result, value) => list_prepend value result)
+  return
+    list_fold (source, target, fn (result, value) => list_prepend value result)
 
 const list_reverse = fn list => list_reverse_onto (list, list_empty)
 
@@ -770,33 +771,40 @@ const list_append = fn left => fn right =>
   return list_reverse_onto (list_reverse left, right)
 
 const list_from_array = fn values =>
-  let reversed = fold (
-    values,
-    list_empty,
-    fn (result, value) => list_prepend value result
-  )
+  let reversed =
+    fold (
+      values,
+      list_empty,
+      fn (result, value) => list_prepend value result
+    )
   return list_reverse reversed
 
 const list_map = fn (list, transform) =>
-  let reversed = list_fold (
-    list,
-    list_empty,
-    fn (result, value) => list_prepend (transform value) result
-  )
+  let reversed =
+    list_fold (
+      list,
+      list_empty,
+      fn (result, value) => list_prepend (transform value) result
+    )
   return list_reverse reversed
 
 const list_filter = fn (list, keep) =>
-  let reversed = list_fold (
-    list,
-    list_empty,
-    fn (result, value) => case keep value of
-      #True => list_prepend value result
-      #False => result
-  )
+  let reversed =
+    list_fold (
+      list,
+      list_empty,
+      fn (result, value) => case keep value of
+        #True => list_prepend value result
+        #False => result
+    )
   return list_reverse reversed
 
 const list_to_array = fn list =>
-  return list_fold (list, Array.empty, fn (values, value) => @array.push values value)
+  return list_fold (
+      list,
+      Array.empty,
+      fn (values, value) => @array.push values value
+    )
 
 const list_items = fn list => {
   .state = list;
@@ -840,21 +848,22 @@ const map_get = fn (equal, entries, key) =>
   return find 0
 
 const map_put = fn (equal, entries, key, value) =>
-  let replaced = fold (
-    entries,
-    (Array.empty, None, False),
-    fn (state, entry) =>
-      if state.2:
-        return (@array.push state.0 entry, state.1, state.2)
-      else if equal entry.0 key:
-        return (
-          @array.push state.0 (key, value),
-          Some entry.1,
-          True
-        )
-      else:
-        return (@array.push state.0 entry, state.1, state.2)
-  )
+  let replaced =
+    fold (
+      entries,
+      (Array.empty, None, False),
+      fn (state, entry) =>
+        if state.2:
+          return (@array.push state.0 entry, state.1, state.2)
+        else if equal entry.0 key:
+          return (
+            @array.push state.0 (key, value),
+            Some entry.1,
+            True
+          )
+        else:
+          return (@array.push state.0 entry, state.1, state.2)
+    )
   let updated = if replaced.2:
     return replaced.0
   else:
@@ -862,26 +871,28 @@ const map_put = fn (equal, entries, key, value) =>
   return (replaced.1, updated)
 
 const map_remove = fn (equal, entries, key) =>
-  let removed = fold (
-    entries,
-    (Array.empty, None, False),
-    fn (state, entry) =>
-      if state.2:
-        return (@array.push state.0 entry, state.1, state.2)
-      else if equal entry.0 key:
-        return (state.0, Some entry.1, True)
-      else:
-        return (@array.push state.0 entry, state.1, state.2)
-  )
+  let removed =
+    fold (
+      entries,
+      (Array.empty, None, False),
+      fn (state, entry) =>
+        if state.2:
+          return (@array.push state.0 entry, state.1, state.2)
+        else if equal entry.0 key:
+          return (state.0, Some entry.1, True)
+        else:
+          return (@array.push state.0 entry, state.1, state.2)
+    )
   return (removed.1, removed.0)
 
 const map_with = fn equal =>
   let put = fn (entries, key, value) => map_put (equal, entries, key, value)
-  let append = fn left => fn right => fold (
-    right,
-    left,
-    fn (entries, entry) => (put (entries, entry.0, entry.1)).1
-  )
+  let append = fn left => fn right =>
+    return fold (
+      right,
+      left,
+      fn (entries, entry) => (put (entries, entry.0, entry.1)).1
+    )
   return {
     .of = map_type;
     .empty = Array.empty;
@@ -895,10 +906,12 @@ const map_with = fn equal =>
     .remove = fn (entries, key) => map_remove (equal, entries, key);
     .append = append;
     .fold = fold;
-    .map = fn (entries, transform) => array_map (
-      entries,
-      fn entry => (entry.0, transform entry.1)
-    );
+    .map = fn (entries, transform) =>
+      return array_map (
+        entries,
+        fn entry => (entry.0, transform entry.1)
+      )
+    ;
     .filter = array_filter;
     .length = Array.length;
     .keys = fn entries => array_map (entries, fn entry => entry.0);
@@ -918,17 +931,18 @@ const set_has = fn (equal, values, needle) =>
   )
 
 const set_insert = fn (equal, values, inserted) =>
-  let replaced = fold (
-    values,
-    (Array.empty, None, False),
-    fn (state, value) =>
-      if state.2:
-        return (@array.push state.0 value, state.1, state.2)
-      else if equal value inserted:
-        return (@array.push state.0 inserted, Some value, True)
-      else:
-        return (@array.push state.0 value, state.1, state.2)
-  )
+  let replaced =
+    fold (
+      values,
+      (Array.empty, None, False),
+      fn (state, value) =>
+        if state.2:
+          return (@array.push state.0 value, state.1, state.2)
+        else if equal value inserted:
+          return (@array.push state.0 inserted, Some value, True)
+        else:
+          return (@array.push state.0 value, state.1, state.2)
+    )
   let updated = if replaced.2:
     return replaced.0
   else:
@@ -936,26 +950,28 @@ const set_insert = fn (equal, values, inserted) =>
   return (replaced.1, updated)
 
 const set_remove = fn (equal, values, needle) =>
-  let removed = fold (
-    values,
-    (Array.empty, None, False),
-    fn (state, value) =>
-      if state.2:
-        return (@array.push state.0 value, state.1, state.2)
-      else if equal value needle:
-        return (state.0, Some value, True)
-      else:
-        return (@array.push state.0 value, state.1, state.2)
-  )
+  let removed =
+    fold (
+      values,
+      (Array.empty, None, False),
+      fn (state, value) =>
+        if state.2:
+          return (@array.push state.0 value, state.1, state.2)
+        else if equal value needle:
+          return (state.0, Some value, True)
+        else:
+          return (@array.push state.0 value, state.1, state.2)
+    )
   return (removed.1, removed.0)
 
 const set_with = fn equal =>
   let insert = fn (values, value) => set_insert (equal, values, value)
-  let union = fn left => fn right => fold (
-    right,
-    left,
-    fn (values, value) => (insert (values, value)).1
-  )
+  let union = fn left => fn right =>
+    return fold (
+      right,
+      left,
+      fn (values, value) => (insert (values, value)).1
+    )
   return {
     .of = set_type;
     .empty = Array.empty;
@@ -965,21 +981,28 @@ const set_with = fn equal =>
     .remove = fn (values, value) => set_remove (equal, values, value);
     .append = union;
     .union = union;
-    .intersect = fn left => fn right => array_filter (
-      left,
-      fn value => set_has (equal, right, value)
-    );
-    .diff = fn left => fn right => array_filter (
-      left,
-      fn value => not (set_has (equal, right, value))
-    );
+    .intersect = fn left => fn right =>
+      return array_filter (
+        left,
+        fn value => set_has (equal, right, value)
+      )
+    ;
+    .diff = fn left => fn right =>
+      return array_filter (
+        left,
+        fn value => not (set_has (equal, right, value))
+      )
+    ;
     .fold = fold;
     .filter = array_filter;
-    .map = fn (values, mapped_equal, transform) => fold (
-      values,
-      Array.empty,
-      fn (mapped, value) => (set_insert (mapped_equal, mapped, transform value)).1
-    );
+    .map = fn (values, mapped_equal, transform) =>
+      return fold (
+        values,
+        Array.empty,
+        fn (mapped, value) =>
+          return (set_insert (mapped_equal, mapped, transform value)).1
+      )
+    ;
     .length = Array.length;
     .items = array_items;
   }
