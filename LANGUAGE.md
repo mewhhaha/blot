@@ -2356,9 +2356,9 @@ prelude source:
 The previous or removed value is an `Option`. Returning it is significant for
 ownership: replacing or removing an owned value does not silently discard it.
 Starting from `empty`, these operations keep keys unique. A manually built
-association array with duplicate keys has defined first-match behavior; `put`
-or `remove` affects only that visible entry. `Dict` is `Map.with` text equality,
-so `Dict.of V` remains the concise type constructor for `(Str, V)` maps.
+association array with duplicate keys has defined first-match behavior; `put` or
+`remove` affects only that visible entry. `Dict` is `Map.with` text equality, so
+`Dict.of V` remains the concise type constructor for `(Str, V)` maps.
 
 #### Safe indexed access
 
@@ -2567,9 +2567,9 @@ record currently exports:
 - collections: `List`, `Map`, `Set`, and the text-keyed `Dict` specialization;
 - iterators: `ever`, `Iter`, `iterate`, and `collect`;
 - variants: `Option`, `None`, `Some`, `unwrap_or`, `Result`, `Ok`, `Error`;
-- type tools: `Type`, `TypeSet`, `attach`, `seal`, `unseal`, `Reflect`, `reflect`,
-  `refines`, `members`, `union_of`, `Extract`, `Exclude`, `Pick`, `Omit`,
-  `opened`, and `range`;
+- type tools: `Type`, `TypeSet`, `attach`, `seal`, `unseal`, `Reflect`,
+  `reflect`, `refines`, `members`, `union_of`, `Extract`, `Exclude`, `Pick`,
+  `Omit`, `opened`, and `range`;
 - storage tools: `struct`, `reorder`, `layout`, `aligned`, `bit_width`, and
   `packed`; and
 - standard types and integer range constructors: `I`, `I8`, `I16`, `I32`, `I64`,
@@ -2615,17 +2615,19 @@ const Iterable = fn (F_A, A, S) => {
 ```
 
 Blot has no higher-kinded inference variable, so these interfaces describe one
-concrete source and result instantiation. A polymorphic namespace such as
-`List` or `Array` structurally satisfies every compatible instantiation; callers
-still pass or name that namespace explicitly.
+concrete source and result instantiation. A polymorphic namespace such as `List`
+or `Array` structurally satisfies every compatible instantiation; callers still
+pass or name that namespace explicitly.
 
-`List.of A` is an immutable arena-backed list represented as `([(A, Int)],
-Int)`, where the second value is the head address and `-1` is empty. `List.view
-A` is `#Nil | #Cons (A, List.of A)`, and `List.uncons` produces that one-step
-view for pattern matching. `List` also supplies `empty`, `singleton`, `prepend`,
-`append`, `fold`, `map`, `filter`, `reverse`, array conversion, `length`, and an
-`items` iterator. These are ordinary source functions and can execute during
-comptime evaluation.
+`List.of A` is an immutable arena-backed list represented as
+`([(A, Int)],
+Int)`, where the second value is the head address and `-1` is
+empty. `List.view
+A` is `#Nil | #Cons (A, List.of A)`, and `List.uncons`
+produces that one-step view for pattern matching. `List` also supplies `empty`,
+`singleton`, `prepend`, `append`, `fold`, `map`, `filter`, `reverse`, array
+conversion, `length`, and an `items` iterator. These are ordinary source
+functions and can execute during comptime evaluation.
 
 `Set.of A` is an insertion-ordered array of unique values. `Set.with equal`
 returns operations for the supplied equality: construction, membership,
@@ -2633,12 +2635,15 @@ returns operations for the supplied equality: construction, membership,
 `map`, `map_with`, `length`, and `items`. `insert` and `remove` return
 `(previous, updated)` so replacing or removing an owned value never silently
 discards it. `map` uses the namespace's equality for an endomorphic transform.
-When mapping changes the element type, `map_with (values, mapped_equal,
-transform)` takes the result equality explicitly and removes mapped duplicates.
+When mapping changes the element type,
+`map_with (values, mapped_equal,
+transform)` takes the result equality
+explicitly and removes mapped duplicates.
 
-`Map.with` and `Set.with` require curried equality, such as `Ord.eq` or `fn left
-=> fn right => text_eq (left, right)`. Equality selection is visible at the
-construction site; there is no implicit instance lookup.
+`Map.with` and `Set.with` require curried equality, such as `Ord.eq` or
+`fn left
+=> fn right => text_eq (left, right)`. Equality selection is visible at
+the construction site; there is no implicit instance lookup.
 
 Important conventional values include:
 
