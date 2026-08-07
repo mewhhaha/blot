@@ -148,7 +148,7 @@ remove_between(
 replace_between(
     "src/syntax/surface.test.ts",
     'Deno.test("value if is retained only by concrete migration parsing"',
-    "function transformerEffect",
+    "function handledArguments",
     """Deno.test("value if is absent from the production grammar", async () => {
   const source = `let value = if True:
   return 1
@@ -519,104 +519,32 @@ replace(
     "The\nintroducers are `=`, `=>`, `<-`, `of`, `with`, `:`, and an opening element's\n",
     "The\nintroducers are `=`, `=>`, `<-`, `of`, `:`, and an opening element's\n",
 )
-replace(
-    "LANGUAGE.md",
-    """The
-formatter writes value conditionals vertically, expanding each direct branch
-value into a block whose explicit `return` supplies that value. When the
-conditional is itself the terminal result of a scope, the formatter omits the
-redundant outer `return` and lets those branch returns target the scope
-directly. Arrays use one line when they fit within their value scope and
-""",
-    """Arrays use one line when they fit within their value scope and
-""",
-)
-replace(
-    "LANGUAGE.md",
-    """The indented continuation accepts a lambda, element, or ordinary expression. An
-`if` immediately after the newline begins the binding's existing block form,
-where it is a statement conditional; parenthesize it when the binding must
-continue with a value conditional instead. The continuation changes layout only
-and does not introduce another scope.
-""",
-    """The indented continuation accepts a lambda, element, or ordinary expression. An
-`if` immediately after the newline begins the binding's statement block. The
-continuation changes layout only and does not introduce another scope.
-""",
-)
-replace(
-    "LANGUAGE.md",
-    """const measuring = fn T => if refines (T, Str):
-  return fn x => Text.length x
-else:
-  return fn x => x + 0
-""",
-    """const measuring = fn T => case refines (T, Str) of
-  #True => fn x => Text.length x
-  #False => fn x => x + 0
-""",
-)
-replace(
-    "LANGUAGE.md",
-    """The left-hand binding in a `try` handler step is a separate bounded surface
-form. Section 12.2 specifies how it binds the newly handled computation without
-executing it.
-
-""",
-    "",
-)
 replace_between(
     "LANGUAGE.md",
-    "### 8.1 Value-producing `if`",
-    "### 8.3 Deconstructing guard",
-    """### 8.1 Statement `if`
+    "A value conditional has one or more conditions and a required fallback:",
+    "### 7.2 Case",
+    """Boolean value selection uses an ordinary exhaustive case:
 
 ```blot
-if condition:
-  statements
-else if other:
-  statements
-else:
-  statements
+let label = case ready of
+  #True => "ready"
+  #False => "waiting"
 ```
 
-A statement conditional's `else` is optional. Its branches are lexical binding
-scopes but not return or loop boundaries, so `return` and `break` retain their
-surrounding targets. Value selection belongs to `case` (§8.3), including a
-choice between `#True` and `#False`.
+The two arms normalize to the checker's internal conditional representation, so
+branch refinement remains shared with standalone control flow. This is surface
+normalization rather than a second Boolean semantics.
 
-A branch is a scope for `let` but not for `:=`. A name a branch rebinds with
-`:=` is rebound for the statements that follow the conditional: the name was
-already in scope and keeps its type, so every path agrees on what it holds —
-including a missing `else`, which passes the name through unchanged. A `let`
-inside a branch stays local to that branch, shadowing any outer binding of that
-name for the rest of the branch and escaping with nothing.
-
-The suite ends at the first dedent. `else` aligns with its `if`.
-
-### 8.2 Deconstructing guard
+### 7.2 Case
 """,
-)
-replace("LANGUAGE.md", "### 8.4 `case`\n", "### 8.3 `case`\n")
-replace(
-    "LANGUAGE.md",
-    "Like expression `if`, `case` is a separate result scope.",
-    "`case` is a separate result scope.",
-)
-replace(
-    "LANGUAGE.md",
-    "It cannot cross a lambda\nor a value-producing `if` or `case`, and using it without an enclosing `for` is\n",
-    "It cannot cross a lambda or a value-producing `case`, and using it without\nan enclosing `for` is\n",
 )
 replace_between(
     "LANGUAGE.md",
     "### 12.2 Handler composition",
-    "### 12.3 Host boundary",
+    "### 12.3 Capability grants",
     """### 12.2 Handler composition
 
-A two-argument `@handle (effect, handler)` is a surface computation transformer.
-It accepts a linear nullary computation and returns another nullary computation
-with that effect discharged. Ordinary left-associative `|>` composes several:
+A two-argument `@handle` is a transformer over one nullary computation:
 
 ```blot
 let handled = program
@@ -626,177 +554,40 @@ let handled = program
 result <- handled
 ```
 
-Each transformer lowers to a nullary computation containing the ordinary
-three-argument `@handle (effect, computation, handler)` call. Sequencing the
-final computation executes it. Effect identities, handler shapes, and the
-resulting effect rows remain statically visible; there is no runtime handler
-registry.
+Each stage is elaborated to the ordinary saturated call
+`@handle (Effect, computation, handler)`. The transformation is static: the
+computation remains linear, the resulting pipeline is visible to specialization,
+and there is no runtime registry or implicit handler stack. The former bounded
+`try ... with` form remains understood only by the frozen layout-v1 migration
+parser.
 
+### 12.3 Capability grants
 """,
 )
 replace(
     "LANGUAGE.md",
-    """Every intrinsic is curried like an ordinary Blot function except `@handle`,
-which takes its three arguments in one tuple. The two-argument spelling inside
-`try` is surface syntax described in section 12.2, not partial application.
-""",
-    """Every intrinsic is curried like an ordinary Blot function except `@handle`,
-which takes its three intrinsic arguments in one tuple. The two-argument source
-spelling is the computation transformer described in section 12.2, not partial
-application of the intrinsic.
-""",
-)
-
-replace(
-    "AGENTS.md",
-    """A standalone `if` becomes an ordinary
-conditional over those results, and `x <- e` explicitly sequences the already
-applied expression `e`, all during CST lowering. `try program with ... end`
-likewise becomes named nullary
-computations containing ordinary three-argument `@handle` calls; its bounded
-left-hand `<-` binds that computation rather than using the general declaration
-form. Nothing downstream of the parser knows these forms exist.
-""",
-    """A standalone `if` becomes an ordinary
-conditional over those results, and `x <- e` explicitly sequences the already
-applied expression `e`, all during CST lowering. Two-argument `@handle` calls
-become nullary computation transformers containing ordinary three-argument
-calls. Nothing downstream of surface elaboration knows these forms exist.
-""",
-)
-replace_between(
-    "AGENTS.md",
-    "**Value conditionals do not transfer control.**",
-    "**A deconstructing guard must leave on failure.**",
-    """**Value selection does not transfer control.** A `case` produces one arm's
-value in a separate result scope that does not inherit surrounding control
-targets. An arm's explicit `return` supplies the `case` result; `break` cannot
-escape it to reach an enclosing loop. A standalone `if condition:` suite
-inherits the surrounding return and loop targets.
-
-""",
-)
-
-replace_between(
-    "DOCS.md",
-    "## Distinguish value conditionals from control flow",
-    "## Treat `return` and `break` as different exits",
-    """## Distinguish value selection from control flow
-
-Use `case` when an expression must choose a value:
-
-```blot
-let label = case ready of
-  #True => "ready"
-  #False => "waiting"
-```
-
-Use standalone `if` for control flow. Return directly from terminal branches,
-or use early returns and leave the main path flat:
-
-```blot
-let minimum = fn (left, right) =>
-  if left < right:
-    return left
-  return right
-```
-
-Use a deconstructing guard when failure leaves and success continues:
-
-```blot
-let unwrap_or = fn (candidate, fallback) =>
-  if let #Some value = candidate else:
-    return fallback
-
-  return value
-```
-
-The success path is the code after the guard. Do not add a success suite, and do
-not let the failure branch continue: the pattern's names would not exist there.
-
-""",
+    "Value-producing conditionals and `case` are explicit result scopes; their\n",
+    "`case` is an explicit result scope; its\n",
 )
 replace(
-    "DOCS.md",
-    """Do not use `break` from a value conditional. A value conditional is a separate
-result scope, so it cannot transfer control to an outer loop.
-
-""",
-    """A `case` is a value scope, so `break` cannot transfer from one of its arms to an
-outer loop.
-
-""",
-)
-
-replace(
-    "docs/editor.md",
-    """- equality `if` chains better written as one `case`, identical branches, and
-  conditionals that only reproduce a Boolean condition;
-- discarded value conditionals better written as statement suites and
-  Option-shaped terminal matches that can become `if let` guards;
-""",
-    """- equality `if` chains better written as one `case`, nested `else`
-  conditionals that can be one `else if` ladder, and Option-shaped terminal
-  matches that can become `if let` guards;
-""",
+    "LANGUAGE.md",
+    "`return` inside one of their branch blocks supplies that value. A `break` inside\n",
+    "`return` inside one of its branch blocks supplies that value. A `break` inside\n",
 )
 replace(
-    "docs/backend.md",
-    """`try program with` followed by an indented suite adds no backend path. CST
-lowering turns each bound two-argument `@handle (effect, handler)` step into a
-named nullary computation containing the ordinary three-argument call, then
-emits one final three-argument call that executes the composition.
-""",
-    """A two-argument `@handle (effect, handler)` adds no backend path. Surface
-elaboration turns it into a transformer over a linear nullary computation that
-contains the ordinary three-argument call. Ordinary `|>` application composes
-those transformers before the final computation is sequenced.
-""",
+    "LANGUAGE.md",
+    "The old `try ... with` handler-composition form is accepted only long enough to\nproduce a targeted removal diagnostic. Use the two-argument `@handle` transformer\nand ordinary `|>` composition instead.\n",
+    "",
 )
 replace(
-    "spec/FRONTEND.md",
-    "while\nisolating both at value-producing `if` and `case` result scopes.\n",
-    "while\nisolating both at `case` result scopes.\n",
-)
-replace(
-    "spec/SAFETY.md",
-    """proved proposition entails. A failed value conditional does not transfer control
-to an enclosing function; statement-control elaboration expresses that transfer
-before coverage runs.
-""",
-    """proved proposition entails. A failed guarded arm falls through to later arms;
-statement-control elaboration expresses function and loop transfer before
-coverage runs.
-""",
-)
-replace(
-    "spec/PAPER.md",
-    "such as `for`, statement `if`, element syntax, `try`, and early `return` should\n",
-    "such as `for`, statement `if`, element syntax, and early `return` should\n",
-)
-replace("spec/PAPER.md", "- `try` handler composition;\n", "")
-replace(
-    "docs/roadmap.md",
-    """**Remaining work.** The formatter reflows lambdas, value conditionals, arrays,
-and long tuple arguments toward 80 columns. A complete expression printer
-""",
-    """**Remaining work.** The formatter reflows lambdas, arrays, explicit blocks,
-and long tuple arguments toward 80 columns. A complete expression printer
-""",
-)
-replace(
-    "docs/roadmap.md",
-    """Every syntax mistake reports
-`Unexpected token
-";"`, including the omitted `else` on an expression `if` — the
-language's most emphatic rule. A missing comma between `case` arms reports
-""",
-    """Every syntax mistake reports `Unexpected token ";"` without saying what was
-expected. A missing comma between `case` arms reports
-""",
+    "LANGUAGE.md",
+    "The previous expression `if` form is accepted only long enough to produce a\ntargeted removal diagnostic. Match `#True` and `#False` with `case` instead.\n",
+    "",
 )
 
-# Historical profile notes remain historical; current counters are updated by
-# the workflow after regeneration.
-
-# Temporary worker files are removed before the final commit.
+# Delete obsolete post-parse diagnostics from the reference material.
+for path in ("spec/FRONTEND.md", "spec/PAPER.md"):
+    text = read(path)
+    text = text.replace("BLOT_VALUE_IF_REMOVED", "production syntax error")
+    text = text.replace("BLOT_TRY_REMOVED", "production syntax error")
+    write(path, text)
