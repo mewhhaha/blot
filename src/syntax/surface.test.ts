@@ -34,7 +34,7 @@ def replace_once(path, old, new):
 replace_once(
     "src/check/infer.ts",
     '''  const scope = childTypeEnv(context.types);\n  const inner: Context = { ...context, types: scope };\n  bindPatternAgainst(expr.parameter, expected.param, inner, level + 1);''',
-    '''  if ((expr.deferred ?? false) !== (expected.deferred ?? false)) {\n    fail(\n      "BLOT_TYPE_ERROR",\n      expected.deferred === true\n        ? "This function signature requires a deferred parameter; write `fn ~name => ...`."\n        : "This function signature requires a strict parameter; remove `~` from the lambda parameter.",\n      expr.span,\n    );\n  }\n\n  const scope = childTypeEnv(context.types);\n  const inner: Context = { ...context, types: scope };\n  bindPatternAgainst(expr.parameter, expected.param, inner, level + 1);''',
+    '''  if ((expr.deferred ?? false) !== (expected.deferred ?? false)) {\n    fail(\n      "BLOT_TYPE_ERROR",\n      expected.deferred === true\n        ? "This function signature requires a deferred parameter; write fn ~name => ...."\n        : "This function signature requires a strict parameter; remove ~ from the lambda parameter.",\n      expr.span,\n    );\n  }\n\n  const scope = childTypeEnv(context.types);\n  const inner: Context = { ...context, types: scope };\n  bindPatternAgainst(expr.parameter, expected.param, inner, level + 1);''',
 )
 replace_once(
     "src/check/infer.ts",
