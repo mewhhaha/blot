@@ -10,10 +10,10 @@ def replace_once(path: str, old: str, new: str) -> None:
     file.write_text(text.replace(old, new, 1))
 
 
-# The public namespace exposes named primitive aliases. Each `const` declaration
-# generalizes its primitive scheme before the values are assembled into the
-# returned prelude record. Ownership checking still recognizes Slice.* at each
-# call site, so this closes the type schemes without severing Region lineage.
+# The public namespace exposes named primitive aliases with explicit closed
+# rank-N signatures. Ownership checking still recognizes Slice.* at each call
+# site, so the signatures close the prelude snapshot without severing Region
+# lineage at a wrapper parameter.
 path = "src/prelude/prelude.blot"
 start = '''const Slice =
   {
@@ -32,13 +32,33 @@ start = '''const Slice =
     .freeze = fn !region => @region.array.freeze (!region);
   }
 '''
-replacement = '''const slice_claim = @region.array.claim
+replacement = '''sig slice_claim = @forall (fn T => [T] -> @region.array.type T)
+const slice_claim = @region.array.claim
+sig slice_length = @forall (fn T => (@region.array.type T) -> Int)
 const slice_length = @region.array.length
+sig slice_get = @forall (fn T => (@region.array.type T) -> Int -> (#Some T | #None))
 const slice_get = @region.array.get
+sig slice_set = @forall (fn T =>
+  (@region.array.type T) -> Int -> T ->
+    (#Updated (@region.array.type T) | #SetOutOfBounds (@region.array.type T))
+)
 const slice_set = @region.array.set
+sig slice_swap = @forall (fn T =>
+  (@region.array.type T) -> Int -> Int ->
+    (#Updated (@region.array.type T) | #SwapOutOfBounds (@region.array.type T))
+)
 const slice_swap = @region.array.swap
+sig slice_split = @forall (fn T =>
+  (@region.array.type T) -> Int ->
+    (#Split ((@region.array.type T), (@region.array.type T)) |
+      #SplitOutOfBounds (@region.array.type T))
+)
 const slice_split = @region.array.split
+sig slice_join = @forall (fn T =>
+  (@region.array.type T) -> (@region.array.type T) -> (@region.array.type T)
+)
 const slice_join = @region.array.join
+sig slice_freeze = @forall (fn T => (@region.array.type T) -> [T])
 const slice_freeze = @region.array.freeze
 
 const Slice =
