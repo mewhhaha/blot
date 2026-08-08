@@ -1,0 +1,11 @@
+// The same fault behind a closure: `spend` is linear because it captured a
+// linear value, and calling it once per iteration calls it more than once.
+open @import "blot:prelude" ()
+
+let consume = fn !value => value + 1
+let !ticket = 7
+let spend = fn () => consume (!ticket)
+let total = 0
+for n in Iter.range (0, 2):
+  total := total + spend ()
+return total

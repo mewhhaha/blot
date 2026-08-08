@@ -1194,6 +1194,44 @@ mod tests {
         tables.remove(0)
     }
 
+    /// A tail call is not a transfer. This body hands the recursion a value it
+    /// computed by spending the capture, so the next entry spends it again.
+    const SPENDS_EACH_ITERATION: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const consume = fn !value => @int.add value 1\n\u{e000}let !token = 41\n\u{e000}let go =\n  \u{e000}\u{e001}rec (fn (n, carried) => case positive n of\n    \u{e000}\u{e001}#True => go (@int.sub n 1, @int.add carried (consume (!token)))\n    \u{e000}#False => carried\n  \u{e000}\u{e002})\n\u{e000}\u{e002}\u{e000}return go (3, 0)\u{e000}\n";
+
+    /// The same recursion spending the capture only where it stops.
+    const SPENDS_WHERE_IT_ENDS: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const consume = fn !value => @int.add value 1\n\u{e000}let !token = 41\n\u{e000}let go =\n  \u{e000}\u{e001}rec (fn (n, carried) => case positive n of\n    \u{e000}\u{e001}#True => go (@int.sub n 1, carried)\n    \u{e000}#False => @int.add carried (consume (!token))\n  \u{e000}\u{e002})\n\u{e000}\u{e002}\u{e000}return go (3, 0)\u{e000}\n";
+
+    #[test]
+    fn a_capture_spent_on_a_recursing_path_is_refused() {
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source(SPENDS_EACH_ITERATION))
+            .expect("source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("source should configure");
+        let checked = session.check_module("main.blot");
+        assert_eq!(checked["ok"], false);
+        assert_eq!(
+            checked["diagnostic"]["code"], "BLOT_LINEAR_CONSUMED_TWICE",
+            "{}",
+            checked["diagnostic"]
+        );
+    }
+
+    #[test]
+    fn a_capture_spent_where_the_recursion_ends_is_accepted() {
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source(SPENDS_WHERE_IT_ENDS))
+            .expect("source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("source should configure");
+        let checked = session.check_module("main.blot");
+        assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
+    }
+
     fn source(value: &str) -> Vec<u16> {
         value.encode_utf16().collect()
     }

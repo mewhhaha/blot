@@ -94,6 +94,12 @@ function printUsage(): void {
   console.error(
     "usage: blot <check|test|eval|ast|ownership|fmt> <path>...",
   );
+  console.error(
+    "       check, build, and package answer from the production Rust compiler;",
+  );
+  console.error(
+    "       eval and ownership answer from the TypeScript conformance oracle.",
+  );
   console.error("       blot fmt [--check] <file.blot>...");
   console.error("       blot build <file.blot>...");
   console.error("       blot package <blot.json>...");
