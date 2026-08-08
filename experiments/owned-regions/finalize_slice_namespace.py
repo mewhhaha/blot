@@ -38,25 +38,13 @@ sig slice_length = @forall (fn T => (@region.array.type T) -> Int)
 const slice_length = @region.array.length
 sig slice_get = @forall (fn T => (@region.array.type T) -> Int -> (#Some T | #None))
 const slice_get = @region.array.get
-sig slice_set = @forall (fn T =>
-  (@region.array.type T) -> Int -> T ->
-    (#Updated (@region.array.type T) | #SetOutOfBounds (@region.array.type T))
-)
+sig slice_set = @forall (fn T => (@region.array.type T) -> Int -> T -> (#Updated (@region.array.type T) | #SetOutOfBounds (@region.array.type T)))
 const slice_set = @region.array.set
-sig slice_swap = @forall (fn T =>
-  (@region.array.type T) -> Int -> Int ->
-    (#Updated (@region.array.type T) | #SwapOutOfBounds (@region.array.type T))
-)
+sig slice_swap = @forall (fn T => (@region.array.type T) -> Int -> Int -> (#Updated (@region.array.type T) | #SwapOutOfBounds (@region.array.type T)))
 const slice_swap = @region.array.swap
-sig slice_split = @forall (fn T =>
-  (@region.array.type T) -> Int ->
-    (#Split ((@region.array.type T), (@region.array.type T)) |
-      #SplitOutOfBounds (@region.array.type T))
-)
+sig slice_split = @forall (fn T => (@region.array.type T) -> Int -> (#Split ((@region.array.type T), (@region.array.type T)) | #SplitOutOfBounds (@region.array.type T)))
 const slice_split = @region.array.split
-sig slice_join = @forall (fn T =>
-  (@region.array.type T) -> (@region.array.type T) -> (@region.array.type T)
-)
+sig slice_join = @forall (fn T => (@region.array.type T) -> (@region.array.type T) -> (@region.array.type T))
 const slice_join = @region.array.join
 sig slice_freeze = @forall (fn T => (@region.array.type T) -> [T])
 const slice_freeze = @region.array.freeze
