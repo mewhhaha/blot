@@ -146,12 +146,12 @@ jobs:
           test = Path("experiments/owned-regions/wasm_region.test.ts")
           text = test.read_text()
           text = text.replace(
-              'import { RustMiddleCompiler } from "../../src/backend/rust_middle.ts";',
-              'import { Compiler } from "../../src/compiler/session.ts";',
+              "../../src/backend/rust_middle.ts",
+              "../../src/compiler/session.ts",
           )
           text = text.replace(
-              'import type { BlotRuntimeModule, BlotRuntimeOperation } from "../../src/backend/runtime/hir.ts";',
-              'import type { BlotRuntimeModule, BlotRuntimeOperation } from "../../src/runtime/hir.ts";',
+              "../../src/backend/runtime/hir.ts",
+              "../../src/runtime/hir.ts",
           )
           text = text.replace("RustMiddleCompiler", "Compiler")
           test.write_text(text)
