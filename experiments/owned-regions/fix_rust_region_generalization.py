@@ -103,11 +103,11 @@ replace_once(
 ''',
 )
 
-# Region is invariant, so an inferred forwarding closure settles its input and
-# output element bounds independently. Give the tupled public operations an
-# explicit rank-N type: every call gets one fresh T shared by all Region
-# occurrences. One-argument operations can remain direct primitive members,
-# which also lets Slice.of expose the Region type constructor for annotations.
+# Region is invariant, so inferred forwarding closures and record fields may
+# settle their input and output element bounds independently. Give every public
+# Slice operation an explicit rank-N type: each call gets one fresh T shared by
+# all Region/Array occurrences. Slice.of remains the Region type constructor for
+# downstream annotations.
 prelude = "src/prelude/prelude.blot"
 replace_once(
     prelude,
@@ -123,7 +123,13 @@ replace_once(
     .freeze = fn !region => @region.array.freeze (!region);
   }
 ''',
-    '''sig slice_get = @forall (fn T => ((@region.array.type T), @type.int) -> (#Some T | #None))
+    '''sig slice_claim = @forall (fn T => [T] -> (@region.array.type T))
+const slice_claim = fn values => @region.array.claim values
+
+sig slice_length = @forall (fn T => (@region.array.type T) -> @type.int)
+const slice_length = fn &region => @region.array.length (&region)
+
+sig slice_get = @forall (fn T => ((@region.array.type T), @type.int) -> (#Some T | #None))
 const slice_get = fn (&region, index) => @region.array.get (&region) index
 
 sig slice_set = @forall (fn T => ((@region.array.type T), @type.int, T) -> (#Updated (@region.array.type T) | #SetOutOfBounds (@region.array.type T)))
@@ -138,17 +144,20 @@ const slice_split = fn (!region, index) => @region.array.split (!region) index
 sig slice_join = @forall (fn T => ((@region.array.type T), (@region.array.type T)) -> (@region.array.type T))
 const slice_join = fn (!left, !right) => @region.array.join (!left) (!right)
 
+sig slice_freeze = @forall (fn T => (@region.array.type T) -> [T])
+const slice_freeze = fn !region => @region.array.freeze (!region)
+
 const Slice =
   {
     .of = @region.array.type;
-    .claim = @region.array.claim;
-    .length = @region.array.length;
+    .claim = slice_claim;
+    .length = slice_length;
     .get = slice_get;
     .set = slice_set;
     .swap = slice_swap;
     .split = slice_split;
     .join = slice_join;
-    .freeze = @region.array.freeze;
+    .freeze = slice_freeze;
   }
 ''',
 )
@@ -195,4 +204,4 @@ let quicksort_rest =
 ''',
 )
 
-print("fixed Rust Region generic traversals and preserved tupled Slice Region relations")
+print("fixed Rust Region generic traversals and typed every public Slice wrapper")
