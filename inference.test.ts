@@ -6,7 +6,7 @@
 // inferred `⊤` for everything.
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { checkFile, checkLegacySource } from "./src/check/mod.ts";
+import { checkFile, checkUncheckedSource } from "./src/check/mod.ts";
 import { BlotError, render } from "./src/diagnostic.ts";
 
 const scratch = await Deno.makeTempDir();
@@ -19,14 +19,14 @@ const PRELUDE = `open @import "blot:prelude" ()
 
 async function typeOf(source: string): Promise<string> {
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
-  const checked = await checkLegacySource(path, PRELUDE + source);
+  const checked = await checkUncheckedSource(path, PRELUDE + source);
   return checked.type;
 }
 
 async function errorOf(source: string): Promise<string> {
   const path = `${scratch}/case_${crypto.randomUUID()}.blot`;
   try {
-    await checkLegacySource(path, PRELUDE + source);
+    await checkUncheckedSource(path, PRELUDE + source);
   } catch (error) {
     if (error instanceof BlotError) return error.message;
     throw error;
@@ -421,10 +421,10 @@ return count_to
 check(
   "a value if keeps a nested return inside its result scope",
   `let answer = fn () =>
-  let inner = if 1 < 2 :
-    return 41
-
-  else: 0
+  let inner = case 1 < 2 of
+    #True => do:
+      return 41
+    #False => 0
   return inner + 1
 return answer
 `,
@@ -908,8 +908,9 @@ check(
   `sig h = 1 -> Str
 let h = fn k => "one"
 sig f = 1 | 2 | 3 -> Str
-let f = fn n => if n == 1 : h n
-else: "rest"
+let f = fn n => case n == 1 of
+  #True => h n
+  #False => "rest"
 return f
 `,
   "1 | 2 | 3 -> Str",
@@ -922,8 +923,9 @@ rejects(
   `sig h = 2 -> Str
 let h = fn k => "two"
 sig f = 1 | 2 | 3 -> Str
-let f = fn n => if n == 1 : h n
-else: "rest"
+let f = fn n => case n == 1 of
+  #True => h n
+  #False => "rest"
 return f
 `,
   "`1` is outside `2`",
@@ -934,8 +936,9 @@ rejects(
   `sig h = 1 -> Str
 let h = fn k => "one"
 sig f = 1 | 2 | 3 -> Str
-let f = fn n => if n == 1 : "one"
-else: h n
+let f = fn n => case n == 1 of
+  #True => "one"
+  #False => h n
 return f
 `,
   "`2` is outside `1`",
@@ -946,8 +949,9 @@ check(
   `sig k = 2 | 3 -> Str
 let k = fn v => "rest"
 sig f = 1 | 2 | 3 -> Str
-let f = fn n => if n == 1 : "one"
-else: k n
+let f = fn n => case n == 1 of
+  #True => "one"
+  #False => k n
 return f
 `,
   "1 | 2 | 3 -> Str",
@@ -956,13 +960,12 @@ return f
 check(
   "a proof survives into a case, which is then complete",
   `sig f = 1 | 2 | 3 -> Str
-let f = fn n => if n == 1 : case n of
-  1 => "one"
-
-else: case n of
-  2 => "two"
-  3 => "three"
-
+let f = fn n => case n == 1 of
+  #True => case n of
+      1 => "one"
+  #False => case n of
+      2 => "two"
+      3 => "three"
 return f
 `,
   "1 | 2 | 3 -> Str",
@@ -971,12 +974,11 @@ return f
 rejects(
   "a proof does not excuse an arm the narrowed set still needs",
   `sig f = 1 | 2 | 3 -> Str
-let f = fn n => if n == 1 : case n of
-  1 => "one"
-
-else: case n of
-  2 => "two"
-
+let f = fn n => case n == 1 of
+  #True => case n of
+      1 => "one"
+  #False => case n of
+      2 => "two"
 return f
 `,
   "No arm covers `3`",
@@ -985,11 +987,12 @@ return f
 check(
   "an else-if chain leaves the fallback with what is left",
   `sig f = 1 | 2 | 3 -> Str
-let f = fn n => if n == 1 : "one"
-else if n == 2: "two"
-else: case n of
-  3 => "three"
-
+let f = fn n => case n == 1 of
+  #True => "one"
+  #False => case n == 2 of
+    #True => "two"
+    #False => case n of
+        3 => "three"
 return f
 `,
   "1 | 2 | 3 -> Str",
@@ -1003,8 +1006,9 @@ check(
   `sig low = range (@type.unbounded, 9) -> Str
 let low = fn n => "low"
 sig f = Int -> Str
-let f = fn n => if n < 10 : low n
-else: "high"
+let f = fn n => case n < 10 of
+  #True => low n
+  #False => "high"
 return f
 `,
   "Int -> Str",
@@ -1015,8 +1019,9 @@ check(
   `sig high = range (10, @type.unbounded) -> Str
 let high = fn n => "high"
 sig f = Int -> Str
-let f = fn n => if n < 10 : "low"
-else: high n
+let f = fn n => case n < 10 of
+  #True => "low"
+  #False => high n
 return f
 `,
   "Int -> Str",
@@ -1027,8 +1032,9 @@ check(
   `sig high = range (1, @type.unbounded) -> Str
 let high = fn n => "high"
 sig f = Int -> Str
-let f = fn n => if 0 < n : high n
-else: "low"
+let f = fn n => case 0 < n of
+  #True => high n
+  #False => "low"
 return f
 `,
   "Int -> Str",
@@ -1039,8 +1045,9 @@ check(
   `sig low = range (@type.unbounded, 9) -> Str
 let low = fn n => "low"
 sig f = Int -> Str
-let f = fn n => if n <= 9 : low n
-else: "high"
+let f = fn n => case n <= 9 of
+  #True => low n
+  #False => "high"
 return f
 `,
   "Int -> Str",
@@ -1049,11 +1056,11 @@ return f
 check(
   "a disequality narrows the branch where it fails",
   `sig f = 1 | 2 | 3 -> Str
-let f = fn n => if n != 1 : case n of
-  2 => "two"
-  3 => "three"
-
-else: "one"
+let f = fn n => case n != 1 of
+  #True => case n of
+      2 => "two"
+      3 => "three"
+  #False => "one"
 return f
 `,
   "1 | 2 | 3 -> Str",
@@ -1085,10 +1092,13 @@ check(
   `sig only = range (@type.unbounded, 0) | range (4, @type.unbounded) -> Str
 let only = fn k => "k"
 sig f = Int -> Str
-let f = fn n => if n != 1 : (if n != 2 : (if n != 3 : only n
-else: "c")
-else: "b")
-else: "a"
+let f = fn n => case n != 1 of
+  #True => case n != 2 of
+      #True => case n != 3 of
+          #True => only n
+          #False => "c"
+      #False => "b"
+  #False => "a"
 return f
 `,
   "Int -> Str",
@@ -1109,8 +1119,9 @@ return f
 
 check(
   "a narrowing never widens the signature it was proved under",
-  `let f = fn n => if n == 1 : "y"
-else: "n"
+  `let f = fn n => case n == 1 of
+  #True => "y"
+  #False => "n"
 return f
 `,
   'Int -> ("y" | "n")',
@@ -1120,10 +1131,12 @@ check(
   "two conditions on one name do not accumulate an intersection",
   `sig f = 1 | 2 | 3 -> Str
 let f = fn n =>
-  let a = if n == 1 : "x"
-  else: "y"
-  let b = if n == 2 : "x"
-  else: "y"
+  let a = case n == 1 of
+    #True => "x"
+    #False => "y"
+  let b = case n == 2 of
+    #True => "x"
+    #False => "y"
   return Text.append a b
 return f
 `,
@@ -1136,11 +1149,12 @@ return f
 check(
   "a rebinding inside a proven branch widens back to the domain",
   `sig f = 1 | 2 | 3 -> Int
-let f = fn n => if n == 1 :
-  n := 5
-  return n
-
-else: 0
+let f = fn n => case n == 1 of
+  #True => do:
+    let n = n
+    n := 5
+    return n
+  #False => 0
 return f
 `,
   "1 | 2 | 3 -> Int",
@@ -1156,10 +1170,10 @@ rejects(
   "a runtime shadow of the operator proves nothing",
   `let Eq = { .eq = fn a => fn b => True; .ne = fn a => fn b => False; }
 sig f = 1 | 2 | 3 -> Str
-let f = fn n => if n == 1 : case n of
-  1 => "one"
-
-else: "rest"
+let f = fn n => case n == 1 of
+  #True => case n of
+      1 => "one"
+  #False => "rest"
 return f
 `,
   "No arm covers `2 | 3`",
@@ -1168,10 +1182,10 @@ return f
 rejects(
   "an operator supplied by the caller proves nothing",
   `sig g = { .eq = 1 | 2 | 3 -> 1 -> #True | #False; } -> (1 | 2 | 3 -> Str)
-let g = fn Eq => fn n => if n == 1 : case n of
-  1 => "one"
-
-else: "rest"
+let g = fn Eq => fn n => case n == 1 of
+  #True => case n of
+      1 => "one"
+  #False => "rest"
 return g
 `,
   "No arm covers `2 | 3`",
@@ -1180,10 +1194,10 @@ return g
 rejects(
   "a witness that is another runtime name proves nothing",
   `sig f = 1 | 2 | 3 -> (1 | 2 -> Str)
-let f = fn n => fn m => if n == m : "same"
-else: case n of
-  3 => "three"
-
+let f = fn n => fn m => case n == m of
+  #True => "same"
+  #False => case n of
+      3 => "three"
 return f
 `,
   "No arm covers `1 | 2`",
@@ -1193,10 +1207,10 @@ rejects(
   "a witness bound by `let` is not a compile-time integer",
   `let k = 1
 sig f = 1 | 2 | 3 -> Str
-let f = fn n => if n == k : case n of
-  1 => "one"
-
-else: "rest"
+let f = fn n => case n == k of
+  #True => case n of
+      1 => "one"
+  #False => "rest"
 return f
 `,
   "No arm covers `2 | 3`",
@@ -1206,13 +1220,12 @@ check(
   "a witness bound by `const` is",
   `const k = 1
 sig f = 1 | 2 | 3 -> Str
-let f = fn n => if n == k : case n of
-  1 => "one"
-
-else: case n of
-  2 => "two"
-  3 => "three"
-
+let f = fn n => case n == k of
+  #True => case n of
+      1 => "one"
+  #False => case n of
+      2 => "two"
+      3 => "three"
 return f
 `,
   "1 | 2 | 3 -> Str",
@@ -1225,13 +1238,12 @@ return f
 check(
   "the operator's own name proves the same thing",
   `sig f = 1 | 2 | 3 -> Str
-let f = fn n => if Eq.eq n 1 : case n of
-  1 => "one"
-
-else: case n of
-  2 => "two"
-  3 => "three"
-
+let f = fn n => case Eq.eq n 1 of
+  #True => case n of
+      1 => "one"
+  #False => case n of
+      2 => "two"
+      3 => "three"
 return f
 `,
   "1 | 2 | 3 -> Str",
@@ -1242,10 +1254,10 @@ rejects(
   `sig f = 1 | 2 | 3 -> Str
 let f = fn n =>
   let same = Eq.eq
-  return if same n 1 : case n of
-    1 => "one"
-
-  else: "rest"
+  return case same n 1 of
+    #True => case n of
+          1 => "one"
+    #False => "rest"
 return f
 `,
   "No arm covers `2 | 3`",
@@ -1254,8 +1266,9 @@ return f
 check(
   "a condition that proves nothing leaves the branch types alone",
   `sig f = 1 | 2 | 3 -> Str
-let f = fn n => if Ord.min n 1 == 1 : "y"
-else: "n"
+let f = fn n => case Ord.min n 1 == 1 of
+  #True => "y"
+  #False => "n"
 return f
 `,
   "1 | 2 | 3 -> Str",
@@ -1267,12 +1280,12 @@ return f
 check(
   "a condition no value satisfies narrows nothing",
   `sig f = 1 | 2 | 3 -> Str
-let f = fn n => if n == 7 : "never"
-else: case n of
-  1 => "a"
-  2 => "b"
-  3 => "c"
-
+let f = fn n => case n == 7 of
+  #True => "never"
+  #False => case n of
+      1 => "a"
+      2 => "b"
+      3 => "c"
 return f
 `,
   "1 | 2 | 3 -> Str",
@@ -1403,9 +1416,11 @@ return @array.get xs n
 // therefore name the same integer without putting that relation in their types.
 
 const GUARDED = `sig at = [Int] -> Int -> Int
-let at = fn xs => fn n => if n >= 0 : (if n < @array.len xs : @array.get xs n
-else: 0)
-else: 0
+let at = fn xs => fn n => case n >= 0 of
+  #True => case n < @array.len xs of
+    #True => @array.get xs n
+    #False => 0
+  #False => 0
 `;
 
 check(
@@ -1424,9 +1439,11 @@ let small = fn k => case k of
   1 => "one"
   2 => "two"
 sig at = [Int] -> Int -> Str
-let at = fn xs => fn n => if n >= 0 : (if n < @array.len xs : small n
-else: "hi")
-else: "lo"
+let at = fn xs => fn n => case n >= 0 of
+  #True => case n < @array.len xs of
+      #True => small n
+      #False => "hi"
+  #False => "lo"
 return at
 `,
   "`0..9223372036854775807` is not one of `1` | `2`",
@@ -1436,8 +1453,9 @@ check(
   "a relationally proved index does not escape into a published type",
   `sig n = Int
 let n = 5
-let g = fn xs => if n < @array.len xs : n
-else: 0
+let g = fn xs => case n < @array.len xs of
+  #True => n
+  #False => 0
 return g
 `,
   "['a] -> (Int | 0)",
@@ -1448,11 +1466,11 @@ return g
 check(
   "`&&` proves both halves, so a bounded range is covered",
   `sig f = Int -> Str
-let f = fn i => if i > 0 && i < 3 : case i of
-  1 => "a"
-  2 => "b"
-
-else: "out"
+let f = fn i => case i > 0 && i < 3 of
+  #True => case i of
+      1 => "a"
+      2 => "b"
+  #False => "out"
 return f
 `,
   "Int -> Str",
@@ -1462,11 +1480,11 @@ rejects(
   "a junction that is not conjunction proves nothing",
   `const Logic = { .not = fn v => v; .and = fn a => fn b => True; .or = fn a => fn b => a; }
 sig f = Int -> Str
-let f = fn i => if i > 0 && i < 3 : case i of
-  1 => "a"
-  2 => "b"
-
-else: "out"
+let f = fn i => case i > 0 && i < 3 of
+  #True => case i of
+      1 => "a"
+      2 => "b"
+  #False => "out"
 return f
 `,
   "BLOT_INCOMPLETE_CASE",
@@ -1479,8 +1497,9 @@ let small = fn k => case k of
   1 => "one"
   2 => "two"
 sig at = [Int] -> Int -> Str
-let at = fn xs => fn n => if n >= 0 && n < @array.len xs : small n
-else: "lo"
+let at = fn xs => fn n => case n >= 0 && n < @array.len xs of
+  #True => small n
+  #False => "lo"
 return at
 `,
   "is not one of `1` | `2`",
@@ -1492,8 +1511,9 @@ return at
 rejects(
   "an index at or past the length is refused",
   `sig at = [Int] -> Int -> Int
-let at = fn xs => fn n => if n >= @array.len xs : @array.get xs n
-else: 0
+let at = fn xs => fn n => case n >= @array.len xs of
+  #True => @array.get xs n
+  #False => 0
 return at
 `,
   "BLOT_OUT_OF_BOUNDS",
@@ -1502,8 +1522,9 @@ return at
 rejects(
   "an index equal to the length is refused",
   `sig at = [Int] -> Int -> Int
-let at = fn xs => fn n => if n == @array.len xs : @array.get xs n
-else: 0
+let at = fn xs => fn n => case n == @array.len xs of
+  #True => @array.get xs n
+  #False => 0
 return at
 `,
   "BLOT_OUT_OF_BOUNDS",
@@ -1512,8 +1533,9 @@ return at
 rejects(
   "`@array.set` is decided against a length by the same rule",
   `sig put = [Int] -> Int -> [Int]
-let put = fn xs => fn n => if n >= @array.len xs : @array.set xs n 0
-else: xs
+let put = fn xs => fn n => case n >= @array.len xs of
+  #True => @array.set xs n 0
+  #False => xs
 return put
 `,
   "BLOT_OUT_OF_BOUNDS",
@@ -1525,8 +1547,9 @@ return put
 rejects(
   "a length proved about one array cannot access another",
   `sig at = [Int] -> [Int] -> Int -> Int
-let at = fn xs => fn ys => fn n => if n >= @array.len xs : @array.get ys n
-else: 0
+let at = fn xs => fn ys => fn n => case n >= @array.len xs of
+  #True => @array.get ys n
+  #False => 0
 return at
 `,
   "BLOT_UNPROVEN_INDEX",
@@ -1537,8 +1560,9 @@ rejects(
   `sig at = [Int] -> Int -> Int
 let at = fn xs => fn n =>
   let ys = xs
-  return if n >= @array.len xs : @array.get ys n
-  else: 0
+  return case n >= @array.len xs of
+    #True => @array.get ys n
+    #False => 0
 return at
 `,
   "BLOT_OUT_OF_BOUNDS",
@@ -1547,11 +1571,12 @@ return at
 rejects(
   "a rebinding invalidates a proof about the previous value",
   `sig at = [Int] -> [Int] -> Int -> Int
-let at = fn xs => fn ws => fn n => if n >= @array.len xs :
-  xs := ws
-  return @array.get xs n
-
-else: 0
+let at = fn xs => fn ws => fn n => case n >= @array.len xs of
+  #True => do:
+    let xs = xs
+    xs := ws
+    return @array.get xs n
+  #False => 0
 return at
 `,
   "BLOT_UNPROVEN_INDEX",
@@ -1559,8 +1584,9 @@ return at
 
 rejects(
   "an inferred integer is checked once a comparison grounds it",
-  `let at = fn xs => fn n => if n >= @array.len xs : @array.get xs n
-else: 0
+  `let at = fn xs => fn n => case n >= @array.len xs of
+  #True => @array.get xs n
+  #False => 0
 return at
 `,
   "BLOT_OUT_OF_BOUNDS",
@@ -1569,8 +1595,9 @@ return at
 check(
   "an immutable field path preserves the array identity used by a proof",
   `sig at = { .values = [Int]; } -> Int -> Int
-let at = fn box => fn n => if n >= 0 && n < @array.len box.values : @array.get box.values n
-else: 0
+let at = fn box => fn n => case n >= 0 && n < @array.len box.values of
+  #True => @array.get box.values n
+  #False => 0
 return at
 `,
   "{ .values = [Int]; } -> Int -> Int",
@@ -1579,8 +1606,9 @@ return at
 rejects(
   "a field proof cannot access a different array field",
   `sig at = { .left = [Int]; .right = [Int]; } -> Int -> Int
-let at = fn box => fn n => if n >= 0 && n < @array.len box.left : @array.get box.right n
-else: 0
+let at = fn box => fn n => case n >= 0 && n < @array.len box.left of
+  #True => @array.get box.right n
+  #False => 0
 return at
 `,
   "BLOT_UNPROVEN_INDEX",
@@ -1591,8 +1619,9 @@ check(
   `sig at = [Int] -> Int -> Int
 let at = fn xs => fn n =>
   let length = @array.len xs
-  return if n >= 0 && n < length : @array.get xs n
-  else: 0
+  return case n >= 0 && n < length of
+    #True => @array.get xs n
+    #False => 0
 return at
 `,
   "[Int] -> Int -> Int",
@@ -1603,8 +1632,9 @@ check(
   `sig at = [Int] -> Int -> Int
 let at = fn xs => fn n =>
   let last = @int.sub (@array.len xs) 1
-  return if n >= 0 && n <= last : @array.get xs n
-  else: 0
+  return case n >= 0 && n <= last of
+    #True => @array.get xs n
+    #False => 0
 return at
 `,
   "[Int] -> Int -> Int",
@@ -1615,8 +1645,9 @@ check(
   `sig at = [Int] -> Int -> Int
 let at = fn xs => fn n =>
   let ys = xs
-  return if n >= 0 && n < @array.len xs : @array.get ys n
-  else: 0
+  return case n >= 0 && n < @array.len xs of
+    #True => @array.get ys n
+    #False => 0
 return at
 `,
   "[Int] -> Int -> Int",
@@ -1659,8 +1690,10 @@ rejects(
 let sum = fn values =>
   let iterator = {
     .state = 0;
-    .step = fn index => if index < @array.len values : #Some ((index, @array.get values index), index + 1)
-    else: #None;
+    .step = fn index => case index < @array.len values of
+      #True => #Some ((index, @array.get values index), index + 1)
+      #False => #None
+    ;
   }
   let total = 0
   for (index, _) in iterator:
@@ -2504,10 +2537,14 @@ return @int.add (reflected 1) 1
 
 check(
   "two `rec` bindings in a run see each other",
-  `let is_even = rec (fn n => if n == 0 : True
-else: is_odd (n - 1))
-let is_odd = rec (fn n => if n == 0 : False
-else: is_even (n - 1))
+  `let is_even = rec (fn n => case n == 0 of
+  #True => True
+  #False => is_odd (n - 1)
+)
+let is_odd = rec (fn n => case n == 0 of
+  #True => False
+  #False => is_even (n - 1)
+)
 return is_even 10
 `,
   "(#True | #False)",
@@ -2515,12 +2552,18 @@ return is_even 10
 
 check(
   "three `rec` bindings in a cycle see each other",
-  `let a = rec (fn n => if n == 0 : 0
-else: b (n - 1))
-let b = rec (fn n => if n == 0 : 1
-else: c (n - 1))
-let c = rec (fn n => if n == 0 : 2
-else: a (n - 1))
+  `let a = rec (fn n => case n == 0 of
+  #True => 0
+  #False => b (n - 1)
+)
+let b = rec (fn n => case n == 0 of
+  #True => 1
+  #False => c (n - 1)
+)
+let c = rec (fn n => case n == 0 of
+  #True => 2
+  #False => a (n - 1)
+)
 return a 7
 `,
   "(0 | 1 | 2)",
@@ -2530,10 +2573,14 @@ return a 7
 // as one, so a member calling nobody is still typed with the rest.
 check(
   "a group member that is not recursive at all is still a member",
-  `let ping = rec (fn n => if n == 0 : 0
-else: pong (n - 1))
-let pong = rec (fn n => if n == 0 : 1
-else: ping (n - 1))
+  `let ping = rec (fn n => case n == 0 of
+  #True => 0
+  #False => pong (n - 1)
+)
+let pong = rec (fn n => case n == 0 of
+  #True => 1
+  #False => ping (n - 1)
+)
 let plain = rec (fn n => n + 1)
 return plain (ping 5)
 `,
@@ -2543,8 +2590,14 @@ return plain (ping 5)
 check(
   "a group inside a nested block sees itself",
   `return do:
-  let up = rec (fn n => if n == 0 : 0 else: down (n - 1))
-  let down = rec (fn n => if n == 0 : 1 else: up (n - 1))
+  let up = rec (fn n => case n == 0 of
+    #True => 0
+    #False => down (n - 1)
+  )
+  let down = rec (fn n => case n == 0 of
+    #True => 1
+    #False => up (n - 1)
+  )
   return up 9
 `,
   "(0 | 1)",
@@ -2553,10 +2606,14 @@ check(
 check(
   "a group inside a lambda body sees itself",
   `let outer = fn start =>
-  let up = rec (fn n => if n == 0 : 0
-  else: down (n - 1))
-  let down = rec (fn n => if n == 0 : 1
-  else: up (n - 1))
+  let up = rec (fn n => case n == 0 of
+    #True => 0
+    #False => down (n - 1)
+  )
+  let down = rec (fn n => case n == 0 of
+    #True => 1
+    #False => up (n - 1)
+  )
   return up start
 return outer 9
 `,
@@ -2568,11 +2625,15 @@ return outer 9
 check(
   "a member's `sig` does not break the run",
   `sig ping = Int -> Int
-let ping = rec (fn n => if n == 0 : 0
-else: pong (n - 1))
+let ping = rec (fn n => case n == 0 of
+  #True => 0
+  #False => pong (n - 1)
+)
 sig pong = Int -> Int
-let pong = rec (fn n => if n == 0 : 1
-else: ping (n - 1))
+let pong = rec (fn n => case n == 0 of
+  #True => 1
+  #False => ping (n - 1)
+)
 return ping 4
 `,
   "Int",
@@ -2580,10 +2641,14 @@ return ping 4
 
 check(
   "a `const` run is a group too",
-  `const even = rec (fn n => if n == 0 : True
-else: odd (n - 1))
-const odd = rec (fn n => if n == 0 : False
-else: even (n - 1))
+  `const even = rec (fn n => case n == 0 of
+  #True => True
+  #False => odd (n - 1)
+)
+const odd = rec (fn n => case n == 0 of
+  #True => False
+  #False => even (n - 1)
+)
 return even 12
 `,
   "(#True | #False)",
@@ -2652,10 +2717,14 @@ return step 3
 // which is the capture rule's whole subject.
 rejects(
   "a `const` and a `let` do not share a group",
-  `const up = rec (fn n => if n == 0 : 0
-else: down (n - 1))
-let down = rec (fn n => if n == 0 : 1
-else: up (n - 1))
+  `const up = rec (fn n => case n == 0 of
+  #True => 0
+  #False => down (n - 1)
+)
+let down = rec (fn n => case n == 0 of
+  #True => 1
+  #False => up (n - 1)
+)
 return up 4
 `,
   "`down` is bound further down",
@@ -2666,10 +2735,14 @@ return up 4
 rejects(
   "a tagged binding is not a group member",
   `@[derive(identity)]
-let up = rec (fn n => if n == 0 : 0
-else: down (n - 1))
-let down = rec (fn n => if n == 0 : 1
-else: up (n - 1))
+let up = rec (fn n => case n == 0 of
+  #True => 0
+  #False => down (n - 1)
+)
+let down = rec (fn n => case n == 0 of
+  #True => 1
+  #False => up (n - 1)
+)
 return up 5
 `,
   "`down` is bound further down",

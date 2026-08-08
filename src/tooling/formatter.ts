@@ -43,7 +43,6 @@ const layoutSensitiveRules = new Set([
   "block",
   "do_block",
   "case_expression",
-  "conditional",
   "effect_row",
   "element_expression",
   "shape",
@@ -53,7 +52,6 @@ const valueScopeBoundaryRules = new Set([
   "block",
   "do_block",
   "case_expression",
-  "conditional",
 ]);
 const indentedValueRuleNames = new Set([
   "continued_expression",
@@ -141,11 +139,6 @@ export async function formatSource(source: string): Promise<FormatResult> {
     const tuple = formatOneTuple(laidOut, current.cst);
     if (tuple !== laidOut) {
       laidOut = tuple;
-      continue;
-    }
-    const conditional = formatOneConditional(laidOut, current.cst);
-    if (conditional !== laidOut) {
-      laidOut = conditional;
       continue;
     }
     const lambda = formatOneLambda(laidOut, current.cst);
@@ -499,134 +492,6 @@ function formatOneTuple(source: string, root: ConcreteRule): string {
   return source;
 }
 
-function formatOneConditional(
-  source: string,
-  root: ConcreteRule,
-): string {
-  const conditionals: ConcreteRule[] = [];
-  collectRules(root, "conditional", conditionals);
-  conditionals.sort((left, right) =>
-    (left.span.end - left.span.start) - (right.span.end - right.span.start)
-  );
-  for (const conditional of conditionals) {
-    const conditionalSpan = ruleContentSpan(conditional);
-    const lineStart = source.lastIndexOf("\n", conditionalSpan.start - 1) + 1;
-    const linePrefix = source.slice(lineStart, conditionalSpan.start);
-    const returnedDirectly = linePrefix.trim() === "return" &&
-      hasAncestorIn(root, conditional, blockRule);
-    const consequence = directRule(conditional, "value");
-    const fallbackClause = directRule(conditional, "else_clause");
-    if (consequence === null || fallbackClause === null) continue;
-    const fallback = directRule(fallbackClause, "value");
-    if (fallback === null) continue;
-    const alternatives = directRules(conditional, "else_if_clause");
-    const branchValues = [
-      consequence,
-      ...alternatives.flatMap((alternative) => {
-        const value = directRule(alternative, "value");
-        return value === null ? [] : [value];
-      }),
-      fallback,
-    ];
-    if (
-      branchValues.every((value) => valueIsBlock(value)) &&
-      !returnedDirectly
-    ) {
-      continue;
-    }
-    const original = source.slice(conditionalSpan.start, conditionalSpan.end);
-    if (original.includes("//")) continue;
-    const condition = directRule(conditional, "expression");
-    if (condition === null) continue;
-    const indent = source.slice(lineStart).match(/^[ \t]*/)?.[0];
-    if (indent === undefined) {
-      throw new Error("conditional line has no indentation");
-    }
-    const nestedIndent = `${indent}  `;
-    const conditionText = flattenLines(
-      source.slice(condition.span.start, condition.span.end),
-    ).trim();
-    const lines = [
-      `if ${conditionText}:`,
-      ...conditionalBranchLines(source, consequence, nestedIndent),
-    ];
-    for (const alternative of alternatives) {
-      const alternativeCondition = directRule(alternative, "expression");
-      const alternativeValue = directRule(alternative, "value");
-      if (alternativeCondition === null || alternativeValue === null) continue;
-      const alternativeConditionText = flattenLines(
-        source.slice(
-          alternativeCondition.span.start,
-          alternativeCondition.span.end,
-        ),
-      ).trim();
-      lines.push(
-        `${indent}else if ${alternativeConditionText}:`,
-        ...conditionalBranchLines(source, alternativeValue, nestedIndent),
-      );
-    }
-    lines.push(
-      `${indent}else:`,
-      ...conditionalBranchLines(source, fallback, nestedIndent),
-    );
-    const closesDelimiter = closesDelimitedLayout(root, conditional);
-    if (
-      closesDelimiter &&
-      closesOnSameLine(source, conditionalSpan.end)
-    ) {
-      lines.push(indent);
-    }
-    let replacementSpan = returnedDirectly
-      ? { start: lineStart + indent.length, end: conditionalSpan.end }
-      : conditionalSpan;
-    let replacement = lines.join("\n");
-    if (
-      closesDelimiter &&
-      hasAncestorIn(
-        root,
-        conditional,
-        new Set(["element_property_expression"]),
-      )
-    ) {
-      const closingIndent = /^\r?\n[ \t]*/.exec(
-        source.slice(conditionalSpan.end),
-      )?.[0];
-      if (closingIndent !== undefined) {
-        const closingOffset = conditionalSpan.end + closingIndent.length;
-        const propertyIndent = closingIndent.replace(/^\r?\n/, "");
-        const closesTupleAndProperty = source.startsWith(")}", closingOffset);
-        replacementSpan = {
-          start: conditionalSpan.start,
-          end: closingOffset + (closesTupleAndProperty ? 1 : 0),
-        };
-        replacement = closesTupleAndProperty
-          ? `${replacement}\n${indent})\n${propertyIndent}`
-          : `${replacement}\n${indent}`;
-      }
-    }
-    if (
-      replacement === source.slice(replacementSpan.start, replacementSpan.end)
-    ) {
-      continue;
-    }
-    return replaceSpan(source, replacementSpan, replacement);
-  }
-  return source;
-}
-
-function conditionalBranchLines(
-  source: string,
-  value: ConcreteRule,
-  indent: string,
-): readonly string[] {
-  return indentedValueLines(
-    source,
-    value,
-    indent,
-    valueIsBlock(value) ? "" : "return ",
-  );
-}
-
 function formatOneLambda(source: string, root: ConcreteRule): string {
   const lambdas: ConcreteRule[] = [];
   collectRules(root, "lambda", lambdas);
@@ -639,11 +504,7 @@ function formatOneLambda(source: string, root: ConcreteRule): string {
     if (body === null || expressionIsBlock(body)) continue;
     const original = source.slice(lambdaSpan.start, lambdaSpan.end);
     if (original.includes("//")) continue;
-    if (
-      original.includes("\n") &&
-      containsRule(body, layoutSensitiveRules) &&
-      !expressionPrimaryIs(body, "conditional")
-    ) {
+    if (original.includes("\n") && containsRule(body, layoutSensitiveRules)) {
       continue;
     }
     const flattened = flattenLines(original);
@@ -652,10 +513,7 @@ function formatOneLambda(source: string, root: ConcreteRule): string {
     const suffixEnd = lineEnd < 0 ? source.length : lineEnd;
     const candidateWidth = source.slice(lineStart, lambdaSpan.start).length +
       flattened.length + source.slice(lambdaSpan.end, suffixEnd).length;
-    if (
-      candidateWidth <= maximumLineWidth &&
-      !expressionPrimaryIs(body, "conditional")
-    ) {
+    if (candidateWidth <= maximumLineWidth) {
       if (flattened === original) continue;
       return replaceSpan(source, lambdaSpan, flattened);
     }
@@ -672,7 +530,7 @@ function formatOneLambda(source: string, root: ConcreteRule): string {
       source,
       bodySpan,
       bodyIndent,
-      expressionPrimaryIs(body, "conditional") ? "" : "return ",
+      "return ",
     );
     const first = bodyLines[0];
     if (first === undefined || first === "") continue;
@@ -730,16 +588,6 @@ function closesOnSameLine(source: string, offset: number): boolean {
   const lineEnd = source.indexOf("\n", offset);
   const suffixEnd = lineEnd < 0 ? source.length : lineEnd;
   return source.slice(offset, suffixEnd).trim() !== "";
-}
-
-function indentedValueLines(
-  source: string,
-  value: ConcreteRule,
-  indent: string,
-  prefix: string,
-): readonly string[] {
-  const span = ruleContentSpan(value);
-  return reindentFragment(source, span, indent, prefix);
 }
 
 function reindentFragment(
@@ -811,12 +659,6 @@ function containsRule(
   if (node.type !== "rule") return false;
   if (names.has(node.name)) return true;
   return node.children().some((child) => containsRule(child, names));
-}
-
-function valueIsBlock(value: ConcreteRule): boolean {
-  const expression = directRule(value, "expression");
-  if (expression === null) return false;
-  return expressionIsBlock(expression);
 }
 
 function expressionIsBlock(expression: ConcreteRule): boolean {

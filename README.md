@@ -196,20 +196,15 @@ name <- expr             // sequence an effect and bind its result
 return expr              // exit the current explicit result scope
 ```
 
-An expression `if` always has an `else` and produces one of its branch values:
+Value selection is written with `case`, including Boolean choices:
 
 ```blot
-let label = if ready:
-  return "ready"
-else:
-  return "waiting"
+let label = case ready of
+  #True => "ready"
+  #False => "waiting"
 ```
 
-There is no `yield`: the selected branch expression is the conditional's value.
-It is a separate result scope and does not inherit surrounding control targets.
-An indented value branch's `return` supplies the conditional result, while
-`break` cannot escape the value conditional to an enclosing loop. A standalone
-conditional is surrounding control flow, has an optional `else`, and may
+A standalone `if` is surrounding control flow, has an optional `else`, and may
 transfer control:
 
 ```blot

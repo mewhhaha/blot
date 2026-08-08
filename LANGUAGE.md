@@ -1034,8 +1034,8 @@ let result =
   return value
 ```
 
-Indentation after `=`, `=>`, `<-`, `of`, `with`, a colon, or a parenthesis
-followed by a statement opens a block. A block evaluates its statements in a
+Indentation after `=`, `=>`, `<-`, `of`, or a colon opens a suite. `do:` is the
+explicit value-producing statement scope. A block evaluates its statements in a
 nested scope. Falling through returns `()`; `return value` exits that block with
 `value`. It may leave from a nested statement conditional, guard, or loop. The
 block is the nearest return scope.
@@ -1174,53 +1174,19 @@ operation.
 
 ## 8. Conditional control flow
 
-### 8.1 Value-producing `if`
+### 8.1 Boolean value selection
+
+Boolean value selection uses an ordinary exhaustive `case`:
 
 ```blot
-let label = if ready:
-  return "ready"
-else if waiting:
-  return "waiting"
-else:
-  return "done"
+let label = case ready of
+  #True => "ready"
+  #False => "waiting"
 ```
 
-An expression `if`:
-
-- requires an `else`;
-- requires every condition to be `#True` or `#False`;
-- evaluates and returns exactly one branch value; and
-- is a result-scope boundary that does not inherit surrounding control targets.
-
-The colon separates a condition from its branch value. A branch may be a direct
-value or an indented block; the formatter always writes the latter, whose
-explicit `return` supplies the branch and therefore the conditional's result.
-This makes the branch boundary visible even when its result is short and keeps
-expression conditionals in the same vertical layout as statement conditionals. A
-bare `break` inside such a branch cannot escape the value expression to reach an
-enclosing loop.
-
-When a returned value conditional is the last operation in a scope, these two
-forms have the same meaning:
-
-```blot
-return if ready:
-  return "ready"
-else:
-  return "waiting"
-
-if ready:
-  return "ready"
-else:
-  return "waiting"
-```
-
-The formatter writes the second form. There is no extra value-expression scope
-to communicate: every branch already transfers its value to the surrounding
-scope. A conditional used inside a binding, argument, or other expression
-position remains a value-producing `if`.
-
-There is no truthiness and no `yield`.
+The two arms normalize to the checker's internal conditional representation, so
+branch refinement remains shared with standalone control flow. This is surface
+normalization rather than a second Boolean semantics. There is no truthiness.
 
 ### 8.2 Statement `if`
 
@@ -1413,9 +1379,9 @@ the same way when a `sig` says what they hold. Where nothing does, an inner
 column carries no requirement — only a column of the scrutinee's own tuple is
 closed by its arms.
 
-Like expression `if`, `case` is a separate result scope. An indented arm block's
-`return` supplies the selected arm and therefore the case result; `break` cannot
-escape an arm to reach an enclosing loop.
+`case` is a separate result scope. An indented arm block's `return` supplies the
+selected arm and therefore the case result; `break` cannot escape an arm to
+reach an enclosing loop.
 
 An effectful `case` remains a value expression. Select the effectful branch and
 sequence the selected expression once at the surrounding scope:
@@ -1685,8 +1651,8 @@ break
 
 `break` exits the nearest `for` with its accumulator as it exists at that point.
 It may appear inside statement conditionals and guards. It cannot cross a lambda
-or a value-producing `if` or `case`, and using it without an enclosing `for` is
-an error.
+or a value-producing `case`, and using it without an enclosing `for` is an
+error.
 
 `break` never carries a value. `return value` is the scoped value exit specified
 in §§4.8 and 6.4; inside a loop it crosses the repeated statement body and exits

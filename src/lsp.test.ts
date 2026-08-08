@@ -13,11 +13,7 @@ Deno.test("the LSP advertises and returns lint code actions", async () => {
         textDocument: {
           uri,
           version: 1,
-          text: `let label = fn ready => if ready:
-  return "same"
-else:
-  return "same"
-return label
+          text: `return Num.rem 5 2
 `,
         },
       },
@@ -29,8 +25,8 @@ return label
       params: {
         textDocument: { uri },
         range: {
-          start: { line: 0, character: 24 },
-          end: { line: 0, character: 24 },
+          start: { line: 0, character: 7 },
+          end: { line: 0, character: 18 },
         },
         context: { diagnostics: [] },
       },
@@ -41,7 +37,7 @@ return label
       method: "textDocument/hover",
       params: {
         textDocument: { uri },
-        position: { line: 0, character: 25 },
+        position: { line: 0, character: 8 },
       },
     },
     { jsonrpc: "2.0", id: 4, method: "shutdown", params: null },
@@ -101,13 +97,6 @@ return label
     readonly result: readonly { readonly title: string }[];
   };
   assertEquals(codeAction.result.map((action) => action.title), [
-    "Remove redundant conditional",
+    "Replace `Num.rem` with `%`",
   ]);
-  const hover = responses.find((response) => response.id === 3) as {
-    readonly result: { readonly contents: { readonly value: string } };
-  };
-  assertEquals(
-    hover.result.contents.value.includes("Selects a branch"),
-    true,
-  );
 });

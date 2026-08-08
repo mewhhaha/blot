@@ -2430,15 +2430,6 @@ fn lower_primary(
             Ok(arena.expression(Expression::Shape { members, span }))
         }
         "element_expression" => lower_element(cst, rule, context, arena),
-        // Both removed forms still parse: the concrete syntax keeps them so the
-        // formatter can migrate a program that predates their removal. What the
-        // compiler accepts is decided here, with the diagnostic source
-        // elaboration gives.
-        "conditional" => Err(concat!(
-            "BLOT_VALUE_IF_REMOVED: `if` is control flow and cannot be used as a ",
-            "value. Match `#True` and `#False` with `case` instead."
-        )
-        .to_owned()),
         "case_expression" => {
             let target = lower_expression(
                 cst,

@@ -4,9 +4,9 @@ import type {
 } from "@mewhhaha/baba/runtime/webgpu";
 import type { Rule, TokenCursor } from "./lower.ts";
 import {
-  compactFieldNames as fieldNames,
   compactNamedTokenKinds as namedTokenKinds,
   compactRepeatedFields,
+  currentCompactFieldNames as fieldNames,
 } from "./compact_schema.ts";
 
 const tokenWords = 4;
