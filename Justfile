@@ -80,6 +80,7 @@ check:
   cargo fmt --manifest-path experiments/rust-middle/Cargo.toml --check
   cargo clippy --manifest-path experiments/rust-middle/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
   cargo test --manifest-path experiments/rust-middle/Cargo.toml
+  # Exact bytes, so this reproduces only under the Rust release CI pins.
   deno task check:rust-middle-artifact
   deno task experiment:rust-middle-parity
   deno task experiment:rust-middle-check-parity

@@ -85,7 +85,11 @@ if (Deno.args.includes("--check")) {
   }
   if (!bytesEqual(bytes, checked)) {
     throw new Error(
-      "generated/rust-middle/compiler.wasm is stale; run `deno task build:rust-middle`",
+      "generated/rust-middle/compiler.wasm does not match a build of the " +
+        "current source. Run `deno task build:rust-middle` — and note that " +
+        "these are exact bytes, so the build must use the same Rust release " +
+        "CI does. Two toolchains compiling one source produce two artifacts, " +
+        "and only the one CI can reproduce passes this check.",
     );
   }
 } else {
