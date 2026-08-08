@@ -63,6 +63,15 @@ export type Value =
   /** Records and tuples. Tuples use `"0"`, `"1"`, … as labels. */
   | { readonly tag: "shape"; readonly fields: ReadonlyMap<string, Value> }
   | { readonly tag: "array"; readonly elements: readonly Value[] }
+  /** Private type value produced only by `@region.type`. */
+  | { readonly tag: "region-type"; readonly element: Value }
+  /** Compiler-private mutable slice over one backing Store. */
+  | {
+    readonly tag: "region-array";
+    readonly store: { readonly cells: Value[] };
+    readonly start: number;
+    readonly end: number;
+  }
   | {
     readonly tag: "tag";
     readonly name: string;
@@ -374,6 +383,10 @@ export function show(value: Value): string {
   if (value.tag === "unit") return "()";
   if (value.tag === "unbounded") return "@type.unbounded";
   if (value.tag === "opaque-type") return value.name;
+  if (value.tag === "region-type") return `Region ${show(value.element)}`;
+  if (value.tag === "region-array") {
+    return `<region ${value.start}..${value.end}>`;
+  }
   if (value.tag === "type-variable") return `'t${value.id}`;
   if (value.tag === "forall") {
     return `forall 't${value.variable}. ${show(value.body)}`;
@@ -509,6 +522,13 @@ export function equal(left: Value, right: Value): boolean {
       left.elements.every((element, index) =>
         equal(element, right.elements[index])
       );
+  }
+  if (left.tag === "region-type" && right.tag === "region-type") {
+    return equal(left.element, right.element);
+  }
+  if (left.tag === "region-array" && right.tag === "region-array") {
+    return left.store === right.store && left.start === right.start &&
+      left.end === right.end;
   }
   if (left.tag === "shape" && right.tag === "shape") {
     if (left.fields.size !== right.fields.size) return false;

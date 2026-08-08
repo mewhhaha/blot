@@ -16,6 +16,10 @@ enum Produced {
     None,
     Borrow(Box<Produced>),
     Leaf(Qualifier),
+    Parameter {
+        qualifier: Qualifier,
+        source: PatternId,
+    },
     Closure {
         captures: Box<Produced>,
         parameter: PatternId,
@@ -25,6 +29,12 @@ enum Produced {
     Sequence(Vec<Produced>),
     Shape(BTreeMap<String, Produced>),
     Variant(Box<Produced>),
+    Choice(BTreeMap<String, Produced>),
+    Region {
+        qualifier: Qualifier,
+        root: Option<PatternId>,
+        splits: Vec<(Span, u8)>,
+    },
 }
 
 struct Binding {
@@ -65,13 +75,26 @@ struct Analysis<'a> {
     module: &'a Module,
     diagnostics: Vec<Diagnostic>,
     function_results: HashMap<ExpressionId, Produced>,
+    trusted_region_wrappers: bool,
 }
 
 pub fn check(module: &Module) -> Vec<Diagnostic> {
+    check_with_region_wrapper_trust(module, false)
+}
+
+pub(crate) fn check_trusted_region_wrappers(module: &Module) -> Vec<Diagnostic> {
+    check_with_region_wrapper_trust(module, true)
+}
+
+fn check_with_region_wrapper_trust(
+    module: &Module,
+    trusted_region_wrappers: bool,
+) -> Vec<Diagnostic> {
     let mut analysis = Analysis {
         module,
         diagnostics: Vec::new(),
         function_results: HashMap::new(),
+        trusted_region_wrappers,
     };
     let scope = child_scope(None, false);
     if let Some(parameter) = module.parameter {
@@ -136,11 +159,16 @@ fn declare(pattern: PatternId, produced: Produced, scope: &ScopeRef, analysis: &
             name, qualifier, ..
         } => {
             let written = written_obligation(*qualifier);
-            let owned = if relevant(&produced) {
+            let mut owned = if relevant(&produced) {
                 produced
             } else {
                 written
             };
+            if let Produced::Region { root, .. } = &mut owned
+                && root.is_none()
+            {
+                *root = Some(pattern);
+            }
             let qualifier = inherited(*qualifier, &owned);
             scope.borrow_mut().bindings.insert(
                 name.clone(),
@@ -322,10 +350,19 @@ fn walk_declarations(declarations: &[DeclarationId], scope: &ScopeRef, analysis:
     while index < declarations.len() {
         if recursive_declaration(analysis.module, declarations[index]) {
             let start = index;
-            while index < declarations.len()
-                && recursive_declaration(analysis.module, declarations[index])
-            {
-                index += 1;
+            while index < declarations.len() {
+                if recursive_declaration(analysis.module, declarations[index]) {
+                    index += 1;
+                    continue;
+                }
+                if signature_declaration(analysis.module, declarations[index])
+                    && index + 1 < declarations.len()
+                    && recursive_declaration(analysis.module, declarations[index + 1])
+                {
+                    index += 1;
+                    continue;
+                }
+                break;
             }
             walk_recursive_group(&declarations[start..index], scope, analysis);
             continue;
@@ -692,7 +729,8 @@ fn walk(
                         pattern_span(analysis.module, arm.pattern),
                     );
                 }
-                declare(arm.pattern, target.clone(), &inner, analysis);
+                let arm_target = choice_for_pattern(&target, arm.pattern, analysis.module);
+                declare(arm.pattern, arm_target, &inner, analysis);
                 produced.push(walk(arm.body, &inner, analysis, kind));
                 close_scope(&inner, analysis);
                 outcomes.push(snapshot(scope));
@@ -778,6 +816,69 @@ fn remove_owned_path(produced: &Produced, path: &[String]) -> Option<(Produced, 
     Some((selected, Produced::Shape(remaining)))
 }
 
+fn ownership_primitive_name<'a>(
+    analysis: &'a Analysis<'_>,
+    scope: &ScopeRef,
+    callee: ExpressionId,
+) -> Option<&'a str> {
+    match &analysis.module.arena.expressions[callee.0 as usize] {
+        Expression::Intrinsic { name, .. } => Some(name.as_str()),
+        Expression::Field { target, name, .. }
+            if analysis.lookup(scope, "Slice").is_none()
+                && matches!(
+                    &analysis.module.arena.expressions[target.0 as usize],
+                    Expression::Var { name: namespace, .. } if namespace == "Slice"
+                ) =>
+        {
+            match name.as_str() {
+                "claim" => Some("@region.claim"),
+                "length" => Some("@region.length"),
+                "get" => Some("@region.get"),
+                "set" => Some("@region.set"),
+                "swap" => Some("@region.swap"),
+                "split" => Some("@region.split"),
+                "join" => Some("@region.join"),
+                "freeze" => Some("@region.freeze"),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn ownership_primitive_arguments(
+    analysis: &Analysis<'_>,
+    callee: ExpressionId,
+    arguments: &[ExpressionId],
+    name: Option<&str>,
+) -> Vec<ExpressionId> {
+    let Some(name) = name else {
+        return arguments.to_vec();
+    };
+    let Expression::Field { target, .. } = &analysis.module.arena.expressions[callee.0 as usize]
+    else {
+        return arguments.to_vec();
+    };
+    if !matches!(
+        &analysis.module.arena.expressions[target.0 as usize],
+        Expression::Var { name, .. } if name == "Slice"
+    ) {
+        return arguments.to_vec();
+    }
+    let arity = match name {
+        "@region.get" | "@region.split" | "@region.join" => 2,
+        "@region.set" | "@region.swap" => 3,
+        _ => 1,
+    };
+    if arity == 1 || arguments.len() != 1 {
+        return arguments.to_vec();
+    }
+    match &analysis.module.arena.expressions[arguments[0].0 as usize] {
+        Expression::Tuple { elements, .. } if elements.len() == arity => elements.clone(),
+        _ => arguments.to_vec(),
+    }
+}
+
 fn walk_apply(
     expression: ExpressionId,
     function: ExpressionId,
@@ -803,9 +904,11 @@ fn walk_apply(
         return Produced::Variant(Box::new(walk(argument, scope, analysis, Use::Move)));
     }
     let (callee, arguments) = application_spine(expression, analysis.module);
-    if let Expression::Intrinsic { name, .. } =
-        &analysis.module.arena.expressions[callee.0 as usize]
-    {
+    let ownership_primitive = ownership_primitive_name(analysis, scope, callee);
+    let ownership_arguments =
+        ownership_primitive_arguments(analysis, callee, &arguments, ownership_primitive);
+    if let Some(name) = ownership_primitive {
+        let arguments = &ownership_arguments;
         let handle_arguments = if name == "@handle" && arguments.len() == 1 {
             match &analysis.module.arena.expressions[arguments[0].0 as usize] {
                 Expression::Tuple { elements, .. }
@@ -837,6 +940,176 @@ fn walk_apply(
             walk(handle_arguments[0], scope, analysis, Use::Move);
             if handle_arguments.len() == 3 {
                 walk(handle_arguments[2], scope, analysis, Use::Move);
+            }
+            return Produced::None;
+        }
+        if name == "@region.claim" && arguments.len() == 1 {
+            let source = walk(arguments[0], scope, analysis, Use::Project);
+            // A linear array binding is claimable: the claim consumes the
+            // whole array, which is what proves its Store reusable. Only
+            // elements that carry their own obligations are refused, because
+            // the acquisition copy would duplicate them.
+            let owned_elements = match &source {
+                Produced::Leaf(_) | Produced::Parameter { .. } => false,
+                produced => obligation(produced) != Obligation::None,
+            };
+            if owned_elements {
+                analysis.report(
+                    "BLOT_REGION_OWNED_ELEMENT",
+                    "The first Region implementation copies its input, so arrays containing owned elements cannot be claimed yet.",
+                    analysis.module.arena.expression_span(arguments[0]),
+                );
+            }
+            return Produced::Region {
+                qualifier: Qualifier::Linear,
+                root: None,
+                splits: Vec::new(),
+            };
+        }
+        if name == "@region.length" && arguments.len() == 1 {
+            walk(arguments[0], scope, analysis, Use::Borrow);
+            return Produced::None;
+        }
+        if name == "@region.get" && arguments.len() == 2 {
+            walk(arguments[0], scope, analysis, Use::Borrow);
+            walk(arguments[1], scope, analysis, Use::Move);
+            return Produced::None;
+        }
+        if name == "@region.set" && arguments.len() == 3 {
+            let region = region_authority(
+                walk(arguments[0], scope, analysis, Use::Move),
+                analysis.trusted_region_wrappers,
+            );
+            walk(arguments[1], scope, analysis, Use::Move);
+            let replacement = walk(arguments[2], scope, analysis, Use::Move);
+            if obligation(&replacement) != Obligation::None {
+                analysis.report(
+                    "BLOT_REGION_OWNED_ELEMENT",
+                    "Region replacement cannot move an owned element in the first implementation.",
+                    analysis.module.arena.expression_span(arguments[2]),
+                );
+            }
+            return Produced::Choice(BTreeMap::from([
+                (
+                    "Updated".to_owned(),
+                    Produced::Variant(Box::new(region.clone())),
+                ),
+                (
+                    "SetOutOfBounds".to_owned(),
+                    Produced::Variant(Box::new(region)),
+                ),
+            ]));
+        }
+        if name == "@region.swap" && arguments.len() == 3 {
+            let region = region_authority(
+                walk(arguments[0], scope, analysis, Use::Move),
+                analysis.trusted_region_wrappers,
+            );
+            walk(arguments[1], scope, analysis, Use::Move);
+            walk(arguments[2], scope, analysis, Use::Move);
+            return Produced::Choice(BTreeMap::from([
+                (
+                    "Updated".to_owned(),
+                    Produced::Variant(Box::new(region.clone())),
+                ),
+                (
+                    "SwapOutOfBounds".to_owned(),
+                    Produced::Variant(Box::new(region)),
+                ),
+            ]));
+        }
+        if name == "@region.split" && arguments.len() == 2 {
+            let region = region_authority(
+                walk(arguments[0], scope, analysis, Use::Move),
+                analysis.trusted_region_wrappers,
+            );
+            walk(arguments[1], scope, analysis, Use::Move);
+            let (qualifier, root, splits) = match region.clone() {
+                Produced::Region {
+                    qualifier,
+                    root,
+                    splits,
+                } => (qualifier, root, splits),
+                Produced::Leaf(qualifier) if analysis.trusted_region_wrappers => {
+                    return Produced::Choice(BTreeMap::from([
+                        (
+                            "Split".to_owned(),
+                            Produced::Variant(Box::new(Produced::Sequence(vec![
+                                Produced::Leaf(qualifier),
+                                Produced::Leaf(qualifier),
+                            ]))),
+                        ),
+                        (
+                            "SplitOutOfBounds".to_owned(),
+                            Produced::Variant(Box::new(Produced::Leaf(qualifier))),
+                        ),
+                    ]));
+                }
+                _ => {
+                    analysis.report(
+                        "BLOT_REGION_SPLIT_NOT_OWNED",
+                        "Region split requires one owned Region authority.",
+                        analysis.module.arena.expression_span(arguments[0]),
+                    );
+                    return Produced::None;
+                }
+            };
+            let mut left_splits = splits.clone();
+            left_splits.push((span, 0));
+            let mut right_splits = splits;
+            right_splits.push((span, 1));
+            return Produced::Choice(BTreeMap::from([
+                (
+                    "Split".to_owned(),
+                    Produced::Variant(Box::new(Produced::Sequence(vec![
+                        Produced::Region {
+                            qualifier,
+                            root,
+                            splits: left_splits,
+                        },
+                        Produced::Region {
+                            qualifier,
+                            root,
+                            splits: right_splits,
+                        },
+                    ]))),
+                ),
+                (
+                    "SplitOutOfBounds".to_owned(),
+                    Produced::Variant(Box::new(region)),
+                ),
+            ]));
+        }
+        if name == "@region.join" && arguments.len() == 2 {
+            let left = region_authority(
+                walk(arguments[0], scope, analysis, Use::Move),
+                analysis.trusted_region_wrappers,
+            );
+            let right = region_authority(
+                walk(arguments[1], scope, analysis, Use::Move),
+                analysis.trusted_region_wrappers,
+            );
+            if analysis.trusted_region_wrappers
+                && !matches!(left, Produced::Region { .. })
+                && !matches!(right, Produced::Region { .. })
+            {
+                return combine(left, right);
+            }
+            return join_region(left, right, span, analysis);
+        }
+        if name == "@region.freeze" && arguments.len() == 1 {
+            let region = region_authority(
+                walk(arguments[0], scope, analysis, Use::Move),
+                analysis.trusted_region_wrappers,
+            );
+            match region {
+                Produced::Region { splits, .. } if splits.is_empty() => {}
+                _ if analysis.trusted_region_wrappers && obligation(&region) != Obligation::None => {}
+                _ => analysis.report(
+                    "BLOT_REGION_PARTIAL_FREEZE",
+                    "Only a complete root Region authority can be frozen. Rejoin every split first.",
+                    analysis.module.arena.expression_span(arguments[0]),
+                ),
             }
             return Produced::None;
         }
@@ -902,7 +1175,7 @@ fn walk_apply(
             analysis.module.arena.expression_span(argument),
         );
     }
-    result
+    substitute_parameters(result, parameter, &argument_value, analysis.module)
 }
 
 fn function_contract(
@@ -947,6 +1220,147 @@ fn function_contract(
             })
             .unwrap_or((None, Produced::None)),
         _ => (None, Produced::None),
+    }
+}
+
+fn substitute_parameters(
+    produced: Produced,
+    parameter: Option<PatternId>,
+    argument: &Produced,
+    module: &Module,
+) -> Produced {
+    let Some(parameter) = parameter else {
+        return produced;
+    };
+    match (&module.arena.patterns[parameter.0 as usize], argument) {
+        (Pattern::Name { .. }, _) => substitute_parameter_source(produced, parameter, argument),
+        (
+            Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. },
+            Produced::Sequence(values),
+        ) => elements
+            .iter()
+            .zip(values)
+            .fold(produced, |current, (pattern, value)| {
+                substitute_parameters(current, Some(*pattern), value, module)
+            }),
+        (
+            Pattern::Constructor {
+                payload: Some(payload),
+                ..
+            },
+            Produced::Variant(value),
+        ) => substitute_parameters(produced, Some(*payload), value, module),
+        (Pattern::Shape { fields, .. }, Produced::Shape(values)) => {
+            fields.iter().fold(produced, |current, field| {
+                values.get(&field.name).map_or(current.clone(), |value| {
+                    substitute_parameters(current, Some(field.pattern), value, module)
+                })
+            })
+        }
+        _ => produced,
+    }
+}
+
+fn substitute_parameter_source(
+    produced: Produced,
+    source: PatternId,
+    argument: &Produced,
+) -> Produced {
+    match produced {
+        Produced::None => Produced::None,
+        Produced::Borrow(value) => Produced::Borrow(Box::new(substitute_parameter_source(
+            *value, source, argument,
+        ))),
+        Produced::Leaf(qualifier) => Produced::Leaf(qualifier),
+        Produced::Parameter {
+            qualifier,
+            source: found,
+        } => {
+            if found == source {
+                argument.clone()
+            } else {
+                Produced::Parameter {
+                    qualifier,
+                    source: found,
+                }
+            }
+        }
+        Produced::Closure {
+            captures,
+            parameter,
+            result,
+        } => Produced::Closure {
+            captures: Box::new(substitute_parameter_source(*captures, source, argument)),
+            parameter,
+            result: Box::new(substitute_parameter_source(*result, source, argument)),
+        },
+        Produced::Many(values) => join(
+            values
+                .into_iter()
+                .map(|value| substitute_parameter_source(value, source, argument)),
+        ),
+        Produced::Sequence(values) => Produced::Sequence(
+            values
+                .into_iter()
+                .map(|value| substitute_parameter_source(value, source, argument))
+                .collect(),
+        ),
+        Produced::Shape(fields) => Produced::Shape(
+            fields
+                .into_iter()
+                .map(|(name, value)| (name, substitute_parameter_source(value, source, argument)))
+                .collect(),
+        ),
+        Produced::Variant(payload) => Produced::Variant(Box::new(substitute_parameter_source(
+            *payload, source, argument,
+        ))),
+        Produced::Choice(cases) => Produced::Choice(
+            cases
+                .into_iter()
+                .map(|(name, value)| (name, substitute_parameter_source(value, source, argument)))
+                .collect(),
+        ),
+        Produced::Region {
+            qualifier,
+            root,
+            splits,
+        } => {
+            if root != Some(source) {
+                return Produced::Region {
+                    qualifier,
+                    root,
+                    splits,
+                };
+            }
+            match argument {
+                Produced::Region {
+                    root: argument_root,
+                    splits: argument_splits,
+                    ..
+                } => {
+                    let mut composed = argument_splits.clone();
+                    composed.extend(splits);
+                    Produced::Region {
+                        qualifier,
+                        root: *argument_root,
+                        splits: composed,
+                    }
+                }
+                Produced::Parameter {
+                    source: argument_source,
+                    ..
+                } => Produced::Region {
+                    qualifier,
+                    root: Some(*argument_source),
+                    splits,
+                },
+                _ => Produced::Region {
+                    qualifier,
+                    root,
+                    splits,
+                },
+            }
+        }
     }
 }
 
@@ -1155,9 +1569,17 @@ fn written_obligation(qualifier: Qualifier) -> Produced {
     }
 }
 
+fn written_parameter_obligation(qualifier: Qualifier, source: PatternId) -> Produced {
+    if spendable(qualifier) {
+        Produced::Parameter { qualifier, source }
+    } else {
+        Produced::None
+    }
+}
+
 fn written_pattern(pattern: PatternId, module: &Module) -> Produced {
     match &module.arena.patterns[pattern.0 as usize] {
-        Pattern::Name { qualifier, .. } => written_obligation(*qualifier),
+        Pattern::Name { qualifier, .. } => written_parameter_obligation(*qualifier, pattern),
         Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => Produced::Sequence(
             elements
                 .iter()
@@ -1195,10 +1617,26 @@ fn spendable(qualifier: Qualifier) -> bool {
 fn obligation(produced: &Produced) -> Obligation {
     match produced {
         Produced::None | Produced::Borrow(_) => Obligation::None,
-        Produced::Leaf(Qualifier::Linear) => Obligation::Linear,
-        Produced::Leaf(Qualifier::Affine) => Obligation::Affine,
-        Produced::Leaf(_) => Obligation::None,
+        Produced::Leaf(Qualifier::Linear)
+        | Produced::Parameter {
+            qualifier: Qualifier::Linear,
+            ..
+        } => Obligation::Linear,
+        Produced::Leaf(Qualifier::Affine)
+        | Produced::Parameter {
+            qualifier: Qualifier::Affine,
+            ..
+        } => Obligation::Affine,
+        Produced::Leaf(_) | Produced::Parameter { .. } => Obligation::None,
+        Produced::Region { qualifier, .. } => match qualifier {
+            Qualifier::Linear => Obligation::Linear,
+            Qualifier::Affine => Obligation::Affine,
+            _ => Obligation::None,
+        },
         Produced::Closure { captures, .. } | Produced::Variant(captures) => obligation(captures),
+        Produced::Choice(cases) => cases.values().fold(Obligation::None, |found, value| {
+            merge_obligation(found, obligation(value))
+        }),
         Produced::Many(values) | Produced::Sequence(values) => {
             values.iter().fold(Obligation::None, |found, value| {
                 merge_obligation(found, obligation(value))
@@ -1223,13 +1661,17 @@ fn merge_obligation(left: Obligation, right: Obligation) -> Obligation {
 fn contains_borrow(produced: &Produced) -> bool {
     match produced {
         Produced::Borrow(_) => true,
-        Produced::None | Produced::Leaf(_) => false,
+        Produced::None
+        | Produced::Leaf(_)
+        | Produced::Parameter { .. }
+        | Produced::Region { .. } => false,
         Produced::Closure {
             captures, result, ..
         } => contains_borrow(captures) || contains_borrow(result),
         Produced::Many(values) | Produced::Sequence(values) => values.iter().any(contains_borrow),
         Produced::Shape(fields) => fields.values().any(contains_borrow),
         Produced::Variant(payload) => contains_borrow(payload),
+        Produced::Choice(cases) => cases.values().any(contains_borrow),
     }
 }
 
@@ -1238,6 +1680,9 @@ fn relevant(produced: &Produced) -> bool {
 }
 
 fn combine(left: Produced, right: Produced) -> Produced {
+    if left == right {
+        return left;
+    }
     if !relevant(&left) {
         return right;
     }
@@ -1258,6 +1703,90 @@ fn combine(left: Produced, right: Produced) -> Produced {
 
 fn join(values: impl IntoIterator<Item = Produced>) -> Produced {
     values.into_iter().fold(Produced::None, combine)
+}
+
+fn choice_for_pattern(target: &Produced, pattern: PatternId, module: &Module) -> Produced {
+    let Produced::Choice(cases) = target else {
+        return target.clone();
+    };
+    match &module.arena.patterns[pattern.0 as usize] {
+        Pattern::Constructor { name, .. } => cases.get(name).cloned().unwrap_or(Produced::None),
+        _ => join(cases.values().cloned()),
+    }
+}
+
+fn region_authority(produced: Produced, trusted_region_wrappers: bool) -> Produced {
+    match produced {
+        Produced::Parameter { qualifier, .. } if trusted_region_wrappers => {
+            Produced::Leaf(qualifier)
+        }
+        Produced::Parameter { qualifier, source } => Produced::Region {
+            qualifier,
+            root: Some(source),
+            splits: Vec::new(),
+        },
+        produced => produced,
+    }
+}
+
+fn join_region(left: Produced, right: Produced, span: Span, analysis: &mut Analysis) -> Produced {
+    let (
+        Produced::Region {
+            qualifier: left_qualifier,
+            root: left_root,
+            splits: mut left_splits,
+        },
+        Produced::Region {
+            qualifier: right_qualifier,
+            root: right_root,
+            splits: right_splits,
+        },
+    ) = (left, right)
+    else {
+        analysis.report(
+            "BLOT_REGION_JOIN_UNPROVED",
+            "Region join needs exactly one authority on each side.",
+            span,
+        );
+        return Produced::None;
+    };
+    let Some((left_split, left_part)) = left_splits.last().copied() else {
+        analysis.report(
+            "BLOT_REGION_JOIN_UNPROVED",
+            "Region join needs two sibling authorities produced by a split.",
+            span,
+        );
+        return Produced::None;
+    };
+    let Some((right_split, right_part)) = right_splits.last().copied() else {
+        analysis.report(
+            "BLOT_REGION_JOIN_UNPROVED",
+            "Region join needs two sibling authorities produced by a split.",
+            span,
+        );
+        return Produced::None;
+    };
+    let siblings = left_qualifier == right_qualifier
+        && left_root == right_root
+        && left_splits.len() == right_splits.len()
+        && left_splits[..left_splits.len() - 1] == right_splits[..right_splits.len() - 1]
+        && left_split == right_split
+        && left_part == 0
+        && right_part == 1;
+    if !siblings {
+        analysis.report(
+            "BLOT_REGION_JOIN_UNPROVED",
+            "Region join accepts only the ordered sibling pair produced by one Region split.",
+            span,
+        );
+        return Produced::None;
+    }
+    left_splits.pop();
+    Produced::Region {
+        qualifier: left_qualifier,
+        root: left_root,
+        splits: left_splits,
+    }
 }
 
 fn pattern_binds(pattern: PatternId, module: &Module) -> bool {
@@ -1386,7 +1915,10 @@ fn trusted_borrow_operation(function: ExpressionId, module: &Module) -> bool {
                 || name.starts_with("@i16x8.")
                 || name.starts_with("@i8x16.")
                 || name.starts_with("@text.")
-                || matches!(name.as_str(), "@array.len" | "@shape.has")
+                || matches!(
+                    name.as_str(),
+                    "@array.len" | "@shape.has" | "@region.length" | "@region.get"
+                )
         }
         Expression::Field { target, name, .. } => {
             matches!(
@@ -1428,6 +1960,16 @@ fn application_spine(
     }
     arguments.reverse();
     (callee, arguments)
+}
+
+fn signature_declaration(module: &Module, declaration: DeclarationId) -> bool {
+    matches!(
+        module.arena.declarations[declaration.0 as usize],
+        Declaration::Binding {
+            kind: DeclarationKind::Sig,
+            ..
+        }
+    )
 }
 
 fn recursive_declaration(module: &Module, declaration: DeclarationId) -> bool {

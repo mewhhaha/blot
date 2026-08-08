@@ -372,6 +372,12 @@ fn runtime_layout_type(
                 module.source
             ));
         }
+        RuntimeType::Product { name, .. } if name.starts_with("$region:") => {
+            return Err(format!(
+                "{}: live Region type {type_id} cannot cross Blot Core Wasm ABI 1",
+                module.source
+            ));
+        }
         RuntimeType::Product { fields, .. } => {
             let mut fields = fields.clone();
             fields.sort_by(|left, right| left.name.cmp(&right.name));
@@ -1822,7 +1828,7 @@ fn terminator_targets(terminator: &RuntimeTerminator) -> Vec<usize> {
             alternate,
             ..
         } => vec![*consequent, *alternate],
-        RuntimeTerminator::Return { .. } => Vec::new(),
+        RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => Vec::new(),
     }
 }
 
@@ -1940,6 +1946,9 @@ fn emit_structured_loop_block(
         }
         RuntimeTerminator::Return { value, .. } => {
             emit_structured_return(instructions, module, value_locals, *value, result)?;
+        }
+        RuntimeTerminator::Trap { .. } => {
+            instructions.unreachable();
         }
     }
     Ok(())
@@ -2077,6 +2086,9 @@ fn emit_internal_terminator(
             emit_local_values(instructions, locals_for(module, value_locals, *value)?);
             instructions.return_();
         }
+        RuntimeTerminator::Trap { .. } => {
+            instructions.unreachable();
+        }
     }
     Ok(())
 }
@@ -2146,6 +2158,9 @@ fn emit_dynamic_terminator(
         RuntimeTerminator::Return { value, .. } => {
             emit_canonical_return(instructions, module, value_locals, *value, canonical_result)?;
             instructions.return_();
+        }
+        RuntimeTerminator::Trap { .. } => {
+            instructions.unreachable();
         }
     }
     Ok(())

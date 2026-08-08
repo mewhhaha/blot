@@ -64,6 +64,8 @@ function describe(type: SimpleType): string {
       }`;
     case "array":
       return "an array";
+    case "region":
+      return "an owned array region";
     case "variant": {
       const shown = [...type.cases.keys()].map((n) => `#${n}`).join(" | ");
       if (type.open) return `${shown} | ..`;
@@ -199,6 +201,13 @@ function constrainWithState(
 
   if (lhs.tag === "array" && rhs.tag === "array") {
     constrainWithState(lhs.element, rhs.element, state);
+    return;
+  }
+
+  if (lhs.tag === "region" && rhs.tag === "region") {
+    // Regions are readable and replaceable, so their element is invariant.
+    constrainWithState(lhs.element, rhs.element, state);
+    constrainWithState(rhs.element, lhs.element, state);
     return;
   }
 
@@ -418,6 +427,11 @@ function extrude(
         tag: "array",
         element: extrude(type.element, polarity, level, seen, state),
       };
+    case "region":
+      return {
+        tag: "region",
+        element: extrude(type.element, polarity, level, seen, state),
+      };
     default:
       return type;
   }
@@ -437,6 +451,7 @@ function levelBelow(type: SimpleType, level: Level): boolean {
     case "variant":
       return [...type.cases.values()].every((t) => levelBelow(t, level));
     case "array":
+    case "region":
       return levelBelow(type.element, level);
     default:
       return true;
@@ -603,6 +618,20 @@ function freshenAbove(
       freshenedTypes.set(type, freshened);
       return freshened;
     }
+    case "region": {
+      const freshened: SimpleType = {
+        tag: "region",
+        element: freshenAbove(
+          type.element,
+          limit,
+          level,
+          freshenedTypes,
+          instances,
+        ),
+      };
+      freshenedTypes.set(type, freshened);
+      return freshened;
+    }
     default:
       return type;
   }
@@ -669,6 +698,11 @@ function substituteRigid(
     case "array":
       return {
         tag: "array",
+        element: substituteRigid(type.element, replacements),
+      };
+    case "region":
+      return {
+        tag: "region",
         element: substituteRigid(type.element, replacements),
       };
     case "variant":

@@ -30,6 +30,7 @@ export type TyRepNode =
   }
   | { readonly tag: "record"; readonly fields: ReadonlyMap<string, TyRepId> }
   | { readonly tag: "array"; readonly element: TyRepId }
+  | { readonly tag: "region"; readonly element: TyRepId }
   | {
     readonly tag: "variant";
     readonly cases: ReadonlyMap<string, TyRepId>;
@@ -108,6 +109,8 @@ export class TyRepBuilder {
         };
       case "array":
         return { tag: "array", element: this.reference(type.element) };
+      case "region":
+        return { tag: "region", element: this.reference(type.element) };
       case "variant":
         return {
           tag: "variant",

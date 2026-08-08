@@ -306,6 +306,59 @@ const Array =
     .split = fn (values, index) => @array.split values index;
   }
 
+sig slice_claim = @forall (fn T => [T] -> @region.type T)
+const slice_claim = fn values => @region.claim values
+
+sig slice_length = @forall (fn T => @region.type T -> @type.int)
+const slice_length = fn &region => @region.length (&region)
+
+sig slice_get =
+  @forall (fn T => (@region.type T, @type.int) -> (#Some T | #None))
+const slice_get = fn (&region, index) => @region.get (&region) index
+
+sig slice_set =
+  @forall (fn T =>
+    return
+      (@region.type T, @type.int, T) -> (#Updated (@region.type T) | #SetOutOfBounds (@region.type T))
+  )
+const slice_set =
+  fn (!region, index, value) => @region.set (!region) index value
+
+sig slice_swap =
+  @forall (fn T =>
+    return
+      (@region.type T, @type.int, @type.int) -> (#Updated (@region.type T) | #SwapOutOfBounds (@region.type T))
+  )
+const slice_swap =
+  fn (!region, left, right) => @region.swap (!region) left right
+
+sig slice_split =
+  @forall (fn T =>
+    return
+      (@region.type T, @type.int) -> (#Split (@region.type T, @region.type T) | #SplitOutOfBounds (@region.type T))
+  )
+const slice_split = fn (!region, index) => @region.split (!region) index
+
+sig slice_join =
+  @forall (fn T => (@region.type T, @region.type T) -> @region.type T)
+const slice_join = fn (!left, !right) => @region.join (!left) (!right)
+
+sig slice_freeze = @forall (fn T => @region.type T -> [T])
+const slice_freeze = fn !region => @region.freeze (!region)
+
+const Slice =
+  {
+    .of = @region.type;
+    .claim = slice_claim;
+    .length = slice_length;
+    .get = slice_get;
+    .set = slice_set;
+    .swap = slice_swap;
+    .split = slice_split;
+    .join = slice_join;
+    .freeze = slice_freeze;
+  }
+
 const Arena =
   {
     .singleton = fn value => [value];
@@ -1589,6 +1642,7 @@ return {
   .Iterable = Iterable;
 
   .Array = Array;
+  .Slice = Slice;
   .Arena = Arena;
   .Continuation = Continuation;
   .fold = fold;

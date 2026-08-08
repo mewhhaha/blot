@@ -243,6 +243,11 @@ export function joinProduced(values: readonly Produced[]): Produced {
 export function joinAlternatives(values: readonly Produced[]): Produced {
   if (values.length === 0) return NONE;
   if (values.every((value) => value.tag === "none")) return NONE;
+  // Alternatives that agree are one outcome, not several. A `case` whose arms
+  // all return the same Region authority must join to that single authority,
+  // or a downstream freeze would read agreement as a partial split.
+  const first = values[0];
+  if (values.every((value) => sameProduced(value, first))) return first;
   if (values.every((value) => value.tag === "sequence")) {
     const sequences = values.map((value) => {
       if (value.tag !== "sequence") throw new Error("expected a sequence");

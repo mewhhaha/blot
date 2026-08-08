@@ -13,6 +13,7 @@ import {
   type Loaded,
   loadSource,
   loadUncheckedSource,
+  PRELUDE,
 } from "../load.ts";
 import {
   type Env as ValueEnv,
@@ -262,7 +263,10 @@ function checkLoaded(
     }
     // Ownership is checked after types. A use-after-move reported on a program
     // that does not type-check would be the second-best diagnostic.
-    const linear = checkLinearity(loaded.module);
+    // The prelude's Slice wrappers necessarily operate on abstract Region
+    // parameters; only the compiler's own prelude gets that trust. Caller-side
+    // Slice.* calls are proved against the caller's concrete Region lineage.
+    const linear = checkLinearity(loaded.module, loaded.path === PRELUDE);
     if (linear.diagnostics.length > 0) {
       throw new BlotError(linear.diagnostics[0]);
     }
