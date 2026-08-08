@@ -33,8 +33,9 @@ jobs:
           python3 experiments/owned-regions/finalize_production.py
           python3 - <<'PY'
           from pathlib import Path
-          path = Path("src/prelude/prelude.blot")
-          source = path.read_text()
+
+          prelude = Path("src/prelude/prelude.blot")
+          source = prelude.read_text()
           for old, new in [
               ("    .of = @region.array.type;\n", ""),
               (".get = fn (&region, index) =>", ".get = fn (region, index) =>"),
@@ -46,17 +47,45 @@ jobs:
               if old not in source:
                   raise SystemExit(f"missing Slice wrapper anchor: {old}")
               source = source.replace(old, new, 1)
-          path.write_text(source)
+          prelude.write_text(source)
+
+          # Intrinsics are lexed as @namespace.operation. The prototype's
+          # @region.array.operation spelling had one namespace segment too many.
+          # Region is array-only in v1, so the trusted names are @region.*.
+          paths = [
+              "src/check/region_primitives.ts",
+              "src/comptime/region_primitives.ts",
+              "src/linear/check.ts",
+              "experiments/rust-middle/src/primitives.rs",
+              "experiments/rust-middle/src/typecheck.rs",
+              "experiments/rust-middle/src/ownership.rs",
+              "experiments/rust-middle/src/hir.rs",
+              "src/prelude/prelude.blot",
+              "experiments/owned-regions/source_surface.test.ts",
+              "experiments/owned-regions/wasm_region.test.ts",
+              "experiments/owned-regions/integration.test.ts",
+              "spec/OWNED_REGIONS.md",
+          ]
+          for name in paths:
+              path = Path(name)
+              if not path.exists():
+                  continue
+              text = path.read_text()
+              text = text.replace("@region.array.", "@region.")
+              path.write_text(text)
           PY
           cargo fmt --manifest-path experiments/rust-middle/Cargo.toml
           deno fmt \
             src/check/bridge.ts \
             src/check/constrain.ts \
             src/check/print.ts \
+            src/check/region_primitives.ts \
             src/comptime/value.ts \
+            src/comptime/region_primitives.ts \
             src/linear/check.ts \
             experiments/owned-regions/source_surface.test.ts \
-            experiments/owned-regions/wasm_region.test.ts
+            experiments/owned-regions/wasm_region.test.ts \
+            experiments/owned-regions/integration.test.ts
           deno run --allow-read --allow-write src/cli.ts fmt src/prelude/prelude.blot
           deno run --allow-read --allow-write src/cli.ts fmt examples/owned_slice_quicksort.blot
           cargo check --manifest-path experiments/rust-middle/Cargo.toml --target wasm32-unknown-unknown
@@ -72,7 +101,9 @@ jobs:
             src/check/bridge.ts \
             src/check/constrain.ts \
             src/check/print.ts \
+            src/check/region_primitives.ts \
             src/comptime/value.ts \
+            src/comptime/region_primitives.ts \
             src/linear/check.ts \
             experiments/rust-middle/src/typecheck.rs \
             experiments/rust-middle/src/primitives.rs \
@@ -82,6 +113,8 @@ jobs:
             examples/owned_slice_quicksort.blot \
             experiments/owned-regions/source_surface.test.ts \
             experiments/owned-regions/wasm_region.test.ts \
+            experiments/owned-regions/integration.test.ts \
+            spec/OWNED_REGIONS.md \
             generated/rust-middle/compiler.wasm \
             generated/rust-middle/prelude.snapshot
           if ! git diff --cached --quiet; then
