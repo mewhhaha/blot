@@ -195,13 +195,5 @@ replace_once(
 let quicksort_parts =
 ''',
 )
-replace_once(
-    example,
-    '''let quicksort_rest =
-''',
-    '''sig quicksort_rest = ((Slice.of Int), (Slice.of Int)) -> (Slice.of Int)
-let quicksort_rest =
-''',
-)
 
-print("fixed Rust Region generic traversals and typed every public Slice wrapper")
+print("fixed Rust Region generic traversals and typed public Slice/one-root quicksort")
