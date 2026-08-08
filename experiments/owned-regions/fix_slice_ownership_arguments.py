@@ -132,4 +132,26 @@ replace_once(
 ''',
 )
 
-print("normalized tupled Slice ownership arguments")
+# The quicksort transfers Region authority through every helper and recursive
+# tail call. State that contract in the parameter patterns as well as the type
+# signatures so the ownership checker can certify each `!region` argument.
+path = "examples/owned_slice_quicksort.blot"
+replace_once(path, "let keep_swap = fn (region, left, right) =>\n", "let keep_swap = fn (!region, left, right) =>\n")
+replace_once(
+    path,
+    "  rec (fn (region, pivot, scan, boundary, limit) =>\n",
+    "  rec (fn (!region, pivot, scan, boundary, limit) =>\n",
+)
+replace_once(path, "  rec (fn region =>\n", "  rec (fn !region =>\n")
+replace_once(
+    path,
+    "  rec (fn (region, pivot_index) =>\n",
+    "  rec (fn (!region, pivot_index) =>\n",
+)
+replace_once(
+    path,
+    "  rec (fn (left, rest) =>\n",
+    "  rec (fn (!left, !rest) =>\n",
+)
+
+print("normalized tupled Slice ownership arguments and explicit quicksort Region transfers")
