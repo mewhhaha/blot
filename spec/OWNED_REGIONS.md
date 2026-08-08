@@ -241,6 +241,10 @@ The inputs need not be immediate siblings of one earlier split. Adjacency is
 enough, which permits reassociation of nested partitions. Failure returns both
 inputs unchanged.
 
+The implemented checker is stricter than this rule: it accepts only the ordered
+sibling pair of one split, proved by static lineage visible at the call site.
+Section 13 records the intended revision that makes the proof a value instead.
+
 ### `@region.length`
 
 Borrows a slice and returns its interval length. It changes no authority.
@@ -328,6 +332,11 @@ const Slice = {
 The backing Store must not be projectable from source. A Runtime-HIR
 representation may contain `(store,start,length,extent)`, but that layout is
 compiler-private and refused by ABI 1.
+
+The current implementation cannot certify these wrapper bodies: a join of two
+abstract parameters has no lineage to inspect. It compensates by trusting the
+compiler's own prelude and by recognizing unshadowed `Slice.*` calls by name.
+Section 13 records why both compensations should not survive stabilization.
 
 ## 6. Static certificate shape
 
@@ -548,4 +557,126 @@ Before moving any of this into `LANGUAGE.md`, require:
 - a benchmark separating acquisition-copy cost from partition/sort cost.
 
 Until those gates pass, `@region.*` remains an experimental trusted boundary,
-not part of Blot's implemented language.
+not part of Blot's implemented language. Section 13 is part of those gates: the
+name-keyed wrapper recognition and the prelude ownership exemption are
+scaffolding of the current draft, and stabilization replaces them rather than
+canonizing them.
+
+## 13. Proposed revision: recombination witnesses
+
+The implemented draft carries three compensations that contradict the prelude's
+own principle that nothing in it is built into the compiler:
+
+- the ownership checkers certify the prelude's `Slice` wrappers under a trusted
+  mode, because a join of two abstract parameters has no split lineage to
+  inspect;
+- both checkers recognize an unshadowed variable spelled `Slice` and map its
+  fields back to `@region.*`, so caller-side proofs bypass the wrapper; and
+- argument interpretation changes when the callee is spelled `Slice`, to unpack
+  the wrappers' tuple calling convention.
+
+Each is the same missing abstraction. The ownership summary of a function cannot
+express a relation between two of its arguments — "these are the sibling halves
+of one split" — so the relation is patched in by name. A relational contract
+language would express it, but there is a smaller design: make the relation a
+value.
+
+### The witness
+
+`@region.split` returns three linear values on success. `@region.join` consumes
+three:
+
+```text
+split : !Own(root,[lo,hi))  k
+        -> #Split (Own(root,[lo,lo+k)),
+                   Own(root,[lo+k,hi)),
+                   Rejoin(root, lo, lo+k, hi))
+         | #SplitOutOfBounds Own(root,[lo,hi))
+
+join  : !Rejoin(root, lo, mid, hi) * !Own(root,[lo,mid)) * !Own(root,[mid,hi))
+        -> Own(root,[lo,hi))
+```
+
+`Rejoin` is an unforgeable, opaque, element-free capability: the proof that its
+two parts recombine into their parent, reified as a value. It carries no data a
+program can read, costs metadata only, and is erased entirely at Runtime-HIR
+lowering — the runtime join operation is unchanged, taking the left part's start
+and the right part's end.
+
+### Why this fits the proof stack
+
+The pairing between a witness and its two parts lives in the ownership
+analysis's produced values, keyed by value identity, not in the type lattice.
+The witness's type is one opaque nominal; no region variable enters algebraic
+inference, so every restriction in section 11 still holds. Join checks that its
+first argument's produced value is the witness whose recorded parts are exactly
+the other two arguments. Where the analysis cannot trace a witness, it rejects —
+the same conservatism as the current lineage proof.
+
+What changes is composition. The current proof dies at a function boundary:
+lineage is visible only at the split's own call site, which is why the checker
+must recognize wrappers by spelling. A witness travels through bindings, tuples,
+case arms, and calls by the ordinary parameter-substitution machinery that
+already threads concrete authorities into function results. A user function that
+receives a witness and two parts and joins them certifies with no new rules:
+
+```blot
+let rejoin_sorted = fn (!rejoin, !left, !right) =>
+  Region.join ((!rejoin), (quicksort (!left)), (quicksort (!right)))
+```
+
+No compiler rule remembers that two arguments originated from one particular
+split; the proof arrived with them.
+
+### Obligations
+
+- A witness is linear. Leaking one is the ordinary unconsumed-linear error, and
+  correctly so: losing the ability to rejoin means the root can never be
+  reassembled for `freeze`.
+- A witness is refused at ABI 1 exactly as a live region authority is.
+- Witness pairing proves sibling recombination of one split. The section 4
+  adjacency rule — reassociating nested partitions — is deliberately given up in
+  the first version; a checked witness-combination law can restore it later if a
+  program needs it.
+- Failure conservation extends to the witness: `#SplitOutOfBounds` returns the
+  parent authority and mints nothing.
+
+### Quicksort under witnesses
+
+```text
+whole
+  |
+split -> left, rest, J1
+                 |
+            split -> pivot, right, J2
+
+sort left, sort right
+join J2 pivot right
+join J1 left (pivot ++ right)
+```
+
+Every recombination names its proof. The recursion passes witnesses down as
+ordinary linear values, so helper functions of any shape stay certifiable.
+
+### What this deletes
+
+With witnesses, the prelude's `Slice` wrappers become ordinary certifiable
+source: each body forwards values whose proofs travel with them. That removes,
+from both checkers:
+
+- the trusted-prelude ownership mode and every path by which the prelude is
+  identified;
+- the name-keyed recognition of `Slice.*`; and
+- the `Slice`-specific tuple-argument reinterpretation.
+
+`Slice` becomes replaceable — a user may rename it, re-wrap it, or write
+`const Banana = { .split = ...; .join = ...; }` — without losing ownership
+semantics, which is the test that no privilege remains.
+
+### Family generality
+
+The witness generalizes the family contract of section 11: a region family's
+partition operation returns pieces plus a recombination witness, and its combine
+operation consumes them. Matrix tiles, tree partitions, and arena chunks can
+implement the same shape without either checker learning anything per family
+beyond the family's own partition/combine laws.
