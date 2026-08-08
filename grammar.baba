@@ -384,7 +384,7 @@ keyword = (
   "module" | "operators" | "infixl" | "infixr" | "infix" | "prefix"
   | "let" | "const" | "sig" | "return"
   | "if" | "else" | "case" | "of" | "rec" | "comptime" | "open"
-  | "for" | "in" | "break" | "try" | "with" | "do" | "fn"
+  | "for" | "in" | "break" | "do" | "fn"
 ) ;
 
 primary_expression = (

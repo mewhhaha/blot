@@ -250,13 +250,12 @@ genuinely undecidable.
 
 Two consequences follow, neither worth making before the primitive-level rule
 exists. `&&` and `||` should become grammar forms that desugar to nested `if`
-during CST lowering, like `for` and `try`: short-circuiting falls out, the
-truth-table recognition is deleted rather than reimplemented, and
-`a && perform ()` stops performing. They are not ordinary operators today — a
-fixity entry the checker matches by semantics is built in, in the way that
-matters. And a guarded arm whose guard is a recognized comparison can contribute
-its proved set to coverage, so `m if m > 0`, `m if m < 0`, `0` covers `Int`
-without a wildcard.
+during CST lowering, like `for`: short-circuiting falls out, the truth-table
+recognition is deleted rather than reimplemented, and `a && perform ()` stops
+performing. They are not ordinary operators today — a fixity entry the checker
+matches by semantics is built in, in the way that matters. And a guarded arm
+whose guard is a recognized comparison can contribute its proved set to
+coverage, so `m if m > 0`, `m if m < 0`, `0` covers `Int` without a wildcard.
 
 ## 11. Carry the index relation across affine arithmetic
 

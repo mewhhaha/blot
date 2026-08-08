@@ -84,7 +84,7 @@ is that a small number of semantic distinctions can do most of the work:
 - an external ABI is not an exposure of the compiler's heap.
 
 These distinctions allow the surface language to remain small. Surface forms
-such as `for`, statement `if`, element syntax, `try`, and early `return` should
+such as `for`, statement `if`, element syntax, and early `return` should
 elaborate to a core whose semantics does not mention them. Conversely, a feature
 that survives into every later pass is not a surface convenience; it is part of
 the core and needs typing and operational rules.
@@ -183,7 +183,7 @@ The following are surface forms only:
 - `for` and `break`;
 - statement `if` and deconstructing guards;
 - early `return`;
-- `try` handler composition;
+- `|>` handler composition over two-argument `@handle`;
 - element statements;
 - declaration tags;
 - `open`; and

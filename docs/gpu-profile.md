@@ -19,14 +19,14 @@ in a benchmark months later.
 
 | counter                     |    blot | note                                               |
 | --------------------------- | ------: | -------------------------------------------------- |
-| `lexerStates`               |     124 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`               |     117 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |      30 | worst-case island candidates allocated per token   |
 | `islandCount`               |      81 | one island for every grammar rule                  |
-| `islandStates`              |     470 |                                                    |
-| `islandTransitions`         |     483 |                                                    |
+| `islandStates`              |     468 |                                                    |
+| `islandTransitions`         |     481 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 783,960 | immutable device table                             |
-| `packedBytes`               | 603,667 | version-3 runtime section                          |
+| `denseTransitionBytes`      | 769,392 | immutable device table                             |
+| `packedBytes`               | 593,683 | version-3 runtime section                          |
 | `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |       9 | islands admitted to parallel long-region execution |
 
@@ -224,11 +224,16 @@ branches, and spelling handler composition with `with` moved the then-current
 general-profile plan from 74 to 72 islands and from 514,619 to 485,445 packed
 bytes. Candidate multiplicity and contraction rounds remain fixed.
 
-`try program with` followed by an indented suite is one bounded island whose
-body is a repeated newline-terminated handler step followed by one final step,
-so candidate multiplicity and contraction rounds remain fixed. The two-argument
-`@handle` spelling is parsed only inside this region and becomes the existing
-three-argument primitive during CST lowering.
+The retired `try program with` suite was one bounded island whose body was a
+repeated newline-terminated handler step followed by one final step; the
+two-argument `@handle` spelling is now written with `|>` and saturates during
+CST lowering. Deleting the retired islands is recorded in the current counters
+above. Un-reserving `try` and `with` afterwards — the rules were gone, so the
+keywords gated nothing — removed seven lexer states, two island states, two
+island transitions, 14,568 dense-transition bytes, and 9,984 packed bytes, and
+lowered the summary scratch factor from 25 to 23. Island count, candidate
+multiplicity, contraction rounds, the root loop, and parallel long-region
+admission are unchanged.
 
 `fn` is the largest reduction the grammar has taken. Before it a lambda was
 `postfix_expression "=>" expression`, sharing its opening tokens with an

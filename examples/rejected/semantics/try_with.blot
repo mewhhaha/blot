@@ -1,0 +1,9 @@
+// The retired `try ... with` spelling. `try` and `with` are ordinary
+// identifiers now, so this parses as the application `try program with
+// (@handle (Effect, handler))` and fails at check because nothing binds
+// `try`. Handler composition is written with `|>` (LANGUAGE.md 12.2).
+let program = fn () => 1
+let handler = {}
+let value = try program with
+  @handle (Effect, handler)
+return value

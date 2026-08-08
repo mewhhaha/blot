@@ -62,7 +62,7 @@ The reserved words are:
 module operators infixl infixr infix prefix
 let const sig return
 if else case of rec comptime open
-for in break try do fn
+for in break do fn
 ```
 
 Reserved words and capitalized names remain valid field names: `.return`,
@@ -354,15 +354,15 @@ above the reader or the two belong in one recursive group.
 
 Physical line breaks terminate declarations. A continuation may be indented, but
 indentation opens a statement suite only after a suite introducer. The
-introducers are `=`, `=>`, `<-`, `of`, `with`, `:`, and an opening element's
-`>`. `do:` is the explicit value-producing statement scope. Parentheses only
-group values or form tuples; they never introduce a statement suite. A suite may
-use any indentation width, but every line at that depth must agree; a dedent
-must return to an active suite width or to the introducer's width. Other
-indentation is expression continuation and does not silently create a scope. A
-closing delimiter does not select a suite width, so its indentation is ignored
-and canonicalized by the formatter. The formatter writes the accepted structure
-with two-space indentation and expands lines toward an 80-column limit. When a
+introducers are `=`, `=>`, `<-`, `of`, `:`, and an opening element's `>`. `do:`
+is the explicit value-producing statement scope. Parentheses only group values
+or form tuples; they never introduce a statement suite. A suite may use any
+indentation width, but every line at that depth must agree; a dedent must return
+to an active suite width or to the introducer's width. Other indentation is
+expression continuation and does not silently create a scope. A closing
+delimiter does not select a suite width, so its indentation is ignored and
+canonicalized by the formatter. The formatter writes the accepted structure with
+two-space indentation and expands lines toward an 80-column limit. When a
 binding or `return` line is too wide, its value moves to the following line at
 one additional indentation level. A delimited value that is already multiline
 likewise moves as a whole, so its opening and closing delimiters share the
