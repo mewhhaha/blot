@@ -154,4 +154,47 @@ replace_once(
     "  rec (fn (!left, !rest) =>\n",
 )
 
-print("normalized tupled Slice ownership arguments and explicit quicksort Region transfers")
+# Keep all sibling relations inside one function body. A function parameter can
+# carry one Region root parametrically; proving a relationship between two
+# independent Region parameters would require a much broader relational
+# function-contract feature and is unnecessary for this in-place quicksort.
+replace_once(
+    path,
+    '''sig quicksort_parts = ((Slice.of Int), Int) -> (Slice.of Int)
+let quicksort_parts =
+  rec (fn (!region, pivot_index) =>
+    return case Slice.split ((!region), pivot_index) of
+      #Split (!left, !rest) => quicksort_rest (!left, !rest)
+      #SplitOutOfBounds !original => original
+  )
+let quicksort_rest =
+  rec (fn (!left, !rest) =>
+    return case Slice.split ((!rest), 1) of
+      #Split (!pivot_region, !right) =>
+        let left_sorted = quicksort (!left)
+        let right_sorted = quicksort (!right)
+        let restored_right = Slice.join ((!pivot_region), (!right_sorted))
+        return Slice.join ((!left_sorted), (!restored_right))
+      #SplitOutOfBounds !original_rest =>
+        return Slice.join ((!left), (!original_rest))
+  )
+''',
+    '''sig quicksort_parts = ((Slice.of Int), Int) -> (Slice.of Int)
+let quicksort_parts =
+  rec (fn (!region, pivot_index) =>
+    return case Slice.split ((!region), pivot_index) of
+      #Split (!left, !rest) =>
+        return case Slice.split ((!rest), 1) of
+          #Split (!pivot_region, !right) =>
+            let left_sorted = quicksort (!left)
+            let right_sorted = quicksort (!right)
+            let restored_right = Slice.join ((!pivot_region), (!right_sorted))
+            return Slice.join ((!left_sorted), (!restored_right))
+          #SplitOutOfBounds !original_rest =>
+            return Slice.join ((!left), (!original_rest))
+      #SplitOutOfBounds !original => original
+  )
+''',
+)
+
+print("normalized tupled Slice ownership and kept quicksort lineage single-root")
