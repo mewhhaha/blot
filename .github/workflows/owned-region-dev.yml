@@ -27,151 +27,201 @@ jobs:
           targets: wasm32-unknown-unknown
           components: rustfmt,clippy
       - uses: extractions/setup-just@v3
-      - name: Apply production Region patch and run gates
+      - name: Materialize, rebase, gate, and publish production patch
+        shell: bash
         run: |
+          set -euo pipefail
+          git fetch origin main codex/owned-slices
           git pull --rebase origin codex/owned-slices
+          SOURCE_HEAD=$(git rev-parse HEAD)
+          BASE=$(git merge-base origin/main "$SOURCE_HEAD")
+          echo "source=$SOURCE_HEAD"
+          echo "merge-base=$BASE"
+          echo "main=$(git rev-parse origin/main)"
+
+          # Materialize the latest production Region patch on the prototype head.
           python3 experiments/owned-regions/finalize_production.py
           python3 experiments/owned-regions/finalize_slice_namespace.py
           python3 experiments/owned-regions/fix_rust_region_generalization.py
           python3 experiments/owned-regions/fix_rust_region_snapshot_closedness.py
+
+          # The prototype used a temporary two-segment intrinsic namespace. The
+          # production grammar and API use one @region segment.
           python3 - <<'PY'
           from pathlib import Path
-
-          paths = [
-              "src/check/region_primitives.ts",
-              "src/comptime/region_primitives.ts",
-              "src/linear/check.ts",
-              "experiments/rust-middle/src/primitives.rs",
-              "experiments/rust-middle/src/typecheck.rs",
-              "experiments/rust-middle/src/ownership.rs",
-              "experiments/rust-middle/src/hir.rs",
-              "src/prelude/prelude.blot",
-              "experiments/owned-regions/source_surface.test.ts",
-              "experiments/owned-regions/wasm_region.test.ts",
-              "experiments/owned-regions/integration.test.ts",
-              "spec/OWNED_REGIONS.md",
+          roots = [
+              Path("src"),
+              Path("examples/owned_slice_quicksort.blot"),
+              Path("experiments/owned-regions/source_surface.test.ts"),
+              Path("experiments/owned-regions/wasm_region.test.ts"),
+              Path("experiments/rust-middle/src"),
+              Path("spec/OWNED_REGIONS.md"),
           ]
-          for name in paths:
-              path = Path(name)
-              if path.exists():
-                  path.write_text(path.read_text().replace("@region.array.", "@region."))
+          paths = []
+          for root in roots:
+              if root.is_dir():
+                  paths.extend(path for path in root.rglob("*") if path.is_file())
+              elif root.exists():
+                  paths.append(root)
+          for path in paths:
+              try:
+                  text = path.read_text()
+              except UnicodeDecodeError:
+                  continue
+              if "@region.array." in text:
+                  path.write_text(text.replace("@region.array.", "@region."))
           PY
+
           cargo fmt --manifest-path experiments/rust-middle/Cargo.toml
           deno fmt \
             src/check/bridge.ts \
             src/check/constrain.ts \
             src/check/print.ts \
             src/check/region_primitives.ts \
+            src/check/type.ts \
             src/comptime/value.ts \
             src/comptime/region_primitives.ts \
+            src/core/type_rep.ts \
+            src/linear/certificate.ts \
             src/linear/check.ts \
             experiments/owned-regions/source_surface.test.ts \
-            experiments/owned-regions/wasm_region.test.ts \
-            experiments/owned-regions/integration.test.ts
+            experiments/owned-regions/wasm_region.test.ts
           deno run --allow-read --allow-write src/cli.ts fmt src/prelude/prelude.blot
           deno run --allow-read --allow-write src/cli.ts fmt examples/owned_slice_quicksort.blot
-          cargo check --manifest-path experiments/rust-middle/Cargo.toml --target wasm32-unknown-unknown
-          deno task build:rust-middle
-
-          cat > examples/__region_diag_rec_passthrough.blot <<'BLOT'
-          open @import "blot:prelude" ()
-          let pass =
-            rec (fn (region, n) =>
-              if n < 1:
-                return region
-              else:
-                return pass (!region, n - 1)
-            )
-          let region = Slice.claim [1, 2]
-          return Slice.freeze (pass (!region, 1))
-          BLOT
-          cat > examples/__region_diag_rec_read.blot <<'BLOT'
-          open @import "blot:prelude" ()
-          let pass =
-            rec (fn (region, n) =>
-              let value = case Slice.get ((&region), 0) of
-                #Some item => item
-                #None => 0
-              if n < 1:
-                return (region, value)
-              else:
-                return pass (!region, n - 1)
-            )
-          let region = Slice.claim [1, 2]
-          let (region, value) = pass (!region, 1)
-          let _ = Slice.freeze (!region)
-          return value
-          BLOT
-          cat > examples/__region_diag_rec_swap.blot <<'BLOT'
-          open @import "blot:prelude" ()
-          let swap_once = fn region =>
-            return case Slice.swap ((!region), 0, 1) of
-              #Updated !updated => updated
-              #SwapOutOfBounds !original => original
-          let pass =
-            rec (fn (region, n) =>
-              if n < 1:
-                return region
-              else:
-                let region = swap_once (!region)
-                return pass (!region, n - 1)
-            )
-          let region = Slice.claim [1, 2]
-          return Slice.freeze (pass (!region, 1))
-          BLOT
-          cat > examples/__region_diag_nonrec_partition.blot <<'BLOT'
-          open @import "blot:prelude" ()
-          let keep_swap = fn (region, left, right) =>
-            return case Slice.swap ((!region), left, right) of
-              #Updated !updated => updated
-              #SwapOutOfBounds !original => original
-          let partition = fn (region, pivot, scan, boundary) =>
-            let current = case Slice.get ((&region), scan) of
-              #Some value => value
-              #None => pivot
-            if current <= pivot:
-              return (keep_swap ((!region), scan, boundary), boundary + 1)
-            else:
-              return (region, boundary)
-          let region = Slice.claim [2, 1]
-          let (region, _) = partition (!region, 2, 0, 0)
-          return Slice.freeze (!region)
-          BLOT
-          for f in examples/__region_diag_*.blot; do
-            echo "===== $f ====="
-            deno run --allow-read src/cli.ts check "$f" || true
-          done
-          rm examples/__region_diag_*.blot
-
-          deno run --allow-read src/cli.ts check examples/owned_slice_quicksort.blot
-          deno test --allow-read --allow-write experiments/owned-regions/*.test.ts
-          deno task corpus
-          just check
-          just test
           git diff --check
+
+          # Only these paths survive. Prototype models, patch scripts, triggers,
+          # temporary workflows, and old task edits are intentionally excluded.
+          PRODUCTION=(
+            examples/owned_slice_quicksort.blot
+            experiments/owned-regions/source_surface.test.ts
+            experiments/owned-regions/wasm_region.test.ts
+            experiments/rust-middle/src/backend.rs
+            experiments/rust-middle/src/hir.rs
+            experiments/rust-middle/src/ownership.rs
+            experiments/rust-middle/src/primitives.rs
+            experiments/rust-middle/src/session.rs
+            experiments/rust-middle/src/typecheck.rs
+            experiments/rust-middle/src/value.rs
+            spec/OWNED_REGIONS.md
+            src/check/bridge.ts
+            src/check/constrain.ts
+            src/check/print.ts
+            src/check/region_primitives.ts
+            src/check/type.ts
+            src/comptime/region_primitives.ts
+            src/comptime/value.ts
+            src/core/type_rep.ts
+            src/linear/certificate.ts
+            src/linear/check.ts
+            src/prelude/prelude.blot
+          )
+          tar -cf /tmp/owned-slice-production.tar "${PRODUCTION[@]}"
+
+          # Build one synthetic production commit against the original merge
+          # base, then cherry-pick it onto current main. Three-way rename merging
+          # carries the Rust edits through main's experiments/rust-middle ->
+          # compiler move and combines them with main's recursive ownership work.
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add \
+          git reset --hard "$BASE"
+          git clean -fdx
+          tar -xf /tmp/owned-slice-production.tar
+          git add "${PRODUCTION[@]}"
+          git commit -m 'feat: add owned Slice regions'
+          SQUASH=$(git rev-parse HEAD)
+
+          git switch -C codex-owned-slices-rebased origin/main
+          git config merge.renames true
+          if ! git cherry-pick "$SQUASH"; then
+            echo '--- cherry-pick conflicts ---'
+            git status --short
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
+
+          if test -d experiments/rust-middle; then
+            echo 'retired experiments/rust-middle path survived rename merge'
+            find experiments/rust-middle -maxdepth 2 -type f -print
+            exit 1
+          fi
+
+          # Port the new tests/spec wording to main #21's compiler boundary.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          test = Path("experiments/owned-regions/wasm_region.test.ts")
+          text = test.read_text()
+          text = text.replace(
+              'import { RustMiddleCompiler } from "../../src/backend/rust_middle.ts";',
+              'import { Compiler } from "../../src/compiler/session.ts";',
+          )
+          text = text.replace(
+              'import type { BlotRuntimeModule, BlotRuntimeOperation } from "../../src/backend/runtime/hir.ts";',
+              'import type { BlotRuntimeModule, BlotRuntimeOperation } from "../../src/runtime/hir.ts";',
+          )
+          text = text.replace("RustMiddleCompiler", "Compiler")
+          test.write_text(text)
+
+          spec = Path("spec/OWNED_REGIONS.md")
+          text = spec.read_text()
+          text = text.replace("experiments/rust-middle", "compiler")
+          text = text.replace("generated/rust-middle", "generated/compiler")
+          text = text.replace("RustMiddleCompiler", "Compiler")
+          spec.write_text(text)
+          PY
+
+          deno fmt \
             src/check/bridge.ts \
             src/check/constrain.ts \
             src/check/print.ts \
             src/check/region_primitives.ts \
+            src/check/type.ts \
             src/comptime/value.ts \
             src/comptime/region_primitives.ts \
+            src/core/type_rep.ts \
+            src/linear/certificate.ts \
             src/linear/check.ts \
-            experiments/rust-middle/src/typecheck.rs \
-            experiments/rust-middle/src/primitives.rs \
-            experiments/rust-middle/src/ownership.rs \
-            experiments/rust-middle/src/hir.rs \
-            src/prelude/prelude.blot \
-            examples/owned_slice_quicksort.blot \
             experiments/owned-regions/source_surface.test.ts \
-            experiments/owned-regions/wasm_region.test.ts \
-            experiments/owned-regions/integration.test.ts \
-            spec/OWNED_REGIONS.md \
-            generated/rust-middle/compiler.wasm \
-            generated/rust-middle/prelude.snapshot
-          if ! git diff --cached --quiet; then
-            git commit -m 'feat: finish owned Slice production path'
-            git push origin HEAD:codex/owned-slices
+            experiments/owned-regions/wasm_region.test.ts
+          deno run --allow-read --allow-write src/cli.ts fmt src/prelude/prelude.blot
+          deno run --allow-read --allow-write src/cli.ts fmt examples/owned_slice_quicksort.blot
+          cargo fmt --manifest-path compiler/Cargo.toml
+
+          # Rebuild the current production compiler artifact/snapshot before the
+          # exact-head gates, then amend them into the one rebased commit.
+          cargo check --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown
+          deno task build:compiler
+          git add -A
+          git commit --amend --no-edit
+          FINAL_HEAD=$(git rev-parse HEAD)
+          test "$(git rev-parse HEAD^)" = "$(git rev-parse origin/main)"
+
+          echo '--- final production diff ---'
+          git diff --stat origin/main...HEAD
+          git diff --name-only origin/main...HEAD
+
+          # Review hygiene: no prototype/scaffolding and no retired compiler path.
+          if git diff --name-only origin/main...HEAD | grep -E \
+            '(^\.github/workflows/owned-region-dev\.yml$|experiments/owned-regions/(model|quicksort|integration|acquisition|certificate|interval|root_claim|store_provenance|trace_branch|apply_|finalize_|finish_|fix_|patch_|run_patch|\.production|\.source|\.sync)|^experiments/rust-middle/|^src/linear/region_(certificate|family|interval)\.ts$)'; then
+            echo 'review scaffolding survived the clean squash'
+            exit 1
           fi
+
+          # Exact-head production gates.
+          deno run --allow-read src/cli.ts check examples/owned_slice_quicksort.blot
+          deno test --allow-read --allow-write \
+            experiments/owned-regions/source_surface.test.ts \
+            experiments/owned-regions/wasm_region.test.ts
+          deno task corpus
+          just check
+          just test
+          git diff --check HEAD^ HEAD
+          git diff --exit-code
+          test "$(git rev-parse HEAD)" = "$FINAL_HEAD"
+          test "$(git rev-parse HEAD^)" = "$(git rev-parse origin/main)"
+
+          # Publish only after the rebased exact-head tree is fully green.
+          git push \
+            --force-with-lease=refs/heads/codex/owned-slices:"$SOURCE_HEAD" \
+            origin HEAD:codex/owned-slices
