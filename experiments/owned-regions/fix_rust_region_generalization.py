@@ -103,4 +103,38 @@ replace_once(
 ''',
 )
 
-print("fixed Rust Region generic traversals")
+# The prelude namespace should retain the primitive values themselves. Both
+# checkers already resolve a compile-time record member that is a primitive back
+# to the primitive's polymorphic scheme at each application. Forwarding closures
+# erase that relationship into Region(Top) -> Region(Bottom), which is unusable
+# for invariant Region even though the wrapper is semantically an identity on T.
+prelude = "src/prelude/prelude.blot"
+replace_once(
+    prelude,
+    '''const Slice =
+  {
+    .claim = fn values => @region.array.claim values;
+    .length = fn &region => @region.array.length (&region);
+    .get = fn (&region, index) => @region.array.get (&region) index;
+    .set = fn (!region, index, value) => @region.array.set (!region) index value;
+    .swap = fn (!region, left, right) => @region.array.swap (!region) left right;
+    .split = fn (!region, index) => @region.array.split (!region) index;
+    .join = fn (!left, !right) => @region.array.join (!left) (!right);
+    .freeze = fn !region => @region.array.freeze (!region);
+  }
+''',
+    '''const Slice =
+  {
+    .claim = @region.array.claim;
+    .length = @region.array.length;
+    .get = @region.array.get;
+    .set = @region.array.set;
+    .swap = @region.array.swap;
+    .split = @region.array.split;
+    .join = @region.array.join;
+    .freeze = @region.array.freeze;
+  }
+''',
+)
+
+print("fixed Rust Region generic traversals and preserved Slice primitive schemes")
