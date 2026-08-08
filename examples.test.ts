@@ -101,6 +101,14 @@ const REJECTIONS: Record<
     code: "BLOT_LINEAR_CONSUMED_TWICE",
     stage: "check",
   },
+  "linear_spent_each_iteration": {
+    code: "BLOT_LINEAR_CONSUMED_TWICE",
+    stage: "check",
+  },
+  "linear_closure_called_each_iteration": {
+    code: "BLOT_LINEAR_CONSUMED_TWICE",
+    stage: "check",
+  },
   "linear_branch_disagreement": {
     code: "BLOT_LINEAR_BRANCH_DISAGREEMENT",
     stage: "check",

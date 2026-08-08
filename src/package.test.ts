@@ -9,8 +9,8 @@ import {
 } from "./package_format.ts";
 import { load } from "./load.ts";
 import { evaluateFile } from "./run.ts";
-import { buildBatch } from "./backend/build.ts";
-import { RustMiddleCompiler } from "./backend/rust_middle.ts";
+import { buildBatch } from "./compiler/build.ts";
+import { Compiler } from "./compiler/session.ts";
 
 Deno.test("a built package loads its bundled module graph after source removal", async () => {
   const directory = await packageFixture();
@@ -275,7 +275,7 @@ return (answer ()).answer
 }
 
 async function assertRustCompiles(path: string): Promise<void> {
-  const compiler = await RustMiddleCompiler.create();
+  const compiler = await Compiler.create();
   try {
     const artifact = await compiler.compile(path);
     assertEquals([...artifact.wasm.slice(0, 4)], [0, 97, 115, 109]);

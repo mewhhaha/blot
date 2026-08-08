@@ -236,19 +236,15 @@ return choose
   assertEquals(binding.value.body.fallback?.tag, "int");
 });
 
-Deno.test("value if is retained only by concrete migration parsing", async () => {
+Deno.test("value if is absent from the production grammar", async () => {
   const source = `let value = if True:
   return 1
 else:
   return 2
 return value
 `;
-  const concrete = await parseConcrete(source);
-  assert(concrete.ok);
-  const parsed = await parse(source);
+  const parsed = await parseConcrete(source);
   assert(!parsed.ok);
-  if (parsed.ok) return;
-  assertEquals(parsed.diagnostics[0]?.code, "BLOT_VALUE_IF_REMOVED");
 });
 
 Deno.test("try-with is absent from the production grammar", async () => {

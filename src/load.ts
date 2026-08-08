@@ -320,10 +320,10 @@ export async function loadSource(
 }
 
 /**
- * Loads one legacy root revision for migration/regression tooling.
- * Dependencies still use the current source language through ordinary `load`.
+ * Loads one internal regression-test revision without source-only validation.
+ * Dependencies still use the ordinary checked source path.
  */
-export async function loadLegacySource(
+export async function loadUncheckedSource(
   path: string,
   source: string,
 ): Promise<Loaded> {
@@ -342,9 +342,9 @@ async function loadSourceRevision(
   source: string,
   cache: Map<string, Loaded>,
   active: readonly string[],
-  allowRemovedSurface: boolean,
+  skipSourceValidation: boolean,
 ): Promise<Loaded> {
-  const parsed = allowRemovedSurface
+  const parsed = skipSourceValidation
     ? await parseConcrete(source)
     : await parse(source);
   if (!parsed.ok) {

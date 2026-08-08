@@ -71,21 +71,21 @@ grammar-check:
   deno run --allow-read --allow-run=tree-sitter scripts/check_grammar.ts
 
 check:
-  deno run --allow-read scripts/generate_rust_middle_schema.ts --check
-  deno check mod.ts scripts/*.ts case-studies/*.ts experiments/generated-code/*.ts experiments/rust-middle/*.ts src/cli.ts src/backend/rust_middle.test.ts src/language_service.test.ts src/syntax/portable.test.ts src/syntax/surface.test.ts src/tooling/*.test.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts
+  deno task check
   deno fmt --check
   deno lint
   deno task corpus
   rustfmt --edition 2024 --check experiments/generated-code/counterpart.rs
-  cargo fmt --manifest-path experiments/rust-middle/Cargo.toml --check
-  cargo clippy --manifest-path experiments/rust-middle/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
-  cargo test --manifest-path experiments/rust-middle/Cargo.toml
-  deno task check:rust-middle-artifact
-  deno task experiment:rust-middle-parity
-  deno task experiment:rust-middle-check-parity
-  deno task experiment:rust-middle-eval-parity
-  deno task experiment:rust-middle-hir-parity
-  deno task verify:rust-compiler
+  cargo fmt --manifest-path compiler/Cargo.toml --check
+  cargo clippy --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+  cargo test --manifest-path compiler/Cargo.toml
+  # Exact bytes, so this reproduces only under the Rust release CI pins.
+  deno task check:compiler-artifact
+  deno task conformance:frontend
+  deno task conformance:check
+  deno task conformance:eval
+  deno task conformance:hir
+  deno task verify:compiler
 
 test:
   deno test --allow-read --allow-write

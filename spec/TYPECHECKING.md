@@ -670,9 +670,9 @@ an explicit invalidation pass.
 The third bounce tests erasure and authority agreement. Closed rows inspect both
 declared and inferred component parameter records, but ordinary function calls
 still use width subtyping. The integer SIMD catalog runs through the comptime
-evaluator, scalar conformance lowering, native Runtime HIR, Rust middle, and
-emitted `wasm-simd128`; the certified selector becomes `i32x4.extract_lane`. The
-checker, Runtime-HIR, and evaluator parity corpora report no TypeScript/Rust
+evaluator, scalar conformance lowering, native Runtime HIR, production compiler,
+and emitted `wasm-simd128`; the certified selector becomes `i32x4.extract_lane`.
+The checker, Runtime-HIR, and evaluator parity corpora report no TypeScript/Rust
 disagreements, and the full language corpus preserves three-execution agreement.
 
 ### Parallel boundary
@@ -902,9 +902,9 @@ Correctness gates:
 ```txt
 deno task check
 deno task test
-deno task experiment:rust-middle-check-parity
-deno task experiment:rust-middle-hir-parity
-deno task experiment:rust-middle-eval-parity
+deno task experiment:compiler-check-parity
+deno task experiment:compiler-hir-parity
+deno task experiment:compiler-eval-parity
 just wasm
 ```
 

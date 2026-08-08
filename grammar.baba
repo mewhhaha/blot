@@ -336,7 +336,6 @@ continued_primary_expression = (
   | constructor_expression
   | unit
   | case_expression
-  | handler_composition
   | do_block
   | array
   | shape
@@ -397,9 +396,7 @@ primary_expression = (
   | INTRINSIC
   | constructor_expression
   | unit
-  | conditional
   | case_expression
-  | handler_composition
   | do_block
   | block
   | array
@@ -546,9 +543,7 @@ element_child_primary_expression = (
   | INTRINSIC
   | constructor_expression
   | unit
-  | conditional
   | case_expression
-  | handler_composition
   | do_block
   | block
   | array
@@ -610,29 +605,6 @@ lambda_parameter = (
   "=>"
 ) ;
 
-conditional = (
-  "if"
-  condition:expression
-  ":"
-  consequence:value
-  alternatives:else_if_clause*
-  fallback:else_clause
-) ;
-
-else_if_clause = (
-  line:LAYOUT_NEWLINE?
-  ELSE_IF
-  condition:expression
-  ":"
-  consequence:value
-) ;
-
-else_clause = (
-  line:LAYOUT_NEWLINE?
-  "else"
-  ":"
-  alternative:value
-) ;
 
 // A standalone conditional is control flow in the surrounding body rather
 // than a value. Its branches contain statements, so `return` and `break` may
@@ -714,46 +686,6 @@ case_arm = (
 case_guard = ( "if" condition:expression ) ;
 
 
-// Compose statically known handlers around one nullary computation. Each
-// bound step receives the computation produced by handling the previous
-// effect; the final step executes the fully composed computation.
-//
-// `@handle` remains the only handling primitive. Its two-argument appearance
-// is confined to this bounded surface form, where the current computation is
-// the omitted middle argument. Lowering restores the ordinary
-// `@handle (effect, computation, handler)` call before inference.
-// The adjacent private layout markers are an artifact-identity
-// anchor. Layout elaboration can never emit them consecutively,
-// so source cannot enter this retired compatibility rule.
-handler_composition = (
-  LAYOUT_INDENT
-  LAYOUT_DEDENT
-  "try"
-  program:value
-  "with"
-  LAYOUT_NEWLINE
-  LAYOUT_INDENT
-  steps:handler_composition_step*
-  result:handler_composition_action
-  LAYOUT_NEWLINE
-  LAYOUT_DEDENT
-) ;
-
-handler_composition_step = (
-  name:(IDENT | TYPE_IDENT)?
-  "<-"
-  action:handler_composition_action
-  LAYOUT_NEWLINE
-) ;
-
-handler_composition_action = (
-  intrinsic:INTRINSIC
-  "("
-  effect:value
-  ","
-  handler:value
-  ")"
-) ;
 
 // Construct-owned suites lower through this internal block form. It has no
 // opening source token of its own.

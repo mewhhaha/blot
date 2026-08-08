@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { RustMiddleCompiler } from "../../src/backend/rust_middle.ts";
+import { Compiler } from "../../src/compiler/session.ts";
 import {
   type BenchmarkInput,
   instantiateWorkload,
@@ -21,9 +21,9 @@ interface CompiledWorkload {
 }
 
 const compilerBytes = await Deno.readFile(
-  new URL("../../generated/rust-middle/compiler.wasm", import.meta.url),
+  new URL("../../generated/compiler/compiler.wasm", import.meta.url),
 );
-const compiler = await RustMiddleCompiler.create();
+const compiler = await Compiler.create();
 const temporaryDirectory = await Deno.makeTempDir({
   prefix: "blot-generated-code-",
 });

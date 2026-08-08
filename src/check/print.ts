@@ -182,9 +182,7 @@ export function show(type: SimpleType): string {
         return braces([...current.labels].map(stripId).sort());
 
       case "union":
-        return current.members.map((member) => go(member, polarity)).join(
-          " | ",
-        );
+        return showUnion(current.members.map((member) => go(member, polarity)));
 
       case "opaque":
         return current.name;
@@ -198,6 +196,28 @@ export function show(type: SimpleType): string {
   };
 
   return go(type, true);
+}
+
+/**
+ * Renders a union as a set rather than as the list the solver happened to
+ * build.
+ *
+ * A union carries one member per contributing bound, so a construct that
+ * residualizes per iteration contributes one per iteration. `Int | Int` and
+ * `Int` describe the same values, and the printed type is what inference tests
+ * assert, so the repetition would make a lattice change unreadable rather than
+ * visible. `⊥` inhabits nothing and drops out beside any other member; a union
+ * of nothing but `⊥` is still `⊥`.
+ */
+function showUnion(members: readonly string[]): string {
+  const shown: string[] = [];
+  for (const member of members) {
+    if (member === "⊥") continue;
+    if (shown.includes(member)) continue;
+    shown.push(member);
+  }
+  if (shown.length === 0) return "⊥";
+  return shown.join(" | ");
 }
 
 /** Which variables are reachable in which polarity. */

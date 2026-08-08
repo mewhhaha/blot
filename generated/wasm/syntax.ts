@@ -293,9 +293,6 @@ export type RuleName =
   | "shape_field"
   | "lambda"
   | "lambda_parameter"
-  | "conditional"
-  | "else_if_clause"
-  | "else_clause"
   | "conditional_statement"
   | "conditional_statement_guard"
   | "conditional_statement_branches"
@@ -304,9 +301,6 @@ export type RuleName =
   | "case_expression"
   | "case_arm"
   | "case_guard"
-  | "handler_composition"
-  | "handler_composition_step"
-  | "handler_composition_action"
   | "block"
   | "do_block"
   | "statement_suite"
@@ -738,30 +732,6 @@ export interface LambdaParameterCursor extends RuleCursorBase<"lambda_parameter"
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
-export interface ConditionalCursor extends RuleCursorBase<"conditional"> {
-  field(name: "alternatives"): ReadonlyArray<ElseIfClauseCursor>;
-  field(name: "condition"): ExpressionCursor;
-  field(name: "consequence"): ValueCursor;
-  field(name: "fallback"): ElseClauseCursor;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
-export interface ElseIfClauseCursor extends RuleCursorBase<"else_if_clause"> {
-  field(name: "condition"): ExpressionCursor;
-  field(name: "consequence"): ValueCursor;
-  field(name: "line"): TokenCursor<"named", "LAYOUT_NEWLINE"> | null;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
-export interface ElseClauseCursor extends RuleCursorBase<"else_clause"> {
-  field(name: "alternative"): ValueCursor;
-  field(name: "line"): TokenCursor<"named", "LAYOUT_NEWLINE"> | null;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
 export interface ConditionalStatementCursor extends RuleCursorBase<"conditional_statement"> {
   field(name: "body"): ConditionalStatementBranchesCursor | ConditionalStatementGuardCursor;
   field(name: string): CursorFieldValue | undefined;
@@ -816,29 +786,6 @@ export interface CaseArmCursor extends RuleCursorBase<"case_arm"> {
 
 export interface CaseGuardCursor extends RuleCursorBase<"case_guard"> {
   field(name: "condition"): ExpressionCursor;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
-export interface HandlerCompositionCursor extends RuleCursorBase<"handler_composition"> {
-  field(name: "program"): ValueCursor;
-  field(name: "result"): HandlerCompositionActionCursor;
-  field(name: "steps"): ReadonlyArray<HandlerCompositionStepCursor>;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
-export interface HandlerCompositionStepCursor extends RuleCursorBase<"handler_composition_step"> {
-  field(name: "action"): HandlerCompositionActionCursor;
-  field(name: "name"): TokenCursor<"named", "IDENT"> | TokenCursor<"named", "TYPE_IDENT"> | null;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
-export interface HandlerCompositionActionCursor extends RuleCursorBase<"handler_composition_action"> {
-  field(name: "effect"): ValueCursor;
-  field(name: "handler"): ValueCursor;
-  field(name: "intrinsic"): TokenCursor<"named", "INTRINSIC">;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -943,9 +890,6 @@ export type AnyRuleCursor =
   | ShapeFieldCursor
   | LambdaCursor
   | LambdaParameterCursor
-  | ConditionalCursor
-  | ElseIfClauseCursor
-  | ElseClauseCursor
   | ConditionalStatementCursor
   | ConditionalStatementGuardCursor
   | ConditionalStatementBranchesCursor
@@ -954,9 +898,6 @@ export type AnyRuleCursor =
   | CaseExpressionCursor
   | CaseArmCursor
   | CaseGuardCursor
-  | HandlerCompositionCursor
-  | HandlerCompositionStepCursor
-  | HandlerCompositionActionCursor
   | BlockCursor
   | DoBlockCursor
   | StatementSuiteCursor

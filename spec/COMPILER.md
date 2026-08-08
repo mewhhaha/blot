@@ -17,6 +17,27 @@ filesystem access, package resolution, and CLI presentation. Its former semantic
 compiler and gpupaper lowering remain only as bounded conformance oracles. An
 implementation boundary is not a semantic boundary.
 
+The artifact receives each module's **raw source bytes**. Layout-token
+insertion, rebinding-frame validation, compact-CST materialization, and all
+source elaboration happen inside that artifact. TypeScript's parser, layout
+elaborator, checker, evaluator, and gpupaper/gpufuck lowering are independent
+tooling and bounded conformance oracles; the production wrapper may not
+pre-elaborate source before installing a module.
+
+Two CLI commands are still answered by the oracle rather than by the production
+compiler: `eval` runs the TypeScript evaluator and `ownership` prints the
+TypeScript ownership facts. This is a stated exception, not a second definition
+of the language — the two engines are held to one meaning by the parity gates in
+[`../Justfile`](../Justfile), and the usage text names which engine answered so
+a disagreement is attributable rather than mysterious. Moving both onto the
+production compiler is recorded in [`../TASKS.md`](../TASKS.md).
+
+Those gates compare both directions. Comparing rejections alone would let the
+production checker drift towards accepting what the oracle refuses, which is the
+drift that reaches an artifact: `experiment:compiler-check-parity` therefore
+requires the two checkers to agree, by diagnostic code, on the accepted corpus
+as well as the rejected one.
+
 ## 1. Inputs, outputs, and observations
 
 Let a source graph be

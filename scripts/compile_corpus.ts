@@ -1,6 +1,6 @@
-import { prepareGpupaperHir } from "../src/backend/compile.ts";
-import { validateBlotRuntimeModule } from "../src/backend/runtime/hir.ts";
-import { compileBlotRuntimeModulesOnRustWasm } from "../src/backend/runtime/target.ts";
+import { prepareGpupaperHir } from "../src/conformance/gpufuck/compile.ts";
+import { validateBlotRuntimeModule } from "../src/runtime/hir.ts";
+import { compileBlotRuntimeModulesOnRustWasm } from "../src/conformance/gpufuck/runtime/target.ts";
 
 const root = new URL("../examples/", import.meta.url);
 const files: string[] = [];

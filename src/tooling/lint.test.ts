@@ -20,48 +20,6 @@ async function applyLintFix(source: string, code: string): Promise<string> {
   return fixed;
 }
 
-Deno.test("an equality if chain prefers one case match", async () => {
-  const source = `let label = fn n => if n == 1:
-  return "one"
-else if n == 2:
-  return "two"
-else:
-  return "other"
-return label
-`;
-  const parsed = await parseConcrete(source);
-  if (!parsed.ok) throw new Error("lint fixture did not parse");
-
-  assertEquals(
-    lintModule(parsed.module, source, parsed.cst).map((diagnostic) =>
-      diagnostic.code
-    ),
-    ["BLOT_LINT_IF_CHAIN"],
-  );
-});
-
-Deno.test("a nested equality ladder becomes one case match", async () => {
-  const source = `let label = fn n => if n == 1:
-  return "one"
-else:
-  return if 2 == n:
-    return "two"
-  else:
-    return "other"
-return label
-`;
-
-  assertEquals(
-    await applyLintFix(source, "BLOT_LINT_IF_CHAIN"),
-    `let label = fn n => case n of
-  1 => "one"
-  2 => "two"
-  _ => "other"
-return label
-`,
-  );
-});
-
 Deno.test("a terminal statement equality ladder becomes a returned case", async () => {
   const source = `let label = fn n =>
   if n == 1:
@@ -101,35 +59,6 @@ return label
       diagnostic.code === "BLOT_LINT_NESTED_IF_CHAIN"
     ),
     [],
-  );
-});
-
-Deno.test("a nested value conditional becomes an else-if ladder", async () => {
-  const source = `let choice = if first:
-  return 1
-else:
-  return if second:
-    return 2
-  else:
-    return if third:
-      return 3
-    else:
-      return 4
-return choice
-`;
-
-  assertEquals(
-    await applyLintFix(source, "BLOT_LINT_NESTED_IF_CHAIN"),
-    `let choice = if first:
-  return 1
-else if second:
-  return 2
-else if third:
-  return 3
-else:
-  return 4
-return choice
-`,
   );
 });
 
@@ -185,65 +114,6 @@ return choose
   );
 });
 
-Deno.test("different equality subjects prefer else-if rather than case", async () => {
-  const source = `let choice = if left == 1:
-  return 1
-else:
-  return if right == 2:
-    return 2
-  else:
-    return 3
-return choice
-`;
-  const parsed = await parseConcrete(source);
-  if (!parsed.ok) throw new Error("different-subject fixture did not parse");
-  const diagnostics = lintModule(parsed.module, source, parsed.cst);
-
-  assertEquals(
-    diagnostics.filter((diagnostic) =>
-      diagnostic.code === "BLOT_LINT_IF_CHAIN"
-    ),
-    [],
-  );
-  assert(
-    diagnostics.some((diagnostic) =>
-      diagnostic.code === "BLOT_LINT_NESTED_IF_CHAIN"
-    ),
-  );
-});
-
-Deno.test("a conditional whose branches agree is redundant", async () => {
-  const source = `let label = fn ready => if ready:
-  return "same"
-else:
-  return "same"
-return label
-`;
-  const parsed = await parseConcrete(source);
-  if (!parsed.ok) throw new Error("lint fixture did not parse");
-
-  assertEquals(
-    lintModule(parsed.module, source, parsed.cst).map((diagnostic) =>
-      diagnostic.code
-    ),
-    ["BLOT_LINT_REDUNDANT_IF"],
-  );
-});
-
-Deno.test("a statement conditional is not a redundant value conditional", async () => {
-  const source = `phase <- Phase.current ()
-if phase == schema_phase:
-  _ <- register_world ()
-if phase == frame_phase:
-  _ <- update ()
-return ()
-`;
-  const parsed = await parseConcrete(source);
-  if (!parsed.ok) throw new Error("lint fixture did not parse");
-
-  assertEquals(lintModule(parsed.module, source, parsed.cst), []);
-});
-
 const RULE_CASES: readonly {
   readonly name: string;
   readonly code: string;
@@ -270,30 +140,6 @@ return count
     source: `return case 1 of
   _ => 1
   1 => 2
-`,
-  },
-  {
-    name: "a Boolean-producing conditional returns its condition",
-    code: "BLOT_LINT_BOOLEAN_IF",
-    source: `let identity = fn ready => if ready:
-  return #True
-else:
-  return #False
-return identity
-`,
-  },
-  {
-    name: "a discarded unit conditional is a statement suite",
-    code: "BLOT_LINT_DISCARDED_VALUE_IF",
-    source: `let choose = fn ready =>
-  _ <- if ready:
-    _ <- when_ready ()
-    return ()
-  else:
-    _ <- when_waiting ()
-    return ()
-  return ()
-return choose
 `,
   },
   {
