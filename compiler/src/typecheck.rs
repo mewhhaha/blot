@@ -50,6 +50,7 @@ pub enum Type {
     },
     Record(Vec<(String, Type)>),
     Array(Box<Type>),
+    Region(Box<Type>),
     Variant {
         cases: Vec<(String, Type)>,
         open: bool,
@@ -98,6 +99,7 @@ enum ConstraintTypeNode {
     },
     Record(Vec<(String, ConstraintTypeId)>),
     Array(ConstraintTypeId),
+    Region(ConstraintTypeId),
     Variant {
         cases: Vec<(String, ConstraintTypeId)>,
         open: bool,
@@ -146,6 +148,7 @@ impl ConstraintTypeArena {
                     .collect(),
             ),
             Type::Array(element) => ConstraintTypeNode::Array(self.intern(element)),
+            Type::Region(element) => ConstraintTypeNode::Region(self.intern(element)),
             Type::Variant { cases, open } => ConstraintTypeNode::Variant {
                 cases: cases
                     .iter()
@@ -200,6 +203,7 @@ impl ConstraintTypeArena {
                     .collect(),
             ),
             ConstraintTypeNode::Array(element) => Type::Array(Box::new(self.expand(*element))),
+            ConstraintTypeNode::Region(element) => Type::Region(Box::new(self.expand(*element))),
             ConstraintTypeNode::Variant { cases, open } => Type::Variant {
                 cases: cases
                     .iter()
@@ -242,7 +246,9 @@ impl ConstraintTypeArena {
                 .map(|(_, field)| self.level_of(*field, variables))
                 .max()
                 .unwrap_or(0),
-            ConstraintTypeNode::Array(element) => self.level_of(*element, variables),
+            ConstraintTypeNode::Array(element) | ConstraintTypeNode::Region(element) => {
+                self.level_of(*element, variables)
+            }
             ConstraintTypeNode::Union(members) => members
                 .iter()
                 .map(|member| self.level_of(*member, variables))
@@ -347,7 +353,8 @@ impl ConstraintTypeArena {
             (ConstraintTypeNode::Record(left), ConstraintTypeNode::Record(right)) => {
                 self.same_fields(left, right, rigids)
             }
-            (ConstraintTypeNode::Array(left), ConstraintTypeNode::Array(right)) => {
+            (ConstraintTypeNode::Array(left), ConstraintTypeNode::Array(right))
+            | (ConstraintTypeNode::Region(left), ConstraintTypeNode::Region(right)) => {
                 self.same_with_rigids(*left, *right, rigids)
             }
             (
@@ -532,6 +539,7 @@ enum FlatTypeNode {
     },
     Record(Vec<(String, FlatTypeId)>),
     Array(FlatTypeId),
+    Region(FlatTypeId),
     Variant {
         cases: Vec<(String, FlatTypeId)>,
         open: bool,
@@ -712,7 +720,9 @@ fn validate_certificate_type(
                 validate_child(*field, bound)?;
             }
         }
-        FlatTypeNode::Array(element) => validate_child(*element, bound)?,
+        FlatTypeNode::Array(element) | FlatTypeNode::Region(element) => {
+            validate_child(*element, bound)?;
+        }
         FlatTypeNode::Union(members) => {
             for member in members {
                 validate_child(*member, bound)?;
@@ -840,9 +850,7 @@ impl Checker {
             Some(interface) => interface,
             None => {
                 for (body, signature) in &checked.closure_signatures {
-                    if flatten_interface_type(signature, &mut HashSet::new(), &mut Vec::new())
-                        .is_none()
-                    {
+                    if !closed_checked_type(signature, &mut HashSet::new()) {
                         return Err(format!(
                             "module {path} closure expression {} has an open checked signature: {signature:?}",
                             body.0
@@ -1093,11 +1101,24 @@ impl Checker {
         if let Some(cached) = self.module_analyses.borrow().get(path) {
             return cached.clone();
         }
+        // The compiler's own prelude is the one trusted Region-wrapper source.
+        // It may arrive as the built-in snapshot, through the `blot:prelude`
+        // specifier, or as an ordinary path import of the compiler's own
+        // source file — the same module either way.
+        let trusted_prelude =
+            path == "snapshot:prelude"
+                || path == "blot:prelude"
+                || path.ends_with("src/prelude/prelude.blot")
+                || self.context.modules.borrow().values().any(|loaded| {
+                    loaded.imports.get("blot:prelude").map(String::as_str) == Some(path)
+                });
+        let ownership_diagnostics = if trusted_prelude {
+            crate::ownership::check_trusted_region_wrappers(module)
+        } else {
+            crate::ownership::check(module)
+        };
         let analyses = CachedModuleAnalyses {
-            ownership: crate::ownership::check(module)
-                .into_iter()
-                .next()
-                .map_or(Ok(()), Err),
+            ownership: ownership_diagnostics.into_iter().next().map_or(Ok(()), Err),
             safety: crate::safety::check(module, &self.context, values)
                 .into_iter()
                 .next()
@@ -1224,6 +1245,9 @@ impl Checker {
                     .collect(),
             ),
             FlatTypeNode::Array(element) => Type::Array(Box::new(
+                self.inflate_interface_type(arena, *element, rigids),
+            )),
+            FlatTypeNode::Region(element) => Type::Region(Box::new(
                 self.inflate_interface_type(arena, *element, rigids),
             )),
             FlatTypeNode::Variant { cases, open } => Type::Variant {
@@ -2919,6 +2943,7 @@ impl Checker {
                     .collect(),
             ),
             Type::Array(element) => Type::Array(Box::new(self.freshen(*element, level, fresh))),
+            Type::Region(element) => Type::Region(Box::new(self.freshen(*element, level, fresh))),
             Type::Variant { cases, open } => Type::Variant {
                 cases: cases
                     .into_iter()
@@ -2973,7 +2998,7 @@ impl Checker {
                 .map(|(_, field)| self.level_of(field))
                 .max()
                 .unwrap_or(0),
-            Type::Array(element) => self.level_of(element),
+            Type::Array(element) | Type::Region(element) => self.level_of(element),
             Type::Union(members) => members
                 .iter()
                 .map(|member| self.level_of(member))
@@ -3060,6 +3085,9 @@ impl Checker {
             ),
             Type::Array(element) => {
                 Type::Array(Box::new(self.extrude(*element, polarity, level, copies)))
+            }
+            Type::Region(element) => {
+                Type::Region(Box::new(self.extrude(*element, polarity, level, copies)))
             }
             Type::Variant { cases, open } => Type::Variant {
                 cases: cases
@@ -3282,6 +3310,11 @@ impl Checker {
                 self.constrain_ids(left, right, span, seen)?;
                 true
             }
+            (ConstraintTypeNode::Region(left), ConstraintTypeNode::Region(right)) => {
+                self.constrain_ids(left, right, span, seen)?;
+                self.constrain_ids(right, left, span, seen)?;
+                true
+            }
             (
                 ConstraintTypeNode::Variant {
                     cases: left,
@@ -3494,7 +3527,7 @@ impl Checker {
                         pending.push((field, bound.clone()));
                     }
                 }
-                Type::Array(element) => pending.push((element, bound)),
+                Type::Array(element) | Type::Region(element) => pending.push((element, bound)),
                 Type::Union(members) => {
                     for member in members {
                         pending.push((member, bound.clone()));
@@ -3643,6 +3676,9 @@ impl Checker {
             Type::Array(element) => Type::Array(Box::new(
                 self.residual_signature_type(*element, seen, resolved, unresolved, recursive),
             )),
+            Type::Region(element) => Type::Region(Box::new(
+                self.residual_signature_type(*element, seen, resolved, unresolved, recursive),
+            )),
             Type::Variant { cases, open } => Type::Variant {
                 cases: cases
                     .into_iter()
@@ -3752,6 +3788,9 @@ impl Checker {
             ),
             Type::Array(element) => {
                 Type::Array(Box::new(self.settle_seen(*element, positive, seen)))
+            }
+            Type::Region(element) => {
+                Type::Region(Box::new(self.settle_seen(*element, positive, seen)))
             }
             Type::Variant { cases, open } => Type::Variant {
                 cases: cases
@@ -4238,6 +4277,15 @@ impl Checker {
                     .map(|(name, value)| (name.clone(), self.bridge_runtime_value(value)))
                     .collect(),
             ),
+            Value::RegionType(element) => {
+                Type::Region(Box::new(self.bridge_runtime_value(element)))
+            }
+            Value::Region { store, start, end } => Type::Region(Box::new(join_types(
+                store.borrow()[*start..*end]
+                    .iter()
+                    .map(|value| self.bridge_runtime_value(value))
+                    .collect(),
+            ))),
             Value::Array(elements) => Type::Array(Box::new(join_types(
                 elements
                     .iter()
@@ -4280,6 +4328,13 @@ impl Checker {
                     .map(|(name, value)| Some((name.clone(), self.bridge(value)?)))
                     .collect::<Option<Vec<_>>>()?,
             )),
+            Value::RegionType(element) => Some(Type::Region(Box::new(self.bridge(element)?))),
+            Value::Region { store, start, end } => Some(Type::Region(Box::new(union_types(
+                store.borrow()[*start..*end]
+                    .iter()
+                    .filter_map(|value| self.bridge(value))
+                    .collect(),
+            )))),
             Value::Array(elements) => Some(Type::Array(Box::new(union_types(
                 elements
                     .iter()
@@ -4412,6 +4467,7 @@ impl Checker {
                     .join("; ")
             ),
             Type::Array(element) => format!("[{}]", self.show(&element)),
+            Type::Region(element) => format!("Region {}", self.show(&element)),
             Type::Variant { cases, .. } => cases
                 .iter()
                 .map(|(name, payload)| {
@@ -4730,6 +4786,88 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         "@text.cmp" => curried(vec![text.clone(), text], ordering),
         "@text.contains" => curried(vec![text.clone(), text], bool_),
         "@text.of_int" => curried(vec![int], text),
+        "@region.type" => curried(
+            vec![Type::Opaque("Type".to_owned())],
+            Type::Opaque("Type".to_owned()),
+        ),
+        "@region.claim" => {
+            let element = checker.fresh();
+            curried(
+                vec![Type::Array(Box::new(element.clone()))],
+                Type::Region(Box::new(element)),
+            )
+        }
+        "@region.length" => curried(vec![Type::Region(Box::new(checker.fresh()))], int.clone()),
+        "@region.get" => {
+            let element = checker.fresh();
+            curried(
+                vec![Type::Region(Box::new(element.clone())), int.clone()],
+                Type::Variant {
+                    cases: vec![
+                        ("Some".to_owned(), element),
+                        ("None".to_owned(), Type::Unit),
+                    ],
+                    open: false,
+                },
+            )
+        }
+        "@region.set" => {
+            let element = checker.fresh();
+            let region = Type::Region(Box::new(element.clone()));
+            curried(
+                vec![region.clone(), int.clone(), element],
+                Type::Variant {
+                    cases: vec![
+                        ("Updated".to_owned(), region.clone()),
+                        ("SetOutOfBounds".to_owned(), region),
+                    ],
+                    open: false,
+                },
+            )
+        }
+        "@region.swap" => {
+            let region = Type::Region(Box::new(checker.fresh()));
+            curried(
+                vec![region.clone(), int.clone(), int.clone()],
+                Type::Variant {
+                    cases: vec![
+                        ("Updated".to_owned(), region.clone()),
+                        ("SwapOutOfBounds".to_owned(), region),
+                    ],
+                    open: false,
+                },
+            )
+        }
+        "@region.split" => {
+            let region = Type::Region(Box::new(checker.fresh()));
+            curried(
+                vec![region.clone(), int.clone()],
+                Type::Variant {
+                    cases: vec![
+                        (
+                            "Split".to_owned(),
+                            Type::Record(vec![
+                                ("0".to_owned(), region.clone()),
+                                ("1".to_owned(), region.clone()),
+                            ]),
+                        ),
+                        ("SplitOutOfBounds".to_owned(), region),
+                    ],
+                    open: false,
+                },
+            )
+        }
+        "@region.join" => {
+            let region = Type::Region(Box::new(checker.fresh()));
+            curried(vec![region.clone(), region.clone()], region)
+        }
+        "@region.freeze" => {
+            let element = checker.fresh();
+            curried(
+                vec![Type::Region(Box::new(element.clone()))],
+                Type::Array(Box::new(element)),
+            )
+        }
         "@array.empty" => Type::Array(Box::new(checker.fresh())),
         "@array.len" => curried(vec![Type::Array(Box::new(checker.fresh()))], int),
         "@array.get" => {
@@ -5129,6 +5267,7 @@ fn substitute_rigid(type_: Type, replacements: &HashMap<VariableId, Type>) -> Ty
                 .collect(),
         ),
         Type::Array(element) => Type::Array(Box::new(substitute_rigid(*element, replacements))),
+        Type::Region(element) => Type::Region(Box::new(substitute_rigid(*element, replacements))),
         Type::Variant { cases, open } => Type::Variant {
             cases: cases
                 .into_iter()
@@ -5867,6 +6006,7 @@ fn reify_type_with_holes(type_: &Type, next_hole: &mut u32) -> Option<Value> {
         Type::Array(element) => Some(Value::Array(vec![reify_type_with_holes(
             element, next_hole,
         )?])),
+        Type::Region(_) => None,
         Type::Variant { cases, open: false } => Some(Value::Union(
             cases
                 .iter()
@@ -6017,7 +6157,9 @@ fn same_type_with_rigids(
                 && same_type_with_rigids(left_result, right_result, rigids)
         }
         (Type::Record(left), Type::Record(right)) => same_fields(left, right, rigids),
-        (Type::Array(left), Type::Array(right)) => same_type_with_rigids(left, right, rigids),
+        (Type::Array(left), Type::Array(right)) | (Type::Region(left), Type::Region(right)) => {
+            same_type_with_rigids(left, right, rigids)
+        }
         (
             Type::Variant {
                 cases: left,
@@ -6452,6 +6594,47 @@ fn empty_effects(type_: &Type) -> bool {
     matches!(type_, Type::Bottom) || matches!(type_, Type::Effects(labels) if labels.is_empty())
 }
 
+fn closed_checked_type(type_: &Type, bound: &mut HashSet<VariableId>) -> bool {
+    match type_ {
+        Type::Variable(_) => false,
+        Type::Rigid(variable) => bound.contains(variable),
+        Type::Forall { variables, body } => {
+            let inserted = variables
+                .iter()
+                .copied()
+                .filter(|variable| bound.insert(*variable))
+                .collect::<Vec<_>>();
+            let closed = closed_checked_type(body, bound);
+            for variable in inserted {
+                bound.remove(&variable);
+            }
+            closed
+        }
+        Type::Function {
+            parameter,
+            effects,
+            result,
+        } => {
+            closed_checked_type(parameter, bound)
+                && closed_checked_type(effects, bound)
+                && closed_checked_type(result, bound)
+        }
+        Type::Record(fields) | Type::Variant { cases: fields, .. } => fields
+            .iter()
+            .all(|(_, field)| closed_checked_type(field, bound)),
+        Type::Array(element) | Type::Region(element) => closed_checked_type(element, bound),
+        Type::Union(members) => members
+            .iter()
+            .all(|member| closed_checked_type(member, bound)),
+        Type::Range { .. }
+        | Type::Unit
+        | Type::Effects(_)
+        | Type::Opaque(_)
+        | Type::Top
+        | Type::Bottom => true,
+    }
+}
+
 fn flatten_interface_type(
     type_: &Type,
     bound: &mut HashSet<VariableId>,
@@ -6499,6 +6682,9 @@ fn flatten_interface_type(
                 .collect::<Option<Vec<_>>>()?,
         ),
         Type::Array(element) => FlatTypeNode::Array(flatten_interface_type(element, bound, nodes)?),
+        Type::Region(element) => {
+            FlatTypeNode::Region(flatten_interface_type(element, bound, nodes)?)
+        }
         Type::Variant { cases, open } => FlatTypeNode::Variant {
             cases: cases
                 .iter()

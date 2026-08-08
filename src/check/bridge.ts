@@ -12,6 +12,7 @@
 // silently widening to "anything" would turn a missing case into a passing
 // check.
 
+import "./region_primitives.ts";
 import {
   effectExtension,
   equal,
@@ -161,6 +162,12 @@ function bridgeValue(
     // Reaching into an effect names an operation, and performing it is an
     // ordinary call — so an effect's type is a record of functions whose rows
     // carry that effect. This is the whole mechanism behind effect inference.
+    case "region-type": {
+      const element = bridgeValue(value.element, variables);
+      if (element === null) return null;
+      return { tag: "region", element };
+    }
+
     case "effect": {
       const label = effectLabel(value);
       effectValues.set(label, effectExtension(value) ?? value);
@@ -301,6 +308,10 @@ export function reify(type: SimpleType): Value | null {
       if (element === null) return null;
       return { tag: "array", elements: [element] };
     }
+
+    // Region capability representations are intentionally not reified.
+    case "region":
+      return null;
 
     case "variant": {
       // An open variant is "these constructors and possibly others", which no

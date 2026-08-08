@@ -60,6 +60,7 @@ import {
   parameterOwnership,
   patternQualifier,
   relevant,
+  samePath,
   sameProduced,
   structuralLineage,
   substituteParameters,
@@ -162,7 +163,7 @@ export type OwnershipTargetPathSegment =
   | { readonly tag: "member"; readonly index: number };
 
 export interface OwnershipExtraction {
-  readonly operation: "@array.take" | "@array.split";
+  readonly operation: "@array.take" | "@array.split" | "@region.split";
   readonly part: number;
   readonly span: Span;
 }
@@ -180,6 +181,14 @@ export interface LinearResult {
 }
 
 export class Analysis {
+  /**
+   * Whether abstract Region parameters may cross the join/freeze proofs.
+   *
+   * Set only while certifying the compiler's own prelude, whose Slice wrappers
+   * necessarily forward parametric Region authority. A user wrapper receives
+   * the ordinary proof rules and cannot hide an unproved join behind a call.
+   */
+  trustedRegionWrappers = false;
   readonly diagnostics: Diagnostic[] = [];
   readonly lastUses = new Map<NamePattern, Span>();
   readonly linear = new Set<NamePattern>();
@@ -270,8 +279,12 @@ function restore(state: Map<Binding, BindingState>): void {
   }
 }
 
-export function checkLinearity(module: Module): LinearResult {
+export function checkLinearity(
+  module: Module,
+  trustedRegionWrappers = false,
+): LinearResult {
   const analysis = new Analysis();
+  analysis.trustedRegionWrappers = trustedRegionWrappers;
   const scope = childScope(null);
 
   if (module.parameter !== null) {
@@ -361,8 +374,32 @@ function declareProduced(
       );
       let owned = produced;
       if (!relevant(owned)) owned = written;
+      // A trusted primitive may create a fresh linear resource rather than
+      // transfer an older one. Once that value is named, the binding itself is
+      // the stable root identity used by downstream extraction lineage.
+      if (
+        owned.tag === "leaf" && owned.source === null &&
+        owned.origins.length === 0 &&
+        (owned.qualifier === "linear" || owned.qualifier === "affine")
+      ) {
+        owned = {
+          ...owned,
+          source: pattern,
+          origins: [{ source: pattern, path: [], extractions: [] }],
+        };
+      }
       const lineage = structuralLineage(pattern, owned);
       if (lineage.length > 0) analysis.lineage.set(pattern, lineage);
+      // A same-scope shadow replaces the map entry before `closeScope` can see
+      // it. A consumed obligation is discharged either way; record it now so
+      // the published certificate says what the analysis proved.
+      const shadowed = scope.bindings.get(pattern.name);
+      if (
+        shadowed !== undefined && spendable(shadowed.qualifier) &&
+        shadowed.moved !== null
+      ) {
+        analysis.linear.add(shadowed.pattern);
+      }
       scope.bindings.set(pattern.name, {
         pattern,
         qualifier: inherited(pattern.qualifier, owned),
@@ -1138,6 +1175,55 @@ function applicationSpine(expr: Expr): ApplicationSpine {
   return { callee, args };
 }
 
+function ownershipPrimitiveName(callee: Expr, scope: Scope): string | null {
+  if (callee.tag === "intrinsic") return callee.name;
+  if (
+    callee.tag !== "field" || callee.target.tag !== "var" ||
+    callee.target.name !== "Slice" || analysisBinding(scope, "Slice") !== null
+  ) return null;
+  switch (callee.name) {
+    case "claim":
+      return "@region.claim";
+    case "length":
+      return "@region.length";
+    case "get":
+      return "@region.get";
+    case "set":
+      return "@region.set";
+    case "swap":
+      return "@region.swap";
+    case "split":
+      return "@region.split";
+    case "join":
+      return "@region.join";
+    case "freeze":
+      return "@region.freeze";
+    default:
+      return null;
+  }
+}
+
+function ownershipPrimitiveArguments(
+  name: string,
+  callee: Expr,
+  args: readonly Expr[],
+): readonly Expr[] {
+  if (callee.tag !== "field") return args;
+  if (callee.target.tag !== "var" || callee.target.name !== "Slice") {
+    return args;
+  }
+  const arity = name === "@region.get" ||
+      name === "@region.split" || name === "@region.join"
+    ? 2
+    : name === "@region.set" || name === "@region.swap"
+    ? 3
+    : 1;
+  if (arity === 1 || args.length !== 1) return args;
+  const tuple = args[0];
+  if (tuple.tag !== "tuple" || tuple.elements.length !== arity) return args;
+  return tuple.elements;
+}
+
 function handleArguments(
   args: readonly Expr[],
 ): readonly [Expr, Expr, Expr] | null {
@@ -1259,14 +1345,144 @@ function walk(
         return NONE;
       }
 
-      if (application.callee.tag === "intrinsic") {
-        const name = application.callee.name;
+      const ownershipPrimitive = ownershipPrimitiveName(
+        application.callee,
+        scope,
+      );
+      if (ownershipPrimitive !== null) {
+        const name = ownershipPrimitive;
+        const ownershipArguments = ownershipPrimitiveArguments(
+          name,
+          application.callee,
+          application.args,
+        );
+        if (name === "@region.claim" && ownershipArguments.length === 1) {
+          const source = walk(
+            ownershipArguments[0],
+            scope,
+            analysis,
+            "project",
+          );
+          // A linear array binding is claimable: the claim consumes the whole
+          // array, which is what proves its Store reusable. Only elements that
+          // carry their own obligations are refused, because the acquisition
+          // copy would duplicate them.
+          const ownedElements = source.tag === "leaf"
+            ? false
+            : obligation(source) !== "none";
+          if (ownedElements) {
+            analysis.report(
+              "BLOT_REGION_OWNED_ELEMENT",
+              "The first Region implementation copies its input, so arrays containing owned elements cannot be claimed yet. Consume or unpack those elements first.",
+              ownershipArguments[0].span,
+            );
+          }
+          // `claim` semantically creates a fresh private Store. The declaration
+          // receiving this leaf roots it at that new binding; no source-array
+          // identity is reused unless a later Store-provenance optimization
+          // proves that stealing the allocation is observationally equivalent.
+          return {
+            tag: "leaf",
+            qualifier: "linear",
+            source: null,
+            path: [],
+            origins: [],
+          };
+        }
+        if (name === "@region.length" && ownershipArguments.length === 1) {
+          walk(ownershipArguments[0], scope, analysis, "borrow");
+          return NONE;
+        }
+        if (name === "@region.get" && ownershipArguments.length === 2) {
+          walk(ownershipArguments[0], scope, analysis, "borrow");
+          walk(ownershipArguments[1], scope, analysis, "move");
+          return NONE;
+        }
+        if (name === "@region.set" && ownershipArguments.length === 3) {
+          const region = walk(ownershipArguments[0], scope, analysis, "move");
+          walk(ownershipArguments[1], scope, analysis, "move");
+          const replacement = walk(
+            ownershipArguments[2],
+            scope,
+            analysis,
+            "move",
+          );
+          if (obligation(replacement) !== "none") {
+            analysis.report(
+              "BLOT_REGION_OWNED_ELEMENT",
+              "Region replacement cannot move an owned element in the first implementation.",
+              ownershipArguments[2].span,
+            );
+          }
+          return {
+            tag: "choice",
+            cases: new Map([
+              ["Updated", region],
+              ["SetOutOfBounds", region],
+            ]),
+          };
+        }
+        if (name === "@region.swap" && ownershipArguments.length === 3) {
+          const region = walk(ownershipArguments[0], scope, analysis, "move");
+          walk(ownershipArguments[1], scope, analysis, "move");
+          walk(ownershipArguments[2], scope, analysis, "move");
+          return {
+            tag: "choice",
+            cases: new Map([
+              ["Updated", region],
+              ["SwapOutOfBounds", region],
+            ]),
+          };
+        }
+        if (name === "@region.split" && ownershipArguments.length === 2) {
+          const region = walk(ownershipArguments[0], scope, analysis, "move");
+          walk(ownershipArguments[1], scope, analysis, "move");
+          if (obligation(region) === "none") {
+            analysis.report(
+              "BLOT_REGION_SPLIT_NOT_OWNED",
+              "Region split requires an owned Region authority.",
+              ownershipArguments[0].span,
+            );
+          }
+          const parts = extractionParts(
+            region,
+            "@region.split",
+            2,
+            expr.span,
+          );
+          return {
+            tag: "choice",
+            cases: new Map([
+              ["Split", { tag: "sequence", elements: parts }],
+              ["SplitOutOfBounds", region],
+            ]),
+          };
+        }
+        if (name === "@region.join" && ownershipArguments.length === 2) {
+          const left = walk(ownershipArguments[0], scope, analysis, "move");
+          const right = walk(ownershipArguments[1], scope, analysis, "move");
+          return joinRegionParts(left, right, expr.span, analysis);
+        }
+        if (name === "@region.freeze" && ownershipArguments.length === 1) {
+          const region = walk(ownershipArguments[0], scope, analysis, "move");
+          const leaves = ownershipLeaves(region);
+          const full = leaves.length === 1 && leaves[0].origins.length === 1 &&
+            leaves[0].origins[0].extractions.length === 0;
+          if (!full) {
+            analysis.report(
+              "BLOT_REGION_PARTIAL_FREEZE",
+              "Only a complete root Region authority can be frozen. Rejoin every split first.",
+              ownershipArguments[0].span,
+            );
+          }
+          return NONE;
+        }
         if (
           (name === "@array.take" || name === "@array.split") &&
-          application.args.length === 2
+          ownershipArguments.length === 2
         ) {
-          const array = walk(application.args[0], scope, analysis, "move");
-          walk(application.args[1], scope, analysis, "move");
+          const array = walk(ownershipArguments[0], scope, analysis, "move");
+          walk(ownershipArguments[1], scope, analysis, "move");
           const failure = array;
           if (name === "@array.take") {
             let selected = extractionParts(
@@ -1276,9 +1492,9 @@ function walk(
               expr.span,
             );
             if (
-              array.tag === "sequence" && application.args[1].tag === "int"
+              array.tag === "sequence" && ownershipArguments[1].tag === "int"
             ) {
-              const position = Number(application.args[1].value);
+              const position = Number(ownershipArguments[1].value);
               const found = array.elements[position];
               if (found !== undefined) {
                 selected = [
@@ -1314,9 +1530,9 @@ function walk(
             ]),
           };
         }
-        if (name === "@array.get" && application.args.length === 2) {
-          const array = walk(application.args[0], scope, analysis, "project");
-          walk(application.args[1], scope, analysis, "move");
+        if (name === "@array.get" && ownershipArguments.length === 2) {
+          const array = walk(ownershipArguments[0], scope, analysis, "project");
+          walk(ownershipArguments[1], scope, analysis, "move");
           let contents = array;
           if (contents.tag === "borrow") contents = contents.value;
           if (
@@ -1330,10 +1546,10 @@ function walk(
           }
           return NONE;
         }
-        if (name === "@array.set" && application.args.length === 3) {
-          const array = walk(application.args[0], scope, analysis, "move");
-          walk(application.args[1], scope, analysis, "move");
-          const value = walk(application.args[2], scope, analysis, "move");
+        if (name === "@array.set" && ownershipArguments.length === 3) {
+          const array = walk(ownershipArguments[0], scope, analysis, "move");
+          walk(ownershipArguments[1], scope, analysis, "move");
+          const value = walk(ownershipArguments[2], scope, analysis, "move");
           if (
             array.tag === "sequence" && obligation(array) !== "none"
           ) {
@@ -1345,9 +1561,9 @@ function walk(
           }
           return combine(array, value);
         }
-        if (name === "@array.push" && application.args.length === 2) {
-          const array = walk(application.args[0], scope, analysis, "move");
-          const value = walk(application.args[1], scope, analysis, "move");
+        if (name === "@array.push" && ownershipArguments.length === 2) {
+          const array = walk(ownershipArguments[0], scope, analysis, "move");
+          const value = walk(ownershipArguments[1], scope, analysis, "move");
           if (array.tag === "sequence") {
             return {
               tag: "sequence",
@@ -1713,6 +1929,102 @@ function installRecursiveCapture(
     borrows: 0,
     lastUse: null,
   });
+}
+
+function joinRegionParts(
+  left: Produced,
+  right: Produced,
+  span: Span,
+  analysis: Analysis,
+): Produced {
+  const leftLeaves = ownershipLeaves(left);
+  const rightLeaves = ownershipLeaves(right);
+  // Inside the trusted prelude both sides are abstract parameter authorities
+  // that carry no split lineage; the caller-side proof happens at the call.
+  if (
+    analysis.trustedRegionWrappers &&
+    leftLeaves.every((leaf) =>
+      leaf.origins.every((origin) => origin.extractions.length === 0)
+    ) &&
+    rightLeaves.every((leaf) =>
+      leaf.origins.every((origin) => origin.extractions.length === 0)
+    )
+  ) {
+    return combine(left, right);
+  }
+  if (leftLeaves.length !== 1 || rightLeaves.length !== 1) {
+    analysis.report(
+      "BLOT_REGION_JOIN_UNPROVED",
+      "Region join needs exactly one authority on each side.",
+      span,
+    );
+    return combine(left, right);
+  }
+  const leftLeaf = leftLeaves[0];
+  const rightLeaf = rightLeaves[0];
+  if (
+    leftLeaf.qualifier !== rightLeaf.qualifier ||
+    leftLeaf.origins.length !== 1 || rightLeaf.origins.length !== 1
+  ) {
+    analysis.report(
+      "BLOT_REGION_JOIN_UNPROVED",
+      "Region join needs two sibling authorities with one common origin.",
+      span,
+    );
+    return combine(left, right);
+  }
+  const leftOrigin = leftLeaf.origins[0];
+  const rightOrigin = rightLeaf.origins[0];
+  const leftExtractions = leftOrigin.extractions;
+  const rightExtractions = rightOrigin.extractions;
+  if (
+    leftOrigin.source !== rightOrigin.source ||
+    !samePath(leftOrigin.path, rightOrigin.path) ||
+    leftExtractions.length === 0 ||
+    leftExtractions.length !== rightExtractions.length
+  ) {
+    analysis.report(
+      "BLOT_REGION_JOIN_UNPROVED",
+      "Region join needs adjacent parts of the same split lineage.",
+      span,
+    );
+    return combine(left, right);
+  }
+  const last = leftExtractions.length - 1;
+  const leftSplit = leftExtractions[last];
+  const rightSplit = rightExtractions[last];
+  const samePrefix = leftExtractions.slice(0, last).every((entry, index) => {
+    const compared = rightExtractions[index];
+    return entry.operation === compared.operation &&
+      entry.part === compared.part &&
+      entry.span.start === compared.span.start &&
+      entry.span.end === compared.span.end;
+  });
+  const siblings = samePrefix &&
+    leftSplit.operation === "@region.split" &&
+    rightSplit.operation === "@region.split" &&
+    leftSplit.part === 0 && rightSplit.part === 1 &&
+    leftSplit.span.start === rightSplit.span.start &&
+    leftSplit.span.end === rightSplit.span.end;
+  if (!siblings) {
+    analysis.report(
+      "BLOT_REGION_JOIN_UNPROVED",
+      "Region join accepts only the ordered sibling pair produced by one Region split.",
+      span,
+    );
+    return combine(left, right);
+  }
+  return {
+    tag: "leaf",
+    qualifier: leftLeaf.qualifier,
+    source: leftOrigin.source,
+    path: leftOrigin.path,
+    origins: [{
+      source: leftOrigin.source,
+      path: leftOrigin.path,
+      extractions: leftExtractions.slice(0, last),
+    }],
+  };
 }
 
 function extractionParts(

@@ -157,6 +157,13 @@ pub(crate) enum RuntimeTerminator {
         value: usize,
         span: RuntimeSpan,
     },
+    /// The block diverges: an arm whose comptime meaning is `@panic` reached
+    /// residual code, so the running program traps instead of producing a
+    /// value for the join.
+    Trap {
+        message: String,
+        span: RuntimeSpan,
+    },
 }
 
 #[derive(Clone, Serialize)]
@@ -737,6 +744,77 @@ impl ResidualTrace {
                     Some(operator),
                 )
             }
+            "@region.claim" if arguments.len() == 1 => {
+                let original = &arguments[0];
+                let lowered = self.lower_value(original, span)?;
+                if !matches!(self.types[lowered.type_id], RuntimeType::Store { .. }) {
+                    return Err(hir_error("Region claim lowered a non-Store array."));
+                }
+                let store = if matches!(original, Value::Array(_))
+                    || matches!(lowered.meaning, RuntimeMeaning::ReusableStore)
+                {
+                    RuntimeValue {
+                        meaning: RuntimeMeaning::Plain,
+                        ..lowered
+                    }
+                } else {
+                    self.private_store_copy(lowered, span)?
+                };
+                let integer = self.region_integer_type();
+                let length = self.operation("store.length", integer, vec![store.id], span, None);
+                let zero =
+                    self.constant(WireConstant::SignedInteger64("0".to_owned()), integer, span);
+                self.make_region(store, zero, length, span)?
+            }
+            "@region.length" if arguments.len() == 1 => {
+                let (_, start, end) = self.lower_region(&arguments[0], span)?;
+                let integer = self.region_integer_type();
+                self.operation(
+                    "scalar",
+                    integer,
+                    vec![end.id, start.id],
+                    span,
+                    Some("subtract"),
+                )
+            }
+            "@region.get" if arguments.len() == 2 => {
+                let (store, start, end) = self.lower_region(&arguments[0], span)?;
+                let index = self.lower_as(Some(&arguments[1]), "signed-integer-64", span)?;
+                self.region_get(store, start, end, index, span)?
+            }
+            "@region.set" if arguments.len() == 3 => {
+                let (store, start, end) = self.lower_region(&arguments[0], span)?;
+                let RuntimeType::Store { element_type } = self.types[store.type_id] else {
+                    return Err(hir_error("Region Store projection lost its Store type."));
+                };
+                let index = self.lower_as(Some(&arguments[1]), "signed-integer-64", span)?;
+                let value = self.lower_store_element(&arguments[2], element_type, span)?;
+                self.region_set(store, start, end, index, value, span)?
+            }
+            "@region.swap" if arguments.len() == 3 => {
+                let (store, start, end) = self.lower_region(&arguments[0], span)?;
+                let left = self.lower_as(Some(&arguments[1]), "signed-integer-64", span)?;
+                let right = self.lower_as(Some(&arguments[2]), "signed-integer-64", span)?;
+                self.region_swap(store, start, end, left, right, span)?
+            }
+            "@region.split" if arguments.len() == 2 => {
+                let (store, start, end) = self.lower_region(&arguments[0], span)?;
+                let offset = self.lower_as(Some(&arguments[1]), "signed-integer-64", span)?;
+                self.split_region(store, start, end, offset, span)?
+            }
+            "@region.join" if arguments.len() == 2 => {
+                let (left_store, left_start, _) = self.lower_region(&arguments[0], span)?;
+                let (_, _, right_end) = self.lower_region(&arguments[1], span)?;
+                // Ordered sibling lineage was proved before destructive HIR is emitted.
+                self.make_region(left_store, left_start, right_end, span)?
+            }
+            "@region.freeze" if arguments.len() == 1 => {
+                let (store, _, _) = self.lower_region(&arguments[0], span)?;
+                RuntimeValue {
+                    meaning: RuntimeMeaning::Plain,
+                    ..store
+                }
+            }
             "@array.len" => {
                 let store = self.lower_value(&arguments[0], span)?;
                 if !matches!(self.types[store.type_id], RuntimeType::Store { .. }) {
@@ -1252,6 +1330,35 @@ impl ResidualTrace {
 
     pub(crate) fn select_block(&mut self, block: usize) {
         self.current_block = block;
+    }
+
+    /// Ends the current block with a runtime trap. Used when a residual branch
+    /// evaluates `@panic`: the arm contributes no value to its join, and the
+    /// program traps if execution reaches it.
+    pub(crate) fn trap_current_block(&mut self, message: &str, span: crate::ast::Span) {
+        let block = self.current_block;
+        self.blocks[block].terminator = Some(RuntimeTerminator::Trap {
+            message: message.to_owned(),
+            span: self.span(span),
+        });
+    }
+
+    /// Completes a conditional whose other arm trapped. The surviving arm
+    /// branches to the join carrying no argument — the trapped arm never
+    /// reaches it — and the surviving arm's value, comptime or runtime,
+    /// remains the result.
+    pub(crate) fn join_survivor(
+        &mut self,
+        branches: &ResidualBranches,
+        end: usize,
+        span: crate::ast::Span,
+    ) {
+        self.blocks[end].terminator = Some(RuntimeTerminator::Branch {
+            target: branches.join,
+            arguments: Vec::new(),
+            span: self.span(span),
+        });
+        self.current_block = branches.join;
     }
 
     pub(crate) fn current_block(&self) -> usize {
@@ -2887,6 +2994,44 @@ impl ResidualTrace {
                 );
                 Ok(self.array_operation("store.empty", store_type, Vec::new(), span, None))
             }
+            Value::Region { store, start, end } => {
+                // A comptime Region crossing into residual code materializes
+                // its private backing Store once; linearity guarantees exactly
+                // one consuming residual site, so no second copy can appear.
+                let cells = store.borrow().clone();
+                let first = cells.first().ok_or_else(|| {
+                    hir_error("An empty residual Region has no element representation.")
+                })?;
+                let element_type = self.value_type(first)?;
+                let store_type = self.insert_type(
+                    &format!("store:{element_type}"),
+                    RuntimeType::Store { element_type },
+                );
+                let mut runtime_store =
+                    self.array_operation("store.empty", store_type, Vec::new(), span, None);
+                for element in &cells {
+                    let element = self.lower_store_element(element, element_type, span)?;
+                    runtime_store = self.array_operation(
+                        "store.grow",
+                        store_type,
+                        vec![runtime_store.id, element.id],
+                        span,
+                        Some("persistent"),
+                    );
+                }
+                let integer = self.region_integer_type();
+                let start = self.constant(
+                    WireConstant::SignedInteger64(start.to_string()),
+                    integer,
+                    span,
+                );
+                let end = self.constant(
+                    WireConstant::SignedInteger64(end.to_string()),
+                    integer,
+                    span,
+                );
+                self.make_region(runtime_store, start, end, span)
+            }
             Value::ClosureChoice { alternatives, .. } => Err(Diagnostic::new(
                 "BLOT_UNSUPPORTED_LOWERING",
                 closure_choice_refusal(alternatives.len()),
@@ -3325,6 +3470,18 @@ impl ResidualTrace {
                     RuntimeType::Store { element_type },
                 ))
             }
+            Value::RegionType(element) => {
+                let element_type = self.specialized_type_from_type_value(
+                    element,
+                    substitutions,
+                    representation_facts,
+                )?;
+                let store_type = self.insert_type(
+                    &format!("store:{element_type}"),
+                    RuntimeType::Store { element_type },
+                );
+                self.region_type(store_type)
+            }
             Value::Union(members) => {
                 if members
                     .iter()
@@ -3469,6 +3626,14 @@ impl ResidualTrace {
                     &format!("store:{element_type}"),
                     RuntimeType::Store { element_type },
                 ))
+            }
+            Type::Region(element) => {
+                let element_type = self.runtime_type_from_checked_type(element)?;
+                let store_type = self.insert_type(
+                    &format!("store:{element_type}"),
+                    RuntimeType::Store { element_type },
+                );
+                self.region_type(store_type)
             }
             Type::Variant { cases, open: false } => {
                 let names = cases
@@ -3756,6 +3921,459 @@ impl ResidualTrace {
         )
     }
 
+    fn region_integer_type(&mut self) -> usize {
+        self.insert_type("signed-integer-64", RuntimeType::SignedInteger64)
+    }
+
+    fn region_type(&mut self, store_type: usize) -> Result<usize, Diagnostic> {
+        if !matches!(self.types[store_type], RuntimeType::Store { .. }) {
+            return Err(hir_error("Region backing type is not a Store."));
+        }
+        let key = format!("region:{store_type}");
+        if let Some(existing) = self.type_ids.get(&key) {
+            return Ok(*existing);
+        }
+        let integer = self.region_integer_type();
+        Ok(self.insert_type(
+            &key,
+            RuntimeType::Product {
+                name: format!("$region:{store_type}"),
+                fields: vec![
+                    RuntimeField {
+                        name: "end".to_owned(),
+                        type_id: integer,
+                    },
+                    RuntimeField {
+                        name: "start".to_owned(),
+                        type_id: integer,
+                    },
+                    RuntimeField {
+                        name: "store".to_owned(),
+                        type_id: store_type,
+                    },
+                ],
+            },
+        ))
+    }
+
+    fn make_region(
+        &mut self,
+        store: RuntimeValue,
+        start: RuntimeValue,
+        end: RuntimeValue,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        let type_id = self.region_type(store.type_id)?;
+        Ok(self.operation(
+            "product.make",
+            type_id,
+            vec![end.id, start.id, store.id],
+            span,
+            None,
+        ))
+    }
+
+    fn lower_region(
+        &mut self,
+        value: &Value,
+        span: crate::ast::Span,
+    ) -> Result<(RuntimeValue, RuntimeValue, RuntimeValue), Diagnostic> {
+        let runtime = self.lower_value(value, span)?;
+        let RuntimeType::Product { name, fields } = self.types[runtime.type_id].clone() else {
+            return Err(hir_error("Region value is not a private Product."));
+        };
+        if !name.starts_with("$region:") {
+            return Err(hir_error(
+                "Region value lost its private runtime representation.",
+            ));
+        }
+        let project = |this: &mut Self, field_name: &str| -> Result<RuntimeValue, Diagnostic> {
+            let (index, field) = fields
+                .iter()
+                .enumerate()
+                .find(|(_, field)| field.name == field_name)
+                .ok_or_else(|| hir_error("Region product lost a field."))?;
+            Ok(this.project_field(&runtime, index, field.type_id, span))
+        };
+        let store = project(self, "store")?;
+        let start = project(self, "start")?;
+        let end = project(self, "end")?;
+        Ok((store, start, end))
+    }
+
+    fn private_store_copy(
+        &mut self,
+        store: RuntimeValue,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        let RuntimeType::Store { element_type } = self.types[store.type_id] else {
+            return Err(hir_error("Region claim copy source is not a Store."));
+        };
+        let integer = self.region_integer_type();
+        let length = self.operation("store.length", integer, vec![store.id], span, None);
+        let zero = self.constant(WireConstant::SignedInteger64("0".to_owned()), integer, span);
+        let empty = self.operation("scalar", 1, vec![length.id, zero.id], span, Some("equal"));
+        let branches = self.begin_conditional(&empty, span)?;
+
+        self.current_block = branches.consequent;
+        let empty_store = RuntimeValue {
+            meaning: RuntimeMeaning::Plain,
+            ..store.clone()
+        };
+        let empty_end = self.current_block;
+
+        self.current_block = branches.alternate;
+        let first = self.operation(
+            "store.read",
+            element_type,
+            vec![store.id, zero.id],
+            span,
+            None,
+        );
+        // Persistent self-write is the existing copy-before-write operation.
+        let copied = self.array_operation(
+            "store.write",
+            store.type_id,
+            vec![store.id, zero.id, first.id],
+            span,
+            Some("persistent"),
+        );
+        let copied_end = self.current_block;
+        Ok(self.join_runtime_values(&branches, empty_end, empty_store, copied_end, copied, span))
+    }
+
+    fn region_index_in_bounds(
+        &mut self,
+        index: &RuntimeValue,
+        start: &RuntimeValue,
+        end: &RuntimeValue,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        let integer = self.region_integer_type();
+        let length = self.operation(
+            "scalar",
+            integer,
+            vec![end.id, start.id],
+            span,
+            Some("subtract"),
+        );
+        let zero = self.constant(WireConstant::SignedInteger64("0".to_owned()), integer, span);
+        let negative = self.operation(
+            "scalar",
+            1,
+            vec![index.id, zero.id],
+            span,
+            Some("less-than"),
+        );
+        let branches = self.begin_conditional(&negative, span)?;
+        self.current_block = branches.consequent;
+        let no = self.constant(WireConstant::Boolean(false), 1, span);
+        let no_end = self.current_block;
+        self.current_block = branches.alternate;
+        let yes_or_no = self.operation(
+            "scalar",
+            1,
+            vec![index.id, length.id],
+            span,
+            Some("less-than"),
+        );
+        let compare_end = self.current_block;
+        Ok(self.join_runtime_values(&branches, no_end, no, compare_end, yes_or_no, span))
+    }
+
+    fn boolean_and(
+        &mut self,
+        left: &RuntimeValue,
+        right: &RuntimeValue,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        let branches = self.begin_conditional(left, span)?;
+        self.current_block = branches.consequent;
+        let yes = right.clone();
+        let yes_end = self.current_block;
+        self.current_block = branches.alternate;
+        let no = self.constant(WireConstant::Boolean(false), 1, span);
+        let no_end = self.current_block;
+        Ok(self.join_runtime_values(&branches, yes_end, yes, no_end, no, span))
+    }
+
+    fn region_get(
+        &mut self,
+        store: RuntimeValue,
+        start: RuntimeValue,
+        end: RuntimeValue,
+        index: RuntimeValue,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        let RuntimeType::Store { element_type } = self.types[store.type_id] else {
+            return Err(hir_error("Region Store projection lost its Store type."));
+        };
+        let cases = vec!["Some".to_owned(), "None".to_owned()];
+        let sum_type = self.sum_type(&cases, &[element_type, 0]);
+        let in_bounds = self.region_index_in_bounds(&index, &start, &end, span)?;
+        let branches = self.begin_conditional(&in_bounds, span)?;
+
+        self.current_block = branches.consequent;
+        let integer = self.region_integer_type();
+        let absolute = self.operation(
+            "scalar",
+            integer,
+            vec![start.id, index.id],
+            span,
+            Some("add"),
+        );
+        let value = self.operation(
+            "store.read",
+            element_type,
+            vec![store.id, absolute.id],
+            span,
+            None,
+        );
+        let some = self.operation_with_case("sum.make", sum_type, vec![value.id], span, 0);
+        let some_end = self.current_block;
+
+        self.current_block = branches.alternate;
+        let unit = self.constant(WireConstant::Unit, 0, span);
+        let none = self.operation_with_case("sum.make", sum_type, vec![unit.id], span, 1);
+        let none_end = self.current_block;
+
+        let mut result = self.join_runtime_values(&branches, some_end, some, none_end, none, span);
+        result.meaning = RuntimeMeaning::Sum { cases };
+        Ok(result)
+    }
+
+    fn region_set(
+        &mut self,
+        store: RuntimeValue,
+        start: RuntimeValue,
+        end: RuntimeValue,
+        index: RuntimeValue,
+        value: RuntimeValue,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        let region_type = self.region_type(store.type_id)?;
+        let cases = vec!["Updated".to_owned(), "SetOutOfBounds".to_owned()];
+        let sum_type = self.sum_type(&cases, &[region_type, region_type]);
+        let in_bounds = self.region_index_in_bounds(&index, &start, &end, span)?;
+        let branches = self.begin_conditional(&in_bounds, span)?;
+
+        self.current_block = branches.consequent;
+        let integer = self.region_integer_type();
+        let absolute = self.operation(
+            "scalar",
+            integer,
+            vec![start.id, index.id],
+            span,
+            Some("add"),
+        );
+        let updated_store = self.array_operation(
+            "store.write",
+            store.type_id,
+            vec![store.id, absolute.id, value.id],
+            span,
+            Some("owned-reuse"),
+        );
+        let updated_region = self.make_region(updated_store, start.clone(), end.clone(), span)?;
+        let updated =
+            self.operation_with_case("sum.make", sum_type, vec![updated_region.id], span, 0);
+        let updated_end = self.current_block;
+
+        self.current_block = branches.alternate;
+        let original = self.make_region(store, start, end, span)?;
+        let failed = self.operation_with_case("sum.make", sum_type, vec![original.id], span, 1);
+        let failed_end = self.current_block;
+
+        let mut result =
+            self.join_runtime_values(&branches, updated_end, updated, failed_end, failed, span);
+        result.meaning = RuntimeMeaning::Sum { cases };
+        Ok(result)
+    }
+
+    fn region_swap(
+        &mut self,
+        store: RuntimeValue,
+        start: RuntimeValue,
+        end: RuntimeValue,
+        left: RuntimeValue,
+        right: RuntimeValue,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        let RuntimeType::Store { element_type } = self.types[store.type_id] else {
+            return Err(hir_error("Region Store projection lost its Store type."));
+        };
+        let region_type = self.region_type(store.type_id)?;
+        let cases = vec!["Updated".to_owned(), "SwapOutOfBounds".to_owned()];
+        let sum_type = self.sum_type(&cases, &[region_type, region_type]);
+        let left_ok = self.region_index_in_bounds(&left, &start, &end, span)?;
+        let right_ok = self.region_index_in_bounds(&right, &start, &end, span)?;
+        let in_bounds = self.boolean_and(&left_ok, &right_ok, span)?;
+        let branches = self.begin_conditional(&in_bounds, span)?;
+
+        self.current_block = branches.consequent;
+        let integer = self.region_integer_type();
+        let left_absolute = self.operation(
+            "scalar",
+            integer,
+            vec![start.id, left.id],
+            span,
+            Some("add"),
+        );
+        let right_absolute = self.operation(
+            "scalar",
+            integer,
+            vec![start.id, right.id],
+            span,
+            Some("add"),
+        );
+        let left_value = self.operation(
+            "store.read",
+            element_type,
+            vec![store.id, left_absolute.id],
+            span,
+            None,
+        );
+        let right_value = self.operation(
+            "store.read",
+            element_type,
+            vec![store.id, right_absolute.id],
+            span,
+            None,
+        );
+        let first = self.array_operation(
+            "store.write",
+            store.type_id,
+            vec![store.id, left_absolute.id, right_value.id],
+            span,
+            Some("owned-reuse"),
+        );
+        let second = self.array_operation(
+            "store.write",
+            store.type_id,
+            vec![first.id, right_absolute.id, left_value.id],
+            span,
+            Some("owned-reuse"),
+        );
+        let updated_region = self.make_region(second, start.clone(), end.clone(), span)?;
+        let updated =
+            self.operation_with_case("sum.make", sum_type, vec![updated_region.id], span, 0);
+        let updated_end = self.current_block;
+
+        self.current_block = branches.alternate;
+        let original = self.make_region(store, start, end, span)?;
+        let failed = self.operation_with_case("sum.make", sum_type, vec![original.id], span, 1);
+        let failed_end = self.current_block;
+
+        let mut result =
+            self.join_runtime_values(&branches, updated_end, updated, failed_end, failed, span);
+        result.meaning = RuntimeMeaning::Sum { cases };
+        Ok(result)
+    }
+
+    fn split_region(
+        &mut self,
+        store: RuntimeValue,
+        start: RuntimeValue,
+        end: RuntimeValue,
+        offset: RuntimeValue,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        let region_type = self.region_type(store.type_id)?;
+        let pair_type = self.insert_product_type(vec![
+            RuntimeField {
+                name: "0".to_owned(),
+                type_id: region_type,
+            },
+            RuntimeField {
+                name: "1".to_owned(),
+                type_id: region_type,
+            },
+        ]);
+        let cases = vec!["Split".to_owned(), "SplitOutOfBounds".to_owned()];
+        let sum_type = self.sum_type(&cases, &[pair_type, region_type]);
+        let meaning = RuntimeMeaning::Sum {
+            cases: cases.clone(),
+        };
+
+        let failure = |this: &mut Self| -> Result<RuntimeValue, Diagnostic> {
+            let original = this.make_region(store.clone(), start.clone(), end.clone(), span)?;
+            let mut tagged =
+                this.operation_with_case("sum.make", sum_type, vec![original.id], span, 1);
+            tagged.meaning = meaning.clone();
+            Ok(tagged)
+        };
+
+        let integer = self.region_integer_type();
+        let zero = self.constant(WireConstant::SignedInteger64("0".to_owned()), integer, span);
+        let negative = self.operation(
+            "scalar",
+            1,
+            vec![offset.id, zero.id],
+            span,
+            Some("less-than"),
+        );
+        let outer = self.begin_conditional(&negative, span)?;
+
+        self.current_block = outer.consequent;
+        let negative_value = failure(self)?;
+        let negative_end = self.current_block;
+
+        self.current_block = outer.alternate;
+        let length = self.operation(
+            "scalar",
+            integer,
+            vec![end.id, start.id],
+            span,
+            Some("subtract"),
+        );
+        let too_high = self.operation(
+            "scalar",
+            1,
+            vec![length.id, offset.id],
+            span,
+            Some("less-than"),
+        );
+        let inner = self.begin_conditional(&too_high, span)?;
+
+        self.current_block = inner.consequent;
+        let high_value = failure(self)?;
+        let high_end = self.current_block;
+
+        self.current_block = inner.alternate;
+        let middle = self.operation(
+            "scalar",
+            integer,
+            vec![start.id, offset.id],
+            span,
+            Some("add"),
+        );
+        let left = self.make_region(store.clone(), start.clone(), middle.clone(), span)?;
+        let right = self.make_region(store.clone(), middle, end.clone(), span)?;
+        let pair = self.operation(
+            "product.make",
+            pair_type,
+            vec![left.id, right.id],
+            span,
+            None,
+        );
+        let mut success = self.operation_with_case("sum.make", sum_type, vec![pair.id], span, 0);
+        success.meaning = meaning.clone();
+        let success_end = self.current_block;
+
+        let bounded =
+            self.join_runtime_values(&inner, high_end, high_value, success_end, success, span);
+        let bounded_end = self.current_block;
+        let mut joined = self.join_runtime_values(
+            &outer,
+            negative_end,
+            negative_value,
+            bounded_end,
+            bounded,
+            span,
+        );
+        joined.meaning = meaning;
+        Ok(joined)
+    }
+
     fn product_type(&mut self, fields: &OrderedFields) -> Result<usize, Diagnostic> {
         let mut runtime_fields = Vec::new();
         for (name, value) in fields {
@@ -3798,9 +4416,12 @@ impl ResidualTrace {
             };
             return Ok(Value::Runtime(value));
         }
-        let RuntimeType::Product { fields, .. } = self.types[value.type_id].clone() else {
+        let RuntimeType::Product { name, fields } = self.types[value.type_id].clone() else {
             return Ok(Value::Runtime(value));
         };
+        if name.starts_with("$region:") {
+            return Ok(Value::Runtime(value));
+        }
         let mut projected = OrderedFields::default();
         for (field_index, field) in fields.into_iter().enumerate() {
             let result = self.next_value();
@@ -3899,6 +4520,7 @@ fn has_unresolved_representation(value: &Value, substitutions: &HashMap<u32, usi
         Value::Array(elements) | Value::Union(elements) => elements
             .iter()
             .any(|element| has_unresolved_representation(element, substitutions)),
+        Value::RegionType(element) => has_unresolved_representation(element, substitutions),
         Value::EmptyArray { element }
         | Value::Extended { inner: element, .. }
         | Value::Sealed { inner: element, .. }
@@ -4040,6 +4662,10 @@ fn capture_field_index(name: &str) -> Option<usize> {
 pub(crate) fn contains_runtime(value: &Value) -> bool {
     match value {
         Value::Runtime(_) | Value::ClosureChoice { .. } => true,
+        Value::Region { store, start, end } => {
+            store.borrow()[*start..*end].iter().any(contains_runtime)
+        }
+        Value::RegionType(element) => contains_runtime(element),
         Value::Shape(fields) => fields.iter().any(|(_, value)| contains_runtime(value)),
         Value::Array(elements) => elements.iter().any(contains_runtime),
         Value::Tag { payload, .. } => payload.as_deref().is_some_and(contains_runtime),
@@ -4168,6 +4794,15 @@ fn collect_value(
         Value::Shape(fields) => collect_fields(context, fields, visited, captured)?,
         Value::Array(elements) | Value::IndexedStep { elements } | Value::Union(elements) => {
             for element in elements {
+                collect_value(context, element, visited, captured)?;
+            }
+        }
+        Value::RegionType(element) => {
+            collect_value(context, element, visited, captured)?;
+        }
+        Value::Region { store, start, end } => {
+            let cells = store.borrow();
+            for element in &cells[*start..*end] {
                 collect_value(context, element, visited, captured)?;
             }
         }
@@ -4354,6 +4989,18 @@ fn replace_value(
             for element in elements {
                 *element = replace_value(context, element, replacements, replaced)?;
             }
+        }
+        Value::RegionType(element) => {
+            **element = replace_value(context, element, replacements, replaced)?;
+        }
+        Value::Region { store, start, end } => {
+            let cells = store.borrow();
+            let mut replaced_cells = cells.clone();
+            drop(cells);
+            for element in &mut replaced_cells[*start..*end] {
+                *element = replace_value(context, element, replacements, replaced)?;
+            }
+            *store = Rc::new(std::cell::RefCell::new(replaced_cells));
         }
         Value::Tag { payload, .. } => {
             if let Some(payload) = payload {
@@ -4559,7 +5206,7 @@ fn simplify_runtime_function(mut function: RuntimeFunction) -> RuntimeFunction {
                     pending.push(*consequent);
                     pending.push(*alternate);
                 }
-                RuntimeTerminator::Return { .. } => {}
+                RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => {}
             }
         }
         if forwarding.is_empty() && reachable.len() == function.blocks.len() {
@@ -4588,7 +5235,7 @@ fn simplify_runtime_function(mut function: RuntimeFunction) -> RuntimeFunction {
                     *consequent = block_ids[&resolve(*consequent)];
                     *alternate = block_ids[&resolve(*alternate)];
                 }
-                RuntimeTerminator::Return { .. } => {}
+                RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => {}
             }
         }
         function.entry_block = block_ids[&function.entry_block];
@@ -4819,7 +5466,7 @@ fn folded_sum_dispatch(function: &RuntimeFunction, join: &RuntimeBlock) -> Optio
                     alternate,
                     ..
                 } => usize::from(*consequent == target) + usize::from(*alternate == target),
-                RuntimeTerminator::Return { .. } => 0,
+                RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => 0,
             })
             .sum::<usize>()
     };
@@ -4915,6 +5562,7 @@ fn value_uses(function: &RuntimeFunction, value: usize) -> usize {
                 RuntimeTerminator::Return {
                     value: returned, ..
                 } => usize::from(*returned == value),
+                RuntimeTerminator::Trap { .. } => 0,
             };
             operands + terminator
         })
@@ -4949,7 +5597,7 @@ fn recover_direct_tail_calls(function: &mut RuntimeFunction) {
                 );
                 record_incoming_arguments(function, *alternate, alternate_arguments, &mut incoming);
             }
-            RuntimeTerminator::Return { .. } => {}
+            RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => {}
         }
     }
     let definitions = function
@@ -5139,7 +5787,7 @@ fn tail_call_suffix_returns(
     match terminator {
         RuntimeTerminator::Return { .. } => true,
         RuntimeTerminator::Branch { arguments, .. } => arguments.len() == 1,
-        RuntimeTerminator::Conditional { .. } => false,
+        RuntimeTerminator::Conditional { .. } | RuntimeTerminator::Trap { .. } => false,
     }
 }
 
@@ -5804,6 +6452,9 @@ impl HirBuilder {
                     },
                 ))
             }
+            Type::Region(_) => Err(hir_error(
+                "A live Region is compiler-private and cannot cross the runtime export boundary.",
+            )),
             Type::Array(element) => {
                 let (elements, element_value) = match value {
                     Value::Array(elements) => (

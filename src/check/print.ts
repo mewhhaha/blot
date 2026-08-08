@@ -167,6 +167,9 @@ export function show(type: SimpleType): string {
       case "array":
         return `[${go(current.element, polarity)}]`;
 
+      case "region":
+        return `Region ${go(current.element, polarity)}`;
+
       case "variant": {
         const cases = [...current.cases].map(([name, payload]) =>
           payload.tag === "unit"
@@ -256,6 +259,7 @@ function collect(type: SimpleType): Occurrences {
         for (const member of current.members) walk(member, polarity);
         return;
       case "array":
+      case "region":
         walk(current.element, polarity);
         return;
       default:

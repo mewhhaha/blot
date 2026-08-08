@@ -172,6 +172,10 @@ impl OpenedValues {
 
 pub type Resume = Rc<RefCell<Option<Box<dyn FnOnce(Value) -> Computation>>>>;
 
+/// One evaluator Store: the shared mutable backing every Region metadata
+/// interval points into.
+pub type RegionStore = Rc<RefCell<Vec<Value>>>;
+
 #[derive(Clone, Debug, Default)]
 pub struct OrderedFields(Rc<OrderedFieldStorage>);
 
@@ -298,6 +302,15 @@ pub enum Value {
     Unit,
     Shape(OrderedFields),
     Array(Vec<Value>),
+    /// Private type value produced only by `@region.type`.
+    RegionType(Box<Value>),
+    /// Mutable interval into one evaluator Store. Split clones only this
+    /// metadata and the `Rc`; elements stay in one backing allocation.
+    Region {
+        store: RegionStore,
+        start: usize,
+        end: usize,
+    },
     EmptyArray {
         element: Box<Value>,
     },
@@ -608,6 +621,23 @@ pub fn equal(left: &Value, right: &Value) -> bool {
                     .zip(right)
                     .all(|(left, right)| equal(left, right))
         }
+        (Value::RegionType(left), Value::RegionType(right)) => equal(left, right),
+        (
+            Value::Region {
+                store: left_store,
+                start: left_start,
+                end: left_end,
+            },
+            Value::Region {
+                store: right_store,
+                start: right_start,
+                end: right_end,
+            },
+        ) => {
+            Rc::ptr_eq(left_store, right_store)
+                && left_start == right_start
+                && left_end == right_end
+        }
         (Value::EmptyArray { .. }, Value::EmptyArray { .. }) => true,
         (Value::EmptyArray { .. }, Value::Array(right))
         | (Value::Array(right), Value::EmptyArray { .. }) => right.is_empty(),
@@ -752,6 +782,8 @@ pub fn show(value: &Value) -> String {
             "[{}]",
             elements.iter().map(show).collect::<Vec<_>>().join(", ")
         ),
+        Value::RegionType(element) => format!("Region {}", show(element)),
+        Value::Region { start, end, .. } => format!("<region {start}..{end}>"),
         Value::EmptyArray { .. } => "[]".to_owned(),
         Value::Tag { name, payload } => match payload {
             Some(payload) => format!("#{name} {}", show(payload)),
