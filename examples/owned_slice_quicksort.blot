@@ -2,13 +2,13 @@ open @import "blot:prelude" ()
 
 const Source = @effect.host { .value = Int -> Int; }
 
-let keep_swap = fn (!region, left, right) =>
+let keep_swap = fn (region, left, right) =>
   return case Slice.swap ((!region), left, right) of
     #Updated !updated => updated
     #SwapOutOfBounds !original => original
 
 let partition =
-  rec (fn (!region, pivot, scan, boundary, limit) =>
+  rec (fn (region, pivot, scan, boundary, limit) =>
     if scan < limit:
       let current = case Slice.get ((&region), scan) of
         #Some value => value
@@ -23,7 +23,7 @@ let partition =
   )
 
 let quicksort =
-  rec (fn !region =>
+  rec (fn region =>
     let length = Slice.length (&region)
     if length < 2:
       return region
@@ -32,7 +32,7 @@ let quicksort =
       let pivot = case Slice.get ((&region), last) of
         #Some value => value
         #None => @panic "pivot index escaped its Region"
-      let (!partitioned, pivot_index) = partition (!region, pivot, 0, 0, last)
+      let (partitioned, pivot_index) = partition (!region, pivot, 0, 0, last)
       let partitioned = keep_swap ((!partitioned), pivot_index, last)
       return case Slice.split ((!partitioned), pivot_index) of
         #Split (!left, !rest) =>
