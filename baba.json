@@ -435,24 +435,6 @@
         }
       },
       {
-        "rule": "conditional",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "else_if_clause",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "else_clause",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
         "rule": "conditional_statement",
         "boundary": {
           "kind": "root"
@@ -497,25 +479,6 @@
       },
       {
         "rule": "case_guard",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "handler_composition",
-        "boundary": {
-          "kind": "terminated",
-          "terminal": "LAYOUT_DEDENT"
-        }
-      },
-      {
-        "rule": "handler_composition_step",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "handler_composition_action",
         "boundary": {
           "kind": "root"
         }

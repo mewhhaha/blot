@@ -3,22 +3,45 @@ import {
   compactFieldNames,
   compactNamedTokenKinds,
   compactRepeatedFields,
+  compactRuleNames,
+  currentCompactFieldNames,
 } from "../src/syntax/compact_schema.ts";
 
 const plan = await Deno.readFile("generated/wasm/parser.plan");
 const frontend = CpuFrontend.create(plan);
-const ruleNames: string[] = [];
+const stableRuleIdByName = new Map<string, number>(
+  compactRuleNames.map((name, id) => [name, id] as const),
+);
+const stableFieldIdByName = new Map<string, number>(
+  compactFieldNames.map((name, id) => [name, id] as const),
+);
 for (const island of frontend.plan.islands) {
-  const previous = ruleNames[island.ruleId];
-  if (previous !== undefined && previous !== island.ruleName) {
+  if (!stableRuleIdByName.has(island.ruleName)) {
     throw new Error(
-      `Baba rule ${island.ruleId} is both ${previous} and ${island.ruleName}`,
+      `Baba rule ${island.ruleName} has no stable compact rule identifier`,
     );
   }
-  ruleNames[island.ruleId] = island.ruleName;
 }
-if (ruleNames.some((name) => name === undefined)) {
-  throw new Error("Baba's compact rule identifiers are not contiguous");
+
+function stableRuleId(name: string): number {
+  const id = stableRuleIdByName.get(name);
+  if (id === undefined) throw new Error(`unknown stable rule ${name}`);
+  return id;
+}
+
+function stableFieldId(id: number): number {
+  if (id < 0) return id;
+  const name = currentCompactFieldNames[id];
+  if (name === undefined) {
+    throw new Error(`Baba emitted unknown live field ${id}`);
+  }
+  const stable = stableFieldIdByName.get(name);
+  if (stable === undefined) {
+    throw new Error(
+      `Baba field ${name} has no stable compact field identifier`,
+    );
+  }
+  return stable;
 }
 
 const repeated = compactRepeatedFields.map((entry) => {
@@ -30,7 +53,7 @@ const repeated = compactRepeatedFields.map((entry) => {
 });
 
 const source = [
-  rustSlice("RULE_NAMES", ruleNames),
+  rustSlice("RULE_NAMES", compactRuleNames),
   rustSlice("FIELD_NAMES", compactFieldNames),
   rustSlice("NAMED_TOKEN_KINDS", compactNamedTokenKinds),
   `pub(crate) const REPEATED_FIELDS: &[(&str, &str)] = &[\n${
@@ -91,7 +114,9 @@ function rustFrontendPlan(frontend: CpuFrontend): string {
         if (transition.inputKind === "island") {
           inputKind = "InputKind::Island";
         }
-        return `    IslandTransition { input_kind: ${inputKind}, input: ${transition.input}, target: ${transition.target}, emit: IslandEmit { field: ${transition.emit.field} } },`;
+        return `    IslandTransition { input_kind: ${inputKind}, input: ${transition.input}, target: ${transition.target}, emit: IslandEmit { field: ${
+          stableFieldId(transition.emit.field)
+        } } },`;
       }).join("\n");
       sections.push(
         `static ISLAND_${islandIndex}_STATE_${stateIndex}_TRANSITIONS: &[IslandTransition] = &[\n${transitions}\n];\n`,
@@ -105,7 +130,9 @@ function rustFrontendPlan(frontend: CpuFrontend): string {
     );
   }
   const islands = frontend.plan.islands.map((island, islandIndex) =>
-    `    Island { rule_id: ${island.ruleId}, start_state: ${island.startState}, states: ISLAND_${islandIndex}_STATES },`
+    `    Island { rule_id: ${
+      stableRuleId(island.ruleName)
+    }, start_state: ${island.startState}, states: ISLAND_${islandIndex}_STATES },`
   ).join("\n");
   sections.push(`static ISLANDS: &[Island] = &[\n${islands}\n];\n`);
   const boundaries = frontend.plan.boundaries.map((boundary) => {

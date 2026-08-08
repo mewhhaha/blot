@@ -23,13 +23,12 @@ export const equalityIfChain: LintRule = {
       expression(path) {
         const expression = path.node;
         if (expression.tag !== "if") return;
-        const valueConditional = context.isValueConditional(expression);
         const terminalStatement = isTerminalStatement(
           expression,
           path.parent,
           context,
         );
-        if (!valueConditional && !terminalStatement) return;
+        if (!terminalStatement) return;
 
         const chain = equalityChain(expression, context);
         if (chain === null) return;
@@ -240,8 +239,10 @@ function isSurfaceConditional(
   expression: Extract<Expr, { readonly tag: "if" }>,
   context: LintRuleContext,
 ): boolean {
-  return context.isValueConditional(expression) ||
-    context.hasConcreteOrigin(expression, "conditional_statement_branches");
+  return context.hasConcreteOrigin(
+    expression,
+    "conditional_statement_branches",
+  );
 }
 
 function statementSpan(

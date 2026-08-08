@@ -579,7 +579,7 @@ function lowerControlOutcome(
       if (context.escapeBoundary === "value-condition") {
         fail(
           "BLOT_BREAK_IN_VALUE_CONDITION",
-          "`break` cannot escape a value-producing `if` or `case`.",
+          "`break` cannot escape a value-producing `case`.",
           rule.span,
         );
       }
@@ -1605,7 +1605,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       if (context.escapeBoundary === "value-condition") {
         fail(
           "BLOT_BREAK_IN_VALUE_CONDITION",
-          "`break` cannot escape a value-producing `if` or `case`.",
+          "`break` cannot escape a value-producing `case`.",
           rule.span,
         );
       }
@@ -2445,50 +2445,6 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     return { tag: "shape", members, span: rule.span };
   }
 
-  if (rule.name === "conditional") {
-    const closed: Context = {
-      ...context,
-      loop: null,
-      returnScope: false,
-      escapeBoundary: "value-condition",
-    };
-    const branches: Branch[] = [{
-      condition: lowerExpression(
-        asRule(field(rule, "condition"), "condition"),
-        closed,
-      ),
-      consequence: lowerValue(
-        asRule(field(rule, "consequence"), "consequence"),
-        closed,
-      ),
-    }];
-    for (const cursor of fieldList(rule, "alternatives")) {
-      const clause = asRule(cursor, "else_if_clause");
-      branches.push({
-        condition: lowerExpression(
-          asRule(field(clause, "condition"), "condition"),
-          closed,
-        ),
-        consequence: lowerValue(
-          asRule(field(clause, "consequence"), "consequence"),
-          closed,
-        ),
-      });
-    }
-    const fallbackCursor = asRule(
-      required(rule, "fallback"),
-      "else_clause",
-    );
-    const fallback = lowerValue(
-      asRule(
-        field(fallbackCursor, "alternative"),
-        "alternative",
-      ),
-      closed,
-    );
-    return { tag: "if", branches, fallback, span: rule.span };
-  }
-
   if (rule.name === "case_expression") {
     const closed: Context = {
       ...context,
@@ -2507,97 +2463,6 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
       closed,
     );
     return lowerGuards(target, arms, rule.span);
-  }
-
-  if (rule.name === "handler_composition") {
-    let current = lowerValue(
-      asRule(field(rule, "program"), "program"),
-      context,
-    );
-    const declarations: Decl[] = [];
-
-    for (const cursor of fieldList(rule, "steps")) {
-      const step = asRule(cursor, "handler_composition_step");
-      const action = lowerHandlerCompositionAction(
-        asRule(field(step, "action"), "action"),
-        context,
-      );
-      const handledName = `handled$${step.span.start}$${step.span.end}`;
-      const handled: Expr = {
-        tag: "lambda",
-        parameter: { tag: "unit", span: step.span },
-        body: {
-          tag: "block",
-          declarations: [{
-            tag: "binding",
-            kind: "effect",
-            tags: [],
-            pattern: {
-              tag: "name",
-              name: handledName,
-              qualifier: "none",
-              span: step.span,
-            },
-            value: {
-              tag: "apply",
-              fn: { tag: "intrinsic", name: "@handle", span: step.span },
-              arg: {
-                tag: "tuple",
-                elements: [action.effect, current, action.handler],
-                span: step.span,
-              },
-              span: step.span,
-            },
-            span: step.span,
-          }],
-          result: { tag: "var", name: handledName, span: step.span },
-          resultEffects: "ambient",
-          span: step.span,
-        },
-        span: step.span,
-      };
-      const nameCursor = field(step, "name");
-      const name = nameCursor === null ? "_" : tokenOf(nameCursor).text;
-      if (name === "_") {
-        current = handled;
-        continue;
-      }
-      declarations.push({
-        tag: "binding",
-        kind: "let",
-        tags: [],
-        pattern: {
-          tag: "name",
-          name,
-          qualifier: "none",
-          span: step.span,
-        },
-        value: handled,
-        span: step.span,
-      });
-      current = { tag: "var", name, span: step.span };
-    }
-
-    const action = lowerHandlerCompositionAction(
-      asRule(field(rule, "result"), "result"),
-      context,
-    );
-    return {
-      tag: "block",
-      declarations,
-      result: {
-        tag: "apply",
-        fn: { tag: "intrinsic", name: "@handle", span: action.span },
-        arg: {
-          tag: "tuple",
-          elements: [action.effect, current, action.handler],
-          span: action.span,
-        },
-        span: action.span,
-      },
-      resultEffects: "ambient",
-      span: rule.span,
-    };
   }
 
   if (rule.name === "block" || rule.name === "do_block") {
@@ -2651,31 +2516,6 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     `\`${rule.name}\` is not an expression.`,
     rule.span,
   );
-}
-
-interface HandlerCompositionAction {
-  readonly effect: Expr;
-  readonly handler: Expr;
-  readonly span: Span;
-}
-
-function lowerHandlerCompositionAction(
-  rule: Rule,
-  context: Context,
-): HandlerCompositionAction {
-  const intrinsic = tokenOf(required(rule, "intrinsic"));
-  if (intrinsic.text !== "@handle") {
-    fail(
-      "BLOT_BAD_HANDLER_COMPOSITION",
-      `A \`try\` step uses \`@handle (effect, handler)\`, found \`${intrinsic.text}\`.`,
-      intrinsic.span,
-    );
-  }
-  return {
-    effect: lowerValue(asRule(field(rule, "effect"), "effect"), context),
-    handler: lowerValue(asRule(field(rule, "handler"), "handler"), context),
-    span: rule.span,
-  };
 }
 
 /** A `case` arm as written: its pattern, the guard refining it, and its body. */

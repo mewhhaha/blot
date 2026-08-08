@@ -42,7 +42,6 @@ export interface LintRuleContext {
     replacement: string,
     validation?: "parse" | "check" | "check-interface",
   ): LintFix | null;
-  isValueConditional(expression: Expr): boolean;
   hasConcreteOrigin(
     node: { readonly span: Span },
     ruleName: string,

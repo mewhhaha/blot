@@ -28,8 +28,6 @@ export type ParseResult =
 export async function parse(source: string): Promise<ParseResult> {
   const result = await parseConcrete(source);
   if (!result.ok) return result;
-  const removed = removedSurfaceDiagnostics(result.cst);
-  if (removed.length > 0) return { ok: false, diagnostics: removed };
   const rebinding = rebindingFrameDiagnostics(result.cst);
   if (rebinding.length > 0) return { ok: false, diagnostics: rebinding };
   return { ok: true, module: result.module };
@@ -89,25 +87,6 @@ export async function parseConcrete(
     }
     throw error;
   }
-}
-
-function removedSurfaceDiagnostics(root: Rule): readonly Diagnostic[] {
-  const diagnostics: Diagnostic[] = [];
-  const visit = (rule: Rule): void => {
-    if (rule.name === "conditional") {
-      diagnostics.push({
-        code: "BLOT_VALUE_IF_REMOVED",
-        message:
-          "`if` is control flow and cannot be used as a value. Match `#True` and `#False` with `case` instead.",
-        span: rule.span,
-      });
-    }
-    for (const child of rule.children()) {
-      if (child.type === "rule") visit(child);
-    }
-  };
-  visit(root);
-  return diagnostics;
 }
 
 export function ingestCpuSource(

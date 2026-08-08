@@ -11,8 +11,8 @@ import {
   importExpressions,
   load,
   type Loaded,
-  loadLegacySource,
   loadSource,
+  loadUncheckedSource,
 } from "../load.ts";
 import {
   type Env as ValueEnv,
@@ -168,14 +168,14 @@ export async function checkSource(
 }
 
 /**
- * Checks one legacy root revision for migration and internal regression tests.
- * Imported modules still have to satisfy the current source language.
+ * Checks one internal regression-test revision without source-only rebinding validation.
+ * Imported modules still use the ordinary checked source path.
  */
-export async function checkLegacySource(
+export async function checkUncheckedSource(
   path: string,
   source: string,
 ): Promise<CheckResult> {
-  const loaded = await loadLegacySource(path, source);
+  const loaded = await loadUncheckedSource(path, source);
   return checkLoadedProgram(loaded);
 }
 

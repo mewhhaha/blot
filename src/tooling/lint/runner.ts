@@ -44,10 +44,6 @@ export function lintModule(
           validation,
         };
       },
-      isValueConditional: (expression) =>
-        expression.tag === "if" &&
-        concrete.spans.get("conditional")?.has(spanKey(expression.span)) ===
-          true,
       hasConcreteOrigin: (node, ruleName) =>
         concrete.spans.get(ruleName)?.has(spanKey(node.span)) === true,
       concreteHasDescendant: (node, ruleName, descendantName) =>

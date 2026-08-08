@@ -325,8 +325,7 @@ function opensSuite(
   if (token.type === "literal") {
     return token.literal === "=" || token.literal === "=>" ||
       token.literal === "<-" ||
-      token.literal === "of" || token.literal === "with" ||
-      token.literal === ":";
+      token.literal === "of" || token.literal === ":";
   }
   if (token.type !== "named") return false;
   if (

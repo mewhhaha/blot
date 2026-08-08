@@ -17,13 +17,12 @@ export const nestedIfChain: LintRule = {
         if (expression.tag !== "if") return;
         if (coveredExpressions.has(spanKey(expression.span))) return;
 
-        const valueConditional = context.isValueConditional(expression);
         const terminalStatement = isTerminalStatement(
           expression,
           path.parent,
           context,
         );
-        if (!valueConditional && !terminalStatement) return;
+        if (!terminalStatement) return;
         const chain = nestedConditionals(expression, context);
         if (chain.conditionals.length < 2) return;
         for (const nested of chain.conditionals.slice(1)) {
@@ -271,8 +270,10 @@ function isSurfaceConditional(
   expression: Extract<Expr, { readonly tag: "if" }>,
   context: LintRuleContext,
 ): boolean {
-  return context.isValueConditional(expression) ||
-    context.hasConcreteOrigin(expression, "conditional_statement_branches");
+  return context.hasConcreteOrigin(
+    expression,
+    "conditional_statement_branches",
+  );
 }
 
 function statementSpan(

@@ -187,68 +187,6 @@ return (reflected, point)
   }
 });
 
-Deno.test("an equality-chain lint offers a case quick fix", async () => {
-  const service = new LanguageService();
-  const uri = "untitled:equality-chain.blot";
-  const source = `let label = fn n => if n == 1:
-  return "one"
-else if n == 2:
-  return "two"
-else:
-  return "other"
-return label
-`;
-  try {
-    service.open(uri, source, 7);
-    const actions = await service.codeActions(uri, {
-      start: { line: 0, character: 0 },
-      end: { line: 5, character: 16 },
-    });
-    assertEquals(actions.length, 1);
-    assertEquals(actions[0]?.title, "Replace equality chain with `case`");
-    assertEquals(actions[0]?.edit.documentChanges[0].textDocument, {
-      uri,
-      version: 7,
-    });
-    assertEquals(
-      actions[0]?.edit.documentChanges[0].edits[0]?.newText,
-      `case n of
-  1 => "one"
-  2 => "two"
-  _ => "other"
-`,
-    );
-  } finally {
-    await service.destroy();
-  }
-});
-
-Deno.test("a repeated-branch lint offers a removal quick fix", async () => {
-  const service = new LanguageService();
-  const uri = "untitled:repeated-branch.blot";
-  const source = `let label = fn ready => if ready:
-  return "same"
-else:
-  return "same"
-return label
-`;
-  try {
-    service.open(uri, source, 1);
-    const actions = await service.codeActions(uri, {
-      start: { line: 0, character: 24 },
-      end: { line: 3, character: 15 },
-    });
-    assertEquals(actions.length, 1);
-    assertEquals(actions[0]?.title, "Remove redundant conditional");
-    assertEquals(
-      actions[0]?.edit.documentChanges[0].edits[0]?.newText,
-      '"same"\n',
-    );
-  } finally {
-    await service.destroy();
-  }
-});
-
 Deno.test("correctness lints are warnings", async () => {
   const service = new LanguageService();
   const uri = "untitled:unused-binding.blot";
