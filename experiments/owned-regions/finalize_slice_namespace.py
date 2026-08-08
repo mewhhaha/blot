@@ -10,10 +10,9 @@ def replace_once(path: str, old: str, new: str) -> None:
     file.write_text(text.replace(old, new, 1))
 
 
-# The public namespace exposes named primitive aliases with explicit closed
-# rank-N signatures. Ownership checking still recognizes Slice.* at each call
-# site, so the signatures close the prelude snapshot without severing Region
-# lineage at a wrapper parameter.
+# Match the existing Array namespace style: ordinary inferred wrappers. The
+# ownership pass recognizes Slice.* at caller sites so concrete Region lineage
+# never gets replaced by a wrapper parameter's generic ownership summary.
 path = "src/prelude/prelude.blot"
 start = '''const Slice =
   {
@@ -32,39 +31,23 @@ start = '''const Slice =
     .freeze = fn !region => @region.array.freeze (!region);
   }
 '''
-replacement = '''sig slice_claim = @forall (fn T => [T] -> @region.array.type T)
-const slice_claim = @region.array.claim
-sig slice_length = @forall (fn T => (@region.array.type T) -> Int)
-const slice_length = @region.array.length
-sig slice_get = @forall (fn T => (@region.array.type T) -> Int -> (#Some T | #None))
-const slice_get = @region.array.get
-sig slice_set = @forall (fn T => (@region.array.type T) -> Int -> T -> (#Updated (@region.array.type T) | #SetOutOfBounds (@region.array.type T)))
-const slice_set = @region.array.set
-sig slice_swap = @forall (fn T => (@region.array.type T) -> Int -> Int -> (#Updated (@region.array.type T) | #SwapOutOfBounds (@region.array.type T)))
-const slice_swap = @region.array.swap
-sig slice_split = @forall (fn T => (@region.array.type T) -> Int -> (#Split ((@region.array.type T), (@region.array.type T)) | #SplitOutOfBounds (@region.array.type T)))
-const slice_split = @region.array.split
-sig slice_join = @forall (fn T => (@region.array.type T) -> (@region.array.type T) -> (@region.array.type T))
-const slice_join = @region.array.join
-sig slice_freeze = @forall (fn T => (@region.array.type T) -> [T])
-const slice_freeze = @region.array.freeze
-
-const Slice =
+replacement = '''const Slice =
   {
-    .claim = slice_claim;
-    .length = slice_length;
-    .get = slice_get;
-    .set = slice_set;
-    .swap = slice_swap;
-    .split = slice_split;
-    .join = slice_join;
-    .freeze = slice_freeze;
+    .claim = fn values => @region.array.claim values;
+    .length = fn &region => @region.array.length (&region);
+    .get = fn (&region, index) => @region.array.get (&region) index;
+    .set = fn (!region, index, value) => @region.array.set (!region) index value;
+    .swap = fn (!region, left, right) => @region.array.swap (!region) left right;
+    .split = fn (!region, index) => @region.array.split (!region) index;
+    .join = fn (!left, !right) => @region.array.join (!left) (!right);
+    .freeze = fn !region => @region.array.freeze (!region);
   }
 '''
 replace_once(path, start, replacement)
 
-# TypeScript ownership: recognize an unshadowed Slice field as the corresponding
-# trusted primitive, then reuse the exact intrinsic ownership rule.
+# TypeScript ownership: an unshadowed Slice field is the corresponding trusted
+# primitive at the caller, so its operation runs over the caller's real Region
+# lineage rather than the wrapper closure's generic parameter summary.
 path = "src/linear/check.ts"
 replace_once(
     path,
@@ -119,8 +102,8 @@ replace_once(
 ''',
 )
 
-# Rust ownership mirrors the same trust boundary. A user binding named `Slice`
-# must not inherit the prelude namespace's privileged Region semantics.
+# Rust caller-side namespace recognition mirrors TypeScript and refuses a local
+# binding that shadows the built-in Slice namespace.
 path = "experiments/rust-middle/src/ownership.rs"
 replace_once(
     path,
@@ -168,4 +151,174 @@ replace_once(
 ''',
 )
 
-print("made Slice a closed trusted primitive namespace")
+# The built-in prelude itself necessarily defines those wrappers over abstract
+# Region parameters. Only its snapshot path gets this exemption. A user wrapper
+# receives the ordinary proof rules and therefore cannot hide an unproved join
+# or partial freeze behind a function call.
+replace_once(
+    path,
+    '''struct Analysis<'a> {
+    module: &'a Module,
+    diagnostics: Vec<Diagnostic>,
+    function_results: HashMap<ExpressionId, Produced>,
+}
+
+pub fn check(module: &Module) -> Vec<Diagnostic> {
+    let mut analysis = Analysis {
+        module,
+        diagnostics: Vec::new(),
+        function_results: HashMap::new(),
+    };
+''',
+    '''struct Analysis<'a> {
+    module: &'a Module,
+    diagnostics: Vec<Diagnostic>,
+    function_results: HashMap<ExpressionId, Produced>,
+    trusted_region_wrappers: bool,
+}
+
+pub fn check(module: &Module) -> Vec<Diagnostic> {
+    check_with_region_wrapper_trust(module, false)
+}
+
+pub(crate) fn check_trusted_region_wrappers(module: &Module) -> Vec<Diagnostic> {
+    check_with_region_wrapper_trust(module, true)
+}
+
+fn check_with_region_wrapper_trust(
+    module: &Module,
+    trusted_region_wrappers: bool,
+) -> Vec<Diagnostic> {
+    let mut analysis = Analysis {
+        module,
+        diagnostics: Vec::new(),
+        function_results: HashMap::new(),
+        trusted_region_wrappers,
+    };
+''',
+)
+
+# Abstract prelude split: enough to certify the wrapper itself; caller-side
+# Slice.split ignores this generic summary and derives concrete sibling lineage.
+replace_once(
+    path,
+    '''            let Produced::Region {
+                qualifier,
+                root,
+                splits,
+            } = region.clone()
+            else {
+                analysis.report(
+                    "BLOT_REGION_SPLIT_NOT_OWNED",
+                    "Region split requires one owned Region authority.",
+                    analysis.module.arena.expression_span(arguments[0]),
+                );
+                return Produced::None;
+            };
+''',
+    '''            let (qualifier, root, splits) = match region.clone() {
+                Produced::Region {
+                    qualifier,
+                    root,
+                    splits,
+                } => (qualifier, root, splits),
+                Produced::Leaf(qualifier) if analysis.trusted_region_wrappers => {
+                    return Produced::Choice(BTreeMap::from([
+                        (
+                            "Split".to_owned(),
+                            Produced::Variant(Box::new(Produced::Sequence(vec![
+                                Produced::Leaf(qualifier),
+                                Produced::Leaf(qualifier),
+                            ]))),
+                        ),
+                        (
+                            "SplitOutOfBounds".to_owned(),
+                            Produced::Variant(Box::new(Produced::Leaf(qualifier))),
+                        ),
+                    ]));
+                }
+                _ => {
+                    analysis.report(
+                        "BLOT_REGION_SPLIT_NOT_OWNED",
+                        "Region split requires one owned Region authority.",
+                        analysis.module.arena.expression_span(arguments[0]),
+                    );
+                    return Produced::None;
+                }
+            };
+''',
+)
+
+# Abstract prelude join/freeze are trusted only while certifying snapshot:prelude.
+replace_once(
+    path,
+    '''        if name == "@region.array.join" && arguments.len() == 2 {
+            let left = walk(arguments[0], scope, analysis, Use::Move);
+            let right = walk(arguments[1], scope, analysis, Use::Move);
+            return join_region(left, right, span, analysis);
+        }
+        if name == "@region.array.freeze" && arguments.len() == 1 {
+            let region = walk(arguments[0], scope, analysis, Use::Move);
+            match region {
+                Produced::Region { splits, .. } if splits.is_empty() => {}
+                _ => analysis.report(
+                    "BLOT_REGION_PARTIAL_FREEZE",
+                    "Only a complete root Region authority can be frozen. Rejoin every split first.",
+                    analysis.module.arena.expression_span(arguments[0]),
+                ),
+            }
+            return Produced::None;
+        }
+''',
+    '''        if name == "@region.array.join" && arguments.len() == 2 {
+            let left = walk(arguments[0], scope, analysis, Use::Move);
+            let right = walk(arguments[1], scope, analysis, Use::Move);
+            if analysis.trusted_region_wrappers
+                && !matches!(left, Produced::Region { .. })
+                && !matches!(right, Produced::Region { .. })
+            {
+                return combine(left, right);
+            }
+            return join_region(left, right, span, analysis);
+        }
+        if name == "@region.array.freeze" && arguments.len() == 1 {
+            let region = walk(arguments[0], scope, analysis, Use::Move);
+            match region {
+                Produced::Region { splits, .. } if splits.is_empty() => {}
+                _ if analysis.trusted_region_wrappers && obligation(&region) != Obligation::None => {}
+                _ => analysis.report(
+                    "BLOT_REGION_PARTIAL_FREEZE",
+                    "Only a complete root Region authority can be frozen. Rejoin every split first.",
+                    analysis.module.arena.expression_span(arguments[0]),
+                ),
+            }
+            return Produced::None;
+        }
+''',
+)
+
+# The Rust type checker knows the module path. The only trusted wrapper source is
+# the compiler's own prelude snapshot; normal user modules never get this flag.
+path = "experiments/rust-middle/src/typecheck.rs"
+replace_once(
+    path,
+    '''        let analyses = CachedModuleAnalyses {
+            ownership: crate::ownership::check(module)
+                .into_iter()
+                .next()
+                .map_or(Ok(()), Err),
+''',
+    '''        let ownership_diagnostics = if path == "snapshot:prelude" {
+            crate::ownership::check_trusted_region_wrappers(module)
+        } else {
+            crate::ownership::check(module)
+        };
+        let analyses = CachedModuleAnalyses {
+            ownership: ownership_diagnostics
+                .into_iter()
+                .next()
+                .map_or(Ok(()), Err),
+''',
+)
+
+print("made Slice ordinary wrappers with caller-lineage ownership")
