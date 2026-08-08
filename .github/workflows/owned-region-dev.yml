@@ -37,8 +37,6 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          # Region is array-only in v1. Keep the trusted primitive surface small
-          # while retaining Region as a compiler-private invariant type.
           paths = [
               "src/check/region_primitives.ts",
               "src/comptime/region_primitives.ts",
@@ -74,6 +72,7 @@ jobs:
           deno run --allow-read --allow-write src/cli.ts fmt examples/owned_slice_quicksort.blot
           cargo check --manifest-path experiments/rust-middle/Cargo.toml --target wasm32-unknown-unknown
           deno task build:rust-middle
+          deno run --allow-read src/cli.ts check examples/owned_slice_quicksort.blot
           deno test --allow-read --allow-write experiments/owned-regions/*.test.ts
           deno task corpus
           just check
