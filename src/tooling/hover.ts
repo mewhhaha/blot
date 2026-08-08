@@ -686,8 +686,6 @@ const KEYWORD_DOCUMENTATION: Readonly<Record<string, string>> = {
   for: "Folds an iterator, carrying names rebound with `:=` as loop state.",
   in: "Separates a `for` pattern from its iterator.",
   break: "Leaves the nearest `for` and returns its current accumulator state.",
-  try: "Runs a computation under the handlers introduced by `with`.",
-  with: "Introduces the handler composition attached to a `try` expression.",
   fn: "Introduces a one-parameter function; adjacent `fn` forms are curried.",
 };
 

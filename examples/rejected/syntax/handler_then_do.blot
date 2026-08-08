@@ -1,2 +1,0 @@
-return try (fn () => ()) then
-  @handle ((), {})

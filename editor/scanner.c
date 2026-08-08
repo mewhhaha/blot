@@ -59,7 +59,7 @@ static bool starts_layout_entry(TSLexer *lexer) {
     strcmp(word, "const") == 0 || strcmp(word, "sig") == 0 ||
     strcmp(word, "return") == 0 || strcmp(word, "for") == 0 ||
     strcmp(word, "break") == 0 || strcmp(word, "open") == 0 ||
-    strcmp(word, "if") == 0 || strcmp(word, "try") == 0;
+    strcmp(word, "if") == 0;
   if (statement_keyword) return true;
 
   const bool lambda = parenthesized_lambda || strcmp(word, "fn") == 0;

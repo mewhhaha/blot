@@ -1,5 +1,0 @@
-let program = fn () => 1
-let handler = {}
-let value = try program with
-  @handle (Effect, handler)
-return value

@@ -161,8 +161,6 @@ export type LiteralKind =
   | "else"
   | "case"
   | "of"
-  | "try"
-  | "with"
   | "do"
   | "fn"
   | "..."

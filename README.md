@@ -491,15 +491,17 @@ than a convention.
 Several handlers compose without manual nesting:
 
 ```blot
-let result = try program with
-  program_without_terminal <- @handle (Terminal, fake_terminal)
-  program_without_clock <- @handle (Clock, fake_clock)
-  @handle (Random, fake_random)
+let handled = program
+  |> @handle (Terminal, fake_terminal)
+  |> @handle (Clock, fake_clock)
+  |> @handle (Random, fake_random)
 ```
 
-Each bound step names the nullary program with that source effect discharged;
-the final step executes the composition. This is static sugar for nested
-three-argument `@handle` calls, not a runtime handler registry.
+A two-argument `@handle (effect, handler)` is a computation transformer awaiting
+its middle argument, so each `|>` step discharges one effect and produces
+another nullary computation. The steps saturate to ordinary three-argument
+`@handle` calls during CST lowering — static composition, not a runtime handler
+registry.
 
 An effect the _host_ implements is declared `@effect.host`, and its operations
 become typed WebAssembly imports — so blot needs no raw import form, and its row

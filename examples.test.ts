@@ -39,6 +39,7 @@ const REJECTIONS: Record<
     code: "BLOT_HANDLER_RESUME_NOT_AFFINE",
     stage: "check",
   },
+  "try_with": { code: "BLOT_UNBOUND", stage: "check" },
   "unknown_operator": { code: "BLOT_UNKNOWN_OPERATOR", stage: "check" },
   "unhandled_effect": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },
   "effect_in_let": { code: "BLOT_UNSEQUENCED_EFFECT", stage: "check" },

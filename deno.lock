@@ -2,28 +2,19 @@
   "version": "5",
   "specifiers": {
     "jsr:@mewhhaha/baba@9": "9.0.0",
-    "jsr:@mewhhaha/gpufuck@*": "0.9.0",
-    "jsr:@mewhhaha/gpufuck@0.10.0": "0.10.0",
-    "jsr:@mewhhaha/gpufuck@0.9": "0.9.0",
-    "jsr:@mewhhaha/gpufuck@0.9.0": "0.9.0",
-    "jsr:@mewhhaha/gpupaper@0.1.5": "0.1.5",
+    "jsr:@mewhhaha/gpufuck@0.9": "0.9.1",
     "jsr:@mewhhaha/gpupaper@~0.1.5": "0.1.5",
-    "jsr:@std/assert@*": "1.0.19",
     "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/internal@^1.0.12": "1.0.14",
     "jsr:@std/internal@^1.0.14": "1.0.14",
-    "jsr:@std/path@*": "1.1.6",
     "jsr:@std/path@1": "1.1.6"
   },
   "jsr": {
     "@mewhhaha/baba@9.0.0": {
       "integrity": "82eeb7e1f8eaed96edc82494ddbffdd6afd72237e0c057843d649c59ac61e203"
     },
-    "@mewhhaha/gpufuck@0.9.0": {
-      "integrity": "9f5714ae3f5327f8622e49be469b5dc60b912c206164d23fbba7278f1f4b9742"
-    },
-    "@mewhhaha/gpufuck@0.10.0": {
-      "integrity": "421e969dc57269ee663607511e5590cc53bb9c6a08469c02330de2fe120f6b03"
+    "@mewhhaha/gpufuck@0.9.1": {
+      "integrity": "7a019fefb61197b4a46cf0679ff603a5b4860830af9c6d7b49806cc22bb9c9d4"
     },
     "@mewhhaha/gpupaper@0.1.5": {
       "integrity": "6c561b49b6ed0ce627a256b298fe86023facb335d5017eccac310956c49d99b9"

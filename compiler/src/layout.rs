@@ -282,7 +282,7 @@ fn source_indent_width(source: &[u16], offset: usize) -> usize {
 }
 
 fn opens_suite(source: &[u16], token: &Token, element_suites: &HashSet<usize>) -> bool {
-    if ["=", "=>", "<-", "of", "with", ":"]
+    if ["=", "=>", "<-", "of", ":"]
         .iter()
         .any(|text| is_text(source, token, text))
     {

@@ -7,34 +7,7 @@ HIR, and the Rust compiler admits the full executable example corpus. The work
 below is what remains; capacity-bearing Stores and new surface features are not
 part of this list.
 
-## 1. Close residual runtime functions
-
-**Done.** A dynamic branch that produces one of several functions no longer
-reaches a representation refusal. The join defunctionalizes the finite set:
-every arm normalizes to a closure source — a lambda's module and body with the
-environment it closed in, or a partially applied primitive with its already
-supplied arguments — plus that arm's ordered runtime captures from
-`runtime_captures`. The joined value is a private sum whose case selects an
-alternative and whose payload is that alternative's capture product. An arm that
-is already a choice contributes its own alternatives, so nested choices flatten
-into one table. Application dispatches on the tag, projects the payload back
-into the captures through the existing environment replacement, and applies the
-selected function, so each call site specializes for its argument
-representation. ABI 1 refuses the table by name, and only a genuinely open
-source set is rejected — with the offending value and the inferred signature.
-
-`experiments/generated-code/programs/opaque_function_probe.blot` and
-`closure_choice_table.blot` compile and agree with the evaluator; the
-representation and validation rule is in `spec/COMPILER.md`, `spec/RUNTIME.md`,
-`spec/STAGING.md`, `spec/PAPER.md`, and `SUGGESTION.md`.
-
-Two latent defects surfaced on the way and were fixed with it:
-`export_parameter` appended a curried export's later parameters to whatever
-block the trace stood in rather than to the entry block, and
-`fold_sum_branch_roundtrips` folded a joined sum away while a later dispatch
-still read it.
-
-## 2. Answer every CLI command from the production compiler
+## 1. Answer every CLI command from the production compiler
 
 `check`, `build`, and `package` route through the Rust compiler; `eval` and
 `ownership` still run the TypeScript oracle. Two engines answering one CLI is
@@ -56,7 +29,7 @@ every module with a module parameter or an unhandled effect, so the two
 evaluators are never compared on a program that performs a host effect — the
 class where `spec/COMPILER.md` says operation order is the observable semantics.
 
-## 3. Recover the lower bound a nested `rec` fold loses
+## 2. Recover the lower bound a nested `rec` fold loses
 
 `iterate` and `collect` infer `⊥` and `[⊥]` for values they demonstrably
 produce:
@@ -94,7 +67,7 @@ that does is worth more than a presentation fix: anything that consumes these
 types — reflection, specialization keys, the ABI boundary — is reading a claim
 the program contradicts.
 
-## 4. Construct Runtime HIR progressively
+## 3. Construct Runtime HIR progressively
 
 Checking and Runtime-HIR preparation still traverse overlapping semantic work.
 Fuse them without moving ownership into the type lattice:
@@ -121,7 +94,7 @@ preparation/checking boundary improves; moving work behind a different timer is
 not an optimization. Update the pass and cache contracts in `spec/COMPILER.md`,
 `spec/TYPECHECKING.md`, `spec/STAGING.md`, and `spec/COST_MODEL.md`.
 
-## 5. Move the bounded oracle onto typed Core
+## 4. Move the bounded oracle onto typed Core
 
 The production Rust/Wasm compiler is already independent of gpupaper, but the
 bounded TypeScript/gpupaper conformance oracle still shares part of the source
@@ -139,7 +112,7 @@ Generated source/Core evaluations, handler traces, host traces, and the complete
 bounded oracle corpus must continue to agree. Update `spec/COMPILER.md`,
 `spec/CORRECTNESS.md`, and the effect-sequencing row in `spec/PAPER.md`.
 
-## 6. Mechanize the stable core
+## 5. Mechanize the stable core
 
 Once residual closures stop changing the core representation, mechanize the
 smallest useful preservation/progress result. Include live pure bindings,
