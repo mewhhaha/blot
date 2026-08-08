@@ -33,6 +33,7 @@ jobs:
           python3 experiments/owned-regions/finalize_production.py
           python3 experiments/owned-regions/finalize_slice_namespace.py
           python3 experiments/owned-regions/fix_rust_region_generalization.py
+          python3 experiments/owned-regions/fix_rust_region_snapshot_closedness.py
           python3 - <<'PY'
           from pathlib import Path
 
