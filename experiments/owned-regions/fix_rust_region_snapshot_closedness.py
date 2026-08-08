@@ -153,3 +153,8 @@ helper = '''fn closed_checked_type(type_: &Type, bound: &mut HashSet<VariableId>
 replace_once(path, anchor, helper + anchor)
 
 print("made Region snapshot-serializable while preserving ABI rejection")
+
+# Keep the dev workflow command list stable while the tuple-argument fix is
+# iterated. This helper is scaffolding and is removed before review.
+script = Path("experiments/owned-regions/fix_slice_ownership_arguments.py")
+exec(compile(script.read_text(), str(script), "exec"))
