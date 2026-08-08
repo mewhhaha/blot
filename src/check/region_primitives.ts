@@ -56,7 +56,13 @@ export const REGION_PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map([
     "@region.array.get",
     poly((fresh) => {
       const element = fresh();
-      return curried([{ tag: "region", element }, INT], element);
+      return curried(
+        [{ tag: "region", element }, INT],
+        variant([
+          ["Some", element],
+          ["None", UNIT],
+        ]),
+      );
     }),
   ],
   [
@@ -64,7 +70,13 @@ export const REGION_PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map([
     poly((fresh) => {
       const element = fresh();
       const region: SimpleType = { tag: "region", element };
-      return curried([region, INT, element], region);
+      return curried(
+        [region, INT, element],
+        variant([
+          ["Updated", region],
+          ["SetOutOfBounds", region],
+        ]),
+      );
     }),
   ],
   [
@@ -72,7 +84,13 @@ export const REGION_PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map([
     poly((fresh) => {
       const element = fresh();
       const region: SimpleType = { tag: "region", element };
-      return curried([region, INT, INT], region);
+      return curried(
+        [region, INT, INT],
+        variant([
+          ["Updated", region],
+          ["SwapOutOfBounds", region],
+        ]),
+      );
     }),
   ],
   [
