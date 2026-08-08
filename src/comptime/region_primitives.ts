@@ -33,16 +33,14 @@ function indexOf(value: Value, span: Span, operation: string): number {
   return index;
 }
 
-function checkedIndex(
+function relativeIndex(
   region: Extract<Value, { tag: "region-array" }>,
   value: Value,
   span: Span,
   operation: string,
-): number {
+): number | null {
   const relative = indexOf(value, span, operation);
-  if (relative < 0 || relative >= region.end - region.start) {
-    fail("BLOT_ARRAY_BOUNDS", `${operation} index is out of bounds.`, span);
-  }
+  if (relative < 0 || relative >= region.end - region.start) return null;
   return region.start + relative;
 }
 
@@ -92,13 +90,20 @@ const entries: readonly (readonly [string, Primitive])[] = [
       arity: 2,
       run: ([value, index], span) => {
         const region = regionOf(value, span, "@region.array.get");
-        const absolute = checkedIndex(
+        const absolute = relativeIndex(
           region,
           index,
           span,
           "@region.array.get",
         );
-        return region.store.cells[absolute];
+        if (absolute === null) {
+          return { tag: "tag", name: "None", payload: null };
+        }
+        return {
+          tag: "tag",
+          name: "Some",
+          payload: region.store.cells[absolute],
+        };
       },
     },
   ],
@@ -108,14 +113,21 @@ const entries: readonly (readonly [string, Primitive])[] = [
       arity: 3,
       run: ([value, index, replacement], span) => {
         const region = regionOf(value, span, "@region.array.set");
-        const absolute = checkedIndex(
+        const absolute = relativeIndex(
           region,
           index,
           span,
           "@region.array.set",
         );
+        if (absolute === null) {
+          return {
+            tag: "tag",
+            name: "SetOutOfBounds",
+            payload: region,
+          };
+        }
         region.store.cells[absolute] = replacement;
-        return region;
+        return { tag: "tag", name: "Updated", payload: region };
       },
     },
   ],
@@ -125,22 +137,29 @@ const entries: readonly (readonly [string, Primitive])[] = [
       arity: 3,
       run: ([value, left, right], span) => {
         const region = regionOf(value, span, "@region.array.swap");
-        const leftIndex = checkedIndex(
+        const leftIndex = relativeIndex(
           region,
           left,
           span,
           "@region.array.swap",
         );
-        const rightIndex = checkedIndex(
+        const rightIndex = relativeIndex(
           region,
           right,
           span,
           "@region.array.swap",
         );
+        if (leftIndex === null || rightIndex === null) {
+          return {
+            tag: "tag",
+            name: "SwapOutOfBounds",
+            payload: region,
+          };
+        }
         const held = region.store.cells[leftIndex];
         region.store.cells[leftIndex] = region.store.cells[rightIndex];
         region.store.cells[rightIndex] = held;
-        return region;
+        return { tag: "tag", name: "Updated", payload: region };
       },
     },
   ],
