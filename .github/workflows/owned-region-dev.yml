@@ -38,19 +38,16 @@ jobs:
           source = prelude.read_text()
           for old, new in [
               ("    .of = @region.array.type;\n", ""),
-              (".get = fn (&region, index) =>", ".get = fn (region, index) =>"),
-              (".set = fn (!region, index, value) =>\n      @region.array.set (!region) index value\n    ;", ".set = fn (region, index, value) => @region.array.set (!region) index value;"),
-              (".swap = fn (!region, left, right) =>\n      @region.array.swap (!region) left right\n    ;", ".swap = fn (region, left, right) => @region.array.swap (!region) left right;"),
-              (".split = fn (!region, index) =>", ".split = fn (region, index) =>"),
-              (".join = fn (!left, !right) =>", ".join = fn (left, right) =>"),
+              (".set = fn (!region, index, value) =>\n      @region.array.set (!region) index value\n    ;", ".set = fn (!region, index, value) => @region.array.set (!region) index value;"),
+              (".swap = fn (!region, left, right) =>\n      @region.array.swap (!region) left right\n    ;", ".swap = fn (!region, left, right) => @region.array.swap (!region) left right;"),
           ]:
               if old not in source:
                   raise SystemExit(f"missing Slice wrapper anchor: {old}")
               source = source.replace(old, new, 1)
           prelude.write_text(source)
 
-          # Region is array-only in v1. Use compact trusted intrinsic names in
-          # source while keeping the compiler-private Region type distinct.
+          # Region is array-only in v1. Keep the trusted primitive surface small
+          # while retaining Region as a compiler-private invariant type.
           paths = [
               "src/check/region_primitives.ts",
               "src/comptime/region_primitives.ts",
@@ -69,8 +66,7 @@ jobs:
               path = Path(name)
               if not path.exists():
                   continue
-              text = path.read_text().replace("@region.array.", "@region.")
-              path.write_text(text)
+              path.write_text(path.read_text().replace("@region.array.", "@region."))
           PY
           cargo fmt --manifest-path experiments/rust-middle/Cargo.toml
           deno fmt \
