@@ -175,7 +175,7 @@ Capacity-bearing Stores, another proof-producing collection, first-class
 references, and a full-width word domain are contingent extensions. The current
 profiles and examples do not justify adding them to the language or runtime.
 
-## 7. Let a signature name the rest of an effect row
+## 8. Let a signature name the rest of an effect row
 
 §12.4 closes a written row, so `('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }`
 is a type the checker prints and no program can write. Every callback-taking
@@ -195,7 +195,7 @@ tail on the outermost arrow with no second occurrence stays refused, which is
 the unconstrained-variable case §12.4 is right to fear. Inference does not
 change; the signature language catches up with what it already computes.
 
-## 8. Resolve `==` through an interface carried on the type
+## 9. Resolve `==` through an interface carried on the type
 
 `"a" == "a"` is still a type error because `==` names `Eq.eq` over `@int.cmp`.
 The repair is not a second equality primitive and not runtime dispatch. `==`
@@ -230,7 +230,7 @@ same mechanism gives `+` one name over `Int`, `F64`, and `F32` by looking up
 resolved target is visible in the specialized program, and a type that attaches
 nothing is a diagnostic rather than a fallback.
 
-## 9. Narrow on the primitive rather than on the shape of its wrapper
+## 10. Narrow on the primitive rather than on the shape of its wrapper
 
 §8.5 recognizes a comparison by inspecting the wrapper: one `@int.cmp p1 p2`
 application, one occurrence of each parameter, no `open` or `rec` in the body,
@@ -258,7 +258,7 @@ matters. And a guarded arm whose guard is a recognized comparison can contribute
 its proved set to coverage, so `m if m > 0`, `m if m < 0`, `0` covers `Int`
 without a wildcard.
 
-## 10. Carry the index relation across affine arithmetic
+## 11. Carry the index relation across affine arithmetic
 
 §10.3 widens `@int.add n 1` to `Int` whatever was proved about `n`, so a
 hand-written `i := i + 1` loop loses its bound on the first iteration and every
@@ -279,7 +279,7 @@ that continues.
 Arbitrary arithmetic must still widen. The value of the rule is that it covers
 the loop shape programs actually write, not that it approaches a general solver.
 
-## 11. Answer float comparison totally
+## 12. Answer float comparison totally
 
 `Float.cmp` refuses NaN — a diagnostic while compiling and a trap while running
 — so every runtime float comparison is a potential fault and numeric code pays
@@ -298,7 +298,7 @@ poses. Keep `@float.is_nan` as the direct ask, and keep the trapping comparison
 under a name that says so for code that has already proved its inputs — the same
 split `Array.get` and `@array.get` already make.
 
-## 12. Return evidence from reflection, not descriptions
+## 13. Return evidence from reflection, not descriptions
 
 The reflection surface is already the easy kind: `@type.reflect` describes a
 type the way a `@typeInfo` does, the shape primitives are field access and field
@@ -330,7 +330,7 @@ no compiler change. Most derive-shaped code needs only sums of products of
 scalars plus the isomorphism, and folding a two-constructor view is easier than
 folding the full reflection variant.
 
-## 13. Finish the value surface before adding another form
+## 14. Finish the value surface before adding another form
 
 The Done criterion is a program that reads input and takes text apart, and text
 cannot be taken apart. The surface is `concat`, `len`, `cmp`, `contains`, and
@@ -352,7 +352,7 @@ expressions with no implicit conversion. Do not add it before the primitives: a
 form that makes text convenient to build while it remains impossible to take
 apart is the wrong order.
 
-## 14. Close the quiet behaviors
+## 15. Close the quiet behaviors
 
 Four places where the accepted reading is not the written one. None needs new
 machinery.
@@ -382,7 +382,7 @@ surface is documentation by excavation. Allow a `sig` for the parameter
 immediately after the header, checked as an upper bound like any other. The
 inferred demand stays the truth; the signature is the human-facing bound on it.
 
-## 15. Contingent, and what not to do yet
+## 16. Contingent, and what not to do yet
 
 - **Relational signatures.** Phi is deliberately unspeakable in a `sig` (§10.1),
   so a proved-safe helper cannot export its precondition and every caller
