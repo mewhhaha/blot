@@ -20,9 +20,9 @@ import {
   runLowering,
   runLoweringExport,
   validateLowering,
-} from "./src/backend/compile.ts";
-import { buildBatch } from "./src/backend/build.ts";
-import { lowerModule } from "./src/backend/lower.ts";
+} from "./src/conformance/gpufuck/compile.ts";
+import { buildBatch } from "./src/compiler/build.ts";
+import { lowerModule } from "./src/conformance/gpufuck/lower.ts";
 import { checkFile } from "./src/check/mod.ts";
 import { BlotError } from "./src/diagnostic.ts";
 import { load, refreshLoadedModules } from "./src/load.ts";

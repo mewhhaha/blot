@@ -236,34 +236,6 @@ export function elaborateComputation(
   return elaborator.computation(declarations, result, resultEffects);
 }
 
-export function scheduleComputation(
-  declarations: readonly Decl[],
-  result: Expr,
-  resultEffects: "pure" | "ambient",
-): ComputationSchedule {
-  const live = liveDeclarations(declarations, result);
-  const steps: ComputationSchedule["steps"][number][] = [];
-  for (const declaration of declarations) {
-    if (!live.has(declaration)) continue;
-    let tag: "define" | "bind" = "define";
-    if (declaration.tag === "binding" && declaration.kind === "effect") {
-      tag = "bind";
-    }
-    steps.push({ tag, declaration });
-  }
-  if (resultEffects === "pure") {
-    return { steps, result: { tag: "return", value: result } };
-  }
-  return { steps, result: { tag: "tail", computation: result } };
-}
-
-export function scheduledResultExpression(
-  result: ComputationSchedule["result"],
-): Expr {
-  if (result.tag === "return") return result.value;
-  return result.computation;
-}
-
 export function elaborateModule(
   module: {
     readonly parameter: Pattern | null;

@@ -2,12 +2,12 @@ import { assertEquals } from "@std/assert";
 import {
   prepareGpupaperHir,
   validateLowering,
-} from "../src/backend/compile.ts";
+} from "../src/conformance/gpufuck/compile.ts";
 import { checkFile } from "../src/check/mod.ts";
 import { evaluateFile } from "../src/run.ts";
 import { show } from "../src/comptime/value.ts";
-import { validateBlotRuntimeModule } from "../src/backend/runtime/hir.ts";
-import { compileBlotRuntimeModulesOnRustWasm } from "../src/backend/runtime/target.ts";
+import { validateBlotRuntimeModule } from "../src/runtime/hir.ts";
+import { compileBlotRuntimeModulesOnRustWasm } from "../src/conformance/gpufuck/runtime/target.ts";
 
 for (
   const source of [

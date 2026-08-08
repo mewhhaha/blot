@@ -1,55 +1,7 @@
 import { assertEquals } from "@std/assert";
 import { parse } from "../syntax/parse.ts";
 import { UNIT } from "../check/type.ts";
-import { elaborateModule, scheduleComputation } from "./computation.ts";
-
-Deno.test("core distinguishes pure definitions from explicit binds", async () => {
-  const parsed = await parse(
-    `let value = 1
-result <- perform value
-return result
-`,
-  );
-  if (!parsed.ok) throw new Error("core fixture did not parse");
-  const core = scheduleComputation(
-    parsed.module.declarations,
-    parsed.module.result,
-    parsed.module.resultEffects,
-  );
-  assertEquals(core.steps.map((step) => step.tag), ["define", "bind"]);
-  assertEquals(core.result.tag, "return");
-});
-
-Deno.test("core marks an ambient block result as a tail computation", async () => {
-  const parsed = await parse(
-    `if #True:
-  return ()
-return ()
-`,
-  );
-  if (!parsed.ok) throw new Error("tail-computation fixture did not parse");
-  const core = scheduleComputation(
-    parsed.module.declarations,
-    parsed.module.result,
-    parsed.module.resultEffects,
-  );
-  assertEquals(core.result.tag, "tail");
-});
-
-Deno.test("core retains an explicit bind whose result is unused", async () => {
-  const parsed = await parse(
-    `_ <- perform ()
-return ()
-`,
-  );
-  if (!parsed.ok) throw new Error("unused-bind fixture did not parse");
-  const core = scheduleComputation(
-    parsed.module.declarations,
-    parsed.module.result,
-    parsed.module.resultEffects,
-  );
-  assertEquals(core.steps.map((step) => step.tag), ["bind"]);
-});
+import { elaborateModule } from "./computation.ts";
 
 Deno.test("typed core contains settled types and independent expression structure", async () => {
   const parsed = await parse(`let value = ()

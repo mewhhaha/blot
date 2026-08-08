@@ -1,4 +1,4 @@
-import { build } from "../src/backend/compile.ts";
+import { build } from "../src/conformance/gpufuck/compile.ts";
 
 type Study =
   | {

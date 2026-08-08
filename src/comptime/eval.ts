@@ -10,16 +10,14 @@
 // an approximation: `resume` is affine and calling it twice is an error, not a
 // convention.
 
-import type { Expr, Module, Pattern, Span } from "../syntax/ast.ts";
+import type { Decl, Expr, Module, Pattern, Span } from "../syntax/ast.ts";
+import { liveDeclarations } from "../syntax/live.ts";
 import type { RecordAdaptation } from "../check/infer.ts";
-import {
-  type ComputationSchedule,
-  type CoreComputation,
-  type CoreExpression,
-  type CoreStep,
-  scheduleComputation,
-  scheduledResultExpression,
-  type TypedCoreModule,
+import type {
+  CoreComputation,
+  CoreExpression,
+  CoreStep,
+  TypedCoreModule,
 } from "../core/computation.ts";
 import { BlotError, expect, fail } from "../diagnostic.ts";
 import { reify } from "../check/bridge.ts";
@@ -79,6 +77,44 @@ export interface Runtime {
 }
 
 const DEFAULT_EVALUATION_FUEL = 1_000_000;
+
+interface SourceComputationSchedule {
+  readonly steps: readonly {
+    readonly tag: "define" | "bind";
+    readonly declaration: Decl;
+  }[];
+  readonly result:
+    | { readonly tag: "return"; readonly value: Expr }
+    | { readonly tag: "tail"; readonly computation: Expr };
+}
+
+function scheduleSourceComputation(
+  declarations: readonly Decl[],
+  result: Expr,
+  resultEffects: "pure" | "ambient",
+): SourceComputationSchedule {
+  const live = liveDeclarations(declarations, result);
+  const steps: SourceComputationSchedule["steps"][number][] = [];
+  for (const declaration of declarations) {
+    if (!live.has(declaration)) continue;
+    let tag: "define" | "bind" = "define";
+    if (declaration.tag === "binding" && declaration.kind === "effect") {
+      tag = "bind";
+    }
+    steps.push({ tag, declaration });
+  }
+  if (resultEffects === "pure") {
+    return { steps, result: { tag: "return", value: result } };
+  }
+  return { steps, result: { tag: "tail", computation: result } };
+}
+
+function scheduledSourceResultExpression(
+  result: SourceComputationSchedule["result"],
+): Expr {
+  if (result.tag === "return") return result.value;
+  return result.computation;
+}
 
 export function evaluationRuntime(
   imports: Imports,
@@ -298,14 +334,14 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
       if (env.module !== null && env.module.scope === "parameter") {
         scope = moduleEnv(env, env.module.identity);
       }
-      const computation = scheduleComputation(
+      const computation = scheduleSourceComputation(
         expr.declarations,
         expr.result,
         expr.resultEffects,
       );
       yield* runDeclarations(computation.steps, scope, runtime);
       return yield* evaluate(
-        scheduledResultExpression(computation.result),
+        scheduledSourceResultExpression(computation.result),
         scope,
         runtime,
       );
@@ -781,7 +817,7 @@ function* evaluateCoreExpression(
  * which the bodies happen to be forced.
  */
 function* runDeclarations(
-  steps: ComputationSchedule["steps"],
+  steps: SourceComputationSchedule["steps"],
   scope: Env,
   runtime: Runtime,
 ): Generator<Perform, void, Value> {

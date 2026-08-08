@@ -194,7 +194,7 @@ of instantiation. The representation removes frontend and checking work for the
 trusted prelude while retaining its once-per-session compile-time evaluation and
 one artifact read. The profile did not show a dominant finite-row scan, so it
 did not justify explicit SIMD in the solver. Operational numbers and
-reproduction commands live in [`docs/rust-middle.md`](../docs/rust-middle.md).
+reproduction commands live in [`docs/compiler.md`](../docs/compiler.md).
 
 ## 7. Optimization acceptance
 

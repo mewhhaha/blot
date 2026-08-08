@@ -235,7 +235,7 @@ async function buildPackages(paths: readonly string[]): Promise<number> {
 async function buildFiles(
   paths: readonly string[],
 ): Promise<number> {
-  const backend = await import("./backend/build.ts");
+  const backend = await import("./compiler/build.ts");
   const outcomes = await backend.buildBatch(paths);
   let failures = 0;
   for (const outcome of outcomes) {

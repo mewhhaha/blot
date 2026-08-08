@@ -1,6 +1,6 @@
 tree-sitter-blot/
 *.wasm
-!generated/rust-middle/compiler.wasm
+!generated/compiler/compiler.wasm
 *.wasm.json
 formal/lean/.lake/
-experiments/rust-middle/target/
+compiler/target/

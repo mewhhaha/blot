@@ -9,11 +9,11 @@
 // Needs a WebGPU adapter, so it is not part of `deno test`: `blot check` and
 // the corpus tests stay runnable without a device.
 
-import { BlotCompilerSession } from "../src/backend/compile.ts";
-import { hostInit } from "../src/backend/host.ts";
+import { BlotCompilerSession } from "../src/conformance/gpufuck/compile.ts";
+import { hostInit } from "../src/conformance/gpufuck/host.ts";
 import { evaluateFile } from "../src/run.ts";
 import { shapeOf, show, UNIT, type Value } from "../src/comptime/value.ts";
-import type { RuntimeConstructor } from "../src/backend/lower.ts";
+import type { RuntimeConstructor } from "../src/conformance/gpufuck/lower.ts";
 import { join } from "@std/path";
 
 const examples: string[] = [];

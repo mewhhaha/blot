@@ -29,8 +29,8 @@ generated DFA and island plan, lowers the compact CST, evaluates comptime,
 infers and checks the program, performs ownership analysis and staging,
 constructs Runtime HIR and ABI 1, and emits the final WebAssembly binary.
 
-The compiler is checked in as `generated/rust-middle/compiler.wasm`, so normal
-use and package consumers do not need Cargo. One process owns a resident Rust
+The compiler is checked in as `generated/compiler/compiler.wasm`, so normal use
+and package consumers do not need Cargo. One process owns a resident Rust
 session. A revision consists of the entry source plus the revisions of every
 resolved import and included file; an unchanged revision returns the cached
 binary artifact. Changes invalidate the affected entry before compilation.
@@ -58,7 +58,7 @@ without returning to TypeScript. Canonical text results are bounds-checked and
 UTF-8-checked before they enter that residual program, including text nested in
 structural host results. Structural fields use canonical ordering and dynamic
 signed arithmetic traps on overflow. The benchmark and current measurements are
-in [`docs/rust-middle.md`](rust-middle.md).
+in [`docs/compiler.md`](compiler.md).
 
 Generated-artifact execution is measured separately from compiler latency. The
 Blot-Wasm versus Rust-Wasm workloads, current results, and unsupported runtime

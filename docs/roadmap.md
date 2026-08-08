@@ -405,12 +405,13 @@ by the clones — `checkLinearity` runs inside `checkFile`, before the
   bounds and still union. The whole corpus emits byte-identical Wasm.
 
 - **M3b — design 1, seeded from M3a's refusals.** A `src/specialize/` pass in
-  the empty slot at `src/backend/compile.ts` (between `checkFile` and
-  `lowerModule`), returning `(Module', Facts')` so `src/backend/lower.ts` is
-  untouched. Seed the worklist **only** from the sites M3a could not pin down,
-  not from every `var` occurrence — that is what removes design 1's unmeasured
-  path explosion (a 27-line program was measured at over 5,000,000 worklist
-  entries under the specified algorithm). Two hard gates:
+  the empty slot at `src/conformance/gpufuck/compile.ts` (between `checkFile`
+  and `lowerModule`), returning `(Module', Facts')` so
+  `src/conformance/gpufuck/lower.ts` is untouched. Seed the worklist **only**
+  from the sites M3a could not pin down, not from every `var` occurrence — that
+  is what removes design 1's unmeasured path explosion (a 27-line program was
+  measured at over 5,000,000 worklist entries under the specified algorithm).
+  Two hard gates:
   - refuse to clone anything but a syntactic lambda or `rec`, which is what
     closes the effect-duplication and linearity-duplication miscompiles;
   - compute the composed per-use field sets inside checking's `pending` closures
@@ -433,9 +434,9 @@ position, or `pair.1` silently becomes `pair.0` (`nominal()` keeps `fields` in
 first-seen order while keying canonically, so the sorted-set discipline is
 load-bearing and needs a test with a tuple projected `.1` before `.0`); and
 `lowerHandle` reads its computation and handler as _syntax_ through
-`Scope.literals` (`src/backend/lower.ts:283`, `:727`), so the specializer needs
-an explicit `@handle` carve-out and an example with a handler over a
-width-subtyped function.
+`Scope.literals` (`src/conformance/gpufuck/lower.ts:283`, `:727`), so the
+specializer needs an explicit `@handle` carve-out and an example with a handler
+over a width-subtyped function.
 
 **Corpus.** None start compiling — all of them already did. What M3a landed
 instead is `examples/projected.blot`, which exercises the feature at all: a
@@ -454,9 +455,9 @@ because M3a adds no constraint and no principal type may move.
 
 **Size.** M3a: ~100 lines across `src/check/constrain.ts`, `src/check/infer.ts`,
 `src/check/mod.ts`, plus ~20 lines of resolution and diagnostic in
-`src/backend/lower.ts`. M3b: ~250 lines in a new `src/specialize/`. M3c: ~60
-lines in `src/check/mod.ts`. Largest milestone here; M3a alone is worth landing
-and shipping before M3b starts.
+`src/conformance/gpufuck/lower.ts`. M3b: ~250 lines in a new `src/specialize/`.
+M3c: ~60 lines in `src/check/mod.ts`. Largest milestone here; M3a alone is worth
+landing and shipping before M3b starts.
 
 ---
 
@@ -526,10 +527,10 @@ same program print `Int`. `src/check/print.ts:94` dedupes by rendered string, so
 — `(0 |
 10)` in `examples/linear.blot` must stay) and head merging for `array`
 and `variant` bounds. Then delete the hand-rolled duplicate of this in
-`src/backend/lower.ts`'s `exportSchema`, which exists only because the checker
-hands the backend an unnormalized bound list. Free — a read-time coalescing
-rule, not a constraint rule. `for` is blot's flagship desugaring and it makes
-every accumulator look untyped.
+`src/conformance/gpufuck/lower.ts`'s `exportSchema`, which exists only because
+the checker hands the backend an unnormalized bound list. Free — a read-time
+coalescing rule, not a constraint rule. `for` is blot's flagship desugaring and
+it makes every accumulator look untyped.
 
 **5b. Widen constructor singletons on `:=`.** `let f = True; f := False;` is
 refused — `must preserve #True, found #False` — and even an explicit

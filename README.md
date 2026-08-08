@@ -118,7 +118,7 @@ checked-in Wasm parses source, checks and stages the program, constructs the
 caller ABI, and emits the final WebAssembly module. Baba generates the parser
 tables embedded at build time; normal compilation loads neither Baba nor
 gpupaper. The conformance gates and end-to-end benchmark are documented in
-[docs/rust-middle.md](docs/rust-middle.md).
+[docs/compiler.md](docs/compiler.md).
 
 ```ts
 import { Compiler } from "@mewhhaha/blot";

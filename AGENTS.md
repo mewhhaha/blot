@@ -49,6 +49,13 @@ must pass through Baba's `CpuFrontend` and Blot's CST materializer. The WebGPU
 executor is an experimental comparison target, not a compiler fallback or a
 release gate under the general profile.
 
+**Raw source crosses the production boundary.** The TypeScript compiler wrapper
+resolves files, packages, imports, and includes, then gives the exact source to
+the Rust/WebAssembly compiler. Layout elaboration, rebinding-frame validation,
+and CST-to-AST elaboration are production compiler work. The TypeScript versions
+exist for formatting, editor support, source evaluation, and conformance; never
+run them as semantic pre-passes before `Compiler` sees a module.
+
 **Nothing is implicitly in scope.** The prelude is an ordinary module reached
 through `@import` and spread with `open`; it gets no seeding, no privileged
 scope, and no exemption from its own type system. A default fixity names a

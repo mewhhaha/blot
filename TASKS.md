@@ -43,16 +43,16 @@ how a checker disagreement stays invisible: a program can be accepted by
 two commands never meet.
 
 `RustMiddle` already exposes `evaluateCompilerSessionModule`, and
-`experiment:rust-middle-eval-parity` already drives it, so `eval` is mostly a
-matter of surfacing it on `RustMiddleCompiler` and matching the printed value
-format the example corpus asserts. `ownership` needs the Rust ownership facts
-exported from the session first.
+`experiment:compiler-eval-parity` already drives it, so `eval` is mostly a
+matter of surfacing it on `Compiler` and matching the printed value format the
+example corpus asserts. `ownership` needs the Rust ownership facts exported from
+the session first.
 
 Until both move, `spec/COMPILER.md` records the exception and the usage text
 names which engine answered.
 
-Fold `experiment:rust-middle-eval-parity`'s skip list in while doing it: it
-skips every module with a module parameter or an unhandled effect, so the two
+Fold `experiment:compiler-eval-parity`'s skip list in while doing it: it skips
+every module with a module parameter or an unhandled effect, so the two
 evaluators are never compared on a program that performs a host effect — the
 class where `spec/COMPILER.md` says operation order is the observable semantics.
 

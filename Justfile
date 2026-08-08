@@ -76,16 +76,16 @@ check:
   deno lint
   deno task corpus
   rustfmt --edition 2024 --check experiments/generated-code/counterpart.rs
-  cargo fmt --manifest-path experiments/rust-middle/Cargo.toml --check
-  cargo clippy --manifest-path experiments/rust-middle/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
-  cargo test --manifest-path experiments/rust-middle/Cargo.toml
+  cargo fmt --manifest-path compiler/Cargo.toml --check
+  cargo clippy --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+  cargo test --manifest-path compiler/Cargo.toml
   # Exact bytes, so this reproduces only under the Rust release CI pins.
-  deno task check:rust-middle-artifact
-  deno task experiment:rust-middle-parity
-  deno task experiment:rust-middle-check-parity
-  deno task experiment:rust-middle-eval-parity
-  deno task experiment:rust-middle-hir-parity
-  deno task verify:rust-compiler
+  deno task check:compiler-artifact
+  deno task conformance:frontend
+  deno task conformance:check
+  deno task conformance:eval
+  deno task conformance:hir
+  deno task verify:compiler
 
 test:
   deno test --allow-read --allow-write

@@ -1,9 +1,9 @@
 import { assertEquals } from "@std/assert";
-import { RustMiddleCompiler } from "../../src/backend/rust_middle.ts";
+import { Compiler } from "../../src/compiler/session.ts";
 import { instantiateWorkload, WORKLOADS } from "./workloads.ts";
 
 Deno.test("generated workload observations match their independent models", async () => {
-  const compiler = await RustMiddleCompiler.create();
+  const compiler = await Compiler.create();
   try {
     for (const workload of WORKLOADS) {
       const artifact = await compiler.compile(workload.programPath);
