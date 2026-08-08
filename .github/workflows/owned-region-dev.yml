@@ -72,6 +72,77 @@ jobs:
           deno run --allow-read --allow-write src/cli.ts fmt examples/owned_slice_quicksort.blot
           cargo check --manifest-path experiments/rust-middle/Cargo.toml --target wasm32-unknown-unknown
           deno task build:rust-middle
+
+          cat > examples/__region_diag_rec_passthrough.blot <<'BLOT'
+          open @import "blot:prelude" ()
+          let pass =
+            rec (fn (region, n) =>
+              if n < 1:
+                return region
+              else:
+                return pass (!region, n - 1)
+            )
+          let region = Slice.claim [1, 2]
+          return Slice.freeze (pass (!region, 1))
+          BLOT
+          cat > examples/__region_diag_rec_read.blot <<'BLOT'
+          open @import "blot:prelude" ()
+          let pass =
+            rec (fn (region, n) =>
+              let value = case Slice.get ((&region), 0) of
+                #Some item => item
+                #None => 0
+              if n < 1:
+                return (region, value)
+              else:
+                return pass (!region, n - 1)
+            )
+          let region = Slice.claim [1, 2]
+          let (region, value) = pass (!region, 1)
+          let _ = Slice.freeze (!region)
+          return value
+          BLOT
+          cat > examples/__region_diag_rec_swap.blot <<'BLOT'
+          open @import "blot:prelude" ()
+          let swap_once = fn region =>
+            return case Slice.swap ((!region), 0, 1) of
+              #Updated !updated => updated
+              #SwapOutOfBounds !original => original
+          let pass =
+            rec (fn (region, n) =>
+              if n < 1:
+                return region
+              else:
+                let region = swap_once (!region)
+                return pass (!region, n - 1)
+            )
+          let region = Slice.claim [1, 2]
+          return Slice.freeze (pass (!region, 1))
+          BLOT
+          cat > examples/__region_diag_nonrec_partition.blot <<'BLOT'
+          open @import "blot:prelude" ()
+          let keep_swap = fn (region, left, right) =>
+            return case Slice.swap ((!region), left, right) of
+              #Updated !updated => updated
+              #SwapOutOfBounds !original => original
+          let partition = fn (region, pivot, scan, boundary) =>
+            let current = case Slice.get ((&region), scan) of
+              #Some value => value
+              #None => pivot
+            if current <= pivot:
+              return (keep_swap ((!region), scan, boundary), boundary + 1)
+            else:
+              return (region, boundary)
+          let region = Slice.claim [2, 1]
+          let (region, _) = partition (!region, 2, 0, 0)
+          return Slice.freeze (!region)
+          BLOT
+          for f in examples/__region_diag_*.blot; do
+            echo "===== $f ====="
+            deno run --allow-read src/cli.ts check "$f" || true
+          done
+          rm examples/__region_diag_*.blot
+
           deno run --allow-read src/cli.ts check examples/owned_slice_quicksort.blot
           deno test --allow-read --allow-write experiments/owned-regions/*.test.ts
           deno task corpus
