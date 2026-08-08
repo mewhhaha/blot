@@ -31,6 +31,22 @@ jobs:
         run: |
           git pull --rebase origin codex/owned-slices
           python3 experiments/owned-regions/finalize_production.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/prelude/prelude.blot")
+          source = path.read_text()
+          for old, new in [
+              (".get = fn (&region, index) =>", ".get = fn (region, index) =>"),
+              (".set = fn (!region, index, value) =>", ".set = fn (region, index, value) =>"),
+              (".swap = fn (!region, left, right) =>", ".swap = fn (region, left, right) =>"),
+              (".split = fn (!region, index) =>", ".split = fn (region, index) =>"),
+              (".join = fn (!left, !right) =>", ".join = fn (left, right) =>"),
+          ]:
+              if old not in source:
+                  raise SystemExit(f"missing Slice wrapper anchor: {old}")
+              source = source.replace(old, new, 1)
+          path.write_text(source)
+          PY
           cargo fmt --manifest-path experiments/rust-middle/Cargo.toml
           deno fmt \
             src/check/bridge.ts \
