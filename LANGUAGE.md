@@ -368,8 +368,8 @@ one additional indentation level. A delimited value that is already multiline
 likewise moves as a whole, so its opening and closing delimiters share the
 value's indentation scope rather than the declaration's prefix. A vertical
 delimiter indents its contents one level and closes one level outside them. The
-formatter writes value conditionals vertically, expanding each direct branch
-value into a block whose explicit `return` supplies that value. When the
+formatter writes a conditional vertically, giving each branch a block whose
+explicit `return` supplies the value that branch contributes. When the
 conditional is itself the terminal result of a scope, the formatter omits the
 redundant outer `return` and lets those branch returns target the scope
 directly. Arrays use one line when they fit within their value scope and
@@ -389,9 +389,10 @@ let descriptive_pattern =
 
 The indented continuation accepts a lambda, element, or ordinary expression. An
 `if` immediately after the newline begins the binding's existing block form,
-where it is a statement conditional; parenthesize it when the binding must
-continue with a value conditional instead. The continuation changes layout only
-and does not introduce another scope.
+where it is a statement conditional whose branches `return` the value the
+binding takes. `case` is what selects a value in place (§8.1); there is no
+spelling that makes the `if` itself the value. The continuation changes layout
+only and does not introduce another scope.
 
 `let` defines a value in the current phase, matches its pattern when demanded,
 and binds the pattern's names.
@@ -791,11 +792,11 @@ return
 `return` inside it supplies the block value. The value may follow `return` on
 the same line or in an indented continuation. `return` exits the nearest
 enclosing module or explicit `do` block with that value. Statement conditionals
-and `for` bodies do not establish return scopes, so a return crosses them.
-Value-producing `if` and `case` expressions are separate result scopes and do
-not inherit that surrounding target. Their branches are values, so an indented
-branch may contain statements; a return in that block supplies the branch, and
-therefore the expression, rather than escaping farther.
+and `for` bodies do not establish return scopes, so a return crosses them. A
+`case` expression is a separate result scope and does not inherit that
+surrounding target. Its branches are values, so an indented branch may contain
+statements; a return in that block supplies the branch, and therefore the
+expression, rather than escaping farther.
 
 ## 5. Patterns
 
