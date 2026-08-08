@@ -39,8 +39,8 @@ jobs:
           for old, new in [
               ("    .of = @region.array.type;\n", ""),
               (".get = fn (&region, index) =>", ".get = fn (region, index) =>"),
-              (".set = fn (!region, index, value) =>", ".set = fn (region, index, value) =>"),
-              (".swap = fn (!region, left, right) =>", ".swap = fn (region, left, right) =>"),
+              (".set = fn (!region, index, value) =>\n      @region.array.set (!region) index value\n    ;", ".set = fn (region, index, value) => @region.array.set (!region) index value;"),
+              (".swap = fn (!region, left, right) =>\n      @region.array.swap (!region) left right\n    ;", ".swap = fn (region, left, right) => @region.array.swap (!region) left right;"),
               (".split = fn (!region, index) =>", ".split = fn (region, index) =>"),
               (".join = fn (!left, !right) =>", ".join = fn (left, right) =>"),
           ]:
@@ -49,9 +49,8 @@ jobs:
               source = source.replace(old, new, 1)
           prelude.write_text(source)
 
-          # Intrinsics are lexed as @namespace.operation. The prototype's
-          # @region.array.operation spelling had one namespace segment too many.
-          # Region is array-only in v1, so the trusted names are @region.*.
+          # Region is array-only in v1. Use compact trusted intrinsic names in
+          # source while keeping the compiler-private Region type distinct.
           paths = [
               "src/check/region_primitives.ts",
               "src/comptime/region_primitives.ts",
@@ -70,8 +69,7 @@ jobs:
               path = Path(name)
               if not path.exists():
                   continue
-              text = path.read_text()
-              text = text.replace("@region.array.", "@region.")
+              text = path.read_text().replace("@region.array.", "@region.")
               path.write_text(text)
           PY
           cargo fmt --manifest-path experiments/rust-middle/Cargo.toml
