@@ -26,6 +26,47 @@ async function evaluate(source: string, fuel = 1_000): Promise<unknown> {
   );
 }
 
+Deno.test("an unused deferred argument is never evaluated", async () => {
+  assertEquals(
+    await evaluate(`let ignore = fn ~_ => 42
+return ignore (@panic "unused")
+`),
+    { tag: "int", value: 42n },
+  );
+});
+
+Deno.test("a demanded deferred argument is evaluated once", async () => {
+  assertEquals(
+    await evaluate(`let use = fn ~value => value
+return use 42
+`),
+    { tag: "int", value: 42n },
+  );
+});
+
+Deno.test("a deferred parameter cannot be demanded twice directly", async () => {
+  const error = await assertRejects(
+    async () => {
+      await evaluate(`let twice = fn ~value => (value, value)
+return twice 21
+`);
+    },
+    BlotError,
+  );
+  assertEquals(error.diagnostic.code, "BLOT_DEFERRED_DEMANDED_TWICE");
+});
+
+Deno.test("a deferred parameter can be forced once into an ordinary binding", async () => {
+  assertEquals(
+    await evaluate(`let twice = fn ~value => do:
+  let value = value
+  return @int.add value value
+return twice 21
+`),
+    { tag: "int", value: 42n },
+  );
+});
+
 Deno.test("evaluation stops at its deterministic fuel limit", async () => {
   const error = await assertRejects(
     async () => {

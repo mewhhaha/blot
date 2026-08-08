@@ -101,6 +101,12 @@ export type Expr =
     readonly tag: "lambda";
     readonly parameter: Pattern;
     readonly body: Expr;
+    /**
+     * The caller suspends the argument until the parameter is read. Absent on
+     * an ordinary lambda rather than `false`, so the two spell the same tree
+     * the Rust middle builds for source that never writes `~`.
+     */
+    readonly deferred?: boolean;
     readonly span: Span;
   }
   | {

@@ -80,6 +80,7 @@ export const DEFAULT_FIXITIES: readonly Fixity[] = [
   entry("%", "left", 70, "Num.rem"),
 
   entry("-", "prefix", 90, "Num.negate"),
+  entry("~", "prefix", 90, "@type.defer"),
   entry("!", "prefix", 90, "@linear.own"),
   entry("?", "prefix", 90, "@linear.maybe"),
   entry("&", "prefix", 90, "@linear.borrow"),

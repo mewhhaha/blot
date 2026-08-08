@@ -155,6 +155,11 @@ const REJECTIONS: Record<
     code: "BLOT_LINEAR_CONSUMED_TWICE",
     stage: "check",
   },
+  "deferred_at_runtime": { code: "BLOT_DEFERRED_AT_RUNTIME", stage: "check" },
+  "deferred_demanded_twice": {
+    code: "BLOT_DEFERRED_DEMANDED_TWICE",
+    stage: "check",
+  },
   "effect_not_discharged": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },
   "for_type_drift": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "rebinding_type_change": { code: "BLOT_TYPE_ERROR", stage: "check" },

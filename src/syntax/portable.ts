@@ -162,6 +162,10 @@ export function encodePortableModule(module: Module): PortableModule {
           tag: expression.tag,
           parameter: patternId(expression.parameter),
           body: expressionId(expression.body),
+          // Written only when set, so an ordinary lambda encodes exactly as it
+          // did before deferred parameters existed. A capsule that dropped it
+          // would hand the importer a strict function under a deferred name.
+          ...(expression.deferred === true ? { deferred: true } : {}),
           span: expression.span,
         };
         break;
@@ -581,6 +585,7 @@ export function decodePortableModule(
               `${location} expression ${index} body`,
             ),
           ),
+          ...(node.deferred === true ? { deferred: true } : {}),
           span,
         };
         break;

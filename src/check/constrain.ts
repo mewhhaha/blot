@@ -163,6 +163,18 @@ function constrainWithState(
   }
 
   if (lhs.tag === "fun" && rhs.tag === "fun") {
+    // Deferredness is part of the arrow, so the two shapes are both functions
+    // and `describe` has nothing left to tell them apart with. Say which
+    // convention each side wants instead: the caller decides whether to
+    // evaluate the argument, so a function cannot stand in for one that
+    // decides the other way.
+    if ((lhs.deferred ?? false) !== (rhs.deferred ?? false)) {
+      throw new TypeError_(
+        lhs.deferred === true
+          ? "a function whose parameter is deferred is not a function whose parameter is strict"
+          : "a function whose parameter is strict is not a function whose parameter is deferred",
+      );
+    }
     constrainWithState(rhs.param, lhs.param, state);
     constrainWithState(lhs.result, rhs.result, state);
     constrainWithState(lhs.effects, rhs.effects, state);
@@ -374,6 +386,7 @@ function extrude(
         param: extrude(type.param, !polarity, level, seen, state),
         effects: extrude(type.effects, polarity, level, seen, state),
         result: extrude(type.result, polarity, level, seen, state),
+        deferred: type.deferred,
       };
     case "forall":
       return {
@@ -525,6 +538,7 @@ function freshenAbove(
           freshenedTypes,
           instances,
         ),
+        deferred: type.deferred,
       };
       freshenedTypes.set(type, freshened);
       return freshened;
@@ -640,6 +654,7 @@ function substituteRigid(
         param: substituteRigid(type.param, replacements),
         effects: substituteRigid(type.effects, replacements),
         result: substituteRigid(type.result, replacements),
+        deferred: type.deferred,
       };
     case "record":
       return {

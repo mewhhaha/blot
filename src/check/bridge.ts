@@ -104,7 +104,12 @@ function bridgeValue(
         if (effect.host) hostLabels.add(effectLabel(effect));
         labels.push(effectLabel(effect));
       }
-      return fun(domain, codomain, effectRow(labels));
+      return fun(
+        domain,
+        codomain,
+        effectRow(labels),
+        value.deferred === true,
+      );
     }
 
     case "union": {
@@ -325,6 +330,9 @@ export function reify(type: SimpleType): Value | null {
         const effect = effectValues.get(label);
         if (effect === undefined) return null;
         effects.push(effect);
+      }
+      if (type.deferred === true) {
+        return { tag: "arrow", domain, codomain, effects, deferred: true };
       }
       return { tag: "arrow", domain, codomain, effects };
     }

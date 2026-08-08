@@ -69,6 +69,18 @@ export type Value =
     readonly payload: Value | null;
   }
   | {
+    /** Internal suspended source expression used only while evaluating a call. */
+    readonly tag: "deferred";
+    readonly expression: Expr;
+    readonly env: Env;
+    readonly state: { used: boolean };
+  }
+  | {
+    /** Prefix `~T` while a source type expression is being evaluated. */
+    readonly tag: "deferred-type";
+    readonly inner: Value;
+  }
+  | {
     readonly tag: "closure";
     readonly parameter: Pattern;
     readonly body: Expr;
@@ -84,6 +96,8 @@ export type Value =
      * declarations rather than written as a lambda anywhere.
      */
     readonly source?: Expr;
+    /** The source calling convention suspends this closure's argument. */
+    readonly deferred?: boolean;
     /**
      * Set only on a module closure. Two files may write the same relative
      * specifier and mean different targets, so the import table belongs to the
@@ -140,6 +154,7 @@ export type Value =
     readonly domain: Value;
     readonly codomain: Value;
     readonly effects: readonly Value[];
+    readonly deferred?: boolean;
   }
   | { readonly tag: "type-variable"; readonly id: number }
   | {
@@ -377,6 +392,8 @@ export function show(value: Value): string {
   if (value.tag === "closure" || value.tag === "core-closure") {
     return "<function>";
   }
+  if (value.tag === "deferred") return "<deferred>";
+  if (value.tag === "deferred-type") return `~${show(value.inner)}`;
   if (value.tag === "primitive") return `<${value.name}>`;
   if (value.tag === "native") return `<host ${value.name}>`;
   if (value.tag === "continuation") return "<resume>";
@@ -422,7 +439,8 @@ export function show(value: Value): string {
     const row = value.effects.length === 0
       ? ""
       : ` ~ { ${value.effects.map(effectName).sort().join(", ")} }`;
-    return `${show(value.domain)} -> ${show(value.codomain)}${row}`;
+    const demand = value.deferred === true ? "~" : "";
+    return `${demand}${show(value.domain)} -> ${show(value.codomain)}${row}`;
   }
   if (value.tag === "union") return value.members.map(show).join(" | ");
   if (value.tag === "tag") {
@@ -487,6 +505,9 @@ export function equal(left: Value, right: Value): boolean {
     return left.value === right.value;
   }
   if (left.tag === "unit" || left.tag === "unbounded") return true;
+  if (left.tag === "deferred-type" && right.tag === "deferred-type") {
+    return equal(left.inner, right.inner);
+  }
   if (left.tag === "tag" && right.tag === "tag") {
     if (left.name !== right.name) return false;
     if (left.payload === null || right.payload === null) {
@@ -519,7 +540,8 @@ export function equal(left: Value, right: Value): boolean {
     // The row is part of the identity. Two arrows that agree on what they
     // accept and return but not on what they perform are two types, and
     // treating them as one would let `@type.diff` remove the effectful one.
-    return equal(left.domain, right.domain) &&
+    return (left.deferred ?? false) === (right.deferred ?? false) &&
+      equal(left.domain, right.domain) &&
       equal(left.codomain, right.codomain) &&
       left.effects.length === right.effects.length &&
       left.effects.every((effect) =>

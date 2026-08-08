@@ -2078,8 +2078,26 @@ impl Checker {
             Expression::Lambda {
                 parameter,
                 body: body_id,
+                deferred,
                 ..
             } => {
+                // Deferral is settled while compiling, so a deferred lambda
+                // belongs to a compile-time declaration. One checked in the
+                // runtime phase is part of the program that runs, where the
+                // argument would be evaluated whether or not the parameter is
+                // read — the same refusal source elaboration makes when it
+                // builds Core.
+                if deferred && self.phase.get() == Phase::Runtime {
+                    return Err(Diagnostic::new(
+                        "BLOT_DEFERRED_AT_RUNTIME",
+                        concat!(
+                            "A deferred parameter is only supplied while compiling. This ",
+                            "function survives into the running program, where its argument ",
+                            "would run whether or not the parameter is read."
+                        ),
+                        expression_span(&expression),
+                    ));
+                }
                 let parameter_type = self.fresh();
                 let mut scope = TypeEnvironment::child(Rc::new(environment.clone()));
                 self.bind_pattern(module, parameter, parameter_type.clone(), &mut scope);

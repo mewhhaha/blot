@@ -2,6 +2,30 @@ import { assert, assertEquals } from "@std/assert";
 import type { Expr } from "./ast.ts";
 import { parse, parseConcrete } from "./parse.ts";
 
+Deno.test("a deferred lambda parameter is recorded on the lambda", async () => {
+  const parsed = await parse(`let lazy = fn ~value => value
+return lazy
+`);
+  assert(parsed.ok);
+  if (!parsed.ok) return;
+  const binding = parsed.module.declarations[0];
+  assert(binding !== undefined && binding.tag === "binding");
+  if (binding === undefined || binding.tag !== "binding") return;
+  assertEquals(binding.value.tag, "lambda");
+  if (binding.value.tag !== "lambda") return;
+  assertEquals(binding.value.deferred, true);
+  assertEquals(binding.value.parameter.tag, "name");
+});
+
+Deno.test("a deferred lambda parameter must be one name", async () => {
+  const parsed = await parse(`let lazy = fn ~(left, right) => left
+return lazy
+`);
+  assert(!parsed.ok);
+  if (parsed.ok) return;
+  assertEquals(parsed.diagnostics[0]?.code, "BLOT_BAD_DEFERRED_PARAMETER");
+});
+
 Deno.test("do is an explicit value-producing statement scope", async () => {
   const source = `let value = do:
   let local = 1

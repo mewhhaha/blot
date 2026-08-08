@@ -376,6 +376,7 @@ fn diagnostic_json(diagnostic: crate::diagnostic::Diagnostic) -> serde_json::Val
 
 fn json_value(value: &Value) -> serde_json::Value {
     match value {
+        Value::Deferred { .. } => serde_json::json!({ "tag": "deferred" }),
         Value::Int(value) => serde_json::json!({ "tag": "int", "value": value.to_string() }),
         Value::Float(value) => serde_json::json!({ "tag": "float", "value": value }),
         Value::Float32(value) => serde_json::json!({ "tag": "float32", "value": value }),

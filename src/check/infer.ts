@@ -789,6 +789,24 @@ export function infer(
   return type;
 }
 
+function functionDeferredness(
+  type: SimpleType,
+  seen = new Set<number>(),
+): boolean | null {
+  if (type.tag === "fun") return type.deferred === true;
+  if (type.tag === "forall") return functionDeferredness(type.body, seen);
+  if (type.tag !== "var" || seen.has(type.id)) return null;
+  seen.add(type.id);
+  let answer: boolean | null = null;
+  for (const bound of [...type.lower, ...type.upper]) {
+    const found = functionDeferredness(bound, seen);
+    if (found === null) continue;
+    if (answer !== null && answer !== found) return null;
+    answer = found;
+  }
+  return answer;
+}
+
 function inferUnrecorded(
   expr: Expr,
   context: Context,
@@ -896,14 +914,23 @@ function inferUnrecorded(
       if (applied !== null) return applied;
 
       const fnType = infer(expr.fn, context, level, row);
-      const argType = infer(expr.arg, context, level, row);
+      const deferred = functionDeferredness(fnType) === true;
+      const argType = deferred
+        ? inferPure(expr.arg, context, level, "A deferred argument")
+        : infer(expr.arg, context, level, row);
       requireEvidencedRuntimeType(argType, expr.arg, context);
       if (context.closedRecordArguments.has(expr.arg)) {
         requireClosedRecord(expr.fn, fnType, argType, expr.arg.span);
       }
       const result = freshVar(level);
       located(expr.span, () => {
-        constrain(fnType, { tag: "fun", param: argType, effects: row, result });
+        constrain(fnType, {
+          tag: "fun",
+          param: argType,
+          effects: row,
+          result,
+          deferred: deferred || undefined,
+        });
       });
       recordApplicationAdaptation(expr.arg, fnType, argType, context);
       return result;
@@ -980,6 +1007,9 @@ function inferUnrecorded(
           level,
           "A function result",
         );
+      }
+      if (expr.deferred === true) {
+        return { tag: "fun", param, effects: bodyRow, result, deferred: true };
       }
       return { tag: "fun", param, effects: bodyRow, result };
     }
@@ -4290,6 +4320,7 @@ function stableRebindingType(
       param: stableRebindingType(type.param),
       effects: stableRebindingType(type.effects),
       result: stableRebindingType(type.result),
+      deferred: type.deferred,
     };
   }
   if (type.tag === "forall") {
@@ -4319,6 +4350,16 @@ function checkAgainst(
     const inferred = infer(expr, context, level + 1, row);
     located(expr.span, () => constrain(inferred, expected));
     return expected;
+  }
+
+  if ((expr.deferred ?? false) !== (expected.deferred ?? false)) {
+    fail(
+      "BLOT_TYPE_ERROR",
+      expected.deferred === true
+        ? "This function signature requires a deferred parameter; write fn ~name => ...."
+        : "This function signature requires a strict parameter; remove ~ from the lambda parameter.",
+      expr.span,
+    );
   }
 
   const scope = childTypeEnv(context.types);
