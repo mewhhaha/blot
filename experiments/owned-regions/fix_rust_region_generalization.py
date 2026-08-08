@@ -103,11 +103,11 @@ replace_once(
 ''',
 )
 
-# The prelude namespace should retain the primitive values themselves. Both
-# checkers already resolve a compile-time record member that is a primitive back
-# to the primitive's polymorphic scheme at each application. Forwarding closures
-# erase that relationship into Region(Top) -> Region(Bottom), which is unusable
-# for invariant Region even though the wrapper is semantically an identity on T.
+# Region is invariant, so an inferred forwarding closure settles its input and
+# output element bounds independently. Give the tupled public operations an
+# explicit rank-N type: every call gets one fresh T shared by all Region
+# occurrences. One-argument operations can remain direct primitive members,
+# which also lets Slice.of expose the Region type constructor for annotations.
 prelude = "src/prelude/prelude.blot"
 replace_once(
     prelude,
@@ -123,18 +123,76 @@ replace_once(
     .freeze = fn !region => @region.array.freeze (!region);
   }
 ''',
-    '''const Slice =
+    '''sig slice_get = @forall (fn T => ((@region.array.type T), Int) -> (#Some T | #None))
+const slice_get = fn (&region, index) => @region.array.get (&region) index
+
+sig slice_set = @forall (fn T => ((@region.array.type T), Int, T) -> (#Updated (@region.array.type T) | #SetOutOfBounds (@region.array.type T)))
+const slice_set = fn (!region, index, value) => @region.array.set (!region) index value
+
+sig slice_swap = @forall (fn T => ((@region.array.type T), Int, Int) -> (#Updated (@region.array.type T) | #SwapOutOfBounds (@region.array.type T)))
+const slice_swap = fn (!region, left, right) => @region.array.swap (!region) left right
+
+sig slice_split = @forall (fn T => ((@region.array.type T), Int) -> (#Split ((@region.array.type T), (@region.array.type T)) | #SplitOutOfBounds (@region.array.type T)))
+const slice_split = fn (!region, index) => @region.array.split (!region) index
+
+sig slice_join = @forall (fn T => ((@region.array.type T), (@region.array.type T)) -> (@region.array.type T))
+const slice_join = fn (!left, !right) => @region.array.join (!left) (!right)
+
+const Slice =
   {
+    .of = @region.array.type;
     .claim = @region.array.claim;
     .length = @region.array.length;
-    .get = @region.array.get;
-    .set = @region.array.set;
-    .swap = @region.array.swap;
-    .split = @region.array.split;
-    .join = @region.array.join;
+    .get = slice_get;
+    .set = slice_set;
+    .swap = slice_swap;
+    .split = slice_split;
+    .join = slice_join;
     .freeze = @region.array.freeze;
   }
 ''',
 )
 
-print("fixed Rust Region generic traversals and preserved Slice primitive schemes")
+example = "examples/owned_slice_quicksort.blot"
+replace_once(
+    example,
+    '''let keep_swap = fn (region, left, right) =>
+''',
+    '''sig keep_swap = ((Slice.of Int), Int, Int) -> (Slice.of Int)
+let keep_swap = fn (region, left, right) =>
+''',
+)
+replace_once(
+    example,
+    '''let partition =
+''',
+    '''sig partition = ((Slice.of Int), Int, Int, Int, Int) -> ((Slice.of Int), Int)
+let partition =
+''',
+)
+replace_once(
+    example,
+    '''let quicksort =
+''',
+    '''sig quicksort = (Slice.of Int) -> (Slice.of Int)
+let quicksort =
+''',
+)
+replace_once(
+    example,
+    '''let quicksort_parts =
+''',
+    '''sig quicksort_parts = ((Slice.of Int), Int) -> (Slice.of Int)
+let quicksort_parts =
+''',
+)
+replace_once(
+    example,
+    '''let quicksort_rest =
+''',
+    '''sig quicksort_rest = ((Slice.of Int), (Slice.of Int)) -> (Slice.of Int)
+let quicksort_rest =
+''',
+)
+
+print("fixed Rust Region generic traversals and preserved tupled Slice Region relations")
