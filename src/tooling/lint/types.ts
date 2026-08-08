@@ -1,6 +1,6 @@
 import type { Diagnostic } from "../../diagnostic.ts";
 import type { Decl, Expr, Module, Pattern, Span } from "../../syntax/ast.ts";
-import type { Rule } from "../../syntax/lower.ts";
+import type { Rule } from "../../syntax/cursor.ts";
 
 export type AstNode = Module | Decl | Expr | Pattern;
 

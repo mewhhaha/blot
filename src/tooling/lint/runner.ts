@@ -1,5 +1,5 @@
 import type { Decl, Expr, Module, Pattern } from "../../syntax/ast.ts";
-import type { Rule } from "../../syntax/lower.ts";
+import type { Rule } from "../../syntax/cursor.ts";
 import { DEFAULT_LINT_RULES } from "./rules.ts";
 import type {
   AstNode,

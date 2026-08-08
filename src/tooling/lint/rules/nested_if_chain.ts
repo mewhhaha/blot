@@ -1,5 +1,5 @@
 import type { Branch, Expr, Span } from "../../../syntax/ast.ts";
-import type { Rule } from "../../../syntax/lower.ts";
+import type { Rule } from "../../../syntax/cursor.ts";
 import { producedExpression, spanKey } from "../syntax.ts";
 import type { AstNode, LintRule, LintRuleContext } from "../types.ts";
 import { prefersEqualityCase } from "./equality_if_chain.ts";

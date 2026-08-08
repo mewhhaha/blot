@@ -2,7 +2,7 @@ import type {
   CompactFrontendProgram,
   CpuFrontend,
 } from "@mewhhaha/baba/runtime/webgpu";
-import type { Rule, TokenCursor } from "./lower.ts";
+import type { Rule, TokenCursor } from "./cursor.ts";
 import {
   compactNamedTokenKinds as namedTokenKinds,
   compactRepeatedFields,
