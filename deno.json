@@ -11,11 +11,13 @@
     "corpus": "deno run --allow-read scripts/compile_corpus.ts",
     "verify:runtime": "deno run --allow-read scripts/verify_runtime.ts",
     "verify:compiler": "deno run --allow-read scripts/verify_runtime.ts --full-rust",
-    "check": "deno run --allow-read scripts/generate_compiler_schema.ts --check && deno check mod.ts scripts/*.ts case-studies/*.ts case-studies/engine/serve.ts experiments/generated-code/*.ts experiments/package/*.ts compiler/*.ts conformance/compiler/*.ts src/cli.ts src/compiler/*.test.ts src/language_service.test.ts src/lsp.test.ts src/load.test.ts src/package.test.ts src/syntax/portable.test.ts src/syntax/surface.test.ts src/tooling/*.test.ts src/check/setops.test.ts src/check/narrow.test.ts src/check/type.test.ts src/check/coverage.test.ts syntax.test.ts examples.test.ts inference.test.ts linear.test.ts comptime.test.ts module.test.ts backend.test.ts",
+    "check": "deno run --allow-read scripts/generate_compiler_schema.ts --check && deno check .",
     "test": "deno test --allow-read --allow-write",
     "blot": "deno run --allow-read --allow-write src/cli.ts",
     "lsp": "deno run --allow-read src/cli.ts lsp",
     "fmt:blot": "deno run --allow-read --allow-write src/cli.ts fmt",
+    "fmt": "deno fmt",
+    "lint": "deno lint",
     "case-study": "deno run --unstable-webgpu --allow-read --allow-env case-studies/run.ts",
     "install": "deno run --allow-read --allow-write --allow-env --allow-run=deno,tree-sitter scripts/setup_helix.ts",
     "engine": "deno run --unstable-webgpu --allow-read --allow-net --allow-env --allow-run=xdg-open,open,explorer case-studies/engine/serve.ts",
@@ -59,6 +61,12 @@
       "!generated/wasm/parser.wasm",
       "!generated/compiler/compiler.wasm",
       "!generated/compiler/prelude.snapshot"
+    ]
+  },
+  "lint": {
+    "exclude": [
+      "generated",
+      "tree-sitter-blot"
     ]
   },
   "fmt": {
