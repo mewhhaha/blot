@@ -206,10 +206,6 @@ function closesLayoutExpression(token: Token): boolean {
   return token.kind === "ELSE_IF" || token.kind === "ANGLE_CLOSE";
 }
 
-export function isLayoutMarker(text: string): boolean {
-  return layoutMarkers.has(text);
-}
-
 async function layoutLexer() {
   if (sharedLexer === null) {
     sharedLexer = createParserAsync({

@@ -197,44 +197,9 @@ export interface TypedCoreModule extends CoreComputation {
   readonly typeRepresentations: TyRepTable;
 }
 
-/**
- * The shared liveness/ordering decision used while consumers migrate to typed
- * Core. It contains source nodes, so it is not a runtime IR and must not gain
- * typing or lowering behavior.
- */
-export interface ComputationSchedule {
-  readonly steps: readonly {
-    readonly tag: "define" | "bind";
-    readonly declaration: Decl;
-  }[];
-  readonly result:
-    | { readonly tag: "return"; readonly value: Expr }
-    | { readonly tag: "tail"; readonly computation: Expr };
-}
-
 export function coreResultExpression(result: CoreResult): CoreExpression {
   if (result.tag === "return") return result.value;
   return result.computation;
-}
-
-export function elaborateComputation(
-  declarations: readonly Decl[],
-  result: Expr,
-  resultEffects: "pure" | "ambient",
-  expressionTypes: ReadonlyMap<Expr, SimpleType>,
-  comptimeValues: ReadonlyMap<Expr, Value> = new Map(),
-  opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>> = new Map(),
-  recordAdaptations: ReadonlyMap<Expr, RecordAdaptation> = new Map(),
-  arrayProofs: ReadonlyMap<Expr, ArrayIndexProof> = new Map(),
-): CoreComputation {
-  const elaborator = new Elaborator(
-    expressionTypes,
-    comptimeValues,
-    opens,
-    recordAdaptations,
-    arrayProofs,
-  );
-  return elaborator.computation(declarations, result, resultEffects);
 }
 
 export function elaborateModule(

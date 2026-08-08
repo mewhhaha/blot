@@ -34,9 +34,9 @@ production compiler is recorded in [`../TASKS.md`](../TASKS.md).
 
 Those gates compare both directions. Comparing rejections alone would let the
 production checker drift towards accepting what the oracle refuses, which is the
-drift that reaches an artifact: `experiment:compiler-check-parity` therefore
-requires the two checkers to agree, by diagnostic code, on the accepted corpus
-as well as the rejected one.
+drift that reaches an artifact: `conformance:check` therefore requires the two
+checkers to agree, by diagnostic code, on the accepted corpus as well as the
+rejected one.
 
 ## 1. Inputs, outputs, and observations
 

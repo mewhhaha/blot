@@ -902,9 +902,9 @@ Correctness gates:
 ```txt
 deno task check
 deno task test
-deno task experiment:compiler-check-parity
-deno task experiment:compiler-hir-parity
-deno task experiment:compiler-eval-parity
+deno task conformance:check
+deno task conformance:hir
+deno task conformance:eval examples/*.blot
 just wasm
 ```
 

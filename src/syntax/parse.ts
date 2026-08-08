@@ -37,16 +37,6 @@ export type ConcreteParseResult =
   | { readonly ok: true; readonly module: Module; readonly cst: Rule }
   | { readonly ok: false; readonly diagnostics: readonly Diagnostic[] };
 
-/** Rebinding-only source validation shared with the public Rust compiler wrapper. */
-export async function rebindingSourceDiagnostics(
-  source: string,
-): Promise<readonly Diagnostic[]> {
-  if (!source.includes(":=")) return [];
-  const parsed = await parseConcrete(source);
-  if (!parsed.ok) return [];
-  return rebindingFrameDiagnostics(parsed.cst);
-}
-
 /** Parses source while retaining Baba's concrete tree for source tooling. */
 export async function parseConcrete(
   source: string,
