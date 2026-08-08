@@ -194,7 +194,7 @@ return Slice.freeze (!restored)
 
 Deno.test("live Slice capabilities are refused at Core Wasm ABI 1", async () => {
   const source = `open @import "blot:prelude" ()
-sig length = (Slice.of Int) -> Int
+sig length = (@region.array.type Int) -> Int
 let length = fn !region =>
   let size = Slice.length (&region)
   let frozen = Slice.freeze (!region)
