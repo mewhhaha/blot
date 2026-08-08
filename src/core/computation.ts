@@ -23,6 +23,7 @@ import type {
   Span,
 } from "../syntax/ast.ts";
 import { patternNames } from "../syntax/ast.ts";
+import { fail } from "../diagnostic.ts";
 import { freeNames, liveDeclarations } from "../syntax/live.ts";
 import { TyRepBuilder, type TyRepId, type TyRepTable } from "./type_rep.ts";
 import type { RecordAdaptation } from "../check/infer.ts";
@@ -584,6 +585,18 @@ class Elaborator {
           name: expression.name,
         };
       case "lambda": {
+        // Core has one calling convention, and it evaluates the argument. A
+        // deferred lambda that reaches it would be run strictly by every
+        // consumer of Core — the evaluator, the backend, the oracle — while
+        // the source said the argument may never run at all. Refusing here is
+        // what keeps `eval` and `build` answering the same way.
+        if (expression.deferred === true) {
+          fail(
+            "BLOT_DEFERRED_AT_RUNTIME",
+            "A deferred parameter is only supplied while compiling. This function survives into the running program, where its argument would run whether or not the parameter is read.",
+            expression.span,
+          );
+        }
         const outerRuntimeNames = this.#runtimeNames;
         this.#runtimeNames = new Set(outerRuntimeNames);
         for (const name of patternNames(expression.parameter)) {

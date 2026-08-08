@@ -816,6 +816,10 @@ function handledLambda(expr: Expr, scope: Scope): RuntimeLambda | null {
       tag: "lambda",
       parameter: value.parameter,
       body: value.body,
+      // A closure rebuilt from its parts keeps its calling convention. A
+      // residual lambda that lost it would be lowered as an ordinary one, and
+      // its argument would run where the evaluator never demanded it.
+      deferred: value.deferred,
       span,
     },
     environment: childScope(null, value.env),
@@ -2688,6 +2692,18 @@ function lower(
     }
 
     case "lambda": {
+      // A deferred parameter is a calling convention the comptime evaluator
+      // implements and this backend does not. Lowering it as an ordinary
+      // lambda would make the evaluator and the emitted Wasm disagree about
+      // whether the argument runs at all, so it is refused here rather than
+      // compiled into a program that means something else.
+      if (expr.deferred === true) {
+        fail(
+          "BLOT_UNSUPPORTED_LOWERING",
+          "A deferred parameter reaches WebAssembly. `fn ~name => ...` suspends its argument while compiling; a function that survives to run must take its parameter strictly.",
+          expr.span,
+        );
+      }
       const inner = childScope(scope);
       inner.capture = { escaped: false };
       const parameter = lowering.fresh("arg");
@@ -4735,6 +4751,18 @@ function lowerApply(
 
   const specialized = specializableLambda(expr.fn, scope);
   if (specialized !== null) {
+    // The argument is lowered here whether or not the body reads the
+    // parameter, which is the opposite of what a deferred parameter promises.
+    // The evaluator settled its own calls already; one that reaches this point
+    // is residual, and the emitted program would run an argument the
+    // evaluator never demanded.
+    if (specialized.expression.deferred === true) {
+      fail(
+        "BLOT_DEFERRED_AT_RUNTIME",
+        "A deferred parameter is only supplied while compiling. This call survives into the emitted program, where the argument would run whether or not the parameter is read.",
+        expr.span,
+      );
+    }
     return lowerSpecializedApplication(
       specialized,
       expr.arg,

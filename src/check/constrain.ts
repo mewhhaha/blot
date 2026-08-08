@@ -163,8 +163,17 @@ function constrainWithState(
   }
 
   if (lhs.tag === "fun" && rhs.tag === "fun") {
+    // Deferredness is part of the arrow, so the two shapes are both functions
+    // and `describe` has nothing left to tell them apart with. Say which
+    // convention each side wants instead: the caller decides whether to
+    // evaluate the argument, so a function cannot stand in for one that
+    // decides the other way.
     if ((lhs.deferred ?? false) !== (rhs.deferred ?? false)) {
-      mismatch(lhs, rhs);
+      throw new TypeError_(
+        lhs.deferred === true
+          ? "a function whose parameter is deferred is not a function whose parameter is strict"
+          : "a function whose parameter is strict is not a function whose parameter is deferred",
+      );
     }
     constrainWithState(rhs.param, lhs.param, state);
     constrainWithState(lhs.result, rhs.result, state);

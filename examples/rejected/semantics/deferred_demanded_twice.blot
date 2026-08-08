@@ -1,0 +1,11 @@
+// A deferred parameter is read at most once. Reading it twice would evaluate
+// the suspended argument twice, so the second read is refused rather than
+// silently repeating the work the caller handed over. `const` is what puts the
+// call where deferral is decided: while compiling.
+open @import "blot:prelude" ()
+
+const twice = fn ~value => (value, value)
+
+const pair = twice 21
+
+return pair

@@ -1026,6 +1026,32 @@ that purpose.
 The `=>` token is reserved for lambda parameters and case arms. A lambda written
 without `fn` is therefore a syntax error rather than an operator chain.
 
+A parameter written `~name` is deferred: the caller suspends the argument
+expression and it is evaluated only where the body reads the name.
+
+```blot
+let unless = fn condition => fn ~fallback => case condition of
+  #True => 0
+  #False => fallback
+```
+
+Deferral is a property of the arrow, not of the call. `~A -> B` is the type of a
+function whose parameter is deferred, `@type.defer` is the primitive the prefix
+names, and the two arrows are unrelated: a strict function does not satisfy a
+deferred signature and a deferred one does not satisfy a strict signature, in a
+`sig`, at an application, and under `refines` alike. `~` is read as a prefix
+here and as the row separator after a `->` in §12.4; the grammar position
+decides which, and neither form can appear where the other is meant.
+
+A deferred argument must be pure, and its parameter may be read at most once —
+reading it twice is `BLOT_DEFERRED_DEMANDED_TWICE`, and forcing it once into an
+ordinary `let` is how a program uses the value more than once.
+
+Deferral is settled while compiling. A call that survives into the emitted
+program is `BLOT_DEFERRED_AT_RUNTIME`, because WebAssembly has no representation
+for a suspension and would run an argument the evaluator never demanded — the
+two executions would then disagree about a program that traps.
+
 ### 6.4 Blocks
 
 ```blot
@@ -1796,6 +1822,7 @@ Compiler output uses notation that is not additional source syntax:
 | `#Some Int \| ..`         | variant with an open set        |
 | `A -> B`                  | pure function                   |
 | `A -> B ~ { Console, e }` | function with an effect row     |
+| `~A -> B`                 | deferred parameter (§6.3)       |
 | `'a`, `'b`                | inferred type variables         |
 | `forall 'q0. ...`         | explicit quantified type        |
 | `⊤`, `⊥`                  | top and bottom                  |
@@ -2532,6 +2559,7 @@ The prelude supplies the two predicates that would otherwise be written inline:
 | `@type.intersect`  | intersection of union members                     |
 | `@type.diff`       | difference of union members                       |
 | `@type.arrow`      | function type value                               |
+| `@type.defer`      | mark a parameter type as deferred                 |
 | `@type.performs`   | attach an effect row to a function type           |
 | `@type.of`         | structural singleton type of a compile-time value |
 | `@type.seal`       | nominally seal a carrier under a text name        |

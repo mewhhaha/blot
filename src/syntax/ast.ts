@@ -101,6 +101,12 @@ export type Expr =
     readonly tag: "lambda";
     readonly parameter: Pattern;
     readonly body: Expr;
+    /**
+     * The caller suspends the argument until the parameter is read. Absent on
+     * an ordinary lambda rather than `false`, so the two spell the same tree
+     * the Rust middle builds for source that never writes `~`.
+     */
+    readonly deferred?: boolean;
     readonly span: Span;
   }
   | {
@@ -232,6 +238,11 @@ export function recursiveGroups(
       close();
       continue;
     }
+    // A `let` and a `const` bound together would put a compile-time closure
+    // and a runtime one in the same knot, which is the capture rule's whole
+    // subject. Changing kind starts a new run instead of being an error,
+    // because two adjacent bindings of different kinds usually have nothing to
+    // do with each other.
     const previous = members[members.length - 1];
     if (
       previous !== undefined &&
@@ -248,6 +259,9 @@ export function recursiveGroups(
 function recursiveMember(declaration: Decl): RecursiveMember | null {
   if (declaration.tag !== "binding") return null;
   if (declaration.kind === "sig") return null;
+  // A `rec` that is not a lambda, or is bound through a compound pattern, is
+  // an error every pass already reports where it stands. Leaving it out of the
+  // group keeps that report rather than replacing it with a grouping message.
   if (declaration.value.tag !== "rec") return null;
   if (declaration.value.lambda.tag !== "lambda") return null;
   if (declaration.pattern.tag !== "name") return null;

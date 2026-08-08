@@ -104,7 +104,7 @@ Deno.test("generative effect identities are recorded once per declaration", asyn
 
 check(
   "a deferred parameter appears in the inferred arrow",
-  `let lazy = fn ~value => value
+  `const lazy = fn ~value => value
 return lazy
 `,
   "~'a -> 'a",
@@ -113,7 +113,7 @@ return lazy
 check(
   "a deferred arrow can be written in a signature",
   `sig lazy = ~Int -> Int
-let lazy = fn ~value => value
+const lazy = fn ~value => value
 return lazy 42
 `,
   "Int",
@@ -131,7 +131,7 @@ return lazy
 rejects(
   "a deferred argument must be pure",
   `const Console = @effect { .write = Str -> Unit; }
-let lazy = fn ~value => value
+const lazy = fn ~value => value
 return lazy (Console.write "hello")
 `,
   "deferred argument",

@@ -2127,7 +2127,10 @@ function lowerLambda(rule: Rule, context: Context): Expr {
     result = {
       tag: "lambda",
       parameter: lowered.pattern,
-      deferred: lowered.deferred || undefined,
+      // Written only when the parameter is deferred, so an ordinary lambda is
+      // the same node it was before this form existed — which is what the
+      // capsule format round-trips and what the Rust middle builds.
+      ...(lowered.deferred ? { deferred: true } : {}),
       body: result,
       span: { start: parameter.span.start, end: rule.span.end },
     };

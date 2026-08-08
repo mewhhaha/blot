@@ -105,6 +105,10 @@ function reflection(fresh: () => SimpleType): SimpleType {
         // is how many there are, which is enough to refuse an arrow that
         // performs rather than guess whether one row contains another.
         ["effects", { tag: "array", element: fresh() }],
+        // Which side evaluates the argument. Reflection answers it for every
+        // arrow, so a program that decides whether one arrow refines another
+        // can see the calling convention the checker compares.
+        ["deferred", BOOL],
       ]),
     ],
     ["Sealed", record([["name", TEXT], ["inner", fresh()]])],
