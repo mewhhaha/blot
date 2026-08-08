@@ -123,16 +123,16 @@ replace_once(
     .freeze = fn !region => @region.array.freeze (!region);
   }
 ''',
-    '''sig slice_get = @forall (fn T => ((@region.array.type T), Int) -> (#Some T | #None))
+    '''sig slice_get = @forall (fn T => ((@region.array.type T), @type.int) -> (#Some T | #None))
 const slice_get = fn (&region, index) => @region.array.get (&region) index
 
-sig slice_set = @forall (fn T => ((@region.array.type T), Int, T) -> (#Updated (@region.array.type T) | #SetOutOfBounds (@region.array.type T)))
+sig slice_set = @forall (fn T => ((@region.array.type T), @type.int, T) -> (#Updated (@region.array.type T) | #SetOutOfBounds (@region.array.type T)))
 const slice_set = fn (!region, index, value) => @region.array.set (!region) index value
 
-sig slice_swap = @forall (fn T => ((@region.array.type T), Int, Int) -> (#Updated (@region.array.type T) | #SwapOutOfBounds (@region.array.type T)))
+sig slice_swap = @forall (fn T => ((@region.array.type T), @type.int, @type.int) -> (#Updated (@region.array.type T) | #SwapOutOfBounds (@region.array.type T)))
 const slice_swap = fn (!region, left, right) => @region.array.swap (!region) left right
 
-sig slice_split = @forall (fn T => ((@region.array.type T), Int) -> (#Split ((@region.array.type T), (@region.array.type T)) | #SplitOutOfBounds (@region.array.type T)))
+sig slice_split = @forall (fn T => ((@region.array.type T), @type.int) -> (#Split ((@region.array.type T), (@region.array.type T)) | #SplitOutOfBounds (@region.array.type T)))
 const slice_split = fn (!region, index) => @region.array.split (!region) index
 
 sig slice_join = @forall (fn T => ((@region.array.type T), (@region.array.type T)) -> (@region.array.type T))
