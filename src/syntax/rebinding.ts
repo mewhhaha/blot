@@ -1,5 +1,5 @@
 import type { Diagnostic } from "../diagnostic.ts";
-import type { Rule } from "./lower.ts";
+import type { Rule } from "./cursor.ts";
 
 interface TokenCursor {
   readonly type: "token";

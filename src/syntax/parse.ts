@@ -5,7 +5,8 @@ import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
 import type { Diagnostic } from "../diagnostic.ts";
 import { BlotError } from "../diagnostic.ts";
 import type { Module } from "./ast.ts";
-import { lowerModule, type Rule } from "./lower.ts";
+import { lowerModule } from "./lower.ts";
+import type { Rule } from "./cursor.ts";
 import { materializeCpuCst } from "./cpu_cst.ts";
 import { elaborateLayout } from "./layout.ts";
 import { rebindingFrameDiagnostics } from "./rebinding.ts";
@@ -36,16 +37,6 @@ export async function parse(source: string): Promise<ParseResult> {
 export type ConcreteParseResult =
   | { readonly ok: true; readonly module: Module; readonly cst: Rule }
   | { readonly ok: false; readonly diagnostics: readonly Diagnostic[] };
-
-/** Rebinding-only source validation shared with the public Rust compiler wrapper. */
-export async function rebindingSourceDiagnostics(
-  source: string,
-): Promise<readonly Diagnostic[]> {
-  if (!source.includes(":=")) return [];
-  const parsed = await parseConcrete(source);
-  if (!parsed.ok) return [];
-  return rebindingFrameDiagnostics(parsed.cst);
-}
 
 /** Parses source while retaining Baba's concrete tree for source tooling. */
 export async function parseConcrete(

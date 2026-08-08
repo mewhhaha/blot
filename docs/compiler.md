@@ -92,7 +92,7 @@ The compiler is checked at each observable boundary:
 Run the source-to-Wasm differential gate directly with:
 
 ```bash
-deno task verify:rust-compiler
+deno task verify:compiler
 ```
 
 Rebuild and verify the checked-in artifact with:
@@ -104,7 +104,7 @@ deno task check:compiler-artifact
 
 ## Fair comparison
 
-`experiment:compiler` measures the complete compiler boundary on both sides. The
+`benchmark:compiler` measures the complete compiler boundary on both sides. The
 TypeScript measurement includes source loading through gpupaper emission; the
 Rust measurement includes source loading through the single-Wasm emitter. It
 compares exact ABI bytes before reporting timings.

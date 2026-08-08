@@ -15,19 +15,19 @@ how a checker disagreement stays invisible: a program can be accepted by
 `blot check` and rejected by `blot eval` without any gate noticing, because the
 two commands never meet.
 
-`RustMiddle` already exposes `evaluateCompilerSessionModule`, and
-`experiment:compiler-eval-parity` already drives it, so `eval` is mostly a
-matter of surfacing it on `Compiler` and matching the printed value format the
-example corpus asserts. `ownership` needs the Rust ownership facts exported from
-the session first.
+`CompilerWasm` already exposes `evaluateCompilerSessionModule`, and
+`conformance:eval` already drives it, so `eval` is mostly a matter of surfacing
+it on `Compiler` and matching the printed value format the example corpus
+asserts. `ownership` needs the Rust ownership facts exported from the session
+first.
 
 Until both move, `spec/COMPILER.md` records the exception and the usage text
 names which engine answered.
 
-Fold `experiment:compiler-eval-parity`'s skip list in while doing it: it skips
-every module with a module parameter or an unhandled effect, so the two
-evaluators are never compared on a program that performs a host effect — the
-class where `spec/COMPILER.md` says operation order is the observable semantics.
+Fold `conformance:eval`'s skip list in while doing it: it skips every module
+with a module parameter or an unhandled effect, so the two evaluators are never
+compared on a program that performs a host effect — the class where
+`spec/COMPILER.md` says operation order is the observable semantics.
 
 ## 2. Recover the lower bound a nested `rec` fold loses
 
@@ -146,7 +146,7 @@ just test
 
 For compiler-artifact changes, also rebuild the checked-in Rust compiler and
 prelude snapshot, verify reproducibility, run the complete Rust compiler
-integration suite, and confirm `verify:rust-compiler` still admits all
-executable examples. Keep `LANGUAGE.md` synchronized with source semantics and
-the focused compiler specifications synchronized with every pass, certificate,
-cache, or Runtime-HIR contract change.
+integration suite, and confirm `verify:compiler` still admits all executable
+examples. Keep `LANGUAGE.md` synchronized with source semantics and the focused
+compiler specifications synchronized with every pass, certificate, cache, or
+Runtime-HIR contract change.

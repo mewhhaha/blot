@@ -254,17 +254,6 @@ export const I8X16_MASK_NAME = "I8x16Mask";
 
 export type SimdElement = "f32" | "i32" | "i16" | "i8";
 
-export function simdTypeName(element: SimdElement, mask: boolean): string {
-  const name = {
-    f32: F32X4_NAME,
-    i32: I32X4_NAME,
-    i16: I16X8_NAME,
-    i8: I8X16_NAME,
-  }[element];
-  if (mask) return `${name}Mask`;
-  return name;
-}
-
 export const UNIT: Value = { tag: "unit" };
 export const TRUE: Value = { tag: "tag", name: "True", payload: null };
 export const FALSE: Value = { tag: "tag", name: "False", payload: null };

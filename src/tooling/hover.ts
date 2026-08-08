@@ -5,7 +5,7 @@ import type { SimpleType } from "../check/type.ts";
 import { lookup, type Value } from "../comptime/value.ts";
 import type { Decl, Expr, Module, Pattern, Span } from "../syntax/ast.ts";
 import { buildFixityTable } from "../syntax/fixity.ts";
-import type { Rule, TokenCursor } from "../syntax/lower.ts";
+import type { Rule, TokenCursor } from "../syntax/cursor.ts";
 import { definitionAt, identifierSpan } from "./definition.ts";
 
 export interface HoverDescription {
