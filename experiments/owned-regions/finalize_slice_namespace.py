@@ -119,33 +119,37 @@ replace_once(
 ''',
 )
 
-# Rust ownership uses the same namespace recognition. The helper also returns
-# ordinary intrinsics unchanged, so existing @handle/@array logic keeps the same
-# control path.
+# Rust ownership mirrors the same trust boundary. A user binding named `Slice`
+# must not inherit the prelude namespace's privileged Region semantics.
 path = "experiments/rust-middle/src/ownership.rs"
 replace_once(
     path,
     '''fn walk_apply(
     expression: ExpressionId,
 ''',
-    '''fn ownership_primitive_name<'a>(module: &'a Module, callee: ExpressionId) -> Option<&'a str> {
-    match &module.arena.expressions[callee.0 as usize] {
+    '''fn ownership_primitive_name<'a>(
+    analysis: &'a Analysis<'_>,
+    scope: &ScopeRef,
+    callee: ExpressionId,
+) -> Option<&'a str> {
+    match &analysis.module.arena.expressions[callee.0 as usize] {
         Expression::Intrinsic { name, .. } => Some(name.as_str()),
         Expression::Field { target, name, .. }
-            if matches!(
-                &module.arena.expressions[target.0 as usize],
-                Expression::Var { name: namespace, .. } if namespace == "Slice"
-            ) => match name.as_str() {
-                "claim" => Some("@region.array.claim"),
-                "length" => Some("@region.array.length"),
-                "get" => Some("@region.array.get"),
-                "set" => Some("@region.array.set"),
-                "swap" => Some("@region.array.swap"),
-                "split" => Some("@region.array.split"),
-                "join" => Some("@region.array.join"),
-                "freeze" => Some("@region.array.freeze"),
-                _ => None,
-            },
+            if analysis.lookup(scope, "Slice").is_none()
+                && matches!(
+                    &analysis.module.arena.expressions[target.0 as usize],
+                    Expression::Var { name: namespace, .. } if namespace == "Slice"
+                ) => match name.as_str() {
+                    "claim" => Some("@region.array.claim"),
+                    "length" => Some("@region.array.length"),
+                    "get" => Some("@region.array.get"),
+                    "set" => Some("@region.array.set"),
+                    "swap" => Some("@region.array.swap"),
+                    "split" => Some("@region.array.split"),
+                    "join" => Some("@region.array.join"),
+                    "freeze" => Some("@region.array.freeze"),
+                    _ => None,
+                },
         _ => None,
     }
 }
@@ -160,7 +164,7 @@ replace_once(
         &analysis.module.arena.expressions[callee.0 as usize]
     {
 ''',
-    '''    if let Some(name) = ownership_primitive_name(analysis.module, callee) {
+    '''    if let Some(name) = ownership_primitive_name(analysis, scope, callee) {
 ''',
 )
 
