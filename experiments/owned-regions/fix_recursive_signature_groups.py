@@ -181,17 +181,17 @@ for operation, arity in [
     ("split", 2),
     ("freeze", 1),
 ]:
-    old = f'''        if name == "@region.array.{operation}" && arguments.len() == {arity} {{\n            let region = walk(arguments[0], scope, analysis, Use::Move);\n'''
-    new = f'''        if name == "@region.array.{operation}" && arguments.len() == {arity} {{\n            let region = region_authority(\n                walk(arguments[0], scope, analysis, Use::Move),\n                analysis.trusted_region_wrappers,\n            );\n'''
+    old = f'''        if name == "@region.{operation}" && arguments.len() == {arity} {{\n            let region = walk(arguments[0], scope, analysis, Use::Move);\n'''
+    new = f'''        if name == "@region.{operation}" && arguments.len() == {arity} {{\n            let region = region_authority(\n                walk(arguments[0], scope, analysis, Use::Move),\n                analysis.trusted_region_wrappers,\n            );\n'''
     replace_once(path, old, new)
 
 replace_once(
     path,
-    """        if name == "@region.array.join" && arguments.len() == 2 {
+    """        if name == "@region.join" && arguments.len() == 2 {
             let left = walk(arguments[0], scope, analysis, Use::Move);
             let right = walk(arguments[1], scope, analysis, Use::Move);
 """,
-    """        if name == "@region.array.join" && arguments.len() == 2 {
+    """        if name == "@region.join" && arguments.len() == 2 {
             let left = region_authority(
                 walk(arguments[0], scope, analysis, Use::Move),
                 analysis.trusted_region_wrappers,
