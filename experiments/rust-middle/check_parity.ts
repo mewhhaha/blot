@@ -9,7 +9,13 @@ const wasm = await Deno.readFile(
   new URL("../../generated/rust-middle/compiler.wasm", import.meta.url),
 );
 const rust = await RustMiddle.load(wasm);
-const candidates = await semanticRejections("examples/rejected/semantics");
+// Both directions matter. Comparing rejections alone lets the production
+// checker drift towards accepting what the oracle refuses, which is the drift
+// that reaches an artifact.
+const candidates = [
+  ...await blotFiles("examples/rejected/semantics"),
+  ...await blotFiles("examples"),
+];
 const loadedModules = new Map<string, Loaded>();
 const roots: string[] = [];
 const loweringRejections: string[] = [];
@@ -97,7 +103,7 @@ function collect(loaded: Loaded, modules: Map<string, Loaded>): void {
   }
 }
 
-async function semanticRejections(root: string): Promise<string[]> {
+async function blotFiles(root: string): Promise<string[]> {
   const paths: string[] = [];
   for await (const entry of Deno.readDir(root)) {
     if (entry.isFile && entry.name.endsWith(".blot")) {

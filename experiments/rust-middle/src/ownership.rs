@@ -465,6 +465,29 @@ fn walk_recursive_group(declarations: &[DeclarationId], scope: &ScopeRef, analys
         );
         return;
     }
+    // A tail call is not by itself a transfer. The capture is consumed once
+    // here, on behalf of every iteration, so a body that spends it and then
+    // recurses spends it again on the next entry. Only a path that ends the
+    // recursion may spend it; a path that continues must hand it to the call.
+    if !captures.is_empty()
+        && members.iter().any(|(_, _, _, _, lambda, _)| {
+            let Expression::Lambda { body, .. } =
+                analysis.module.arena.expressions[lambda.0 as usize]
+            else {
+                return true;
+            };
+            recursion_spends_a_capture(body, &names, &captures, analysis.module)
+        })
+    {
+        // The same code the checker reports for two written consumptions: this
+        // is that program, with the repetition supplied by the recursion.
+        analysis.report(
+            "BLOT_LINEAR_CONSUMED_TWICE",
+            "A recursive body spends a captured resource on a path that recurses, so every iteration after the first spends it again. Pass it to the recursive call instead, or spend it only where the recursion ends.",
+            members[0].5,
+        );
+        return;
+    }
     if captures.is_empty() {
         for (_, _, pattern, value, _, _) in members {
             let produced = walk(value, scope, analysis, Use::Move);
@@ -1415,6 +1438,215 @@ fn recursive_declaration(module: &Module, declaration: DeclarationId) -> bool {
         module.arena.expressions[value.0 as usize],
         Expression::Rec { .. }
     )
+}
+
+/// What one path through a recursive body does with the group's captures.
+#[derive(Clone, Copy, Default)]
+struct RecursionPath {
+    /// Reads a capture other than by handing it to the recursive call.
+    spends: bool,
+    /// Can reach a recursive call.
+    recurses: bool,
+}
+
+impl RecursionPath {
+    /// Both subtrees run on the same path, so their facts accumulate.
+    fn then(self, next: Self) -> Self {
+        Self {
+            spends: self.spends || next.spends,
+            recurses: self.recurses || next.recurses,
+        }
+    }
+
+    /// Alternatives are separate paths; upward, either may have happened.
+    fn or(self, other: Self) -> Self {
+        Self {
+            spends: self.spends || other.spends,
+            recurses: self.recurses || other.recurses,
+        }
+    }
+}
+
+/// Does some path through this recursive body both spend a capture and recurse?
+///
+/// The group already consumed each capture once, which is what makes the
+/// transfer sound for a body that hands the capture to its own tail call. A
+/// body that instead spends the capture and then continues would spend it again
+/// on the next entry, so the two facts must not meet on one path.
+fn recursion_spends_a_capture(
+    body: ExpressionId,
+    names: &HashSet<String>,
+    captures: &HashSet<String>,
+    module: &Module,
+) -> bool {
+    recursion_paths(body, names, captures, module).1
+}
+
+fn recursion_paths(
+    expression: ExpressionId,
+    names: &HashSet<String>,
+    captures: &HashSet<String>,
+    module: &Module,
+) -> (RecursionPath, bool) {
+    let leaf = |path: RecursionPath| (path, path.spends && path.recurses);
+    match &module.arena.expressions[expression.0 as usize] {
+        Expression::Var { name, .. } => leaf(RecursionPath {
+            spends: captures.contains(name),
+            recurses: names.contains(name),
+        }),
+        Expression::Apply { .. } => {
+            let (callee, arguments) = application_spine(expression, module);
+            let recursive = matches!(
+                &module.arena.expressions[callee.0 as usize],
+                Expression::Var { name, .. } if names.contains(name)
+            );
+            let mut path = RecursionPath {
+                recurses: recursive,
+                ..RecursionPath::default()
+            };
+            let mut violated = false;
+            if !recursive {
+                let (callee_path, callee_violated) =
+                    recursion_paths(callee, names, captures, module);
+                path = path.then(callee_path);
+                violated = violated || callee_violated;
+            }
+            for argument in arguments {
+                // Handing a capture straight to the recursive call is the
+                // transfer this rule exists to permit.
+                if recursive && transferred_capture(argument, captures, module) {
+                    continue;
+                }
+                let (argument_path, argument_violated) =
+                    recursion_paths(argument, names, captures, module);
+                path = path.then(argument_path);
+                violated = violated || argument_violated;
+            }
+            (path, violated || (path.spends && path.recurses))
+        }
+        Expression::Field { target, .. } => recursion_paths(*target, names, captures, module),
+        Expression::Lambda { body, .. } | Expression::Comptime { body, .. } => {
+            recursion_paths(*body, names, captures, module)
+        }
+        Expression::Rec { lambda, .. } => recursion_paths(*lambda, names, captures, module),
+        Expression::Tuple { elements, .. } => {
+            sequential(elements.iter().copied(), names, captures, module)
+        }
+        Expression::Array { elements, .. } => sequential(
+            elements.iter().map(|element| element.value),
+            names,
+            captures,
+            module,
+        ),
+        Expression::Shape { members, .. } => sequential(
+            members.iter().map(|member| match member {
+                ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => *value,
+            }),
+            names,
+            captures,
+            module,
+        ),
+        Expression::If {
+            branches, fallback, ..
+        } => {
+            let mut before = RecursionPath::default();
+            let mut violated = false;
+            let mut taken = Vec::new();
+            for branch in branches {
+                let (condition, condition_violated) =
+                    recursion_paths(branch.condition, names, captures, module);
+                before = before.then(condition);
+                violated = violated || condition_violated;
+                let (consequence, consequence_violated) =
+                    recursion_paths(branch.consequence, names, captures, module);
+                violated = violated || consequence_violated;
+                taken.push(before.then(consequence));
+            }
+            if let Some(fallback) = fallback {
+                let (path, fallback_violated) = recursion_paths(*fallback, names, captures, module);
+                violated = violated || fallback_violated;
+                taken.push(before.then(path));
+            }
+            alternatives(taken, before, violated)
+        }
+        Expression::Case { target, arms, .. } => {
+            let (before, mut violated) = recursion_paths(*target, names, captures, module);
+            let mut taken = Vec::new();
+            for arm in arms {
+                let (path, arm_violated) = recursion_paths(arm.body, names, captures, module);
+                violated = violated || arm_violated;
+                taken.push(before.then(path));
+            }
+            alternatives(taken, before, violated)
+        }
+        Expression::Block {
+            declarations,
+            result,
+            ..
+        } => {
+            let values = declarations.iter().map(|declaration| {
+                match &module.arena.declarations[declaration.0 as usize] {
+                    Declaration::Binding { value, .. }
+                    | Declaration::Shadow { value, .. }
+                    | Declaration::Open { value, .. } => *value,
+                }
+            });
+            let (path, violated) = sequential(values, names, captures, module);
+            let (result_path, result_violated) = recursion_paths(*result, names, captures, module);
+            let path = path.then(result_path);
+            (
+                path,
+                violated || result_violated || (path.spends && path.recurses),
+            )
+        }
+        _ => (RecursionPath::default(), false),
+    }
+}
+
+fn sequential(
+    expressions: impl IntoIterator<Item = ExpressionId>,
+    names: &HashSet<String>,
+    captures: &HashSet<String>,
+    module: &Module,
+) -> (RecursionPath, bool) {
+    let mut path = RecursionPath::default();
+    let mut violated = false;
+    for expression in expressions {
+        let (next, next_violated) = recursion_paths(expression, names, captures, module);
+        path = path.then(next);
+        violated = violated || next_violated;
+    }
+    (path, violated || (path.spends && path.recurses))
+}
+
+fn alternatives(
+    taken: Vec<RecursionPath>,
+    before: RecursionPath,
+    violated: bool,
+) -> (RecursionPath, bool) {
+    let violated = violated || taken.iter().any(|path| path.spends && path.recurses);
+    let path = taken.into_iter().fold(before, RecursionPath::or);
+    (path, violated)
+}
+
+/// Is this argument the capture itself, handed to the recursive call?
+fn transferred_capture(
+    argument: ExpressionId,
+    captures: &HashSet<String>,
+    module: &Module,
+) -> bool {
+    match &module.arena.expressions[argument.0 as usize] {
+        Expression::Var { name, .. } => captures.contains(name),
+        Expression::Apply {
+            function, argument, ..
+        } => {
+            matches!(
+                &module.arena.expressions[function.0 as usize],
+                Expression::Intrinsic { name, .. } if name == "@linear.own" || name == "@linear.borrow"
+            ) && transferred_capture(*argument, captures, module)
+        }
+        _ => false,
+    }
 }
 
 fn recursive_calls_are_tail(

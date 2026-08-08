@@ -926,6 +926,15 @@ path takes exactly one such edge, and an external call consumes the SCC as one
 owned knot. Other recursive captures are refused; traversal order is never a
 call-count proof.
 
+A tail edge is not by itself a transfer. The external call consumes each capture
+once on behalf of every entry, so a body that spends a capture and then takes a
+recursive edge spends it again on the next entry. A capture may therefore be
+spent only on a path that ends the recursion; a path that continues must hand
+the capture to the recursive call. This is what makes the rule cover a loop:
+`for` desugars to a tail-recursive `rec`, so a linear value spent in a loop body
+is spent once per iteration, and it is refused with the same
+`BLOT_LINEAR_CONSUMED_TWICE` as the two consumptions written out.
+
 Ownership propagates structurally. A tuple, record, constructor, or array
 containing a linear value is itself linear; one containing only affine and
 unrestricted values is at most affine. Moving the structure moves its
@@ -1197,7 +1206,7 @@ executable checker or lowering test, not only by documentation.
 | indexed loops            | `@array.indexed` yields an ordinary iterator plus unforgeable erased packages propagated through projections and patterns                                                                                                                                                | iterator yields an erased relational package                           | generalize the relational-value channel when another proof-producing collection needs it         |
 | ownership of structures  | aggregate obligations propagate; schema-2 certificates publish path-specific consumption, gate exact-site reuse, and require complete source-to-destination lineage for dynamic extraction partitions                                                                    | ownership propagates structurally                                      | none for known structural paths and consuming array partitions                                   |
 | higher-order ownership   | explicit and inferred path-sensitive usage summaries follow known calls, projections, destructuring, and returned closures; callers reject omitted owned paths                                                                                                           | functions carry separate usage summaries                               | none for statically known functions; unknown callees require an explicit contract                |
-| recursion and ownership  | a certified SCC may transfer shared spendable captures through exactly one ownership-tail recursive edge per path; other recursion refuses closed                                                                                                                        | recursive ownership requires a semantic call-count proof               | none for the certified ownership-tail class                                                      |
+| recursion and ownership  | a certified SCC may transfer shared spendable captures through exactly one ownership-tail recursive edge per path, and only when no path both spends a capture and recurses; other recursion refuses closed                                                              | recursive ownership requires a semantic call-count proof               | none for the certified ownership-tail class                                                      |
 | borrow scope             | transient borrow evidence follows structural arguments; storage, return, ordinary or host passage, and retained closure capture are rejected                                                                                                                             | borrows are lexical non-escaping views                                 | none for lexical borrows; first-class references would require explicit regions and provenance   |
 | handler abort            | a continuation that owns a linear capture requires `!resume`, consumed exactly once by resuming or explicit sequenced cancellation                                                                                                                                       | a continuation owning linear resources has a linear `resume`           | none for statically known handlers                                                               |
 | effect identity          | inference records each declaration's generative value by AST identity; lowering installs and compares those recorded atoms                                                                                                                                               | generative atoms are allocated once and recorded                       | none for the current inference-to-lowering pipeline                                              |

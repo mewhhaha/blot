@@ -4409,16 +4409,111 @@ impl Checker {
                 "{{ {} }}",
                 labels.into_iter().collect::<Vec<_>>().join(", ")
             ),
-            Type::Union(members) => members
-                .iter()
-                .map(|member| self.show(member))
-                .collect::<Vec<_>>()
-                .join(" | "),
+            Type::Union(members) => show_union(
+                union_members(&members)
+                    .into_iter()
+                    .map(|member| self.show(member))
+                    .collect::<Vec<_>>(),
+            ),
             Type::Opaque(name) => name,
             Type::Top => "⊤".to_owned(),
             Type::Bottom => "⊥".to_owned(),
         }
     }
+}
+
+/// Renders a union as a set rather than as the list the solver happened to
+/// build.
+///
+/// A union carries one member per contributing bound, so a construct that
+/// residualizes per iteration contributes one per iteration. `Int | Int` and
+/// `Int` describe the same values, and the printed type is what inference tests
+/// assert, so the repetition would make a lattice change unreadable rather than
+/// visible. `⊥` inhabits nothing and drops out beside any other member; a union
+/// of nothing but `⊥` is still `⊥`.
+/// The members a union needs, with the ones another member already covers left
+/// out.
+///
+/// A domain absorbs its own sub-ranges: `Int | 0..0` is `Int`, because every
+/// value of `0..0` is a value of `Int`. This is the shape a residualized
+/// accumulator produces — the initial literal's singleton beside the widened
+/// domain, once per iteration — and printing all of them describes the
+/// solver's bookkeeping rather than the type.
+fn union_members(members: &[Type]) -> Vec<&Type> {
+    members
+        .iter()
+        .enumerate()
+        .filter(|(index, member)| {
+            !members.iter().enumerate().any(|(other, candidate)| {
+                // Keep the first of two members that cover each other, so an
+                // exact repeat leaves one behind rather than none.
+                let earlier = other < *index;
+                (earlier || !covers(member, candidate)) && covers(candidate, member)
+            })
+        })
+        .map(|(_, member)| member)
+        .collect()
+}
+
+/// Does every value of `inner` inhabit `outer`?
+///
+/// Two ranges of one domain nest when the outer bounds are no tighter, and an
+/// absent bound is the domain's own end. Arrays nest by their elements, and
+/// `⊥` is covered by anything.
+fn covers(outer: &Type, inner: &Type) -> bool {
+    // Nothing inhabits `⊥`, so every member covers it.
+    if matches!(inner, Type::Bottom) {
+        return true;
+    }
+    if let (Type::Array(outer), Type::Array(inner)) = (outer, inner) {
+        return covers(outer, inner);
+    }
+    let (
+        Type::Range {
+            domain: outer_domain,
+            low: outer_low,
+            high: outer_high,
+        },
+        Type::Range {
+            domain: inner_domain,
+            low: inner_low,
+            high: inner_high,
+        },
+    ) = (outer, inner)
+    else {
+        return false;
+    };
+    if outer_domain != inner_domain {
+        return false;
+    }
+    let low = match (outer_low, inner_low) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(outer), Some(inner)) => outer <= inner,
+    };
+    let high = match (outer_high, inner_high) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(outer), Some(inner)) => outer >= inner,
+    };
+    low && high
+}
+
+fn show_union(members: Vec<String>) -> String {
+    let mut shown = Vec::new();
+    for member in members {
+        if member == "⊥" {
+            continue;
+        }
+        if shown.contains(&member) {
+            continue;
+        }
+        shown.push(member);
+    }
+    if shown.is_empty() {
+        return "⊥".to_owned();
+    }
+    shown.join(" | ")
 }
 
 struct Inferred {
@@ -6420,6 +6515,58 @@ fn flatten_interface_type(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A union carries one member per contributing bound. A residualized
+    /// accumulator contributes the initial literal's singleton beside the
+    /// widened domain once per iteration, and printing all of them describes
+    /// the solver rather than the type.
+    #[test]
+    fn a_union_prints_only_the_members_it_needs() {
+        let integer = || Type::Range {
+            domain: Domain::Int,
+            low: None,
+            high: None,
+        };
+        let zero = || Type::Range {
+            domain: Domain::Int,
+            low: Some(Scalar::Int(0.into())),
+            high: Some(Scalar::Int(0.into())),
+        };
+        let members = vec![integer(), zero(), integer(), zero()];
+        let kept = union_members(&members);
+        assert_eq!(kept.len(), 1);
+        assert!(matches!(
+            kept[0],
+            Type::Range {
+                low: None,
+                high: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_union_keeps_members_no_other_covers() {
+        let one = Type::Range {
+            domain: Domain::Int,
+            low: Some(Scalar::Int(1.into())),
+            high: Some(Scalar::Int(1.into())),
+        };
+        let two = Type::Range {
+            domain: Domain::Int,
+            low: Some(Scalar::Int(2.into())),
+            high: Some(Scalar::Int(2.into())),
+        };
+        assert_eq!(union_members(&[one, two]).len(), 2);
+    }
+
+    /// Nothing inhabits `⊥`, so it disappears beside anything else — but a
+    /// union of nothing else is still `⊥`.
+    #[test]
+    fn bottom_drops_out_of_a_union_unless_it_is_the_union() {
+        assert_eq!(show_union(vec!["Int".to_owned(), "⊥".to_owned()]), "Int");
+        assert_eq!(show_union(vec!["⊥".to_owned(), "⊥".to_owned()]), "⊥");
+    }
 
     #[test]
     fn residual_bottom_positions_get_distinct_representation_holes() {

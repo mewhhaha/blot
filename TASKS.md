@@ -34,7 +34,67 @@ block the trace stood in rather than to the entry block, and
 `fold_sum_branch_roundtrips` folded a joined sum away while a later dispatch
 still read it.
 
-## 2. Construct Runtime HIR progressively
+## 2. Answer every CLI command from the production compiler
+
+`check`, `build`, and `package` route through the Rust compiler; `eval` and
+`ownership` still run the TypeScript oracle. Two engines answering one CLI is
+how a checker disagreement stays invisible: a program can be accepted by
+`blot check` and rejected by `blot eval` without any gate noticing, because the
+two commands never meet.
+
+`RustMiddle` already exposes `evaluateCompilerSessionModule`, and
+`experiment:rust-middle-eval-parity` already drives it, so `eval` is mostly a
+matter of surfacing it on `RustMiddleCompiler` and matching the printed value
+format the example corpus asserts. `ownership` needs the Rust ownership facts
+exported from the session first.
+
+Until both move, `spec/COMPILER.md` records the exception and the usage text
+names which engine answered.
+
+Fold `experiment:rust-middle-eval-parity`'s skip list in while doing it: it
+skips every module with a module parameter or an unhandled effect, so the two
+evaluators are never compared on a program that performs a host effect — the
+class where `spec/COMPILER.md` says operation order is the observable semantics.
+
+## 3. Recover the lower bound a nested `rec` fold loses
+
+`iterate` and `collect` infer `⊥` and `[⊥]` for values they demonstrably
+produce:
+
+```blot
+open @import "blot:prelude" ()
+return iterate (Iter.range (1, 4), 1, fn (product, n) => product * n)
+```
+
+`blot check` says `⊥`; `blot eval` says `6`. `collect (Iter.range (0, 4))`
+likewise types as `[⊥]` and evaluates to `[0, 1, 2, 3]`. `⊥` is the printed form
+of a positive variable with no lower bound, so the base case's type is not
+reaching the result.
+
+It is not recursion by itself. The same fold written at module scope keeps its
+bound:
+
+```blot
+let go =
+  rec (fn (n, carried) => case n == 0 of
+    #True => carried
+    #False => go (n - 1, carried + n)
+  )
+return go (3, 0)          -- Int
+```
+
+What differs is that the prelude's `go` is a `rec` inside a function, closing
+over that function's parameters, with the accumulator flowing through a `visit`
+callback. Find which of those three loses the edge before changing the lattice —
+a union that prints one member per bound will make the answer visible now that
+the printer no longer repeats them.
+
+Because `⊥` describes a value that cannot exist, an inferred `⊥` for a value
+that does is worth more than a presentation fix: anything that consumes these
+types — reflection, specialization keys, the ABI boundary — is reading a claim
+the program contradicts.
+
+## 4. Construct Runtime HIR progressively
 
 Checking and Runtime-HIR preparation still traverse overlapping semantic work.
 Fuse them without moving ownership into the type lattice:
@@ -61,7 +121,7 @@ preparation/checking boundary improves; moving work behind a different timer is
 not an optimization. Update the pass and cache contracts in `spec/COMPILER.md`,
 `spec/TYPECHECKING.md`, `spec/STAGING.md`, and `spec/COST_MODEL.md`.
 
-## 3. Move the bounded oracle onto typed Core
+## 5. Move the bounded oracle onto typed Core
 
 The production Rust/Wasm compiler is already independent of gpupaper, but the
 bounded TypeScript/gpupaper conformance oracle still shares part of the source
@@ -79,7 +139,7 @@ Generated source/Core evaluations, handler traces, host traces, and the complete
 bounded oracle corpus must continue to agree. Update `spec/COMPILER.md`,
 `spec/CORRECTNESS.md`, and the effect-sequencing row in `spec/PAPER.md`.
 
-## 4. Mechanize the stable core
+## 6. Mechanize the stable core
 
 Once residual closures stop changing the core representation, mechanize the
 smallest useful preservation/progress result. Include live pure bindings,

@@ -17,6 +17,20 @@ filesystem access, package resolution, and CLI presentation. Its former semantic
 compiler and gpupaper lowering remain only as bounded conformance oracles. An
 implementation boundary is not a semantic boundary.
 
+Two CLI commands are still answered by the oracle rather than by the production
+compiler: `eval` runs the TypeScript evaluator and `ownership` prints the
+TypeScript ownership facts. This is a stated exception, not a second definition
+of the language — the two engines are held to one meaning by the parity gates in
+[`../Justfile`](../Justfile), and the usage text names which engine answered so
+a disagreement is attributable rather than mysterious. Moving both onto the
+production compiler is recorded in [`../TASKS.md`](../TASKS.md).
+
+Those gates compare both directions. Comparing rejections alone would let the
+production checker drift towards accepting what the oracle refuses, which is the
+drift that reaches an artifact: `experiment:rust-middle-check-parity` therefore
+requires the two checkers to agree, by diagnostic code, on the accepted corpus
+as well as the rejected one.
+
 ## 1. Inputs, outputs, and observations
 
 Let a source graph be
