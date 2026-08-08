@@ -39,14 +39,11 @@ jobs:
           echo "merge-base=$BASE"
           echo "main=$(git rev-parse origin/main)"
 
-          # Materialize the latest production Region patch on the prototype head.
           python3 experiments/owned-regions/finalize_production.py
           python3 experiments/owned-regions/finalize_slice_namespace.py
           python3 experiments/owned-regions/fix_rust_region_generalization.py
           python3 experiments/owned-regions/fix_rust_region_snapshot_closedness.py
 
-          # The prototype used a temporary two-segment intrinsic namespace. The
-          # production grammar and API use one @region segment.
           python3 - <<'PY'
           from pathlib import Path
           roots = [
@@ -90,8 +87,6 @@ jobs:
           deno run --allow-read --allow-write src/cli.ts fmt examples/owned_slice_quicksort.blot
           git diff --check
 
-          # Only these paths survive. Prototype models, patch scripts, triggers,
-          # temporary workflows, and old task edits are intentionally excluded.
           PRODUCTION=(
             examples/owned_slice_quicksort.blot
             experiments/owned-regions/source_surface.test.ts
@@ -118,10 +113,6 @@ jobs:
           )
           tar -cf /tmp/owned-slice-production.tar "${PRODUCTION[@]}"
 
-          # Build one synthetic production commit against the original merge
-          # base, then cherry-pick it onto current main. Three-way rename merging
-          # carries the Rust edits through main's experiments/rust-middle ->
-          # compiler move and combines them with main's recursive ownership work.
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git reset --hard "$BASE"
@@ -146,7 +137,59 @@ jobs:
             exit 1
           fi
 
-          # Port the new tests/spec wording to main #21's compiler boundary.
+          # Signatures constrain recursive bindings but carry no ownership
+          # obligations. Treat a sig immediately followed by another recursive
+          # binding as transparent while collecting one recursive ownership
+          # group, so every cross-member call sees the callee's parameter
+          # pattern before any body is walked.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("compiler/src/ownership.rs")
+          text = path.read_text()
+          old = '''            while index < declarations.len()
+                && recursive_declaration(analysis.module, declarations[index])
+            {
+                index += 1;
+            }
+'''
+          new = '''            while index < declarations.len() {
+                if recursive_declaration(analysis.module, declarations[index]) {
+                    index += 1;
+                    continue;
+                }
+                if signature_declaration(analysis.module, declarations[index])
+                    && index + 1 < declarations.len()
+                    && recursive_declaration(analysis.module, declarations[index + 1])
+                {
+                    index += 1;
+                    continue;
+                }
+                break;
+            }
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f"recursive ownership group loop anchor count={text.count(old)}")
+          text = text.replace(old, new, 1)
+          anchor = '''fn recursive_declaration(module: &Module, declaration: DeclarationId) -> bool {
+'''
+          helper = '''fn signature_declaration(module: &Module, declaration: DeclarationId) -> bool {
+    matches!(
+        module.arena.declarations[declaration.0 as usize],
+        Declaration::Binding {
+            kind: DeclarationKind::Sig,
+            ..
+        }
+    )
+}
+
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit(f"recursive declaration anchor count={text.count(anchor)}")
+          path.write_text(text.replace(anchor, helper + anchor, 1))
+          PY
+
+          # Port new tests/spec references to the production compiler boundary.
           python3 - <<'PY'
           from pathlib import Path
 
@@ -188,8 +231,6 @@ jobs:
           deno run --allow-read --allow-write src/cli.ts fmt examples/owned_slice_quicksort.blot
           cargo fmt --manifest-path compiler/Cargo.toml
 
-          # Rebuild the current production compiler artifact/snapshot before the
-          # exact-head gates, then amend them into the one rebased commit.
           cargo check --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown
           deno task build:compiler
           git add -A
@@ -201,14 +242,12 @@ jobs:
           git diff --stat origin/main...HEAD
           git diff --name-only origin/main...HEAD
 
-          # Review hygiene: no prototype/scaffolding and no retired compiler path.
           if git diff --name-only origin/main...HEAD | grep -E \
             '(^\.github/workflows/owned-region-dev\.yml$|experiments/owned-regions/(model|quicksort|integration|acquisition|certificate|interval|root_claim|store_provenance|trace_branch|apply_|finalize_|finish_|fix_|patch_|run_patch|\.production|\.source|\.sync)|^experiments/rust-middle/|^src/linear/region_(certificate|family|interval)\.ts$)'; then
             echo 'review scaffolding survived the clean squash'
             exit 1
           fi
 
-          # Exact-head production gates.
           deno run --allow-read src/cli.ts check examples/owned_slice_quicksort.blot
           deno test --allow-read --allow-write \
             experiments/owned-regions/source_surface.test.ts \
@@ -221,7 +260,6 @@ jobs:
           test "$(git rev-parse HEAD)" = "$FINAL_HEAD"
           test "$(git rev-parse HEAD^)" = "$(git rev-parse origin/main)"
 
-          # Publish only after the rebased exact-head tree is fully green.
           git push \
             --force-with-lease=refs/heads/codex/owned-slices:"$SOURCE_HEAD" \
             origin HEAD:codex/owned-slices
