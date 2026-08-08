@@ -1,0 +1,59 @@
+open @import "blot:prelude" ()
+
+const Source = @effect.host { .value = Int -> Int; }
+
+let keep_swap = fn (!region, left, right) =>
+  return case Slice.swap ((!region), left, right) of
+    #Updated !updated => updated
+    #SwapOutOfBounds !original => original
+
+let partition =
+  rec (fn (!region, pivot, scan, boundary, limit) =>
+    if scan < limit:
+      let current = case Slice.get ((&region), scan) of
+        #Some value => value
+        #None => @panic "partition index escaped its Region"
+      if current <= pivot:
+        let updated = keep_swap ((!region), scan, boundary)
+        return partition (!updated, pivot, scan + 1, boundary + 1, limit)
+      else:
+        return partition (!region, pivot, scan + 1, boundary, limit)
+    else:
+      return (!region, boundary)
+  )
+
+let quicksort =
+  rec (fn !region =>
+    let length = Slice.length (&region)
+    if length < 2:
+      return region
+    else:
+      let last = length - 1
+      let pivot = case Slice.get ((&region), last) of
+        #Some value => value
+        #None => @panic "pivot index escaped its Region"
+      let (!partitioned, pivot_index) = partition (!region, pivot, 0, 0, last)
+      let partitioned = keep_swap ((!partitioned), pivot_index, last)
+      return case Slice.split ((!partitioned), pivot_index) of
+        #Split (!left, !rest) =>
+          case Slice.split ((!rest), 1) of
+            #Split (!pivot_region, !right) =>
+              let left_sorted = quicksort (!left)
+              let right_sorted = quicksort (!right)
+              let restored_right = Slice.join ((!pivot_region), (!right_sorted))
+              return Slice.join ((!left_sorted), (!restored_right))
+            #SplitOutOfBounds !original_rest =>
+              return Slice.join ((!left), (!original_rest))
+        #SplitOutOfBounds !original => original
+  )
+
+dynamic <- Source.value 0
+let region = Slice.claim [dynamic, 4, 7, 3, 8, 2, 6, 1, 5]
+let sorted_region = quicksort (!region)
+let sorted = Slice.freeze (!sorted_region)
+
+return fold (
+  sorted,
+  0,
+  fn (state, value) => state * 10 + value
+)
