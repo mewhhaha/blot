@@ -34,7 +34,6 @@
     "publish:dry-run": "deno publish --dry-run"
   },
   "imports": {
-    "@mewhhaha/baba": "jsr:@mewhhaha/baba@^9.0.0",
     "@mewhhaha/baba/cli": "jsr:@mewhhaha/baba@^9.0.0/cli",
     "@mewhhaha/baba/runtime/generated-wasm": "jsr:@mewhhaha/baba@^9.0.0/runtime/generated-wasm",
     "@mewhhaha/baba/runtime/webgpu": "jsr:@mewhhaha/baba@^9.0.0/runtime/webgpu",
