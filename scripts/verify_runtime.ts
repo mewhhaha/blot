@@ -2,23 +2,23 @@ import {
   prepareGpupaperHir,
   runLoweringExport,
   validateLowering,
-} from "../src/backend/compile.ts";
-import { compileBlotRuntimeModulesOnRustWasm } from "../src/backend/runtime/target.ts";
+} from "../src/conformance/gpufuck/compile.ts";
+import { compileBlotRuntimeModulesOnRustWasm } from "../src/conformance/gpufuck/runtime/target.ts";
 import {
   validateBlotRuntimeModule,
   type ValidatedBlotRuntimeModule,
-} from "../src/backend/runtime/hir.ts";
+} from "../src/runtime/hir.ts";
 import {
   type BlotCanonicalValue,
   decodeBlotAbiResult,
   equalBlotCanonicalValues,
   normalizeGpufuckValue,
-} from "../src/backend/runtime/abi_decode.ts";
+} from "../src/conformance/gpufuck/runtime/abi_decode.ts";
 import type {
   BlotAbiManifest,
   BlotAbiType,
-} from "../src/backend/runtime/abi.ts";
-import { RustMiddleCompiler } from "../src/backend/rust_middle.ts";
+} from "../src/conformance/gpufuck/runtime/abi.ts";
+import { Compiler } from "../src/compiler/session.ts";
 
 type EffectObservation = {
   readonly capability: string;
@@ -28,8 +28,8 @@ type EffectObservation = {
 
 const root = new URL("../examples/", import.meta.url);
 const useFullRustCompiler = Deno.args.includes("--full-rust");
-let rustCompiler: RustMiddleCompiler | undefined;
-if (useFullRustCompiler) rustCompiler = await RustMiddleCompiler.create();
+let rustCompiler: Compiler | undefined;
+if (useFullRustCompiler) rustCompiler = await Compiler.create();
 const boundedOracleExclusions = new Set([
   "data.blot",
   "including.blot",

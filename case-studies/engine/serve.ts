@@ -13,7 +13,7 @@
 // Compiling needs a WebGPU adapter. One session is held for the life of the
 // server, so a rebuild is a compile and not a device acquisition.
 
-import { BlotCompilerSession } from "../../src/backend/compile.ts";
+import { BlotCompilerSession } from "../../src/conformance/gpufuck/compile.ts";
 
 const root = new URL(".", import.meta.url);
 const source = "case-studies/engine/main.blot";

@@ -4,7 +4,7 @@
  * @module
  */
 
-export * from "./src/backend/host.ts";
+export * from "./src/conformance/gpufuck/host.ts";
 export * from "./src/check/mod.ts";
 export * from "./src/compiler.ts";
 export * from "./src/diagnostic.ts";

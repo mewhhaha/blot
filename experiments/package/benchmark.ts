@@ -1,9 +1,9 @@
 import { assertEquals } from "@std/assert";
 import { dirname, fromFileUrl, join } from "@std/path";
-import { prepareGpupaperHir } from "../../src/backend/compile.ts";
-import { RustMiddleCompiler } from "../../src/backend/rust_middle.ts";
-import { validateBlotRuntimeModule } from "../../src/backend/runtime/hir.ts";
-import { compileBlotRuntimeModulesOnRustWasm } from "../../src/backend/runtime/target.ts";
+import { prepareGpupaperHir } from "../../src/conformance/gpufuck/compile.ts";
+import { Compiler } from "../../src/compiler/session.ts";
+import { validateBlotRuntimeModule } from "../../src/runtime/hir.ts";
+import { compileBlotRuntimeModulesOnRustWasm } from "../../src/conformance/gpufuck/runtime/target.ts";
 import { checkFile } from "../../src/check/mod.ts";
 import { load, type Loaded, refreshLoadedModules } from "../../src/load.ts";
 import { buildPackage } from "../../src/package.ts";
@@ -320,7 +320,7 @@ async function runRustWorker(
     throw new Error("the full Rust compiler has no public load-only boundary");
   }
   const instantiationStarted = performance.now();
-  const compiler = await RustMiddleCompiler.create();
+  const compiler = await Compiler.create();
   const instantiationMilliseconds = performance.now() - instantiationStarted;
   try {
     if (boundary === "check") {
