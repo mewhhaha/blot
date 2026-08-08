@@ -536,6 +536,7 @@ fn walk(
             parameter,
             body,
             span,
+            ..
         } => {
             let inner = child_scope(Some(scope.clone()), true);
             declare(

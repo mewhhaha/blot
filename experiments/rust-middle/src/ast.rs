@@ -159,6 +159,13 @@ pub enum Expression {
     Lambda {
         parameter: PatternId,
         body: ExpressionId,
+        /// The caller suspends the argument until the parameter is read.
+        /// Always serialized: the module snapshot encodes a struct as a
+        /// sequence, so a field that comes and goes shifts every field after
+        /// it. `canonicalModule` drops the strict case instead, which is what
+        /// makes this the same node source elaboration builds.
+        #[serde(default)]
+        deferred: bool,
         span: Span,
     },
     Array {

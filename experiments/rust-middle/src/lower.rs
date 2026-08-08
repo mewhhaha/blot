@@ -213,6 +213,7 @@ fn handler_transformer(
     Expression::Lambda {
         parameter,
         body,
+        deferred: false,
         span,
     }
 }
@@ -264,6 +265,7 @@ fn handled_computation(
     Expression::Lambda {
         parameter,
         body,
+        deferred: false,
         span,
     }
 }
@@ -1443,6 +1445,7 @@ fn desugar_loop(
     let lambda = arena.expression(Expression::Lambda {
         parameter: go_parameter,
         body: go_body,
+        deferred: false,
         span,
     });
     let recursive_go = arena.expression(Expression::Rec { lambda, span });
@@ -2174,7 +2177,8 @@ fn lower_lambda(
                 cst.text(pattern_cursor)?
             ));
         }
-        let pattern = lower_pattern(cst, pattern_cursor, arena)
+        let deferred = deferred_parameter(cst, as_rule(pattern_cursor)?)?;
+        let pattern = lower_lambda_pattern(cst, pattern_cursor, deferred, arena)
             .map_err(|error| format!("while lowering lambda parameter: {error}"))?;
         let span = Span {
             start: cst.span(Cursor::Rule(parameter))?.start,
@@ -2183,10 +2187,64 @@ fn lower_lambda(
         result = arena.expression(Expression::Lambda {
             parameter: pattern,
             body: result,
+            deferred,
             span,
         });
     }
     Ok(result)
+}
+
+/// `~` is a qualifier only here: it defers one named parameter, where every
+/// other qualifier describes ownership of a pattern. Source elaboration reads
+/// it the same way, and both compilers must agree on the tree.
+fn deferred_parameter(cst: &CompactCst<'_>, pattern: u32) -> Result<bool, String> {
+    let Some(qualifier) = cst.field(pattern, "qualifier")? else {
+        return Ok(false);
+    };
+    // The qualifier arrives as a token or as the rule that wraps one, the same
+    // way every other operator token in this grammar does.
+    Ok(token_text(cst, qualifier)? == "~")
+}
+
+/// Lowers a lambda's parameter, with the deferring `~` already read off it.
+/// The name it binds is an ordinary one: deferral belongs to the arrow, not to
+/// the pattern, so nothing downstream sees a new qualifier.
+fn lower_lambda_pattern(
+    cst: &CompactCst<'_>,
+    pattern: Cursor,
+    deferred: bool,
+    arena: &mut AstArena,
+) -> Result<PatternId, String> {
+    if !deferred {
+        return lower_pattern(cst, pattern, arena);
+    }
+    let rule = as_rule(pattern)?;
+    let span = cst.span(Cursor::Rule(rule))?;
+    let core = cst.unwrap(required(cst, rule, "value")?)?;
+    let Cursor::Token(token) = core else {
+        return Err(deferred_parameter_error());
+    };
+    let kind = cst.token_kind(token)?;
+    if kind != "IDENT" && kind != "TYPE_IDENT" {
+        return Err(deferred_parameter_error());
+    }
+    let name = cst.text(core)?;
+    if name == "_" {
+        return Ok(arena.pattern(Pattern::Wildcard { span }));
+    }
+    Ok(arena.pattern(Pattern::Name {
+        name,
+        qualifier: Qualifier::None,
+        span,
+    }))
+}
+
+fn deferred_parameter_error() -> String {
+    concat!(
+        "BLOT_BAD_DEFERRED_PARAMETER: `~` defers one name parameter. Bind a ",
+        "name, then destructure the value after it is demanded."
+    )
+    .to_owned()
 }
 
 fn lower_expression(
@@ -2770,6 +2828,7 @@ fn guard_level(
     let lambda = arena.expression(Expression::Lambda {
         parameter: unit,
         body,
+        deferred: false,
         span,
     });
     let pattern = arena.pattern(Pattern::Name {
@@ -2947,6 +3006,7 @@ fn lower_element(
             let value = arena.expression(Expression::Lambda {
                 parameter,
                 body,
+                deferred: false,
                 span: child_span,
             });
             child_elements.push(ArrayElement {
@@ -2993,6 +3053,7 @@ fn lower_element(
     Ok(arena.expression(Expression::Lambda {
         parameter,
         body,
+        deferred: false,
         span,
     }))
 }

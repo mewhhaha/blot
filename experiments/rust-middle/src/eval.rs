@@ -368,6 +368,30 @@ pub fn evaluate_expression(
             payload: None,
         }),
         Expression::Var { name, .. } => match lookup(&environment, name) {
+            Some(Value::Deferred {
+                module: suspended_module,
+                expression,
+                environment: suspended_environment,
+                demanded,
+            }) => {
+                if demanded.get() {
+                    return Computation::error(Diagnostic::new(
+                        "BLOT_DEFERRED_DEMANDED_TWICE",
+                        format!(
+                            "Deferred parameter `{name}` was demanded more than once. Force it once into an ordinary `let` binding before reusing the value."
+                        ),
+                        span,
+                    ));
+                }
+                demanded.set(true);
+                evaluate_expression(
+                    context,
+                    suspended_module,
+                    expression,
+                    suspended_environment,
+                    runtime,
+                )
+            }
             Some(mut value) => {
                 if let Value::Closure { signature, .. } = &mut value
                     && signature.is_none()
@@ -401,6 +425,43 @@ pub fn evaluate_expression(
                 runtime,
             )
             .and_then(move |function| {
+                // A deferred parameter is handed the argument unevaluated, so
+                // the decision not to run it belongs to the body's reads.
+                if let Value::Closure {
+                    module: closure_module,
+                    deferred: true,
+                    ..
+                } = &function
+                {
+                    // Deferral is settled while compiling. A residual trace
+                    // means this call is being staged into the running
+                    // program, which has no representation for a suspension —
+                    // source elaboration refuses the same program.
+                    if argument_runtime.residual.is_some() {
+                        return Computation::error(Diagnostic::new(
+                            "BLOT_DEFERRED_AT_RUNTIME",
+                            concat!(
+                                "A deferred parameter is only supplied while compiling. This call ",
+                                "survives into the emitted program, where the argument would run ",
+                                "whether or not the parameter is read."
+                            ),
+                            span,
+                        ));
+                    }
+                    let suspended = Value::Deferred {
+                        module: closure_module.clone(),
+                        expression: argument,
+                        environment: argument_environment,
+                        demanded: Rc::new(Cell::new(false)),
+                    };
+                    return apply(
+                        argument_context,
+                        function,
+                        suspended,
+                        span,
+                        argument_runtime,
+                    );
+                }
                 evaluate_expression(
                     argument_context.clone(),
                     argument_module,
@@ -419,7 +480,10 @@ pub fn evaluate_expression(
                 .and_then(move |target| project(target, &name, span))
         }
         Expression::Lambda {
-            parameter, body, ..
+            parameter,
+            body,
+            deferred,
+            ..
         } => {
             let signature = context
                 .closure_signatures
@@ -431,6 +495,7 @@ pub fn evaluate_expression(
                 module: module_path,
                 parameter: *parameter,
                 body: *body,
+                deferred: *deferred,
                 environment,
                 self_name: None,
                 imports: None,
@@ -1622,6 +1687,7 @@ pub(crate) fn evaluate_binding(
             environment,
             imports,
             signature,
+            deferred,
             ..
         } = value
         else {
@@ -1635,6 +1701,7 @@ pub(crate) fn evaluate_binding(
             module: closure_module,
             parameter,
             body,
+            deferred,
             environment,
             self_name: Some(self_name),
             imports,
@@ -1762,6 +1829,7 @@ pub fn apply(
             module: closure_module,
             parameter,
             body,
+            deferred: _,
             environment,
             self_name,
             imports: _,
@@ -1828,6 +1896,7 @@ pub fn apply(
                         module: closure_module.clone(),
                         parameter,
                         body,
+                        deferred: false,
                         environment: scope.parent.clone().expect("closure environment"),
                         self_name: Some(name),
                         imports: None,

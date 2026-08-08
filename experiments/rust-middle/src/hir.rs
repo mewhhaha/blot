@@ -1816,6 +1816,7 @@ impl ResidualTrace {
                     module: module.clone(),
                     parameter: *parameter,
                     body: *body,
+                    deferred: false,
                     environment,
                     self_name: self_name.clone(),
                     imports: None,
@@ -2889,6 +2890,20 @@ impl ResidualTrace {
             Value::ClosureChoice { alternatives, .. } => Err(Diagnostic::new(
                 "BLOT_UNSUPPORTED_LOWERING",
                 closure_choice_refusal(alternatives.len()),
+                span,
+            )),
+            // The emitted program has one calling convention and it evaluates
+            // the argument. A deferred function reaching here would be run
+            // strictly while the source said the argument may never run at
+            // all, so it is refused with the diagnostic source elaboration
+            // gives the same program.
+            Value::Closure { deferred: true, .. } => Err(Diagnostic::new(
+                "BLOT_DEFERRED_AT_RUNTIME",
+                concat!(
+                    "A deferred parameter is only supplied while compiling. This function ",
+                    "survives into the running program, where its argument would run whether ",
+                    "or not the parameter is read."
+                ),
                 span,
             )),
             _ => Err(Diagnostic::new(
@@ -4142,6 +4157,9 @@ fn collect_value(
     captured: &mut BTreeMap<(usize, usize), RuntimeValue>,
 ) -> Result<(), Diagnostic> {
     match value {
+        // A suspension lives only between a deferred call and the read that
+        // demands it, so it is never a captured runtime value.
+        Value::Deferred { .. } => {}
         Value::Runtime(runtime) => {
             captured
                 .entry((runtime.id, runtime.type_id))
@@ -4323,6 +4341,7 @@ fn replace_value(
 ) -> Result<Value, Diagnostic> {
     let mut result = value.clone();
     match &mut result {
+        Value::Deferred { .. } => {}
         Value::Runtime(runtime) => {
             if let Some(replacement) = replacements.get(&(runtime.id, runtime.type_id)) {
                 *runtime = replacement.clone();

@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -312,6 +313,17 @@ pub enum Value {
         self_name: Option<String>,
         imports: Option<BTreeMap<String, String>>,
         signature: Option<Box<Value>>,
+        /// The caller suspends the argument until the parameter is read.
+        deferred: bool,
+    },
+    /// An argument a deferred parameter has not demanded yet. It never escapes
+    /// the call it was made for: reading the parameter replaces it with the
+    /// value, and reading it twice is refused.
+    Deferred {
+        module: Rc<String>,
+        expression: ExpressionId,
+        environment: Environment,
+        demanded: Rc<Cell<bool>>,
     },
     ClosureChoice {
         selector: RuntimeValue,
@@ -716,6 +728,7 @@ fn effect_id(value: &Value) -> Option<u32> {
 
 pub fn show(value: &Value) -> String {
     match value {
+        Value::Deferred { .. } => "<deferred>".to_owned(),
         Value::Int(value) => value.to_string(),
         Value::Float(value) => value.to_string(),
         Value::Float32(value) => format!("{value}f32"),

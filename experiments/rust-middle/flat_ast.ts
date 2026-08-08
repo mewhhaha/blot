@@ -170,6 +170,11 @@ export function canonicalModule(
 ): unknown {
   return JSON.parse(JSON.stringify(module, (key, value) => {
     if (typeof value === "bigint") return value.toString();
+    // An ordinary lambda writes no `deferred` at all in source elaboration,
+    // while the Rust middle always encodes the field because its snapshot
+    // format is positional. Dropping the strict case compares the two trees
+    // for what they say rather than for how they are written.
+    if (key === "deferred" && value === false) return undefined;
     if (key === "name" && typeof value === "string" && value.includes("$")) {
       return value.replaceAll(/[0-9]+/g, "#");
     }
