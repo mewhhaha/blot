@@ -36,6 +36,7 @@ jobs:
           path = Path("src/prelude/prelude.blot")
           source = path.read_text()
           for old, new in [
+              ("    .of = @region.array.type;\n", ""),
               (".get = fn (&region, index) =>", ".get = fn (region, index) =>"),
               (".set = fn (!region, index, value) =>", ".set = fn (region, index, value) =>"),
               (".swap = fn (!region, left, right) =>", ".swap = fn (region, left, right) =>"),
