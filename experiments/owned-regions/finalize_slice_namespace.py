@@ -10,9 +10,10 @@ def replace_once(path: str, old: str, new: str) -> None:
     file.write_text(text.replace(old, new, 1))
 
 
-# The public namespace exposes the trusted primitives directly. Wrapping them in
-# closures would sever the caller's static Region lineage at the wrapper
-# parameter, which is exactly the proof split/join need to preserve.
+# The public namespace exposes named primitive aliases. Each `const` declaration
+# generalizes its primitive scheme before the values are assembled into the
+# returned prelude record. Ownership checking still recognizes Slice.* at each
+# call site, so this closes the type schemes without severing Region lineage.
 path = "src/prelude/prelude.blot"
 start = '''const Slice =
   {
@@ -31,16 +32,25 @@ start = '''const Slice =
     .freeze = fn !region => @region.array.freeze (!region);
   }
 '''
-replacement = '''const Slice =
+replacement = '''const slice_claim = @region.array.claim
+const slice_length = @region.array.length
+const slice_get = @region.array.get
+const slice_set = @region.array.set
+const slice_swap = @region.array.swap
+const slice_split = @region.array.split
+const slice_join = @region.array.join
+const slice_freeze = @region.array.freeze
+
+const Slice =
   {
-    .claim = @region.array.claim;
-    .length = @region.array.length;
-    .get = @region.array.get;
-    .set = @region.array.set;
-    .swap = @region.array.swap;
-    .split = @region.array.split;
-    .join = @region.array.join;
-    .freeze = @region.array.freeze;
+    .claim = slice_claim;
+    .length = slice_length;
+    .get = slice_get;
+    .set = slice_set;
+    .swap = slice_swap;
+    .split = slice_split;
+    .join = slice_join;
+    .freeze = slice_freeze;
   }
 '''
 replace_once(path, start, replacement)
@@ -146,4 +156,4 @@ replace_once(
 ''',
 )
 
-print("made Slice a direct trusted primitive namespace")
+print("made Slice a closed trusted primitive namespace")
