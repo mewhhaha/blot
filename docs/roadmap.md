@@ -51,8 +51,9 @@ record rather than as the tree:
   program that traps.
 - The recursive-group linearity bug at the end of this file is fixed.
 - Still true: `Array.find`, `Iter.map`, and `Option.map` are absent;
-  `"a" == "a"` fails because `==` is over `@int.cmp`; there is no
-  `examples/rankn.blot`.
+  `"a" == "a"` fails because `==` is over `@int.cmp`.
+- No longer true: the rank-N example was still owed; it has since landed as
+  `examples/rank_n.blot`.
 
 **The corpus is green and that is the problem.** All 31 programs in `examples/`,
 all three case studies, and both library modules lower to gpufuck Core and pass
@@ -84,8 +85,9 @@ return run2 (fn x => 42);
 ```
 
 The refutation case works, which is what proves it is not the `@type.unbounded`
-approximation. There is no `examples/rankn.blot`; `grep -rn "@forall" examples`
-is empty. The catalog rule says there should be one.
+approximation. At the time of this snapshot there was no rank-N example; the
+catalog rule says there should be one, and `examples/rank_n.blot` has since
+landed.
 
 **Width subtyping lowers; two residual shape cases remain.** The program below
 was the reproduction, and staging was hiding it: `stageModule` (`src/stage.ts`)
@@ -912,11 +914,9 @@ Most of the debt listed here has been paid; what remains is named as such.
 - `docs/editor.md:15` promised a language server "with the inference milestone".
   Corrected: inference has landed and the server has not, which is the honest
   statement. M7 still owes the server.
-- `docs/inference.md`'s rank-N paragraph is correct — but no example exercises
-  it. `examples/rankn.blot` plus the `run2 (fn x => 42)` rejection is still
-  owed, per the one-program-per-feature catalog rule;
-  `grep -rn "@forall"
-  examples` is still empty.
+- `docs/inference.md`'s rank-N paragraph is correct — and the examples it was
+  owed have since landed: `examples/rank_n.blot` and the monomorphic-argument
+  rejection `examples/rejected/semantics/rank_n_monomorphic.blot`.
 - `docs/backend.md`'s "Width subtyping is specialized before Core" section, its
   "Remaining backend boundaries" list, `docs/inference.md`'s limits, and
   `case-studies/README.md`'s "what the language made awkward" have all been
