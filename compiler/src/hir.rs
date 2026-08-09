@@ -6609,6 +6609,7 @@ impl HirBuilder {
             | Type::Forall { .. }
             | Type::Function { .. }
             | Type::Effects(_)
+            | Type::OpenEffects { .. }
             | Type::Opaque(_)
             | Type::Top => Err(hir_error(&format!(
                 "The runtime value cannot cross the boundary as {:?}.",
