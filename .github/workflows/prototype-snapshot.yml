@@ -28,6 +28,45 @@ jobs:
               | gzip -d > /tmp/implementation.patch
             patch -p1 < /tmp/implementation.patch
           fi
+      - name: Repair prototype type coverage
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          infer = Path("src/check/infer.ts")
+          text = infer.read_text()
+          text = text.replace(
+              "): ReturnType<typeof run> {\n  try {\n    return run(\n      bind(\n        pattern,\n        expr,\n        context.values,",
+              "): ReturnType<typeof run> | null {\n  try {\n    return run(\n      bind(\n        pattern,\n        expr,\n        context.values,",
+              1,
+          )
+          infer.write_text(text)
+
+          type_rep = Path("src/core/type_rep.ts")
+          text = type_rep.read_text()
+          text = text.replace(
+              '  | { readonly tag: "effects"; readonly labels: ReadonlySet<string> }\n',
+              '  | { readonly tag: "effects"; readonly labels: ReadonlySet<string> }\n'
+              '  | {\n'
+              '    readonly tag: "open-effects";\n'
+              '    readonly labels: ReadonlySet<string>;\n'
+              '    readonly tail: TyRepId;\n'
+              '  }\n',
+              1,
+          )
+          text = text.replace(
+              '      case "effects":\n        return { tag: "effects", labels: new Set(type.labels) };\n',
+              '      case "effects":\n        return { tag: "effects", labels: new Set(type.labels) };\n'
+              '      case "open-effects":\n'
+              '        return {\n'
+              '          tag: "open-effects",\n'
+              '          labels: new Set(type.labels),\n'
+              '          tail: this.reference(type.tail),\n'
+              '        };\n',
+              1,
+          )
+          type_rep.write_text(text)
+          PY
       - run: deno fmt
       - run: cargo fmt --manifest-path compiler/Cargo.toml
       - name: Commit formatted implementation
@@ -36,7 +75,7 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
           if ! git diff --cached --quiet; then
-            git commit -m "implement language cleanup prototype"
+            git commit -m "repair cleanup prototype type coverage"
             git push origin HEAD:${{ github.event.pull_request.head.ref }}
           fi
       - run: deno check .
