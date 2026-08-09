@@ -8,6 +8,7 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { checkFile, checkUncheckedSource } from "./src/check/mod.ts";
 import { BlotError, render } from "./src/diagnostic.ts";
+import { LoadError } from "./src/load.ts";
 
 const scratch = await Deno.makeTempDir();
 
@@ -28,7 +29,9 @@ async function errorOf(source: string): Promise<string> {
   try {
     await checkUncheckedSource(path, PRELUDE + source);
   } catch (error) {
-    if (error instanceof BlotError) return error.message;
+    if (error instanceof BlotError || error instanceof LoadError) {
+      return error.message;
+    }
     throw error;
   }
   throw new Error("expected this program to be rejected");
@@ -2097,9 +2100,10 @@ return copied
 );
 
 rejects(
-  "a comptime expression cannot depend on a runtime binding",
+  "a compdo expression cannot depend on a runtime binding",
   `let runtime = 41
-return comptime (runtime + 1)
+return compdo:
+  return runtime + 1
 `,
   "BLOT_NOT_COMPTIME",
 );
