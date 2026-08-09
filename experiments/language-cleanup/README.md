@@ -2,13 +2,13 @@
 
 This directory isolates four related surface-language changes before they are
 wired into the generated Baba plan and both CST lowerers. The production grammar
-remains unchanged in this draft so the checked-in parser tables and Rust compiler
-cannot drift from `grammar.baba`.
+remains unchanged in this draft so the checked-in parser tables and Rust
+compiler cannot drift from `grammar.baba`.
 
 The proposed direction is deliberately subtractive:
 
-1. replace prefix `comptime value` with `compdo:` as the compile-time counterpart
-   of `do:`;
+1. replace prefix `comptime value` with `compdo:` as the compile-time
+   counterpart of `do:`;
 2. keep `const` valid in function scopes, but make it a compile-time obligation
    rather than a binding that can silently become runtime;
 3. let `sig` effect rows name a tail with `..e`; and
@@ -69,10 +69,10 @@ existing block lowering; when `phase` is `compdo`, wrap the completed block in
 the existing compiler-internal `comptime` expression. No downstream evaluator,
 type, ownership, Core, or backend form is required.
 
-A `compdo:` scope may use ordinary `let`, `const`, `if`, `case`, `for`, `:=`, and
-`return`. If any demanded value in the scope still depends on unresolved runtime
-data, compilation reports a staging diagnostic instead of residualizing the
-scope.
+A `compdo:` scope may use ordinary `let`, `const`, `if`, `case`, `for`, `:=`,
+and `return`. If any demanded value in the scope still depends on unresolved
+runtime data, compilation reports a staging diagnostic instead of residualizing
+the scope.
 
 ## Function-local `const`
 
@@ -164,14 +164,14 @@ effect_row_tail = (
 ) ;
 ```
 
-The final grammar needs to preserve the current `{}` versus shape disambiguation:
-an effect row with neither named effects nor a tail is still invalid. `{ ..e }`
-is the only newly empty-looking effect row.
+The final grammar needs to preserve the current `{}` versus shape
+disambiguation: an effect row with neither named effects nor a tail is still
+invalid. `{ ..e }` is the only newly empty-looking effect row.
 
 ## Element-free surface
 
-The prototype intentionally adds no replacement syntax. The current element
-form already lowers to:
+The prototype intentionally adds no replacement syntax. The current element form
+already lowers to:
 
 ```text
 fn () => component properties children
@@ -196,15 +196,20 @@ only when the generated compact plan, TypeScript tooling path, Rust production
 lowerer, editor grammar, profile counters, and language specification move
 together.
 
-- [x] Write an executable element-free equivalent of the current element example.
-- [x] Specify `compdo:` in terms of the existing block and internal comptime form.
+- [x] Write an executable element-free equivalent of the current element
+      example.
+- [x] Specify `compdo:` in terms of the existing block and internal comptime
+      form.
 - [x] Specify the function-local `const` must-reduce boundary.
 - [x] Specify effect-row-tail scope and constraints.
 - [ ] Change `grammar.baba` and regenerate the Baba/Tree-sitter artifacts.
 - [ ] Update both TypeScript and Rust CST lowering.
 - [ ] Enforce residual function-local `const` as a staging diagnostic.
 - [ ] Elaborate effect-row tails into the existing inferred row variables.
-- [ ] Remove the element grammar/lowering/editor queries and migrate rejection tests.
-- [ ] Update `LANGUAGE.md`, `spec/STAGING.md`, `spec/TYPECHECKING.md`, and focused docs.
+- [ ] Remove the element grammar/lowering/editor queries and migrate rejection
+      tests.
+- [ ] Update `LANGUAGE.md`, `spec/STAGING.md`, `spec/TYPECHECKING.md`, and
+      focused docs.
 - [ ] Record parser-profile counter changes in `docs/gpu-profile.md`.
-- [ ] Run `just check`, `just test`, generation/profile gates, and the compiler corpus.
+- [ ] Run `just check`, `just test`, generation/profile gates, and the compiler
+      corpus.
