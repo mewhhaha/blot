@@ -232,26 +232,21 @@ from a statement branch or across a loop. Bare `break` only exits a `for`. A
 bare trailing expression remains invalid because a trailing name and the start
 of `name := ...` have the same one-token prefix.
 
-Elements are effect values around ordinary component calls with property records
-and an array of child effect values:
+Components use ordinary functions, records, arrays, and nullary computations;
+there is no element syntax. A renderer-shaped API can keep the same convention
+explicitly:
 
 ```blot
-<- <div .class="counter" .hidden={hidden}>
-  text "Count: "
-  <Button .disabled=True />
-</div>
+let label = fn () =>
+  <- text "Count: "
+let save = fn () =>
+  <- Button { .label = "Save"; .disabled = (); } []
+<- div { .class = "counter"; .hidden = hidden; } [label, save]
 ```
 
-The element lowers to a nullary effect value containing
-`div { .class = "counter"; .hidden = hidden; } children`. Use
-`result <- <div />` to execute and retain its result or `<- <div />` to execute
-and discard it. Both `div` and `Button` are ordinary lexical bindings. The
-syntax supplies no implicit renderer or text operation. Each body value is an
-effect value in the child array, so the component decides which children execute
-and in which order. `{effect}` passes a previously constructed effect value
-without executing or suspending it again. A component's expected record makes
-ordinary fields required. Writing `.field? = T` in that record means
-`.field = T | ()`, so the field may be omitted and receives `()` at the call.
+The component decides whether and when to execute child computations. Property
+records use ordinary structural record typing, and child suspension is explicit
+rather than introduced by tag syntax.
 
 `for` is a declaration rather than an expression because what it produces is an
 effect on the enclosing scope: the names its body rebinds with `:=` are the
@@ -447,10 +442,13 @@ why `derive` is a function rather than a macro.
 
 Effects are a shape of operation types handed to one primitive, and performing
 one is an ordinary call, so the row is inferred rather than declared. It is
-still writable: `sig report = Unit -> Str ~ { Console }` says exactly what the
-printer prints, a bare `->` is the empty row rather than an unwritten one, and a
-row names effects that are in scope, so it is closed — there is no way to write
-the row variable inference uses for a callback's effects.
+still writable: `sig report = Unit -> Str ~ { Console }` is a closed row and a
+bare `->` is exactly empty. Higher-order signatures may name the rest of a row
+with a signature-local tail such as
+`(a -> b ~ { ..e }) -> a -> b ~ { Console,
+..e }`; repeating the tail relates
+those positions without granting authority to construct or handle the effects it
+carries.
 
 `x <- expression` sequences one. A nullary effect value is forced with `()`, so
 it can be stored before it is executed; `let` remains a pure definition:

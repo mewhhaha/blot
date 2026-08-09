@@ -43,7 +43,20 @@ export function performs(arrow: Value, effects: Value, span: Span): Value {
   // A row is a set, so a name written twice is written once. Keeping the
   // duplicate would make two spellings of one row two unequal type values.
   const row: Value[] = [];
-  for (const effect of arrayElements(effects, span, "`~`")) {
+  let tail: number | undefined;
+  const members = arrayElements(effects, span, "`~`");
+  for (const [index, effect] of members.entries()) {
+    if (effect.tag === "type-variable") {
+      if (tail !== undefined || index !== members.length - 1) {
+        fail(
+          "BLOT_TYPE",
+          "an effect-row tail is written once and must be the final row member",
+          span,
+        );
+      }
+      tail = effect.id;
+      continue;
+    }
     if (effect.tag !== "effect") {
       fail(
         "BLOT_TYPE",
@@ -53,7 +66,7 @@ export function performs(arrow: Value, effects: Value, span: Span): Value {
     }
     if (!row.some((seen) => equal(seen, effect))) row.push(effect);
   }
-  const attached = attach(arrow, row);
+  const attached = attach(arrow, row, tail);
   if (attached === null) {
     fail(
       "BLOT_TYPE",
@@ -67,13 +80,16 @@ export function performs(arrow: Value, effects: Value, span: Span): Value {
 function attach(
   arrow: Value & { tag: "arrow" },
   row: readonly Value[],
+  tail?: number,
 ): Value | null {
   if (arrow.codomain.tag === "arrow") {
-    const inner = attach(arrow.codomain, row);
+    const inner = attach(arrow.codomain, row, tail);
     if (inner !== null) return { ...arrow, codomain: inner };
   }
-  if (arrow.effects.length > 0) return null;
-  return { ...arrow, effects: row };
+  if (arrow.effects.length > 0 || arrow.effectTail !== undefined) return null;
+  return tail === undefined
+    ? { ...arrow, effects: row }
+    : { ...arrow, effects: row, effectTail: tail };
 }
 
 /** Unions are flat and duplicate-free, so `1 | 1 | 2` and `1 | 2` are one value. */
@@ -290,7 +306,15 @@ export function reflect(value: Value): Value {
         record({
           domain: value.domain,
           codomain: value.codomain,
-          effects: { tag: "array", elements: [...value.effects] },
+          effects: {
+            tag: "array",
+            elements: value.effectTail === undefined
+              ? [...value.effects]
+              : [...value.effects, {
+                tag: "type-variable",
+                id: value.effectTail,
+              }],
+          },
           deferred: bool(value.deferred === true),
         }),
       );

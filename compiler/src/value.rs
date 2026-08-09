@@ -364,6 +364,8 @@ pub enum Value {
         domain: Box<Value>,
         codomain: Box<Value>,
         effects: Vec<Value>,
+        /// Signature-local rest of an open effect row, bound by `@forall`.
+        effect_tail: Option<u32>,
     },
     TypeVariable(u32),
     Forall {
@@ -679,15 +681,18 @@ pub fn equal(left: &Value, right: &Value) -> bool {
                 domain: left_domain,
                 codomain: left_codomain,
                 effects: left_effects,
+                effect_tail: left_tail,
             },
             Value::Arrow {
                 domain: right_domain,
                 codomain: right_codomain,
                 effects: right_effects,
+                effect_tail: right_tail,
             },
         ) => {
             equal(left_domain, right_domain)
                 && equal(left_codomain, right_codomain)
+                && left_tail == right_tail
                 && left_effects.len() == right_effects.len()
                 && left_effects
                     .iter()
@@ -803,14 +808,16 @@ pub fn show(value: &Value) -> String {
             domain,
             codomain,
             effects,
+            effect_tail,
         } => {
-            let row = if effects.is_empty() {
+            let mut parts = effects.iter().map(show).collect::<Vec<_>>();
+            if let Some(tail) = effect_tail {
+                parts.push(format!("..'t{tail}"));
+            }
+            let row = if parts.is_empty() {
                 String::new()
             } else {
-                format!(
-                    " ~ {{ {} }}",
-                    effects.iter().map(show).collect::<Vec<_>>().join(", ")
-                )
+                format!(" ~ {{ {} }}", parts.join(", "))
             };
             format!("{} -> {}{row}", show(domain), show(codomain))
         }

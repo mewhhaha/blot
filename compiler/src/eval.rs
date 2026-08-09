@@ -2896,6 +2896,7 @@ fn substitute_signature(signature: &Value, environment: &Environment) -> Value {
             domain,
             codomain,
             effects,
+            effect_tail,
         } => Value::Arrow {
             domain: Box::new(substitute_signature(domain, environment)),
             codomain: Box::new(substitute_signature(codomain, environment)),
@@ -2903,6 +2904,7 @@ fn substitute_signature(signature: &Value, environment: &Environment) -> Value {
                 .iter()
                 .map(|effect| substitute_signature(effect, environment))
                 .collect(),
+            effect_tail: *effect_tail,
         },
         Value::Forall { variable, body } => Value::Forall {
             variable: *variable,

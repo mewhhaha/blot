@@ -19,21 +19,30 @@ in a benchmark months later.
 
 | counter                     |    blot | note                                               |
 | --------------------------- | ------: | -------------------------------------------------- |
-| `lexerStates`               |     117 | direct multiplier in the parallel DFA summary pass |
-| `maxCandidateMultiplicity`  |      30 | worst-case island candidates allocated per token   |
-| `islandCount`               |      81 | one island for every grammar rule                  |
-| `islandStates`              |     468 |                                                    |
-| `islandTransitions`         |     481 |                                                    |
+| `lexerStates`               |     113 | direct multiplier in the parallel DFA summary pass |
+| `maxCandidateMultiplicity`  |      22 | worst-case island candidates allocated per token   |
+| `islandCount`               |      67 | one island for every grammar rule                  |
+| `islandStates`              |     392 |                                                    |
+| `islandTransitions`         |     401 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 769,392 | immutable device table                             |
-| `packedBytes`               | 593,683 | version-3 runtime section                          |
+| `denseTransitionBytes`      | 573,888 | immutable device table                             |
+| `packedBytes`               | 450,224 | version-3 runtime section                          |
 | `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
-| `parallelLongRegionIslands` |       9 | islands admitted to parallel long-region execution |
+| `parallelLongRegionIslands` |       7 | islands admitted to parallel long-region execution |
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
-and edge arrays directly. Declaring all 87 rules as islands is what preserves
+and edge arrays directly. Declaring all 67 rules as islands is what preserves
 the full CST shape needed by source lowering.
+
+Removing element syntax while adding `compdo:` and effect-row tails moves the
+current plan from 117 to 113 lexer states, from 81 to 67 islands, and from 30 to
+22 maximum candidates per token. Dense transitions fall from 769,392 to 573,888
+bytes and the packed plan from 593,683 to 450,224 bytes. The root loop and 33
+contraction rounds are unchanged; parallel long-region admission moves from 9 to
+7 islands because the retired element regions no longer exist. These are the
+current counters above; the element measurements later in this document remain
+historical records of the retired syntax.
 
 Adding the explicit `do:` value scope adds two lexer states, one island, eleven
 island states, twelve island transitions, 31,260 dense-transition bytes, and

@@ -61,8 +61,8 @@ The reserved words are:
 ```text
 module operators infixl infixr infix prefix
 let const sig return
-if else case of rec comptime open
-for in break do fn
+if else case of rec open
+for in break do compdo fn
 ```
 
 Reserved words and capitalized names remain valid field names: `.return`,
@@ -354,24 +354,24 @@ above the reader or the two belong in one recursive group.
 
 Physical line breaks terminate declarations. A continuation may be indented, but
 indentation opens a statement suite only after a suite introducer. The
-introducers are `=`, `=>`, `<-`, `of`, `:`, and an opening element's `>`. `do:`
-is the explicit value-producing statement scope. Parentheses only group values
-or form tuples; they never introduce a statement suite. A suite may use any
-indentation width, but every line at that depth must agree; a dedent must return
-to an active suite width or to the introducer's width. Other indentation is
-expression continuation and does not silently create a scope. A closing
-delimiter does not select a suite width, so its indentation is ignored and
-canonicalized by the formatter. The formatter writes the accepted structure with
-two-space indentation and expands lines toward an 80-column limit. When a
-binding or `return` line is too wide, its value moves to the following line at
-one additional indentation level. A delimited value that is already multiline
-likewise moves as a whole, so its opening and closing delimiters share the
-value's indentation scope rather than the declaration's prefix. A vertical
-delimiter indents its contents one level and closes one level outside them. The
-formatter writes a conditional vertically, giving each branch a block whose
-explicit `return` supplies the value that branch contributes. When the
-conditional is itself the terminal result of a scope, the formatter omits the
-redundant outer `return` and lets those branch returns target the scope
+introducers are `=`, `=>`, `<-`, `of`, and `:`. `do:` is the explicit
+value-producing statement scope, and `compdo:` is its compile-time counterpart.
+Parentheses only group values or form tuples; they never introduce a statement
+suite. A suite may use any indentation width, but every line at that depth must
+agree; a dedent must return to an active suite width or to the introducer's
+width. Other indentation is expression continuation and does not silently create
+a scope. A closing delimiter does not select a suite width, so its indentation
+is ignored and canonicalized by the formatter. The formatter writes the accepted
+structure with two-space indentation and expands lines toward an 80-column
+limit. When a binding or `return` line is too wide, its value moves to the
+following line at one additional indentation level. A delimited value that is
+already multiline likewise moves as a whole, so its opening and closing
+delimiters share the value's indentation scope rather than the declaration's
+prefix. A vertical delimiter indents its contents one level and closes one level
+outside them. The formatter writes a conditional vertically, giving each branch
+a block whose explicit `return` supplies the value that branch contributes. When
+the conditional is itself the terminal result of a scope, the formatter omits
+the redundant outer `return` and lets those branch returns target the scope
 directly. Arrays use one line when they fit within their value scope and
 otherwise place one element on each line. After a standalone `if` or `for` suite
 closes before another statement, the formatter writes one empty line to make the
@@ -387,12 +387,12 @@ let descriptive_pattern =
   value
 ```
 
-The indented continuation accepts a lambda, element, or ordinary expression. An
-`if` immediately after the newline begins the binding's existing block form,
-where it is a statement conditional whose branches `return` the value the
-binding takes. `case` is what selects a value in place (§8.1); there is no
-spelling that makes the `if` itself the value. The continuation changes layout
-only and does not introduce another scope.
+The indented continuation accepts a lambda or ordinary expression. An `if`
+immediately after the newline begins the binding's existing block form, where it
+is a statement conditional whose branches `return` the value the binding takes.
+`case` is what selects a value in place (§8.1); there is no spelling that makes
+the `if` itself the value. The continuation changes layout only and does not
+introduce another scope.
 
 `let` defines a value in the current phase, matches its pattern when demanded,
 and binds the pattern's names.
@@ -451,13 +451,13 @@ conditional or returned from a compile-time function. Functions captured
 alongside it are typed the same way, so a local helper in scope does not prevent
 it.
 
-A `const` may not capture a `let`. Specializing a compile-time closure emits it
-as a definition of its own, and a definition has no enclosing frame to read a
-runtime binding out of, so a `const` whose body names a `let` is refused at the
-capture. Bind the captured name with `const`, or bind the closure with `let`. A
-`const` written inside a function body whose value depends on that function's
-parameters is not a compile-time value at all — it is an ordinary runtime
-binding, and captures like one.
+A `const` may appear inside a function and still means compile time. Generic
+checking may defer its evaluation until a specialization supplies concrete
+compile-time arguments, but the declaration never becomes an ordinary runtime
+`let`. If the specialization still needs unresolved runtime data to evaluate the
+`const`, compilation fails at that declaration. A `const` also may not capture a
+runtime `let`; bind the dependency with `const`, or make the dependent binding a
+`let`.
 
 A mismatch in a binding pattern is an error. Repeating `let` or `const`
 explicitly shadows the earlier binding and may change its type:
@@ -601,9 +601,9 @@ supplies `()` and binds the resulting `A`, so it can be constructed, retained,
 and executed later:
 
 ```blot
-let effect = <Camera />
-camera <- effect
-<- effect
+const Clock = @effect { .now = Unit -> Int; }
+let effect = Clock.now
+time <- effect
 ```
 
 An already-applied expression that performs while it is evaluated remains valid
@@ -619,144 +619,40 @@ reordered, inlined, or discarded when their values are not demanded; sequencing
 an effect before the tail therefore requires `<-` even when its result is
 ignored.
 
-### 4.6 Element expressions and statements
+### 4.6 Components are ordinary functions
 
-An element constructs an effect value which, when executed, applies an ordinary
-component binding to a property record and an array of child effect values.
-Executing while discarding the component result is explicit:
-
-```blot
-<- <div .class="counter" .hidden={hidden}>
-  text "Count: "
-  <Button .disabled=True />
-</div>
-```
-
-Element syntax is pure at construction: `let effect = <div />` retains the
-effect without executing the component, `reference <- effect` executes it and
-retains its result, and `<- effect` executes it while discarding that result. A
-bare element is accepted only as a nested child; ordinary statement suites
-require one of the explicit sequencing forms. An element is a complete value
-form; parenthesize it before placing the effect value in a larger operator
-expression.
-
-Braces in an element body pass an existing effect value to the parent without
-executing or suspending it again:
-
-```blot
-let effect1 = <A />
-let effect2 = <B />
-let parent =
-  <C>
-    {effect1}
-    {effect2}
-  </C>
-```
-
-Short bodies may remain inline as `<C>{effect1}{effect2}</C>`. Like other
-multiline binding values, a multiline element moves to the following indented
-line, so the opening and closing tags visibly share the value's scope. The
-braces distinguish an existing effect value from a bare child computation, which
-element syntax suspends once for convenience.
-
-The tag is a lexical binding with exactly the name written. Lower-case and
-capitalized tags have the same semantics: `<div>` reaches `div`, and `<Button>`
-reaches `Button`. Nothing named `Render`, `text`, or `children` is implicitly in
-scope. A renderer may expose bindings directly, or a function may bind fields
-projected from a renderer before using element expressions.
-
-Properties are fields of one record:
-
-| source                 | record field            |
-| ---------------------- | ----------------------- |
-| `.disabled=True`       | `.disabled = True;`     |
-| `.class="counter"`     | `.class = "counter";`   |
-| `.hidden={expression}` | `.hidden = expression;` |
-
-An unbraced payload is a name, constructor, unit, integer, float, or text
-literal. Braces admit any value expression. Every property has an explicit
-value; boolean-like properties use ordinary values such as `True`. Writing one
-property twice is the same duplicate explicit field error as writing one record
-field twice.
-
-The component's first parameter decides which properties are required. An
-element property record is a closed call-site row: every required field must be
-written and every written field must be declared by the component. Ordinary
-records retain width subtyping; the closed check applies only to element syntax,
-where an extra property is otherwise almost always a misspelling. A field
-written with `?` elaborates to a field whose type includes `()`, and the call
-supplies `()` when it is omitted. Thus this signature requires `label` and makes
-`disabled` optional without an intrinsic `Option`:
-
-```blot
-sig Button = {
-  .label = Str;
-  .disabled? = Bool;
-} -> [Unit -> Unit ~ { Draw }] -> Unit ~ { Draw };
-```
-
-`<Button .label="Save" />` supplies `()` as `.disabled`, while `<Button />` is a
-type error because `label` is required. This is expectation-driven: projecting
-an unknown field from `{}` remains an error, and a typo does not silently
-acquire type `Unit`.
-
-A component is otherwise an ordinary curried function. For example:
+Blot has no element syntax. A component is an ordinary function over ordinary
+values, conventionally a property record followed by an array of nullary child
+computations:
 
 ```blot
 let component = fn properties => fn children =>
   for child in Iter.items children:
     <- child
 
-  return ()
+  return properties
 ```
 
-Its principal type admits an array of nullary computations. The property
-argument remains polymorphic until the component inspects it, and calling a
-child propagates that child's inferred effects into the component. Projecting
-fields or attaching a signature constrains the property argument to a record;
-performing renderer operations adds their effects to the outer row.
-
-The component's result and effect row become the element effect value's result
-and effect row:
+Children are suspended explicitly with nullary functions when suspension is
+wanted. Construction, storage, reordering, and execution then use the same
+function, record, array, and effect rules as the rest of the language:
 
 ```blot
-let draw_twice = fn () =>
-  let effect = <div />
-  <- effect
-  result <- effect
-  return result
+let label = fn () =>
+  <- text "Count: "
+
+let button = fn () =>
+  <- Button { .label = "Save"; .disabled = (); } []
+
+let view = fn () =>
+  <- div { .class = "counter"; } [label, button]
 ```
 
-Each child between paired tags becomes one effect value in the child array. A
-nested element already is such a value. `{effect}` passes an existing effect
-value unchanged, while a bare non-element expression is suspended as
-`fn () => expression`. Sequencing the child executes it and binds its result. A
-self-closing element receives `[]`. The component may inspect the effects,
-reorder them, keep only some of them, or execute them in source order. Control
-inside one suspended child has that child's suspension as its boundary.
-
-The first example lowers conceptually to the equivalent of:
-
-```blot
-let first_child = fn () =>
-  child <- text "Count: "
-  return child
-let second_child = fn () =>
-  return Button { .disabled = True; } []
-let effect = fn () =>
-  return div { .class = "counter"; .hidden = hidden; } [first_child, second_child]
-<- effect
-```
-
-The nullary closures in that expansion are the erased representation of effect
-values; they are not a second surface calling convention. The source form lowers
-completely during CST lowering, and effect binding performs the one erased `()`
-application. There is no element AST node, element type, renderer primitive,
-implicit execution, or backend path. Opening and closing names must match
-exactly. `</` and `/>` are reserved element delimiters; exact `<` and `>` remain
-available as fixity operators, while longer operator spellings continue to lex
-as operators. The exact brackets are infix operators only; using `<` as a prefix
-would be indistinguishable from opening an element expression.
+There is no special closed property-row rule, implicit child suspension,
+renderer namespace, or backend representation. A component that wants a closed
+configuration can encode that policy in its ordinary API; record calls otherwise
+keep structural width subtyping. `examples/elements.blot` retains its historical
+name as the corpus comparison for this element-free spelling.
 
 ### 4.7 Opening a record
 
@@ -1142,16 +1038,29 @@ reading itself.
 A member's type is inferred with the whole group's names bound monomorphically
 and generalized afterwards, so recursion within a group is not polymorphic.
 
-### 6.6 Compile-time evaluation
+### 6.6 Compile-time blocks
 
 ```blot
-comptime expression
+const fields = compdo:
+  let reflected = reflect T
+  return field_names reflected
 ```
 
-`comptime` evaluates its operand in the compile-time phase. It may not depend on
-runtime bindings. Compile-time and runtime evaluation otherwise use the same
-language semantics.
+`compdo:` has the same statement and `return` rules as `do:`, but the complete
+block must resolve in the compile-time phase. It may use ordinary `let`,
+`const`, `if`, `case`, `for`, `:=`, and `return`; a demanded value that still
+depends on unresolved runtime data is a staging error rather than residual code.
+Lowering uses the existing internal compile-time expression form, so the
+evaluator and backend gain no second block representation.
 
+A single expression normally needs no block:
+`const fields = field_names
+(reflect T)` already carries the same must-resolve
+obligation. Function-local `const` declarations follow that rule as well:
+specialization may make a parameter compile-time-known, but an unresolved value
+never silently becomes a runtime binding.
+
+Compile-time and runtime evaluation otherwise use the same language semantics.
 Evaluation has a deterministic fuel limit. Exceeding it is an error rather than
 non-deterministically hanging the compiler.
 
@@ -1779,30 +1688,29 @@ inference lattice only when it denotes a type.
 
 Compiler output uses notation that is not additional source syntax:
 
-| display                   | meaning                         |
-| ------------------------- | ------------------------------- |
-| `Int`, `Str`, `1`, `"x"`  | ranges and singleton ranges     |
-| `0..9`, `0..`             | bounded and half-bounded ranges |
-| `{ .x = Int; }`           | structural record               |
-| `[Int]`                   | homogeneous array               |
-| `#None \| #Some Int`      | constructor variant             |
-| `#Some Int \| ..`         | variant with an open set        |
-| `A -> B`                  | pure function                   |
-| `A -> B ~ { Console, e }` | function with an effect row     |
-| `~A -> B`                 | deferred parameter (§6.3)       |
-| `'a`, `'b`                | inferred type variables         |
-| `forall 'q0. ...`         | explicit quantified type        |
-| `⊤`, `⊥`                  | top and bottom                  |
+| display                     | meaning                          |
+| --------------------------- | -------------------------------- |
+| `Int`, `Str`, `1`, `"x"`    | ranges and singleton ranges      |
+| `0..9`, `0..`               | bounded and half-bounded ranges  |
+| `{ .x = Int; }`             | structural record                |
+| `[Int]`                     | homogeneous array                |
+| `#None \| #Some Int`        | constructor variant              |
+| `#Some Int \| ..`           | variant with an open set         |
+| `A -> B`                    | pure function                    |
+| `A -> B ~ { Console, ..e }` | function with an open effect row |
+| `~A -> B`                   | deferred parameter (§6.3)        |
+| `'a`, `'b`                  | inferred type variables          |
+| `forall 'q0. ...`           | explicit quantified type         |
+| `⊤`, `⊥`                    | top and bottom                   |
 
 Array lengths and affine relations are not display types. Diagnostics that need
 to explain a failed proof render propositions such as `index < length(values)`
 directly from `Phi`; a `sig` cannot name them.
 
 An effect row is the one piece of this notation that is also source:
-`A -> B ~ {
-Console }` is written in a `sig` exactly as it is printed (§12.4). A
-row _variable_ — the `e` in `A -> B ~ { Console, e }` — is printed and not
-written; a written row names effects and is closed.
+`A -> B ~ { Console }` is a closed row, while `A -> B ~ { Console, ..e }` names
+the rest of the row inside a `sig` (§12.4). The checker prints inferred open
+rows with the same `..e` notation.
 
 ### 10.2 Type-value primitives
 
@@ -2169,48 +2077,43 @@ the checker prints it:
 ```blot
 const Console = @effect { .write = Str -> Unit; }
 
-sig greet = Str -> Unit ~ { Console }
-let greet = fn name =>
-  result <- Console.write name
-  return result
+sig map_logged =
+  (Int -> Int ~ { ..e }) ->
+  Int -> Int ~ { Console, ..e }
+let map_logged = fn callback => fn value =>
+  <- Console.write "call"
+  return callback value
 ```
 
-`~` is an ordinary infix operator (`@type.performs`, precedence 21) whose right
-operand is a **row**: one or more comma-separated expressions between braces,
-each of which must evaluate at compile time to an effect. A row's members carry
-no leading `.` where a shape's members always do, which is what tells
+`~` is the ordinary `@type.performs` operator. Its right operand is a row of
+compile-time effect values, optionally ending in one tail `..name`.
 `{ Console
-}` and `{ .x = Int; }` apart; `{}` is the empty shape, and a row is
-never empty because a function that performs nothing is written without `~`.
+}` is closed. `{ ..e }` requires no named effect but leaves the row
+open through `e`. A function that performs exactly nothing is still written with
+bare `->`; `{}` remains the empty shape rather than an effect row.
 
-An effect is an ordinary compile-time value, so only an effect that is in scope
-can be named. A module that acquires authority by importing a library — the
-library declares the effect and does not export it — receives that effect in its
-own inferred rows and cannot write them.
+A tail name is scoped to the immediately containing `sig`. Every occurrence of
+the same tail name in that signature denotes the same inferred effect-row
+variable, and the tail must appear in at least two positions. That repeated-use
+rule prevents a signature from introducing an unconstrained row variable that
+could admit arbitrary effects. A row has at most one tail and the tail is last.
+This facility is specific to effect-label sets; it does not add record row
+polymorphism.
 
-Four rules decide what a written row means.
-
-**A written row is an upper bound.** The binding's inferred type must be a
+A written row remains an upper bound. The binding's inferred type must be a
 subtype of the signature, and fewer effects is a subtype, so a body may perform
-fewer effects than its signature names. `sig quiet = Int -> Int ~ { Console };`
-over a body that performs nothing is accepted, and callers are told what the
-signature says.
+fewer named effects than its signature promises. A closed
+`sig quiet = Int ->
+Int ~ { Console }` over a pure body is therefore accepted.
+Conversely, bare `->` is the exactly-empty row, so a body that performs is
+rejected when its signature omits `~`.
 
-**A bare `->` is the empty row.** It is a claim, not the absence of one, so a
-`sig` without `~` on a body that performs is rejected. Reading it as "says
-nothing about effects" would make the row a variable that every later constraint
-satisfies — and since the binding takes its signature as its type, the effect
-would pass the check and then be missing from what every caller is told.
+Only effects in scope can be named directly. A tail can nevertheless preserve an
+effect identity supplied by a callback or dependency without making that effect
+constructible or handleable by name. Nameability and authority therefore remain
+separate: `..e` carries the rest of a row; it grants no capability.
 
-**A written row is closed.** There is no way to write a row variable: `e` in a
-printed `~ { Console, e }` is the rest of the row inference found, and a
-signature naming one would be an unconstrained variable admitting every effect.
-The cost is that a function polymorphic in a callback's row —
-`('a -> 'b ~ { e
-}) -> 'a -> 'b ~ { Console, e }` — can be given a signature
-only by fixing that row.
-
-**The row lands on the last arrow.** `A -> B -> C ~ { Console }` is the function
+The row lands on the last arrow. `A -> B -> C ~ { Console }` is the function
 that performs when its second argument arrives, which is where the printer puts
 a row. A second `~` fills the next arrow outwards, so
 `A -> B -> C ~ { Inner } ~
@@ -2218,10 +2121,9 @@ a row. A second `~` fills the next arrow outwards, so
 whose arrows all carry rows is an error.
 
 Reflection (§10.2) describes an arrow's `.domain`, `.codomain`, and `.effects`,
-but an effect itself reflects as `#Opaque` — nothing in blot takes one apart. So
-the prelude's `refines` decides an arrow's row only when the narrow side
-performs nothing, and refuses rather than guesses otherwise. Rows are decided by
-the checker, at the `sig`.
+but an effect itself reflects as `#Opaque` — nothing in Blot takes one apart.
+Open row tails remain type-checking evidence and do not add a runtime value,
+Runtime-HIR representation, or ABI field.
 
 ## 13. Primitive namespace
 

@@ -1,9 +1,0 @@
-open @import "blot:prelude" ()
-
-sig Button = { .label = Str; } -> [Unit -> Unit] -> Unit
-let Button = fn _ => fn _ => ()
-
-let view = fn () =>
-  _ <- <Button />
-
-return view

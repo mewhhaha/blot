@@ -84,10 +84,10 @@ is that a small number of semantic distinctions can do most of the work:
 - an external ABI is not an exposure of the compiler's heap.
 
 These distinctions allow the surface language to remain small. Surface forms
-such as `for`, statement `if`, element syntax, and early `return` should
-elaborate to a core whose semantics does not mention them. Conversely, a feature
-that survives into every later pass is not a surface convenience; it is part of
-the core and needs typing and operational rules.
+such as `for`, statement `if`, `compdo:`, and early `return` should elaborate to
+a core whose semantics does not mention them. Conversely, a feature that
+survives into every later pass is not a surface convenience; it is part of the
+core and needs typing and operational rules.
 
 The language has the following non-goals:
 
@@ -184,10 +184,9 @@ The following are surface forms only:
 - statement `if` and deconstructing guards;
 - early `return`;
 - `|>` handler composition over two-argument `@handle`;
-- element statements;
-- declaration tags;
-- `open`; and
-- optional element properties.
+- `compdo:` compile-time blocks;
+- declaration tags; and
+- `open`.
 
 Their elaboration must be hygienic. Compiler-generated names are atoms outside
 the source identifier space, not strings that a source program might bind.
@@ -209,47 +208,24 @@ administrative steps:
 evaluate_surface(s) = observe(evaluate_core(elaborate(s)))
 ```
 
-### 3.3 Elements are ordinary component applications
+### 3.3 Components need no dedicated syntax
 
-An element has no built-in DOM, renderer, node type, or text operation.
-
-```blot
-<Button .label="Save">
-  text "ready"
-</Button>
-```
-
-The element expression elaborates to an effect value around an ordinary
-component call whose second argument is an array of child effect values. Nested
-elements and braced existing effect values enter that array unchanged; a bare
-non-element child computation receives one nullary suspension:
+Component-shaped APIs are ordinary functions whose arguments may be property
+records and arrays of nullary child computations:
 
 ```blot
-fn () => Button { .label = "Save"; } [fn () => text "ready"]
+let label = fn () =>
+  <- text "ready"
+
+let button = fn () =>
+  <- Button { .label = "Save"; } [label]
 ```
 
-An effect binding executes that value, supplying its erased unit argument. A
-named bind retains the component's result and a leading bind discards it. A bare
-element is valid only as a nested child. Each child effect remains suspended
-until the component sequences it. Element syntax therefore preserves the
-component's result and effect row inside a first-class effect value.
-
-The component decides whether and how often to execute its children, subject to
-the child's ownership contract. An unrestricted child may be called repeatedly;
-a child capturing a linear resource is itself linear and may be called exactly
-once.
-
-Property omission uses a general, type-directed record-completion coercion. If a
-callee's uniquely inferred parameter record contains `.disabled = Bool | ()`, an
-argument omitting that field is elaborated with `.disabled = ()`. Element syntax
-is the common use, but an ordinary function call may use the same coercion.
-
-Completion is not record width subtyping. It is an explicit operation recorded
-in typed core, and reflection after the call observes the completed field. It
-may run only at a boundary with one known expected record; an unconstrained
-record does not spontaneously gain fields, and competing expected records make
-elaboration ambiguous and are rejected. These rules give omission one result
-independent of the path by which inference discovered the expectation.
+The language does not distinguish these calls from any other function, record,
+array, or effect value. Child suspension is explicit, record arguments retain
+width subtyping, and staging handles the nullary closures through the ordinary
+closure path. A future surface convenience would therefore have to justify
+itself without adding a second component typing or runtime model.
 
 ## 4. Core language
 

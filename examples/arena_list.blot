@@ -18,16 +18,16 @@ const sum_matching =
     #Cons (value, tail) => value + sum_matching tail
   )
 
-const Primes = comptime (2 :: 3 :: 5 :: 7 :: List.empty)
-const Doubled = comptime List.map (Primes, fn value => value * 2)
-const Combined = comptime (Primes ++ Doubled)
+const Primes = 2 :: 3 :: 5 :: 7 :: List.empty
+const Doubled = List.map (Primes, fn value => value * 2)
+const Combined = Primes ++ Doubled
 const compile_time_total =
-  comptime List.fold (
+  List.fold (
     Combined,
     0,
     fn (total, value) => total + value
   )
-const compile_time_values = comptime List.to_array Combined
+const compile_time_values = List.to_array Combined
 
 let runtime_list = List.from_array (upto (1, 11))
 let prefixed = 0 :: runtime_list

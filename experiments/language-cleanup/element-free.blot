@@ -1,8 +1,3 @@
-// Element-free baseline. Components are ordinary functions over a property
-// record and an array of nullary child computations. Keep this under the
-// historical example name while the grammar-removal prototype is evaluated so
-// its existing golden continues to compare the same behavior.
-
 open @import "blot:prelude" ()
 
 const Draw =

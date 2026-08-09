@@ -70,11 +70,11 @@ programs are recorded in
 blot runs the same program three ways, and `just wasm` requires all three to
 agree:
 
-|                         |                                                                           |
-| ----------------------- | ------------------------------------------------------------------------- |
-| the comptime evaluator  | also the runtime, and the thing `comptime` uses — one semantics, no drift |
-| gpufuck's GPU evaluator | a cross-check on the lowering                                             |
-| the emitted Wasm        | the artifact                                                              |
+|                         |                                                                                     |
+| ----------------------- | ----------------------------------------------------------------------------------- |
+| the comptime evaluator  | also the runtime, and the engine behind `const`/`compdo:` — one semantics, no drift |
+| gpufuck's GPU evaluator | a cross-check on the lowering                                                       |
+| the emitted Wasm        | the artifact                                                                        |
 
 A lowering can satisfy one and not another, which is why the check is on all
 three rather than on whichever is convenient.

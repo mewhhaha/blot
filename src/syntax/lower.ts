@@ -1398,6 +1398,80 @@ function lowerControlLoop(
   };
 }
 
+interface EffectRowTailUse {
+  readonly name: string;
+  readonly count: number;
+  readonly span: Span;
+}
+
+function effectRowTailUses(cursor: Cursor): readonly EffectRowTailUse[] {
+  const uses = new Map<string, { count: number; span: Span }>();
+  const record = (name: { text: string; span: Span }): void => {
+    const existing = uses.get(name.text);
+    if (existing === undefined) {
+      uses.set(name.text, { count: 1, span: name.span });
+    } else {
+      existing.count += 1;
+    }
+  };
+  const visit = (current: Cursor): void => {
+    if (current.type === "token") return;
+    if (current !== cursor && current.name === "binding") return;
+    if (current.name === "effect_row_tail") {
+      record(tokenOf(required(current, "name")));
+      return;
+    }
+    if (current.name === "effect_row") {
+      const children = current.children();
+      for (let index = 0; index < children.length; index += 1) {
+        const child = children[index];
+        const next = children[index + 1];
+        if (
+          child.type === "token" && child.text === ".." &&
+          next?.type === "token"
+        ) {
+          record(next);
+          index += 1;
+        } else {
+          visit(child);
+        }
+      }
+      return;
+    }
+    for (const child of current.children()) visit(child);
+  };
+  visit(cursor);
+  return [...uses].map(([name, use]) => ({ name, ...use }));
+}
+
+function quantifyEffectRowTails(
+  value: Expr,
+  tails: readonly EffectRowTailUse[],
+  span: Span,
+): Expr {
+  let result = value;
+  for (const tail of [...tails].reverse()) {
+    const lambda: Expr = {
+      tag: "lambda",
+      parameter: {
+        tag: "name",
+        name: tail.name,
+        qualifier: "none",
+        span: tail.span,
+      },
+      body: result,
+      span,
+    };
+    result = {
+      tag: "apply",
+      fn: { tag: "intrinsic", name: "@forall", span: tail.span },
+      arg: lambda,
+      span,
+    };
+  }
+  return result;
+}
+
 function lowerDecl(rule: Rule, context: Context): Decl {
   if (rule.name === "binding") {
     const kind = tokenOf(required(rule, "kind")).text;
@@ -1425,7 +1499,28 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     const pattern = lowerPattern(asRule(field(rule, "pattern"), "pattern"));
     const valueCursor = field(rule, "value");
     expect(valueCursor !== null, "a binding has no value");
+    const rowTails = effectRowTailUses(valueCursor);
+    if (rowTails.length > 0 && kind !== "sig") {
+      fail(
+        "BLOT_EFFECT_ROW_TAIL_OUTSIDE_SIG",
+        "An effect-row tail is scoped by a `sig`; write `..e` only inside a signature.",
+        rowTails[0].span,
+      );
+    }
+    if (kind === "sig") {
+      const unconstrained = rowTails.find((tail) => tail.count < 2);
+      if (unconstrained !== undefined) {
+        fail(
+          "BLOT_EFFECT_ROW_TAIL_UNCONSTRAINED",
+          `Effect-row tail \`..${unconstrained.name}\` must occur at least twice in one \`sig\`.`,
+          unconstrained.span,
+        );
+      }
+    }
     let value = lowerValue(asRule(valueCursor, "value"), context);
+    if (kind === "sig" && rowTails.length > 0) {
+      value = quantifyEffectRowTails(value, rowTails, rule.span);
+    }
     if (tags.length > 0) {
       expect(kind !== "sig", "a tagged signature reached value lowering");
       value = lowerTaggedValue(kind, pattern, value, tags, rule.span);
@@ -1972,9 +2067,6 @@ function lowerValue(rule: Rule, context: Context): Expr {
   else inner = unwrap(rule);
   const target = asRule(inner, "value alternative");
   if (target.name === "lambda") return lowerLambda(target, context);
-  if (target.name === "element_expression") {
-    return lowerPrimary(target, context);
-  }
   return lowerExpression(target, context);
 }
 
@@ -2050,8 +2142,7 @@ function lowerLambda(rule: Rule, context: Context): Expr {
 
 function lowerExpression(rule: Rule, context: Context): Expr {
   expect(
-    rule.name === "expression" || rule.name === "continued_expression" ||
-      rule.name === "element_child_expression",
+    rule.name === "expression" || rule.name === "continued_expression",
     `expected expression, got ${rule.name}`,
   );
   const first = lowerOperand(asRule(field(rule, "first"), "first"), context);
@@ -2085,10 +2176,6 @@ function lowerOperand(rule: Rule, context: Context): Expr {
     }
     if (prefix.text === "rec") {
       result = { tag: "rec", lambda: result, span };
-      continue;
-    }
-    if (prefix.text === "comptime") {
-      result = { tag: "comptime", body: result, span };
       continue;
     }
     const fixity = context.table.prefix(prefix.text);
@@ -2177,153 +2264,6 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
   }
   if (rule.name === "unit") return { tag: "unit", span: rule.span };
 
-  if (rule.name === "element_expression") {
-    const elementName = tokenOf(required(rule, "name"));
-    const properties: ShapeMember[] = fieldList(rule, "properties").map(
-      (cursor) => {
-        const property = asRule(cursor, "element_property");
-        const propertyName = tokenOf(required(property, "name"));
-        const propertyValue = asRule(
-          required(property, "value"),
-          "element_property_value",
-        );
-        const unwrapped = unwrap(propertyValue);
-        let value: Expr;
-        if (unwrapped.type === "token") {
-          value = lowerPrimary(unwrapped, context);
-        } else if (unwrapped.name === "element_property_expression") {
-          value = lowerValue(
-            asRule(required(unwrapped, "value"), "value"),
-            context,
-          );
-        } else {
-          value = lowerPrimary(unwrapped, context);
-        }
-        return { tag: "field", name: propertyName.text, value };
-      },
-    );
-
-    const ending = asRule(required(rule, "ending"), "element ending");
-    const childElements: ArrayElement[] = [];
-    if (ending.name === "element_body") {
-      const closingName = tokenOf(required(ending, "closing"));
-      if (closingName.text !== elementName.text) {
-        fail(
-          "BLOT_MISMATCHED_ELEMENT",
-          `Element \`<${elementName.text}>\` is closed by \`</${closingName.text}>\`.`,
-          closingName.span,
-        );
-      }
-      const children = [
-        ...fieldList(ending, "children"),
-        ...fieldList(ending, "effects"),
-      ].toSorted((left, right) => left.span.start - right.span.start);
-      const childContext: Context = {
-        ...context,
-        loop: null,
-        returnScope: false,
-        escapeBoundary: "none",
-      };
-      for (const cursor of children) {
-        const child = asRule(cursor, "element child");
-        if (
-          child.name !== "element_line" &&
-          child.name !== "value" &&
-          child.name !== "element_child"
-        ) {
-          fail(
-            "BLOT_UNKNOWN_ELEMENT_CHILD",
-            `Unknown element child \`${child.name}\`.`,
-            child.span,
-          );
-        }
-        if (child.name === "value") {
-          childElements.push({
-            spread: false,
-            value: lowerValue(child, childContext),
-          });
-          continue;
-        }
-        const childValue = required(child, "value");
-        if (child.name === "element_line") {
-          childElements.push({
-            spread: false,
-            value: lowerPrimary(childValue, childContext),
-          });
-          continue;
-        }
-        const resultName = `elementChild$${child.span.start}$${child.span.end}`;
-        const value = lowerValue(asRule(childValue, "value"), childContext);
-        childElements.push({
-          spread: false,
-          value: {
-            tag: "lambda",
-            parameter: { tag: "unit", span: child.span },
-            body: {
-              tag: "block",
-              declarations: [{
-                tag: "binding",
-                kind: "effect",
-                tags: [],
-                pattern: {
-                  tag: "name",
-                  name: resultName,
-                  qualifier: "none",
-                  span: child.span,
-                },
-                value,
-                span: child.span,
-              }],
-              result: { tag: "var", name: resultName, span: child.span },
-              resultEffects: "ambient",
-              span: child.span,
-            },
-            span: child.span,
-          },
-        });
-      }
-    } else {
-      expect(
-        ending.name === "element_self_close",
-        `unknown element ending ${ending.name}`,
-      );
-    }
-
-    const children: Expr = {
-      tag: "array",
-      elements: childElements,
-      span: ending.span,
-    };
-    const withProperties: Expr = {
-      tag: "apply",
-      fn: {
-        tag: "var",
-        name: elementName.text,
-        span: elementName.span,
-      },
-      arg: { tag: "shape", members: properties, span: rule.span },
-      span: rule.span,
-    };
-    const application: Expr = {
-      tag: "apply",
-      fn: withProperties,
-      arg: children,
-      span: rule.span,
-    };
-    return {
-      tag: "lambda",
-      parameter: { tag: "unit", span: rule.span },
-      body: {
-        tag: "block",
-        declarations: [],
-        result: application,
-        resultEffects: "ambient",
-        span: rule.span,
-      },
-      span: rule.span,
-    };
-  }
-
   if (rule.name === "parenthesized_or_tuple") {
     const first = lowerValue(asRule(field(rule, "first"), "first"), context);
     if (field(rule, "tail") === null) return first;
@@ -2345,15 +2285,65 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     return { tag: "array", elements, span: rule.span };
   }
 
-  // An effect row is a list of effects, and an array is already the list a
-  // compile-time value can be. `~` is what gives the list its meaning, exactly
-  // as `->` is what gives two type values theirs, so the row needs no node of
-  // its own — only a spelling that a shape cannot be mistaken for.
+  // An effect row remains the compile-time array consumed by `~`. A tail is
+  // lowered as the signature-local type variable that `lowerDecl` implicitly
+  // quantifies with `@forall`; `@type.performs` is the only primitive that
+  // interprets such an array member as a row tail.
   if (rule.name === "effect_row") {
-    const elements: ArrayElement[] = fieldList(rule, "effects").map((c) => ({
-      spread: false,
-      value: lowerExpression(asRule(c, "effect"), context),
-    }));
+    // The compact CPU CST keeps token-only tails transparent, so `{ ..e }`
+    // arrives as `{`, `..`, `e`, `}` instead of a named child rule. Split at
+    // top-level commas rather than relying on the optional-field view.
+    const members: Cursor[][] = [];
+    let current: Cursor[] = [];
+    for (const child of rule.children().slice(1, -1)) {
+      if (child.type === "token" && child.text === ",") {
+        members.push(current);
+        current = [];
+      } else {
+        current.push(child);
+      }
+    }
+    if (current.length > 0) members.push(current);
+
+    const elements: ArrayElement[] = [];
+    let sawTail = false;
+    for (let index = 0; index < members.length; index += 1) {
+      const member = members[index];
+      const tailName =
+        member[0]?.type === "rule" && member[0].name === "effect_row_tail"
+          ? tokenOf(required(member[0], "name"))
+          : member[0]?.type === "token" && member[0].text === ".."
+          ? member[1]?.type === "token" ? member[1] : null
+          : null;
+      if (tailName !== null) {
+        if (sawTail || index !== members.length - 1) {
+          fail(
+            "BLOT_EFFECT_ROW_TAIL_POSITION",
+            "An effect row has at most one tail, and it must be its final member.",
+            tailName.span,
+          );
+        }
+        sawTail = true;
+        elements.push({
+          spread: false,
+          value: { tag: "var", name: tailName.text, span: tailName.span },
+        });
+        continue;
+      }
+      const expression = member.find((cursor) =>
+        cursor.type === "rule" && cursor.name === "expression"
+      );
+      expect(
+        expression !== undefined,
+        `unknown effect-row member ${
+          member[0]?.type === "rule" ? member[0].name : member[0]?.type
+        }`,
+      );
+      elements.push({
+        spread: false,
+        value: lowerExpression(asRule(expression, "expression"), context),
+      });
+    }
     return { tag: "array", elements, span: rule.span };
   }
 
@@ -2417,6 +2407,15 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
   }
 
   if (rule.name === "block" || rule.name === "do_block") {
+    const phase = rule.name === "do_block"
+      ? tokenOf(required(rule, "phase")).text
+      : "do";
+    expect(
+      phase === "do" || phase === "compdo",
+      `unknown block phase ${phase}`,
+    );
+    const finish = (body: Expr): Expr =>
+      phase === "compdo" ? { tag: "comptime", body, span: rule.span } : body;
     let statements = fieldList(rule, "statements");
     let result: Expr = { tag: "unit", span: rule.span };
     let resultEffects: "pure" | "ambient" = "pure";
@@ -2435,9 +2434,9 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
         containsOnlyResult = statements.length === 0;
       }
     }
-    if (containsOnlyResult) return result;
+    if (containsOnlyResult) return finish(result);
     if (statementsNeedControlLowering(statements)) {
-      return {
+      return finish({
         tag: "block",
         declarations: [],
         result: resolveControlSequence(
@@ -2448,18 +2447,18 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
         ),
         resultEffects: "ambient",
         span: rule.span,
-      };
+      });
     }
     const declarations = statements.map((statement) =>
       lowerDecl(asRule(unwrap(statement), "statement"), blockContext)
     );
-    return {
+    return finish({
       tag: "block",
       declarations,
       result,
       resultEffects,
       span: rule.span,
-    };
+    });
   }
 
   fail(

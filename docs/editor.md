@@ -170,12 +170,10 @@ scopes each capture to the rule it belongs to rather than matching the bare
 token. That scoping matters: blot lets field names be keywords, and a bare
 `"const" @keyword` would colour `.const` too, because the token inside a
 `field_name` is more deeply nested than the `(field_name)` capture and wins.
-`queries/elements.scm` applies the same rule to element delimiters and property
-fields: exact `<` and `>` tokens are brackets inside an element but remain
-operators elsewhere, while a shape field's optional `?` is punctuation rather
-than an operator. `queries/calls.scm` captures the called binding in `render x`
-and `draw` in `Canvas.draw x` as `function.call`; values that are only
-referenced retain their ordinary variable, type, or member colour.
+`queries/calls.scm` captures the called binding in `render x` and `draw` in
+`Canvas.draw x` as `function.call`; values that are only referenced retain their
+ordinary variable, type, or member colour. Exact `<` and `>` are now uniformly
+operators, so editor queries need no context-specific element override.
 
 `queries/indents.scm` is unusually short. Layout suites are explicit CST nodes,
 so indentation is just "indent the suite." The generated Tree-sitter parser uses

@@ -557,6 +557,8 @@ export function settle(staging: Staging): void {
 export interface Context {
   /** The phase whose expressions are currently being inferred. */
   readonly phase: "runtime" | "comptime";
+  /** A function body may defer a local `const` until a concrete specialization. */
+  readonly deferComptimeBindings: boolean;
   /** Settled type terms produced by this inference run, keyed by expression identity. */
   readonly expressionTypes: Map<Expr, SimpleType>;
   /** Erasable evidence for direct array accesses proved in bounds. */
@@ -567,8 +569,6 @@ export interface Context {
   readonly shapes: Map<Expr, Shape>;
   readonly recordAdaptations: Map<Expr, RecordAdaptation>;
   readonly optionalCases: Set<Expr>;
-  /** Property records identified by element desugaring's span-preserving shape. */
-  readonly closedRecordArguments: Set<Expr>;
   /** Compile-time declaration values, keyed by their source expression. */
   readonly comptimeValues: Map<Expr, Value>;
   /**
@@ -752,7 +752,7 @@ function requireComptimeBinding(
   pattern: Pattern,
   expr: Expr,
   context: Context,
-): ReturnType<typeof run> {
+): ReturnType<typeof run> | null {
   try {
     return run(
       bind(
@@ -774,6 +774,7 @@ function requireComptimeBinding(
       (error.diagnostic.code === "BLOT_UNBOUND" ||
         error.diagnostic.code === "BLOT_UNHANDLED_EFFECT")
     ) {
+      if (context.deferComptimeBindings) return null;
       fail(
         "BLOT_NOT_COMPTIME",
         `A \`const\` binding must be known at compile time: ${error.diagnostic.message}`,
@@ -909,11 +910,6 @@ function inferUnrecorded(
         return variant([[expr.fn.name, payload]]);
       }
 
-      const elementProperties = elementPropertyApplication(expr);
-      if (elementProperties !== null) {
-        context.closedRecordArguments.add(elementProperties);
-      }
-
       const special = inferSpecial(expr, context, level, row);
       if (special !== null) return special;
 
@@ -926,9 +922,6 @@ function inferUnrecorded(
         ? inferPure(expr.arg, context, level, "A deferred argument")
         : infer(expr.arg, context, level, row);
       requireEvidencedRuntimeType(argType, expr.arg, context);
-      if (context.closedRecordArguments.has(expr.arg)) {
-        requireClosedRecord(expr.fn, fnType, argType, expr.arg.span);
-      }
       const result = freshVar(level);
       located(expr.span, () => {
         constrain(fnType, {
@@ -999,7 +992,11 @@ function inferUnrecorded(
 
     case "lambda": {
       const scope = childTypeEnv(context.types);
-      const inner: Context = { ...context, types: scope };
+      const inner: Context = {
+        ...context,
+        types: scope,
+        deferComptimeBindings: true,
+      };
       const param = bindPattern(expr.parameter, inner, level);
       // A fresh row per lambda is what makes the inferred effect minimal:
       // nothing becomes effectful because something else nearby was.
@@ -1160,83 +1157,6 @@ function inferUnrecorded(
   }
 }
 
-function elementPropertyApplication(expr: Expr): Expr | null {
-  if (expr.tag !== "apply" || expr.fn.tag !== "apply") return null;
-  if (expr.fn.arg.tag !== "shape") return null;
-  if (
-    expr.fn.span.start !== expr.span.start || expr.fn.span.end !== expr.span.end
-  ) return null;
-  if (
-    expr.fn.arg.span.start !== expr.span.start ||
-    expr.fn.arg.span.end !== expr.span.end
-  ) return null;
-  return expr.fn.arg;
-}
-
-function requireClosedRecord(
-  callee: Expr,
-  functionType: SimpleType,
-  argumentType: SimpleType,
-  span: Span,
-): void {
-  const parameter = functionParameter(functionType);
-  if (parameter === null || argumentType.tag !== "record") return;
-  const requiredFields = closedRecordFields(parameter);
-  if (requiredFields === null) return;
-  let component = "This component";
-  if (callee.tag === "var") component = `Component \`${callee.name}\``;
-  for (const name of argumentType.fields.keys()) {
-    if (requiredFields.has(name)) continue;
-    fail(
-      "BLOT_ELEMENT_UNKNOWN_PROPERTY",
-      `${component} has no property \`.${name}\`.`,
-      span,
-    );
-  }
-  for (const [name, required] of requiredFields) {
-    if (argumentType.fields.has(name) || admitsOmission(required)) continue;
-    fail(
-      "BLOT_ELEMENT_MISSING_PROPERTY",
-      `${component} requires property \`.${name}\`.`,
-      span,
-    );
-  }
-}
-
-function closedRecordFields(
-  type: SimpleType,
-  seen = new Set<number>(),
-): ReadonlyMap<string, SimpleType> | null {
-  if (type.tag === "record") return type.fields;
-  if (type.tag === "forall") return closedRecordFields(type.body, seen);
-  if (type.tag !== "var" || seen.has(type.id)) return null;
-  seen.add(type.id);
-  for (const bound of [...type.lower, ...type.upper]) {
-    const fields = closedRecordFields(bound, seen);
-    if (fields !== null) return fields;
-  }
-  return null;
-}
-
-function functionParameter(
-  type: SimpleType,
-  seen = new Set<number>(),
-): SimpleType | null {
-  if (type.tag === "fun") return type.param;
-  if (type.tag === "forall") return functionParameter(type.body, seen);
-  if (type.tag !== "var" || seen.has(type.id)) return null;
-  seen.add(type.id);
-  for (const bound of [...type.lower, ...type.upper]) {
-    const parameter = functionParameter(bound, seen);
-    if (parameter !== null) return parameter;
-  }
-  return null;
-}
-
-/**
- * `@effect` and `@handle` depend on the shape of their arguments rather than on
- * a fixed scheme, so they are typed at the application site.
- */
 function inferSpecial(
   expr: Expr & { tag: "apply" },
   context: Context,
@@ -2401,6 +2321,9 @@ function casesOf(type: SimpleType): readonly VariantCase[] | null {
 /** The concrete effect labels a row carries. */
 function rowLabels(type: SimpleType, seen: Set<number>): string[] {
   if (type.tag === "effects") return [...type.labels];
+  if (type.tag === "open-effects") {
+    return [...type.labels, ...rowLabels(type.tail, seen)];
+  }
   if (type.tag !== "var" || seen.has(type.id)) return [];
   seen.add(type.id);
   return type.lower.flatMap((bound) => rowLabels(bound, seen));
@@ -3892,6 +3815,16 @@ function snapshotType(
     snapshots.set(source, snapshot);
     return Object.freeze(snapshot);
   }
+  if (source.tag === "open-effects") {
+    const snapshot = {
+      tag: "open-effects" as const,
+      labels: new Set(source.labels),
+      tail: TOP,
+    };
+    snapshots.set(source, snapshot);
+    snapshot.tail = snapshotType(source.tail, snapshots);
+    return Object.freeze(snapshot);
+  }
   if (source.tag === "range") {
     const snapshot = Object.freeze({ ...source });
     snapshots.set(source, snapshot);
@@ -4345,7 +4278,6 @@ export function checkModule(
   const shapes = new Map<Expr, Shape>();
   const recordAdaptations = new Map<Expr, RecordAdaptation>();
   const optionalCases = new Set<Expr>();
-  const closedRecordArguments = new Set<Expr>();
   const expressionTypes = new Map<Expr, SimpleType>();
   const arrayProofs = new Map<Expr, ArrayIndexProof>();
   const expressionRelations = new Map<Expr, RelationalValue>();
@@ -4370,6 +4302,7 @@ export function checkModule(
   }
   const context: Context = {
     phase: "runtime",
+    deferComptimeBindings: false,
     expressionTypes,
     arrayProofs,
     expressionRelations,
@@ -4380,7 +4313,6 @@ export function checkModule(
     shapes,
     recordAdaptations,
     optionalCases,
-    closedRecordArguments,
     variants,
     patternShapes,
     pinnedPatterns,

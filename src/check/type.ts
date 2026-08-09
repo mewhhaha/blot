@@ -119,6 +119,12 @@ export type SimpleType =
   }
   /** An effect row: a set ordered by inclusion. */
   | { readonly tag: "effects"; readonly labels: ReadonlySet<string> }
+  /** A written row with fixed labels and one quantified/inferred rest row. */
+  | {
+    readonly tag: "open-effects";
+    readonly labels: ReadonlySet<string>;
+    readonly tail: SimpleType;
+  }
   /**
    * A declared union of ground types, as written in a `sig`: `1 | 2 | "three"`.
    *
@@ -318,6 +324,13 @@ export function effects(labels: Iterable<string>): SimpleType {
   return { tag: "effects", labels: new Set(labels) };
 }
 
+export function openEffects(
+  labels: Iterable<string>,
+  tail: SimpleType,
+): SimpleType {
+  return { tag: "open-effects", labels: new Set(labels), tail };
+}
+
 export function tupleType(elements: readonly SimpleType[]): SimpleType {
   return record(
     elements.map((element, index) => [String(index), element] as const),
@@ -382,6 +395,8 @@ export function levelOf(type: SimpleType): Level {
     case "array":
     case "region":
       return levelOf(type.element);
+    case "open-effects":
+      return levelOf(type.tail);
     default:
       return 0;
   }

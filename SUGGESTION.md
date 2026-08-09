@@ -175,12 +175,12 @@ Capacity-bearing Stores, another proof-producing collection, first-class
 references, and a full-width word domain are contingent extensions. The current
 profiles and examples do not justify adding them to the language or runtime.
 
-## 8. Let a signature name the rest of an effect row
+## 8. Implemented: let a signature name the rest of an effect row
 
-§12.4 closes a written row, so `('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }`
-is a type the checker prints and no program can write. Every callback-taking
-export — `map`, `each`, any handler-shaped library function — can therefore be
-given a signature only by fixing the callback's row.
+§12.4 now admits a written tail such as `..e`, so callback-taking exports can
+relate the callback's inferred row to the row they return without fixing either
+to a closed set. The source spelling matches the checker printer rather than
+leaving an inferred interface that signatures cannot express.
 
 The argument against record row variables does not transfer. An effect row is a
 set of labels with nothing under them, subsumption is already "fewer effects is
@@ -189,7 +189,7 @@ one. Row polymorphism over label sets has principal solutions in this lattice. A
 record row would need field types and the concatenation and override operations
 shape syntax can write, which is the reason that one has none.
 
-Implement it in `sig` elaboration alone: one written tail, `~ { Console, ..e }`,
+The implemented `sig` elaboration uses one written tail, `~ { Console, ..e }`,
 binding `e` for the extent of that signature, with both occurrences required. A
 tail on the outermost arrow with no second occurrence stays refused, which is
 the unconstrained-variable case §12.4 is right to fear. Inference does not
@@ -353,7 +353,7 @@ apart is the wrong order.
 
 ## 15. Close the quiet behaviors
 
-Four places where the accepted reading is not the written one. None needs new
+Three places where the accepted reading is not the written one. None needs new
 machinery.
 
 A refutable `for` binder silently skips elements that do not match (§9). Adding
@@ -369,12 +369,6 @@ row variable: desugar the spread to an explicit copy of exactly the declared
 fields. The type and the runtime value agree field for field,
 `BLOT_SPREAD_MAY_OVERWRITE` keeps its meaning where nothing was declared, and
 the idiom becomes writable precisely where the program said what it meant.
-
-An element property record is a closed row while every ordinary record has width
-subtyping, and the two spellings otherwise mean the same call. Make closedness a
-property the component's parameter type declares, so the rule lives in the type
-and holds for `div { … } [children]` as well; a second record rule selected by
-call-site spelling is a second way to say what the language already says.
 
 A module's demand on its parameter is inferred and unwritable, so its authority
 surface is documentation by excavation. Allow a `sig` for the parameter
