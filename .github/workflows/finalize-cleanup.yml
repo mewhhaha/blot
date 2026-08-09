@@ -29,25 +29,29 @@ jobs:
           from pathlib import Path
           path = Path("compiler/src/session.rs")
           text = path.read_text()
-          old = '''        } => serde_json::json!({
-            "tag": "arrow",
-            "domain": json_value(domain),
-            "codomain": json_value(codomain),
-            "effects": effects.iter().map(json_value).collect::<Vec<_>>(),
-            "effect_tail": effect_tail,
-        }),'''
-          new = '''        } => {
-            let mut value = serde_json::json!({
-                "tag": "arrow",
-                "domain": json_value(domain),
-                "codomain": json_value(codomain),
-                "effects": effects.iter().map(json_value).collect::<Vec<_>>(),
-            });
-            if let Some(effect_tail) = effect_tail {
-                value["effect_tail"] = serde_json::json!(effect_tail);
-            }
-            value
-        },'''
+          old = "\n".join([
+              '        } => serde_json::json!({',
+              '            "tag": "arrow",',
+              '            "domain": json_value(domain),',
+              '            "codomain": json_value(codomain),',
+              '            "effects": effects.iter().map(json_value).collect::<Vec<_>>(),',
+              '            "effect_tail": effect_tail,',
+              '        }),',
+          ])
+          new = "\n".join([
+              '        } => {',
+              '            let mut value = serde_json::json!({',
+              '                "tag": "arrow",',
+              '                "domain": json_value(domain),',
+              '                "codomain": json_value(codomain),',
+              '                "effects": effects.iter().map(json_value).collect::<Vec<_>>(),',
+              '            });',
+              '            if let Some(effect_tail) = effect_tail {',
+              '                value["effect_tail"] = serde_json::json!(effect_tail);',
+              '            }',
+              '            value',
+              '        },',
+          ])
           if old not in text:
               raise SystemExit("arrow JSON block not found")
           path.write_text(text.replace(old, new, 1))
