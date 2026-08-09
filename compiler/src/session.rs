@@ -433,13 +433,18 @@ fn json_value(value: &Value) -> serde_json::Value {
             codomain,
             effects,
             effect_tail,
-        } => serde_json::json!({
-            "tag": "arrow",
-            "domain": json_value(domain),
-            "codomain": json_value(codomain),
-            "effects": effects.iter().map(json_value).collect::<Vec<_>>(),
-            "effect_tail": effect_tail,
-        }),
+        } => {
+            let mut value = serde_json::json!({
+                "tag": "arrow",
+                "domain": json_value(domain),
+                "codomain": json_value(codomain),
+                "effects": effects.iter().map(json_value).collect::<Vec<_>>(),
+            });
+            if let Some(effect_tail) = effect_tail {
+                value["effect_tail"] = serde_json::json!(effect_tail);
+            }
+            value
+        }
         Value::TypeVariable(id) => serde_json::json!({ "tag": "type-variable", "id": id }),
         Value::Forall { variable, body } => serde_json::json!({
             "tag": "forall", "variable": variable, "body": json_value(body),
