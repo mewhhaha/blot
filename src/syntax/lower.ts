@@ -1406,16 +1406,35 @@ interface EffectRowTailUse {
 
 function effectRowTailUses(cursor: Cursor): readonly EffectRowTailUse[] {
   const uses = new Map<string, { count: number; span: Span }>();
+  const record = (name: { text: string; span: Span }): void => {
+    const existing = uses.get(name.text);
+    if (existing === undefined) {
+      uses.set(name.text, { count: 1, span: name.span });
+    } else {
+      existing.count += 1;
+    }
+  };
   const visit = (current: Cursor): void => {
     if (current.type === "token") return;
     if (current !== cursor && current.name === "binding") return;
     if (current.name === "effect_row_tail") {
-      const name = tokenOf(required(current, "name"));
-      const existing = uses.get(name.text);
-      if (existing === undefined) {
-        uses.set(name.text, { count: 1, span: name.span });
-      } else {
-        existing.count += 1;
+      record(tokenOf(required(current, "name")));
+      return;
+    }
+    if (current.name === "effect_row") {
+      const children = current.children();
+      for (let index = 0; index < children.length; index += 1) {
+        const child = children[index];
+        const next = children[index + 1];
+        if (
+          child.type === "token" && child.text === ".." &&
+          next?.type === "token"
+        ) {
+          record(next);
+          index += 1;
+        } else {
+          visit(child);
+        }
       }
       return;
     }
@@ -2271,38 +2290,58 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
   // quantifies with `@forall`; `@type.performs` is the only primitive that
   // interprets such an array member as a row tail.
   if (rule.name === "effect_row") {
-    const members: Cursor[] = [required(rule, "first")];
-    for (const cursor of fieldList(rule, "rest")) {
-      const part = asRule(cursor, "effect_row_part");
-      members.push(required(part, "value"));
+    // The compact CPU CST keeps token-only tails transparent, so `{ ..e }`
+    // arrives as `{`, `..`, `e`, `}` instead of a named child rule. Split at
+    // top-level commas rather than relying on the optional-field view.
+    const members: Cursor[][] = [];
+    let current: Cursor[] = [];
+    for (const child of rule.children().slice(1, -1)) {
+      if (child.type === "token" && child.text === ",") {
+        members.push(current);
+        current = [];
+      } else {
+        current.push(child);
+      }
     }
+    if (current.length > 0) members.push(current);
+
     const elements: ArrayElement[] = [];
     let sawTail = false;
     for (let index = 0; index < members.length; index += 1) {
-      const member = asRule(members[index], "effect row member");
-      if (member.name === "effect_row_tail") {
+      const member = members[index];
+      const tailName =
+        member[0]?.type === "rule" && member[0].name === "effect_row_tail"
+          ? tokenOf(required(member[0], "name"))
+          : member[0]?.type === "token" && member[0].text === ".."
+          ? member[1]?.type === "token" ? member[1] : null
+          : null;
+      if (tailName !== null) {
         if (sawTail || index !== members.length - 1) {
           fail(
             "BLOT_EFFECT_ROW_TAIL_POSITION",
             "An effect row has at most one tail, and it must be its final member.",
-            member.span,
+            tailName.span,
           );
         }
         sawTail = true;
-        const name = tokenOf(required(member, "name"));
         elements.push({
           spread: false,
-          value: { tag: "var", name: name.text, span: name.span },
+          value: { tag: "var", name: tailName.text, span: tailName.span },
         });
         continue;
       }
+      const expression = member.find((cursor) =>
+        cursor.type === "rule" && cursor.name === "expression"
+      );
       expect(
-        member.name === "expression",
-        `unknown effect-row member ${member.name}`,
+        expression !== undefined,
+        `unknown effect-row member ${
+          member[0]?.type === "rule" ? member[0].name : member[0]?.type
+        }`,
       );
       elements.push({
         spread: false,
-        value: lowerExpression(member, context),
+        value: lowerExpression(asRule(expression, "expression"), context),
       });
     }
     return { tag: "array", elements, span: rule.span };
