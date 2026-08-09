@@ -9,6 +9,7 @@
 ")" @punctuation.bracket
 "," @punctuation.delimiter
 "." @punctuation.delimiter
+".." @operator
 "..." @operator
 ":" @punctuation.delimiter
 ":=" @operator
@@ -24,14 +25,10 @@
 (shape_pattern_field) @variable.other.member
 (field_suffix) @variable.other.member
 (field_name) @variable.other.member
-(element_property) @variable.other.member
-(element_property_value) @variable.other.member
-(element_property_expression) @variable.other.member
 (shape_member) @variable.other.member
 (shape_field) @variable.other.member
 (FLOAT) @number
 (COMMENT) @comment
-(element_property name: (field_name) @variable.other.member)
 (field_suffix field: (field_name) @variable.other.member)
 (fixity_declaration target: (qualified_name) @variable)
 (shape_field name: (field_name) @variable.other.member)

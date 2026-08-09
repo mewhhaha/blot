@@ -569,8 +569,6 @@ export interface Context {
   readonly shapes: Map<Expr, Shape>;
   readonly recordAdaptations: Map<Expr, RecordAdaptation>;
   readonly optionalCases: Set<Expr>;
-  /** Property records identified by element desugaring's span-preserving shape. */
-  readonly closedRecordArguments: Set<Expr>;
   /** Compile-time declaration values, keyed by their source expression. */
   readonly comptimeValues: Map<Expr, Value>;
   /**
@@ -912,11 +910,6 @@ function inferUnrecorded(
         return variant([[expr.fn.name, payload]]);
       }
 
-      const elementProperties = elementPropertyApplication(expr);
-      if (elementProperties !== null) {
-        context.closedRecordArguments.add(elementProperties);
-      }
-
       const special = inferSpecial(expr, context, level, row);
       if (special !== null) return special;
 
@@ -929,9 +922,6 @@ function inferUnrecorded(
         ? inferPure(expr.arg, context, level, "A deferred argument")
         : infer(expr.arg, context, level, row);
       requireEvidencedRuntimeType(argType, expr.arg, context);
-      if (context.closedRecordArguments.has(expr.arg)) {
-        requireClosedRecord(expr.fn, fnType, argType, expr.arg.span);
-      }
       const result = freshVar(level);
       located(expr.span, () => {
         constrain(fnType, {
@@ -1167,83 +1157,6 @@ function inferUnrecorded(
   }
 }
 
-function elementPropertyApplication(expr: Expr): Expr | null {
-  if (expr.tag !== "apply" || expr.fn.tag !== "apply") return null;
-  if (expr.fn.arg.tag !== "shape") return null;
-  if (
-    expr.fn.span.start !== expr.span.start || expr.fn.span.end !== expr.span.end
-  ) return null;
-  if (
-    expr.fn.arg.span.start !== expr.span.start ||
-    expr.fn.arg.span.end !== expr.span.end
-  ) return null;
-  return expr.fn.arg;
-}
-
-function requireClosedRecord(
-  callee: Expr,
-  functionType: SimpleType,
-  argumentType: SimpleType,
-  span: Span,
-): void {
-  const parameter = functionParameter(functionType);
-  if (parameter === null || argumentType.tag !== "record") return;
-  const requiredFields = closedRecordFields(parameter);
-  if (requiredFields === null) return;
-  let component = "This component";
-  if (callee.tag === "var") component = `Component \`${callee.name}\``;
-  for (const name of argumentType.fields.keys()) {
-    if (requiredFields.has(name)) continue;
-    fail(
-      "BLOT_ELEMENT_UNKNOWN_PROPERTY",
-      `${component} has no property \`.${name}\`.`,
-      span,
-    );
-  }
-  for (const [name, required] of requiredFields) {
-    if (argumentType.fields.has(name) || admitsOmission(required)) continue;
-    fail(
-      "BLOT_ELEMENT_MISSING_PROPERTY",
-      `${component} requires property \`.${name}\`.`,
-      span,
-    );
-  }
-}
-
-function closedRecordFields(
-  type: SimpleType,
-  seen = new Set<number>(),
-): ReadonlyMap<string, SimpleType> | null {
-  if (type.tag === "record") return type.fields;
-  if (type.tag === "forall") return closedRecordFields(type.body, seen);
-  if (type.tag !== "var" || seen.has(type.id)) return null;
-  seen.add(type.id);
-  for (const bound of [...type.lower, ...type.upper]) {
-    const fields = closedRecordFields(bound, seen);
-    if (fields !== null) return fields;
-  }
-  return null;
-}
-
-function functionParameter(
-  type: SimpleType,
-  seen = new Set<number>(),
-): SimpleType | null {
-  if (type.tag === "fun") return type.param;
-  if (type.tag === "forall") return functionParameter(type.body, seen);
-  if (type.tag !== "var" || seen.has(type.id)) return null;
-  seen.add(type.id);
-  for (const bound of [...type.lower, ...type.upper]) {
-    const parameter = functionParameter(bound, seen);
-    if (parameter !== null) return parameter;
-  }
-  return null;
-}
-
-/**
- * `@effect` and `@handle` depend on the shape of their arguments rather than on
- * a fixed scheme, so they are typed at the application site.
- */
 function inferSpecial(
   expr: Expr & { tag: "apply" },
   context: Context,
@@ -4365,7 +4278,6 @@ export function checkModule(
   const shapes = new Map<Expr, Shape>();
   const recordAdaptations = new Map<Expr, RecordAdaptation>();
   const optionalCases = new Set<Expr>();
-  const closedRecordArguments = new Set<Expr>();
   const expressionTypes = new Map<Expr, SimpleType>();
   const arrayProofs = new Map<Expr, ArrayIndexProof>();
   const expressionRelations = new Map<Expr, RelationalValue>();
@@ -4401,7 +4313,6 @@ export function checkModule(
     shapes,
     recordAdaptations,
     optionalCases,
-    closedRecordArguments,
     variants,
     patternShapes,
     pinnedPatterns,

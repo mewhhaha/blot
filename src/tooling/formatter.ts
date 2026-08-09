@@ -34,7 +34,6 @@ const maximumLineWidth = 80;
 const delimitedLayoutRules = new Set([
   "array",
   "effect_row",
-  "element_property_expression",
   "parenthesized_or_tuple",
   "shape",
 ]);
@@ -44,7 +43,6 @@ const layoutSensitiveRules = new Set([
   "do_block",
   "case_expression",
   "effect_row",
-  "element_expression",
   "shape",
 ]);
 const blockRule = new Set(["block", "do_block"]);
@@ -55,7 +53,6 @@ const valueScopeBoundaryRules = new Set([
 ]);
 const indentedValueRuleNames = new Set([
   "continued_expression",
-  "element_expression",
   "lambda",
 ]);
 const suiteStatementRules = new Set([
@@ -69,7 +66,6 @@ const INDENTED_RULES = new Set([
   "block",
   "case_expression",
   "effect_row",
-  "element_expression",
   "lambda",
   "operator_section",
   "parenthesized_or_tuple",
@@ -276,8 +272,7 @@ function formatOneStatementValue(
     }
     const inlineWidth = introducer.span.end - statementLineStart + 1 +
       valueFirstLine.length;
-    let valueUsesDelimiters = value.name === "element_expression" ||
-      directRule(value, "element_expression") !== null;
+    let valueUsesDelimiters = false;
     const valueIsLambda = value.name === "lambda" ||
       directRule(value, "lambda") !== null;
     if (!valueUsesDelimiters && !valueIsLambda) {

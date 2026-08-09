@@ -81,12 +81,6 @@
         }
       },
       {
-        "rule": "element_line",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
         "rule": "iteration",
         "boundary": {
           "kind": "root"
@@ -308,84 +302,6 @@
       },
       {
         "rule": "array_element",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "element_expression",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "element_name",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "element_property",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "element_property_value",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "element_property_expression",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "element_self_close",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "element_body",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "element_child",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "element_child_value",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "element_child_expression",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "element_child_operand",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "element_child_postfix_expression",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
-        "rule": "element_child_primary_expression",
         "boundary": {
           "kind": "root"
         }

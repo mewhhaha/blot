@@ -183,22 +183,6 @@ const REJECTIONS: Record<
   },
   "generic_refused": { code: "BLOT_REFUSED", stage: "check" },
   "zero_integer_width": { code: "BLOT_REFUSED", stage: "run" },
-  "mismatched_element": {
-    code: "BLOT_MISMATCHED_ELEMENT",
-    stage: "check",
-  },
-  "duplicate_element_property": {
-    code: "BLOT_DUPLICATE_FIELD",
-    stage: "check",
-  },
-  "missing_element_property": {
-    code: "BLOT_ELEMENT_MISSING_PROPERTY",
-    stage: "check",
-  },
-  "unknown_element_property": {
-    code: "BLOT_ELEMENT_UNKNOWN_PROPERTY",
-    stage: "check",
-  },
   "tagged_sig": { code: "BLOT_TAGGED_SIG", stage: "check" },
   "bad_declaration_tag": {
     code: "BLOT_BAD_DECLARATION_TAG",

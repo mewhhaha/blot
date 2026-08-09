@@ -1777,60 +1777,6 @@ return { .adjust = adjust; }
 );
 
 check(
-  "an element effect can be stored and explicitly executed",
-  `const Draw = @effect { .create = Unit -> Int; }
-let div = fn _ => fn _children =>
-  result <- Draw.create ()
-  return result
-let view = fn () =>
-  let effect = <div></div>
-  <- effect
-  result <- effect
-  return result
-return { .view = view; }
-`,
-  "{ .view = () -> Int ~ { Draw }; }",
-);
-
-check(
-  "an element child stays suspended when its parent ignores it",
-  `const Draw = @effect { .write = Str -> Unit; }
-let Ignore = fn _ => fn _children => ()
-let Child = fn _ => fn _children =>
-  result <- Draw.write "not run"
-  return result
-let view = fn () =>
-  <- <Ignore>
-    <Child />
-  </Ignore>
-  return ()
-return { .view = view; }
-`,
-  "{ .view = () -> (); }",
-);
-
-check(
-  "stored element effects pass through child braces without another suspension",
-  `const Draw = @effect { .write = Str -> Unit; }
-sig Parent = {} -> [Unit -> Unit ~ { Draw }] -> Unit ~ { Draw }
-let Parent = fn _ => fn children =>
-  for child in Iter.items children:
-    <- child
-
-  return ()
-let Child = fn properties => fn _children =>
-  <- Draw.write properties.name
-let view = fn () =>
-  let first = <Child .name="first" />
-  let second = <Child .name="second" />
-  <- <Parent>{first}{second}</Parent>
-  return ()
-return { .view = view; }
-`,
-  "{ .view = () -> () ~ { Draw }; }",
-);
-
-check(
   "a compile-time SIMD lane selector produces an immediate-certified access",
   `const lane = 2
 let pick = fn vector => Int32x4.lane vector lane
@@ -1859,23 +1805,6 @@ check(
   `return Int8x16.splat_wrapping 128
 `,
   "I8x16",
-);
-
-rejects(
-  "element property rows reject misspelled fields",
-  `sig Button = { .label = Str; } -> [Unit -> Unit] -> Unit
-let Button = fn _ => fn _ => ()
-return <Button .lable="Save" />
-`,
-  "BLOT_ELEMENT_UNKNOWN_PROPERTY",
-);
-
-rejects(
-  "inferred component property rows are closed too",
-  `let Button = fn properties => fn _ => @text.len properties.label
-return <Button .lable="Save" />
-`,
-  "BLOT_ELEMENT_UNKNOWN_PROPERTY",
 );
 
 check(
@@ -1928,6 +1857,27 @@ let logged = fn f => fn x =>
 return { .logged = logged; }
 `,
   "{ .logged = ('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }; }",
+);
+
+Deno.test("a signature can reuse an effect row tail", async () => {
+  const type = await typeOf(`const Console = @effect { .write = Str -> Unit; }
+sig logged = (Int -> Int ~ { ..e }) -> Int -> Int ~ { Console, ..e }
+let logged = fn f => fn x =>
+  <- Console.write "call"
+  result <- f x
+  return result
+return logged
+`);
+  assertStringIncludes(type, "Console");
+});
+
+rejects(
+  "an effect row tail must relate two positions",
+  `sig quiet = Int -> Int ~ { ..e }
+let quiet = fn value => value
+return quiet
+`,
+  "BLOT_EFFECT_ROW_TAIL_UNCONSTRAINED",
 );
 
 check(

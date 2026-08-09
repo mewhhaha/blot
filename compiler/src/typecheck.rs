@@ -793,7 +793,6 @@ pub struct Checker {
     specialization_depth: Cell<u32>,
     modules: RefCell<HashMap<String, Result<CheckedModule, Diagnostic>>>,
     active: RefCell<Vec<String>>,
-    closed_record_arguments: RefCell<HashSet<(String, ExpressionId)>>,
     closure_types: RefCell<HashMap<(String, ExpressionId), Type>>,
     recursive_closure_bodies: RefCell<HashSet<(String, ExpressionId)>>,
     incomplete_evaluations: RefCell<HashSet<String>>,
@@ -828,7 +827,6 @@ impl Checker {
             specialization_depth: Cell::new(0),
             modules: RefCell::new(HashMap::new()),
             active: RefCell::new(Vec::new()),
-            closed_record_arguments: RefCell::new(HashSet::new()),
             closure_types: RefCell::new(HashMap::new()),
             recursive_closure_bodies: RefCell::new(HashSet::new()),
             incomplete_evaluations: RefCell::new(HashSet::new()),
@@ -943,9 +941,6 @@ impl Checker {
         self.modules
             .borrow_mut()
             .retain(|path, _| !paths.contains(path));
-        self.closed_record_arguments
-            .borrow_mut()
-            .retain(|(path, _)| !paths.contains(path));
         self.closure_types
             .borrow_mut()
             .retain(|(path, _), _| !paths.contains(path));
@@ -1762,22 +1757,6 @@ impl Checker {
             Expression::Apply {
                 function, argument, ..
             } => {
-                if let Expression::Apply {
-                    argument: properties,
-                    span: function_span,
-                    ..
-                } = &module.arena.expressions[function.0 as usize]
-                    && *function_span == span
-                    && let Expression::Shape {
-                        span: properties_span,
-                        ..
-                    } = &module.arena.expressions[properties.0 as usize]
-                    && *properties_span == span
-                {
-                    self.closed_record_arguments
-                        .borrow_mut()
-                        .insert((path.to_owned(), *properties));
-                }
                 let (member_callee, member_arguments) =
                     application_spine_ids(module, expression_id);
                 if member_arguments.len() == 2
@@ -2074,13 +2053,6 @@ impl Checker {
                     self.infer(path, module, function, environment, values, dependencies)?;
                 let argument =
                     self.infer(path, module, argument_id, environment, values, dependencies)?;
-                if self
-                    .closed_record_arguments
-                    .borrow()
-                    .contains(&(path.to_owned(), argument_id))
-                {
-                    self.require_closed_record(&function.type_, &argument.type_, span)?;
-                }
                 let result = self.fresh();
                 let performed = self.fresh();
                 self.constrain(
@@ -2874,44 +2846,6 @@ impl Checker {
             Typing::Mono(type_) => type_,
             Typing::Scheme { level, body } => self.freshen(body, level, &mut HashMap::new()),
         }
-    }
-
-    fn require_closed_record(
-        &self,
-        function: &Type,
-        argument: &Type,
-        span: Span,
-    ) -> Result<(), Diagnostic> {
-        let Type::Function { parameter, .. } = self.settle(function.clone(), true) else {
-            return Ok(());
-        };
-        let Type::Record(required) = self.settle(*parameter, true) else {
-            return Ok(());
-        };
-        let Type::Record(written) = self.settle(argument.clone(), true) else {
-            return Ok(());
-        };
-        for (name, _) in &written {
-            if required.iter().any(|(candidate, _)| candidate == name) {
-                continue;
-            }
-            return Err(Diagnostic::new(
-                "BLOT_ELEMENT_UNKNOWN_PROPERTY",
-                format!("This component has no property `.{name}`."),
-                span,
-            ));
-        }
-        for (name, type_) in &required {
-            if written.iter().any(|(candidate, _)| candidate == name) || admits_omission(type_) {
-                continue;
-            }
-            return Err(Diagnostic::new(
-                "BLOT_ELEMENT_MISSING_PROPERTY",
-                format!("This component requires property `.{name}`."),
-                span,
-            ));
-        }
-        Ok(())
     }
 
     fn constraint_type(&self, type_: &Type) -> ConstraintTypeId {
