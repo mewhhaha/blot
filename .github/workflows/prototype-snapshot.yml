@@ -19,33 +19,5 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-          components: rustfmt,clippy
-      - uses: extractions/setup-just@v3
-      - name: Parse representative modules with regenerated frontend
-        run: |
-          deno task parse examples/minimal.blot
-          deno task parse src/prelude/prelude.blot
-      - name: Rebuild checked-in compiler artifact
-        run: deno task build:compiler
-      - name: Commit compiler artifact
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add generated/compiler
-          if ! git diff --cached --quiet; then
-            git commit -m "rebuild compiler for cleanup surface"
-            git push origin HEAD:codex/compdo-effect-rows-no-elements
-          fi
-      - run: just check
-      - run: just test
-      - run: tar --exclude=.git -czf /tmp/blot-source.tgz .
-        if: always()
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: blot-source
-          path: /tmp/blot-source.tgz
-          if-no-files-found: error
+      - name: Inspect regenerated minimal CST
+        run: deno run --allow-read experiments/language-cleanup/debug_cst.ts examples/minimal.blot
