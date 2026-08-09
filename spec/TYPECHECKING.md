@@ -608,33 +608,13 @@ _Sketch._ A move requires `Live(p)`. Every earlier move of a prefix makes `p`
 unreachable below `Moved`; every earlier move of a descendant makes a prefix of
 `p` `Partial`. Both fail the premise.
 
-### Closed property rows
-
-Ordinary record subtyping retains width subtyping. Element property records are
-checked in the stricter closed-row mode because every written property purports
-to configure the selected component:
-
-```txt
-required(B) subset fields(A)
-fields(A) subset fields(B)
-A.l <= B.l for every written l
--------------------------------- closed-row
-A <=closed B
-```
-
-Here `required(B)` excludes fields whose type admits `unit`. An omitted optional
-field receives the existing `unit`/optional adaptation certificate. A missing
-required field and an excess written field are separate diagnostics carrying the
-component and field names. Closed-row checking is a call-site policy, not a new
-record type and not a change to declarative record subtyping.
-
 ### Conservativity obligation
 
 For a program containing no immediate-consuming primitive, checked lane
-constructor, direct array access, ownership qualifier, or element expression,
-the auxiliary judgements emit no certificate and inference must return exactly
-the same principal type and diagnostics as the base system. Each implementation
-slice below must include an erasure test for this property.
+constructor, direct array access, ownership qualifier, or open effect-row
+signature, the auxiliary judgements emit no certificate and inference must
+return exactly the same principal type and diagnostics as the base system. Each
+implementation slice below must include an erasure test for this property.
 
 ### Theory/implementation bounce: auxiliary certificates
 
@@ -657,19 +637,18 @@ authority rather than duplicating it:
   ownership transactions. Ownership leaves also retain their source binding and
   path. Certificate schema 2 publishes that lineage and independently requires
   both `take` outputs or all three `split` outputs at one extraction identity.
-- Element desugaring preserves one compiler-local span identity for its property
-  argument. Inference uses it to select `<=closed`; no element node or
-  record-row type survives the parser.
+- A written effect-row tail elaborates to one signature-local row variable. The
+  same `..e` identity is reused at each occurrence in that `sig`, and lowering
+  refuses a tail with fewer than two occurrences before ordinary inference. Open
+  effect rows are erased before Runtime HIR and do not alter record subtyping.
 
-The second theory bounce tightens two implementation consequences. Unknown
-element properties are diagnosed before missing ones because a single typo
-usually creates both sets. An array projection identity includes its parent
-identity, so rebinding a record invalidates every projected relationship without
-an explicit invalidation pass.
+The second theory bounce tightens one implementation consequence. An array
+projection identity includes its parent identity, so rebinding a record
+invalidates every projected relationship without an explicit invalidation pass.
 
-The third bounce tests erasure and authority agreement. Closed rows inspect both
-declared and inferred component parameter records, but ordinary function calls
-still use width subtyping. The integer SIMD catalog runs through the comptime
+The third bounce tests erasure and authority agreement. Ordinary function calls
+retain record width subtyping; effect-row tails affect only the effect-set
+component of arrows. The integer SIMD catalog runs through the comptime
 evaluator, scalar conformance lowering, native Runtime HIR, production compiler,
 and emitted `wasm-simd128`; the certified selector becomes `i32x4.extract_lane`.
 The checker, Runtime-HIR, and evaluator parity corpora report no TypeScript/Rust
