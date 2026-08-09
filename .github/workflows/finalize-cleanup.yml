@@ -64,6 +64,7 @@ jobs:
           rm .github/workflows/finalize-cleanup.yml
       - run: deno fmt
       - run: cargo fmt --manifest-path compiler/Cargo.toml
+      - run: deno task build:rust-middle
       - run: just check
       - run: just test
       - name: Commit validated cleanup
