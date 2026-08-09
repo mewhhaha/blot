@@ -6,7 +6,7 @@ const elementFree = fromFileUrl(
   new URL("./element-free.blot", import.meta.url),
 );
 
-Deno.test("element-free component spelling preserves the element example", async () => {
+Deno.test("ordinary component spelling preserves the element example", async () => {
   const result = await evaluateFile(elementFree, { write() {} });
   assertEquals(result, {
     tag: "text",
