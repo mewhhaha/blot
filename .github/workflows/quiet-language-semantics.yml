@@ -1,0 +1,48 @@
+name: Quiet language cleanup
+
+on:
+  push:
+    branches:
+      - codex/quiet-language-semantics
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/quiet-language-semantics
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt,clippy
+      - uses: extractions/setup-just@v3
+      - name: Apply cleanup
+        run: python3 scripts/apply_quiet_language_semantics.py
+      - name: Remove staging helpers
+        run: |
+          rm scripts/apply_quiet_language_semantics.py
+          rm .github/workflows/quiet-language-semantics.yml
+      - name: Format
+        run: |
+          deno fmt
+          cargo fmt --manifest-path compiler/Cargo.toml
+      - name: Rebuild compiler artifact
+        run: deno task build:compiler
+      - name: Check
+        run: just check
+      - name: Test
+        run: just test
+      - name: Commit validated cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Close quiet language semantics"
+          git push origin HEAD:codex/quiet-language-semantics
