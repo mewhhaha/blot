@@ -333,6 +333,33 @@ fn effect_row_tail_uses(
             }
             return Ok(());
         }
+        if name == "effect_row" {
+            let children = cst.children(rule)?;
+            let mut index = 0;
+            while index < children.len() {
+                let child = children[index];
+                if matches!(child, Cursor::Token(_))
+                    && cst.text(child)? == ".."
+                    && let Some(Cursor::Token(name_cursor)) = children.get(index + 1).copied()
+                {
+                    let name = cst.text(Cursor::Token(name_cursor))?;
+                    if let Some(existing) = uses.iter_mut().find(|use_| use_.name == name) {
+                        existing.count += 1;
+                    } else {
+                        uses.push(EffectRowTailUse {
+                            name,
+                            count: 1,
+                            span: cst.span(Cursor::Token(name_cursor))?,
+                        });
+                    }
+                    index += 2;
+                    continue;
+                }
+                visit(cst, child, uses)?;
+                index += 1;
+            }
+            return Ok(());
+        }
         for child in cst.children(rule)? {
             visit(cst, child, uses)?;
         }
@@ -2532,15 +2559,38 @@ fn lower_primary(
             Ok(arena.expression(Expression::Array { elements, span }))
         }
         "effect_row" => {
-            let mut members = vec![required(cst, rule, "first")?];
-            for part in cst.field_list(rule, "rest")? {
-                members.push(required(cst, as_rule(part)?, "value")?);
+            let children = cst.children(rule)?;
+            let mut members: Vec<Vec<Cursor>> = Vec::new();
+            let mut current = Vec::new();
+            for child in children
+                .iter()
+                .copied()
+                .skip(1)
+                .take(children.len().saturating_sub(2))
+            {
+                if matches!(child, Cursor::Token(_)) && cst.text(child)? == "," {
+                    members.push(current);
+                    current = Vec::new();
+                } else {
+                    current.push(child);
+                }
+            }
+            if !current.is_empty() {
+                members.push(current);
             }
             let mut elements = Vec::new();
             let mut saw_tail = false;
-            for (index, member) in members.iter().copied().enumerate() {
-                let member = as_rule(member)?;
-                if cst.rule_name(member)? == "effect_row_tail" {
+            for (index, member) in members.iter().enumerate() {
+                let tail_name = match member.first().copied() {
+                    Some(Cursor::Rule(member)) if cst.rule_name(member)? == "effect_row_tail" => {
+                        Some(required(cst, member, "name")?)
+                    }
+                    Some(Cursor::Token(token)) if cst.text(Cursor::Token(token))? == ".." => {
+                        member.get(1).copied()
+                    }
+                    _ => None,
+                };
+                if let Some(name_cursor) = tail_name {
                     if saw_tail || index + 1 != members.len() {
                         return Err(
                             "BLOT_EFFECT_ROW_TAIL_POSITION: an effect row has at most one tail, and it must be its final member"
@@ -2548,7 +2598,6 @@ fn lower_primary(
                         );
                     }
                     saw_tail = true;
-                    let name_cursor = required(cst, member, "name")?;
                     let value = arena.expression(Expression::Var {
                         name: token_text(cst, name_cursor)?,
                         span: cst.span(name_cursor)?,
@@ -2559,10 +2608,16 @@ fn lower_primary(
                     });
                     continue;
                 }
-                require_rule(cst, member, "expression")?;
+                let member = member
+                    .iter()
+                    .copied()
+                    .find(|cursor| {
+                        matches!(cursor, Cursor::Rule(rule) if cst.rule_name(*rule).ok() == Some("expression"))
+                    })
+                    .ok_or_else(|| "unknown effect-row member".to_owned())?;
                 elements.push(ArrayElement {
                     spread: false,
-                    value: lower_expression(cst, member, context, arena)?,
+                    value: lower_expression(cst, as_rule(member)?, context, arena)?,
                 });
             }
             Ok(arena.expression(Expression::Array { elements, span }))
