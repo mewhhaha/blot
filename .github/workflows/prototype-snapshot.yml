@@ -24,6 +24,12 @@ jobs:
           targets: wasm32-unknown-unknown
           components: rustfmt,clippy
       - run: python3 experiments/language-cleanup/migrate.py
+      - name: Drop retired element islands from Baba metadata
+        run: >-
+          python3 -c 'import json; p="baba.json"; d=json.load(open(p));
+          d["gpuFrontend"]["islands"]=[x for x in d["gpuFrontend"]["islands"]
+          if not x["rule"].startswith("element_")];
+          open(p,"w").write(json.dumps(d,indent=2)+"\n")'
       - name: Regenerate parser and compiler schema
         run: |
           deno task generate
