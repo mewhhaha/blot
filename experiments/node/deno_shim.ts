@@ -74,8 +74,45 @@ function installUint8ArrayBase64(): void {
   }
 }
 
+function fetchUrl(input: RequestInfo | URL): URL | null {
+  if (input instanceof URL) return input;
+  if (typeof input === "string") {
+    try {
+      return new URL(input);
+    } catch {
+      return null;
+    }
+  }
+  if (input instanceof Request) return new URL(input.url);
+  return null;
+}
+
+function installFileFetch(): void {
+  const nativeFetch = globalThis.fetch.bind(globalThis);
+  Object.defineProperty(globalThis, "fetch", {
+    async value(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+      const url = fetchUrl(input);
+      if (url !== null && url.protocol === "file:") {
+        try {
+          const bytes = await nodeReadFile(url);
+          return new Response(bytes, { status: 200 });
+        } catch (error) {
+          if (isNodeNotFound(error)) {
+            return new Response(null, { status: 404 });
+          }
+          throw error;
+        }
+      }
+      return await nativeFetch(input, init);
+    },
+    configurable: true,
+    writable: true,
+  });
+}
+
 export function installDenoShim(): void {
   installUint8ArrayBase64();
+  installFileFetch();
   if ("Deno" in globalThis) return;
   Object.defineProperty(globalThis, "Deno", {
     value: Object.freeze({
