@@ -158,5 +158,5 @@ return {
   .compared = 20 + 22 === 42;
   .appended = "a" ++ "b" ++ "c";
   .piped = 20 |> Num.add 2 |> double;
-  .comptime = comptime (20 * 2 + 1);
+  .comptime = 20 * 2 + 1;
 }
