@@ -1,3 +1,8 @@
+// Element-free baseline. Components are ordinary functions over a property
+// record and an array of nullary child computations. Keep this under the
+// historical example name while the grammar-removal prototype is evaluated so
+// its existing golden continues to compare the same behavior.
+
 open @import "blot:prelude" ()
 
 const Draw =
@@ -48,14 +53,32 @@ let Button = fn properties => fn children =>
   <- Draw.write "</button>"
 
 let view = fn () =>
-  let save = <Button .label="Save" />
-  let delete = <Button .label="Delete" .disabled=True .order=2 />
-  root <- <div .class="counter" .hidden=False>
-    text "Count: "
-    {save}
-    {delete}
-    <icon />
-  </div>
+  let count = fn () =>
+    <- text "Count: "
+
+  let save = fn () =>
+    <- Button {
+      .label = "Save";
+      .disabled = ();
+      .order = ();
+    } []
+
+  let delete = fn () =>
+    <- Button {
+      .label = "Delete";
+      .disabled = #True;
+      .order = 2;
+    } []
+
+  let glyph = fn () =>
+    <- icon {} []
+
+  root <- div
+    {
+      .class = "counter";
+      .hidden = #False;
+    }
+    [count, save, delete, glyph]
   return root
 
 let collecting =
