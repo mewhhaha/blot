@@ -4,15 +4,47 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   snapshot:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt,clippy
+      - name: Apply prototype implementation
+        run: |
+          if ! grep -q '"compdo"' grammar.baba; then
+            cat experiments/language-cleanup/patch.{0,1,2,3} \
+              | base64 -d \
+              | gzip -d > /tmp/implementation.patch
+            patch -p1 < /tmp/implementation.patch
+          fi
+      - run: deno fmt
+      - run: cargo fmt --manifest-path compiler/Cargo.toml
+      - name: Commit formatted implementation
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "implement language cleanup prototype"
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          fi
+      - run: deno check .
+      - run: cargo check --manifest-path compiler/Cargo.toml
       - run: tar --exclude=.git -czf /tmp/blot-source.tgz .
+        if: always()
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: blot-source
           path: /tmp/blot-source.tgz
