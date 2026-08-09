@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use crate::ast::Span;
 use crate::cst::NAMED_TOKEN_KINDS;
 use crate::diagnostic::Diagnostic;
@@ -48,19 +46,11 @@ struct LayoutFrame {
     indent: usize,
     close_indent: usize,
     brackets: usize,
-    element_heads: usize,
 }
 
 #[derive(Default)]
 struct Delimiters {
     brackets: usize,
-    element_heads: Vec<ElementHead>,
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum ElementHead {
-    Open,
-    Close,
 }
 
 pub(crate) fn elaborate(source: &[u16]) -> Result<LayoutSource, Vec<Diagnostic>> {
@@ -91,31 +81,18 @@ pub(crate) fn elaborate(source: &[u16]) -> Result<LayoutSource, Vec<Diagnostic>>
         indent: 0,
         close_indent: 0,
         brackets: 0,
-        element_heads: 0,
     }];
     let mut delimiters = Delimiters::default();
-    let mut element_suite_introducers = HashSet::new();
     let mut previous = tokens[0];
-    update_delimiters(
-        source,
-        &mut delimiters,
-        previous,
-        None,
-        &mut element_suite_introducers,
-        true,
-    );
+    update_delimiters(source, &mut delimiters, previous);
 
     for token in tokens.iter().skip(1) {
         let gap = &source[previous.end..token.start];
         let newline = last_newline_end(gap);
-        let suite_introducer = opens_suite(source, previous, &element_suite_introducers);
+        let suite_introducer = opens_suite(source, previous);
         let frame = *frames.last().expect("layout always has a root frame");
-        let inside_active_suite = frames.len() > 1
-            && delimiters.brackets == frame.brackets
-            && delimiters.element_heads.len() == frame.element_heads;
-        let layout_active = inside_active_suite
-            || (delimiters.brackets == 0 && delimiters.element_heads.is_empty())
-            || suite_introducer;
+        let inside_active_suite = frames.len() > 1 && delimiters.brackets == frame.brackets;
+        let layout_active = inside_active_suite || delimiters.brackets == 0 || suite_introducer;
 
         if let Some(newline) = newline
             && layout_active
@@ -126,19 +103,11 @@ pub(crate) fn elaborate(source: &[u16]) -> Result<LayoutSource, Vec<Diagnostic>>
             let current = frame.indent;
             let closes_delimiter = is_text(source, token, ")")
                 || is_text(source, token, "]")
-                || is_text(source, token, "}")
-                || kind(token) == Some("ANGLE_CLOSE");
+                || is_text(source, token, "}");
             let mut markers = vec![LAYOUT_NEWLINE];
             if indent > current {
                 if !suite_introducer {
-                    update_delimiters(
-                        source,
-                        &mut delimiters,
-                        token,
-                        Some(previous),
-                        &mut element_suite_introducers,
-                        true,
-                    );
+                    update_delimiters(source, &mut delimiters, token);
                     previous = token;
                     continue;
                 }
@@ -146,7 +115,6 @@ pub(crate) fn elaborate(source: &[u16]) -> Result<LayoutSource, Vec<Diagnostic>>
                     indent,
                     close_indent: source_indent_width(source, previous.start),
                     brackets: delimiters.brackets,
-                    element_heads: delimiters.element_heads.len(),
                 });
                 markers.push(LAYOUT_INDENT);
             } else if indent < current {
@@ -190,14 +158,7 @@ pub(crate) fn elaborate(source: &[u16]) -> Result<LayoutSource, Vec<Diagnostic>>
             insertions.push((token.start, markers));
         }
 
-        update_delimiters(
-            source,
-            &mut delimiters,
-            token,
-            Some(previous),
-            &mut element_suite_introducers,
-            newline.is_some(),
-        );
+        update_delimiters(source, &mut delimiters, token);
         previous = token;
     }
 
@@ -281,14 +242,11 @@ fn source_indent_width(source: &[u16], offset: usize) -> usize {
     indentation_width(&source[start..end]).expect("line indentation is whitespace")
 }
 
-fn opens_suite(source: &[u16], token: &Token, element_suites: &HashSet<usize>) -> bool {
+fn opens_suite(source: &[u16], token: &Token) -> bool {
     if ["=", "=>", "<-", "of", ":"]
         .iter()
         .any(|text| is_text(source, token, text))
     {
-        return true;
-    }
-    if kind(token) == Some("ANGLE_RIGHT") && element_suites.contains(&token.start) {
         return true;
     }
     kind(token) == Some("OPERATOR") && is_text(source, token, ":")
@@ -301,17 +259,10 @@ fn closes_layout_expression(source: &[u16], token: &Token) -> bool {
     {
         return true;
     }
-    matches!(kind(token), Some("ELSE_IF" | "ANGLE_CLOSE"))
+    kind(token) == Some("ELSE_IF")
 }
 
-fn update_delimiters(
-    source: &[u16],
-    delimiters: &mut Delimiters,
-    token: &Token,
-    previous: Option<&Token>,
-    element_suites: &mut HashSet<usize>,
-    starts_line: bool,
-) {
+fn update_delimiters(source: &[u16], delimiters: &mut Delimiters, token: &Token) {
     if ["(", "[", "{"]
         .iter()
         .any(|text| is_text(source, token, text))
@@ -324,41 +275,7 @@ fn update_delimiters(
         .any(|text| is_text(source, token, text))
     {
         delimiters.brackets = delimiters.brackets.saturating_sub(1);
-        return;
     }
-    if kind(token) == Some("ANGLE_LEFT") && begins_element(source, previous, starts_line) {
-        delimiters.element_heads.push(ElementHead::Open);
-        return;
-    }
-    if kind(token) == Some("ANGLE_CLOSE") {
-        delimiters.element_heads.push(ElementHead::Close);
-        return;
-    }
-    if matches!(kind(token), Some("ANGLE_RIGHT" | "ANGLE_SELF_CLOSE")) {
-        let head = delimiters.element_heads.pop();
-        if head == Some(ElementHead::Open) && kind(token) == Some("ANGLE_RIGHT") {
-            element_suites.insert(token.start);
-        }
-    }
-}
-
-fn begins_element(source: &[u16], previous: Option<&Token>, starts_line: bool) -> bool {
-    let Some(previous) = previous else {
-        return true;
-    };
-    if starts_line {
-        return true;
-    }
-    if ["=", "=>", "<-", "(", "[", "{", ","]
-        .iter()
-        .any(|text| is_text(source, previous, text))
-    {
-        return true;
-    }
-    matches!(
-        kind(previous),
-        Some("OPERATOR" | "ANGLE_RIGHT" | "ANGLE_SELF_CLOSE")
-    )
 }
 
 fn kind(token: &Token) -> Option<&'static str> {

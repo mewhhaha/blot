@@ -464,6 +464,9 @@ function unhandledRow(effects: SimpleType): string {
 
 function rowLabels(type: SimpleType, seen: Set<number>): string[] {
   if (type.tag === "effects") return [...type.labels];
+  if (type.tag === "open-effects") {
+    return [...type.labels, ...rowLabels(type.tail, seen)];
+  }
   if (type.tag !== "var" || seen.has(type.id)) return [];
   seen.add(type.id);
   return type.lower.flatMap((bound) => rowLabels(bound, seen));

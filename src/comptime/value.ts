@@ -163,6 +163,8 @@ export type Value =
     readonly domain: Value;
     readonly codomain: Value;
     readonly effects: readonly Value[];
+    /** Signature-local rest of an open effect row, bound by `@forall`. */
+    readonly effectTail?: number;
     readonly deferred?: boolean;
   }
   | { readonly tag: "type-variable"; readonly id: number }
@@ -438,9 +440,9 @@ export function show(value: Value): string {
     // The checker's printer spells a row the same way, sorted for the same
     // reason: a row is a set, and a type value is read next to an inferred type
     // often enough that the two must agree down to the order.
-    const row = value.effects.length === 0
-      ? ""
-      : ` ~ { ${value.effects.map(effectName).sort().join(", ")} }`;
+    const parts = value.effects.map(effectName).sort();
+    if (value.effectTail !== undefined) parts.push(`..'t${value.effectTail}`);
+    const row = parts.length === 0 ? "" : ` ~ { ${parts.join(", ")} }`;
     const demand = value.deferred === true ? "~" : "";
     return `${demand}${show(value.domain)} -> ${show(value.codomain)}${row}`;
   }
@@ -552,6 +554,7 @@ export function equal(left: Value, right: Value): boolean {
     return (left.deferred ?? false) === (right.deferred ?? false) &&
       equal(left.domain, right.domain) &&
       equal(left.codomain, right.codomain) &&
+      left.effectTail === right.effectTail &&
       left.effects.length === right.effects.length &&
       left.effects.every((effect) =>
         right.effects.some((other) => equal(effect, other))

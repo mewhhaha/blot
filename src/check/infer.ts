@@ -557,6 +557,8 @@ export function settle(staging: Staging): void {
 export interface Context {
   /** The phase whose expressions are currently being inferred. */
   readonly phase: "runtime" | "comptime";
+  /** A function body may defer a local `const` until a concrete specialization. */
+  readonly deferComptimeBindings: boolean;
   /** Settled type terms produced by this inference run, keyed by expression identity. */
   readonly expressionTypes: Map<Expr, SimpleType>;
   /** Erasable evidence for direct array accesses proved in bounds. */
@@ -774,6 +776,7 @@ function requireComptimeBinding(
       (error.diagnostic.code === "BLOT_UNBOUND" ||
         error.diagnostic.code === "BLOT_UNHANDLED_EFFECT")
     ) {
+      if (context.deferComptimeBindings) return null;
       fail(
         "BLOT_NOT_COMPTIME",
         `A \`const\` binding must be known at compile time: ${error.diagnostic.message}`,
@@ -999,7 +1002,11 @@ function inferUnrecorded(
 
     case "lambda": {
       const scope = childTypeEnv(context.types);
-      const inner: Context = { ...context, types: scope };
+      const inner: Context = {
+        ...context,
+        types: scope,
+        deferComptimeBindings: true,
+      };
       const param = bindPattern(expr.parameter, inner, level);
       // A fresh row per lambda is what makes the inferred effect minimal:
       // nothing becomes effectful because something else nearby was.
@@ -2401,6 +2408,9 @@ function casesOf(type: SimpleType): readonly VariantCase[] | null {
 /** The concrete effect labels a row carries. */
 function rowLabels(type: SimpleType, seen: Set<number>): string[] {
   if (type.tag === "effects") return [...type.labels];
+  if (type.tag === "open-effects") {
+    return [...type.labels, ...rowLabels(type.tail, seen)];
+  }
   if (type.tag !== "var" || seen.has(type.id)) return [];
   seen.add(type.id);
   return type.lower.flatMap((bound) => rowLabels(bound, seen));
@@ -3892,6 +3902,16 @@ function snapshotType(
     snapshots.set(source, snapshot);
     return Object.freeze(snapshot);
   }
+  if (source.tag === "open-effects") {
+    const snapshot = {
+      tag: "open-effects" as const,
+      labels: new Set(source.labels),
+      tail: TOP,
+    };
+    snapshots.set(source, snapshot);
+    snapshot.tail = snapshotType(source.tail, snapshots);
+    return Object.freeze(snapshot);
+  }
   if (source.tag === "range") {
     const snapshot = Object.freeze({ ...source });
     snapshots.set(source, snapshot);
@@ -4370,6 +4390,7 @@ export function checkModule(
   }
   const context: Context = {
     phase: "runtime",
+    deferComptimeBindings: false,
     expressionTypes,
     arrayProofs,
     expressionRelations,

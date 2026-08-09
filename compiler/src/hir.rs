@@ -2137,6 +2137,7 @@ impl ResidualTrace {
                 domain,
                 codomain,
                 effects,
+                ..
             },
         ) = signature
         else {
@@ -4538,6 +4539,7 @@ fn has_unresolved_representation(value: &Value, substitutions: &HashMap<u32, usi
             domain,
             codomain,
             effects,
+            ..
         } => {
             has_unresolved_representation(domain, substitutions)
                 || has_unresolved_representation(codomain, substitutions)
@@ -4843,6 +4845,7 @@ fn collect_value(
             domain,
             codomain,
             effects,
+            ..
         } => {
             collect_value(context, domain, visited, captured)?;
             collect_value(context, codomain, visited, captured)?;
@@ -5041,6 +5044,7 @@ fn replace_value(
             domain,
             codomain,
             effects,
+            ..
         } => {
             **domain = replace_value(context, domain, replacements, replaced)?;
             **codomain = replace_value(context, codomain, replacements, replaced)?;
@@ -6133,6 +6137,7 @@ fn module_argument(parameter: &Option<Type>) -> Result<Value, Diagnostic> {
                 domain: Box::new(Value::Unbounded),
                 codomain: Box::new(Value::Unit),
                 effects: Vec::new(),
+                effect_tail: None,
             },
         );
     }

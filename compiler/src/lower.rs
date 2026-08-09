@@ -296,6 +296,97 @@ fn lower_fixity(cst: &CompactCst<'_>, cursor: Cursor) -> Result<Fixity, String> 
     })
 }
 
+#[derive(Clone)]
+struct EffectRowTailUse {
+    name: String,
+    count: usize,
+    span: Span,
+}
+
+fn effect_row_tail_uses(
+    cst: &CompactCst<'_>,
+    cursor: Cursor,
+) -> Result<Vec<EffectRowTailUse>, String> {
+    fn visit(
+        cst: &CompactCst<'_>,
+        cursor: Cursor,
+        uses: &mut Vec<EffectRowTailUse>,
+    ) -> Result<(), String> {
+        let Cursor::Rule(rule) = cursor else {
+            return Ok(());
+        };
+        let name = cst.rule_name(rule)?;
+        if name == "binding" {
+            return Ok(());
+        }
+        if name == "effect_row_tail" {
+            let name_cursor = required(cst, rule, "name")?;
+            let name = token_text(cst, name_cursor)?;
+            if let Some(existing) = uses.iter_mut().find(|use_| use_.name == name) {
+                existing.count += 1;
+            } else {
+                uses.push(EffectRowTailUse {
+                    name,
+                    count: 1,
+                    span: cst.span(name_cursor)?,
+                });
+            }
+            return Ok(());
+        }
+        for child in cst.children(rule)? {
+            visit(cst, child, uses)?;
+        }
+        Ok(())
+    }
+
+    let mut uses = Vec::new();
+    visit(cst, cursor, &mut uses)?;
+    Ok(uses)
+}
+
+fn quantify_effect_row_tails(
+    mut value: ExpressionId,
+    tails: &[EffectRowTailUse],
+    span: Span,
+    arena: &mut AstArena,
+) -> ExpressionId {
+    for tail in tails.iter().rev() {
+        let parameter = arena.pattern(Pattern::Name {
+            name: tail.name.clone(),
+            qualifier: Qualifier::None,
+            span: tail.span,
+        });
+        let lambda = arena.expression(Expression::Lambda {
+            parameter,
+            body: value,
+            deferred: false,
+            span,
+        });
+        let function = arena.expression(Expression::Intrinsic {
+            name: "@forall".to_owned(),
+            span: tail.span,
+        });
+        value = arena.expression(Expression::Apply {
+            function,
+            argument: lambda,
+            span,
+        });
+    }
+    value
+}
+
+fn finish_source_block(
+    phase: &str,
+    body: ExpressionId,
+    span: Span,
+    arena: &mut AstArena,
+) -> ExpressionId {
+    if phase == "compdo" {
+        return arena.expression(Expression::Comptime { body, span });
+    }
+    body
+}
+
 fn lower_declaration(
     cst: &CompactCst<'_>,
     rule: u32,
@@ -338,8 +429,26 @@ fn lower_declaration(
                     cst.text(value_cursor)?
                 ));
             }
+            let row_tails = effect_row_tail_uses(cst, value_cursor)?;
+            if !row_tails.is_empty() && kind != DeclarationKind::Sig {
+                return Err(
+                    "BLOT_EFFECT_ROW_TAIL_OUTSIDE_SIG: an effect-row tail is scoped by a `sig`"
+                        .to_owned(),
+                );
+            }
+            if kind == DeclarationKind::Sig
+                && let Some(unconstrained) = row_tails.iter().find(|tail| tail.count < 2)
+            {
+                return Err(format!(
+                    "BLOT_EFFECT_ROW_TAIL_UNCONSTRAINED: effect-row tail `..{}` must occur at least twice in one `sig`",
+                    unconstrained.name
+                ));
+            }
             let mut value = lower_value(cst, value_cursor, context, arena)
                 .map_err(|error| format!("while lowering its value: {error}"))?;
+            if kind == DeclarationKind::Sig && !row_tails.is_empty() {
+                value = quantify_effect_row_tails(value, &row_tails, span, arena);
+            }
             if !tags.is_empty() {
                 value = lower_tagged_value(kind, pattern, value, &tags, span, arena);
             }
@@ -1854,7 +1963,6 @@ fn statements_contain_effect(cst: &CompactCst<'_>, statements: &[Cursor]) -> Res
     for statement in statements {
         let statement = statement_rule(cst, *statement)?;
         if cst.rule_name(statement)? == "sequencing"
-            || cst.rule_name(statement)? == "element_line"
             || (cst.rule_name(statement)? == "rebinding"
                 && token_text(cst, required(cst, statement, "arrow")?)? == "<-")
         {
@@ -2143,9 +2251,6 @@ fn lower_value(
     if cst.rule_name(target_rule)? == "lambda" {
         return lower_lambda(cst, target_rule, context, arena);
     }
-    if cst.rule_name(target_rule)? == "element_expression" {
-        return lower_primary(cst, Cursor::Rule(target_rule), context, arena);
-    }
     let name = cst.rule_name(target_rule)?;
     lower_expression(cst, target_rule, context, arena)
         .map_err(|error| format!("while lowering value rule {name}: {error}"))
@@ -2254,10 +2359,7 @@ fn lower_expression(
     arena: &mut AstArena,
 ) -> Result<ExpressionId, String> {
     let rule_name = cst.rule_name(rule)?;
-    if rule_name != "expression"
-        && rule_name != "continued_expression"
-        && rule_name != "element_child_expression"
-    {
+    if rule_name != "expression" && rule_name != "continued_expression" {
         return Err(format!("expected expression, found `{rule_name}`"));
     }
     let first = lower_operand(cst, as_rule(required(cst, rule, "first")?)?, context, arena)
@@ -2303,10 +2405,6 @@ fn lower_operand(
                 lambda: result,
                 span,
             });
-            continue;
-        }
-        if text == "comptime" {
-            result = arena.expression(Expression::Comptime { body: result, span });
             continue;
         }
         let fixity = context
@@ -2422,26 +2520,50 @@ fn lower_primary(
             }
             Ok(arena.expression(Expression::Tuple { elements, span }))
         }
-        "array" | "effect_row" => {
-            let field = if cst.rule_name(rule)? == "array" {
-                "elements"
-            } else {
-                "effects"
-            };
+        "array" => {
             let mut elements = Vec::new();
-            for element in cst.field_list(rule, field)? {
-                if field == "elements" {
-                    let element = as_rule(element)?;
-                    elements.push(ArrayElement {
-                        spread: cst.field(element, "spread")?.is_some(),
-                        value: lower_value(cst, required(cst, element, "value")?, context, arena)?,
+            for element in cst.field_list(rule, "elements")? {
+                let element = as_rule(element)?;
+                elements.push(ArrayElement {
+                    spread: cst.field(element, "spread")?.is_some(),
+                    value: lower_value(cst, required(cst, element, "value")?, context, arena)?,
+                });
+            }
+            Ok(arena.expression(Expression::Array { elements, span }))
+        }
+        "effect_row" => {
+            let mut members = vec![required(cst, rule, "first")?];
+            for part in cst.field_list(rule, "rest")? {
+                members.push(required(cst, as_rule(part)?, "value")?);
+            }
+            let mut elements = Vec::new();
+            let mut saw_tail = false;
+            for (index, member) in members.iter().copied().enumerate() {
+                let member = as_rule(member)?;
+                if cst.rule_name(member)? == "effect_row_tail" {
+                    if saw_tail || index + 1 != members.len() {
+                        return Err(
+                            "BLOT_EFFECT_ROW_TAIL_POSITION: an effect row has at most one tail, and it must be its final member"
+                                .to_owned(),
+                        );
+                    }
+                    saw_tail = true;
+                    let name_cursor = required(cst, member, "name")?;
+                    let value = arena.expression(Expression::Var {
+                        name: token_text(cst, name_cursor)?,
+                        span: cst.span(name_cursor)?,
                     });
-                } else {
                     elements.push(ArrayElement {
                         spread: false,
-                        value: lower_expression(cst, as_rule(element)?, context, arena)?,
+                        value,
                     });
+                    continue;
                 }
+                require_rule(cst, member, "expression")?;
+                elements.push(ArrayElement {
+                    spread: false,
+                    value: lower_expression(cst, member, context, arena)?,
+                });
             }
             Ok(arena.expression(Expression::Array { elements, span }))
         }
@@ -2487,7 +2609,6 @@ fn lower_primary(
             }
             Ok(arena.expression(Expression::Shape { members, span }))
         }
-        "element_expression" => lower_element(cst, rule, context, arena),
         "case_expression" => {
             let target = lower_expression(
                 cst,
@@ -2525,9 +2646,17 @@ fn lower_primary(
             }
             lower_guards(target, &arms, span, arena)
         }
-        // `do:` is the same statement scope written explicitly, so it lowers
-        // through the same arm rather than gaining its own node.
+        // `do:` and `compdo:` share one statement scope. `compdo:` wraps the
+        // completed block in the existing internal comptime expression.
         "block" | "do_block" => {
+            let phase = if cst.rule_name(rule)? == "do_block" {
+                token_text(cst, required(cst, rule, "phase")?)?
+            } else {
+                "do".to_owned()
+            };
+            if phase != "do" && phase != "compdo" {
+                return Err(format!("unknown block phase `{phase}`"));
+            }
             let mut statements = cst.field_list(rule, "statements")?;
             let mut result = arena.expression(Expression::Unit { span });
             let mut result_effects = ResultEffects::Pure;
@@ -2544,7 +2673,7 @@ fn lower_primary(
                 contains_only_result = statements.is_empty();
             }
             if contains_only_result {
-                return Ok(result);
+                return Ok(finish_source_block(&phase, result, span, arena));
             }
             if statements_need_control(cst, &statements)? {
                 let result = resolve_control_sequence(
@@ -2555,24 +2684,26 @@ fn lower_primary(
                     span,
                     arena,
                 )?;
-                return Ok(arena.expression(Expression::Block {
+                let block = arena.expression(Expression::Block {
                     declarations: Vec::new(),
                     result,
                     result_effects: ResultEffects::Ambient,
                     span,
-                }));
+                });
+                return Ok(finish_source_block(&phase, block, span, arena));
             }
             let mut declarations = Vec::new();
             for statement in statements {
                 let statement = unwrapped_rule(cst, statement)?;
                 declarations.push(lower_declaration(cst, statement, &block_context, arena)?);
             }
-            Ok(arena.expression(Expression::Block {
+            let block = arena.expression(Expression::Block {
                 declarations,
                 result,
                 result_effects,
                 span,
-            }))
+            });
+            Ok(finish_source_block(&phase, block, span, arena))
         }
         name => Err(format!(
             "Rust middle has not lowered expression `{name}` yet"
@@ -2898,155 +3029,6 @@ fn erase_binders(pattern: PatternId, arena: &mut AstArena) -> PatternId {
         }
         pattern => arena.pattern(pattern),
     }
-}
-
-fn lower_element(
-    cst: &CompactCst<'_>,
-    rule: u32,
-    context: &LoweringContext<'_>,
-    arena: &mut AstArena,
-) -> Result<ExpressionId, String> {
-    let span = cst.span(Cursor::Rule(rule))?;
-    let name_cursor = required(cst, rule, "name")?;
-    let name = token_text(cst, name_cursor)?;
-    let name_span = cst.span(name_cursor)?;
-    let mut properties = Vec::new();
-    for property in cst.field_list(rule, "properties")? {
-        let property = as_rule(property)?;
-        let property_name = token_text(cst, required(cst, property, "name")?)?;
-        let property_value = as_rule(required(cst, property, "value")?)?;
-        let unwrapped = cst.unwrap(Cursor::Rule(property_value))?;
-        let value = match unwrapped {
-            Cursor::Rule(value) if cst.rule_name(value)? == "element_property_expression" => {
-                lower_value(cst, required(cst, value, "value")?, context, arena)?
-            }
-            value => lower_primary(cst, value, context, arena)?,
-        };
-        properties.push(ShapeMember::Field {
-            name: property_name,
-            value,
-        });
-    }
-
-    let ending = as_rule(required(cst, rule, "ending")?)?;
-    let ending_span = cst.span(Cursor::Rule(ending))?;
-    let mut child_elements = Vec::new();
-    if cst.rule_name(ending)? == "element_body" {
-        let closing_cursor = required(cst, ending, "closing")?;
-        let closing = token_text(cst, closing_cursor)?;
-        if closing != name {
-            return Err(format!(
-                "BLOT_MISMATCHED_ELEMENT: element `<{name}>` is closed by `</{closing}>`"
-            ));
-        }
-        let mut children = cst.field_list(ending, "children")?;
-        children.extend(cst.field_list(ending, "effects")?);
-        let mut children = children
-            .into_iter()
-            .map(|child| Ok((cst.span(child)?.start, child)))
-            .collect::<Result<Vec<_>, String>>()?;
-        children.sort_by_key(|(start, _)| *start);
-        let child_context = context.body();
-        for (_, child) in children {
-            let child = as_rule(child)?;
-            let child_rule = cst.rule_name(child)?;
-            if child_rule != "element_line"
-                && child_rule != "value"
-                && child_rule != "element_child"
-            {
-                return Err(format!("unknown element child `{child_rule}`"));
-            }
-            if child_rule == "value" {
-                child_elements.push(ArrayElement {
-                    spread: false,
-                    value: lower_value(cst, Cursor::Rule(child), &child_context, arena)?,
-                });
-                continue;
-            }
-            let child_value = required(cst, child, "value")?;
-            if child_rule == "element_line" {
-                child_elements.push(ArrayElement {
-                    spread: false,
-                    value: lower_primary(cst, child_value, &child_context, arena)?,
-                });
-                continue;
-            }
-            let child_span = cst.span(Cursor::Rule(child))?;
-            let value = lower_value(cst, child_value, &child_context, arena)?;
-            let result_name = format!("elementChild${}${}", child_span.start, child_span.end);
-            let result_pattern = arena.pattern(Pattern::Name {
-                name: result_name.clone(),
-                qualifier: Qualifier::None,
-                span: child_span,
-            });
-            let binding = arena.declaration(Declaration::Binding {
-                kind: DeclarationKind::Effect,
-                tags: Vec::new(),
-                pattern: result_pattern,
-                value,
-                span: child_span,
-            });
-            let result = variable(&result_name, child_span, arena);
-            let body = arena.expression(Expression::Block {
-                declarations: vec![binding],
-                result,
-                result_effects: ResultEffects::Ambient,
-                span: child_span,
-            });
-            let parameter = arena.pattern(Pattern::Unit { span: child_span });
-            let value = arena.expression(Expression::Lambda {
-                parameter,
-                body,
-                deferred: false,
-                span: child_span,
-            });
-            child_elements.push(ArrayElement {
-                spread: false,
-                value,
-            });
-        }
-    } else if cst.rule_name(ending)? == "element_self_close" {
-    } else {
-        return Err(format!(
-            "unknown element ending `{}`",
-            cst.rule_name(ending)?
-        ));
-    }
-    let children = arena.expression(Expression::Array {
-        elements: child_elements,
-        span: ending_span,
-    });
-    let component = arena.expression(Expression::Var {
-        name,
-        span: name_span,
-    });
-    let property_shape = arena.expression(Expression::Shape {
-        members: properties,
-        span,
-    });
-    let with_properties = arena.expression(Expression::Apply {
-        function: component,
-        argument: property_shape,
-        span,
-    });
-    let application = arena.expression(Expression::Apply {
-        function: with_properties,
-        argument: children,
-        span,
-    });
-    let body = arena.expression(Expression::Block {
-        declarations: Vec::new(),
-        result: application,
-        result_effects: ResultEffects::Ambient,
-        span,
-    });
-    let parameter = arena.pattern(Pattern::Unit { span });
-    Ok(arena.expression(Expression::Lambda {
-        parameter,
-        body,
-        deferred: false,
-        span,
-    }))
 }
 
 fn decode_text(literal: &str) -> Result<String, String> {

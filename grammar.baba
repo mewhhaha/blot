@@ -18,8 +18,6 @@ token ELSE_IF priority 3 = /else[ \t\r\n]+if/ ;
 token INTRINSIC priority 3 = /@[a-z_][A-Za-z0-9_]*(\.[a-z_][A-Za-z0-9_]*)*/ ;
 token ANGLE_LEFT = /</ ;
 token ANGLE_RIGHT = />/ ;
-token ANGLE_CLOSE = /<\// ;
-token ANGLE_SELF_CLOSE = /\/>/ ;
 token QUESTION = /\?/ ;
 token LAYOUT_NEWLINE = // ;
 token LAYOUT_INDENT = // ;
@@ -37,11 +35,9 @@ token LAYOUT_DEDENT = // ;
 token OPERATOR =
   /[+\-*=|&^%!~$:\\][+\-*\/<>=|&^%!?~$:\\]*|\?[+\-*\/<>=|&^%!?~$:\\]+|<[+\-*<>=|&^%!?~$:\\][+\-*\/<>=|&^%!?~$:\\]*|>[+\-*\/>=|&^%!?~$:\\][+\-*\/<>=|&^%!?~$:\\]*|\/[+\-*<=|&^%!?~$:\\][+\-*\/<>=|&^%!?~$:\\]*|\// ;
 
-// Exact angle brackets announce elements, while longer operators such as
-// `<=` remain OPERATOR tokens by longest match. `><` is reserved so adjacent
-// opening and closing tags split as `>` then `</`. The exact brackets remain
-// available to infix chains and the fixity table through this shared rule, so
-// reserving their terminal identity does not remove comparisons.
+// Exact angle brackets retain fixed terminal identities while longer operators
+// such as `<=` remain OPERATOR tokens by longest match. They stay available to
+// infix chains and the fixity table through this shared rule.
 operator_token = OPERATOR | ANGLE_LEFT | ANGLE_RIGHT | QUESTION ;
 
 skip WHITESPACE = /[ \t\r\n]+/ ;
@@ -109,7 +105,7 @@ binding = (
 indented_value = (
   LAYOUT_NEWLINE
   LAYOUT_INDENT
-  value:(lambda | element_expression | continued_expression)
+  value:(lambda | continued_expression)
   LAYOUT_NEWLINE
   LAYOUT_DEDENT
 ) ;
@@ -153,14 +149,6 @@ rebinding = (
 sequencing = (
   "<-"
   value:value
-  LAYOUT_NEWLINE
-) ;
-
-// Inside an element body, a bare nested element is one suspended child value.
-// Ordinary statement regions require `<- <Element />` to execute and discard
-// an element effect.
-element_line = (
-  value:element_expression
   LAYOUT_NEWLINE
 ) ;
 
@@ -356,7 +344,7 @@ operand = (
 // `...` is deliberately absent: spreading is only meaningful in array and
 // shape positions, and having it in both places made the two readings of
 // `[...x]` ambiguous.
-prefix_operator = (OPERATOR | QUESTION | "comptime" | "rec") ;
+prefix_operator = (OPERATOR | QUESTION | "rec") ;
 
 // Unary application by juxtaposition: `f x y` is `(f x) y`. This matches
 // gpufuck's unary Core exactly, so lowering needs no currying pass.
@@ -383,8 +371,8 @@ field_name = (IDENT | TYPE_IDENT | INTEGER | keyword) ;
 keyword = (
   "module" | "operators" | "infixl" | "infixr" | "infix" | "prefix"
   | "let" | "const" | "sig" | "return"
-  | "if" | "else" | "case" | "of" | "rec" | "comptime" | "open"
-  | "for" | "in" | "break" | "do" | "fn"
+  | "if" | "else" | "case" | "of" | "rec" | "open"
+  | "for" | "in" | "break" | "do" | "compdo" | "fn"
 ) ;
 
 primary_expression = (
@@ -411,10 +399,26 @@ primary_expression = (
 // brace forms apart and neither needs a keyword to announce it. A row is
 // never empty — a function that performs nothing is written without `~` —
 // which is what leaves `{}` unambiguously the empty shape.
+//
+// A `..e` member names the rest of the row in a `sig`. The flat member list
+// keeps the comma decision local: after each comma, `..` and an expression have
+// disjoint starts. Lowering requires the tail to be last and gives every tail
+// name signature-local scope.
 effect_row = (
   "{"
-  effects:(expression % ",")
+  first:(expression | effect_row_tail)
+  rest:effect_row_part*
   "}"
+) ;
+
+effect_row_part = (
+  ","
+  value:(expression | effect_row_tail)
+) ;
+
+effect_row_tail = (
+  ".."
+  name:IDENT
 ) ;
 
 application_primary = (
@@ -456,104 +460,10 @@ array_element = (
   value:value
 ) ;
 
-// Elements are ordinary component applications. Dot properties become record
-// fields, and every value between paired tags becomes one suspended child in
-// the array passed to the component. No contextual JSX lexer mode is needed:
-// every token keeps the identity it has elsewhere.
-element_expression = (
-  ANGLE_LEFT
-  name:element_name
-  properties:element_property*
-  ending:(element_self_close | element_body)
-) ;
-
-element_name = IDENT | TYPE_IDENT ;
-
-element_property = (
-  "."
-  name:field_name
-  "="
-  value:element_property_value
-) ;
-
-element_property_value =
-  IDENT | TYPE_IDENT | TEXT | INTEGER | FLOAT
-  | constructor_expression | unit | element_property_expression ;
-
-element_property_expression = (
-  "{"
-  value:value
-  "}"
-) ;
-
-element_self_close = (ANGLE_SELF_CLOSE) ;
-
-element_body = (
-  ANGLE_RIGHT
-  body:(
-    children:("{" effects:value "}")+
-    |
-      body_start:LAYOUT_NEWLINE
-      LAYOUT_INDENT
-      children:(
-        element_line
-        | ("{" effects:value "}" LAYOUT_NEWLINE)
-        | element_child
-      )+
-      body_end:LAYOUT_DEDENT
-  )?
-  ANGLE_CLOSE
-  closing:element_name
-  ANGLE_RIGHT
-) ;
-
-element_child = (
-  value:element_child_value
-  LAYOUT_NEWLINE
-) ;
-
-// A nested bare element uses `element_line`. A braced child is reserved for an
-// existing effect value, so a bare child expression cannot begin with braces.
-// Shapes and effect rows remain available as application arguments and infix
-// right operands.
-element_child_value = lambda | element_child_expression ;
-
-element_child_expression = (
-  first:element_child_operand
-  rest:infix_operation*
-) ;
-
-element_child_operand = (
-  prefixes:prefix_operator*
-  value:element_child_postfix_expression
-) ;
-
-element_child_postfix_expression = (
-  value:element_child_primary_expression
-  suffixes:field_suffix*
-  arguments:application_argument*
-) ;
-
-element_child_primary_expression = (
-  IDENT
-  | TYPE_IDENT
-  | INTEGER
-  | FLOAT
-  | TEXT
-  | INTRINSIC
-  | constructor_expression
-  | unit
-  | case_expression
-  | do_block
-  | block
-  | array
-  | parenthesized_or_tuple
-) ;
-
 // A lambda is admissible wherever a value is. The two alternatives are told
 // apart by their first token — `fn` begins one and nothing else — so this is a
 // decision the parser makes without lookahead.
-value = lambda | element_expression | expression ;
+value = lambda | expression ;
 
 // One structural aggregate. Tuples are shapes with integer labels; the
 // reference language's stored-tuple versus transient-pack distinction is gone.
@@ -696,10 +606,11 @@ block = (
   LAYOUT_DEDENT
 ) ;
 
-// `do:` is the explicit statement scope available as a value. Parentheses are
-// only grouping/tuple syntax and never announce a statement suite.
+// `do:` is the explicit statement scope available as a value. `compdo:` is
+// the same scope with a compile-time obligation. Parentheses are only
+// grouping/tuple syntax and never announce a statement suite.
 do_block = (
-  "do"
+  phase:("do" | "compdo")
   ":"
   LAYOUT_NEWLINE
   LAYOUT_INDENT

@@ -56,6 +56,10 @@ pub enum Type {
         open: bool,
     },
     Effects(BTreeSet<String>),
+    OpenEffects {
+        labels: BTreeSet<String>,
+        tail: Box<Type>,
+    },
     Union(Vec<Type>),
     Opaque(String),
     Top,
@@ -105,6 +109,10 @@ enum ConstraintTypeNode {
         open: bool,
     },
     Effects(BTreeSet<String>),
+    OpenEffects {
+        labels: BTreeSet<String>,
+        tail: ConstraintTypeId,
+    },
     Union(Vec<ConstraintTypeId>),
     Opaque(String),
     Top,
@@ -157,6 +165,10 @@ impl ConstraintTypeArena {
                 open: *open,
             },
             Type::Effects(labels) => ConstraintTypeNode::Effects(labels.clone()),
+            Type::OpenEffects { labels, tail } => ConstraintTypeNode::OpenEffects {
+                labels: labels.clone(),
+                tail: self.intern(tail),
+            },
             Type::Union(members) => ConstraintTypeNode::Union(
                 members.iter().map(|member| self.intern(member)).collect(),
             ),
@@ -212,6 +224,10 @@ impl ConstraintTypeArena {
                 open: *open,
             },
             ConstraintTypeNode::Effects(labels) => Type::Effects(labels.clone()),
+            ConstraintTypeNode::OpenEffects { labels, tail } => Type::OpenEffects {
+                labels: labels.clone(),
+                tail: Box::new(self.expand(*tail)),
+            },
             ConstraintTypeNode::Union(members) => {
                 Type::Union(members.iter().map(|member| self.expand(*member)).collect())
             }
@@ -249,6 +265,7 @@ impl ConstraintTypeArena {
             ConstraintTypeNode::Array(element) | ConstraintTypeNode::Region(element) => {
                 self.level_of(*element, variables)
             }
+            ConstraintTypeNode::OpenEffects { tail, .. } => self.level_of(*tail, variables),
             ConstraintTypeNode::Union(members) => members
                 .iter()
                 .map(|member| self.level_of(*member, variables))
@@ -333,6 +350,19 @@ impl ConstraintTypeArena {
             ) => left_domain == right_domain && left_low == right_low && left_high == right_high,
             (ConstraintTypeNode::Effects(left), ConstraintTypeNode::Effects(right)) => {
                 left == right
+            }
+            (
+                ConstraintTypeNode::OpenEffects {
+                    labels: left_labels,
+                    tail: left_tail,
+                },
+                ConstraintTypeNode::OpenEffects {
+                    labels: right_labels,
+                    tail: right_tail,
+                },
+            ) => {
+                left_labels == right_labels
+                    && self.same_with_rigids(*left_tail, *right_tail, rigids)
             }
             (
                 ConstraintTypeNode::Function {
@@ -503,7 +533,7 @@ pub struct CachedModuleInterface {
     recursive_closures: Vec<ExpressionId>,
 }
 
-pub const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 3;
+pub const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 4;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct CheckedModuleCertificate {
@@ -545,6 +575,10 @@ enum FlatTypeNode {
         open: bool,
     },
     Effects(BTreeSet<String>),
+    OpenEffects {
+        labels: BTreeSet<String>,
+        tail: FlatTypeId,
+    },
     Union(Vec<FlatTypeId>),
     Opaque(String),
     Top,
@@ -722,6 +756,9 @@ fn validate_certificate_type(
         }
         FlatTypeNode::Array(element) | FlatTypeNode::Region(element) => {
             validate_child(*element, bound)?;
+        }
+        FlatTypeNode::OpenEffects { tail, .. } => {
+            validate_child(*tail, bound)?;
         }
         FlatTypeNode::Union(members) => {
             for member in members {
@@ -1275,6 +1312,10 @@ impl Checker {
             },
             FlatTypeNode::Unit => Type::Unit,
             FlatTypeNode::Effects(labels) => Type::Effects(labels.clone()),
+            FlatTypeNode::OpenEffects { labels, tail } => Type::OpenEffects {
+                labels: labels.clone(),
+                tail: Box::new(self.inflate_interface_type(arena, *tail, rigids)),
+            },
             FlatTypeNode::Opaque(name) => Type::Opaque(name.clone()),
             FlatTypeNode::Top => Type::Top,
             FlatTypeNode::Bottom => Type::Bottom,
@@ -2944,6 +2985,10 @@ impl Checker {
             ),
             Type::Array(element) => Type::Array(Box::new(self.freshen(*element, level, fresh))),
             Type::Region(element) => Type::Region(Box::new(self.freshen(*element, level, fresh))),
+            Type::OpenEffects { labels, tail } => Type::OpenEffects {
+                labels,
+                tail: Box::new(self.freshen(*tail, level, fresh)),
+            },
             Type::Variant { cases, open } => Type::Variant {
                 cases: cases
                     .into_iter()
@@ -2999,6 +3044,7 @@ impl Checker {
                 .max()
                 .unwrap_or(0),
             Type::Array(element) | Type::Region(element) => self.level_of(element),
+            Type::OpenEffects { tail, .. } => self.level_of(tail),
             Type::Union(members) => members
                 .iter()
                 .map(|member| self.level_of(member))
@@ -3089,6 +3135,10 @@ impl Checker {
             Type::Region(element) => {
                 Type::Region(Box::new(self.extrude(*element, polarity, level, copies)))
             }
+            Type::OpenEffects { labels, tail } => Type::OpenEffects {
+                labels,
+                tail: Box::new(self.extrude(*tail, polarity, level, copies)),
+            },
             Type::Variant { cases, open } => Type::Variant {
                 cases: cases
                     .into_iter()
@@ -3347,6 +3397,66 @@ impl Checker {
                 left.is_subset(&right)
             }
             (
+                ConstraintTypeNode::Effects(left),
+                ConstraintTypeNode::OpenEffects {
+                    labels: right_labels,
+                    tail: right_tail,
+                },
+            ) => {
+                let missing = left
+                    .difference(&right_labels)
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                if !missing.is_empty() {
+                    let missing = self.constraint_type(&Type::Effects(missing));
+                    self.constrain_ids(missing, right_tail, span, seen)?;
+                }
+                true
+            }
+            (
+                ConstraintTypeNode::OpenEffects {
+                    labels: left_labels,
+                    tail: left_tail,
+                },
+                ConstraintTypeNode::Effects(right),
+            ) => {
+                if !left_labels.is_subset(&right) {
+                    false
+                } else {
+                    let right = self.constraint_type(&Type::Effects(right));
+                    self.constrain_ids(left_tail, right, span, seen)?;
+                    true
+                }
+            }
+            (
+                ConstraintTypeNode::OpenEffects {
+                    labels: left_labels,
+                    tail: left_tail,
+                },
+                ConstraintTypeNode::OpenEffects {
+                    labels: right_labels,
+                    tail: right_tail,
+                },
+            ) => {
+                let missing = left_labels
+                    .difference(&right_labels)
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                if !missing.is_empty() {
+                    let missing = self.constraint_type(&Type::Effects(missing));
+                    self.constrain_ids(missing, right_tail, span, seen)?;
+                }
+                let same_tail = self.constraint_types.borrow().same(left_tail, right_tail);
+                if !same_tail {
+                    let right_row = self.constraint_type(&Type::OpenEffects {
+                        labels: right_labels,
+                        tail: Box::new(self.expand_constraint(right_tail)),
+                    });
+                    self.constrain_ids(left_tail, right_row, span, seen)?;
+                }
+                true
+            }
+            (
                 ConstraintTypeNode::Variable(left_variable),
                 ConstraintTypeNode::Variable(right_variable),
             ) => {
@@ -3528,6 +3638,7 @@ impl Checker {
                     }
                 }
                 Type::Array(element) | Type::Region(element) => pending.push((element, bound)),
+                Type::OpenEffects { tail, .. } => pending.push((tail, bound)),
                 Type::Union(members) => {
                     for member in members {
                         pending.push((member, bound.clone()));
@@ -3679,6 +3790,12 @@ impl Checker {
             Type::Region(element) => Type::Region(Box::new(
                 self.residual_signature_type(*element, seen, resolved, unresolved, recursive),
             )),
+            Type::OpenEffects { labels, tail } => Type::OpenEffects {
+                labels,
+                tail: Box::new(
+                    self.residual_signature_type(*tail, seen, resolved, unresolved, recursive),
+                ),
+            },
             Type::Variant { cases, open } => Type::Variant {
                 cases: cases
                     .into_iter()
@@ -3792,6 +3909,10 @@ impl Checker {
             Type::Region(element) => {
                 Type::Region(Box::new(self.settle_seen(*element, positive, seen)))
             }
+            Type::OpenEffects { labels, tail } => Type::OpenEffects {
+                labels,
+                tail: Box::new(self.settle_seen(*tail, positive, seen)),
+            },
             Type::Variant { cases, open } => Type::Variant {
                 cases: cases
                     .into_iter()
@@ -4379,13 +4500,25 @@ impl Checker {
                 domain,
                 codomain,
                 effects,
-            } => Some(Type::Function {
-                parameter: Box::new(self.bridge(domain)?),
-                effects: Box::new(Type::Effects(
-                    effects.iter().filter_map(effect_label).collect(),
-                )),
-                result: Box::new(self.bridge(codomain)?),
-            }),
+                effect_tail,
+            } => {
+                let labels = effects
+                    .iter()
+                    .filter_map(effect_label)
+                    .collect::<BTreeSet<_>>();
+                let effects = match effect_tail {
+                    Some(tail) => Type::OpenEffects {
+                        labels,
+                        tail: Box::new(Type::Rigid(*tail)),
+                    },
+                    None => Type::Effects(labels),
+                };
+                Some(Type::Function {
+                    parameter: Box::new(self.bridge(domain)?),
+                    effects: Box::new(effects),
+                    result: Box::new(self.bridge(codomain)?),
+                })
+            }
             Value::Forall { variable, body } => Some(Type::Forall {
                 variables: vec![*variable],
                 body: Box::new(self.bridge(body)?),
@@ -4483,6 +4616,11 @@ impl Checker {
                 "{{ {} }}",
                 labels.into_iter().collect::<Vec<_>>().join(", ")
             ),
+            Type::OpenEffects { labels, tail } => {
+                let mut parts = labels.into_iter().collect::<Vec<_>>();
+                parts.push(format!("..{}", self.show(&tail)));
+                format!("{{ {} }}", parts.join(", "))
+            }
             Type::Union(members) => show_union(
                 union_members(&members)
                     .into_iter()
@@ -5268,6 +5406,10 @@ fn substitute_rigid(type_: Type, replacements: &HashMap<VariableId, Type>) -> Ty
         ),
         Type::Array(element) => Type::Array(Box::new(substitute_rigid(*element, replacements))),
         Type::Region(element) => Type::Region(Box::new(substitute_rigid(*element, replacements))),
+        Type::OpenEffects { labels, tail } => Type::OpenEffects {
+            labels,
+            tail: Box::new(substitute_rigid(*tail, replacements)),
+        },
         Type::Variant { cases, open } => Type::Variant {
             cases: cases
                 .into_iter()
@@ -5732,6 +5874,9 @@ fn add_function_effect(type_: &mut Type, label: String) {
         Type::Effects(labels) => {
             labels.insert(label);
         }
+        Type::OpenEffects { labels, .. } => {
+            labels.insert(label);
+        }
         Type::Bottom => {
             **effects = Type::Effects(BTreeSet::from([label]));
         }
@@ -6027,18 +6172,28 @@ fn reify_type_with_holes(type_: &Type, next_hole: &mut u32) -> Option<Value> {
             parameter,
             effects,
             result,
-        } => Some(Value::Arrow {
-            domain: Box::new(reify_type_with_holes(parameter, next_hole)?),
-            codomain: Box::new(reify_type_with_holes(result, next_hole)?),
-            effects: match effects.as_ref() {
-                Type::Effects(labels) => labels
+        } => {
+            let (labels, effect_tail) = match effects.as_ref() {
+                Type::Effects(labels) => (labels.clone(), None),
+                Type::OpenEffects { labels, tail } => {
+                    let Value::TypeVariable(tail) = reify_type_with_holes(tail, next_hole)? else {
+                        return None;
+                    };
+                    (labels.clone(), Some(tail))
+                }
+                Type::Bottom => (BTreeSet::new(), None),
+                _ => return None,
+            };
+            Some(Value::Arrow {
+                domain: Box::new(reify_type_with_holes(parameter, next_hole)?),
+                codomain: Box::new(reify_type_with_holes(result, next_hole)?),
+                effects: labels
                     .iter()
                     .map(|label| crate::primitives::effect_value(label))
                     .collect::<Option<Vec<_>>>()?,
-                Type::Bottom => Vec::new(),
-                _ => return None,
-            },
-        }),
+                effect_tail,
+            })
+        }
         Type::Union(members) => Some(Value::Union(
             members
                 .iter()
@@ -6140,6 +6295,16 @@ fn same_type_with_rigids(
             },
         ) => ld == rd && ll == rl && lh == rh,
         (Type::Effects(left), Type::Effects(right)) => left == right,
+        (
+            Type::OpenEffects {
+                labels: left_labels,
+                tail: left_tail,
+            },
+            Type::OpenEffects {
+                labels: right_labels,
+                tail: right_tail,
+            },
+        ) => left_labels == right_labels && same_type_with_rigids(left_tail, right_tail, rigids),
         (
             Type::Function {
                 parameter: left_parameter,
@@ -6586,6 +6751,18 @@ fn show_effects(effects: &Type) -> String {
             " ~ {{ {} }}",
             labels.iter().cloned().collect::<Vec<_>>().join(", ")
         ),
+        Type::OpenEffects { labels, tail } => {
+            let mut parts = labels.iter().cloned().collect::<Vec<_>>();
+            parts.push(format!(
+                "..{}",
+                match tail.as_ref() {
+                    Type::Rigid(id) => format!("e{id}"),
+                    Type::Variable(id) => format!("e{id}"),
+                    _ => "?".to_owned(),
+                }
+            ));
+            format!(" ~ {{ {} }}", parts.join(", "))
+        }
         _ => " ~ {?}".to_owned(),
     }
 }
@@ -6623,6 +6800,7 @@ fn closed_checked_type(type_: &Type, bound: &mut HashSet<VariableId>) -> bool {
             .iter()
             .all(|(_, field)| closed_checked_type(field, bound)),
         Type::Array(element) | Type::Region(element) => closed_checked_type(element, bound),
+        Type::OpenEffects { tail, .. } => closed_checked_type(tail, bound),
         Type::Union(members) => members
             .iter()
             .all(|member| closed_checked_type(member, bound)),
@@ -6707,6 +6885,10 @@ fn flatten_interface_type(
         },
         Type::Unit => FlatTypeNode::Unit,
         Type::Effects(labels) => FlatTypeNode::Effects(labels.clone()),
+        Type::OpenEffects { labels, tail } => FlatTypeNode::OpenEffects {
+            labels: labels.clone(),
+            tail: flatten_interface_type(tail, bound, nodes)?,
+        },
         Type::Opaque(name) => FlatTypeNode::Opaque(name.clone()),
         Type::Top => FlatTypeNode::Top,
         Type::Bottom => FlatTypeNode::Bottom,

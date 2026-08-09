@@ -77,6 +77,16 @@ export function show(type: SimpleType): string {
    * function would carry a row variable that says nothing.
    */
   const row = (effects: SimpleType, polarity: boolean): string => {
+    if (effects.tag === "open-effects") {
+      const parts = [...effects.labels].map(stripId).sort();
+      const tail = effects.tail.tag === "var"
+        ? rowNameFor(effects.tail)
+        : effects.tail.tag === "rigid"
+        ? quantifiedNames.get(effects.tail.id) ?? `e${effects.tail.id}`
+        : go(effects.tail, polarity);
+      parts.push(`..${tail}`);
+      return ` ~ ${braces(parts)}`;
+    }
     const parts = rowParts(effects, polarity, occurrences, rowNameFor);
     return parts.length === 0 ? "" : ` ~ ${braces(parts)}`;
   };
@@ -184,6 +194,12 @@ export function show(type: SimpleType): string {
       case "effects":
         return braces([...current.labels].map(stripId).sort());
 
+      case "open-effects": {
+        const parts = [...current.labels].map(stripId).sort();
+        parts.push(`..${go(current.tail, polarity)}`);
+        return braces(parts);
+      }
+
       case "union":
         return showUnion(current.members.map((member) => go(member, polarity)));
 
@@ -261,6 +277,9 @@ function collect(type: SimpleType): Occurrences {
       case "array":
       case "region":
         walk(current.element, polarity);
+        return;
+      case "open-effects":
+        walk(current.tail, polarity);
         return;
       default:
         return;
@@ -358,6 +377,11 @@ function rowParts(
   const walk = (current: SimpleType, seen: Set<number>): void => {
     if (current.tag === "effects") {
       for (const label of current.labels) labels.add(stripId(label));
+      return;
+    }
+    if (current.tag === "open-effects") {
+      for (const label of current.labels) labels.add(stripId(label));
+      walk(current.tail, seen);
       return;
     }
     if (current.tag !== "var" || seen.has(current.id)) return;

@@ -16,11 +16,13 @@ import {
   boundAbove,
   boundBelow,
   checkpointInferenceIdentities,
+  effects,
   evidenceOf,
   freshRigid,
   freshVar,
   type Level,
   levelOf,
+  openEffects,
   restoreInferenceIdentities,
   type Scheme,
   type SimpleType,
@@ -73,6 +75,8 @@ function describe(type: SimpleType): string {
     }
     case "effects":
       return `<${[...type.labels].join(", ")}>`;
+    case "open-effects":
+      return `<${[...type.labels].join(", ")}, ..>`;
     case "opaque":
       // `F32x4` is a name the reader can write; a seal's is not — it bridges
       // to `${name}#${carrier}` (see `bridge.ts`), which is a compiler-local
@@ -233,14 +237,8 @@ function constrainWithState(
     return;
   }
 
-  if (lhs.tag === "effects" && rhs.tag === "effects") {
-    // Fewer effects is a subtype, by the same reasoning as variants. This one
-    // line is the entirety of effect-row inference.
-    for (const label of lhs.labels) {
-      if (!rhs.labels.has(label)) {
-        throw new TypeError_(`effect \`${label}\` is not handled`);
-      }
-    }
+  if (isEffectRow(lhs) && isEffectRow(rhs)) {
+    constrainEffectRows(lhs, rhs, state);
     return;
   }
 
@@ -321,6 +319,52 @@ function constrainWithState(
   }
 
   mismatch(lhs, rhs);
+}
+
+type EffectRowType = Extract<
+  SimpleType,
+  { readonly tag: "effects" | "open-effects" }
+>;
+
+function isEffectRow(type: SimpleType): type is EffectRowType {
+  return type.tag === "effects" || type.tag === "open-effects";
+}
+
+function sameRowTail(left: SimpleType, right: SimpleType): boolean {
+  if (left === right) return true;
+  if (left.tag === "rigid" && right.tag === "rigid") {
+    return left.id === right.id;
+  }
+  if (left.tag === "var" && right.tag === "var") return left.id === right.id;
+  return false;
+}
+
+function constrainEffectRows(
+  lhs: EffectRowType,
+  rhs: EffectRowType,
+  state: ConstraintState,
+): void {
+  const missing: string[] = [];
+  for (const label of lhs.labels) {
+    if (!rhs.labels.has(label)) missing.push(label);
+  }
+
+  if (missing.length > 0) {
+    if (rhs.tag !== "open-effects") {
+      throw new TypeError_(`effect \`${missing[0]}\` is not handled`);
+    }
+    constrainWithState(effects(missing), rhs.tail, state);
+  }
+
+  if (lhs.tag !== "open-effects") return;
+  if (rhs.tag === "open-effects" && sameRowTail(lhs.tail, rhs.tail)) return;
+  constrainWithState(
+    lhs.tail,
+    rhs.tag === "open-effects"
+      ? openEffects(rhs.labels, rhs.tail)
+      : effects(rhs.labels),
+    state,
+  );
 }
 
 function insertBound(
@@ -432,6 +476,12 @@ function extrude(
         tag: "region",
         element: extrude(type.element, polarity, level, seen, state),
       };
+    case "open-effects":
+      return {
+        tag: "open-effects",
+        labels: type.labels,
+        tail: extrude(type.tail, polarity, level, seen, state),
+      };
     default:
       return type;
   }
@@ -453,6 +503,8 @@ function levelBelow(type: SimpleType, level: Level): boolean {
     case "array":
     case "region":
       return levelBelow(type.element, level);
+    case "open-effects":
+      return levelBelow(type.tail, level);
     default:
       return true;
   }
@@ -632,6 +684,21 @@ function freshenAbove(
       freshenedTypes.set(type, freshened);
       return freshened;
     }
+    case "open-effects": {
+      const freshened: SimpleType = {
+        tag: "open-effects",
+        labels: type.labels,
+        tail: freshenAbove(
+          type.tail,
+          limit,
+          level,
+          freshenedTypes,
+          instances,
+        ),
+      };
+      freshenedTypes.set(type, freshened);
+      return freshened;
+    }
     default:
       return type;
   }
@@ -704,6 +771,12 @@ function substituteRigid(
       return {
         tag: "region",
         element: substituteRigid(type.element, replacements),
+      };
+    case "open-effects":
+      return {
+        tag: "open-effects",
+        labels: type.labels,
+        tail: substituteRigid(type.tail, replacements),
       };
     case "variant":
       return {

@@ -29,6 +29,7 @@ import {
   fun,
   INT,
   intLiteral,
+  openEffects,
   record,
   type SimpleType,
   TEXT,
@@ -105,12 +106,13 @@ function bridgeValue(
         if (effect.host) hostLabels.add(effectLabel(effect));
         labels.push(effectLabel(effect));
       }
-      return fun(
-        domain,
-        codomain,
-        effectRow(labels),
-        value.deferred === true,
-      );
+      let row: SimpleType = effectRow(labels);
+      if (value.effectTail !== undefined) {
+        const tail = variables.get(value.effectTail);
+        if (tail === undefined) return null;
+        row = openEffects(labels, tail);
+      }
+      return fun(domain, codomain, row, value.deferred === true);
     }
 
     case "union": {
@@ -381,6 +383,9 @@ function reifiedEffectLabels(
   seen: Set<number>,
 ): string[] {
   if (type.tag === "effects") return [...type.labels];
+  if (type.tag === "open-effects") {
+    return [...type.labels, ...reifiedEffectLabels(type.tail, seen)];
+  }
   if (type.tag !== "var" || seen.has(type.id)) return [];
   seen.add(type.id);
   return type.lower.flatMap((bound) => reifiedEffectLabels(bound, seen));

@@ -33,14 +33,12 @@ interface SourceInsertion {
 
 interface Delimiters {
   brackets: number;
-  readonly elementHeads: ("open" | "close")[];
 }
 
 interface LayoutFrame {
   readonly indent: number;
   readonly closeIndent: number;
   readonly brackets: number;
-  readonly elementHeads: number;
 }
 
 export async function elaborateLayout(source: string): Promise<LayoutResult> {
@@ -87,18 +85,10 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
     indent: 0,
     closeIndent: 0,
     brackets: 0,
-    elementHeads: 0,
   }];
-  const delimiters: Delimiters = { brackets: 0, elementHeads: [] };
-  const elementSuiteIntroducers = new Set<number>();
+  const delimiters: Delimiters = { brackets: 0 };
   let previous = tokens[0];
-  updateDelimiters(
-    delimiters,
-    previous,
-    undefined,
-    elementSuiteIntroducers,
-    true,
-  );
+  updateDelimiters(delimiters, previous);
 
   for (let tokenIndex = 1; tokenIndex < tokens.length; tokenIndex += 1) {
     const token = tokens[tokenIndex];
@@ -107,13 +97,11 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
     }
     const gap = source.slice(previous.span.end, token.span.start);
     const newline = lastNewlineEnd(gap);
-    const suiteIntroducer = opensSuite(previous, elementSuiteIntroducers);
+    const suiteIntroducer = opensSuite(previous);
     const frame = frames[frames.length - 1];
     const insideActiveSuite = frames.length > 1 &&
-      delimiters.brackets === frame.brackets &&
-      delimiters.elementHeads.length === frame.elementHeads;
-    const layoutActive = insideActiveSuite ||
-      (delimiters.brackets === 0 && delimiters.elementHeads.length === 0) ||
+      delimiters.brackets === frame.brackets;
+    const layoutActive = insideActiveSuite || delimiters.brackets === 0 ||
       suiteIntroducer;
     if (newline >= 0 && layoutActive) {
       const lineStart = previous.span.end + newline;
@@ -121,19 +109,12 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
       const indent = indentationWidth(indentText);
       const current = frame.indent;
       const closesDelimiter = token.type === "literal" &&
-          (token.literal === ")" || token.literal === "]" ||
-            token.literal === "}") ||
-        token.type === "named" && token.kind === "ANGLE_CLOSE";
+        (token.literal === ")" || token.literal === "]" ||
+          token.literal === "}");
       let markers = layoutNewline;
       if (indent > current) {
         if (!suiteIntroducer) {
-          updateDelimiters(
-            delimiters,
-            token,
-            previous,
-            elementSuiteIntroducers,
-            true,
-          );
+          updateDelimiters(delimiters, token);
           previous = token;
           continue;
         }
@@ -141,7 +122,6 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
           indent,
           closeIndent: sourceIndentWidth(source, previous.span.start),
           brackets: delimiters.brackets,
-          elementHeads: delimiters.elementHeads.length,
         });
         markers += layoutIndent;
       } else if (indent < current) {
@@ -177,13 +157,7 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
       }
       insertions.push({ offset: token.span.start, text: markers });
     }
-    updateDelimiters(
-      delimiters,
-      token,
-      previous,
-      elementSuiteIntroducers,
-      newline >= 0,
-    );
+    updateDelimiters(delimiters, token);
     previous = token;
   }
 
@@ -203,7 +177,7 @@ function closesLayoutExpression(token: Token): boolean {
       token.literal === "," || token.literal === "else";
   }
   if (token.type !== "named") return false;
-  return token.kind === "ELSE_IF" || token.kind === "ANGLE_CLOSE";
+  return token.kind === "ELSE_IF";
 }
 
 async function layoutLexer() {
@@ -314,76 +288,31 @@ function sourceIndentWidth(source: string, offset: number): number {
   return indentationWidth(indentation);
 }
 
-function opensSuite(
-  token: Token,
-  elementSuiteIntroducers: ReadonlySet<number>,
-): boolean {
+function opensSuite(token: Token): boolean {
   if (token.type === "literal") {
     return token.literal === "=" || token.literal === "=>" ||
       token.literal === "<-" ||
       token.literal === "of" || token.literal === ":";
   }
   if (token.type !== "named") return false;
-  if (
-    token.kind === "ANGLE_RIGHT" &&
-    elementSuiteIntroducers.has(token.span.start)
-  ) return true;
   return token.kind === "OPERATOR" && token.text === ":";
 }
 
 function updateDelimiters(
   delimiters: Delimiters,
   token: Token,
-  previous: Token | undefined,
-  elementSuiteIntroducers: Set<number>,
-  startsLine: boolean,
 ): void {
-  if (token.type === "literal") {
-    if (
-      token.literal === "(" || token.literal === "[" || token.literal === "{"
-    ) {
-      delimiters.brackets += 1;
-      return;
-    }
-    if (
-      token.literal === ")" || token.literal === "]" || token.literal === "}"
-    ) {
-      delimiters.brackets -= 1;
-      if (delimiters.brackets < 0) delimiters.brackets = 0;
-    }
-    return;
-  }
-  if (token.type !== "named") return;
-  if (token.kind === "ANGLE_LEFT" && beginsElement(previous, startsLine)) {
-    delimiters.elementHeads.push("open");
-    return;
-  }
-  if (token.kind === "ANGLE_CLOSE") {
-    delimiters.elementHeads.push("close");
+  if (token.type !== "literal") return;
+  if (
+    token.literal === "(" || token.literal === "[" || token.literal === "{"
+  ) {
+    delimiters.brackets += 1;
     return;
   }
   if (
-    token.kind === "ANGLE_RIGHT" || token.kind === "ANGLE_SELF_CLOSE"
+    token.literal === ")" || token.literal === "]" || token.literal === "}"
   ) {
-    const head = delimiters.elementHeads.pop();
-    if (head === "open" && token.kind === "ANGLE_RIGHT") {
-      elementSuiteIntroducers.add(token.span.start);
-    }
+    delimiters.brackets -= 1;
+    if (delimiters.brackets < 0) delimiters.brackets = 0;
   }
-}
-
-function beginsElement(
-  previous: Token | undefined,
-  startsLine: boolean,
-): boolean {
-  if (previous === undefined || startsLine) return true;
-  if (previous.type === "literal") {
-    return previous.literal === "=" || previous.literal === "=>" ||
-      previous.literal === "<-" || previous.literal === "(" ||
-      previous.literal === "[" || previous.literal === "{" ||
-      previous.literal === ",";
-  }
-  if (previous.type !== "named") return false;
-  return previous.kind === "OPERATOR" || previous.kind === "ANGLE_RIGHT" ||
-    previous.kind === "ANGLE_SELF_CLOSE";
 }

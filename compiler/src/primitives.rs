@@ -261,6 +261,7 @@ pub fn run_primitive(
             domain: Box::new(arguments[0].clone()),
             codomain: Box::new(arguments[1].clone()),
             effects: Vec::new(),
+            effect_tail: None,
         }),
         "@type.performs" => performs(&arguments[0], &arguments[1], span),
         "@type.of" => Ok(type_of(&arguments[0])),
@@ -1467,14 +1468,21 @@ fn reflect(value: &Value) -> Value {
             domain,
             codomain,
             effects,
-        } => tagged(
-            "Arrow",
-            Value::Shape(OrderedFields::from([
-                ("domain".to_owned(), (**domain).clone()),
-                ("codomain".to_owned(), (**codomain).clone()),
-                ("effects".to_owned(), Value::Array(effects.clone())),
-            ])),
-        ),
+            effect_tail,
+        } => {
+            let mut reflected_effects = effects.clone();
+            if let Some(tail) = effect_tail {
+                reflected_effects.push(Value::TypeVariable(*tail));
+            }
+            tagged(
+                "Arrow",
+                Value::Shape(OrderedFields::from([
+                    ("domain".to_owned(), (**domain).clone()),
+                    ("codomain".to_owned(), (**codomain).clone()),
+                    ("effects".to_owned(), Value::Array(reflected_effects)),
+                ])),
+            )
+        }
         Value::Sealed { name, inner } => tagged(
             "Sealed",
             Value::Shape(OrderedFields::from([
@@ -1487,13 +1495,36 @@ fn reflect(value: &Value) -> Value {
 }
 
 fn performs(arrow: &Value, effects: &Value, span: Span) -> Result<Value, Diagnostic> {
-    let Value::Array(effects) = effects else {
+    let Value::Array(members) = effects else {
         return Err(type_error("~", "an effect row", effects, span));
     };
     if !matches!(arrow, Value::Arrow { .. }) {
         return Err(type_error("~", "a function type", arrow, span));
     }
-    if let Some(attached) = attach_effects(arrow, effects) {
+
+    let mut row = Vec::new();
+    let mut tail = None;
+    for (index, effect) in members.iter().enumerate() {
+        if let Value::TypeVariable(id) = effect {
+            if tail.is_some() || index + 1 != members.len() {
+                return Err(Diagnostic::new(
+                    "BLOT_TYPE",
+                    "An effect-row tail is written once and must be the final row member.",
+                    span,
+                ));
+            }
+            tail = Some(*id);
+            continue;
+        }
+        if !matches!(effect, Value::Effect { .. }) {
+            return Err(type_error("~", "effects", effect, span));
+        }
+        if !row.iter().any(|seen| crate::value::equal(seen, effect)) {
+            row.push(effect.clone());
+        }
+    }
+
+    if let Some(attached) = attach_effects(arrow, &row, tail) {
         return Ok(attached);
     }
     Err(Diagnostic::new(
@@ -1503,29 +1534,32 @@ fn performs(arrow: &Value, effects: &Value, span: Span) -> Result<Value, Diagnos
     ))
 }
 
-fn attach_effects(arrow: &Value, effects: &[Value]) -> Option<Value> {
+fn attach_effects(arrow: &Value, effects: &[Value], tail: Option<u32>) -> Option<Value> {
     let Value::Arrow {
         domain,
         codomain,
         effects: existing,
+        effect_tail: existing_tail,
     } = arrow
     else {
         return None;
     };
-    if let Some(codomain) = attach_effects(codomain, effects) {
+    if let Some(codomain) = attach_effects(codomain, effects, tail) {
         return Some(Value::Arrow {
             domain: domain.clone(),
             codomain: Box::new(codomain),
             effects: existing.clone(),
+            effect_tail: *existing_tail,
         });
     }
-    if !existing.is_empty() {
+    if !existing.is_empty() || existing_tail.is_some() {
         return None;
     }
     Some(Value::Arrow {
         domain: domain.clone(),
         codomain: codomain.clone(),
         effects: effects.to_vec(),
+        effect_tail: tail,
     })
 }
 
