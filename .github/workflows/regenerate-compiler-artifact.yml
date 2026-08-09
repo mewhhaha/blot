@@ -21,6 +21,8 @@ jobs:
         with:
           deno-version: v2.x
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
       - name: Build compiler artifact
         run: deno task build:compiler
       - name: Commit artifact and remove workflow
