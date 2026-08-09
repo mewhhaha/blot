@@ -34,6 +34,61 @@ jobs:
           script.write_text(text)
           PY
           python3 scripts/apply_quiet_language_semantics.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("examples/looped.blot")
+          text = path.read_text()
+          old = '''// A refutable binder is the `case` it looks like, with the other arm handing
+          // the accumulator back — so filtering compiles too.
+          let kept = 0
+          for #Some n in Iter.items [Some 3, None, Some 4]:
+            kept := kept + n
+          '''
+          new = '''// Filtering is explicit: the loop binds every element, and `case` decides
+          // which values contribute to the accumulator.
+          let kept = 0
+          for candidate in Iter.items [Some 3, None, Some 4]:
+            let contribution = case candidate of
+              #Some n => n
+              #None => 0
+            kept := kept + contribution
+          '''
+          if old not in text:
+              raise SystemExit("looped filter example anchor missing")
+          path.write_text(text.replace(old, new, 1))
+
+          path = Path("examples/loops.blot")
+          text = path.read_text()
+          old = '''  // --- a refutable binder filters ---------------------------------------------
+            //
+            // `x in source` binds every element. A binder that *can* fail — a constructor,
+            // a literal — becomes the `case` it looks like, with the other arm handing the
+            // accumulator back untouched. An element that does not match skips the
+            // iteration rather than failing it, which is what makes this a filter and
+            // costs exactly one arm.
+
+          let found = 0
+          for #Some n in Iter.items [Some 1, None, Some 20, None, Some 300]:
+            found := found + n
+          '''
+          new = '''  // --- filtering is explicit ---------------------------------------------------
+            //
+            // `x in source` binds every element. A refutable pattern belongs in an
+            // explicit `case` or `if let`, so adding another constructor cannot silently
+            // make a loop drop values.
+
+          let found = 0
+          for candidate in Iter.items [Some 1, None, Some 20, None, Some 300]:
+            let contribution = case candidate of
+              #Some n => n
+              #None => 0
+            found := found + contribution
+          '''
+          if old not in text:
+              raise SystemExit("loops filter example anchor missing")
+          path.write_text(text.replace(old, new, 1))
+          PY
       - name: Remove staging helpers
         run: |
           rm scripts/apply_quiet_language_semantics.py
