@@ -176,9 +176,10 @@ construction with one checked element representation. A dynamic conditional
 residualizes each branch in order, including `else if` chains, and injects a
 singleton constructor into the already inferred sum when necessary.
 
-An element effect value is a nullary closure during staging. Constructing it is
-pure and retains its lexical environment. At an effect-binding boundary, a
-checked `Unit -> A ~ E` value is applied to `()` exactly once; its `E` joins the
+A nullary effect value is an ordinary closure during staging. Constructing it is
+pure and retains its lexical environment; component-shaped APIs build child
+arrays from these closures explicitly. At an effect-binding boundary, a checked
+`Unit -> A ~ E` value is applied to `()` exactly once; its `E` joins the
 surrounding row and the binding receives `A`. A residual effect value is
 therefore handled by ordinary closure conversion and direct calls rather than a
 second runtime representation.
