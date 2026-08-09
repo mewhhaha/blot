@@ -66,6 +66,15 @@ jobs:
               1,
           )
           type_rep.write_text(text)
+
+          hir = Path("compiler/src/hir.rs")
+          text = hir.read_text()
+          text = text.replace(
+              "            | Type::Effects(_)\n            | Type::Opaque(_)",
+              "            | Type::Effects(_)\n            | Type::OpenEffects { .. }\n            | Type::Opaque(_)",
+              1,
+          )
+          hir.write_text(text)
           PY
       - run: deno fmt
       - run: cargo fmt --manifest-path compiler/Cargo.toml
