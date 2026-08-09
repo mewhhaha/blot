@@ -6,7 +6,8 @@
 
 open @import "blot:prelude" ()
 
-let folded = comptime (20 * 2 + 1)
+let folded = compdo:
+  return 20 * 2 + 1
 
 const Header =
   struct {
@@ -37,7 +38,7 @@ const derive_show = fn names => fn value => fold (
         @text.concat state (@text.concat name (@text.concat "=" (@text.concat rendered " ")))
   )
 
-const show_header = comptime derive_show Header.fields
+const show_header = derive_show Header.fields
 
 const derive_sum = fn names => fn value =>
   return fold (
@@ -46,7 +47,7 @@ const derive_sum = fn names => fn value =>
     fn (state, name) => @int.add state (@shape.get value name)
   )
 
-const sum_header = comptime derive_sum Header.fields
+const sum_header = derive_sum Header.fields
 
 let sample = { .kind = 5; .urgent = 1; .length = 120; }
 
