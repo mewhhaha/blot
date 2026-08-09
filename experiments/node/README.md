@@ -44,9 +44,11 @@ npm run node:compile -- examples/minimal.blot --out /tmp/minimal.wasm
 ```
 
 The Node ESM loader maps the Deno/JSR specifiers used by the existing source to
-the pinned submodules. A small compatibility shim supplies only the Deno file
-APIs needed by Blot's loader and parser. Baba is mapped to its `CpuFrontend`
-directly, so this path never imports or initializes WebGPU.
+the pinned submodules. A small compatibility shim supplies the file APIs Blot
+expects from Deno, supports Baba's `fetch(file:)` parser loading, and fills in
+the typed-array base64 helpers used by gpupaper's checked-in Rust/Wasm emitter
+on Node 22. Baba is mapped to its `CpuFrontend` directly, so this path never
+imports or initializes WebGPU.
 
 ## Current boundary
 
@@ -55,6 +57,7 @@ currently accepts the same restricted shape that exporter already accepts:
 one default runtime export. It does not broaden the language or change any
 compiler, ABI, inference, ownership, or frontend contract.
 
-Package/capsule paths still contain Deno-specific APIs that this first shim does
-not emulate. Ordinary source files, relative imports/includes, and
-`blot:prelude` use the shimmed file reads.
+The smoke test covers an ordinary source module, `blot:prelude`, Baba's CPU
+frontend, TypeScript checking/staging, Runtime HIR export, and gpupaper's
+checked-in Rust/Wasm emitter. Package/capsule behavior and the wider corpus are
+not part of this experiment's current Node smoke test.
