@@ -1,0 +1,36 @@
+name: Regenerate compiler artifact
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  regenerate:
+    if: >-
+      ${{ github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'codex/compdo-effect-rows-no-elements' &&
+      github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: extractions/setup-just@v3
+      - run: deno task build:compiler
+      - run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/regenerate-compiler-artifact.yml
+          git add generated/compiler/compiler.wasm generated/compiler/prelude.snapshot
+          git commit -m "regenerate compiler artifact"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
