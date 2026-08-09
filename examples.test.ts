@@ -272,8 +272,12 @@ const REJECTIONS: Record<
 
 async function blotFiles(directory: string): Promise<string[]> {
   const found: string[] = [];
-  for await (const entry of Deno.readDir(directory)) {
-    if (entry.isFile && entry.name.endsWith(".blot")) found.push(entry.name);
+  try {
+    for await (const entry of Deno.readDir(directory)) {
+      if (entry.isFile && entry.name.endsWith(".blot")) found.push(entry.name);
+    }
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
   }
   return found.sort();
 }
