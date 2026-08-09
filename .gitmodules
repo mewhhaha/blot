@@ -1,0 +1,6 @@
+[submodule "vendor/baba"]
+	path = vendor/baba
+	url = https://github.com/mewhhaha/baba.git
+[submodule "vendor/gpupaper"]
+	path = vendor/gpupaper
+	url = https://github.com/mewhhaha/gpupaper.git

@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "node:compile": "node --experimental-transform-types --disable-warning=ExperimentalWarning --experimental-loader=./experiments/node/loader.mjs ./experiments/node/compile.ts"
+  }
+}
