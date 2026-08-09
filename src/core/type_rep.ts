@@ -37,6 +37,11 @@ export type TyRepNode =
     readonly open: boolean;
   }
   | { readonly tag: "effects"; readonly labels: ReadonlySet<string> }
+  | {
+    readonly tag: "open-effects";
+    readonly labels: ReadonlySet<string>;
+    readonly tail: TyRepId;
+  }
   | { readonly tag: "union"; readonly members: readonly TyRepId[] }
   | { readonly tag: "opaque"; readonly name: string }
   | { readonly tag: "top" }
@@ -123,6 +128,12 @@ export class TyRepBuilder {
         };
       case "effects":
         return { tag: "effects", labels: new Set(type.labels) };
+      case "open-effects":
+        return {
+          tag: "open-effects",
+          labels: new Set(type.labels),
+          tail: this.reference(type.tail),
+        };
       case "union":
         return {
           tag: "union",

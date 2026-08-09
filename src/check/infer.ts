@@ -754,7 +754,7 @@ function requireComptimeBinding(
   pattern: Pattern,
   expr: Expr,
   context: Context,
-): ReturnType<typeof run> {
+): ReturnType<typeof run> | null {
   try {
     return run(
       bind(
