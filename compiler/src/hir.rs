@@ -802,10 +802,13 @@ impl ResidualTrace {
                 let offset = self.lower_as(Some(&arguments[1]), "signed-integer-64", span)?;
                 self.split_region(store, start, end, offset, span)?
             }
-            "@region.join" if arguments.len() == 2 => {
-                let (left_store, left_start, _) = self.lower_region(&arguments[0], span)?;
-                let (_, _, right_end) = self.lower_region(&arguments[1], span)?;
-                // Ordered sibling lineage was proved before destructive HIR is emitted.
+            "@region.join" if arguments.len() == 3 => {
+                // The witness is erased at runtime: ownership proved the
+                // pairing before destructive HIR is emitted, so the runtime
+                // join is metadata reassembly and the witness lowers to unit.
+                self.lower_value(&arguments[0], span)?;
+                let (left_store, left_start, _) = self.lower_region(&arguments[1], span)?;
+                let (_, _, right_end) = self.lower_region(&arguments[2], span)?;
                 self.make_region(left_store, left_start, right_end, span)?
             }
             "@region.freeze" if arguments.len() == 1 => {
@@ -2995,6 +2998,9 @@ impl ResidualTrace {
                 );
                 Ok(self.array_operation("store.empty", store_type, Vec::new(), span, None))
             }
+            // A witness is element-free proof; at runtime it is erased to
+            // unit, because ownership already discharged the pairing.
+            Value::RegionRejoin { .. } => Ok(self.constant(WireConstant::Unit, 0, span)),
             Value::Region { store, start, end } => {
                 // A comptime Region crossing into residual code materializes
                 // its private backing Store once; linearity guarantees exactly
@@ -4279,6 +4285,8 @@ impl ResidualTrace {
         span: crate::ast::Span,
     ) -> Result<RuntimeValue, Diagnostic> {
         let region_type = self.region_type(store.type_id)?;
+        // The third slot is the rejoin witness: element-free proof, erased
+        // to unit at runtime.
         let pair_type = self.insert_product_type(vec![
             RuntimeField {
                 name: "0".to_owned(),
@@ -4287,6 +4295,10 @@ impl ResidualTrace {
             RuntimeField {
                 name: "1".to_owned(),
                 type_id: region_type,
+            },
+            RuntimeField {
+                name: "2".to_owned(),
+                type_id: 0,
             },
         ]);
         let cases = vec!["Split".to_owned(), "SplitOutOfBounds".to_owned()];
@@ -4349,10 +4361,11 @@ impl ResidualTrace {
         );
         let left = self.make_region(store.clone(), start.clone(), middle.clone(), span)?;
         let right = self.make_region(store.clone(), middle, end.clone(), span)?;
+        let witness = self.constant(WireConstant::Unit, 0, span);
         let pair = self.operation(
             "product.make",
             pair_type,
-            vec![left.id, right.id],
+            vec![left.id, right.id, witness.id],
             span,
             None,
         );
@@ -4808,6 +4821,8 @@ fn collect_value(
                 collect_value(context, element, visited, captured)?;
             }
         }
+        // A witness names no elements; there is nothing to capture.
+        Value::RegionRejoin { .. } => {}
         Value::Tag { payload, .. } => {
             if let Some(payload) = payload {
                 collect_value(context, payload, visited, captured)?;
@@ -5005,6 +5020,7 @@ fn replace_value(
             }
             *store = Rc::new(std::cell::RefCell::new(replaced_cells));
         }
+        Value::RegionRejoin { .. } => {}
         Value::Tag { payload, .. } => {
             if let Some(payload) = payload {
                 **payload = replace_value(context, payload, replacements, replaced)?;
@@ -6459,6 +6475,9 @@ impl HirBuilder {
             }
             Type::Region(_) => Err(hir_error(
                 "A live Region is compiler-private and cannot cross the runtime export boundary.",
+            )),
+            Type::Opaque(name) if name == "Rejoin" => Err(hir_error(
+                "A live Region rejoin witness is compiler-private and cannot cross the runtime export boundary.",
             )),
             Type::Array(element) => {
                 let (elements, element_value) = match value {

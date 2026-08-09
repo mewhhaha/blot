@@ -84,6 +84,7 @@ pub fn constant(name: &str) -> Option<Value> {
         "@type.i16x8_mask" => Some(Value::OpaqueType(I16X8_MASK.to_owned())),
         "@type.i8x16" => Some(Value::OpaqueType(I8X16.to_owned())),
         "@type.i8x16_mask" => Some(Value::OpaqueType(I8X16_MASK.to_owned())),
+        "@region.rejoin" => Some(Value::OpaqueType("Rejoin".to_owned())),
         "@shape.empty" => Some(Value::Shape(OrderedFields::default())),
         "@array.empty" => Some(Value::Array(Vec::new())),
         _ => None,
@@ -138,14 +139,14 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         "@type.range" | "@type.union" | "@type.intersect" | "@type.diff" | "@type.arrow"
         | "@type.performs" | "@type.seal" | "@satisfies" | "@shape.get" | "@shape.remove"
         | "@shape.has" | "@array.get" | "@array.push" | "@array.take" | "@array.split"
-        | "@region.get" | "@region.split" | "@region.join" | "@int.add" | "@int.sub"
-        | "@int.mul" | "@int.div" | "@int.rem" | "@int.cmp" | "@text.concat" | "@text.cmp"
-        | "@text.contains" | "@json.parse" | "@float.add" | "@float.sub" | "@float.mul"
-        | "@float.div" | "@float.rem" | "@float.cmp" | "@f32.add" | "@f32.sub" | "@f32.mul"
-        | "@f32.div" | "@f32.cmp" | "@f32x4.add" | "@f32x4.sub" | "@f32x4.mul" | "@f32x4.div"
-        | "@f32x4.eq" | "@f32x4.less" => 2,
+        | "@region.get" | "@region.split" | "@int.add" | "@int.sub" | "@int.mul" | "@int.div"
+        | "@int.rem" | "@int.cmp" | "@text.concat" | "@text.cmp" | "@text.contains"
+        | "@json.parse" | "@float.add" | "@float.sub" | "@float.mul" | "@float.div"
+        | "@float.rem" | "@float.cmp" | "@f32.add" | "@f32.sub" | "@f32.mul" | "@f32.div"
+        | "@f32.cmp" | "@f32x4.add" | "@f32x4.sub" | "@f32x4.mul" | "@f32x4.div" | "@f32x4.eq"
+        | "@f32x4.less" => 2,
         "@type.attach" | "@shape.set" | "@array.set" | "@region.set" | "@region.swap"
-        | "@f32x4.select" => 3,
+        | "@region.join" | "@f32x4.select" => 3,
         "@f32x4.of" => 4,
         "@f32x4.shuffle" => 6,
         _ => return None,
@@ -431,20 +432,41 @@ pub fn run_primitive(
                         end: middle,
                     },
                     Value::Region {
-                        store,
+                        store: store.clone(),
                         start: middle,
+                        end,
+                    },
+                    Value::RegionRejoin {
+                        store,
+                        start,
+                        middle,
                         end,
                     },
                 ]))),
             })
         }
         "@region.join" => {
-            let (left_store, left_start, left_end) = region(&arguments[0], span, name)?;
-            let (right_store, right_start, right_end) = region(&arguments[1], span, name)?;
-            if !std::rc::Rc::ptr_eq(&left_store, &right_store) || left_end != right_start {
+            let Value::RegionRejoin {
+                store: witness_store,
+                start: witness_start,
+                middle: witness_middle,
+                end: witness_end,
+            } = &arguments[0]
+            else {
+                return Err(type_error(name, "a rejoin witness", &arguments[0], span));
+            };
+            let (left_store, left_start, left_end) = region(&arguments[1], span, name)?;
+            let (right_store, right_start, right_end) = region(&arguments[2], span, name)?;
+            let paired = std::rc::Rc::ptr_eq(witness_store, &left_store)
+                && std::rc::Rc::ptr_eq(witness_store, &right_store)
+                && *witness_start == left_start
+                && *witness_middle == left_end
+                && *witness_middle == right_start
+                && *witness_end == right_end;
+            if !paired {
                 return Err(Diagnostic::new(
                     "BLOT_REGION_JOIN_UNPROVED",
-                    "Region join requires ordered adjacent siblings from one Store.",
+                    "Region join requires the witness minted with these two parts.",
                     span,
                 ));
             }

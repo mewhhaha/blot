@@ -43,15 +43,16 @@ sig quicksort_parts = (Slice.of Int, Int) -> Slice.of Int
 let quicksort_parts =
   rec (fn (!region, pivot_index) =>
     return case Slice.split ((!region), pivot_index) of
-      #Split (!left, !rest) =>
+      #Split (!left, !rest, !outer) =>
         return case Slice.split ((!rest), 1) of
-          #Split (!pivot_region, !right) =>
+          #Split (!pivot_region, !right, !inner) =>
             let left_sorted = quicksort (!left)
             let right_sorted = quicksort (!right)
-            let restored_right = Slice.join ((!pivot_region), (!right_sorted))
-            return Slice.join ((!left_sorted), (!restored_right))
+            let restored_right =
+              Slice.join ((!inner), (!pivot_region), (!right_sorted))
+            return Slice.join ((!outer), (!left_sorted), (!restored_right))
           #SplitOutOfBounds !original_rest =>
-            return Slice.join ((!left), (!original_rest))
+            return Slice.join ((!outer), (!left), (!original_rest))
       #SplitOutOfBounds !original => original
   )
 

@@ -60,7 +60,6 @@ import {
   parameterOwnership,
   patternQualifier,
   relevant,
-  samePath,
   sameProduced,
   structuralLineage,
   substituteParameters,
@@ -181,14 +180,6 @@ export interface LinearResult {
 }
 
 export class Analysis {
-  /**
-   * Whether abstract Region parameters may cross the join/freeze proofs.
-   *
-   * Set only while certifying the compiler's own prelude, whose Slice wrappers
-   * necessarily forward parametric Region authority. A user wrapper receives
-   * the ordinary proof rules and cannot hide an unproved join behind a call.
-   */
-  trustedRegionWrappers = false;
   readonly diagnostics: Diagnostic[] = [];
   readonly lastUses = new Map<NamePattern, Span>();
   readonly linear = new Set<NamePattern>();
@@ -279,12 +270,8 @@ function restore(state: Map<Binding, BindingState>): void {
   }
 }
 
-export function checkLinearity(
-  module: Module,
-  trustedRegionWrappers = false,
-): LinearResult {
+export function checkLinearity(module: Module): LinearResult {
   const analysis = new Analysis();
-  analysis.trustedRegionWrappers = trustedRegionWrappers;
   const scope = childScope(null);
 
   if (module.parameter !== null) {
@@ -1212,10 +1199,10 @@ function ownershipPrimitiveArguments(
   if (callee.target.tag !== "var" || callee.target.name !== "Slice") {
     return args;
   }
-  const arity = name === "@region.get" ||
-      name === "@region.split" || name === "@region.join"
+  const arity = name === "@region.get" || name === "@region.split"
     ? 2
-    : name === "@region.set" || name === "@region.swap"
+    : name === "@region.set" || name === "@region.swap" ||
+        name === "@region.join"
     ? 3
     : 1;
   if (arity === 1 || args.length !== 1) return args;
@@ -1450,31 +1437,45 @@ function walk(
             2,
             expr.span,
           );
+          // The witness is the recombination proof as a value: it records
+          // which two part authorities rejoin into which parent.
+          const witness: Produced = {
+            tag: "region-witness",
+            left: parts[0],
+            right: parts[1],
+            parent: region,
+          };
           return {
             tag: "choice",
             cases: new Map([
-              ["Split", { tag: "sequence", elements: parts }],
+              ["Split", {
+                tag: "sequence",
+                elements: [parts[0], parts[1], witness],
+              }],
               ["SplitOutOfBounds", region],
             ]),
           };
         }
-        if (name === "@region.join" && ownershipArguments.length === 2) {
-          const left = walk(ownershipArguments[0], scope, analysis, "move");
-          const right = walk(ownershipArguments[1], scope, analysis, "move");
-          return joinRegionParts(left, right, expr.span, analysis);
+        if (name === "@region.join" && ownershipArguments.length === 3) {
+          const witness = walk(ownershipArguments[0], scope, analysis, "move");
+          const left = walk(ownershipArguments[1], scope, analysis, "move");
+          const right = walk(ownershipArguments[2], scope, analysis, "move");
+          return joinRegionAuthorities(
+            witness,
+            left,
+            right,
+            expr.span,
+            analysis,
+          );
         }
         if (name === "@region.freeze" && ownershipArguments.length === 1) {
           const region = walk(ownershipArguments[0], scope, analysis, "move");
-          const leaves = ownershipLeaves(region);
-          const full = leaves.length === 1 && leaves[0].origins.length === 1 &&
-            leaves[0].origins[0].extractions.length === 0;
-          if (!full) {
-            analysis.report(
-              "BLOT_REGION_PARTIAL_FREEZE",
-              "Only a complete root Region authority can be frozen. Rejoin every split first.",
-              ownershipArguments[0].span,
-            );
+          // A symbolic authority defers the full-root proof to the call
+          // site, where substitution makes the caller's region concrete.
+          if (symbolicAuthority(region)) {
+            return { tag: "pending-freeze", region };
           }
+          fullRegionFreeze(region, ownershipArguments[0].span, analysis);
           return NONE;
         }
         if (
@@ -1616,10 +1617,14 @@ function walk(
           );
         }
       }
-      return substituteParameters(
-        contract.result,
-        contract.pattern,
-        argument,
+      return resolvePending(
+        substituteParameters(
+          contract.result,
+          contract.pattern,
+          argument,
+        ),
+        expr.span,
+        analysis,
       );
     }
 
@@ -1931,100 +1936,164 @@ function installRecursiveCapture(
   });
 }
 
-function joinRegionParts(
+/**
+ * Whether a produced value may still become concrete through parameter
+ * substitution at a call site.
+ */
+function symbolicAuthority(produced: Produced): boolean {
+  if (produced.tag === "leaf") return produced.parameter === true;
+  if (produced.tag === "region-witness") {
+    return symbolicAuthority(produced.left) ||
+      symbolicAuthority(produced.right) ||
+      symbolicAuthority(produced.parent);
+  }
+  return produced.tag === "pending-join" || produced.tag === "pending-freeze";
+}
+
+/** The full-root proof `@region.freeze` demands of a concrete authority. */
+function fullRegionFreeze(
+  region: Produced,
+  span: Span,
+  analysis: Analysis,
+): void {
+  const leaves = ownershipLeaves(region);
+  const full = leaves.length === 1 && leaves[0].origins.length === 1 &&
+    leaves[0].origins[0].extractions.length === 0;
+  if (!full) {
+    analysis.report(
+      "BLOT_REGION_PARTIAL_FREEZE",
+      "Only a complete root Region authority can be frozen. Rejoin every split first.",
+      span,
+    );
+  }
+}
+
+/**
+ * Joins two part authorities under their recombination witness. The witness
+ * records which two parts rejoin into which parent, so the proof is pairing
+ * by produced-value identity — it needs no split lineage visible at this
+ * call. A witness that is still a symbolic parameter defers to the call
+ * site, where substitution makes it concrete.
+ */
+function joinRegionAuthorities(
+  witness: Produced,
   left: Produced,
   right: Produced,
   span: Span,
   analysis: Analysis,
 ): Produced {
-  const leftLeaves = ownershipLeaves(left);
-  const rightLeaves = ownershipLeaves(right);
-  // Inside the trusted prelude both sides are abstract parameter authorities
-  // that carry no split lineage; the caller-side proof happens at the call.
-  if (
-    analysis.trustedRegionWrappers &&
-    leftLeaves.every((leaf) =>
-      leaf.origins.every((origin) => origin.extractions.length === 0)
-    ) &&
-    rightLeaves.every((leaf) =>
-      leaf.origins.every((origin) => origin.extractions.length === 0)
-    )
-  ) {
-    return combine(left, right);
+  if (witness.tag === "region-witness") {
+    if (
+      !sameProduced(witness.left, left) || !sameProduced(witness.right, right)
+    ) {
+      analysis.report(
+        "BLOT_REGION_JOIN_UNPROVED",
+        "Region join requires the witness minted with these two parts.",
+        span,
+      );
+      return NONE;
+    }
+    return witness.parent;
   }
-  if (leftLeaves.length !== 1 || rightLeaves.length !== 1) {
-    analysis.report(
-      "BLOT_REGION_JOIN_UNPROVED",
-      "Region join needs exactly one authority on each side.",
-      span,
-    );
-    return combine(left, right);
+  if (symbolicAuthority(witness)) {
+    return { tag: "pending-join", witness, left, right };
   }
-  const leftLeaf = leftLeaves[0];
-  const rightLeaf = rightLeaves[0];
-  if (
-    leftLeaf.qualifier !== rightLeaf.qualifier ||
-    leftLeaf.origins.length !== 1 || rightLeaf.origins.length !== 1
-  ) {
-    analysis.report(
-      "BLOT_REGION_JOIN_UNPROVED",
-      "Region join needs two sibling authorities with one common origin.",
-      span,
-    );
-    return combine(left, right);
+  analysis.report(
+    "BLOT_REGION_JOIN_UNPROVED",
+    "Region join requires the rejoin witness a split minted.",
+    span,
+  );
+  return NONE;
+}
+
+/**
+ * Discharges pending join and freeze proofs whose components became concrete
+ * through parameter substitution. Components that are still symbolic stay
+ * pending for the next call boundary out.
+ */
+function resolvePending(
+  produced: Produced,
+  span: Span,
+  analysis: Analysis,
+): Produced {
+  switch (produced.tag) {
+    case "pending-join":
+      return joinRegionAuthorities(
+        resolvePending(produced.witness, span, analysis),
+        resolvePending(produced.left, span, analysis),
+        resolvePending(produced.right, span, analysis),
+        span,
+        analysis,
+      );
+    case "pending-freeze": {
+      const region = resolvePending(produced.region, span, analysis);
+      if (symbolicAuthority(region)) {
+        return { tag: "pending-freeze", region };
+      }
+      fullRegionFreeze(region, span, analysis);
+      return NONE;
+    }
+    case "region-witness":
+      return {
+        tag: "region-witness",
+        left: resolvePending(produced.left, span, analysis),
+        right: resolvePending(produced.right, span, analysis),
+        parent: resolvePending(produced.parent, span, analysis),
+      };
+    case "borrow":
+      return {
+        tag: "borrow",
+        value: resolvePending(produced.value, span, analysis),
+      };
+    case "closure":
+      return {
+        tag: "closure",
+        captures: resolvePending(produced.captures, span, analysis),
+        parameter: produced.parameter,
+        result: resolvePending(produced.result, span, analysis),
+      };
+    case "many":
+      return {
+        tag: "many",
+        values: produced.values.map((value) =>
+          resolvePending(value, span, analysis)
+        ),
+      };
+    case "sequence":
+      return {
+        tag: "sequence",
+        elements: produced.elements.map((element) =>
+          resolvePending(element, span, analysis)
+        ),
+      };
+    case "shape":
+      return {
+        tag: "shape",
+        fields: new Map(
+          [...produced.fields].map(([name, field]) => [
+            name,
+            resolvePending(field, span, analysis),
+          ]),
+        ),
+      };
+    case "variant":
+      return {
+        tag: "variant",
+        payload: resolvePending(produced.payload, span, analysis),
+      };
+    case "choice":
+      return {
+        tag: "choice",
+        cases: new Map(
+          [...produced.cases].map(([name, payload]) => [
+            name,
+            resolvePending(payload, span, analysis),
+          ]),
+        ),
+      };
+    default:
+      return produced;
   }
-  const leftOrigin = leftLeaf.origins[0];
-  const rightOrigin = rightLeaf.origins[0];
-  const leftExtractions = leftOrigin.extractions;
-  const rightExtractions = rightOrigin.extractions;
-  if (
-    leftOrigin.source !== rightOrigin.source ||
-    !samePath(leftOrigin.path, rightOrigin.path) ||
-    leftExtractions.length === 0 ||
-    leftExtractions.length !== rightExtractions.length
-  ) {
-    analysis.report(
-      "BLOT_REGION_JOIN_UNPROVED",
-      "Region join needs adjacent parts of the same split lineage.",
-      span,
-    );
-    return combine(left, right);
-  }
-  const last = leftExtractions.length - 1;
-  const leftSplit = leftExtractions[last];
-  const rightSplit = rightExtractions[last];
-  const samePrefix = leftExtractions.slice(0, last).every((entry, index) => {
-    const compared = rightExtractions[index];
-    return entry.operation === compared.operation &&
-      entry.part === compared.part &&
-      entry.span.start === compared.span.start &&
-      entry.span.end === compared.span.end;
-  });
-  const siblings = samePrefix &&
-    leftSplit.operation === "@region.split" &&
-    rightSplit.operation === "@region.split" &&
-    leftSplit.part === 0 && rightSplit.part === 1 &&
-    leftSplit.span.start === rightSplit.span.start &&
-    leftSplit.span.end === rightSplit.span.end;
-  if (!siblings) {
-    analysis.report(
-      "BLOT_REGION_JOIN_UNPROVED",
-      "Region join accepts only the ordered sibling pair produced by one Region split.",
-      span,
-    );
-    return combine(left, right);
-  }
-  return {
-    tag: "leaf",
-    qualifier: leftLeaf.qualifier,
-    source: leftOrigin.source,
-    path: leftOrigin.path,
-    origins: [{
-      source: leftOrigin.source,
-      path: leftOrigin.path,
-      extractions: leftExtractions.slice(0, last),
-    }],
-  };
 }
 
 function extractionParts(

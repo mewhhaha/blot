@@ -72,6 +72,18 @@ export type Value =
     readonly start: number;
     readonly end: number;
   }
+  /**
+   * The recombination witness a successful split mints: the proof that its
+   * two parts rejoin into their parent, reified as an element-free value.
+   * `middle` is the boundary the split cut at.
+   */
+  | {
+    readonly tag: "region-rejoin";
+    readonly store: { readonly cells: Value[] };
+    readonly start: number;
+    readonly middle: number;
+    readonly end: number;
+  }
   | {
     readonly tag: "tag";
     readonly name: string;
@@ -389,6 +401,9 @@ export function show(value: Value): string {
   if (value.tag === "region-array") {
     return `<region ${value.start}..${value.end}>`;
   }
+  if (value.tag === "region-rejoin") {
+    return `<rejoin ${value.start}..${value.middle}..${value.end}>`;
+  }
   if (value.tag === "type-variable") return `'t${value.id}`;
   if (value.tag === "forall") {
     return `forall 't${value.variable}. ${show(value.body)}`;
@@ -531,6 +546,10 @@ export function equal(left: Value, right: Value): boolean {
   if (left.tag === "region-array" && right.tag === "region-array") {
     return left.store === right.store && left.start === right.start &&
       left.end === right.end;
+  }
+  if (left.tag === "region-rejoin" && right.tag === "region-rejoin") {
+    return left.store === right.store && left.start === right.start &&
+      left.middle === right.middle && left.end === right.end;
   }
   if (left.tag === "shape" && right.tag === "shape") {
     if (left.fields.size !== right.fields.size) return false;

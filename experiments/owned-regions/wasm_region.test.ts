@@ -109,14 +109,14 @@ Deno.test("Slice-relative get and set cannot reach a sibling Region", async () =
   const source = `open @import "blot:prelude" ()
 let whole = Slice.claim [10, 20, 30]
 return case Slice.split ((!whole), 1) of
-  #Split (!left, !right) =>
+  #Split (!left, !right, !rejoin) =>
     let crossed = case Slice.get ((&left), 1) of
       #Some _ => 1
       #None => 0
     let left = case Slice.set ((!left), 1, 77) of
       #Updated !updated => updated
       #SetOutOfBounds !original => original
-    let restored = Slice.join ((!left), (!right))
+    let restored = Slice.join ((!rejoin), (!left), (!right))
     let frozen = Slice.freeze (!restored)
     let middle = case Array.get (frozen, 1) of
       #Some value => value
@@ -140,7 +140,7 @@ const Source = @effect.host { .offset = Int -> Int; }
 at <- Source.offset 0
 let whole = Slice.claim [4, 5, 6]
 let restored = case Slice.split ((!whole), at) of
-  #Split (!left, !right) => Slice.join ((!left), (!right))
+  #Split (!left, !right, !rejoin) => Slice.join ((!rejoin), (!left), (!right))
   #SplitOutOfBounds !original => original
 let frozen = Slice.freeze (!restored)
 let first = case Array.get (frozen, 0) of
@@ -188,11 +188,79 @@ return case Array.get (frozen, 0) of
   assertEquals(await persistentWrites(true), 1);
 });
 
+Deno.test("a user wrapper carries the rejoin witness across its boundary", async () => {
+  // No compiler trust and no recognized name: the witness travels as an
+  // ordinary linear value, so the wrapper certifies by deferring its join
+  // proof to this call site.
+  const source = `open @import "blot:prelude" ()
+sig rejoin_parts =
+  (@region.rejoin, @region.type Int, @region.type Int) -> @region.type Int
+let rejoin_parts =
+  fn (!rejoin, !left, !right) => Slice.join ((!rejoin), (!left), (!right))
+let whole = Slice.claim [7, 8, 9]
+let restored = case Slice.split ((!whole), 1) of
+  #Split (!left, !right, !rejoin) => rejoin_parts ((!rejoin), (!left), (!right))
+  #SplitOutOfBounds !original => original
+let frozen = Slice.freeze (!restored)
+return case Array.get (frozen, 2) of
+  #Some value => value
+  #None => 0
+`;
+
+  await withSource(source, async (compiler, path) => {
+    const artifact = await compiler.compile(path);
+    const run = await instantiateDefault(artifact.wasm);
+    assertEquals(run(), 9n);
+  });
+});
+
+Deno.test("a user wrapper cannot launder reversed parts past the witness", async () => {
+  const source = `open @import "blot:prelude" ()
+sig rejoin_parts =
+  (@region.rejoin, @region.type Int, @region.type Int) -> @region.type Int
+let rejoin_parts =
+  fn (!rejoin, !left, !right) => Slice.join ((!rejoin), (!left), (!right))
+let whole = Slice.claim [7, 8, 9]
+let restored = case Slice.split ((!whole), 1) of
+  #Split (!left, !right, !rejoin) => rejoin_parts ((!rejoin), (!right), (!left))
+  #SplitOutOfBounds !original => original
+return Slice.freeze (!restored)
+`;
+
+  const error = await assertRejects(
+    () => withSource(source, (compiler, path) => compiler.check(path)),
+    BlotError,
+  );
+  assertEquals(error.diagnostic.code, "BLOT_REGION_JOIN_UNPROVED");
+});
+
+Deno.test("a wrapper freeze of a split part is caught at the call site", async () => {
+  // The full-root proof defers through the wrapper parameter and is
+  // discharged against the caller's concrete part authority.
+  const source = `open @import "blot:prelude" ()
+sig freeze_it = @region.type Int -> [Int]
+let freeze_it = fn !region => Slice.freeze (!region)
+let whole = Slice.claim [4, 5, 6]
+return case Slice.split ((!whole), 1) of
+  #Split (!left, !right, !rejoin) =>
+    let frozen = freeze_it (!left)
+    let restored = Slice.join ((!rejoin), (Slice.claim frozen), (!right))
+    return Slice.freeze (!restored)
+  #SplitOutOfBounds !original => Slice.freeze (!original)
+`;
+
+  const error = await assertRejects(
+    () => withSource(source, (compiler, path) => compiler.check(path)),
+    BlotError,
+  );
+  assertEquals(error.diagnostic.code, "BLOT_REGION_PARTIAL_FREEZE");
+});
+
 Deno.test("Rust ownership rejects reversed Slice siblings", async () => {
   const source = `open @import "blot:prelude" ()
 let whole = Slice.claim [3, 1, 2]
 let restored = case Slice.split ((!whole), 1) of
-  #Split (!left, !right) => Slice.join ((!right), (!left))
+  #Split (!left, !right, !rejoin) => Slice.join ((!rejoin), (!right), (!left))
   #SplitOutOfBounds !original => original
 return Slice.freeze (!restored)
 `;

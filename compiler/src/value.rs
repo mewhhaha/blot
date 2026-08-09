@@ -311,6 +311,15 @@ pub enum Value {
         start: usize,
         end: usize,
     },
+    /// The recombination witness a successful split mints: the proof that its
+    /// two parts rejoin into their parent, reified as an element-free value.
+    /// `middle` is the boundary the split cut at.
+    RegionRejoin {
+        store: RegionStore,
+        start: usize,
+        middle: usize,
+        end: usize,
+    },
     EmptyArray {
         element: Box<Value>,
     },
@@ -640,6 +649,25 @@ pub fn equal(left: &Value, right: &Value) -> bool {
                 && left_start == right_start
                 && left_end == right_end
         }
+        (
+            Value::RegionRejoin {
+                store: left_store,
+                start: left_start,
+                middle: left_middle,
+                end: left_end,
+            },
+            Value::RegionRejoin {
+                store: right_store,
+                start: right_start,
+                middle: right_middle,
+                end: right_end,
+            },
+        ) => {
+            Rc::ptr_eq(left_store, right_store)
+                && left_start == right_start
+                && left_middle == right_middle
+                && left_end == right_end
+        }
         (Value::EmptyArray { .. }, Value::EmptyArray { .. }) => true,
         (Value::EmptyArray { .. }, Value::Array(right))
         | (Value::Array(right), Value::EmptyArray { .. }) => right.is_empty(),
@@ -789,6 +817,11 @@ pub fn show(value: &Value) -> String {
         ),
         Value::RegionType(element) => format!("Region {}", show(element)),
         Value::Region { start, end, .. } => format!("<region {start}..{end}>"),
+        Value::RegionRejoin {
+            start, middle, end, ..
+        } => {
+            format!("<rejoin {start}..{middle}..{end}>")
+        }
         Value::EmptyArray { .. } => "[]".to_owned(),
         Value::Tag { name, payload } => match payload {
             Some(payload) => format!("#{name} {}", show(payload)),

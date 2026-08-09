@@ -170,6 +170,10 @@ function bridgeValue(
       return { tag: "region", element };
     }
 
+    // A witness is opaque on both sides; its pairing lives in ownership.
+    case "region-rejoin":
+      return { tag: "opaque", name: "Rejoin" };
+
     case "effect": {
       const label = effectLabel(value);
       effectValues.set(label, effectExtension(value) ?? value);

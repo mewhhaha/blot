@@ -408,6 +408,12 @@ fn json_value(value: &Value) -> serde_json::Value {
             "tag": "opaque",
             "display": format!("<region {start}..{end}>"),
         }),
+        Value::RegionRejoin {
+            start, middle, end, ..
+        } => serde_json::json!({
+            "tag": "opaque",
+            "display": format!("<rejoin {start}..{middle}..{end}>"),
+        }),
         Value::EmptyArray { .. } => serde_json::json!({
             "tag": "array",
             "elements": [],
