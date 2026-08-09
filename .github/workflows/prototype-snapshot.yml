@@ -24,6 +24,10 @@ jobs:
           targets: wasm32-unknown-unknown
           components: rustfmt,clippy
       - uses: extractions/setup-just@v3
+      - name: Parse representative modules with regenerated frontend
+        run: |
+          deno task parse examples/minimal.blot
+          deno task parse src/prelude/prelude.blot
       - name: Rebuild checked-in compiler artifact
         run: deno task build:compiler
       - name: Commit compiler artifact
