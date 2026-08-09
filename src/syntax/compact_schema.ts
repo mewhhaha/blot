@@ -86,8 +86,12 @@ export const compactRuleNames = [
   "statement_suite",
   "qualified_name",
   "qualified_name_part",
+  "effect_row_part",
+  "effect_row_tail",
 ] as const;
 
+// Stable field identifiers. Retired names remain here so compiler snapshots do
+// not renumber existing fields; new names append at the end.
 export const compactFieldNames = [
   "action",
   "alternative",
@@ -148,21 +152,59 @@ export const compactFieldNames = [
   "tail",
   "target",
   "value",
+  "phase",
 ] as const;
 
-const retiredCompactFieldNames = new Set([
-  "action",
-  "effect",
-  "handler",
-  "intrinsic",
-  "program",
-  "result",
-  "steps",
-]);
-
-export const currentCompactFieldNames = compactFieldNames.filter(
-  (name) => !retiredCompactFieldNames.has(name),
-);
+// Baba numbers live fields densely in grammar order. Keep this list exactly in
+// sync with the current grammar while compactFieldNames above remains stable.
+export const currentCompactFieldNames = [
+  "alternative",
+  "alternatives",
+  "arguments",
+  "arrow",
+  "associativity",
+  "body",
+  "condition",
+  "consequence",
+  "constructor",
+  "declarations",
+  "descriptor",
+  "drawn",
+  "elements",
+  "fallback",
+  "field",
+  "fields",
+  "first",
+  "guard",
+  "head",
+  "header",
+  "kind",
+  "line",
+  "members",
+  "name",
+  "operator",
+  "operators",
+  "optional",
+  "parameter",
+  "parameters",
+  "pattern",
+  "payload",
+  "phase",
+  "precedence",
+  "prefixes",
+  "qualifier",
+  "rest",
+  "right",
+  "root",
+  "source",
+  "spread",
+  "statements",
+  "suffixes",
+  "tags",
+  "tail",
+  "target",
+  "value",
+] as const;
 
 export const compactNamedTokenKinds = [
   "IDENT",
@@ -174,8 +216,6 @@ export const compactNamedTokenKinds = [
   "INTRINSIC",
   "ANGLE_LEFT",
   "ANGLE_RIGHT",
-  "ANGLE_CLOSE",
-  "ANGLE_SELF_CLOSE",
   "QUESTION",
   "LAYOUT_NEWLINE",
   "LAYOUT_INDENT",
@@ -197,14 +237,7 @@ export const compactRepeatedFields = [
   "continued_operand.prefixes",
   "continued_postfix_expression.arguments",
   "continued_postfix_expression.suffixes",
-  "effect_row.effects",
-  "element_body.children",
-  "element_body.effects",
-  "element_child_expression.rest",
-  "element_child_operand.prefixes",
-  "element_child_postfix_expression.arguments",
-  "element_child_postfix_expression.suffixes",
-  "element_expression.properties",
+  "effect_row.rest",
   "expression.rest",
   "lambda.parameters",
   "operand.prefixes",
