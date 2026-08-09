@@ -86,6 +86,8 @@ pub(crate) const RULE_NAMES: &[&str] = &[
     "statement_suite",
     "qualified_name",
     "qualified_name_part",
+    "effect_row_part",
+    "effect_row_tail",
 ];
 
 pub(crate) const FIELD_NAMES: &[&str] = &[
@@ -148,6 +150,7 @@ pub(crate) const FIELD_NAMES: &[&str] = &[
     "tail",
     "target",
     "value",
+    "phase",
 ];
 
 pub(crate) const NAMED_TOKEN_KINDS: &[&str] = &[
@@ -160,8 +163,6 @@ pub(crate) const NAMED_TOKEN_KINDS: &[&str] = &[
     "INTRINSIC",
     "ANGLE_LEFT",
     "ANGLE_RIGHT",
-    "ANGLE_CLOSE",
-    "ANGLE_SELF_CLOSE",
     "QUESTION",
     "LAYOUT_NEWLINE",
     "LAYOUT_INDENT",
@@ -183,14 +184,7 @@ pub(crate) const REPEATED_FIELDS: &[(&str, &str)] = &[
     ("continued_operand", "prefixes"),
     ("continued_postfix_expression", "arguments"),
     ("continued_postfix_expression", "suffixes"),
-    ("effect_row", "effects"),
-    ("element_body", "children"),
-    ("element_body", "effects"),
-    ("element_child_expression", "rest"),
-    ("element_child_operand", "prefixes"),
-    ("element_child_postfix_expression", "arguments"),
-    ("element_child_postfix_expression", "suffixes"),
-    ("element_expression", "properties"),
+    ("effect_row", "rest"),
     ("expression", "rest"),
     ("lambda", "parameters"),
     ("operand", "prefixes"),
