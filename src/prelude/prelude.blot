@@ -334,14 +334,24 @@ const slice_swap =
 
 sig slice_split =
   @forall (fn T =>
-    return
-      (@region.type T, @type.int) -> (#Split (@region.type T, @region.type T) | #SplitOutOfBounds (@region.type T))
+    return (@region.type T, @type.int) -> (#Split (
+        @region.type T,
+        @region.type T,
+        @region.rejoin
+      ) | #SplitOutOfBounds (@region.type T))
   )
 const slice_split = fn (!region, index) => @region.split (!region) index
 
 sig slice_join =
-  @forall (fn T => (@region.type T, @region.type T) -> @region.type T)
-const slice_join = fn (!left, !right) => @region.join (!left) (!right)
+  @forall (fn T =>
+    return (
+      @region.rejoin,
+      @region.type T,
+      @region.type T
+    ) -> @region.type T
+  )
+const slice_join =
+  fn (!rejoin, !left, !right) => @region.join (!rejoin) (!left) (!right)
 
 sig slice_freeze = @forall (fn T => @region.type T -> [T])
 const slice_freeze = fn !region => @region.freeze (!region)

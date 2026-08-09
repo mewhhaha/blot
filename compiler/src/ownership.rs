@@ -35,6 +35,26 @@ enum Produced {
         root: Option<PatternId>,
         splits: Vec<(Span, u8)>,
     },
+    /// The recombination witness a split mints: which two part authorities
+    /// rejoin into which parent. Pairing is by produced-value identity, so the
+    /// proof travels through bindings and calls like any linear value.
+    RegionWitness {
+        left: Box<Produced>,
+        right: Box<Produced>,
+        parent: Box<Produced>,
+    },
+    /// A join whose components are still symbolic parameters. The obligation
+    /// defers to the call site, where substitution makes them concrete.
+    PendingJoin {
+        witness: Box<Produced>,
+        left: Box<Produced>,
+        right: Box<Produced>,
+    },
+    /// A freeze whose region is still a symbolic parameter. The full-root
+    /// proof defers to the call site, where substitution makes it concrete.
+    PendingFreeze {
+        region: Box<Produced>,
+    },
 }
 
 struct Binding {
@@ -75,26 +95,13 @@ struct Analysis<'a> {
     module: &'a Module,
     diagnostics: Vec<Diagnostic>,
     function_results: HashMap<ExpressionId, Produced>,
-    trusted_region_wrappers: bool,
 }
 
 pub fn check(module: &Module) -> Vec<Diagnostic> {
-    check_with_region_wrapper_trust(module, false)
-}
-
-pub(crate) fn check_trusted_region_wrappers(module: &Module) -> Vec<Diagnostic> {
-    check_with_region_wrapper_trust(module, true)
-}
-
-fn check_with_region_wrapper_trust(
-    module: &Module,
-    trusted_region_wrappers: bool,
-) -> Vec<Diagnostic> {
     let mut analysis = Analysis {
         module,
         diagnostics: Vec::new(),
         function_results: HashMap::new(),
-        trusted_region_wrappers,
     };
     let scope = child_scope(None, false);
     if let Some(parameter) = module.parameter {
@@ -866,8 +873,8 @@ fn ownership_primitive_arguments(
         return arguments.to_vec();
     }
     let arity = match name {
-        "@region.get" | "@region.split" | "@region.join" => 2,
-        "@region.set" | "@region.swap" => 3,
+        "@region.get" | "@region.split" => 2,
+        "@region.set" | "@region.swap" | "@region.join" => 3,
         _ => 1,
     };
     if arity == 1 || arguments.len() != 1 {
@@ -976,10 +983,7 @@ fn walk_apply(
             return Produced::None;
         }
         if name == "@region.set" && arguments.len() == 3 {
-            let region = region_authority(
-                walk(arguments[0], scope, analysis, Use::Move),
-                analysis.trusted_region_wrappers,
-            );
+            let region = region_authority(walk(arguments[0], scope, analysis, Use::Move));
             walk(arguments[1], scope, analysis, Use::Move);
             let replacement = walk(arguments[2], scope, analysis, Use::Move);
             if obligation(&replacement) != Obligation::None {
@@ -1001,10 +1005,7 @@ fn walk_apply(
             ]));
         }
         if name == "@region.swap" && arguments.len() == 3 {
-            let region = region_authority(
-                walk(arguments[0], scope, analysis, Use::Move),
-                analysis.trusted_region_wrappers,
-            );
+            let region = region_authority(walk(arguments[0], scope, analysis, Use::Move));
             walk(arguments[1], scope, analysis, Use::Move);
             walk(arguments[2], scope, analysis, Use::Move);
             return Produced::Choice(BTreeMap::from([
@@ -1019,10 +1020,7 @@ fn walk_apply(
             ]));
         }
         if name == "@region.split" && arguments.len() == 2 {
-            let region = region_authority(
-                walk(arguments[0], scope, analysis, Use::Move),
-                analysis.trusted_region_wrappers,
-            );
+            let region = region_authority(walk(arguments[0], scope, analysis, Use::Move));
             walk(arguments[1], scope, analysis, Use::Move);
             let (qualifier, root, splits) = match region.clone() {
                 Produced::Region {
@@ -1030,21 +1028,6 @@ fn walk_apply(
                     root,
                     splits,
                 } => (qualifier, root, splits),
-                Produced::Leaf(qualifier) if analysis.trusted_region_wrappers => {
-                    return Produced::Choice(BTreeMap::from([
-                        (
-                            "Split".to_owned(),
-                            Produced::Variant(Box::new(Produced::Sequence(vec![
-                                Produced::Leaf(qualifier),
-                                Produced::Leaf(qualifier),
-                            ]))),
-                        ),
-                        (
-                            "SplitOutOfBounds".to_owned(),
-                            Produced::Variant(Box::new(Produced::Leaf(qualifier))),
-                        ),
-                    ]));
-                }
                 _ => {
                     analysis.report(
                         "BLOT_REGION_SPLIT_NOT_OWNED",
@@ -1058,21 +1041,27 @@ fn walk_apply(
             left_splits.push((span, 0));
             let mut right_splits = splits;
             right_splits.push((span, 1));
+            let left = Produced::Region {
+                qualifier,
+                root,
+                splits: left_splits,
+            };
+            let right = Produced::Region {
+                qualifier,
+                root,
+                splits: right_splits,
+            };
+            // The witness is the recombination proof as a value: it records
+            // which two part authorities rejoin into which parent.
+            let witness = Produced::RegionWitness {
+                left: Box::new(left.clone()),
+                right: Box::new(right.clone()),
+                parent: Box::new(region.clone()),
+            };
             return Produced::Choice(BTreeMap::from([
                 (
                     "Split".to_owned(),
-                    Produced::Variant(Box::new(Produced::Sequence(vec![
-                        Produced::Region {
-                            qualifier,
-                            root,
-                            splits: left_splits,
-                        },
-                        Produced::Region {
-                            qualifier,
-                            root,
-                            splits: right_splits,
-                        },
-                    ]))),
+                    Produced::Variant(Box::new(Produced::Sequence(vec![left, right, witness]))),
                 ),
                 (
                     "SplitOutOfBounds".to_owned(),
@@ -1080,31 +1069,23 @@ fn walk_apply(
                 ),
             ]));
         }
-        if name == "@region.join" && arguments.len() == 2 {
-            let left = region_authority(
-                walk(arguments[0], scope, analysis, Use::Move),
-                analysis.trusted_region_wrappers,
-            );
-            let right = region_authority(
-                walk(arguments[1], scope, analysis, Use::Move),
-                analysis.trusted_region_wrappers,
-            );
-            if analysis.trusted_region_wrappers
-                && !matches!(left, Produced::Region { .. })
-                && !matches!(right, Produced::Region { .. })
-            {
-                return combine(left, right);
-            }
-            return join_region(left, right, span, analysis);
+        if name == "@region.join" && arguments.len() == 3 {
+            let witness = walk(arguments[0], scope, analysis, Use::Move);
+            let left = walk(arguments[1], scope, analysis, Use::Move);
+            let right = walk(arguments[2], scope, analysis, Use::Move);
+            return join_region(witness, left, right, span, analysis);
         }
         if name == "@region.freeze" && arguments.len() == 1 {
-            let region = region_authority(
-                walk(arguments[0], scope, analysis, Use::Move),
-                analysis.trusted_region_wrappers,
-            );
+            let region = walk(arguments[0], scope, analysis, Use::Move);
+            // A symbolic authority defers the full-root proof to the call
+            // site, where substitution makes the caller's region concrete.
+            if symbolic_authority(&region) {
+                return Produced::PendingFreeze {
+                    region: Box::new(region),
+                };
+            }
             match region {
                 Produced::Region { splits, .. } if splits.is_empty() => {}
-                _ if analysis.trusted_region_wrappers && obligation(&region) != Obligation::None => {}
                 _ => analysis.report(
                     "BLOT_REGION_PARTIAL_FREEZE",
                     "Only a complete root Region authority can be frozen. Rejoin every split first.",
@@ -1175,7 +1156,8 @@ fn walk_apply(
             analysis.module.arena.expression_span(argument),
         );
     }
-    substitute_parameters(result, parameter, &argument_value, analysis.module)
+    let result = substitute_parameters(result, parameter, &argument_value, analysis.module);
+    resolve_pending(result, span, analysis)
 }
 
 fn function_contract(
@@ -1320,6 +1302,27 @@ fn substitute_parameter_source(
                 .map(|(name, value)| (name, substitute_parameter_source(value, source, argument)))
                 .collect(),
         ),
+        Produced::RegionWitness {
+            left,
+            right,
+            parent,
+        } => Produced::RegionWitness {
+            left: Box::new(substitute_parameter_source(*left, source, argument)),
+            right: Box::new(substitute_parameter_source(*right, source, argument)),
+            parent: Box::new(substitute_parameter_source(*parent, source, argument)),
+        },
+        Produced::PendingJoin {
+            witness,
+            left,
+            right,
+        } => Produced::PendingJoin {
+            witness: Box::new(substitute_parameter_source(*witness, source, argument)),
+            left: Box::new(substitute_parameter_source(*left, source, argument)),
+            right: Box::new(substitute_parameter_source(*right, source, argument)),
+        },
+        Produced::PendingFreeze { region } => Produced::PendingFreeze {
+            region: Box::new(substitute_parameter_source(*region, source, argument)),
+        },
         Produced::Region {
             qualifier,
             root,
@@ -1645,6 +1648,13 @@ fn obligation(produced: &Produced) -> Obligation {
         Produced::Shape(fields) => fields.values().fold(Obligation::None, |found, value| {
             merge_obligation(found, obligation(value))
         }),
+        // A witness owes exactly one join; losing it forfeits reassembly.
+        Produced::RegionWitness { .. } => Obligation::Linear,
+        // A pending join still carries its live part authorities.
+        Produced::PendingJoin { .. } => Obligation::Linear,
+        // A pending freeze already consumed its authority; only the deferred
+        // full-root proof remains, discharged where substitution lands.
+        Produced::PendingFreeze { .. } => Obligation::None,
     }
 }
 
@@ -1664,7 +1674,10 @@ fn contains_borrow(produced: &Produced) -> bool {
         Produced::None
         | Produced::Leaf(_)
         | Produced::Parameter { .. }
-        | Produced::Region { .. } => false,
+        | Produced::Region { .. }
+        | Produced::RegionWitness { .. }
+        | Produced::PendingJoin { .. }
+        | Produced::PendingFreeze { .. } => false,
         Produced::Closure {
             captures, result, ..
         } => contains_borrow(captures) || contains_borrow(result),
@@ -1715,11 +1728,8 @@ fn choice_for_pattern(target: &Produced, pattern: PatternId, module: &Module) ->
     }
 }
 
-fn region_authority(produced: Produced, trusted_region_wrappers: bool) -> Produced {
+fn region_authority(produced: Produced) -> Produced {
     match produced {
-        Produced::Parameter { qualifier, .. } if trusted_region_wrappers => {
-            Produced::Leaf(qualifier)
-        }
         Produced::Parameter { qualifier, source } => Produced::Region {
             qualifier,
             root: Some(source),
@@ -1729,63 +1739,149 @@ fn region_authority(produced: Produced, trusted_region_wrappers: bool) -> Produc
     }
 }
 
-fn join_region(left: Produced, right: Produced, span: Span, analysis: &mut Analysis) -> Produced {
-    let (
-        Produced::Region {
-            qualifier: left_qualifier,
-            root: left_root,
-            splits: mut left_splits,
+/// Whether a produced value may still become concrete through parameter
+/// substitution at a call site. A rooted Region is concrete even when its
+/// root names a binding pattern; only a parameter awaits a caller.
+fn symbolic_authority(produced: &Produced) -> bool {
+    matches!(
+        produced,
+        Produced::Parameter { .. } | Produced::PendingJoin { .. } | Produced::PendingFreeze { .. }
+    )
+}
+
+fn join_region(
+    witness: Produced,
+    left: Produced,
+    right: Produced,
+    span: Span,
+    analysis: &mut Analysis,
+) -> Produced {
+    match witness {
+        Produced::RegionWitness {
+            left: witness_left,
+            right: witness_right,
+            parent,
+        } => {
+            // A part that is still a parameter defers: the outermost call
+            // substitutes the caller's concrete authorities.
+            if symbolic_authority(&left) || symbolic_authority(&right) {
+                return Produced::PendingJoin {
+                    witness: Box::new(Produced::RegionWitness {
+                        left: witness_left,
+                        right: witness_right,
+                        parent,
+                    }),
+                    left: Box::new(left),
+                    right: Box::new(right),
+                };
+            }
+            if *witness_left != left || *witness_right != right {
+                analysis.report(
+                    "BLOT_REGION_JOIN_UNPROVED",
+                    "Region join requires the witness minted with these two parts.",
+                    span,
+                );
+                return Produced::None;
+            }
+            *parent
+        }
+        Produced::Parameter { .. } => Produced::PendingJoin {
+            witness: Box::new(witness),
+            left: Box::new(left),
+            right: Box::new(right),
         },
-        Produced::Region {
-            qualifier: right_qualifier,
-            root: right_root,
-            splits: right_splits,
-        },
-    ) = (left, right)
-    else {
-        analysis.report(
-            "BLOT_REGION_JOIN_UNPROVED",
-            "Region join needs exactly one authority on each side.",
-            span,
-        );
-        return Produced::None;
-    };
-    let Some((left_split, left_part)) = left_splits.last().copied() else {
-        analysis.report(
-            "BLOT_REGION_JOIN_UNPROVED",
-            "Region join needs two sibling authorities produced by a split.",
-            span,
-        );
-        return Produced::None;
-    };
-    let Some((right_split, right_part)) = right_splits.last().copied() else {
-        analysis.report(
-            "BLOT_REGION_JOIN_UNPROVED",
-            "Region join needs two sibling authorities produced by a split.",
-            span,
-        );
-        return Produced::None;
-    };
-    let siblings = left_qualifier == right_qualifier
-        && left_root == right_root
-        && left_splits.len() == right_splits.len()
-        && left_splits[..left_splits.len() - 1] == right_splits[..right_splits.len() - 1]
-        && left_split == right_split
-        && left_part == 0
-        && right_part == 1;
-    if !siblings {
-        analysis.report(
-            "BLOT_REGION_JOIN_UNPROVED",
-            "Region join accepts only the ordered sibling pair produced by one Region split.",
-            span,
-        );
-        return Produced::None;
+        _ => {
+            analysis.report(
+                "BLOT_REGION_JOIN_UNPROVED",
+                "Region join requires the rejoin witness a split minted.",
+                span,
+            );
+            Produced::None
+        }
     }
-    left_splits.pop();
-    Produced::Region {
-        qualifier: left_qualifier,
-        root: left_root,
-        splits: left_splits,
+}
+
+/// Discharges pending join and freeze proofs whose components became
+/// concrete through parameter substitution. Components that are still
+/// symbolic stay pending for the next call boundary out.
+fn resolve_pending(produced: Produced, span: Span, analysis: &mut Analysis) -> Produced {
+    match produced {
+        Produced::PendingJoin {
+            witness,
+            left,
+            right,
+        } => {
+            let witness = resolve_pending(*witness, span, analysis);
+            let left = resolve_pending(*left, span, analysis);
+            let right = resolve_pending(*right, span, analysis);
+            join_region(witness, left, right, span, analysis)
+        }
+        Produced::PendingFreeze { region } => {
+            let region = resolve_pending(*region, span, analysis);
+            match region {
+                Produced::Region { ref splits, .. } if splits.is_empty() => Produced::None,
+                region if symbolic_authority(&region) => Produced::PendingFreeze {
+                    region: Box::new(region),
+                },
+                _ => {
+                    analysis.report(
+                        "BLOT_REGION_PARTIAL_FREEZE",
+                        "Only a complete root Region authority can be frozen. Rejoin every split first.",
+                        span,
+                    );
+                    Produced::None
+                }
+            }
+        }
+        Produced::RegionWitness {
+            left,
+            right,
+            parent,
+        } => Produced::RegionWitness {
+            left: Box::new(resolve_pending(*left, span, analysis)),
+            right: Box::new(resolve_pending(*right, span, analysis)),
+            parent: Box::new(resolve_pending(*parent, span, analysis)),
+        },
+        Produced::Borrow(value) => {
+            Produced::Borrow(Box::new(resolve_pending(*value, span, analysis)))
+        }
+        Produced::Closure {
+            captures,
+            parameter,
+            result,
+        } => Produced::Closure {
+            captures: Box::new(resolve_pending(*captures, span, analysis)),
+            parameter,
+            result: Box::new(resolve_pending(*result, span, analysis)),
+        },
+        Produced::Many(values) => join(
+            values
+                .into_iter()
+                .map(|value| resolve_pending(value, span, analysis))
+                .collect::<Vec<_>>(),
+        ),
+        Produced::Sequence(values) => Produced::Sequence(
+            values
+                .into_iter()
+                .map(|value| resolve_pending(value, span, analysis))
+                .collect(),
+        ),
+        Produced::Shape(fields) => Produced::Shape(
+            fields
+                .into_iter()
+                .map(|(name, value)| (name, resolve_pending(value, span, analysis)))
+                .collect(),
+        ),
+        Produced::Variant(payload) => {
+            Produced::Variant(Box::new(resolve_pending(*payload, span, analysis)))
+        }
+        Produced::Choice(cases) => Produced::Choice(
+            cases
+                .into_iter()
+                .map(|(name, value)| (name, resolve_pending(value, span, analysis)))
+                .collect(),
+        ),
+        produced => produced,
     }
 }
 

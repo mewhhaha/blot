@@ -1133,24 +1133,11 @@ impl Checker {
         if let Some(cached) = self.module_analyses.borrow().get(path) {
             return cached.clone();
         }
-        // The compiler's own prelude is the one trusted Region-wrapper source.
-        // It may arrive as the built-in snapshot, through the `blot:prelude`
-        // specifier, or as an ordinary path import of the compiler's own
-        // source file — the same module either way.
-        let trusted_prelude =
-            path == "snapshot:prelude"
-                || path == "blot:prelude"
-                || path.ends_with("src/prelude/prelude.blot")
-                || self.context.modules.borrow().values().any(|loaded| {
-                    loaded.imports.get("blot:prelude").map(String::as_str) == Some(path)
-                });
-        let ownership_diagnostics = if trusted_prelude {
-            crate::ownership::check_trusted_region_wrappers(module)
-        } else {
-            crate::ownership::check(module)
-        };
         let analyses = CachedModuleAnalyses {
-            ownership: ownership_diagnostics.into_iter().next().map_or(Ok(()), Err),
+            ownership: crate::ownership::check(module)
+                .into_iter()
+                .next()
+                .map_or(Ok(()), Err),
             safety: crate::safety::check(module, &self.context, values)
                 .into_iter()
                 .next()
@@ -4341,6 +4328,7 @@ impl Checker {
                     .map(|value| self.bridge_runtime_value(value))
                     .collect(),
             ))),
+            Value::RegionRejoin { .. } => Type::Opaque("Rejoin".to_owned()),
             Value::Array(elements) => Type::Array(Box::new(join_types(
                 elements
                     .iter()
@@ -4390,6 +4378,7 @@ impl Checker {
                     .filter_map(|value| self.bridge(value))
                     .collect(),
             )))),
+            Value::RegionRejoin { .. } => Some(Type::Opaque("Rejoin".to_owned())),
             Value::Array(elements) => Some(Type::Array(Box::new(union_types(
                 elements
                     .iter()
@@ -4921,6 +4910,7 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
                             Type::Record(vec![
                                 ("0".to_owned(), region.clone()),
                                 ("1".to_owned(), region.clone()),
+                                ("2".to_owned(), Type::Opaque("Rejoin".to_owned())),
                             ]),
                         ),
                         ("SplitOutOfBounds".to_owned(), region),
@@ -4931,7 +4921,14 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         }
         "@region.join" => {
             let region = Type::Region(Box::new(checker.fresh()));
-            curried(vec![region.clone(), region.clone()], region)
+            curried(
+                vec![
+                    Type::Opaque("Rejoin".to_owned()),
+                    region.clone(),
+                    region.clone(),
+                ],
+                region,
+            )
         }
         "@region.freeze" => {
             let element = checker.fresh();

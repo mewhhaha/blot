@@ -15,6 +15,12 @@ import {
 
 const PURE = effects([]);
 const TYPE: SimpleType = { tag: "opaque", name: "Type" };
+/**
+ * The recombination witness minted by a successful split. Opaque and
+ * element-free: the pairing between a witness and its two parts lives in the
+ * ownership analysis, never in the type lattice.
+ */
+const REJOIN: SimpleType = { tag: "opaque", name: "Rejoin" };
 
 function curried(
   params: readonly SimpleType[],
@@ -38,6 +44,7 @@ function mono(type: SimpleType): Scheme {
 
 export const REGION_PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map([
   ["@region.type", mono(curried([TYPE], TYPE))],
+  ["@region.rejoin", mono(TYPE)],
   [
     "@region.claim",
     poly((fresh) => {
@@ -101,7 +108,7 @@ export const REGION_PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map([
       return curried(
         [region, INT],
         variant([
-          ["Split", tupleType([region, region])],
+          ["Split", tupleType([region, region, REJOIN])],
           ["SplitOutOfBounds", region],
         ]),
       );
@@ -111,7 +118,7 @@ export const REGION_PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map([
     "@region.join",
     poly((fresh) => {
       const region: SimpleType = { tag: "region", element: fresh() };
-      return curried([region, region], region);
+      return curried([REJOIN, region, region], region);
     }),
   ],
   [

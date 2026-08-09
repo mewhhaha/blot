@@ -23,7 +23,7 @@ Deno.test("Region split and join preserve one fresh root", async () => {
 let values = [3, 1, 2]
 let whole = @region.claim values
 let rejoined = case @region.split (!whole) 1 of
-  #Split (!left, !right) => @region.join (!left) (!right)
+  #Split (!left, !right, !rejoin) => @region.join (!rejoin) (!left) (!right)
   #SplitOutOfBounds !original => original
 return @region.freeze (!rejoined)
 `,
@@ -56,7 +56,7 @@ Deno.test("Region join rejects reversed siblings", async () => {
 let values = [3, 1, 2]
 let whole = @region.claim values
 let rejoined = case @region.split (!whole) 1 of
-  #Split (!left, !right) => @region.join (!right) (!left)
+  #Split (!left, !right, !rejoin) => @region.join (!rejoin) (!right) (!left)
   #SplitOutOfBounds !original => original
 return @region.freeze (!rejoined)
 `,

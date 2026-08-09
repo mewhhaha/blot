@@ -1,6 +1,6 @@
 import type { Span } from "../syntax/ast.ts";
 import { fail } from "../diagnostic.ts";
-import { type Primitive, PRIMITIVES } from "./primitives.ts";
+import { type Primitive, PRIMITIVE_VALUES, PRIMITIVES } from "./primitives.ts";
 import { show, tupleOf, type Value } from "./value.ts";
 
 function regionOf(
@@ -191,6 +191,13 @@ const entries: readonly (readonly [string, Primitive])[] = [
               start: middle,
               end: region.end,
             },
+            {
+              tag: "region-rejoin",
+              store: region.store,
+              start: region.start,
+              middle,
+              end: region.end,
+            },
           ]),
         };
       },
@@ -199,14 +206,29 @@ const entries: readonly (readonly [string, Primitive])[] = [
   [
     "@region.join",
     {
-      arity: 2,
-      run: ([leftValue, rightValue], span) => {
+      arity: 3,
+      run: ([witnessValue, leftValue, rightValue], span) => {
+        if (witnessValue.tag !== "region-rejoin") {
+          fail(
+            "BLOT_TYPE",
+            `@region.join expects a rejoin witness, found ${
+              show(witnessValue)
+            }.`,
+            span,
+          );
+        }
         const left = regionOf(leftValue, span, "@region.join");
         const right = regionOf(rightValue, span, "@region.join");
-        if (left.store !== right.store || left.end !== right.start) {
+        const paired = witnessValue.store === left.store &&
+          witnessValue.store === right.store &&
+          witnessValue.start === left.start &&
+          witnessValue.middle === left.end &&
+          witnessValue.middle === right.start &&
+          witnessValue.end === right.end;
+        if (!paired) {
           fail(
             "BLOT_REGION_JOIN_UNPROVED",
-            "Region join requires adjacent slices produced from one backing Store.",
+            "Region join requires the witness minted with these two parts.",
             span,
           );
         }
@@ -240,3 +262,8 @@ const entries: readonly (readonly [string, Primitive])[] = [
 
 const table = PRIMITIVES as Map<string, Primitive>;
 for (const [name, primitive] of entries) table.set(name, primitive);
+
+// The witness type is opaque and element-free; its pairing lives in the
+// ownership analysis, never in the type lattice.
+const values = PRIMITIVE_VALUES as Map<string, Value>;
+values.set("@region.rejoin", { tag: "opaque-type", name: "Rejoin" });

@@ -208,19 +208,21 @@ A reuse lowering must cite a valid Store root. A fresh lowering creates one.
 
 ### `@region.split`
 
-Consumes one authority and, on success, produces two child authorities:
+Consumes one authority and, on success, produces two child authorities plus the
+recombination witness that rejoins them:
 
 ```text
 Own(root,[lo,hi))   0 <= k <= hi-lo
 ------------------------------------
-Own(root,[lo,lo+k)) * Own(root,[lo+k,hi))
+Own(root,[lo,lo+k)) * Own(root,[lo+k,hi)) * Rejoin(root,lo,lo+k,hi)
 ```
 
-The runtime operation changes metadata only. Failure returns the original
-authority:
+The runtime operation changes metadata only, and the witness is element-free: it
+erases to unit at Runtime-HIR lowering. Failure returns the original authority
+and mints nothing:
 
 ```text
-#Split (left, right)
+#Split (left, right, rejoin)
 | #SplitOutOfBounds original
 ```
 
@@ -228,22 +230,20 @@ No element Store is copied.
 
 ### `@region.join`
 
-Consumes two authorities. Success requires the same Store root and extent plus
-ordered adjacency:
+Consumes a recombination witness and the two part authorities it was minted
+with:
 
 ```text
-Own(root,[lo,mid)) * Own(root,[mid,hi))
----------------------------------------
+Rejoin(root,lo,mid,hi) * Own(root,[lo,mid)) * Own(root,[mid,hi))
+----------------------------------------------------------------
 Own(root,[lo,hi))
 ```
 
-The inputs need not be immediate siblings of one earlier split. Adjacency is
-enough, which permits reassociation of nested partitions. Failure returns both
-inputs unchanged.
-
-The implemented checker is stricter than this rule: it accepts only the ordered
-sibling pair of one split, proved by static lineage visible at the call site.
-Section 13 records the intended revision that makes the proof a value instead.
+The witness is the proof: ownership pairs it with its two parts by
+produced-value identity, so the proof travels through bindings and function
+calls like any linear value (section 13). Reassociating nested partitions by
+bare adjacency is deliberately given up in this version; a checked
+witness-combination law can restore it later if a program needs it.
 
 ### `@region.length`
 
@@ -317,7 +317,7 @@ const Slice = {
   .claim = fn values => @region.claim values;
   .length = fn &slice => @region.length (&slice);
   .split = fn (!slice, index) => @region.split (slice, index);
-  .join = fn (!left, !right) => @region.join (left, right);
+  .join = fn (!rejoin, !left, !right) => @region.join (rejoin, left, right);
   .get = fn (&slice, index) => @region.get ((&slice), index);
   .set = fn (!slice, index, value) =>
     @region.set (slice, index, value)
@@ -333,10 +333,12 @@ The backing Store must not be projectable from source. A Runtime-HIR
 representation may contain `(store,start,length,extent)`, but that layout is
 compiler-private and refused by ABI 1.
 
-The current implementation cannot certify these wrapper bodies: a join of two
-abstract parameters has no lineage to inspect. It compensates by trusting the
-compiler's own prelude and by recognizing unshadowed `Slice.*` calls by name.
-Section 13 records why both compensations should not survive stabilization.
+These wrappers certify as ordinary source: a region proof over an abstract
+parameter defers to the call site, where substitution makes the caller's
+authority concrete (section 13). No compiler trust attaches to the prelude. The
+checkers still recognize unshadowed `Slice.*` calls by name — that is the
+remaining bridge over ownership summaries not yet crossing module interfaces,
+and section 13 records it as the last scaffolding to delete.
 
 ## 6. Static certificate shape
 
@@ -562,24 +564,30 @@ name-keyed wrapper recognition and the prelude ownership exemption are
 scaffolding of the current draft, and stabilization replaces them rather than
 canonizing them.
 
-## 13. Proposed revision: recombination witnesses
+## 13. Recombination witnesses
 
-The implemented draft carries three compensations that contradict the prelude's
-own principle that nothing in it is built into the compiler:
+Implemented. The first draft carried three compensations that contradicted the
+prelude's own principle that nothing in it is built into the compiler:
 
-- the ownership checkers certify the prelude's `Slice` wrappers under a trusted
-  mode, because a join of two abstract parameters has no split lineage to
-  inspect;
+- the ownership checkers certified the prelude's `Slice` wrappers under a
+  trusted mode, because a join of two abstract parameters had no split lineage
+  to inspect;
 - both checkers recognize an unshadowed variable spelled `Slice` and map its
   fields back to `@region.*`, so caller-side proofs bypass the wrapper; and
 - argument interpretation changes when the callee is spelled `Slice`, to unpack
   the wrappers' tuple calling convention.
 
-Each is the same missing abstraction. The ownership summary of a function cannot
-express a relation between two of its arguments — "these are the sibling halves
-of one split" — so the relation is patched in by name. A relational contract
-language would express it, but there is a smaller design: make the relation a
-value.
+Each was the same missing abstraction. The ownership summary of a function
+cannot express a relation between two of its arguments — "these are the sibling
+halves of one split" — so the relation was patched in by name. A relational
+contract language would express it, but there is a smaller design, now
+implemented: make the relation a value. The trusted mode is deleted; a region
+proof over an abstract parameter defers as a pending obligation carried in the
+function's summary and is discharged at the call site, after parameter
+substitution makes the caller's authorities concrete. The name recognition and
+tuple unpacking remain only as the bridge over ownership summaries not yet
+crossing module interfaces; serializing function ownership summaries into module
+interfaces deletes them too.
 
 ### The witness
 
@@ -660,18 +668,25 @@ ordinary linear values, so helper functions of any shape stay certifiable.
 
 ### What this deletes
 
-With witnesses, the prelude's `Slice` wrappers become ordinary certifiable
-source: each body forwards values whose proofs travel with them. That removes,
-from both checkers:
+With witnesses, the prelude's `Slice` wrappers are ordinary certifiable source:
+each body forwards values whose proofs travel with them.
 
-- the trusted-prelude ownership mode and every path by which the prelude is
-  identified;
+Deleted in this revision, from both checkers:
+
+- the trusted-prelude ownership mode and every path by which the prelude was
+  identified.
+
+Remaining scaffolding, deletable once function ownership summaries are
+serialized into module interfaces:
+
 - the name-keyed recognition of `Slice.*`; and
 - the `Slice`-specific tuple-argument reinterpretation.
 
-`Slice` becomes replaceable — a user may rename it, re-wrap it, or write
-`const Banana = { .split = ...; .join = ...; }` — without losing ownership
-semantics, which is the test that no privilege remains.
+Within one module the replaceability test already holds: a user wrapper over
+split, join, or freeze — any name, any shape — certifies with no new rules,
+because the deferred proof discharges where the caller's concrete authorities
+substitute in. Across modules, `Slice` is still the one spelling the checkers
+bridge by name.
 
 ### Family generality
 
