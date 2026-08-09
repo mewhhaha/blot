@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { readFile as nodeReadFile } from "node:fs/promises";
 
 class NotFound extends Error {
@@ -41,7 +42,40 @@ async function readTextFile(target: string | URL): Promise<string> {
   }
 }
 
+function installUint8ArrayBase64(): void {
+  const constructor = Uint8Array as typeof Uint8Array & {
+    fromBase64?: (source: string) => Uint8Array;
+  };
+  if (constructor.fromBase64 === undefined) {
+    Object.defineProperty(constructor, "fromBase64", {
+      value(source: string): Uint8Array {
+        return Uint8Array.from(Buffer.from(source, "base64"));
+      },
+      configurable: true,
+      writable: true,
+    });
+  }
+
+  const prototype = Uint8Array.prototype as Uint8Array & {
+    toBase64?: () => string;
+  };
+  if (prototype.toBase64 === undefined) {
+    Object.defineProperty(prototype, "toBase64", {
+      value(this: Uint8Array): string {
+        return Buffer.from(
+          this.buffer,
+          this.byteOffset,
+          this.byteLength,
+        ).toString("base64");
+      },
+      configurable: true,
+      writable: true,
+    });
+  }
+}
+
 export function installDenoShim(): void {
+  installUint8ArrayBase64();
   if ("Deno" in globalThis) return;
   Object.defineProperty(globalThis, "Deno", {
     value: Object.freeze({
