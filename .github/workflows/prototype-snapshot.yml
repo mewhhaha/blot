@@ -23,31 +23,20 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
           components: rustfmt,clippy
-      - run: python3 experiments/language-cleanup/migrate.py
-      - name: Drop retired element islands from Baba metadata
-        run: >-
-          python3 -c 'import json; p="baba.json"; d=json.load(open(p));
-          d["gpuFrontend"]["islands"]=[x for x in d["gpuFrontend"]["islands"]
-          if not x["rule"].startswith("element_")];
-          open(p,"w").write(json.dumps(d,indent=2)+"\n")'
-      - name: Regenerate parser and compiler schema
-        run: |
-          deno task generate
-          deno task generate:compiler-schema
-          deno task inspect
-      - run: deno fmt
-      - run: cargo fmt --manifest-path compiler/Cargo.toml
-      - name: Commit generated migration
+      - uses: extractions/setup-just@v3
+      - name: Rebuild checked-in compiler artifact
+        run: deno task build:compiler
+      - name: Commit compiler artifact
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
+          git add generated/compiler
           if ! git diff --cached --quiet; then
-            git commit -m "migrate cleanup corpus and regenerate frontend"
+            git commit -m "rebuild compiler for cleanup surface"
             git push origin HEAD:codex/compdo-effect-rows-no-elements
           fi
-      - run: deno check .
-      - run: cargo check --manifest-path compiler/Cargo.toml
+      - run: just check
+      - run: just test
       - run: tar --exclude=.git -czf /tmp/blot-source.tgz .
         if: always()
       - uses: actions/upload-artifact@v4
