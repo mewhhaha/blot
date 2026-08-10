@@ -53,9 +53,11 @@ is not final WebAssembly. See [spec/PACKAGES.md](spec/PACKAGES.md).
 
 The parser profile is a design tool, not an implementation afterthought. It
 rules out contextual lexing and recursive precedence grammar, keeping both the
-grammar and the language small enough to understand. Node instantiates Baba
-9.0.0's generated parser Wasm with Blot's checked-in plan and parser binary. The
-WebGPU and CPU frontends remain comparison targets.
+grammar and the language small enough to understand. Node instantiates Baba 9.0.0's generated lexer Wasm with Blot's checked-in
+binary and plan. Because that plan uses Baba's `general` throughput profile,
+Baba's own CPU island executor completes parsing; the generated-Wasm island
+parser intentionally accepts only `strict`. WebGPU remains a comparison
+target.
 
 ## Status
 
@@ -141,8 +143,8 @@ pnpm blot build examples/minimal.blot examples/arithmetic.blot
 ```
 
 Blot owns parsing policy, checking, staging, specialization, Runtime HIR,
-canonical ABI adapters, and target orchestration. Baba's generated parser Wasm
-owns syntax. Gpupaper owns Core-to-Wasm planning and uses its embedded Rust/Wasm
+canonical ABI adapters, and target orchestration. Baba's generated Wasm lexer
+and general-profile CPU island executor own syntax. Gpupaper owns Core-to-Wasm planning and uses its embedded Rust/Wasm
 emitter for the final bytes. Node supplies filesystem and package access and
 hosts both Wasm modules. No compiler command initializes WebGPU or invokes Deno,
 Cargo, or a native Rust binary.
