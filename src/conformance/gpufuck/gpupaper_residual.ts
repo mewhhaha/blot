@@ -142,38 +142,56 @@ export function exportResidualRuntimeHir(
   stagedExports: readonly StagedExport[],
   wasmName: string,
 ): BlotRuntimeModule {
-  const runtimeExports = stagedExports.filter((exported) =>
-    exported.phase === "runtime"
-  );
-  if (
-    runtimeExports.length !== 1 || runtimeExports[0].sourceName !== "default"
-  ) {
-    throw new TypeError(
-      `${source}: residual Runtime HIR currently requires one default runtime export`,
-    );
-  }
   const builder = new ResidualHirBuilder(source, checked);
-  const function_ = builder.build(checked.core, wasmName);
+  const functions: BlotRuntimeFunction[] = [];
+  const runtimeFunctions = new Map<string, BlotRuntimeFunction>();
+  for (const exported of stagedExports) {
+    if (exported.phase !== "runtime") continue;
+    let exportedWasmName = `blot:${exported.sourceName}`;
+    if (exported.sourceName === "default") exportedWasmName = wasmName;
+    const function_ = builder.build(
+      checked.core,
+      exportedWasmName,
+      functions.length,
+      exported.sourceName,
+    );
+    functions.push(function_);
+    runtimeFunctions.set(exported.sourceName, function_);
+  }
+
+  const exports: BlotRuntimeModule["exports"][number][] = [];
+  for (const exported of stagedExports) {
+    if (exported.phase === "comptime") {
+      exports.push({
+        sourceName: exported.sourceName,
+        phase: "comptime",
+      });
+      continue;
+    }
+    const function_ = runtimeFunctions.get(exported.sourceName);
+    if (function_ === undefined) {
+      throw new Error(
+        `${source}: residual runtime export ${exported.sourceName} lost its function`,
+      );
+    }
+    exports.push({
+      sourceName: exported.sourceName,
+      phase: "runtime",
+      wasmName: function_.name,
+      function: function_.id,
+      signature: function_.signature,
+      ownership: "owned",
+    });
+  }
   return {
     format: "blot-runtime-hir",
     schemaVersion: 2,
     source,
     types: builder.types,
     signatures: builder.signatures,
-    functions: [function_],
+    functions,
     capabilities: builder.capabilities(),
-    exports: stagedExports.map((exported) =>
-      exported.phase === "comptime"
-        ? { sourceName: exported.sourceName, phase: "comptime" as const }
-        : {
-          sourceName: exported.sourceName,
-          phase: "runtime" as const,
-          wasmName,
-          function: 0,
-          signature: function_.signature,
-          ownership: "owned" as const,
-        }
-    ),
+    exports,
   };
 }
 
@@ -190,6 +208,7 @@ class ResidualHirBuilder {
     Map<string, { readonly signature: number; readonly key: string }>
   >();
   readonly #checked: CheckResult;
+  readonly #functionCapabilities = new Set<string>();
   readonly #sourceHandlers: {
     readonly effect: number;
     readonly handler: ResidualValue;
@@ -212,25 +231,34 @@ class ResidualHirBuilder {
   build(
     computation: CoreComputation,
     wasmName: string,
+    functionId: number,
+    sourceName: string,
   ): BlotRuntimeFunction {
+    this.#blocks.length = 0;
+    this.#sourceHandlers.length = 0;
+    this.#functionCapabilities.clear();
+    this.#currentBlock = 0;
+    this.#nextValue = 0;
     this.block();
     const environment = this.environment(null, this.#checked.values);
     this.coreDeclarations(computation.steps, environment);
     const resultExpression = coreResultExpression(computation.result);
-    const result = this.dynamic(
-      this.evaluate(resultExpression, environment),
-    );
+    let residual = this.evaluate(resultExpression, environment);
+    if (sourceName !== "default" || residual.kind === "shape") {
+      residual = this.project(residual, sourceName, resultExpression.span);
+    }
+    const result = this.dynamic(residual);
     this.terminate({
       kind: "return",
       value: result.value,
       span: this.span(resultExpression.span),
     });
-    const effects = [...this.#capabilityOperations.keys()].sort();
+    const effects = [...this.#functionCapabilities].sort();
     const signature = this.signatures.length;
     this.signatures.push({ parameters: [], result: result.type, effects });
     return {
-      id: 0,
-      name: `blot$residual$${wasmName}`,
+      id: functionId,
+      name: wasmName,
       signature,
       entryBlock: 0,
       blocks: this.#blocks.map((block) => {
@@ -1639,6 +1667,7 @@ class ResidualHirBuilder {
         `${this.#source}:${span.start}: checked host operation ${operation.name} has no arrow signature`,
       );
     }
+    this.#functionCapabilities.add(operation.effect.name);
     const parameterType = this.typeFromValue(arrow.domain, span);
     const resultType = this.typeFromValue(arrow.codomain, span);
     const dynamicArgument = this.materialize(argument, parameterType, span);
