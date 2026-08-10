@@ -51,3 +51,31 @@ export function compareObservations(
   if (differences.length === 0) return undefined;
   return { path, node, rust, differences };
 }
+
+export interface ParityGapSignature {
+  readonly path: string;
+  readonly node: string;
+  readonly rust: string;
+  readonly differences: readonly string[];
+}
+
+export function parityGapSignature(gap: ParityGap): ParityGapSignature {
+  return {
+    path: gap.path,
+    node: observationSignature(gap.node),
+    rust: observationSignature(gap.rust),
+    differences: gap.differences,
+  };
+}
+
+export function sameParityGapBaseline(
+  actual: readonly ParityGapSignature[],
+  expected: readonly ParityGapSignature[],
+): boolean {
+  return JSON.stringify(actual) === JSON.stringify(expected);
+}
+
+function observationSignature(observation: CompilerObservation): string {
+  if (observation.status === "accepted") return "accepted";
+  return `${observation.stage}:${observation.code}`;
+}
