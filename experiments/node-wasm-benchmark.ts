@@ -339,8 +339,8 @@ async function incrementalTimes(
     { readonly hir: BlotRuntimeModule; readonly artifact: BenchmarkArtifact }
   >();
   try {
+    const path = temporarySourcePath(measuredPath, "incremental");
     for (const entry of compilers) {
-      const path = temporarySourcePath(measuredPath, entry.name);
       paths.set(entry.name, path);
       await writeFile(path, edit(source, 0));
       const artifact = await entry.compiler.compile(path);
@@ -382,8 +382,8 @@ async function incrementalPhaseTimes(
   >();
   const results = new Map<"node" | "rust", PhaseTimes>();
   try {
+    const path = temporarySourcePath(measuredPath, "phases");
     for (const entry of compilers) {
-      const path = temporarySourcePath(measuredPath, `${entry.name}-phases`);
       paths.set(entry.name, path);
       await writeFile(path, editedModule(source, 0));
       const artifact = await entry.compiler.compile(path);
@@ -542,7 +542,7 @@ function temporarySourcePath(path: string, label: string): string {
 async function removeTemporarySources(
   paths: ReadonlyMap<"node" | "rust", string>,
 ): Promise<void> {
-  await Promise.all([...paths.values()].map(async (path) => {
+  await Promise.all([...new Set(paths.values())].map(async (path) => {
     await rm(path, { force: true });
   }));
 }
