@@ -8,8 +8,6 @@ import {
 
 const accepted: CompilerAcceptance = {
   status: "accepted",
-  type: "Int",
-  effects: "",
   exports: ["main:runtime"],
   manifest: "{\"abi\":1}",
   capabilities: [],
