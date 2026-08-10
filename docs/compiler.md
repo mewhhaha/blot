@@ -97,9 +97,8 @@ invalidate the result. The immutable Runtime-HIR object remains the final
 artifact-cache key.
 
 `Compiler.create()` starts Baba runtime and gpupaper emitter initialization in
-parallel. Both runtimes are shared within the process and disposed with the last
-compiler session; no semantic fact crosses a process or unvalidated revision
-boundary.
+parallel. Both runtimes are shared for the process lifetime; no semantic fact crosses a
+process or unvalidated revision boundary.
 
 ## CI boundary
 
