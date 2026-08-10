@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { Compiler } from "../compiler.ts";
+import { runArtifact } from "./run.ts";
 
 interface ManifestType {
   readonly kind: string;
@@ -46,6 +47,29 @@ test("Baba Wasm -> Node -> gpupaper Wasm compiles Blot", async () => {
     const artifact = await compiler.compile(resolve("examples/minimal.blot"));
     assert.equal(WebAssembly.validate(artifact.wasm), true);
     assert.ok(artifact.manifestBytes.byteLength > 0);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("run executes and formats a default scalar export", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(resolve("examples/minimal.blot"));
+    assert.equal(await runArtifact(artifact), "42");
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("run refuses to fabricate required host operations", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(resolve("examples/granted.blot"));
+    await assert.rejects(
+      runArtifact(artifact),
+      /run cannot supply host operations: Init\.print/,
+    );
   } finally {
     compiler.destroy();
   }

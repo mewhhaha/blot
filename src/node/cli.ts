@@ -6,14 +6,15 @@ import { Compiler } from "../compiler.ts";
 import { BlotError, render } from "../diagnostic.ts";
 import { LoadError } from "../load.ts";
 import { parse } from "../syntax/parse.ts";
+import { runArtifact } from "./run.ts";
 
 const [command, ...paths] = process.argv.slice(2);
 if (
   command === undefined ||
   paths.length === 0 ||
-  !["build", "check", "ast"].includes(command)
+  !["build", "check", "ast", "run"].includes(command)
 ) {
-  console.error("usage: pnpm blot <build|check|ast> <path>...");
+  console.error("usage: pnpm blot <build|check|ast|run> <path>...");
   process.exitCode = 2;
 } else {
   const compiler = await Compiler.create();
@@ -21,7 +22,10 @@ if (
   try {
     for (const path of paths) {
       try {
-        if (command === "build") {
+        if (command === "run") {
+          const artifact = await compiler.compile(path);
+          console.log(await runArtifact(artifact));
+        } else if (command === "build") {
           const artifact = await compiler.compile(path);
           const output = path.replace(/\.blot$/, ".wasm");
           const manifest = `${output}.json`;

@@ -25,7 +25,10 @@ owns every semantic judgment between those boundaries; neither Wasm component
 is permitted to reinterpret Blot source semantics. An implementation boundary
 is not a semantic boundary.
 
-The Node CLI exposes `ast`, `check`, and `build`. Evaluation, ownership reports,
+The Node CLI exposes `ast`, `check`, `run`, and `build`. `run` executes a
+zero-parameter default or sole runtime export when its result has a direct
+scalar ABI and the module needs no host capabilities. Evaluation of arbitrary
+host-dependent programs, ownership reports,
 formatting, and package construction remain development tools outside this
 experimental CLI boundary. `pnpm parity` and `pnpm parity:strict` compare both
 compiler directions; comparing rejections alone would let either checker drift

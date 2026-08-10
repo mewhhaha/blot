@@ -23,7 +23,7 @@ parser.
 
 | Component | Version |
 | --- | ---: |
-| Node | 24.14.0 or newer |
+| Node | 22.18.0 or newer |
 | pnpm | 11.21.0 |
 | Baba | 9.0.0 |
 | gpupaper | 0.1.6 |
@@ -38,9 +38,15 @@ The pnpm workspace applies a seven-day minimum release age and excludes the two
 corepack enable
 pnpm install
 pnpm blot check examples/minimal.blot
+pnpm blot run examples/minimal.blot
 pnpm blot build examples/minimal.blot
 pnpm test
 ```
+
+`run` compiles in memory and invokes a zero-parameter default (or sole) runtime
+export. It prints Unit, Boolean, integer, and floating-point results. Programs
+that require host capabilities or return structured ABI values must currently
+be embedded in a host that implements that boundary.
 
 `build` writes `examples/minimal.wasm` and
 `examples/minimal.wasm.json`. The sidecar bytes match the `blot:abi` custom
