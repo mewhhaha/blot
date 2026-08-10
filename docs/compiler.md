@@ -44,9 +44,10 @@ pnpm test
 ```
 
 `run` compiles in memory and invokes a zero-parameter default (or sole) runtime
-export. It prints Unit, Boolean, integer, and floating-point results. Programs
-that require host capabilities or return structured ABI values must currently
-be embedded in a host that implements that boundary.
+export. It copies and prints Unit, scalar, Text, array, record, variant, and
+sealed results, then performs the ABI post-return exactly once for owned
+indirect values. Programs that require host capabilities must be embedded in a
+host that implements those operations.
 
 `build` writes `examples/minimal.wasm` and
 `examples/minimal.wasm.json`. The sidecar bytes match the `blot:abi` custom

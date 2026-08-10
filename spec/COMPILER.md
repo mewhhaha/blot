@@ -26,8 +26,9 @@ is permitted to reinterpret Blot source semantics. An implementation boundary
 is not a semantic boundary.
 
 The Node CLI exposes `ast`, `check`, `run`, and `build`. `run` executes a
-zero-parameter default or sole runtime export when its result has a direct
-scalar ABI and the module needs no host capabilities. Evaluation of arbitrary
+zero-parameter default or sole runtime export when the module needs no host
+capabilities. It copies direct and canonical-memory values and completes owned
+indirect results through their declared post-return. Evaluation of arbitrary
 host-dependent programs, ownership reports,
 formatting, and package construction remain development tools outside this
 experimental CLI boundary. `pnpm parity` and `pnpm parity:strict` compare both
