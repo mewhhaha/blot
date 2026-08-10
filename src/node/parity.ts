@@ -94,7 +94,6 @@ async function observeNode(
   try {
     const artifact = await compiler.compile(absolute);
     return acceptance(
-      checked,
       hir,
       artifact.manifestBytes,
       artifact.capabilities,
@@ -182,7 +181,6 @@ async function observeRust(
       );
     }
     return acceptance(
-      { type: checked.type, effects: checked.effects },
       validateBlotRuntimeModule(prepared.module),
       compiled.manifestBytes,
       compiled.capabilities,
@@ -195,15 +193,12 @@ async function observeRust(
 }
 
 function acceptance(
-  checked: { readonly type: string; readonly effects: string },
   hir: BlotRuntimeModule,
   manifestBytes: Uint8Array,
   capabilities: readonly string[],
 ): CompilerAcceptance {
   return {
     status: "accepted",
-    type: checked.type,
-    effects: checked.effects,
     exports: hir.exports.map((exported) =>
       `${exported.sourceName}:${exported.phase}`
     ),
