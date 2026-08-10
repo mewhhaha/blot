@@ -12,17 +12,17 @@ meaning. [`PAPER.md`](PAPER.md) develops the target language model.
 [`TYPECHECKING.md`](TYPECHECKING.md) is a sub-reference of this specification,
 not a second definition of the language.
 
-The production compiler is one Rust/WebAssembly artifact. TypeScript supplies
-filesystem access, package resolution, and CLI presentation. Its former semantic
-compiler and gpupaper lowering remain only as bounded conformance oracles. An
-implementation boundary is not a semantic boundary.
+On the experimental Node-Wasm branch, compilation is one deterministic pipeline
+with two checked-in Wasm boundaries. Node instantiates Baba's generated parser
+Wasm, Blot's TypeScript passes elaborate and validate Runtime HIR, and Node then
+instantiates gpupaper's embedded Rust/Wasm emitter. Deno, native Rust, Cargo, and
+WebGPU are outside the compilation boundary.
 
-The artifact receives each module's **raw source bytes**. Layout-token
-insertion, rebinding-frame validation, compact-CST materialization, and all
-source elaboration happen inside that artifact. TypeScript's parser, layout
-elaborator, checker, evaluator, and gpupaper/gpufuck lowering are independent
-tooling and bounded conformance oracles; the production wrapper may not
-pre-elaborate source before installing a module.
+Baba receives the layout-elaborated source and returns its generated cursor.
+Gpupaper receives gpupaper Core lowered from validated Blot Runtime HIR. Blot
+owns every semantic judgment between those boundaries; neither Wasm component
+is permitted to reinterpret Blot source semantics. An implementation boundary
+is not a semantic boundary.
 
 Two CLI commands are still answered by the oracle rather than by the production
 compiler: `eval` runs the TypeScript evaluator and `ownership` prints the
@@ -78,8 +78,8 @@ order, operation arguments, return values, and classified traps are.
 
 ```text
 SourceGraph
-  -> TokenGraph
   -> LayoutTokenGraph
+  -> BabaParserWasmCursor
   -> CompactCST
   -> SurfaceAST
   -> TypedAST + InferenceFacts
@@ -396,52 +396,29 @@ results. Merely putting the same responsibilities in one file is not a collapse.
 
 ## 10. Present implementation shape
 
-This is an operational snapshot recorded on 2026-08-06, not a permanent
-contract. The two implementations do not currently materialize the logical
-artifact graph in the same way.
-
-The production compiler has one semantic session. The TypeScript host resolves
-files and packages, then supplies source or a validated portable AST to that
-session. For one semantic revision, the session checks, evaluates the static
-fragment, proves safety and ownership, specializes, and elaborates Runtime HIR.
-Those services close into one persistent artifact:
+This is the experimental Node-hosted implementation boundary:
 
 ```text
-AST + resolved dependencies
-  -> close
-  -> ClosedProgram(ValidatedRuntimeHIR, PublicLayout)
-  -> direct Runtime-HIR emitter
+source graph
+  -> layout elaboration
+  -> Baba generated parser Wasm
+  -> CST / AST
+  -> checking / comptime / ownership / staging
+  -> validated Runtime HIR
+  -> gpupaper Core and Wasm plan
+  -> gpupaper embedded Rust/Wasm emitter
   -> WasmArtifact
 ```
 
-`ClosedProgram` is the cache boundary. It owns the only Runtime HIR for the
-revision and the only `PublicLayout`. The layout produces the manifest bytes,
-capability list, flattened signatures, memory layouts, variant tags, and
-post-return obligations consumed by the emitter. Compilation memoizes the final
-artifact inside the same closed value.
+The `Compiler` session caches final artifacts by immutable Runtime-HIR identity.
+Baba's parser instance is process-shared and disposed explicitly. Gpupaper's
+emitter bytes are checked into its package and instantiated through the standard
+`WebAssembly` API.
 
-Constants and residual computations are ordinary Runtime-HIR functions handled
-by one emitter. The former constant evaluator, template emitter, and dynamic
-emitter selection have been deleted. Structured constant results therefore use
-the same canonical-result adapter as effectful results.
-
-The former TypeScript semantic pipeline is not reachable from `build` or the
-public `Compiler`. Small differential tests may call it explicitly as an oracle.
-Its alternate lowering routes and gpupaper adapter are test infrastructure, not
-production fallbacks, and may reject programs outside the bounded comparison set
-without changing the production language.
-
-The current gpupaper Rust crate serializes an already planned WebAssembly
-module; gpupaper Core construction and Core-to-plan lowering remain TypeScript.
-Linking that crate would retain both Blot's runtime lowering and gpupaper's
-TypeScript lowering rather than collapse them. Blot therefore selected the
-permitted alternative: one direct Rust emitter in production, with gpupaper
-external to the production artifact.
-
-The logical safety, ownership, and inference judgments remain distinct. Their
-intermediate Rust representations are request-local; only the closed result is
-persistent. This is fusion at the semantic and cache boundary, not a claim that
-the different proofs have become one type-system rule.
+The TypeScript semantic pipeline is authoritative on this branch. The native
+Rust compiler sources and gpufuck/WebGPU routes are historical and conformance
+implementations; they are not reachable from the Node CLI or public
+`Compiler.compile` path.
 
 ## 11. Collapse laws
 
@@ -507,94 +484,25 @@ language can accidentally exist.
 
 ## 12. Minimal compiler architecture
 
-The production architecture is one Rust compiler inside one WebAssembly
-artifact, with TypeScript restricted to filesystem access, package resolution,
-and CLI presentation:
+The branch uses Node as the only host and keeps one authority per boundary:
 
-```text
-SourceGraph
-  -> Baba compact CST
-  -> SurfaceArena
-  -> close
-  -> ClosedProgram(RuntimeHIR, PublicLayout)
-  -> direct Rust emitter
-  -> WasmArtifact
-```
+| Boundary | Authority | Persisted input |
+| --- | --- | --- |
+| syntax | Baba generated parser Wasm | `parser.wasm` plus `parser.plan` |
+| semantics | Blot TypeScript passes | source graph and inference facts |
+| target lowering | gpupaper TypeScript Core lowering | validated Runtime HIR |
+| binary emission | gpupaper embedded Rust/Wasm emitter | validated Wasm plan |
 
-`SurfaceArena` is the only untyped tree. `ClosedProgram` is the only persistent
-post-analysis compiler artifact. Its Runtime HIR contains flat stable IDs,
-settled runtime types and effects, residual operations, concrete
-representations, and source origins. Its `PublicLayout` contains the closed
-caller representation. It contains no live inference variable, open structural
-row, or unresolved effect. Runtime HIR schema 2 adds an `indirect` type plus
-`indirect.make` and `indirect.load`. Representation closure allocates the
-recursive root ID only for a closure body named by the checked recursive-SCC
-certificate, before lowering its constructor body. It fills the target edge
-after the positive body is known and rejects a root with no finite constructor
-case. An unresolved result without that certificate is a lowering refusal, not
-implicit permission to invent indirection. The emitter stores the target in
-call-local scratch memory and flattens a recursive edge to one `i32`;
-public-layout construction refuses that private type under ABI 1.
-
-A dynamic branch that joins functions produces the other private type: a sum
-whose case selects one normalized closure source and whose payload is that
-alternative's ordered runtime capture product. Alternatives whose capture
-products are prefixes of the widest are carried directly; otherwise every case
-carries a private indirection to its product. The table is built once per join
-and absorbs an already-joined arm rather than nesting, so it stays finite.
-Public-layout construction refuses it under ABI 1 with a diagnostic that names
-the layout, and a branch whose function source set is not closed is a lowering
-refusal that reports the value and the inferred signature — not permission to
-invent a runtime function pointer.
-
-The central judgment combines type elaboration with normalization:
-
-```text
-Gamma ; Phi ; K |- e => Static(v : A)
-Gamma ; Phi ; K |- e => Dynamic(r : A ! E)
-```
-
-Constraint solving remains a service used by the judgment. Compile-time
-application recursively invokes the same judgment with a static argument.
-Dynamic results append typed Runtime-HIR nodes immediately. Structural folds
-over static labels unfold before a dynamic node is committed. This is
-normalization-by-evaluation for the static fragment and typed elaboration for
-the residual fragment, not an evaluator followed by an unrelated lowering. The
-current implementation closes these stages behind one request and persistence
-boundary; progressively producing final nodes during checking is the remaining
-internal fusion opportunity.
-
-Ownership remains a separate flow analysis over the closed residual control-flow
-graph. This preserves the decision that linearity is not part of the subtyping
-lattice while eliminating a second source-AST traversal and the transitive
-ownership-map merge. Coverage and relational reasoning run while elaborating the
-operation they justify; compact replay evidence may remain on Runtime HIR until
-validation consumes it.
-
-Gpupaper does not currently expose its Core construction and lowering as a Rust
-library boundary. Blot therefore retains Runtime HIR as `ClosedProgram` and has
-exactly one direct emitter. `PublicLayout` stays Blot-owned and supplies the
-module shell and canonical adapters. Adding a linked gpupaper emitter is valid
-only if it replaces the direct emitter; retaining both is the rejected state.
-
-This architecture makes the following current concepts unnecessary as production
-mechanisms:
-
-| Remove                                        | Replacement                               |
-| --------------------------------------------- | ----------------------------------------- |
-| TypeScript semantic compiler                  | thin host plus bounded conformance oracle |
-| transitive `CheckResult` fact-map assembly    | stable typed Runtime-HIR nodes            |
-| separate staged AST                           | static/dynamic result of elaboration      |
-| legacy gpufuck surface module                 | direct closed Runtime-HIR construction    |
-| constant Runtime HIR path                     | ordinary constant folding in one HIR      |
-| canonical-text versus constant emitter choice | one ABI plan and emitter                  |
-| gpupaper production lowering                  | bounded external conformance oracle       |
-| duplicate portable AST and snapshot envelopes | one versioned flat module artifact        |
+`Runtime HIR` is the semantic/backend boundary. It contains settled runtime
+types and effects, residual operations, concrete representations, and source
+origins. It contains no live inference variable, open structural row, or
+unresolved effect. Gpupaper may reject unsupported target features, but it may
+not infer or change Blot semantics.
 
 The architecture deliberately does not remove Baba, source effects, algebraic
 subtyping, ownership, safe arrays, compile-time modules, canonical ABI checks,
-or differential testing. Those are language or correctness responsibilities. It
-removes repeated representations and authorities around them.
+or differential testing. It removes Deno and the native Rust toolchain from
+ordinary parsing, checking, and compilation.
 
 ## 13. More radical language levers
 
