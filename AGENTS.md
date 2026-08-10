@@ -6,15 +6,15 @@ The simplest language that keeps the reference feature set, fits Baba's parser
 profile, and compiles in Node without Deno, native Rust, or WebGPU.
 
 ```txt
-source -> Baba generated parser Wasm -> compact CST -> fixity fold -> AST
+source -> Baba Wasm lexer -> Baba CPU island parser -> compact CST -> AST
        -> comptime evaluation -> biunification -> linearity/ownership
        -> Runtime HIR -> gpupaper Core -> gpupaper Rust/Wasm emitter -> Wasm
 ```
 
 Blot owns source elaboration, inference, comptime, ownership, Runtime HIR, ABI
 policy, and the module shell. Baba owns lexing and parsing; do not hand-write a
-lexer or parser. Node hosts Baba's checked-in generated parser Wasm and
-gpupaper's checked-in Rust/Wasm emitter. Gpupaper owns Core-to-Wasm planning and
+lexer or parser. Node hosts Baba's checked-in generated lexer Wasm, Baba's general-profile CPU
+island executor, and gpupaper's checked-in Rust/Wasm emitter. Gpupaper owns Core-to-Wasm planning and
 emission on this experimental branch. The GPU paths remain explicit conformance
 tools, not compiler targets.
 
@@ -24,8 +24,7 @@ These are the decisions a change must not silently reverse.
 
 **The frontend profile is a gate, not an aspiration.** Baba generation must
 succeed with the version-3 general profile accepted and every grammar rule
-declared as an island, because the generated parser Wasm preserves island
-nodes. If a grammar change needs a `metadata.parser.resolutions` entry to
+declared as an island, because Baba's compact general-profile plan preserves island nodes. If a grammar change needs a `metadata.parser.resolutions` entry to
 generate, the grammar is wrong — every conflict so far had a design fix that
 made the language better, not a metadata override. Record counter changes in
 `docs/gpu-profile.md`.
@@ -44,10 +43,12 @@ certificate, cache key, target relation, or benchmark boundary must update the
 corresponding specification in the same diff. Operational notes in `docs/` do
 not replace that contract.
 
-**The generated Wasm cursor is the parser contract.** Every accepted program
-must pass through Baba's checked-in `generated/wasm/parser.wasm` and generated
-cursor API. Blot may adapt cursor spans and shape, but it must not duplicate
-lexing or parsing. WebGPU and Baba's CPU frontend remain comparison targets.
+**Baba owns the complete syntax contract.** Every accepted program first passes
+through the checked-in generated Wasm lexer, then through Baba's
+`CpuFrontend` general-profile island executor and Blot's compact-CST
+materializer. Baba's Wasm island parser is strict-profile-only and must not be
+used to misinterpret the general plan. Blot must not duplicate lexing or
+parsing. WebGPU remains a comparison target.
 
 **Runtime HIR crosses the backend boundary.** The Node host resolves source,
 packages, imports, and includes, then Blot performs layout, CST-to-AST
@@ -149,8 +150,8 @@ still contain a local compile-time binding. Do not re-derive them in the
 backend — that is a second type checker and, for effects, would mint a different
 identity. This is why `load` keeps one cache per process.
 
-**Compiler commands must not touch WebGPU.** Node hosts Baba's generated parser
-Wasm and gpupaper's embedded Rust/Wasm emitter. Keep the split structural so
+**Compiler commands must not touch WebGPU.** Node hosts Baba's generated lexer Wasm and general-profile CPU island parser,
+then gpupaper's embedded Rust/Wasm emitter. Keep the split structural so
 ordinary compiler, formatter, and language-server processes never initialize a
 device or invoke a native Rust toolchain.
 
