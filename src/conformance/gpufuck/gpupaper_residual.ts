@@ -70,25 +70,6 @@ function scheduledSourceResultExpression(
   return result.computation;
 }
 
-function selectStagedSourceExport(result: Expr, sourceName: string): Expr {
-  if (result.tag === "block") {
-    return {
-      ...result,
-      result: selectStagedSourceExport(result.result, sourceName),
-    };
-  }
-  if (result.tag === "shape") {
-    for (const member of result.members) {
-      if (member.tag === "field" && member.name === sourceName) {
-        return member.value;
-      }
-    }
-  }
-  throw new Error(
-    `staged module result omitted direct export ${sourceName}`,
-  );
-}
-
 type TypeId = number;
 type ValueId = number;
 type BlotRuntimeScalarOperator = Extract<
@@ -106,14 +87,18 @@ type ResidualCase =
 type ResidualValue =
   | { readonly kind: "static"; readonly value: Value }
   | { readonly kind: "empty-store"; elementType?: TypeId }
-  | { readonly kind: "array"; readonly elements: readonly ResidualValue[] }
+  | {
+    readonly kind: "array";
+    readonly elements: readonly ResidualValue[];
+    readonly elementType?: TypeId;
+  }
   | {
     readonly kind: "dynamic";
     readonly value: ValueId;
     readonly type: TypeId;
     readonly meaning?:
       | "ordering"
-      | { readonly kind: "integer-ordering"; readonly right: ValueId }
+      | { readonly kind: "scalar-ordering"; readonly right: ValueId }
       | {
         readonly kind: "sum";
         readonly cases: readonly string[];
@@ -152,7 +137,17 @@ type ResidualValue =
     readonly kind: "host-operation";
     readonly capability: "Init";
     readonly operation: string;
-  };
+    readonly grant: {
+      readonly parameter: SimpleType;
+      readonly result: SimpleType;
+    };
+  }
+  | {
+    readonly kind: "tail-loop";
+    readonly block: number;
+    readonly parameterType: TypeId;
+  }
+  | { readonly kind: "never" };
 
 type ResidualEnvironment = {
   readonly names: Map<string, ResidualValue>;
@@ -188,6 +183,7 @@ export function exportResidualRuntimeHir(
       exportedWasmName,
       functions.length,
       exported.sourceName,
+      exported.named,
     );
     functions.push(function_);
     runtimeFunctions.set(exported.sourceName, function_);
@@ -267,6 +263,7 @@ class ResidualHirBuilder {
     wasmName: string,
     functionId: number,
     sourceName: string,
+    namedExport: boolean,
   ): BlotRuntimeFunction {
     this.#blocks.length = 0;
     this.#sourceHandlers.length = 0;
@@ -279,10 +276,8 @@ class ResidualHirBuilder {
     let resultExpression: ResidualExpression;
     let projectResult = false;
     if ("declarations" in computation) {
-      let sourceResult = computation.result;
-      if (sourceName !== "default") {
-        sourceResult = selectStagedSourceExport(sourceResult, sourceName);
-      }
+      const sourceResult = computation.result;
+      projectResult = namedExport;
       const scheduled = scheduleSourceComputation(
         computation.declarations,
         sourceResult,
@@ -293,7 +288,7 @@ class ResidualHirBuilder {
     } else {
       this.coreDeclarations(computation.steps, environment);
       resultExpression = coreResultExpression(computation.result);
-      if (sourceName !== "default") projectResult = true;
+      projectResult = namedExport;
     }
     let residual = this.evaluate(resultExpression, environment);
     if (projectResult) {
@@ -302,6 +297,7 @@ class ResidualHirBuilder {
     const resultType = this.typeForExportValue(
       residual,
       sourceName,
+      namedExport,
       resultExpression.span,
     );
     const result = this.materialize(
@@ -412,8 +408,14 @@ class ResidualHirBuilder {
         );
       }
       const fn = this.evaluate(expr.fn, environment);
+      if (fn.kind === "never") return fn;
       const argument = this.evaluate(expr.arg, environment);
-      return this.apply(fn, argument, expr.span);
+      return this.apply(
+        fn,
+        argument,
+        expr.span,
+        this.#checked.expressionTypes.get(expr.arg),
+      );
     }
     if (expr.tag === "intrinsic-apply") {
       if (
@@ -441,6 +443,7 @@ class ResidualHirBuilder {
           value,
           this.evaluate(argument, environment),
           expr.span,
+          this.#checked.expressionTypes.get(argument),
         );
       }
       return value;
@@ -489,7 +492,18 @@ class ResidualHirBuilder {
           elements.push({ kind: "static", value: spreadElement });
         }
       }
-      return { kind: "array", elements };
+      let elementType: TypeId | undefined;
+      const checkedType = this.#checked.expressionTypes.get(expr);
+      if (checkedType !== undefined) {
+        const type = this.typeForSimpleType(checkedType, expr.span, new Set());
+        if (type !== null) {
+          const runtimeType = this.types[type];
+          if (runtimeType.kind === "store") {
+            elementType = runtimeType.elementType;
+          }
+        }
+      }
+      return { kind: "array", elements, elementType };
     }
     if (expr.tag === "tuple") {
       return {
@@ -655,6 +669,11 @@ class ResidualHirBuilder {
       } else {
         value = this.evaluate(declaration.value, environment);
       }
+      value = this.applyCheckedResidualType(
+        value,
+        declaration.value,
+        declaration.span,
+      );
       if (step.tag === "bind") {
         value = this.forceEffectValue(value, declaration.span);
       }
@@ -694,7 +713,11 @@ class ResidualHirBuilder {
     fn: ResidualValue,
     argument: ResidualValue,
     span: Span,
+    expectedArgumentType?: SimpleType,
   ): ResidualValue {
+    if (fn.kind === "never" || argument.kind === "never") {
+      return { kind: "never" };
+    }
     if (fn.kind === "static") {
       const value = fn.value;
       if (value.tag === "closure" || value.tag === "core-closure") {
@@ -738,6 +761,14 @@ class ResidualHirBuilder {
       throw this.outside(span, `application of static ${value.tag}`);
     }
     if (fn.kind === "closure") {
+      if (fn.self === "go$") {
+        return this.lowerTailRecursiveLoop(
+          fn,
+          argument,
+          span,
+          expectedArgumentType,
+        );
+      }
       const scope = this.environment(fn.environment, null);
       if (fn.self !== null) scope.names.set(fn.self, fn);
       this.bind(fn.parameter, argument, scope, span);
@@ -745,6 +776,20 @@ class ResidualHirBuilder {
     }
     if (fn.kind === "host-operation") {
       return this.hostGrantCall(fn, argument, span);
+    }
+    if (fn.kind === "tail-loop") {
+      const dynamicArgument = this.materialize(
+        argument,
+        fn.parameterType,
+        span,
+      );
+      this.terminate({
+        kind: "branch",
+        target: fn.block,
+        arguments: [dynamicArgument.value],
+        span: this.span(span),
+      });
+      return { kind: "never" };
     }
     if (fn.kind !== "primitive") {
       throw this.outside(span, `application of ${fn.kind}`);
@@ -864,15 +909,28 @@ class ResidualHirBuilder {
       return { kind: "dynamic", value: result, type: store.type };
     }
     if (fn.name === "@array.push") {
-      const elementType = this.typeForResidualValue(applied[1], span);
       if (applied[0].kind === "empty-store") {
-        applied[0].elementType = elementType;
+        if (applied[0].elementType === undefined) {
+          let inferred: TypeId | null = null;
+          if (expectedArgumentType !== undefined) {
+            inferred = this.typeForSimpleType(
+              expectedArgumentType,
+              span,
+              new Set(),
+            );
+          }
+          if (inferred === null) {
+            inferred = this.typeForResidualValue(applied[1], span);
+          }
+          applied[0].elementType = inferred;
+        }
       }
       const store = this.store(applied[0], span, fn.name);
       const storeType = this.types[store.type];
-      if (storeType.kind !== "store" || storeType.elementType !== elementType) {
-        throw this.outside(span, `${fn.name} element type disagreement`);
+      if (storeType.kind !== "store") {
+        throw this.outside(span, `${fn.name} over a non-store`);
       }
+      const elementType = storeType.elementType;
       const length = this.nextValue();
       this.current().operations.push({
         kind: "store.length",
@@ -943,7 +1001,7 @@ class ResidualHirBuilder {
         kind: "dynamic",
         value: left.value,
         type: left.type,
-        meaning: { kind: "integer-ordering", right: right.value },
+        meaning: { kind: "scalar-ordering", right: right.value },
       };
     }
     if (fn.name === "@text.of_int") {
@@ -972,6 +1030,115 @@ class ResidualHirBuilder {
         "ordering",
       );
     }
+    if (fn.name === "@float.of_int") {
+      return this.floatOfInteger(applied[0], span);
+    }
+    if (fn.name === "@f32.of_float") {
+      const value = this.floating(
+        applied[0],
+        "float-64",
+        span,
+        fn.name,
+      );
+      return this.convert(
+        value,
+        this.type("float-32"),
+        "float-64-to-float-32",
+        span,
+      );
+    }
+    if (fn.name === "@float.of_f32") {
+      const value = this.floating(
+        applied[0],
+        "float-32",
+        span,
+        fn.name,
+      );
+      return this.convert(
+        value,
+        this.type("float-64"),
+        "float-32-to-float-64",
+        span,
+      );
+    }
+    if (fn.name === "@int.of_float") {
+      const value = this.floating(
+        applied[0],
+        "float-64",
+        span,
+        fn.name,
+      );
+      return this.convert(
+        value,
+        this.type("signed-integer-64"),
+        "float-64-to-signed-integer-64",
+        span,
+      );
+    }
+    if (
+      fn.name === "@float.add" || fn.name === "@float.sub" ||
+      fn.name === "@float.mul" || fn.name === "@float.div" ||
+      fn.name === "@float.rem" || fn.name === "@f32.add" ||
+      fn.name === "@f32.sub" || fn.name === "@f32.mul" ||
+      fn.name === "@f32.div"
+    ) {
+      let expected: "float-32" | "float-64" = "float-64";
+      if (fn.name.startsWith("@f32.")) expected = "float-32";
+      const left = this.floating(applied[0], expected, span, fn.name);
+      const right = this.floating(applied[1], expected, span, fn.name);
+      let operator: BlotRuntimeScalarOperator = "add";
+      if (fn.name.endsWith(".sub")) operator = "subtract";
+      if (fn.name.endsWith(".mul")) operator = "multiply";
+      if (fn.name.endsWith(".div")) operator = "divide";
+      if (fn.name.endsWith(".rem")) operator = "remainder";
+      return this.operation(
+        "scalar",
+        left.type,
+        [left.value, right.value],
+        span,
+        undefined,
+        operator,
+      );
+    }
+    if (fn.name === "@float.neg" || fn.name === "@f32.neg") {
+      let expected: "float-32" | "float-64" = "float-64";
+      if (fn.name === "@f32.neg") expected = "float-32";
+      const value = this.floating(applied[0], expected, span, fn.name);
+      const negativeOne = this.constant(-1, value.type, span);
+      return this.operation(
+        "scalar",
+        value.type,
+        [value.value, negativeOne.value],
+        span,
+        undefined,
+        "multiply",
+      );
+    }
+    if (fn.name === "@float.is_nan" || fn.name === "@f32.is_nan") {
+      let expected: "float-32" | "float-64" = "float-64";
+      if (fn.name === "@f32.is_nan") expected = "float-32";
+      const value = this.floating(applied[0], expected, span, fn.name);
+      return this.operation(
+        "scalar",
+        this.type("boolean"),
+        [value.value, value.value],
+        span,
+        undefined,
+        "not-equal",
+      );
+    }
+    if (fn.name === "@float.cmp" || fn.name === "@f32.cmp") {
+      let expected: "float-32" | "float-64" = "float-64";
+      if (fn.name === "@f32.cmp") expected = "float-32";
+      const left = this.floating(applied[0], expected, span, fn.name);
+      const right = this.floating(applied[1], expected, span, fn.name);
+      this.trapIfNaN(left, fn.name, span);
+      this.trapIfNaN(right, fn.name, span);
+      return {
+        ...left,
+        meaning: { kind: "scalar-ordering", right: right.value },
+      };
+    }
     const simd = this.simdPrimitive(fn.name, applied, span);
     if (simd !== undefined) return simd;
     if (fn.name === "@text.contains") {
@@ -980,32 +1147,96 @@ class ResidualHirBuilder {
     throw this.outside(span, `dynamic primitive ${fn.name}`);
   }
 
+  private lowerTailRecursiveLoop(
+    fn: Extract<ResidualValue, { readonly kind: "closure" }>,
+    argument: ResidualValue,
+    span: Span,
+    expectedArgumentType?: SimpleType,
+  ): ResidualValue {
+    let parameterType: TypeId | null = null;
+    if (expectedArgumentType !== undefined) {
+      parameterType = this.typeForSimpleType(
+        expectedArgumentType,
+        span,
+        new Set(),
+      );
+    }
+    if (parameterType === null) {
+      parameterType = this.typeForResidualValue(argument, span);
+    }
+    const dynamicArgument = this.materialize(argument, parameterType, span);
+    const source = this.current();
+    const header = this.block();
+    source.terminator = {
+      kind: "branch",
+      target: header.id,
+      arguments: [dynamicArgument.value],
+      span: this.span(span),
+    };
+    const parameter = this.nextValue();
+    header.parameters.push({
+      value: parameter,
+      type: parameterType,
+      ownership: this.ownership(parameterType),
+      span: this.span(span),
+    });
+    this.#currentBlock = header.id;
+    const scope = this.environment(fn.environment, null);
+    scope.names.set("go$", {
+      kind: "tail-loop",
+      block: header.id,
+      parameterType,
+    });
+    this.bind(
+      fn.parameter,
+      { kind: "dynamic", value: parameter, type: parameterType },
+      scope,
+      span,
+    );
+    return this.evaluate(fn.body, scope);
+  }
+
   private conditional(
     expr: ResidualIf,
     environment: ResidualEnvironment,
   ): ResidualValue {
-    if (expr.branches.length !== 1 || expr.fallback === null) {
-      throw this.outside(expr.span, "multi-branch conditional");
+    return this.conditionalBranch(expr, 0, environment);
+  }
+
+  private conditionalBranch(
+    expr: ResidualIf,
+    index: number,
+    environment: ResidualEnvironment,
+  ): ResidualValue {
+    const branch = expr.branches[index];
+    if (branch === undefined) {
+      if (expr.fallback !== null) {
+        return this.evaluate(expr.fallback, environment);
+      }
+      this.terminate({
+        kind: "trap",
+        message: "BLOT_NO_BRANCH: no conditional branch matched.",
+        span: this.span(expr.span),
+      });
+      return { kind: "never" };
     }
-    const condition = this.evaluate(expr.branches[0].condition, environment);
+    const condition = this.evaluate(branch.condition, environment);
+    if (condition.kind === "never") return condition;
     const known = this.staticBoolean(condition);
     if (known !== undefined) {
-      return this.evaluate(
-        known ? expr.branches[0].consequence : expr.fallback,
-        environment,
-      );
+      if (known) return this.evaluate(branch.consequence, environment);
+      return this.conditionalBranch(expr, index + 1, environment);
     }
     const dynamicCondition = this.dynamic(condition);
     if (this.types[dynamicCondition.type].kind !== "boolean") {
       throw this.outside(
-        expr.branches[0].condition.span,
+        branch.condition.span,
         "non-Boolean condition",
       );
     }
     const sourceBlock = this.current();
     const consequence = this.block();
     const alternate = this.block();
-    const join = this.block();
     sourceBlock.terminator = {
       kind: "conditional",
       condition: dynamicCondition.value,
@@ -1018,51 +1249,28 @@ class ResidualHirBuilder {
 
     this.#currentBlock = consequence.id;
     const consequentValue = this.evaluate(
-      expr.branches[0].consequence,
+      branch.consequence,
       environment,
     );
     const consequenceEnd = this.#currentBlock;
 
     this.#currentBlock = alternate.id;
-    const alternateValue = this.evaluate(expr.fallback, environment);
+    const alternateValue = this.conditionalBranch(
+      expr,
+      index + 1,
+      environment,
+    );
     const alternateEnd = this.#currentBlock;
 
-    const joined = this.joinBranchValues(
+    return this.finishBranchJoin(
       consequentValue,
       alternateValue,
       consequenceEnd,
       alternateEnd,
+      branch.consequence.span,
+      expr.span,
       expr.span,
     );
-    this.#currentBlock = consequenceEnd;
-    this.terminate({
-      kind: "branch",
-      target: join.id,
-      arguments: [joined.consequent.value],
-      span: this.span(expr.branches[0].consequence.span),
-    });
-    this.#currentBlock = alternateEnd;
-    this.terminate({
-      kind: "branch",
-      target: join.id,
-      arguments: [joined.alternate.value],
-      span: this.span(expr.fallback.span),
-    });
-
-    const joinedValue = this.nextValue();
-    join.parameters.push({
-      value: joinedValue,
-      type: joined.type,
-      ownership: this.ownership(joined.type),
-      span: this.span(expr.span),
-    });
-    this.#currentBlock = join.id;
-    return {
-      kind: "dynamic",
-      value: joinedValue,
-      type: joined.type,
-      meaning: joined.meaning,
-    };
   }
 
   private caseExpression(
@@ -1070,6 +1278,7 @@ class ResidualHirBuilder {
     environment: ResidualEnvironment,
   ): ResidualValue {
     const target = this.evaluate(expr.target, environment);
+    if (target.kind === "never") return target;
     if (target.kind === "tag") {
       for (const arm of expr.arms) {
         const scope = this.environment(environment, null);
@@ -1117,7 +1326,7 @@ class ResidualHirBuilder {
       target.kind !== "dynamic" ||
       (target.meaning !== "ordering" &&
         !(typeof target.meaning === "object" &&
-          target.meaning.kind === "integer-ordering"))
+          target.meaning.kind === "scalar-ordering"))
     ) {
       throw this.outside(expr.target.span, "dynamic non-ordering case");
     }
@@ -1194,7 +1403,6 @@ class ResidualHirBuilder {
     const source = this.current();
     const trueBlock = this.block();
     const falseBlock = this.block();
-    const join = this.block();
     source.terminator = {
       kind: "conditional",
       condition: target.value,
@@ -1230,41 +1438,15 @@ class ResidualHirBuilder {
     const consequenceEnd = this.#currentBlock;
     const alternate = evaluateArm("False", falseBlock);
     const alternateEnd = this.#currentBlock;
-    const joined = this.joinBranchValues(
+    return this.finishBranchJoin(
       consequent.value,
       alternate.value,
       consequenceEnd,
       alternateEnd,
+      consequent.arm.body.span,
+      alternate.arm.body.span,
       expr.span,
     );
-    this.#currentBlock = consequenceEnd;
-    this.terminate({
-      kind: "branch",
-      target: join.id,
-      arguments: [joined.consequent.value],
-      span: this.span(consequent.arm.body.span),
-    });
-    this.#currentBlock = alternateEnd;
-    this.terminate({
-      kind: "branch",
-      target: join.id,
-      arguments: [joined.alternate.value],
-      span: this.span(alternate.arm.body.span),
-    });
-    const joinedValue = this.nextValue();
-    join.parameters.push({
-      value: joinedValue,
-      type: joined.type,
-      ownership: this.ownership(joined.type),
-      span: this.span(expr.span),
-    });
-    this.#currentBlock = join.id;
-    return {
-      kind: "dynamic",
-      value: joinedValue,
-      type: joined.type,
-      meaning: joined.meaning,
-    };
   }
 
   private integerCase(
@@ -1298,7 +1480,6 @@ class ResidualHirBuilder {
       const source = this.current();
       const consequence = this.block();
       const alternate = this.block();
-      const join = this.block();
       source.terminator = {
         kind: "conditional",
         condition: condition.value,
@@ -1319,43 +1500,15 @@ class ResidualHirBuilder {
       this.#currentBlock = alternate.id;
       const alternateValue = evaluateArm(index + 1);
       const alternateEnd = this.#currentBlock;
-      const joined = this.joinBranchValues(
+      return this.finishBranchJoin(
         consequenceValue,
         alternateValue,
         consequenceEnd,
         alternateEnd,
+        arm.body.span,
+        expr.span,
         expr.span,
       );
-
-      this.#currentBlock = consequenceEnd;
-      this.terminate({
-        kind: "branch",
-        target: join.id,
-        arguments: [joined.consequent.value],
-        span: this.span(arm.body.span),
-      });
-      this.#currentBlock = alternateEnd;
-      this.terminate({
-        kind: "branch",
-        target: join.id,
-        arguments: [joined.alternate.value],
-        span: this.span(expr.span),
-      });
-
-      const joinedValue = this.nextValue();
-      join.parameters.push({
-        value: joinedValue,
-        type: joined.type,
-        ownership: this.ownership(joined.type),
-        span: this.span(expr.span),
-      });
-      this.#currentBlock = join.id;
-      return {
-        kind: "dynamic",
-        value: joinedValue,
-        type: joined.type,
-        meaning: joined.meaning,
-      };
     };
 
     return evaluateArm(0);
@@ -1456,7 +1609,6 @@ class ResidualHirBuilder {
     const source = this.current();
     const consequence = this.block();
     const alternate = this.block();
-    const join = this.block();
     source.terminator = {
       kind: "conditional",
       condition: condition.value,
@@ -1507,33 +1659,66 @@ class ResidualHirBuilder {
     const consequenceEnd = this.#currentBlock;
     const alternateValue = evaluateArm(1, alternate);
     const alternateEnd = this.#currentBlock;
-    const joined = this.joinBranchValues(
+    return this.finishBranchJoin(
       consequentValue,
       alternateValue,
       consequenceEnd,
       alternateEnd,
+      arms[0]!.body.span,
+      arms[1]!.body.span,
       expr.span,
+    );
+  }
+
+  private finishBranchJoin(
+    consequent: ResidualValue,
+    alternate: ResidualValue,
+    consequenceEnd: number,
+    alternateEnd: number,
+    consequenceSpan: Span,
+    alternateSpan: Span,
+    span: Span,
+  ): ResidualValue {
+    if (consequent.kind === "never" && alternate.kind === "never") {
+      this.#currentBlock = alternateEnd;
+      return { kind: "never" };
+    }
+    if (consequent.kind === "never") {
+      this.#currentBlock = alternateEnd;
+      return alternate;
+    }
+    if (alternate.kind === "never") {
+      this.#currentBlock = consequenceEnd;
+      return consequent;
+    }
+    const join = this.block();
+    const joined = this.joinBranchValues(
+      consequent,
+      alternate,
+      consequenceEnd,
+      alternateEnd,
+      span,
     );
     this.#currentBlock = consequenceEnd;
     this.terminate({
       kind: "branch",
       target: join.id,
       arguments: [joined.consequent.value],
-      span: this.span(arms[0]!.body.span),
+      span: this.span(consequenceSpan),
     });
     this.#currentBlock = alternateEnd;
     this.terminate({
       kind: "branch",
       target: join.id,
       arguments: [joined.alternate.value],
-      span: this.span(arms[1]!.body.span),
+      span: this.span(alternateSpan),
     });
     const joinedValue = this.nextValue();
     join.parameters.push({
       value: joinedValue,
       type: joined.type,
       ownership: this.ownership(joined.type),
-      span: this.span(expr.span),
+      span: this.span(span),
     });
     this.#currentBlock = join.id;
     return {
@@ -1586,48 +1771,136 @@ class ResidualHirBuilder {
         type: consequent.type,
       };
     }
+    const consequentBoolean = this.staticBoolean(consequent);
+    const alternateBoolean = this.staticBoolean(alternate);
+    if (
+      consequentBoolean !== undefined && alternate.kind === "dynamic" &&
+      this.types[alternate.type].kind === "boolean"
+    ) {
+      this.#currentBlock = consequenceEnd;
+      return {
+        consequent: this.constant(
+          consequentBoolean,
+          this.type("boolean"),
+          span,
+        ),
+        alternate,
+        type: alternate.type,
+      };
+    }
+    if (
+      consequent.kind === "dynamic" && alternateBoolean !== undefined &&
+      this.types[consequent.type].kind === "boolean"
+    ) {
+      this.#currentBlock = alternateEnd;
+      return {
+        consequent,
+        alternate: this.constant(
+          alternateBoolean,
+          this.type("boolean"),
+          span,
+        ),
+        type: consequent.type,
+      };
+    }
+    if (
+      consequentBoolean !== undefined && alternateBoolean !== undefined
+    ) {
+      const type = this.type("boolean");
+      this.#currentBlock = consequenceEnd;
+      const consequentValue = this.constant(consequentBoolean, type, span);
+      this.#currentBlock = alternateEnd;
+      const alternateValue = this.constant(alternateBoolean, type, span);
+      return {
+        consequent: consequentValue,
+        alternate: alternateValue,
+        type,
+      };
+    }
     const consequentTag = this.residualTag(consequent);
     const alternateTag = this.residualTag(alternate);
+    let consequentSum: Extract<
+      Extract<ResidualValue, { kind: "dynamic" }>["meaning"],
+      { kind: "sum" }
+    > | undefined;
+    if (consequent.kind === "dynamic") {
+      if (
+        typeof consequent.meaning === "object" &&
+        consequent.meaning.kind === "sum"
+      ) {
+        consequentSum = consequent.meaning;
+      } else {
+        const type = this.types[consequent.type];
+        if (type.kind === "sum") {
+          consequentSum = {
+            kind: "sum",
+            cases: type.cases.map((case_) => case_.name),
+            payloadTypes: type.cases.map((case_) => case_.payloadType),
+            wrappedPayloads: type.cases.map(() => false),
+          };
+        }
+      }
+    }
+    let alternateSum: Extract<
+      Extract<ResidualValue, { kind: "dynamic" }>["meaning"],
+      { kind: "sum" }
+    > | undefined;
+    if (alternate.kind === "dynamic") {
+      if (
+        typeof alternate.meaning === "object" &&
+        alternate.meaning.kind === "sum"
+      ) {
+        alternateSum = alternate.meaning;
+      } else {
+        const type = this.types[alternate.type];
+        if (type.kind === "sum") {
+          alternateSum = {
+            kind: "sum",
+            cases: type.cases.map((case_) => case_.name),
+            payloadTypes: type.cases.map((case_) => case_.payloadType),
+            wrappedPayloads: type.cases.map(() => false),
+          };
+        }
+      }
+    }
     if (
       consequentTag !== null && alternate.kind === "dynamic" &&
-      typeof alternate.meaning === "object" &&
-      alternate.meaning.kind === "sum" &&
-      alternate.meaning.cases.includes(consequentTag.name)
+      alternateSum !== undefined &&
+      alternateSum.cases.includes(consequentTag.name)
     ) {
       this.#currentBlock = consequenceEnd;
       const consequentValue = this.materializeTag(
         consequentTag,
         alternate.type,
-        alternate.meaning.cases,
-        alternate.meaning.wrappedPayloads,
+        alternateSum.cases,
+        alternateSum.wrappedPayloads,
         span,
       );
       return {
         consequent: consequentValue,
         alternate,
         type: alternate.type,
-        meaning: alternate.meaning,
+        meaning: alternateSum,
       };
     }
     if (
       consequent.kind === "dynamic" && alternateTag !== null &&
-      typeof consequent.meaning === "object" &&
-      consequent.meaning.kind === "sum" &&
-      consequent.meaning.cases.includes(alternateTag.name)
+      consequentSum !== undefined &&
+      consequentSum.cases.includes(alternateTag.name)
     ) {
       this.#currentBlock = alternateEnd;
       const alternateValue = this.materializeTag(
         alternateTag,
         consequent.type,
-        consequent.meaning.cases,
-        consequent.meaning.wrappedPayloads,
+        consequentSum.cases,
+        consequentSum.wrappedPayloads,
         span,
       );
       return {
         consequent,
         alternate: alternateValue,
         type: consequent.type,
-        meaning: consequent.meaning,
+        meaning: consequentSum,
       };
     }
     if (consequentTag !== null && alternateTag !== null) {
@@ -1728,16 +2001,17 @@ class ResidualHirBuilder {
     wrappedPayloads: readonly boolean[],
     span: Span,
   ): Extract<ResidualValue, { kind: "dynamic" }> {
-    const payload = tagged.payload.kind === "shape"
-      ? tagged.payload.fields.get("value")
-      : tagged.payload;
-    if (payload === undefined) {
-      throw this.outside(span, `tag ${tagged.name} without value payload`);
-    }
     const selectedCase = cases.indexOf(tagged.name);
     const selectedType = this.types[type];
     if (selectedType.kind !== "sum" || selectedCase < 0) {
       throw this.outside(span, `tag ${tagged.name} outside its sum`);
+    }
+    let payload: ResidualValue | undefined = tagged.payload;
+    if (wrappedPayloads[selectedCase] && payload.kind === "shape") {
+      payload = payload.fields.get("value");
+    }
+    if (payload === undefined) {
+      throw this.outside(span, `tag ${tagged.name} without value payload`);
     }
     const dynamicPayload = this.materialize(
       payload,
@@ -1826,8 +2100,20 @@ class ResidualHirBuilder {
     span: Span,
   ): ResidualValue {
     this.#functionCapabilities.add(operation.capability);
-    const parameterType = this.typeForResidualValue(argument, span);
-    const resultType = this.type("unit");
+    let parameterType = this.typeForSimpleType(
+      operation.grant.parameter,
+      span,
+      new Set(),
+    );
+    if (parameterType === null) {
+      parameterType = this.typeForResidualValue(argument, span);
+    }
+    let resultType = this.typeForSimpleType(
+      operation.grant.result,
+      span,
+      new Set(),
+    );
+    if (resultType === null) resultType = this.type("unit");
     const dynamicArgument = this.materialize(argument, parameterType, span);
     const key = `${parameterType}->${resultType}`;
     let operations = this.#capabilityOperations.get(operation.capability);
@@ -1860,7 +2146,7 @@ class ResidualHirBuilder {
       result,
       type: resultType,
       operands: [dynamicArgument.value],
-      ownership: "plain",
+      ownership: this.ownership(resultType),
       capability: operation.capability,
       operation: operation.operation,
       span: this.span(span),
@@ -1963,6 +2249,7 @@ class ResidualHirBuilder {
     name: string,
     span: Span,
   ): ResidualValue {
+    if (value.kind === "never") return value;
     if (value.kind === "tuple") {
       const index = Number(name);
       if (Number.isSafeInteger(index) && index >= 0) {
@@ -2055,6 +2342,18 @@ class ResidualHirBuilder {
         pattern.elements.every((element, index) =>
           this.match(element, value.elements[index], environment)
         );
+    }
+    if (pattern.tag === "tuple" && value.kind === "dynamic") {
+      const type = this.types[value.type];
+      if (type.kind !== "product") return false;
+      if (type.fields.length !== pattern.elements.length) return false;
+      return pattern.elements.every((element, index) =>
+        this.match(
+          element,
+          this.project(value, String(index), element.span),
+          environment,
+        )
+      );
     }
     if (pattern.tag === "constructor" && value.kind === "tag") {
       if (pattern.name !== value.name) return false;
@@ -2344,6 +2643,9 @@ class ResidualHirBuilder {
     if (value.kind === "array") {
       const first = value.elements[0];
       if (first === undefined) {
+        if (value.elementType !== undefined) {
+          return this.storeType(value.elementType);
+        }
         throw this.outside(span, "untyped empty residual array");
       }
       const elementType = this.typeForResidualValue(first, span);
@@ -2448,18 +2750,29 @@ class ResidualHirBuilder {
   private typeForExportValue(
     value: ResidualValue,
     sourceName: string,
+    namedExport: boolean,
     span: Span,
   ): TypeId {
-    if (this.residualTag(value) !== null) {
-      const exported = this.checkedExportType(
-        this.#checked.moduleType,
-        sourceName,
-        new Set(),
-      );
-      if (exported !== null) {
+    const exported = this.checkedExportType(
+      this.#checked.moduleType,
+      sourceName,
+      namedExport,
+      new Set(),
+    );
+    if (exported !== null) {
+      const expected = this.typeForSimpleType(exported, span, new Set());
+      if (expected !== null) return expected;
+      if (this.residualTag(value) !== null) {
         const cases = this.variantCasesForSimpleType(exported, new Set());
         if (cases !== null) {
           const names = [...cases.keys()];
+          if (
+            names.length > 0 &&
+            names.every((name) => name === "True" || name === "False") &&
+            [...cases.values()].every((payload) => payload.tag === "unit")
+          ) {
+            return this.type("boolean");
+          }
           const payloadTypes: TypeId[] = [];
           for (const payload of cases.values()) {
             const payloadType = this.typeForSimpleType(
@@ -2482,9 +2795,10 @@ class ResidualHirBuilder {
   private checkedExportType(
     type: SimpleType,
     sourceName: string,
+    namedExport: boolean,
     seen: Set<number>,
   ): SimpleType | null {
-    if (sourceName === "default") return type;
+    if (!namedExport) return type;
     if (type.tag === "record") {
       const field = type.fields.get(sourceName);
       if (field !== undefined) return field;
@@ -2493,7 +2807,12 @@ class ResidualHirBuilder {
     if (type.tag !== "var" || seen.has(type.id)) return null;
     seen.add(type.id);
     for (const bound of [...type.lower, ...type.upper]) {
-      const field = this.checkedExportType(bound, sourceName, seen);
+      const field = this.checkedExportType(
+        bound,
+        sourceName,
+        namedExport,
+        seen,
+      );
       if (field !== null) return field;
     }
     return null;
@@ -2533,8 +2852,8 @@ class ResidualHirBuilder {
       if (type.open) return null;
       const cases = [...type.cases.keys()];
       if (
-        cases.length === 2 && cases.includes("True") &&
-        cases.includes("False") &&
+        cases.length > 0 &&
+        cases.every((name) => name === "True" || name === "False") &&
         [...type.cases.values()].every((payload) => payload.tag === "unit")
       ) {
         return this.type("boolean");
@@ -2636,6 +2955,180 @@ class ResidualHirBuilder {
     return dynamic;
   }
 
+  private floating(
+    value: ResidualValue,
+    expected: "float-32" | "float-64",
+    span: Span,
+    primitive: string,
+  ): Extract<ResidualValue, { kind: "dynamic" }> {
+    const dynamic = this.dynamic(value);
+    if (this.types[dynamic.type].kind !== expected) {
+      throw this.outside(span, `${primitive} over non-${expected} operand`);
+    }
+    return dynamic;
+  }
+
+  private floatOfInteger(
+    value: ResidualValue,
+    span: Span,
+  ): Extract<ResidualValue, { kind: "dynamic" }> {
+    const integer = this.integer(value, span, "@float.of_int");
+    const integerType = integer.type;
+    const base = this.constant(2_147_483_648n, integerType, span);
+    const quotient = this.operation(
+      "scalar",
+      integerType,
+      [integer.value, base.value],
+      span,
+      undefined,
+      "divide",
+    );
+    const quotientProduct = this.operation(
+      "scalar",
+      integerType,
+      [quotient.value, base.value],
+      span,
+      undefined,
+      "multiply",
+    );
+    const remainder = this.operation(
+      "scalar",
+      integerType,
+      [integer.value, quotientProduct.value],
+      span,
+      undefined,
+      "subtract",
+    );
+    const high = this.operation(
+      "scalar",
+      integerType,
+      [quotient.value, base.value],
+      span,
+      undefined,
+      "divide",
+    );
+    const highProduct = this.operation(
+      "scalar",
+      integerType,
+      [high.value, base.value],
+      span,
+      undefined,
+      "multiply",
+    );
+    const middle = this.operation(
+      "scalar",
+      integerType,
+      [quotient.value, highProduct.value],
+      span,
+      undefined,
+      "subtract",
+    );
+    const integer32Type = this.type("integer-32");
+    const floatType = this.type("float-64");
+    const high32 = this.convert(
+      high,
+      integer32Type,
+      "signed-integer-64-to-signed-integer-32",
+      span,
+    );
+    const middle32 = this.convert(
+      middle,
+      integer32Type,
+      "signed-integer-64-to-signed-integer-32",
+      span,
+    );
+    const remainder32 = this.convert(
+      remainder,
+      integer32Type,
+      "signed-integer-64-to-signed-integer-32",
+      span,
+    );
+    const highFloat = this.convert(
+      high32,
+      floatType,
+      "signed-integer-32-to-float-64",
+      span,
+    );
+    const middleFloat = this.convert(
+      middle32,
+      floatType,
+      "signed-integer-32-to-float-64",
+      span,
+    );
+    const remainderFloat = this.convert(
+      remainder32,
+      floatType,
+      "signed-integer-32-to-float-64",
+      span,
+    );
+    const floatBase = this.constant(2_147_483_648, floatType, span);
+    const highScaled = this.operation(
+      "scalar",
+      floatType,
+      [highFloat.value, floatBase.value],
+      span,
+      undefined,
+      "multiply",
+    );
+    const highAndMiddle = this.operation(
+      "scalar",
+      floatType,
+      [highScaled.value, middleFloat.value],
+      span,
+      undefined,
+      "add",
+    );
+    const quotientFloat = this.operation(
+      "scalar",
+      floatType,
+      [highAndMiddle.value, floatBase.value],
+      span,
+      undefined,
+      "multiply",
+    );
+    return this.operation(
+      "scalar",
+      floatType,
+      [quotientFloat.value, remainderFloat.value],
+      span,
+      undefined,
+      "add",
+    );
+  }
+
+  private trapIfNaN(
+    value: Extract<ResidualValue, { kind: "dynamic" }>,
+    primitive: string,
+    span: Span,
+  ): void {
+    const unordered = this.operation(
+      "scalar",
+      this.type("boolean"),
+      [value.value, value.value],
+      span,
+      undefined,
+      "not-equal",
+    );
+    const source = this.current();
+    const trap = this.block();
+    const ordered = this.block();
+    source.terminator = {
+      kind: "conditional",
+      condition: unordered.value,
+      consequent: trap.id,
+      consequentArguments: [],
+      alternate: ordered.id,
+      alternateArguments: [],
+      span: this.span(span),
+    };
+    trap.terminator = {
+      kind: "trap",
+      message: `${primitive} cannot order NaN. Test for it before comparing.`,
+      span: this.span(span),
+    };
+    this.#currentBlock = ordered.id;
+  }
+
   private text(
     value: ResidualValue,
     span: Span,
@@ -2661,6 +3154,25 @@ class ResidualHirBuilder {
       operands: [],
       ownership: typeof value === "string" ? "owned" : "plain",
       value,
+      span: this.span(span),
+    });
+    return { kind: "dynamic", value: result, type };
+  }
+
+  private convert(
+    value: Extract<ResidualValue, { kind: "dynamic" }>,
+    type: TypeId,
+    conversion: string,
+    span: Span,
+  ): Extract<ResidualValue, { kind: "dynamic" }> {
+    const result = this.nextValue();
+    this.current().operations.push({
+      kind: "convert",
+      result,
+      type,
+      operands: [value.value],
+      ownership: "plain",
+      conversion,
       span: this.span(span),
     });
     return { kind: "dynamic", value: result, type };
@@ -2860,6 +3372,42 @@ class ResidualHirBuilder {
         [vector.value],
         span,
         floatLane as 0 | 1 | 2 | 3,
+      );
+    }
+    if (element === "f32" && operation === "sum") {
+      const vector = this.simd(inputs[0], "f32", false, span, name);
+      const lanes = ([0, 1, 2, 3] as const).map((lane) =>
+        this.vectorOperation(
+          "extract",
+          this.type("float-32"),
+          [vector.value],
+          span,
+          lane,
+        )
+      );
+      const left = this.operation(
+        "scalar",
+        this.type("float-32"),
+        [lanes[0].value, lanes[1].value],
+        span,
+        undefined,
+        "add",
+      );
+      const right = this.operation(
+        "scalar",
+        this.type("float-32"),
+        [lanes[2].value, lanes[3].value],
+        span,
+        undefined,
+        "add",
+      );
+      return this.operation(
+        "scalar",
+        this.type("float-32"),
+        [left.value, right.value],
+        span,
+        undefined,
+        "add",
       );
     }
     const laneMatch = /^(?:lane|with_lane)([0-3])$/.exec(operation);
@@ -3163,6 +3711,26 @@ class ResidualHirBuilder {
     return value;
   }
 
+  private applyCheckedResidualType(
+    value: ResidualValue,
+    expression: Expr,
+    span: Span,
+  ): ResidualValue {
+    if (
+      value.kind !== "array" && value.kind !== "empty-store"
+    ) return value;
+    const checked = this.#checked.expressionTypes.get(expression);
+    if (checked === undefined) return value;
+    const type = this.typeForSimpleType(checked, span, new Set());
+    if (type === null) return value;
+    const runtimeType = this.types[type];
+    if (runtimeType.kind !== "store") return value;
+    if (value.kind === "array") {
+      return { ...value, elementType: runtimeType.elementType };
+    }
+    return { ...value, elementType: runtimeType.elementType };
+  }
+
   private staticBoolean(value: ResidualValue): boolean | undefined {
     const known = this.staticValue(value);
     if (known?.tag !== "tag" || known.payload !== null) return undefined;
@@ -3407,7 +3975,7 @@ class ResidualHirBuilder {
     const parameter = this.#checked.core.parameter;
     if (parameter === null) return;
     const fields = new Map<string, ResidualValue>();
-    for (const [projection] of this.#checked.grants) {
+    for (const [projection, grant] of this.#checked.grants) {
       if (projection.tag !== "field") {
         throw new Error(
           `${this.#source}:${projection.span.start}: a module grant is not a field projection`,
@@ -3417,6 +3985,7 @@ class ResidualHirBuilder {
         kind: "host-operation",
         capability: "Init",
         operation: projection.name,
+        grant,
       });
     }
     this.bind(

@@ -14,9 +14,42 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24.14.0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Rebuild Rust compiler Wasm
+        run: >-
+          deno run
+          --allow-read
+          --allow-write
+          --allow-run=cargo
+          --allow-env
+          scripts/build_compiler.ts
+      - name: Upload generated Rust compiler artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: blot-rust-compiler-${{ github.sha }}
+          path: |
+            generated/compiler/compiler.wasm
+            generated/prelude/prelude.snapshot
+          if-no-files-found: error
+          retention-days: 1
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path compiler/Cargo.toml -- --check
+      - name: Test Rust compiler
+        run: cargo test --manifest-path compiler/Cargo.toml
       - run: corepack enable
       - run: corepack prepare pnpm@11.21.0 --activate
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm test
       - run: pnpm run check
-      - run: pnpm parity
+      - run: pnpm run smoke
+      - run: pnpm parity:strict
+      - name: Verify generated Rust artifacts are committed
+        run: >-
+          git diff --exit-code --
+          generated/compiler/compiler.wasm
+          generated/prelude/prelude.snapshot

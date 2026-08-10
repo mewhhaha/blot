@@ -446,6 +446,7 @@ enum Typing {
 #[derive(Clone, Default)]
 struct TypeEnvironment {
     names: Rc<BTreeMap<String, Typing>>,
+    phases: Rc<BTreeMap<String, Phase>>,
     stable_names: Rc<BTreeMap<String, Typing>>,
     opens: Rc<Vec<OpenedTypes>>,
     forward: Rc<BTreeSet<String>>,
@@ -469,6 +470,7 @@ impl TypeEnvironment {
     fn child(parent: Rc<Self>) -> Self {
         Self {
             names: Rc::new(BTreeMap::new()),
+            phases: Rc::new(BTreeMap::new()),
             stable_names: Rc::new(BTreeMap::new()),
             opens: Rc::new(Vec::new()),
             forward: Rc::new(BTreeSet::new()),
@@ -501,6 +503,16 @@ impl TypeEnvironment {
             }
         }
         self.parent.as_ref()?.lookup_stable(name)
+    }
+
+    fn binding_phase(&self, name: &str) -> Option<Phase> {
+        if self.names.contains_key(name) {
+            return self.phases.get(name).copied();
+        }
+        if self.opens.iter().rev().any(|opened| opened.get(name).is_some()) {
+            return Some(Phase::Comptime);
+        }
+        self.parent.as_ref()?.binding_phase(name)
     }
 
     fn is_forward(&self, name: &str) -> bool {
@@ -1007,7 +1019,15 @@ impl Checker {
         let values = child_env(None);
         let parameter = loaded.module.parameter.map(|pattern| {
             let parameter = self.fresh();
-            self.bind_pattern(&loaded.module, pattern, parameter.clone(), &mut types);
+            // The entry authority survives hoisting: projections from it
+            // become host imports rather than runtime-frame captures.
+            self.bind_pattern_at_phase(
+                &loaded.module,
+                pattern,
+                parameter.clone(),
+                &mut types,
+                Phase::Comptime,
+            );
             parameter
         });
         let mut signatures = BTreeMap::<String, Type>::new();
@@ -1304,6 +1324,225 @@ impl Checker {
         }
     }
 
+    fn refuse_runtime_const_captures(
+        &self,
+        path: &str,
+        value: &Value,
+        environment: &TypeEnvironment,
+        source: &Module,
+        binding_name: Option<&str>,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        match value {
+            Value::Closure {
+                module,
+                parameter,
+                body,
+                self_name,
+                ..
+            } => {
+                // A dependency checks closures in its own lexical type
+                // environment. Names from another module cannot be classified
+                // by this module's same-spelled bindings.
+                if module.as_str() != path {
+                    return Ok(());
+                }
+                for name in closure_free_names(
+                    &self.context,
+                    path,
+                    *parameter,
+                    *body,
+                    self_name.as_deref(),
+                )? {
+                    if environment.binding_phase(&name) != Some(Phase::Runtime) {
+                        continue;
+                    }
+                    let Some(capture_span) = closure_free_name_span(
+                        source,
+                        *parameter,
+                        *body,
+                        self_name.as_deref(),
+                        &name,
+                    ) else {
+                        // `closure_free_names` is deliberately conservative
+                        // around pinned patterns. A name with no unbound source
+                        // occurrence is local, not a runtime capture.
+                        continue;
+                    };
+                    let mut binding = "this compile-time closure".to_owned();
+                    if let Some(binding_name) = binding_name {
+                        binding = format!("the compile-time closure `{binding_name}`");
+                    }
+                    return Err(Diagnostic::new(
+                        "BLOT_CONST_CAPTURES_RUNTIME",
+                        format!(
+                            "`{name}` is a runtime binding, so it has no value at compile time and {binding} cannot capture it. Write a `let` binding for the closure, or make `{name}` available with `const`."
+                        ),
+                        capture_span,
+                    ));
+                }
+            }
+            Value::Shape(fields) | Value::Effect { operations: fields, .. } => {
+                for (_, member) in fields {
+                    self.refuse_runtime_const_captures(
+                        path,
+                        member,
+                        environment,
+                        source,
+                        binding_name,
+                        span,
+                    )?;
+                }
+            }
+            Value::Array(elements)
+            | Value::Union(elements)
+            | Value::IndexedStep { elements } => {
+                for element in elements {
+                    self.refuse_runtime_const_captures(
+                        path,
+                        element,
+                        environment,
+                        source,
+                        binding_name,
+                        span,
+                    )?;
+                }
+            }
+            Value::RegionType(inner)
+            | Value::EmptyArray { element: inner }
+            | Value::Forall { body: inner, .. }
+            | Value::Sealed { inner, .. } => {
+                self.refuse_runtime_const_captures(
+                    path,
+                    inner,
+                    environment,
+                    source,
+                    binding_name,
+                    span,
+                )?;
+            }
+            Value::Tag {
+                payload: Some(payload),
+                ..
+            } => {
+                self.refuse_runtime_const_captures(
+                    path,
+                    payload,
+                    environment,
+                    source,
+                    binding_name,
+                    span,
+                )?;
+            }
+            Value::Primitive { applied, .. } => {
+                for argument in applied {
+                    self.refuse_runtime_const_captures(
+                        path,
+                        argument,
+                        environment,
+                        source,
+                        binding_name,
+                        span,
+                    )?;
+                }
+            }
+            Value::Range { low, high, .. } => {
+                self.refuse_runtime_const_captures(
+                    path,
+                    low,
+                    environment,
+                    source,
+                    binding_name,
+                    span,
+                )?;
+                self.refuse_runtime_const_captures(
+                    path,
+                    high,
+                    environment,
+                    source,
+                    binding_name,
+                    span,
+                )?;
+            }
+            Value::Arrow {
+                domain,
+                codomain,
+                effects,
+                ..
+            } => {
+                self.refuse_runtime_const_captures(
+                    path,
+                    domain,
+                    environment,
+                    source,
+                    binding_name,
+                    span,
+                )?;
+                self.refuse_runtime_const_captures(
+                    path,
+                    codomain,
+                    environment,
+                    source,
+                    binding_name,
+                    span,
+                )?;
+                for effect in effects {
+                    self.refuse_runtime_const_captures(
+                        path,
+                        effect,
+                        environment,
+                        source,
+                        binding_name,
+                        span,
+                    )?;
+                }
+            }
+            Value::Operation { effect, .. } => {
+                self.refuse_runtime_const_captures(
+                    path,
+                    effect,
+                    environment,
+                    source,
+                    binding_name,
+                    span,
+                )?;
+            }
+            Value::Extended { inner, members } => {
+                self.refuse_runtime_const_captures(
+                    path,
+                    inner,
+                    environment,
+                    source,
+                    binding_name,
+                    span,
+                )?;
+                for (_, member) in members {
+                    self.refuse_runtime_const_captures(
+                        path,
+                        member,
+                        environment,
+                        source,
+                        binding_name,
+                        span,
+                    )?;
+                }
+            }
+            Value::Runtime(_)
+            | Value::ClosureChoice { .. }
+            | Value::Region { .. }
+            | Value::RegionRejoin { .. }
+            | Value::Continuation { .. } => {
+                return Err(Diagnostic::new(
+                    "BLOT_CONST_CAPTURES_RUNTIME",
+                    "A compile-time value contains a runtime value that is not available while the `const` is created.",
+                    span,
+                ));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn check_declaration(
         &self,
@@ -1391,8 +1630,16 @@ impl Checker {
                     }
                     for name in pattern_names(module, pattern) {
                         Rc::make_mut(&mut types.names)
-                            .entry(name)
+                            .entry(name.clone())
                             .or_insert_with(|| Typing::Mono(self.fresh()));
+                        Rc::make_mut(&mut types.phases).insert(
+                            name.clone(),
+                            if kind == DeclarationKind::Const {
+                                Phase::Comptime
+                            } else {
+                                Phase::Runtime
+                            },
+                        );
                     }
                 }
                 let names = pattern_names(module, pattern);
@@ -1509,6 +1756,23 @@ impl Checker {
                         }
                     }
                 };
+                if kind == DeclarationKind::Const
+                    && let Some(value) = &evaluated
+                {
+                    let binding_name = if names.len() == 1 {
+                        Some(names[0].as_str())
+                    } else {
+                        None
+                    };
+                    self.refuse_runtime_const_captures(
+                        path,
+                        value,
+                        types,
+                        module,
+                        binding_name,
+                        span,
+                    )?;
+                }
                 if signature.is_none()
                     && kind == DeclarationKind::Const
                     && !matches!(
@@ -1530,6 +1794,7 @@ impl Checker {
                         body,
                         environment: closure_values,
                         self_name,
+                        deferred,
                         ..
                     }) = evaluated.as_ref()
                 {
@@ -1542,6 +1807,7 @@ impl Checker {
                         *body,
                         closure_values,
                         self_name.as_deref(),
+                        *deferred,
                         types,
                         dependencies,
                     );
@@ -1569,6 +1835,14 @@ impl Checker {
                     self.constrain(inferred.type_.clone(), bound, span)?;
                 }
                 self.bind_pattern(module, pattern, inferred.type_.clone(), types);
+                let binding_phase = if kind == DeclarationKind::Const {
+                    Phase::Comptime
+                } else {
+                    Phase::Runtime
+                };
+                for name in &names {
+                    Rc::make_mut(&mut types.phases).insert(name.clone(), binding_phase);
+                }
                 let settled_signature = if matches!(
                     module.arena.expressions[value.0 as usize],
                     Expression::Lambda { .. } | Expression::Rec { .. }
@@ -1629,6 +1903,7 @@ impl Checker {
                 self.constrain(inferred_type.clone(), previous.clone(), span)?;
                 self.constrain(previous.clone(), inferred_type, span)?;
                 Rc::make_mut(&mut types.names).insert(name.clone(), Typing::Mono(previous));
+                Rc::make_mut(&mut types.phases).insert(name.clone(), Phase::Runtime);
                 match self.evaluate(path, value, values, Phase::Runtime) {
                     Ok(value_) => {
                         values.names.borrow_mut().insert(name, value_);
@@ -1786,6 +2061,7 @@ impl Checker {
                         body,
                         environment: closure_values,
                         self_name,
+                        deferred,
                         ..
                     }) = static_member(&target_value, name)
                 {
@@ -1815,6 +2091,7 @@ impl Checker {
                         body,
                         &closure_values,
                         self_name.as_deref(),
+                        deferred,
                         environment,
                         dependencies,
                     )?;
@@ -1848,6 +2125,7 @@ impl Checker {
                         body,
                         environment: closure_values,
                         self_name,
+                        deferred,
                         ..
                     }) = static_member(&target_value, name)
                 {
@@ -1871,6 +2149,7 @@ impl Checker {
                         body,
                         &closure_values,
                         self_name.as_deref(),
+                        deferred,
                         environment,
                         dependencies,
                     )?;
@@ -2124,7 +2403,18 @@ impl Checker {
                 }
                 let parameter_type = self.fresh();
                 let mut scope = TypeEnvironment::child(Rc::new(environment.clone()));
-                self.bind_pattern(module, parameter, parameter_type.clone(), &mut scope);
+                let parameter_phase = if deferred {
+                    Phase::Comptime
+                } else {
+                    Phase::Runtime
+                };
+                self.bind_pattern_at_phase(
+                    module,
+                    parameter,
+                    parameter_type.clone(),
+                    &mut scope,
+                    parameter_phase,
+                );
                 let body = self.infer(path, module, body_id, &scope, values, dependencies)?;
                 let type_ = Type::Function {
                     parameter: Box::new(parameter_type),
@@ -2257,6 +2547,7 @@ impl Checker {
                         comparison_refinements(module, branch.condition, &remaining, values, self);
                     let mut consequence_scope = TypeEnvironment::child(Rc::new(remaining.clone()));
                     if let Some((name, consequence, alternate)) = refinements {
+                        let binding_phase = remaining.binding_phase(&name);
                         let stable = remaining.lookup_stable(&name).ok_or_else(|| {
                             Diagnostic::new(
                                 "BLOT_RUST_INVARIANT",
@@ -2269,7 +2560,13 @@ impl Checker {
                         Rc::make_mut(&mut remaining.stable_names).insert(name.clone(), stable);
                         Rc::make_mut(&mut consequence_scope.names)
                             .insert(name.clone(), Typing::Mono(consequence));
-                        Rc::make_mut(&mut remaining.names).insert(name, Typing::Mono(alternate));
+                        Rc::make_mut(&mut remaining.names)
+                            .insert(name.clone(), Typing::Mono(alternate));
+                        if let Some(phase) = binding_phase {
+                            Rc::make_mut(&mut consequence_scope.phases)
+                                .insert(name.clone(), phase);
+                            Rc::make_mut(&mut remaining.phases).insert(name, phase);
+                        }
                     }
                     let consequence = self.infer(
                         path,
@@ -2487,7 +2784,10 @@ impl Checker {
             return Ok(inferred);
         }
         if let Expression::Lambda {
-            parameter, body, ..
+            parameter,
+            body,
+            deferred,
+            ..
         } = module.arena.expressions[expression.0 as usize]
             && let Type::Function {
                 parameter: expected_parameter,
@@ -2499,7 +2799,18 @@ impl Checker {
                 .borrow_mut()
                 .insert((path.to_owned(), body), expected.clone());
             let mut scope = TypeEnvironment::child(Rc::new(environment.clone()));
-            self.bind_pattern(module, parameter, (*expected_parameter).clone(), &mut scope);
+            let parameter_phase = if deferred {
+                Phase::Comptime
+            } else {
+                Phase::Runtime
+            };
+            self.bind_pattern_at_phase(
+                module,
+                parameter,
+                (*expected_parameter).clone(),
+                &mut scope,
+                parameter_phase,
+            );
             let body = self.infer_against(
                 path,
                 module,
@@ -2534,13 +2845,14 @@ impl Checker {
     #[allow(clippy::too_many_arguments)]
     fn infer_evaluated_closure(
         &self,
-        _path: &str,
+        path: &str,
         module: &Module,
         closure_module: &str,
         parameter: PatternId,
         body: ExpressionId,
         closure_values: &ValueEnvironment,
         self_name: Option<&str>,
+        deferred: bool,
         environment: &TypeEnvironment,
         dependencies: &BTreeMap<String, Type>,
     ) -> Result<Type, Diagnostic> {
@@ -2569,20 +2881,49 @@ impl Checker {
             for (name, value) in values.names.borrow().iter() {
                 let type_ = self.bridge(value).unwrap_or_else(|| self.fresh());
                 Rc::make_mut(&mut scope.names).insert(name.clone(), Typing::Mono(type_));
+                let phase = if closure_module == path {
+                    environment.binding_phase(name).unwrap_or(Phase::Comptime)
+                } else {
+                    Phase::Comptime
+                };
+                Rc::make_mut(&mut scope.phases).insert(name.clone(), phase);
             }
             for opened in values.opens.borrow().iter() {
                 for (name, value) in opened.iter() {
                     let type_ = self.bridge(value).unwrap_or_else(|| self.fresh());
                     Rc::make_mut(&mut scope.names).insert(name.clone(), Typing::Mono(type_));
+                    let phase = if closure_module == path {
+                        environment.binding_phase(name).unwrap_or(Phase::Comptime)
+                    } else {
+                        Phase::Comptime
+                    };
+                    Rc::make_mut(&mut scope.phases).insert(name.clone(), phase);
                 }
             }
         }
         let recursive = self_name.map(|name| (name.to_owned(), self.fresh()));
         if let Some((name, type_)) = &recursive {
             Rc::make_mut(&mut scope.names).insert(name.clone(), Typing::Mono(type_.clone()));
+            let phase = if closure_module == path {
+                environment.binding_phase(name).unwrap_or(self.phase.get())
+            } else {
+                Phase::Comptime
+            };
+            Rc::make_mut(&mut scope.phases).insert(name.clone(), phase);
         }
         let parameter_type = self.fresh();
-        self.bind_pattern(&closure_ast, parameter, parameter_type.clone(), &mut scope);
+        let parameter_phase = if deferred {
+            Phase::Comptime
+        } else {
+            Phase::Runtime
+        };
+        self.bind_pattern_at_phase(
+            &closure_ast,
+            parameter,
+            parameter_type.clone(),
+            &mut scope,
+            parameter_phase,
+        );
         let previous_specialization_depth = self.specialization_depth.get();
         self.specialization_depth
             .set(previous_specialization_depth + 1);
@@ -3890,9 +4231,21 @@ impl Checker {
         type_: Type,
         environment: &mut TypeEnvironment,
     ) {
+        self.bind_pattern_at_phase(module, pattern, type_, environment, self.phase.get());
+    }
+
+    fn bind_pattern_at_phase(
+        &self,
+        module: &Module,
+        pattern: PatternId,
+        type_: Type,
+        environment: &mut TypeEnvironment,
+        phase: Phase,
+    ) {
         match &module.arena.patterns[pattern.0 as usize] {
             Pattern::Name { name, .. } => {
                 Rc::make_mut(&mut environment.names).insert(name.clone(), Typing::Mono(type_));
+                Rc::make_mut(&mut environment.phases).insert(name.clone(), phase);
             }
             Pattern::Tuple { elements, .. } => {
                 let fields = elements
@@ -3900,7 +4253,13 @@ impl Checker {
                     .enumerate()
                     .map(|(index, pattern)| {
                         let field = self.fresh();
-                        self.bind_pattern(module, *pattern, field.clone(), environment);
+                        self.bind_pattern_at_phase(
+                            module,
+                            *pattern,
+                            field.clone(),
+                            environment,
+                            phase,
+                        );
                         (index.to_string(), field)
                     })
                     .collect();
@@ -3909,14 +4268,26 @@ impl Checker {
             Pattern::Array { elements, .. } => {
                 let element = self.fresh();
                 for pattern in elements {
-                    self.bind_pattern(module, *pattern, element.clone(), environment);
+                    self.bind_pattern_at_phase(
+                        module,
+                        *pattern,
+                        element.clone(),
+                        environment,
+                        phase,
+                    );
                 }
                 let _ = self.constrain(type_, Type::Array(Box::new(element)), module.span);
             }
             Pattern::Constructor { name, payload, .. } => {
                 let payload_type = if let Some(payload) = payload {
                     let payload_type = self.fresh();
-                    self.bind_pattern(module, *payload, payload_type.clone(), environment);
+                    self.bind_pattern_at_phase(
+                        module,
+                        *payload,
+                        payload_type.clone(),
+                        environment,
+                        phase,
+                    );
                     payload_type
                 } else {
                     Type::Unit
@@ -3963,7 +4334,13 @@ impl Checker {
                     .iter()
                     .map(|field| {
                         let field_type = self.fresh();
-                        self.bind_pattern(module, field.pattern, field_type.clone(), environment);
+                        self.bind_pattern_at_phase(
+                            module,
+                            field.pattern,
+                            field_type.clone(),
+                            environment,
+                            phase,
+                        );
                         (field.name.clone(), field_type)
                     })
                     .collect();
@@ -4075,6 +4452,7 @@ impl Checker {
             (Pattern::Name { name, .. }, type_) => {
                 Rc::make_mut(&mut environment.names)
                     .insert(name.clone(), Typing::Mono(type_.clone()));
+                Rc::make_mut(&mut environment.phases).insert(name.clone(), self.phase.get());
             }
             (Pattern::Tuple { elements, .. }, Type::Record(fields))
             | (Pattern::Array { elements, .. }, Type::Record(fields)) => {
@@ -5847,6 +6225,7 @@ fn prebind_recursive_group(
             break;
         }
         let Declaration::Binding {
+            kind,
             pattern,
             value,
             span,
@@ -5866,6 +6245,14 @@ fn prebind_recursive_group(
             }
             Rc::make_mut(&mut environment.names)
                 .insert(name.clone(), Typing::Mono(checker.fresh_at_next_level()));
+            Rc::make_mut(&mut environment.phases).insert(
+                name.clone(),
+                if *kind == DeclarationKind::Const {
+                    Phase::Comptime
+                } else {
+                    Phase::Runtime
+                },
+            );
         }
         let Expression::Rec { lambda, .. } = module.arena.expressions[value.0 as usize] else {
             continue;
@@ -6663,6 +7050,226 @@ fn expression_span(expression: &Expression) -> Span {
         | Expression::Block { span, .. }
         | Expression::Rec { span, .. }
         | Expression::Comptime { span, .. } => *span,
+    }
+}
+
+fn closure_free_name_span(
+    module: &Module,
+    parameter: PatternId,
+    body: ExpressionId,
+    self_name: Option<&str>,
+    name: &str,
+) -> Option<Span> {
+    let mut bound = pattern_names(module, parameter)
+        .iter()
+        .any(|candidate| candidate == name);
+    if self_name == Some(name) {
+        bound = true;
+    }
+    free_name_span(module, body, name, bound)
+}
+
+fn free_name_span(
+    module: &Module,
+    expression_id: ExpressionId,
+    name: &str,
+    bound: bool,
+) -> Option<Span> {
+    let expression = &module.arena.expressions[expression_id.0 as usize];
+    match expression {
+        Expression::Var {
+            name: candidate,
+            span,
+        } => {
+            if !bound && candidate == name {
+                return Some(*span);
+            }
+            None
+        }
+        Expression::Apply {
+            function, argument, ..
+        } => {
+            if let Some(span) = free_name_span(module, *function, name, bound) {
+                return Some(span);
+            }
+            free_name_span(module, *argument, name, bound)
+        }
+        Expression::Field { target, .. }
+        | Expression::Rec { lambda: target, .. }
+        | Expression::Comptime { body: target, .. } => {
+            free_name_span(module, *target, name, bound)
+        }
+        Expression::Lambda {
+            parameter, body, ..
+        } => {
+            let parameter_binds_name = pattern_names(module, *parameter)
+                .iter()
+                .any(|candidate| candidate == name);
+            free_name_span(module, *body, name, bound || parameter_binds_name)
+        }
+        Expression::Array { elements, .. } => {
+            for element in elements {
+                if let Some(span) = free_name_span(module, element.value, name, bound) {
+                    return Some(span);
+                }
+            }
+            None
+        }
+        Expression::Tuple { elements, .. } => {
+            for element in elements {
+                if let Some(span) = free_name_span(module, *element, name, bound) {
+                    return Some(span);
+                }
+            }
+            None
+        }
+        Expression::Shape { members, .. } => {
+            for member in members {
+                let value = match member {
+                    ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => *value,
+                };
+                if let Some(span) = free_name_span(module, value, name, bound) {
+                    return Some(span);
+                }
+            }
+            None
+        }
+        Expression::If {
+            branches, fallback, ..
+        } => {
+            for branch in branches {
+                if let Some(span) = free_name_span(module, branch.condition, name, bound) {
+                    return Some(span);
+                }
+                if let Some(span) = free_name_span(module, branch.consequence, name, bound) {
+                    return Some(span);
+                }
+            }
+            if let Some(fallback) = fallback {
+                return free_name_span(module, *fallback, name, bound);
+            }
+            None
+        }
+        Expression::Case { target, arms, .. } => {
+            if let Some(span) = free_name_span(module, *target, name, bound) {
+                return Some(span);
+            }
+            for arm in arms {
+                if !bound
+                    && let Some(span) = pattern_pin_name_span(module, arm.pattern, name)
+                {
+                    return Some(span);
+                }
+                let pattern_binds_name = pattern_names(module, arm.pattern)
+                    .iter()
+                    .any(|candidate| candidate == name);
+                if let Some(span) =
+                    free_name_span(module, arm.body, name, bound || pattern_binds_name)
+                {
+                    return Some(span);
+                }
+            }
+            None
+        }
+        Expression::Block {
+            declarations,
+            result,
+            ..
+        } => {
+            let mut block_bound = bound;
+            for declaration in declarations {
+                let declaration = &module.arena.declarations[declaration.0 as usize];
+                match declaration {
+                    Declaration::Binding {
+                        tags,
+                        pattern,
+                        value,
+                        ..
+                    } => {
+                        for tag in tags {
+                            if let Some(span) =
+                                free_name_span(module, tag.descriptor, name, block_bound)
+                            {
+                                return Some(span);
+                            }
+                        }
+                        if !block_bound
+                            && let Some(span) = pattern_pin_name_span(module, *pattern, name)
+                        {
+                            return Some(span);
+                        }
+                        if let Some(span) = free_name_span(module, *value, name, block_bound) {
+                            return Some(span);
+                        }
+                        if pattern_names(module, *pattern)
+                            .iter()
+                            .any(|candidate| candidate == name)
+                        {
+                            block_bound = true;
+                        }
+                    }
+                    Declaration::Shadow {
+                        name: shadowed,
+                        value,
+                        ..
+                    } => {
+                        if let Some(span) = free_name_span(module, *value, name, block_bound) {
+                            return Some(span);
+                        }
+                        if shadowed == name {
+                            block_bound = true;
+                        }
+                    }
+                    Declaration::Open { value, .. } => {
+                        if let Some(span) = free_name_span(module, *value, name, block_bound) {
+                            return Some(span);
+                        }
+                    }
+                }
+            }
+            free_name_span(module, *result, name, block_bound)
+        }
+        Expression::Int { .. }
+        | Expression::Float { .. }
+        | Expression::Text { .. }
+        | Expression::Unit { .. }
+        | Expression::Intrinsic { .. }
+        | Expression::Tag { .. } => None,
+    }
+}
+
+fn pattern_pin_name_span(module: &Module, pattern: PatternId, name: &str) -> Option<Span> {
+    match &module.arena.patterns[pattern.0 as usize] {
+        Pattern::Pin {
+            name: candidate,
+            span,
+        } => {
+            if candidate == name {
+                return Some(*span);
+            }
+            None
+        }
+        Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => {
+            for element in elements {
+                if let Some(span) = pattern_pin_name_span(module, *element, name) {
+                    return Some(span);
+                }
+            }
+            None
+        }
+        Pattern::Constructor {
+            payload: Some(payload),
+            ..
+        } => pattern_pin_name_span(module, *payload, name),
+        Pattern::Shape { fields, .. } => {
+            for field in fields {
+                if let Some(span) = pattern_pin_name_span(module, field.pattern, name) {
+                    return Some(span);
+                }
+            }
+            None
+        }
+        _ => None,
     }
 }
 

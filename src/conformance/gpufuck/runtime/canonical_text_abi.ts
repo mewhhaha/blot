@@ -46,7 +46,7 @@ export function supportsBlotCanonicalTextAbi(
   for (const exported of manifest.exports) {
     if (exported.function === null) continue;
     if (exported.function.parameters.length !== 0) return false;
-    if (exported.function.result.kind !== "unit") return false;
+    if (!admittedDirectExportResult(exported.function.result)) return false;
   }
   for (const imported of manifest.imports) {
     if (
@@ -149,12 +149,10 @@ export function compileBlotCanonicalTextAbi(
       );
     }
     const signature = module.signatures[function_.signature];
-    if (
-      signature.parameters.length !== 0 ||
-      module.types[signature.result].kind !== "unit"
-    ) {
+    const resultTypes = directExportResultTypes(module, signature.result);
+    if (signature.parameters.length !== 0 || resultTypes === null) {
       throw new TypeError(
-        `${module.source}: canonical first-order export ${function_.name} must have type Unit -> Unit`,
+        `${module.source}: canonical first-order export ${function_.name} must have no parameters and return Unit, Bool, I32, or I64`,
       );
     }
     const layout = planValueLocals(module, function_);
@@ -167,7 +165,10 @@ export function compileBlotCanonicalTextAbi(
       wasmType.i32,
       wasmType.i32,
     ];
-    const type = builder.addFunctionType([], []);
+    const type = builder.addFunctionType(
+      [],
+      resultTypes.map(flatWasmType),
+    );
     const instructions = emitFunction(
       module,
       function_,
@@ -177,6 +178,7 @@ export function compileBlotCanonicalTextAbi(
       dispatchLocal,
       shell,
       activeExport,
+      resultTypes,
       function_.id + 1,
       importedFunctions,
       literalLocations,
@@ -213,6 +215,7 @@ function emitFunction(
   dispatchLocal: number,
   shell: { readonly realloc: number; readonly heap: number },
   activeExport: number,
+  resultTypes: readonly ("i32" | "i64")[],
   callId: number,
   importedFunctions: ReadonlyMap<
     string,
@@ -272,6 +275,7 @@ function emitFunction(
       checkpointLocal,
       shell.heap,
       activeExport,
+      resultTypes,
     ));
     instructions.push(...wasmInstruction.end);
   }
@@ -618,15 +622,29 @@ function emitTerminator(
   checkpointLocal: number,
   heap: number,
   activeExport: number,
+  resultTypes: readonly ("i32" | "i64")[],
 ): readonly WasmInstruction[] {
-  const finish = [
+  const finish: WasmInstruction[] = [
     ...wasmInstruction.localGet(checkpointLocal),
     ...wasmInstruction.globalSet(heap),
     ...wasmInstruction.i32Constant(0),
     ...wasmInstruction.globalSet(activeExport),
-    ...wasmInstruction.return,
   ];
-  if (terminator.kind === "return") return finish;
+  if (terminator.kind === "return") {
+    if (resultTypes.length > 0) {
+      const returned = requiredLocals(values, function_, terminator.value);
+      if (returned.length !== resultTypes.length) {
+        throw new TypeError(
+          `${module.source}: canonical export ${function_.name} returns ${returned.length} flattened values; expected ${resultTypes.length}`,
+        );
+      }
+      for (const local of returned) {
+        finish.push(...wasmInstruction.localGet(local));
+      }
+    }
+    finish.push(...wasmInstruction.return);
+    return finish;
+  }
   if (terminator.kind === "trap") return wasmInstruction.unreachable;
   const branch = (
     target: number,
@@ -1286,6 +1304,22 @@ function admittedAbiType(type: BlotAbiType): boolean {
     return type.fields.every((field) => admittedAbiType(field.type));
   }
   return false;
+}
+
+function admittedDirectExportResult(type: BlotAbiType): boolean {
+  return type.kind === "unit" || type.kind === "boolean" ||
+    type.kind === "signed-integer-64";
+}
+
+function directExportResultTypes(
+  module: BlotRuntimeModule,
+  typeId: number,
+): readonly ("i32" | "i64")[] | null {
+  const type = module.types[typeId];
+  if (type.kind === "unit") return [];
+  if (type.kind === "boolean" || type.kind === "integer-32") return ["i32"];
+  if (type.kind === "signed-integer-64") return ["i64"];
+  return null;
 }
 
 function collectTextLiterals(module: BlotRuntimeModule): readonly string[] {

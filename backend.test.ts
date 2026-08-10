@@ -431,9 +431,8 @@ Deno.test("loop control lowers without synthetic variant declarations", async ()
 Deno.test("a `const` refuses to capture a `let`", async () => {
   const path = join("examples/rejected/semantics", "const_captures_let.blot");
   const loaded = await load(path);
-  const checked = await checkFile(path);
-  const error = assertThrows(
-    () => lowerModule(loaded.module, checked, checked.values),
+  const error = await assertRejects(
+    () => checkFile(path),
     BlotError,
   );
   assertEquals(error.diagnostic.code, "BLOT_CONST_CAPTURES_RUNTIME");

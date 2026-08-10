@@ -16,6 +16,7 @@ import {
 import { warmBabaRuntime } from "../syntax/baba_runtime.ts";
 import { encodePortableModule } from "../syntax/portable.ts";
 import { prepareGpupaperHir } from "./node_hir.ts";
+import { BlotError, fail } from "../diagnostic.ts";
 
 export interface CompilerArtifact {
   readonly wasm: Uint8Array;
@@ -106,10 +107,18 @@ export class Compiler {
     }
 
     const module = validateBlotRuntimeModule(hir);
-    const batch = await compileBlotRuntimeModulesOnRustWasm(
-      [module],
-      { target: "wasm-simd128" },
-    );
+    let batch;
+    try {
+      batch = await compileBlotRuntimeModulesOnRustWasm(
+        [module],
+        { target: "wasm-simd128" },
+      );
+    } catch (error) {
+      if (error instanceof BlotError) throw error;
+      let message = String(error);
+      if (error instanceof Error) message = error.message;
+      fail("BLOT_BACKEND_ERROR", message, { start: 0, end: 0 });
+    }
     const emitted = batch.artifacts[0];
     if (emitted === undefined || batch.artifacts.length !== 1) {
       throw new Error(

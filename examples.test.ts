@@ -261,12 +261,11 @@ const REJECTIONS: Record<
     code: "BLOT_BREAK_OUTSIDE_LOOP",
     stage: "check",
   },
-  // A phase error, not a type error: the program checks and the interpreter
-  // runs it, and only lowering has to place the capture in a frame that does
-  // not exist. `backend.test.ts` asserts the code.
+  // A phase error, not a type error: the captured name is in lexical scope,
+  // but a compile-time closure has no runtime frame in which to find it.
   "const_captures_let": {
     code: "BLOT_CONST_CAPTURES_RUNTIME",
-    stage: "build",
+    stage: "check",
   },
 };
 

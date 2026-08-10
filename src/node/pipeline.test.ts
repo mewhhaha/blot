@@ -5,6 +5,41 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { Compiler } from "../compiler.ts";
 
+interface ManifestType {
+  readonly kind: string;
+  readonly element?: ManifestType;
+  readonly cases?: readonly {
+    readonly name: string;
+    readonly payload?: ManifestType;
+  }[];
+}
+
+interface ManifestFunction {
+  readonly parameters: readonly ManifestType[];
+  readonly result: ManifestType;
+}
+
+interface ManifestExport {
+  readonly sourceName: string;
+  readonly name: string | null;
+  readonly phase: "runtime" | "comptime";
+  readonly function: ManifestFunction | null;
+  readonly effects: readonly string[];
+}
+
+interface ManifestImport {
+  readonly capability: string;
+  readonly operation: string;
+  readonly module: string;
+  readonly name: string;
+  readonly function: ManifestFunction;
+}
+
+interface Manifest {
+  readonly exports: readonly ManifestExport[];
+  readonly imports: readonly ManifestImport[];
+}
+
 test("Baba Wasm -> Node -> gpupaper Wasm compiles Blot", async () => {
   const compiler = await Compiler.create();
   try {
@@ -35,22 +70,320 @@ test("comment-only revisions reuse the compiled artifact", async () => {
   }
 });
 
-
-test("multiple runtime exports lower through gpupaper", async () => {
+test("multiple named runtime exports survive Runtime HIR and ABI lowering", async () => {
   const compiler = await Compiler.create();
   try {
-    const artifact = await compiler.compile(resolve("examples/arithmetic.blot"));
-    assert.equal(WebAssembly.validate(artifact.wasm), true);
-    const manifest = JSON.parse(
-      new TextDecoder().decode(artifact.manifestBytes),
-    ) as {
-      readonly exports: readonly { readonly phase: string }[];
-    };
-    const runtimeExports = manifest.exports.filter((exported) =>
-      exported.phase === "runtime"
-    );
-    assert.ok(runtimeExports.length > 1);
+    const path = resolve("examples/arithmetic.blot");
+    const expectedNames = [
+      "sum",
+      "nested",
+      "negated",
+      "compared",
+      "equal",
+      "piped",
+      "branch",
+    ];
+    const hir = await compiler.prepare(path);
+    const runtimeHirNames = hir.exports
+      .filter((exported) => exported.phase === "runtime")
+      .map((exported) => exported.sourceName);
+    assert.deepEqual(runtimeHirNames, expectedNames);
+
+    const artifact = await compiler.compile(path);
+    const manifest = decodeManifest(artifact.manifestBytes);
+    const runtimeAbiNames = manifest.exports
+      .filter((exported) => exported.phase === "runtime")
+      .map((exported) => exported.sourceName);
+    assert.deepEqual(runtimeAbiNames, expectedNames);
+    assert.deepEqual(blotFunctionExports(artifact.wasm), expectedNames.map(
+      (name) => `blot:${name}`,
+    ));
   } finally {
     compiler.destroy();
   }
 });
+
+test("array exports preserve the complete closed Option ABI", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(
+      resolve("examples/polymorphic_collections.blot"),
+    );
+    const manifest = decodeManifest(artifact.manifestBytes);
+    assert.deepEqual(requiredRuntimeExport(manifest, "lengths").function.result, {
+      kind: "array",
+      element: { kind: "signed-integer-64" },
+    });
+    assert.deepEqual(
+      requiredRuntimeExport(manifest, "map_previous").function.result,
+      {
+        kind: "variant",
+        cases: [
+          { name: "None" },
+          { name: "Some", payload: { kind: "text" } },
+        ],
+      },
+    );
+    assert.equal(WebAssembly.validate(artifact.wasm), true);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("a named .default field is projected as blot:default", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-node-default-"));
+  const path = join(directory, "default-field.blot");
+  const compiler = await Compiler.create();
+  try {
+    await writeFile(
+      path,
+      "return {\n  .default = 42;\n  .other = 7;\n}\n",
+    );
+    const artifact = await compiler.compile(path);
+    const manifest = decodeManifest(artifact.manifestBytes);
+    assert.deepEqual(
+      manifest.exports.map((exported) => [exported.sourceName, exported.name]),
+      [
+        ["default", "blot:default"],
+        ["other", "blot:other"],
+      ],
+    );
+    const instantiated = await WebAssembly.instantiate(artifact.wasm);
+    assert.equal(
+      exportedFunction(instantiated.instance, "blot:default")(),
+      42n,
+    );
+    assert.equal(exportedFunction(instantiated.instance, "blot:other")(), 7n);
+  } finally {
+    compiler.destroy();
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("module grants keep Unit return typing through canonical text imports", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(resolve("examples/granted.blot"));
+    const manifest = decodeManifest(artifact.manifestBytes);
+    assert.deepEqual(manifest.imports, [
+      {
+        capability: "Init",
+        operation: "print",
+        module: "blot:host/Init",
+        name: "print",
+        function: {
+          parameters: [{ kind: "text" }],
+          result: { kind: "unit" },
+        },
+      },
+    ]);
+    const exported = requiredRuntimeExport(manifest, "default");
+    assert.deepEqual(exported.function.result, { kind: "signed-integer-64" });
+    assert.deepEqual(exported.effects, ["Init"]);
+    assert.deepEqual(artifact.capabilities, ["Init"]);
+
+    const writes: string[] = [];
+    let activeInstance: WebAssembly.Instance | undefined;
+    const instantiated = await WebAssembly.instantiate(artifact.wasm, {
+      "blot:host/Init": {
+        print(pointer: number, length: number): void {
+          if (activeInstance === undefined) {
+            throw new Error("host print called before instantiation completed");
+          }
+          const memory = exportedMemory(activeInstance);
+          const bytes = new Uint8Array(memory.buffer, pointer, length);
+          writes.push(new TextDecoder().decode(bytes));
+        },
+      },
+    });
+    activeInstance = instantiated.instance;
+    assert.equal(
+      exportedFunction(instantiated.instance, "blot:default")(),
+      42n,
+    );
+    assert.deepEqual(writes, ["compiled", "linked"]);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("module grants preserve dynamic non-Unit host results", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-node-host-result-"));
+  const path = join(directory, "host-result.blot");
+  const compiler = await Compiler.create();
+  try {
+    await writeFile(
+      path,
+      "module init\n\nopen @import \"blot:prelude\" ()\n\nvalue <- init.read ()\nreturn value + 1\n",
+    );
+    const artifact = await compiler.compile(path);
+    const manifest = decodeManifest(artifact.manifestBytes);
+    assert.deepEqual(manifest.imports, [
+      {
+        capability: "Init",
+        operation: "read",
+        module: "blot:host/Init",
+        name: "read",
+        function: {
+          parameters: [{ kind: "unit" }],
+          result: { kind: "signed-integer-64" },
+        },
+      },
+    ]);
+
+    let hostValue = 41n;
+    const instantiated = await WebAssembly.instantiate(artifact.wasm, {
+      "blot:host/Init": {
+        read(): bigint {
+          return hostValue;
+        },
+      },
+    });
+    const run = exportedFunction(instantiated.instance, "blot:default");
+    assert.equal(run(), 42n);
+    hostValue = -2n;
+    assert.equal(run(), -1n);
+  } finally {
+    compiler.destroy();
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("dynamic signed i64 to f64 conversion matches WebAssembly edge rounding", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-node-i64-f64-"));
+  const path = join(directory, "i64-f64.blot");
+  const compiler = await Compiler.create();
+  try {
+    await writeFile(
+      path,
+      "module init\n\nopen @import \"blot:prelude\" ()\n\nvalue <- init.read ()\n<- init.observe (Float.of_int value)\nreturn ()\n",
+    );
+    const artifact = await compiler.compile(path);
+    const manifest = decodeManifest(artifact.manifestBytes);
+    assert.deepEqual(
+      manifest.imports.map((imported) => imported.function),
+      [
+        {
+          parameters: [{ kind: "unit" }],
+          result: { kind: "signed-integer-64" },
+        },
+        {
+          parameters: [{ kind: "float-64" }],
+          result: { kind: "unit" },
+        },
+      ],
+    );
+
+    let hostValue = 0n;
+    const observed: number[] = [];
+    const instantiated = await WebAssembly.instantiate(artifact.wasm, {
+      "blot:host/Init": {
+        read(): bigint {
+          return hostValue;
+        },
+        observe(value: number): void {
+          observed.push(value);
+        },
+      },
+    });
+    const run = exportedFunction(instantiated.instance, "blot:default");
+    const cases = [
+      -9223372036854775808n,
+      -9007199254740993n,
+      -4294967297n,
+      -2147483649n,
+      -1n,
+      0n,
+      1n,
+      2147483647n,
+      2147483648n,
+      4294967295n,
+      9007199254740993n,
+      9223372036854775807n,
+    ];
+    for (const value of cases) {
+      hostValue = value;
+      run();
+      assert.equal(observed.pop(), Number(value), `conversion of ${value}`);
+    }
+    assert.deepEqual(observed, []);
+  } finally {
+    compiler.destroy();
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("agent-style recursion lowers to a dynamic back-edge and compiles", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const path = resolve("case-studies/agent/main.blot");
+    const hir = await compiler.prepare(path);
+    const function_ = hir.functions[0];
+    assert.notEqual(function_, undefined);
+    if (function_ === undefined) throw new Error("agent HIR has no function");
+    const hasConditional = function_.blocks.some((block) =>
+      block.terminator.kind === "conditional"
+    );
+    const hasBackEdge = function_.blocks.some((block) => {
+      if (block.terminator.kind !== "branch") return false;
+      return block.terminator.target <= block.id;
+    });
+    assert.equal(hasConditional, true);
+    assert.equal(hasBackEdge, true);
+
+    const artifact = await compiler.compile(path);
+    const exported = requiredRuntimeExport(
+      decodeManifest(artifact.manifestBytes),
+      "default",
+    );
+    assert.deepEqual(exported.function.result, { kind: "signed-integer-64" });
+    assert.equal(WebAssembly.validate(artifact.wasm), true);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+function decodeManifest(bytes: Uint8Array): Manifest {
+  return JSON.parse(new TextDecoder().decode(bytes)) as Manifest;
+}
+
+function requiredRuntimeExport(
+  manifest: Manifest,
+  sourceName: string,
+): ManifestExport & { readonly function: ManifestFunction } {
+  const exported = manifest.exports.find((candidate) =>
+    candidate.sourceName === sourceName && candidate.phase === "runtime"
+  );
+  if (exported === undefined || exported.function === null) {
+    throw new Error(`missing runtime export ${sourceName}`);
+  }
+  return exported as ManifestExport & { readonly function: ManifestFunction };
+}
+
+function blotFunctionExports(wasm: Uint8Array): string[] {
+  const module = new WebAssembly.Module(wasm as BufferSource);
+  return WebAssembly.Module.exports(module)
+    .filter((exported) =>
+      exported.kind === "function" && exported.name.startsWith("blot:")
+    )
+    .map((exported) => exported.name);
+}
+
+function exportedFunction(
+  instance: WebAssembly.Instance,
+  name: string,
+): (...arguments_: readonly number[]) => unknown {
+  const exported = instance.exports[name];
+  if (typeof exported !== "function") {
+    throw new Error(`missing WebAssembly function export ${name}`);
+  }
+  return exported as (...arguments_: readonly number[]) => unknown;
+}
+
+function exportedMemory(instance: WebAssembly.Instance): WebAssembly.Memory {
+  const memory = instance.exports.memory;
+  if (!(memory instanceof WebAssembly.Memory)) {
+    throw new Error("missing WebAssembly memory export");
+  }
+  return memory;
+}

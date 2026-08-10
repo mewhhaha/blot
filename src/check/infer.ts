@@ -179,6 +179,11 @@ export interface TypeEnv {
    * scope.
    */
   readonly bindings: Map<string, { id: number; typing: Typing }>;
+  /** Lexical phase of the active binding, paired to survive shadowing safely. */
+  readonly phases: Map<
+    string,
+    { phase: "runtime" | "comptime"; typing: Typing }
+  >;
   /** Stable identities for immutable projections, keyed by parent identity and field. */
   readonly projections: Map<string, number>;
   /**
@@ -215,6 +220,7 @@ export function childTypeEnv(parent: TypeEnv | null): TypeEnv {
     integerValues: new Map(),
     relations: new Map(),
     bindings: new Map(),
+    phases: new Map(),
     projections: new Map(),
     folded: new Map(),
     parent,
@@ -250,6 +256,34 @@ export function lookupBinding(env: TypeEnv, name: string): number | null {
     if (found !== undefined) {
       if (found.typing !== typing) return null;
       return found.id;
+    }
+    scope = scope.parent;
+  }
+  return null;
+}
+
+function recordBindingPhase(
+  scope: TypeEnv,
+  name: string,
+  phase: "runtime" | "comptime",
+): void {
+  const typing = scope.names.get(name);
+  if (typing === undefined) return;
+  scope.phases.set(name, { phase, typing });
+}
+
+function lookupBindingPhase(
+  env: TypeEnv,
+  name: string,
+): "runtime" | "comptime" | null {
+  const typing = lookupType(env, name);
+  if (typing === undefined) return null;
+  let scope: TypeEnv | null = env;
+  while (scope !== null) {
+    const found = scope.phases.get(name);
+    if (found !== undefined) {
+      if (found.typing !== typing) return null;
+      return found.phase;
     }
     scope = scope.parent;
   }
@@ -785,6 +819,178 @@ function requireComptimeBinding(
   }
 }
 
+/**
+ * A closure created for a `const` is hoisted out of the runtime frame. Its own
+ * parameters and locals remain legal because they are bound inside the
+ * closure; only a free name that resolves to a runtime binding is unavailable.
+ */
+function refuseRuntimeConstCaptures(
+  pattern: Pattern,
+  value: Value,
+  context: Context,
+  span: Span,
+): void {
+  const seen = new Set<Value>();
+  const inspect = (candidate: Value): void => {
+    if (seen.has(candidate)) return;
+    seen.add(candidate);
+    if (candidate.tag === "closure" && candidate.source !== undefined) {
+      for (const name of freeNames(candidate.source)) {
+        if (name === candidate.self) continue;
+        if (lookupBindingPhase(context.types, name) !== "runtime") continue;
+        let binding = "this compile-time closure";
+        if (pattern.tag === "name") {
+          binding = `the compile-time closure \`${pattern.name}\``;
+        }
+        let captureSpan = freeNameSpan(candidate.source, name);
+        if (captureSpan === null) captureSpan = span;
+        fail(
+          "BLOT_CONST_CAPTURES_RUNTIME",
+          `\`${name}\` is a runtime binding, so it has no value at compile time and ${binding} cannot capture it. Write a \`let\` binding for the closure, or make \`${name}\` available with \`const\`.`,
+          captureSpan,
+        );
+      }
+      return;
+    }
+    switch (candidate.tag) {
+      case "shape":
+        for (const member of candidate.fields.values()) inspect(member);
+        return;
+      case "array":
+        for (const element of candidate.elements) inspect(element);
+        return;
+      case "region-type":
+        inspect(candidate.element);
+        return;
+      case "deferred-type":
+        inspect(candidate.inner);
+        return;
+      case "region-array":
+      case "region-rejoin":
+        for (const element of candidate.store.cells) inspect(element);
+        return;
+      case "tag":
+        if (candidate.payload !== null) inspect(candidate.payload);
+        return;
+      case "primitive":
+      case "native":
+        for (const argument of candidate.applied) inspect(argument);
+        return;
+      case "range":
+        inspect(candidate.low);
+        inspect(candidate.high);
+        return;
+      case "union":
+        for (const member of candidate.members) inspect(member);
+        return;
+      case "arrow":
+        inspect(candidate.domain);
+        inspect(candidate.codomain);
+        for (const effect of candidate.effects) inspect(effect);
+        return;
+      case "forall":
+        inspect(candidate.body);
+        return;
+      case "effect":
+        for (const operation of candidate.operations.values()) {
+          inspect(operation);
+        }
+        return;
+      case "operation":
+        inspect(candidate.effect);
+        return;
+      case "extended":
+        inspect(candidate.inner);
+        for (const member of candidate.members.values()) inspect(member);
+        return;
+      case "sealed":
+        inspect(candidate.inner);
+        return;
+      default:
+        return;
+    }
+  };
+  inspect(value);
+}
+
+/** Finds the source read represented by `freeNames`, preserving inner binders. */
+function freeNameSpan(expr: Expr, name: string): Span | null {
+  if (!freeNames(expr).has(name)) return null;
+  const find = (candidate: Expr): Span | null => {
+    if (!freeNames(candidate).has(name)) return null;
+    return freeNameSpan(candidate, name);
+  };
+  switch (expr.tag) {
+    case "var": {
+      if (expr.name === name) return expr.span;
+      return null;
+    }
+    case "apply": {
+      const fn = find(expr.fn);
+      if (fn !== null) return fn;
+      return find(expr.arg);
+    }
+    case "field":
+      return find(expr.target);
+    case "lambda":
+      return find(expr.body);
+    case "rec":
+      return find(expr.lambda);
+    case "comptime":
+      return find(expr.body);
+    case "tuple":
+      for (const element of expr.elements) {
+        const found = find(element);
+        if (found !== null) return found;
+      }
+      return null;
+    case "array":
+      for (const element of expr.elements) {
+        const found = find(element.value);
+        if (found !== null) return found;
+      }
+      return null;
+    case "shape":
+      for (const member of expr.members) {
+        const found = find(member.value);
+        if (found !== null) return found;
+      }
+      return null;
+    case "if":
+      for (const branch of expr.branches) {
+        const condition = find(branch.condition);
+        if (condition !== null) return condition;
+        const consequence = find(branch.consequence);
+        if (consequence !== null) return consequence;
+      }
+      if (expr.fallback === null) return null;
+      return find(expr.fallback);
+    case "case": {
+      const target = find(expr.target);
+      if (target !== null) return target;
+      for (const arm of expr.arms) {
+        if (patternNames(arm.pattern).includes(name)) continue;
+        const found = find(arm.body);
+        if (found !== null) return found;
+      }
+      return null;
+    }
+    case "block":
+      for (const declaration of expr.declarations) {
+        const found = find(declaration.value);
+        if (found !== null) return found;
+        if (
+          (declaration.tag === "shadow" && declaration.name === name) ||
+          (declaration.tag === "binding" &&
+            patternNames(declaration.pattern).includes(name))
+        ) return null;
+      }
+      return find(expr.result);
+    default:
+      return null;
+  }
+}
+
 export function infer(
   expr: Expr,
   context: Context,
@@ -997,7 +1203,13 @@ function inferUnrecorded(
         types: scope,
         deferComptimeBindings: true,
       };
-      const param = bindPattern(expr.parameter, inner, level);
+      let parameterPhase: "runtime" | "comptime" = "runtime";
+      if (expr.deferred === true) parameterPhase = "comptime";
+      const parameterContext: Context = {
+        ...inner,
+        phase: parameterPhase,
+      };
+      const param = bindPattern(expr.parameter, parameterContext, level);
       // A fresh row per lambda is what makes the inferred effect minimal:
       // nothing becomes effectful because something else nearby was.
       const bodyRow = freshVar(level);
@@ -1965,7 +2177,11 @@ function inferCase(
       // Narrowing: inside the arm, a matched name is known to have the arm's
       // shape. This is what "branches prove stuff" amounts to over a union
       // lattice — refinement, not dependent types.
-      if (expr.target.tag === "var") scope.names.set(expr.target.name, armType);
+      if (expr.target.tag === "var") {
+        const phase = lookupBindingPhase(scope, expr.target.name);
+        scope.names.set(expr.target.name, armType);
+        if (phase !== null) recordBindingPhase(scope, expr.target.name, phase);
+      }
     }
 
     const body = infer(arm.body, inner, level, row);
@@ -2552,6 +2768,7 @@ function bindPattern(
       const type = freshVar(level);
       scope.names.set(pattern.name, type);
       const identity = recordBinding(scope, pattern.name);
+      recordBindingPhase(scope, pattern.name, context.phase);
       context.patternBindings.set(pattern, identity);
       if (
         pattern.qualifier === "affine" || pattern.qualifier === "linear"
@@ -2743,6 +2960,7 @@ function inferDeclarations(
         // never be used on integers.
         context.types.names.set(name, scheme(field, -1));
         recordBinding(context.types, name);
+        recordBindingPhase(context.types, name, "comptime");
         recordComptimeBinding(context.types, name, fieldValue);
       }
       continue;
@@ -2821,6 +3039,7 @@ function inferDeclarations(
       // `Typing` pairing alone would not notice a `:=` in the same scope.
       const identity = aliasedBinding(declaration.value, context.types);
       recordBinding(context.types, declaration.name, identity);
+      recordBindingPhase(context.types, declaration.name, "runtime");
       // A rebinding whose value is not known at compile time erases the one the
       // name had.
       context.types.comptime.delete(declaration.name);
@@ -2922,6 +3141,14 @@ function inferDeclarations(
         declaration.value,
         context,
       );
+      if (raw !== null) {
+        refuseRuntimeConstCaptures(
+          declaration.pattern,
+          raw,
+          context,
+          declaration.value.span,
+        );
+      }
       // `@effect` cannot know what it will be called, so the binding names it.
       // The identity is preserved: this is a rename, not a second effect.
       const value =
@@ -3031,7 +3258,16 @@ function inferDeclarations(
     const integerValue = witness(declaration.value, context.types);
     const knownArrayLength = arrayLength(declaration.value, context.types);
     const relation = expressionRelation(declaration.value, context);
-    bindDeclaration(declaration.pattern, type, context, level, identity);
+    let bindingPhase: "runtime" | "comptime" = "runtime";
+    if (declaration.kind === "const") bindingPhase = "comptime";
+    bindDeclaration(
+      declaration.pattern,
+      type,
+      context,
+      level,
+      identity,
+      bindingPhase,
+    );
     bindPatternRelation(declaration.pattern, relation, context.types);
     if (
       declaration.pattern.tag === "name" && integerValue !== null &&
@@ -3345,7 +3581,15 @@ function checkAgainst(
 
   const scope = childTypeEnv(context.types);
   const inner: Context = { ...context, types: scope };
-  bindPatternAgainst(expr.parameter, expected.param, inner, level + 1);
+  let parameterPhase: "runtime" | "comptime" = "runtime";
+  if (expr.deferred === true) parameterPhase = "comptime";
+  const parameterContext: Context = { ...inner, phase: parameterPhase };
+  bindPatternAgainst(
+    expr.parameter,
+    expected.param,
+    parameterContext,
+    level + 1,
+  );
   const bodyRow = freshVar(level + 1);
   if (expr.body.tag === "block" || isReturnScopeBoundary(expr.body)) {
     checkAgainst(
@@ -3400,6 +3644,7 @@ function bindPatternAgainst(
   if (pattern.tag === "name") {
     scope.names.set(pattern.name, expected);
     const identity = recordBinding(scope, pattern.name);
+    recordBindingPhase(scope, pattern.name, context.phase);
     context.patternBindings.set(pattern, identity);
     if (pattern.qualifier === "affine" || pattern.qualifier === "linear") {
       context.continuationCandidates.add(identity);
@@ -3416,10 +3661,12 @@ function bindDeclaration(
   context: Context,
   level: Level,
   identity: number | null,
+  phase: "runtime" | "comptime",
 ): void {
   if (pattern.tag === "name") {
     context.types.names.set(pattern.name, type);
     const binding = recordBinding(context.types, pattern.name, identity);
+    recordBindingPhase(context.types, pattern.name, phase);
     context.patternBindings.set(pattern, binding);
     if (pattern.qualifier === "affine" || pattern.qualifier === "linear") {
       context.continuationCandidates.add(binding);
@@ -3428,7 +3675,7 @@ function bindDeclaration(
   }
   // A destructuring binding types its parts by constraining the whole against
   // the shape the pattern requires.
-  const required = bindPattern(pattern, context, level);
+  const required = bindPattern(pattern, { ...context, phase }, level);
   const whole = instantiate(type, level, context.staging.instances);
   located(pattern.span, () => constrain(whole, required));
   recordPatternShapes(pattern, whole, context);
@@ -3636,6 +3883,7 @@ function snapshotTypeEnv(
     integerValues: new Map(),
     relations: new Map(),
     bindings: new Map(),
+    phases: new Map(),
     projections: new Map(),
     folded: new Map(),
     parent,
@@ -3680,6 +3928,13 @@ function snapshotTypeEnv(
     if (omittedNames.has(name)) continue;
     snapshot.bindings.set(name, {
       id: entry.id,
+      typing: snapshotTyping(entry.typing, types, typings),
+    });
+  }
+  for (const [name, entry] of source.phases) {
+    if (omittedNames.has(name)) continue;
+    snapshot.phases.set(name, {
+      phase: entry.phase,
       typing: snapshotTyping(entry.typing, types, typings),
     });
   }
@@ -3881,6 +4136,10 @@ function typeClosure(
   const placeholder = freshVar(level + 1);
   captured.types.names.set(value.self, placeholder);
   recordBinding(captured.types, value.self);
+  let selfPhase = context.phase;
+  const lexicalSelfPhase = lookupBindingPhase(context.types, value.self);
+  if (lexicalSelfPhase !== null) selfPhase = lexicalSelfPhase;
+  recordBindingPhase(captured.types, value.self, selfPhase);
   const inferred = infer(value.source, inner, level + 1, row);
   located(value.source.span, () => constrain(inferred, placeholder));
   return scheme(inferred, level);
@@ -3968,6 +4227,16 @@ function capturedScope(
   if (origin === null) return null;
   const built = childTypeEnv(origin.types);
   const values = childEnv(origin.values);
+  const capturePhase = (name: string): "runtime" | "comptime" => {
+    if (
+      context.values.module !== null && origin.values.module !== null &&
+      context.values.module.identity === origin.values.module.identity
+    ) {
+      const lexical = lookupBindingPhase(context.types, name);
+      if (lexical !== null) return lexical;
+    }
+    return "comptime";
+  };
   // Outermost first, so a name bound twice ends up meaning the inner one.
   for (const scope of inner.reverse()) {
     for (const [name, captured] of scope.names) {
@@ -3982,6 +4251,7 @@ function capturedScope(
       if (bridged !== null) {
         built.names.set(name, bridged);
         recordBinding(built, name);
+        recordBindingPhase(built, name, capturePhase(name));
         recordComptimeBinding(built, name, captured);
         continue;
       }
@@ -4000,6 +4270,7 @@ function capturedScope(
       if (captive === null) return null;
       built.names.set(name, captive);
       recordBinding(built, name);
+      recordBindingPhase(built, name, capturePhase(name));
       recordComptimeBinding(built, name, captured);
     }
   }
@@ -4117,6 +4388,8 @@ function inferRecursiveGroup(
     const placeholder = freshVar(level + 1);
     placeholders.set(member.name, placeholder);
     scope.names.set(member.name, placeholder);
+    recordBinding(scope, member.name);
+    recordBindingPhase(scope, member.name, context.phase);
   }
   for (const member of members) {
     const inferred = infer(member.lambda, inner, level + 1, row);
@@ -4273,7 +4546,10 @@ export function checkModule(
     // instantiated once when its result record was built, which left their
     // variables at level 0. Re-generalizing at 0 would make every use share
     // them, so `fold` used once on text could never be used on integers.
-    for (const [name, type] of prelude) types.names.set(name, scheme(type, -1));
+    for (const [name, type] of prelude) {
+      types.names.set(name, scheme(type, -1));
+      recordBindingPhase(types, name, "comptime");
+    }
   }
   const shapes = new Map<Expr, Shape>();
   const recordAdaptations = new Map<Expr, RecordAdaptation>();
@@ -4344,10 +4620,14 @@ export function checkModule(
   // shape is whatever the program actually reaches for — inference discovers
   // the capability requirement rather than the program declaring it. An
   // imported module's parameter is the same variable, and reporting it is what
-  // lets an importer's argument be checked against what the module reads.
-  const parameter = module.parameter === null
-    ? null
-    : bindPattern(module.parameter, context, level);
+  // lets an importer's argument be checked against what the module reads. It
+  // is also available to a hoisted `const` closure: field projections become
+  // host imports rather than captures from an enclosing runtime frame.
+  let parameter: SimpleType | null = null;
+  if (module.parameter !== null) {
+    const parameterContext: Context = { ...context, phase: "comptime" };
+    parameter = bindPattern(module.parameter, parameterContext, level);
+  }
 
   inferDeclarations(module.declarations, context, level, row);
   let result: SimpleType;

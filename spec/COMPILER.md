@@ -25,19 +25,11 @@ owns every semantic judgment between those boundaries; neither Wasm component
 is permitted to reinterpret Blot source semantics. An implementation boundary
 is not a semantic boundary.
 
-Two CLI commands are still answered by the oracle rather than by the production
-compiler: `eval` runs the TypeScript evaluator and `ownership` prints the
-TypeScript ownership facts. This is a stated exception, not a second definition
-of the language — the two engines are held to one meaning by the parity gates in
-[`../Justfile`](../Justfile), and the usage text names which engine answered so
-a disagreement is attributable rather than mysterious. Moving both onto the
-production compiler is recorded in [`../TASKS.md`](../TASKS.md).
-
-Those gates compare both directions. Comparing rejections alone would let the
-production checker drift towards accepting what the oracle refuses, which is the
-drift that reaches an artifact: `conformance:check` therefore requires the two
-checkers to agree, by diagnostic code, on the accepted corpus as well as the
-rejected one.
+The Node CLI exposes `ast`, `check`, and `build`. Evaluation, ownership reports,
+formatting, and package construction remain development tools outside this
+experimental CLI boundary. `pnpm parity` and `pnpm parity:strict` compare both
+compiler directions; comparing rejections alone would let either checker drift
+towards accepting a program the other refuses.
 
 ## 1. Inputs, outputs, and observations
 
@@ -108,15 +100,16 @@ The source pipeline is:
 ```text
 source -> Baba lexer -> layout elaboration -> Baba CPU frontend -> compact CST -> fixity fold -> AST
        -> comptime evaluation -> biunification -> safety -> ownership
-       -> staging and specialization -> ClosedProgram
-       -> direct Rust/WebAssembly emission
+       -> staging and specialization -> validated Runtime HIR
+       -> gpupaper Core -> gpupaper Rust/Wasm emission -> ClosedProgram
 ```
 
 Baba owns lexing and parsing. Blot owns deterministic layout-token insertion,
 source-offset recovery, elaboration, inference, compile-time evaluation, safety,
-ownership, specialization, Runtime HIR, ABI policy, the module shell, and direct
-WebAssembly emission. Gpupaper owns its independent Core and emitter, which Blot
-uses only for bounded conformance comparisons.
+ownership, specialization, Runtime HIR, ABI policy, and the module shell.
+Gpupaper owns Core-to-Wasm planning and binary emission. The checked-in Blot
+Rust compiler Wasm remains the semantic and ABI parity implementation; it is not
+invoked by an ordinary Node compilation.
 
 ## 3. Pass contract
 
@@ -266,7 +259,7 @@ A content hash establishes identity, not authority. In particular, an untrusted
 package cannot justify a checked interface by hashing an interface it supplied
 itself. Reusing semantic judgments across a trust boundary requires either a
 replayable proof certificate or an attestation rooted in the compiler
-distribution. The compiler-distributed prelude snapshot uses the latter: its
+distribution. The Rust/Wasm distribution's prelude snapshot uses the latter: its
 portable AST and closed interface are a separate package artifact beside the
 checker WebAssembly, and the artifact build regenerates both from the same
 source revision by running the ordinary frontend and checker. Distribution
@@ -283,10 +276,12 @@ distribute(W_C, S(ast, interface))    decode_C(S) = (ast, interface)
 check_C(ast) = interface
 ```
 
-The premises are a release-build obligation over one distribution. Runtime
-loading resolves `blot:prelude` to the adjacent snapshot through the ordinary
-module loader, then validates the portable AST arena, certificate schema, closed
-flat type arena, and all arena references before installing the memoized result.
+The premises are a release-build obligation over one distribution. The
+Rust/Wasm implementation resolves `blot:prelude` to the adjacent snapshot
+through the ordinary module loader, then validates the portable AST arena,
+certificate schema, closed flat type arena, and all arena references before
+installing the memoized result. The Node implementation loads the ordinary
+prelude source through its source graph and derives the same interface.
 The MessagePack envelope is a transport encoding of those existing artifacts,
 not another AST schema. If compile-time specialization needs values represented
 by the AST, the compiler evaluates the validated AST once per session and
@@ -296,7 +291,10 @@ value.
 Performance is measured by phase work, not by repository boundaries. Cold, warm,
 resident, unchanged-revision, source-only-edit, and semantic-edit timings are
 different experiments. [`COST_MODEL.md`](COST_MODEL.md) defines them and the
-conditions under which a faster compiler remains the same compiler.
+conditions under which a faster compiler remains the same compiler. The combined
+Node-hosted benchmark runs both implementations in one process with
+`pnpm run benchmark -- <root.blot>` and verifies comparable observations before
+reporting phase medians, artifact sizes, and Node-to-Rust ratios.
 
 The Node and Rust/Wasm implementations may be developed in sequence, with Node
 acting as the readable prototype and Rust/Wasm as the production compiler, but
@@ -311,6 +309,12 @@ the Rust implementation is the checked-in compiler Wasm, not a native toolchain
 process. Its known-gap file is an inventory, not permission to weaken a
 judgment. CI requires that inventory to change explicitly, and the strict mode
 requires the inventory to be empty.
+
+Staging evaluates a module result as one computation before selecting a named
+export. Consequently, host requests made while constructing the module result
+are replayed in the same order for every runtime export, matching the Rust/Wasm
+implementation. Export selection may remove pure representation work only when
+that removal cannot change requests, traps, returns, or divergence.
 
 ## 9. Complete responsibility inventory
 
@@ -332,7 +336,7 @@ public artifact, or an explicit compiler command.
 | reject cycles and invalid include paths                               | source-oriented diagnostics             |
 | retain package-owned relative edges and consumer-owned external edges | relocatable reusable libraries          |
 | hash, compress, decode, and validate module capsules                  | a portable lowered AST graph            |
-| load the compiler-distributed prelude snapshot                        | a validated AST and checked interface   |
+| load source prelude or the compiler-distributed Rust snapshot         | the same validated AST and interface    |
 | detect changed sources, includes, capsules, and reverse dependencies  | sound resident invalidation             |
 
 ### 9.2 Frontend and elaboration
@@ -411,7 +415,7 @@ public artifact, or an explicit compiler command.
 | lower trapping arithmetic, wrapping arithmetic, comparisons, control, memory, host calls, and SIMD            | specified WebAssembly behavior       |
 | emit UTF-8 validation, text comparison, integer formatting, relocation, and allocation support when reachable | complete runtime support             |
 | encode deterministic WebAssembly and validate it                                                              | final module bytes                   |
-| expose parse, AST, check, ownership, evaluation, test, package, and build commands                            | observable compiler tooling          |
+| expose the commands assigned to the selected host boundary                                                   | observable compiler tooling          |
 | retain reference, conformance, and emitted-Wasm executions                                                    | differential correctness evidence    |
 | cache frontend, interfaces, analyses, static values, runtime program, and final artifacts by valid revision   | incremental compilation              |
 
@@ -442,6 +446,15 @@ Baba's Wasm lexer and CPU parser instances are process-shared; the Wasm
 instance is disposed explicitly. Gpupaper's
 emitter bytes are checked into its package and instantiated through the standard
 `WebAssembly` API.
+
+Residual structured values use the settled checked boundary type, not only the
+constructor or element observed during staging. This keeps empty Store values,
+closed variants, records, and sealed values layout-stable. A staged self-tail
+call may become an explicit Runtime-HIR loop back-edge; a non-tail or escaping
+closure still requires the ordinary closure representation. Canonical adapters
+currently admit direct scalar results and the existing structured ABI policy;
+unsupported target operations fail at the compile boundary with
+`BLOT_BACKEND_ERROR`, not as a source-checking diagnostic.
 
 The TypeScript semantic pipeline is authoritative on this branch. The native
 Rust compiler sources and gpufuck/WebGPU routes are historical and conformance
@@ -501,14 +514,15 @@ adapters = emit(L)
 No emitter may independently recalculate record offsets, variant layouts,
 flattening limits, post-return obligations, or text ownership.
 
-### 11.5 One production compiler
+### 11.5 One language judgment, two development implementations
 
-Differential implementations are valuable while establishing parity. They are
-not a permanent architecture. After one implementation satisfies the release
-gates, the other becomes a bounded oracle over a deliberately small core or is
-deleted. A complete second frontend, evaluator, type checker, ownership pass,
-runtime lowering, and ABI backend doubles the number of places in which the
-language can accidentally exist.
+Node/TypeScript is the readable prototype and ordinary development host;
+Rust/Wasm is the production-shaped reference and upgrade path. Either may land a
+feature first, but neither defines a second language. A change graduates only
+when strict parity proves the shared corpus observations equal and focused
+runtime tests cover behavior that manifests cannot expose. The duplicate
+implementation is therefore a deliberate differential-testing cost, not
+permission to fork semantics.
 
 ## 12. Minimal compiler architecture
 
@@ -571,27 +585,25 @@ dependent. No data layout makes that dependency disappear.
 
 ## 14. Decision experiments
 
-The collapse should be tested by deletion in this order:
+The collapse should be tested by deletion or replacement in this order:
 
-1. **Complete:** `build` and the public `Compiler` route through Rust; the
-   TypeScript path is callable only from explicit oracle tests.
-2. **Complete:** constant programs use the residual emitter, including
-   structured canonical results; the constant evaluator and emitter are gone.
+1. **Experimental:** `build` and the public `Compiler` route through the
+   Baba-Wasm → Node semantics → gpupaper-Wasm pipeline. The checked-in Blot
+   Rust compiler Wasm remains the strict parity implementation.
+2. **Complete on the Node path:** constant and residual programs share Runtime
+   HIR and the gpupaper emitter, including structured canonical results.
 3. **Complete at the persistence boundary:** one `ClosedProgram` owns Runtime
    HIR and the compiled artifact for a semantic revision. Flattening the
    remaining request-local analysis arenas is a separate internal optimization.
-4. **In progress:** recursive and higher-order closure signatures are attached
-   to stable `(module revision, lambda body)` identities and cross the prelude
-   snapshot as checked facts. Call-site representation substitutions, structural
-   product-shape facts, globally fresh representation holes, and imported source
-   origins now close recursive functions without guessing from captured values.
-   Progressively attach the remaining settled types, deleting request-local fact
-   maps as their last consumers move into elaboration.
+4. **In progress:** checked boundary types and source origins close arrays,
+   variants, host grants, and specialized tail recursion without guessing from
+   the current staged value. General escaping closure conversion remains a
+   separate representation task.
 5. **Complete:** one `PublicLayout` owns manifest bytes, capabilities, canonical
    layout, and the data consumed by adapters.
-6. **Complete:** gpupaper's available Rust crate does not expose Core lowering,
-   so the direct Rust emitter is the sole production emitter and gpupaper is an
-   external oracle.
+6. **Complete on the experimental path:** gpupaper Core and its embedded
+   Rust/Wasm emitter own target planning and binary emission; Blot does not
+   duplicate that emitter in Node.
 7. Replace the package capsule and prelude snapshot with one flat module
    artifact whose optional sections are AST, checked static interface, and
    `ClosedProgram`, all keyed by the same semantic schema.

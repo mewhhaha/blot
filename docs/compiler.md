@@ -77,6 +77,14 @@ lowers that snapshot to gpupaper Core and emits through a resident
 `createRustWasmEmitter` instance. Despite the legacy directory name, this path
 imports no gpufuck runtime.
 
+The residualizer evaluates the staged module result once per exported function
+before projecting its named field. This deliberately preserves module-level host
+request order and replay behavior shared with the Rust compiler. Settled checked
+types drive Store, record, variant, sealed, and host-grant layouts; the value
+observed during staging is not allowed to narrow a public layout. Specialized
+self-tail recursion becomes a Runtime-HIR loop back-edge, and direct scalar
+results cross the canonical Wasm boundary without a return area.
+
 Gpupaper embeds its checked Rust emitter bytes in its published package. Node
 instantiates those bytes with the standard `WebAssembly` API, so final emission
 does not read a toolchain artifact from disk.
@@ -112,14 +120,32 @@ For every corpus root, parity compares frontend acceptance, rejection stage and
 diagnostic code, Runtime-HIR export phases, canonical ABI manifest bytes, and
 capabilities. Internal type pretty-printing and emitted instruction bytes are
 not parity observations. `conformance/node-rust-gaps.json` records the current
-known gap signatures. CI fails when a gap is added, removed, or changes shape,
-so graduating a Node feature to Rust requires an intentional baseline update.
-`pnpm parity:strict` rejects every remaining gap and is the target for full
-feature equivalence.
+known gap signatures. The feature-parity baseline is empty. CI runs
+`pnpm parity:strict`, so a Node feature, Rust/Wasm feature, diagnostic, export,
+manifest, or capability change cannot land while the implementations disagree.
+Focused runtime tests cover host-call results, canonical values, conversion edge
+rounding, and recursive control flow that manifest comparison cannot observe.
+
+## Benchmark
+
+The combined benchmark hosts both compiler implementations inside one Node
+process and first verifies their observable artifacts are comparable:
+
+```bash
+pnpm run benchmark -- examples/storage.blot
+pnpm run benchmark -- --node-only examples/storage.blot
+```
+
+It reports nine-sample medians for initialization, cold and resident builds,
+checks, comment-only edits, semantic edits, phase splits, emitted sizes, and
+Node-to-Rust ratios. `--node-only` is useful while rebuilding the checked-in Rust
+compiler Wasm; it is not a parity measurement.
 
 ## CI boundary
 
-Pull-request CI installs exact package versions with pnpm and runs the Node
-tests, checker, and dual-compiler parity baseline. It intentionally installs
-neither Deno nor native Rust. The smoke test compiles
-`examples/minimal.blot` and validates the emitted WebAssembly.
+Pull-request CI installs exact package versions with pnpm, runs the Node tests
+and checker, rebuilds the checked-in Rust compiler Wasm and prelude snapshot,
+runs Rust tests, and requires strict dual-compiler parity. Deno and Cargo exist
+only in that artifact-verification job; ordinary `check`, `build`, tests, and
+benchmark execution host both checked-in Wasm components in Node. CI also
+rejects an uncommitted generated-artifact diff.
