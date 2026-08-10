@@ -259,7 +259,7 @@ class ResidualHirBuilder {
       resultExpression = coreResultExpression(computation.result);
     }
     let residual = this.evaluate(resultExpression, environment);
-    if (sourceName !== "default" || residual.kind === "shape") {
+    if (sourceName !== "default") {
       residual = this.project(residual, sourceName, resultExpression.span);
     }
     const resultType = this.typeForResidualValue(
@@ -829,13 +829,31 @@ class ResidualHirBuilder {
       if (storeType.kind !== "store" || storeType.elementType !== elementType) {
         throw this.outside(span, `${fn.name} element type disagreement`);
       }
+      const length = this.nextValue();
+      this.current().operations.push({
+        kind: "store.length",
+        result: length,
+        type: this.type("signed-integer-64"),
+        operands: [store.value],
+        ownership: "plain",
+        span: this.span(span),
+      });
+      const one = this.constant(1n, this.type("signed-integer-64"), span);
+      const grownLength = this.operation(
+        "scalar",
+        this.type("signed-integer-64"),
+        [length, one.value],
+        span,
+        undefined,
+        "add",
+      );
       const element = this.materialize(applied[1], elementType, span);
       const result = this.nextValue();
       this.current().operations.push({
         kind: "store.grow",
         result,
         type: store.type,
-        operands: [store.value, element.value],
+        operands: [store.value, grownLength.value, element.value],
         ownership: "owned",
         update: "persistent",
         span: this.span(span),
@@ -2089,6 +2107,24 @@ class ResidualHirBuilder {
       }
       let store = this.emptyStore(expected.elementType, span);
       for (const element of elements) {
+        const length = this.nextValue();
+        this.current().operations.push({
+          kind: "store.length",
+          result: length,
+          type: this.type("signed-integer-64"),
+          operands: [store.value],
+          ownership: "plain",
+          span: this.span(span),
+        });
+        const one = this.constant(1n, this.type("signed-integer-64"), span);
+        const grownLength = this.operation(
+          "scalar",
+          this.type("signed-integer-64"),
+          [length, one.value],
+          span,
+          undefined,
+          "add",
+        );
         const dynamicElement = this.materialize(
           element,
           expected.elementType,
@@ -2099,7 +2135,7 @@ class ResidualHirBuilder {
           kind: "store.grow",
           result,
           type: expectedType,
-          operands: [store.value, dynamicElement.value],
+          operands: [store.value, grownLength.value, dynamicElement.value],
           ownership: "owned",
           update: "persistent",
           span: this.span(span),
