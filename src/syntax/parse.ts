@@ -3,47 +3,17 @@
 // owns parsing. The general plan is intentionally not accepted by Baba's
 // strict-only generated-Wasm island parser.
 
-import { readFile } from "node:fs/promises";
-import {
-  createParser,
-  type ParserInstance,
-} from "../../generated/wasm/mod.ts";
-import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
+import type { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
 import type { Diagnostic } from "../diagnostic.ts";
 import { BlotError } from "../diagnostic.ts";
 import type { Module } from "./ast.ts";
+import { babaRuntime, disposeBabaRuntime } from "./baba_runtime.ts";
 import type { Rule } from "./cursor.ts";
 import { materializeCpuCst } from "./cpu_cst.ts";
 import { lowerModule } from "./lower.ts";
 import { elaborateLayout } from "./layout.ts";
 import { rebindingFrameDiagnostics } from "./rebinding.ts";
 import { elaborateSurface } from "./surface.ts";
-
-const parserWasmUrl = new URL(
-  "../../generated/wasm/parser.wasm",
-  import.meta.url,
-);
-const planUrl = new URL("../../generated/wasm/parser.plan", import.meta.url);
-
-interface BabaRuntime {
-  readonly wasmLexer: ParserInstance;
-  readonly cpuParser: CpuFrontend;
-}
-
-let shared: BabaRuntime | null = null;
-
-async function parser(): Promise<BabaRuntime> {
-  if (shared !== null) return shared;
-  const [bytes, plan] = await Promise.all([
-    readFile(parserWasmUrl),
-    readFile(planUrl),
-  ]);
-  shared = {
-    wasmLexer: createParser({ bytes, plan }),
-    cpuParser: CpuFrontend.create(plan),
-  };
-  return shared;
-}
 
 export type ParseResult =
   | { readonly ok: true; readonly module: Module }
@@ -67,7 +37,7 @@ export async function parseConcrete(
 ): Promise<ConcreteParseResult> {
   const elaborated = await elaborateLayout(source);
   if (!elaborated.ok) return elaborated;
-  const runtime = await parser();
+  const runtime = await babaRuntime();
 
   const lexed = runtime.wasmLexer.lex(elaborated.layout.source);
   if (lexed.diagnostics.length > 0) {
@@ -150,7 +120,5 @@ export function ingestCpuSource(
 }
 
 export function dispose(): void {
-  if (shared === null) return;
-  shared.wasmLexer.dispose();
-  shared = null;
+  disposeBabaRuntime();
 }
