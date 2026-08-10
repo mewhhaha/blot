@@ -1,24 +1,37 @@
-// The parse entry point. Every compiler command uses baba's explicit CPU
-// frontend, so parsing never initializes WebGPU.
+// The parse entry point. Every compiler command hosts Baba's generated parser
+// Wasm in Node, so parsing needs neither Deno nor WebGPU.
 
-import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
+import { readFile } from "node:fs/promises";
+import {
+  createParser,
+  type CursorFieldValue as BabaCursorFieldValue,
+  type ParserInstance,
+  type SyntaxCursor as BabaCursor,
+} from "../../generated/wasm/mod.ts";
 import type { Diagnostic } from "../diagnostic.ts";
 import { BlotError } from "../diagnostic.ts";
 import type { Module } from "./ast.ts";
+import type { Cursor, Rule, TokenCursor } from "./cursor.ts";
 import { lowerModule } from "./lower.ts";
-import type { Rule } from "./cursor.ts";
-import { materializeCpuCst } from "./cpu_cst.ts";
 import { elaborateLayout } from "./layout.ts";
 import { rebindingFrameDiagnostics } from "./rebinding.ts";
 import { elaborateSurface } from "./surface.ts";
 
+const parserWasmUrl = new URL(
+  "../../generated/wasm/parser.wasm",
+  import.meta.url,
+);
 const planUrl = new URL("../../generated/wasm/parser.plan", import.meta.url);
 
-let shared: CpuFrontend | null = null;
+let shared: ParserInstance | null = null;
 
-async function parser(): Promise<CpuFrontend> {
+async function parser(): Promise<ParserInstance> {
   if (shared !== null) return shared;
-  shared = CpuFrontend.create(await Deno.readFile(planUrl));
+  const [bytes, plan] = await Promise.all([
+    readFile(parserWasmUrl),
+    readFile(planUrl),
+  ]);
+  shared = createParser({ bytes, plan });
   return shared;
 }
 
@@ -45,26 +58,21 @@ export async function parseConcrete(
   const elaborated = await elaborateLayout(source);
   if (!elaborated.ok) return elaborated;
   const instance = await parser();
-  const result = ingestCpuSource(instance, elaborated.layout.source);
+  const result = instance.parse(elaborated.layout.source);
   if (!result.ok) {
     return {
       ok: false,
       diagnostics: result.diagnostics.map((diagnostic) => ({
         code: diagnostic.code,
         message: diagnostic.message,
-        span: {
-          start: elaborated.layout.originalOffset(diagnostic.start),
-          end: elaborated.layout.originalOffset(diagnostic.end),
-        },
+        span: remapSpan(diagnostic.span, elaborated.layout.originalOffset),
       })),
     };
   }
 
   try {
-    const cst = materializeCpuCst(
-      instance,
-      result.program,
-      elaborated.layout.source,
+    const cst = materializeWasmCursor(
+      result.cursor,
       elaborated.layout.originalOffset,
     );
     return {
@@ -80,33 +88,74 @@ export async function parseConcrete(
   }
 }
 
-export function ingestCpuSource(
-  instance: CpuFrontend,
-  source: string,
-): ReturnType<CpuFrontend["ingest"]> {
-  let result = instance.ingest(source);
-  if (
-    !result.ok &&
-    result.diagnostics.length > 0 &&
-    result.diagnostics.every((diagnostic) =>
-      diagnostic.code === "GPU_FRONTEND_INTEGER_BOUNDS"
-    )
-  ) {
-    // Baba owns syntax, but its compact frontend also applies an I32 policy
-    // that is not part of Blot's I64 integer domain. Baba has already proved
-    // these spans are integer tokens, so replacing their digits preserves token
-    // identities and offsets without duplicating any lexical logic in Blot.
-    let syntaxSource = source;
-    for (const diagnostic of [...result.diagnostics].reverse()) {
-      syntaxSource = syntaxSource.slice(0, diagnostic.start) +
-        "0".repeat(diagnostic.end - diagnostic.start) +
-        syntaxSource.slice(diagnostic.end);
+function materializeWasmCursor(
+  root: BabaCursor,
+  originalOffset: (offset: number) => number,
+): Rule {
+  const rules = new WeakMap<object, Rule>();
+  const tokens = new WeakMap<object, TokenCursor>();
+
+  function wrap(cursor: BabaCursor): Cursor {
+    if (cursor.type === "token") {
+      const cached = tokens.get(cursor);
+      if (cached !== undefined) return cached;
+      const token: TokenCursor = {
+        type: "token",
+        kind: cursor.kind,
+        text: cursor.text,
+        span: remapSpan(cursor.span, originalOffset),
+      };
+      tokens.set(cursor, token);
+      return token;
     }
-    result = instance.ingest(syntaxSource);
+
+    const cached = rules.get(cursor);
+    if (cached !== undefined) return cached;
+    const rule: Rule = {
+      type: "rule",
+      name: cursor.name,
+      span: remapSpan(cursor.span, originalOffset),
+      child(index: number): Cursor | undefined {
+        const child = cursor.child(index);
+        if (child === undefined) return undefined;
+        return wrap(child);
+      },
+      children(): readonly Cursor[] {
+        return cursor.children().map(wrap);
+      },
+      field(name: string): unknown {
+        return wrapField(cursor.field(name));
+      },
+    };
+    rules.set(cursor, rule);
+    return rule;
   }
-  return result;
+
+  function wrapField(value: BabaCursorFieldValue | undefined): unknown {
+    if (value === undefined || value === null) return value;
+    if (Array.isArray(value)) return value.map(wrapField);
+    return wrap(value as BabaCursor);
+  }
+
+  const cursor = wrap(root);
+  if (cursor.type !== "rule") {
+    throw new Error("Baba returned a token as the root cursor");
+  }
+  return cursor;
+}
+
+function remapSpan(
+  span: { readonly start: number; readonly end: number },
+  originalOffset: (offset: number) => number,
+): { readonly start: number; readonly end: number } {
+  return {
+    start: originalOffset(span.start),
+    end: originalOffset(span.end),
+  };
 }
 
 export function dispose(): void {
+  if (shared === null) return;
+  shared.dispose();
   shared = null;
 }
