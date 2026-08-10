@@ -2,29 +2,29 @@
 
 ## Goal
 
-The simplest language that keeps the reference feature set, fits baba's WebGPU
-frontend profile, and compiles without requiring WebGPU.
+The simplest language that keeps the reference feature set, fits Baba's parser
+profile, and compiles in Node without Deno, native Rust, or WebGPU.
 
 ```txt
-source -> baba CPU frontend -> compact CST -> fixity fold -> AST
+source -> Baba generated parser Wasm -> compact CST -> fixity fold -> AST
        -> comptime evaluation -> biunification -> linearity/ownership
-       -> specialize -> ClosedProgram -> direct Rust/WebAssembly emission
+       -> Runtime HIR -> gpupaper Core -> gpupaper Rust/Wasm emitter -> Wasm
 ```
 
-blot owns source elaboration, inference, comptime, ownership, Runtime HIR, ABI
-policy, the module shell, and direct Rust/WebAssembly emission. baba owns lexing
-and parsing; do not hand-write a lexer or parser. The compiler executes Baba's
-generated compact plan inside its checked-in Rust-built Wasm. Gpupaper remains
-an independent bounded conformance oracle, not a production compiler path. The
-GPU paths remain explicit conformance tools, not compiler targets.
+Blot owns source elaboration, inference, comptime, ownership, Runtime HIR, ABI
+policy, and the module shell. Baba owns lexing and parsing; do not hand-write a
+lexer or parser. Node hosts Baba's checked-in generated parser Wasm and
+gpupaper's checked-in Rust/Wasm emitter. Gpupaper owns Core-to-Wasm planning and
+emission on this experimental branch. The GPU paths remain explicit conformance
+tools, not compiler targets.
 
 ## Invariants
 
 These are the decisions a change must not silently reverse.
 
-**The frontend profile is a gate, not an aspiration.** `deno task generate`
-must succeed with the version-3 general profile accepted and every grammar rule
-declared as an island, because the CPU frontend's compact CST preserves island
+**The frontend profile is a gate, not an aspiration.** Baba generation must
+succeed with the version-3 general profile accepted and every grammar rule
+declared as an island, because the generated parser Wasm preserves island
 nodes. If a grammar change needs a `metadata.parser.resolutions` entry to
 generate, the grammar is wrong — every conflict so far had a design fix that
 made the language better, not a metadata override. Record counter changes in
@@ -44,17 +44,16 @@ certificate, cache key, target relation, or benchmark boundary must update the
 corresponding specification in the same diff. Operational notes in `docs/` do
 not replace that contract.
 
-**The CPU compact CST is the parser contract.** Every accepted corpus program
-must pass through Baba's `CpuFrontend` and Blot's CST materializer. The WebGPU
-executor is an experimental comparison target, not a compiler fallback or a
-release gate under the general profile.
+**The generated Wasm cursor is the parser contract.** Every accepted program
+must pass through Baba's checked-in `generated/wasm/parser.wasm` and generated
+cursor API. Blot may adapt cursor spans and shape, but it must not duplicate
+lexing or parsing. WebGPU and Baba's CPU frontend remain comparison targets.
 
-**Raw source crosses the production boundary.** The TypeScript compiler wrapper
-resolves files, packages, imports, and includes, then gives the exact source to
-the Rust/WebAssembly compiler. Layout elaboration, rebinding-frame validation,
-and CST-to-AST elaboration are production compiler work. The TypeScript versions
-exist for formatting, editor support, source evaluation, and conformance; never
-run them as semantic pre-passes before `Compiler` sees a module.
+**Runtime HIR crosses the backend boundary.** The Node host resolves source,
+packages, imports, and includes, then Blot performs layout, CST-to-AST
+elaboration, checking, staging, specialization, and Runtime-HIR validation.
+Gpupaper receives only validated Runtime HIR lowered to its Core model. Its
+embedded Rust/Wasm emitter owns final binary planning and emission.
 
 **Nothing is implicitly in scope.** The prelude is an ordinary module reached
 through `@import` and spread with `open`; it gets no seeding, no privileged
@@ -150,10 +149,10 @@ still contain a local compile-time binding. Do not re-derive them in the
 backend — that is a second type checker and, for effects, would mint a different
 identity. This is why `load` keeps one cache per process.
 
-**Compiler commands must not touch WebGPU.** Parsing executes Baba-generated
-tables and compilation runs inside the checked-in Rust compiler Wasm. Keep the
-split structural so ordinary compiler, formatter, and language-server processes
-never initialize a device.
+**Compiler commands must not touch WebGPU.** Node hosts Baba's generated parser
+Wasm and gpupaper's embedded Rust/Wasm emitter. Keep the split structural so
+ordinary compiler, formatter, and language-server processes never initialize a
+device or invoke a native Rust toolchain.
 
 ## Style
 
@@ -168,7 +167,7 @@ never initialize a device.
 
 ## Tests
 
-Deno tests next to the implementation they cover. `examples/` is the executable
+Node tests live next to the implementation they cover. `examples/` is the executable
 catalog: one program per feature, including the ones that must be rejected and
 the ones that must trap. Inference tests assert principal types as strings, so
 a lattice change that widens an inferred type shows up as a diff rather than as
