@@ -15,6 +15,9 @@ import {
   type CompilerStage,
   compareObservations,
   type ParityGap,
+  type ParityGapSignature,
+  parityGapSignature,
+  sameParityGapBaseline,
 } from "./parity_report.ts";
 
 const compilerWasmUrl = new URL(
@@ -50,13 +53,33 @@ try {
   node.destroy();
 }
 
+const signatures = gaps.map(parityGapSignature);
+let mode = "report";
+let passes = true;
+if (strict) {
+  mode = "strict";
+  passes = signatures.length === 0;
+} else if (requested.length === 0) {
+  mode = "baseline";
+  const baselineUrl = new URL(
+    "../../conformance/node-rust-gaps.json",
+    import.meta.url,
+  );
+  const expected = JSON.parse(
+    await readFile(baselineUrl, "utf8"),
+  ) as ParityGapSignature[];
+  passes = sameParityGapBaseline(signatures, expected);
+}
+
 console.log(JSON.stringify({
+  mode,
+  passes,
   corpus: paths.length,
   matchingAcceptances,
   matchingRejections,
-  gaps,
+  gaps: signatures,
 }, null, 2));
-if (strict && gaps.length > 0) process.exitCode = 1;
+if (!passes) process.exitCode = 1;
 
 async function observeNode(
   compiler: Compiler,
