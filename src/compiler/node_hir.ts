@@ -40,6 +40,7 @@ export async function prepareGpupaperHir(
     checked,
     staged.exports,
     "blot:default",
+    staged.module,
   ));
   hirByLoadedRevision.set(loaded, hir);
   return hir;
