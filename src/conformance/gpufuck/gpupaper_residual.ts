@@ -1789,7 +1789,9 @@ class ResidualHirBuilder {
     }
 
     const computation = this.evaluate(arguments_[1], environment);
-    const handler = this.evaluate(arguments_[2], environment);
+    const handler = this.residualizeStatic(
+      this.evaluate(arguments_[2], environment),
+    );
     if (handler.kind !== "shape") {
       throw this.outside(span, "dynamic source effect handler");
     }
@@ -2090,6 +2092,45 @@ class ResidualHirBuilder {
       return value;
     }
     const expected = this.types[expectedType];
+    if (expected.kind === "sum") {
+      const tagged = this.residualTag(value);
+      if (tagged === null) {
+        throw this.outside(span, "non-constructor sum value");
+      }
+      return this.materializeTag(
+        tagged,
+        expectedType,
+        expected.cases.map((case_) => case_.name),
+        expected.cases.map(() => false),
+        span,
+      );
+    }
+    if (expected.kind === "sealed") {
+      if (value.kind !== "static" || value.value.tag !== "sealed") {
+        throw this.outside(span, `non-sealed value for ${expected.name}`);
+      }
+      if (value.value.name !== expected.name) {
+        throw this.outside(
+          span,
+          `sealed value ${value.value.name} for ${expected.name}`,
+        );
+      }
+      const representation = this.materialize(
+        { kind: "static", value: value.value.inner },
+        expected.representationType,
+        span,
+      );
+      const result = this.nextValue();
+      this.current().operations.push({
+        kind: "seal.wrap",
+        result,
+        type: expectedType,
+        operands: [representation.value],
+        ownership: "owned",
+        span: this.span(span),
+      });
+      return { kind: "dynamic", value: result, type: expectedType };
+    }
     if (expected.kind === "store") {
       if (value.kind === "empty-store") {
         return this.emptyStore(expected.elementType, span);
@@ -2106,24 +2147,13 @@ class ResidualHirBuilder {
         throw this.outside(span, "non-array Store value");
       }
       let store = this.emptyStore(expected.elementType, span);
+      let index = 0;
       for (const element of elements) {
-        const length = this.nextValue();
-        this.current().operations.push({
-          kind: "store.length",
-          result: length,
-          type: this.type("signed-integer-64"),
-          operands: [store.value],
-          ownership: "plain",
-          span: this.span(span),
-        });
-        const one = this.constant(1n, this.type("signed-integer-64"), span);
-        const grownLength = this.operation(
-          "scalar",
+        index += 1;
+        const grownLength = this.constant(
+          BigInt(index),
           this.type("signed-integer-64"),
-          [length, one.value],
           span,
-          undefined,
-          "add",
         );
         const dynamicElement = this.materialize(
           element,
@@ -2244,6 +2274,23 @@ class ResidualHirBuilder {
       (staticValue.name === "True" || staticValue.name === "False")
     ) {
       return this.type("boolean");
+    }
+    if (staticValue.tag === "tag") {
+      const payload = staticValue.payload;
+      let payloadValue: Value = { tag: "unit" };
+      if (payload !== null) payloadValue = payload;
+      const payloadType = this.typeForResidualValue(
+        { kind: "static", value: payloadValue },
+        span,
+      );
+      return this.sumType([staticValue.name], [payloadType]);
+    }
+    if (staticValue.tag === "sealed") {
+      const representationType = this.typeForResidualValue(
+        { kind: "static", value: staticValue.inner },
+        span,
+      );
+      return this.sealedType(staticValue.name, representationType);
     }
     if (staticValue.tag === "array") {
       const first = staticValue.elements[0];
@@ -2761,6 +2808,41 @@ class ResidualHirBuilder {
     return undefined;
   }
 
+  private residualizeStatic(value: ResidualValue): ResidualValue {
+    if (value.kind !== "static") return value;
+    const known = value.value;
+    if (known.tag === "array") {
+      return {
+        kind: "array",
+        elements: known.elements.map((element) =>
+          this.residualizeStatic({ kind: "static", value: element })
+        ),
+      };
+    }
+    if (known.tag === "shape") {
+      return {
+        kind: "shape",
+        fields: new Map(
+          [...known.fields].map(([name, field]) => [
+            name,
+            this.residualizeStatic({ kind: "static", value: field }),
+          ]),
+        ),
+      };
+    }
+    if (known.tag === "tag" && known.payload !== null) {
+      return {
+        kind: "tag",
+        name: known.name,
+        payload: this.residualizeStatic({
+          kind: "static",
+          value: known.payload,
+        }),
+      };
+    }
+    return value;
+  }
+
   private staticBoolean(value: ResidualValue): boolean | undefined {
     const known = this.staticValue(value);
     if (known?.tag !== "tag" || known.payload !== null) return undefined;
@@ -2849,6 +2931,16 @@ class ResidualHirBuilder {
     const type = this.types.length;
     this.#typeByName.set(key, type);
     this.types.push({ kind: "store", elementType });
+    return type;
+  }
+
+  private sealedType(name: string, representationType: TypeId): TypeId {
+    const key = `sealed:${name}:${representationType}`;
+    const existing = this.#typeByName.get(key);
+    if (existing !== undefined) return existing;
+    const type = this.types.length;
+    this.#typeByName.set(key, type);
+    this.types.push({ kind: "sealed", name, representationType });
     return type;
   }
 
