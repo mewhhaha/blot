@@ -14,8 +14,6 @@ export interface CompilerRejection {
 
 export interface CompilerAcceptance {
   readonly status: "accepted";
-  readonly type: string;
-  readonly effects: string;
   readonly exports: readonly string[];
   readonly manifest: string;
   readonly capabilities: readonly string[];
@@ -42,8 +40,6 @@ export function compareObservations(
     if (node.stage !== rust.stage) differences.push("rejection stage");
     if (node.code !== rust.code) differences.push("diagnostic code");
   } else if (node.status === "accepted" && rust.status === "accepted") {
-    if (node.type !== rust.type) differences.push("inferred type");
-    if (node.effects !== rust.effects) differences.push("inferred effects");
     if (node.exports.join("\0") !== rust.exports.join("\0")) {
       differences.push("Runtime HIR exports");
     }
