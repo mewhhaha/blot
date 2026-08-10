@@ -78,6 +78,11 @@ console.log(JSON.stringify({
   matchingAcceptances,
   matchingRejections,
   gaps: signatures,
+  details: gaps.map((gap) => ({
+    path: gap.path,
+    node: observationDetail(gap.node),
+    rust: observationDetail(gap.rust),
+  })),
 }, null, 2));
 if (!passes) process.exitCode = 1;
 
@@ -274,6 +279,21 @@ function errorRejection(
   let message = String(error);
   if (error instanceof Error) message = error.message;
   return rejection(stage, fallbackCode, message);
+}
+
+function observationDetail(
+  observation: CompilerObservation,
+): string | {
+  readonly stage: CompilerStage;
+  readonly code: string;
+  readonly message: string;
+} {
+  if (observation.status === "accepted") return "accepted";
+  return {
+    stage: observation.stage,
+    code: observation.code,
+    message: observation.message,
+  };
 }
 
 function rejection(
