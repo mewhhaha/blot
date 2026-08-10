@@ -1,4 +1,9 @@
-import { createParserAsync, type Token } from "../../generated/wasm/mod.ts";
+import { readFile } from "node:fs/promises";
+import {
+  createParser,
+  type ParserInstance,
+  type Token,
+} from "../../generated/wasm/mod.ts";
 import type { Diagnostic } from "../diagnostic.ts";
 
 const layoutNewline = "\u{e000}";
@@ -15,7 +20,7 @@ const parserPlanUrl = new URL(
   import.meta.url,
 );
 
-let sharedLexer: ReturnType<typeof createParserAsync> | null = null;
+let sharedLexer: ParserInstance | null = null;
 
 export interface LayoutSource {
   readonly source: string;
@@ -180,14 +185,14 @@ function closesLayoutExpression(token: Token): boolean {
   return token.kind === "ELSE_IF";
 }
 
-async function layoutLexer() {
-  if (sharedLexer === null) {
-    sharedLexer = createParserAsync({
-      url: parserWasmUrl,
-      planUrl: parserPlanUrl,
-    });
-  }
-  return await sharedLexer;
+async function layoutLexer(): Promise<ParserInstance> {
+  if (sharedLexer !== null) return sharedLexer;
+  const [bytes, plan] = await Promise.all([
+    readFile(parserWasmUrl),
+    readFile(parserPlanUrl),
+  ]);
+  sharedLexer = createParser({ bytes, plan });
+  return sharedLexer;
 }
 
 function identityLayout(source: string): LayoutSource {
