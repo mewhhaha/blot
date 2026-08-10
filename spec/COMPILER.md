@@ -298,6 +298,20 @@ resident, unchanged-revision, source-only-edit, and semantic-edit timings are
 different experiments. [`COST_MODEL.md`](COST_MODEL.md) defines them and the
 conditions under which a faster compiler remains the same compiler.
 
+The Node and Rust/Wasm implementations may be developed in sequence, with Node
+acting as the readable prototype and Rust/Wasm as the production compiler, but
+they remain implementations of this one judgment. A feature is graduated only
+after both agree on acceptance or rejection, diagnostic code, Runtime-HIR export
+phases, public ABI manifest, capabilities, and the applicable runtime
+observations. Internal type pretty-printing and instruction-byte identity are
+not required observations.
+
+The repository-wide dual-compiler corpus runs both implementations under Node;
+the Rust implementation is the checked-in compiler Wasm, not a native toolchain
+process. Its known-gap file is an inventory, not permission to weaken a
+judgment. CI requires that inventory to change explicitly, and the strict mode
+requires the inventory to be empty.
+
 ## 9. Complete responsibility inventory
 
 This section inventories what the compiler does, independently of which pass or
