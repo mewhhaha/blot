@@ -1,4 +1,4 @@
-name: CI
+name: Node Wasm CI
 
 on:
   pull_request:
@@ -10,14 +10,12 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: denoland/setup-deno@v2
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
-          deno-version: v2.x
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-          components: rustfmt,clippy
-      - uses: extractions/setup-just@v3
-      - run: just check
-      - run: just test
+          node-version: 24.14.0
+      - run: corepack enable
+      - run: corepack prepare pnpm@11.21.0 --activate
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm test
+      - run: pnpm run check
