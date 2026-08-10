@@ -279,6 +279,7 @@ function stageExpression(
     return { expression: expr, folded: false, value };
   } catch (error) {
     if (error instanceof BlotError) {
+      if (error.diagnostic.code === "BLOT_MISPLACED_REC") throw error;
       return { expression: expr, folded: false };
     }
     throw error;
