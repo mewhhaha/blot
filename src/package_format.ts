@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "@std/path";
 import {
   decodePortableModule,
@@ -76,7 +77,7 @@ export async function readPackageManifest(
 ): Promise<PackageManifest> {
   let source: string;
   try {
-    source = await Deno.readTextFile(manifestPath);
+    source = await readFile(manifestPath, "utf8");
   } catch (cause) {
     throw new PackageArtifactError(
       `could not read Blot package manifest ${JSON.stringify(manifestPath)}`,
@@ -194,7 +195,7 @@ export async function resolvePackageExport(
     } catch (error) {
       if (
         error instanceof PackageArtifactError &&
-        error.cause instanceof Deno.errors.NotFound
+        isNotFound(error.cause)
       ) {
         const parent = dirname(directory);
         if (parent === directory) break;
@@ -647,4 +648,10 @@ function stringValue(value: unknown, location: string): string {
     throw new PackageArtifactError(`${location} is not text`);
   }
   return value;
+}
+
+function isNotFound(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  if (!("code" in error)) return false;
+  return (error as { readonly code?: unknown }).code === "ENOENT";
 }
