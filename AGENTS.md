@@ -136,6 +136,14 @@ evaluator, and the emitted Wasm run the same language. `just wasm` requires all
 three to produce the same value; a lowering that satisfies one and not another
 is wrong.
 
+**Node prototypes graduate through Rust/Wasm parity.** A feature may be
+implemented in the Node/TypeScript compiler first for iteration speed, but it is
+not production-complete until the checked-in Rust compiler Wasm agrees on
+acceptance, diagnostic code, Runtime-HIR exports, public ABI, capabilities, and
+runtime observations. `pnpm parity` must keep the known-gap inventory exact;
+`pnpm parity:strict` is the zero-gap target. Do not treat the inventory as a
+second language definition.
+
 **The caller never sees gpufuck values.** Blot Core Wasm ABI 1 is the stable
 memory32, UTF-8 caller contract in `docs/abi.md`. Exports and host effects use
 its canonical adapters; gpufuck's tagged words, constructor numbers, and heap
