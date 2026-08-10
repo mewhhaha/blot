@@ -2,3 +2,5 @@ minimumReleaseAge: 10080
 minimumReleaseAgeExclude:
   - "@mewhhaha/baba"
   - "@mewhhaha/gpupaper"
+  - "@jsr/mewhhaha__baba"
+  - "@jsr/mewhhaha__gpupaper"
