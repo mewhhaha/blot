@@ -1,0 +1,25 @@
+{
+  "name": "@mewhhaha/blot",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./mod.ts",
+    "./compiler": "./src/compiler.ts"
+  },
+  "scripts": {
+    "blot": "node --experimental-transform-types src/node/cli.ts",
+    "check": "node --experimental-transform-types src/node/cli.ts check examples/minimal.blot",
+    "test": "node --experimental-transform-types --test src/node/pipeline.test.ts",
+    "smoke": "node --experimental-transform-types src/node/cli.ts build examples/minimal.blot"
+  },
+  "dependencies": {
+    "@mewhhaha/baba": "npm:@jsr/mewhhaha__baba@9.0.0",
+    "@mewhhaha/gpupaper": "npm:@jsr/mewhhaha__gpupaper@0.1.6",
+    "@std/path": "npm:@jsr/std__path@1.1.6"
+  },
+  "engines": {
+    "node": ">=24.14.0"
+  },
+  "packageManager": "pnpm@11.21.0"
+}
