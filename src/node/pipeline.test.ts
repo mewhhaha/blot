@@ -34,3 +34,23 @@ test("comment-only revisions reuse the compiled artifact", async () => {
     await rm(directory, { recursive: true });
   }
 });
+
+
+test("multiple runtime exports lower through gpupaper", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(resolve("examples/arithmetic.blot"));
+    assert.equal(WebAssembly.validate(artifact.wasm), true);
+    const manifest = JSON.parse(
+      new TextDecoder().decode(artifact.manifestBytes),
+    ) as {
+      readonly exports: readonly { readonly phase: string }[];
+    };
+    const runtimeExports = manifest.exports.filter((exported) =>
+      exported.phase === "runtime"
+    );
+    assert.ok(runtimeExports.length > 1);
+  } finally {
+    compiler.destroy();
+  }
+});
