@@ -1,0 +1,31 @@
+name: Experimental optimized benchmark
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.14.0
+      - run: corepack enable
+      - run: corepack prepare pnpm@11.21.0 --activate
+      - run: pnpm install --no-frozen-lockfile
+      - name: Benchmark optimized Node pipeline
+        run: node --import ./src/node/polyfills.mjs --experimental-transform-types experiments/node-wasm-benchmark.ts examples/minimal.blot
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          path: rust-baseline
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Benchmark Rust baseline
+        working-directory: rust-baseline
+        run: deno task benchmark:compiler examples/minimal.blot
