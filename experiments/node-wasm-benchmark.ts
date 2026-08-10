@@ -21,6 +21,7 @@ const arguments_ = process.argv.slice(2);
 let nodeOnly = false;
 let requestedPath: string | undefined;
 for (const argument of arguments_) {
+  if (argument === "--") continue;
   if (argument === "--node-only") {
     nodeOnly = true;
     continue;
