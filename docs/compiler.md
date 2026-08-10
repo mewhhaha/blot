@@ -73,9 +73,9 @@ logic.
 
 `src/compiler/node_hir.ts` runs the authoritative Blot semantic passes and
 freezes the Runtime-HIR snapshot. `src/conformance/gpufuck/runtime/target.ts`
-lowers that snapshot to gpupaper Core and calls
-`emitWasmPlanOnRustWasm`. Despite the legacy directory name, this path imports
-no gpufuck runtime.
+lowers that snapshot to gpupaper Core and emits through a resident
+`createRustWasmEmitter` instance. Despite the legacy directory name, this path
+imports no gpufuck runtime.
 
 Gpupaper embeds its checked Rust emitter bytes in its published package. Node
 instantiates those bytes with the standard `WebAssembly` API, so final emission
@@ -84,9 +84,22 @@ does not read a toolchain artifact from disk.
 ## Cache and invalidation
 
 The module loader retains stable AST identity for unchanged source and
-invalidates changed modules plus their importers. A compiler session caches a
-finished artifact by the immutable Runtime-HIR object. Recompiling an unchanged
-revision returns copied bytes marked `revision-cache`.
+invalidates changed modules plus their importers. Checking memoizes a complete
+root program by loader identity; dependency checks are not cached independently,
+because their facts can depend on importer constraints and staging context.
+
+A resident compiler also keys each source graph by the exact portable AST,
+including spans, dependency revision keys, and included file paths and bytes.
+An equal key may reuse the checked summary, Runtime HIR, and finished artifact.
+This permits comment-only edits that preserve the portable graph to return copied
+bytes marked `revision-cache`, while source-span, dependency, and include changes
+invalidate the result. The immutable Runtime-HIR object remains the final
+artifact-cache key.
+
+`Compiler.create()` starts Baba runtime and gpupaper emitter initialization in
+parallel. Both runtimes are shared within the process and disposed with the last
+compiler session; no semantic fact crosses a process or unvalidated revision
+boundary.
 
 ## CI boundary
 
