@@ -13,12 +13,13 @@ meaning. [`PAPER.md`](PAPER.md) develops the target language model.
 not a second definition of the language.
 
 On the experimental Node-Wasm branch, compilation is one deterministic pipeline
-with two checked-in Wasm boundaries. Node instantiates Baba's generated parser
-Wasm, Blot's TypeScript passes elaborate and validate Runtime HIR, and Node then
-instantiates gpupaper's embedded Rust/Wasm emitter. Deno, native Rust, Cargo, and
+with two checked-in Wasm boundaries. Node instantiates Baba's generated lexer Wasm and runs Baba's general-profile
+CPU island executor. Blot's TypeScript passes then elaborate and validate
+Runtime HIR before Node instantiates gpupaper's embedded Rust/Wasm emitter. Deno, native Rust, Cargo, and
 WebGPU are outside the compilation boundary.
 
-Baba receives the layout-elaborated source and returns its generated cursor.
+Baba's Wasm runtime lexes layout-elaborated source. Its CPU island executor
+parses the general-profile plan and returns the compact CST.
 Gpupaper receives gpupaper Core lowered from validated Blot Runtime HIR. Blot
 owns every semantic judgment between those boundaries; neither Wasm component
 is permitted to reinterpret Blot source semantics. An implementation boundary
@@ -79,8 +80,8 @@ order, operation arguments, return values, and classified traps are.
 ```text
 SourceGraph
   -> LayoutTokenGraph
-  -> BabaParserWasmCursor
-  -> CompactCST
+  -> BabaWasmTokenGraph
+  -> BabaGeneralCompactCST
   -> SurfaceAST
   -> TypedAST + InferenceFacts
   -> SafeAST + SafetyCertificates
@@ -401,7 +402,8 @@ This is the experimental Node-hosted implementation boundary:
 ```text
 source graph
   -> layout elaboration
-  -> Baba generated parser Wasm
+  -> Baba generated Wasm lexer
+  -> Baba general-profile CPU island parser
   -> CST / AST
   -> checking / comptime / ownership / staging
   -> validated Runtime HIR
@@ -411,7 +413,8 @@ source graph
 ```
 
 The `Compiler` session caches final artifacts by immutable Runtime-HIR identity.
-Baba's parser instance is process-shared and disposed explicitly. Gpupaper's
+Baba's Wasm lexer and CPU parser instances are process-shared; the Wasm
+instance is disposed explicitly. Gpupaper's
 emitter bytes are checked into its package and instantiated through the standard
 `WebAssembly` API.
 
@@ -488,7 +491,8 @@ The branch uses Node as the only host and keeps one authority per boundary:
 
 | Boundary | Authority | Persisted input |
 | --- | --- | --- |
-| syntax | Baba generated parser Wasm | `parser.wasm` plus `parser.plan` |
+| lexing | Baba generated Wasm lexer | `parser.wasm` plus `parser.plan` |
+| parsing | Baba CPU island executor | general-profile `parser.plan` |
 | semantics | Blot TypeScript passes | source graph and inference facts |
 | target lowering | gpupaper TypeScript Core lowering | validated Runtime HIR |
 | binary emission | gpupaper embedded Rust/Wasm emitter | validated Wasm plan |
