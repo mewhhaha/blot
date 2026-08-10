@@ -283,13 +283,27 @@ function errorRejection(
 
 function observationDetail(
   observation: CompilerObservation,
-): string | {
+): {
+  readonly status: "accepted";
+  readonly exports: readonly string[];
+  readonly manifest: unknown;
+  readonly capabilities: readonly string[];
+} | {
+  readonly status: "rejected";
   readonly stage: CompilerStage;
   readonly code: string;
   readonly message: string;
 } {
-  if (observation.status === "accepted") return "accepted";
+  if (observation.status === "accepted") {
+    return {
+      status: "accepted",
+      exports: observation.exports,
+      manifest: JSON.parse(observation.manifest),
+      capabilities: observation.capabilities,
+    };
+  }
   return {
+    status: "rejected",
     stage: observation.stage,
     code: observation.code,
     message: observation.message,
