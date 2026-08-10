@@ -251,6 +251,17 @@ skip a pass only when a revision key proves that every input observed by that
 pass is unchanged and its closed output certificate validates. This is specified
 in [`INCREMENTAL.md`](INCREMENTAL.md).
 
+On the experimental Node-Wasm branch, a resident source-graph revision key is
+the canonical root identity plus every module's exact portable AST (including
+source spans), dependency revision keys, and included file identities and bytes.
+Equality permits reuse of the root's checked summary, validated Runtime HIR, and
+emitted artifact. Loader-object memoization may additionally reuse a complete
+root checking judgment while that loader reports the same revision. It may not
+reuse a dependency's mutable inference facts independently: those facts can
+observe importer constraints and staging context. Baba and gpupaper Wasm runtime
+instances are process resources, not semantic facts, and may be initialized once
+and shared across resident compiler sessions.
+
 A content hash establishes identity, not authority. In particular, an untrusted
 package cannot justify a checked interface by hashing an interface it supplied
 itself. Reusing semantic judgments across a trust boundary requires either a
