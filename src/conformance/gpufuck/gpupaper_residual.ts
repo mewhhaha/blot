@@ -20,6 +20,8 @@ import {
   type Value,
 } from "../../comptime/value.ts";
 import type { CheckResult } from "../../check/mod.ts";
+import type { SimpleType } from "../../check/type.ts";
+import { fail } from "../../diagnostic.ts";
 import {
   type CoreComputation,
   type CoreExpression,
@@ -68,6 +70,25 @@ function scheduledSourceResultExpression(
   return result.computation;
 }
 
+function selectStagedSourceExport(result: Expr, sourceName: string): Expr {
+  if (result.tag === "block") {
+    return {
+      ...result,
+      result: selectStagedSourceExport(result.result, sourceName),
+    };
+  }
+  if (result.tag === "shape") {
+    for (const member of result.members) {
+      if (member.tag === "field" && member.name === sourceName) {
+        return member.value;
+      }
+    }
+  }
+  throw new Error(
+    `staged module result omitted direct export ${sourceName}`,
+  );
+}
+
 type TypeId = number;
 type ValueId = number;
 type BlotRuntimeScalarOperator = Extract<
@@ -106,6 +127,10 @@ type ResidualValue =
     readonly fields: ReadonlyMap<string, ResidualValue>;
   }
   | {
+    readonly kind: "module-argument";
+    readonly fields: ReadonlyMap<string, ResidualValue>;
+  }
+  | {
     readonly kind: "tag";
     readonly name: string;
     readonly payload: ResidualValue;
@@ -122,6 +147,11 @@ type ResidualValue =
     readonly name: string;
     readonly arity: number;
     readonly applied: readonly ResidualValue[];
+  }
+  | {
+    readonly kind: "host-operation";
+    readonly capability: "Init";
+    readonly operation: string;
   };
 
 type ResidualEnvironment = {
@@ -245,11 +275,17 @@ class ResidualHirBuilder {
     this.#nextValue = 0;
     this.block();
     const environment = this.environment(null, this.#checked.values);
+    this.bindModuleParameter(environment);
     let resultExpression: ResidualExpression;
+    let projectResult = false;
     if ("declarations" in computation) {
+      let sourceResult = computation.result;
+      if (sourceName !== "default") {
+        sourceResult = selectStagedSourceExport(sourceResult, sourceName);
+      }
       const scheduled = scheduleSourceComputation(
         computation.declarations,
-        computation.result,
+        sourceResult,
         computation.resultEffects,
       );
       this.declarations(scheduled.steps, environment);
@@ -257,13 +293,15 @@ class ResidualHirBuilder {
     } else {
       this.coreDeclarations(computation.steps, environment);
       resultExpression = coreResultExpression(computation.result);
+      if (sourceName !== "default") projectResult = true;
     }
     let residual = this.evaluate(resultExpression, environment);
-    if (sourceName !== "default") {
+    if (projectResult) {
       residual = this.project(residual, sourceName, resultExpression.span);
     }
-    const resultType = this.typeForResidualValue(
+    const resultType = this.typeForExportValue(
       residual,
+      sourceName,
       resultExpression.span,
     );
     const result = this.materialize(
@@ -343,7 +381,7 @@ class ResidualHirBuilder {
           `${this.#source}:${expr.span.start}: residual name ${expr.name} is unbound`,
         );
       }
-      return value;
+      return this.residualizeStatic(value, environment);
     }
     if (expr.tag === "intrinsic") {
       if (expr.name === "@array.empty") {
@@ -598,7 +636,10 @@ class ResidualHirBuilder {
             `${this.#source}:${declaration.span.start}: checking omitted compile-time declaration value`,
           );
         }
-        value = { kind: "static", value: known };
+        value = this.residualizeStatic(
+          { kind: "static", value: known },
+          environment,
+        );
       } else if (declaration.value.tag === "rec") {
         if (declaration.pattern.tag !== "name") {
           throw this.outside(declaration.span, "recursive non-name binding");
@@ -701,6 +742,9 @@ class ResidualHirBuilder {
       if (fn.self !== null) scope.names.set(fn.self, fn);
       this.bind(fn.parameter, argument, scope, span);
       return this.evaluate(fn.body, scope);
+    }
+    if (fn.kind === "host-operation") {
+      return this.hostGrantCall(fn, argument, span);
     }
     if (fn.kind !== "primitive") {
       throw this.outside(span, `application of ${fn.kind}`);
@@ -930,6 +974,9 @@ class ResidualHirBuilder {
     }
     const simd = this.simdPrimitive(fn.name, applied, span);
     if (simd !== undefined) return simd;
+    if (fn.name === "@text.contains") {
+      return this.unsupported(span, "dynamic @text.contains");
+    }
     throw this.outside(span, `dynamic primitive ${fn.name}`);
   }
 
@@ -1773,6 +1820,54 @@ class ResidualHirBuilder {
     return { kind: "dynamic", value: result, type: resultType };
   }
 
+  private hostGrantCall(
+    operation: Extract<ResidualValue, { readonly kind: "host-operation" }>,
+    argument: ResidualValue,
+    span: Span,
+  ): ResidualValue {
+    this.#functionCapabilities.add(operation.capability);
+    const parameterType = this.typeForResidualValue(argument, span);
+    const resultType = this.type("unit");
+    const dynamicArgument = this.materialize(argument, parameterType, span);
+    const key = `${parameterType}->${resultType}`;
+    let operations = this.#capabilityOperations.get(operation.capability);
+    if (operations === undefined) {
+      operations = new Map<
+        string,
+        { readonly signature: number; readonly key: string }
+      >();
+    }
+    const existing = operations.get(operation.operation);
+    if (existing !== undefined && existing.key !== key) {
+      throw new TypeError(
+        `${this.#source}:${span.start}: host operation ` +
+          `${operation.capability}.${operation.operation} has inconsistent signatures`,
+      );
+    }
+    if (existing === undefined) {
+      const signature = this.signatures.length;
+      this.signatures.push({
+        parameters: [parameterType],
+        result: resultType,
+        effects: [operation.capability],
+      });
+      operations.set(operation.operation, { signature, key });
+      this.#capabilityOperations.set(operation.capability, operations);
+    }
+    const result = this.nextValue();
+    this.current().operations.push({
+      kind: "host.call",
+      result,
+      type: resultType,
+      operands: [dynamicArgument.value],
+      ownership: "plain",
+      capability: operation.capability,
+      operation: operation.operation,
+      span: this.span(span),
+    });
+    return { kind: "dynamic", value: result, type: resultType };
+  }
+
   private handleSourceEffect(
     arguments_: readonly ResidualExpression[],
     environment: ResidualEnvironment,
@@ -1791,6 +1886,7 @@ class ResidualHirBuilder {
     const computation = this.evaluate(arguments_[1], environment);
     const handler = this.residualizeStatic(
       this.evaluate(arguments_[2], environment),
+      environment,
     );
     if (handler.kind !== "shape") {
       throw this.outside(span, "dynamic source effect handler");
@@ -1878,6 +1974,14 @@ class ResidualHirBuilder {
       const field = value.fields.get(name);
       if (field !== undefined) return field;
     }
+    if (value.kind === "module-argument") {
+      const field = value.fields.get(name);
+      if (field !== undefined) return field;
+      return this.unsupported(
+        span,
+        `module capability ${name} is not a function`,
+      );
+    }
     if (value.kind === "dynamic") {
       const type = this.types[value.type];
       if (type.kind !== "product") {
@@ -1958,6 +2062,16 @@ class ResidualHirBuilder {
         this.match(pattern.payload, value.payload, environment);
     }
     if (pattern.tag === "shape" && value.kind === "shape") {
+      return pattern.fields.every((field) => {
+        const member = value.fields.get(field.name);
+        return member !== undefined && this.match(
+          field.pattern,
+          member,
+          environment,
+        );
+      });
+    }
+    if (pattern.tag === "shape" && value.kind === "module-argument") {
       return pattern.fields.every((field) => {
         const member = value.fields.get(field.name);
         return member !== undefined && this.match(
@@ -2110,10 +2224,7 @@ class ResidualHirBuilder {
         throw this.outside(span, `non-sealed value for ${expected.name}`);
       }
       if (value.value.name !== expected.name) {
-        throw this.outside(
-          span,
-          `sealed value ${value.value.name} for ${expected.name}`,
-        );
+        throw this.outside(span, `sealed value ${value.value.name} for ${expected.name}`);
       }
       const representation = this.materialize(
         { kind: "static", value: value.value.inner },
@@ -2221,6 +2332,12 @@ class ResidualHirBuilder {
 
   private typeForResidualValue(value: ResidualValue, span: Span): TypeId {
     if (value.kind === "dynamic") return value.type;
+    if (value.kind === "closure") {
+      return this.unsupported(span, "function export");
+    }
+    if (value.kind === "module-argument") {
+      return this.unsupported(span, "module argument as a runtime value");
+    }
     if (value.kind === "empty-store" && value.elementType !== undefined) {
       return this.storeType(value.elementType);
     }
@@ -2292,6 +2409,9 @@ class ResidualHirBuilder {
       );
       return this.sealedType(staticValue.name, representationType);
     }
+    if (staticValue.tag === "closure" || staticValue.tag === "core-closure") {
+      return this.unsupported(span, "function export");
+    }
     if (staticValue.tag === "array") {
       const first = staticValue.elements[0];
       if (first === undefined) {
@@ -2323,6 +2443,185 @@ class ResidualHirBuilder {
       return this.productTypeFromRuntimeFields(fields);
     }
     throw this.outside(span, `runtime type for static ${staticValue.tag}`);
+  }
+
+  private typeForExportValue(
+    value: ResidualValue,
+    sourceName: string,
+    span: Span,
+  ): TypeId {
+    if (this.residualTag(value) !== null) {
+      const exported = this.checkedExportType(
+        this.#checked.moduleType,
+        sourceName,
+        new Set(),
+      );
+      if (exported !== null) {
+        const cases = this.variantCasesForSimpleType(exported, new Set());
+        if (cases !== null) {
+          const names = [...cases.keys()];
+          const payloadTypes: TypeId[] = [];
+          for (const payload of cases.values()) {
+            const payloadType = this.typeForSimpleType(
+              payload,
+              span,
+              new Set(),
+            );
+            if (payloadType === null) {
+              return this.typeForResidualValue(value, span);
+            }
+            payloadTypes.push(payloadType);
+          }
+          return this.sumType(names, payloadTypes);
+        }
+      }
+    }
+    return this.typeForResidualValue(value, span);
+  }
+
+  private checkedExportType(
+    type: SimpleType,
+    sourceName: string,
+    seen: Set<number>,
+  ): SimpleType | null {
+    if (sourceName === "default") return type;
+    if (type.tag === "record") {
+      const field = type.fields.get(sourceName);
+      if (field !== undefined) return field;
+      return null;
+    }
+    if (type.tag !== "var" || seen.has(type.id)) return null;
+    seen.add(type.id);
+    for (const bound of [...type.lower, ...type.upper]) {
+      const field = this.checkedExportType(bound, sourceName, seen);
+      if (field !== null) return field;
+    }
+    return null;
+  }
+
+  private typeForSimpleType(
+    type: SimpleType,
+    span: Span,
+    seen: Set<number>,
+  ): TypeId | null {
+    if (type.tag === "unit") return this.type("unit");
+    if (type.tag === "range") {
+      if (type.domain === "int") return this.type("signed-integer-64");
+      if (type.domain === "float") return this.type("float-64");
+      if (type.domain === "float32") return this.type("float-32");
+      return this.type("text");
+    }
+    if (type.tag === "record") {
+      const fields = new Map<string, TypeId>();
+      for (const [name, field] of type.fields) {
+        const fieldType = this.typeForSimpleType(
+          field,
+          span,
+          new Set(seen),
+        );
+        if (fieldType === null) return null;
+        fields.set(name, fieldType);
+      }
+      return this.productTypeFromRuntimeFields(fields);
+    }
+    if (type.tag === "array" || type.tag === "region") {
+      const elementType = this.typeForSimpleType(type.element, span, seen);
+      if (elementType === null) return null;
+      return this.storeType(elementType);
+    }
+    if (type.tag === "variant") {
+      if (type.open) return null;
+      const cases = [...type.cases.keys()];
+      if (
+        cases.length === 2 && cases.includes("True") &&
+        cases.includes("False") &&
+        [...type.cases.values()].every((payload) => payload.tag === "unit")
+      ) {
+        return this.type("boolean");
+      }
+      const payloadTypes: TypeId[] = [];
+      for (const payload of type.cases.values()) {
+        const payloadType = this.typeForSimpleType(payload, span, seen);
+        if (payloadType === null) return null;
+        payloadTypes.push(payloadType);
+      }
+      return this.sumType(cases, payloadTypes);
+    }
+    if (type.tag === "forall") {
+      return this.typeForSimpleType(type.body, span, seen);
+    }
+    if (type.tag === "var") {
+      if (seen.has(type.id)) return null;
+      seen.add(type.id);
+      const representations = new Set<TypeId>();
+      for (const bound of [...type.lower, ...type.upper]) {
+        const representation = this.typeForSimpleType(
+          bound,
+          span,
+          new Set(seen),
+        );
+        if (representation !== null) representations.add(representation);
+      }
+      if (representations.size !== 1) return null;
+      return representations.values().next().value as TypeId;
+    }
+    if (type.tag === "union") {
+      const representations = new Set<TypeId>();
+      for (const member of type.members) {
+        const representation = this.typeForSimpleType(
+          member,
+          span,
+          new Set(seen),
+        );
+        if (representation !== null) representations.add(representation);
+      }
+      if (representations.size !== 1) return null;
+      return representations.values().next().value as TypeId;
+    }
+    if (type.tag === "opaque") {
+      const simd = this.simdTypeFromName(type.name);
+      if (simd !== undefined) return simd;
+    }
+    return null;
+  }
+
+  private variantCasesForSimpleType(
+    type: SimpleType,
+    seen: Set<number>,
+  ): ReadonlyMap<string, SimpleType> | null {
+    if (type.tag === "variant") {
+      if (type.open) return null;
+      return type.cases;
+    }
+    if (type.tag === "var") {
+      if (seen.has(type.id)) return null;
+      seen.add(type.id);
+      const cases = new Map<string, SimpleType>();
+      for (const bound of [...type.lower, ...type.upper]) {
+        const found = this.variantCasesForSimpleType(
+          bound,
+          new Set(seen),
+        );
+        if (found === null) continue;
+        for (const [name, payload] of found) cases.set(name, payload);
+      }
+      if (cases.size === 0) return null;
+      return cases;
+    }
+    if (type.tag === "union") {
+      const cases = new Map<string, SimpleType>();
+      for (const member of type.members) {
+        const found = this.variantCasesForSimpleType(
+          member,
+          new Set(seen),
+        );
+        if (found === null) return null;
+        for (const [name, payload] of found) cases.set(name, payload);
+      }
+      if (cases.size === 0) return null;
+      return cases;
+    }
+    return null;
   }
 
   private integer(
@@ -2808,14 +3107,29 @@ class ResidualHirBuilder {
     return undefined;
   }
 
-  private residualizeStatic(value: ResidualValue): ResidualValue {
+  private residualizeStatic(
+    value: ResidualValue,
+    environment: ResidualEnvironment | null = null,
+  ): ResidualValue {
     if (value.kind !== "static") return value;
     const known = value.value;
+    if (known.tag === "closure" || known.tag === "core-closure") {
+      return {
+        kind: "closure",
+        parameter: known.parameter,
+        body: known.body,
+        environment: this.environment(environment, known.env),
+        self: known.self,
+      };
+    }
     if (known.tag === "array") {
       return {
         kind: "array",
         elements: known.elements.map((element) =>
-          this.residualizeStatic({ kind: "static", value: element })
+          this.residualizeStatic(
+            { kind: "static", value: element },
+            environment,
+          )
         ),
       };
     }
@@ -2825,7 +3139,10 @@ class ResidualHirBuilder {
         fields: new Map(
           [...known.fields].map(([name, field]) => [
             name,
-            this.residualizeStatic({ kind: "static", value: field }),
+            this.residualizeStatic(
+              { kind: "static", value: field },
+              environment,
+            ),
           ]),
         ),
       };
@@ -2834,10 +3151,13 @@ class ResidualHirBuilder {
       return {
         kind: "tag",
         name: known.name,
-        payload: this.residualizeStatic({
-          kind: "static",
-          value: known.payload,
-        }),
+        payload: this.residualizeStatic(
+          {
+            kind: "static",
+            value: known.payload,
+          },
+          environment,
+        ),
       };
     }
     return value;
@@ -3083,6 +3403,30 @@ class ResidualHirBuilder {
     return { names: new Map(), parent, staticParent };
   }
 
+  private bindModuleParameter(environment: ResidualEnvironment): void {
+    const parameter = this.#checked.core.parameter;
+    if (parameter === null) return;
+    const fields = new Map<string, ResidualValue>();
+    for (const [projection] of this.#checked.grants) {
+      if (projection.tag !== "field") {
+        throw new Error(
+          `${this.#source}:${projection.span.start}: a module grant is not a field projection`,
+        );
+      }
+      fields.set(projection.name, {
+        kind: "host-operation",
+        capability: "Init",
+        operation: projection.name,
+      });
+    }
+    this.bind(
+      parameter,
+      { kind: "module-argument", fields },
+      environment,
+      parameter.span,
+    );
+  }
+
   private lookup(
     environment: ResidualEnvironment,
     name: string,
@@ -3140,6 +3484,14 @@ class ResidualHirBuilder {
   private outside(span: Span, construct: string): TypeError {
     return new TypeError(
       `${this.#source}:${span.start}: ${construct} is outside the checked residual Runtime-HIR calculus`,
+    );
+  }
+
+  private unsupported(span: Span, construct: string): never {
+    fail(
+      "BLOT_UNSUPPORTED_LOWERING",
+      `${construct} is outside the Node residual calculus.`,
+      span,
     );
   }
 }
