@@ -73,31 +73,7 @@
     ]
   },
   {
-    "path": "examples/arithmetic.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
     "path": "examples/array_extraction.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
-    "path": "examples/asking.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
-    "path": "examples/breaking.blot",
     "node": "prepare:NODE_PREPARE_ERROR",
     "rust": "accepted",
     "differences": [
@@ -138,14 +114,6 @@
   },
   {
     "path": "examples/comptime.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
-    "path": "examples/conditional_rebinding.blot",
     "node": "prepare:NODE_PREPARE_ERROR",
     "rust": "accepted",
     "differences": [
@@ -202,14 +170,6 @@
   },
   {
     "path": "examples/floats.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
-    "path": "examples/generics.blot",
     "node": "prepare:NODE_PREPARE_ERROR",
     "rust": "accepted",
     "differences": [
@@ -297,14 +257,6 @@
     ]
   },
   {
-    "path": "examples/linear.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
     "path": "examples/looped.blot",
     "node": "prepare:NODE_PREPARE_ERROR",
     "rust": "accepted",
@@ -321,22 +273,6 @@
     ]
   },
   {
-    "path": "examples/modules.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
-    "path": "examples/narrowing.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
     "path": "examples/newtype.blot",
     "node": "prepare:NODE_PREPARE_ERROR",
     "rust": "accepted",
@@ -345,47 +281,7 @@
     ]
   },
   {
-    "path": "examples/opening.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
-    "path": "examples/operators.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
-    "path": "examples/pinned_patterns.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
     "path": "examples/polymorphic_collections.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
-    "path": "examples/projected.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
-    "path": "examples/proved.blot",
     "node": "prepare:NODE_PREPARE_ERROR",
     "rust": "accepted",
     "differences": [
@@ -425,14 +321,6 @@
     ]
   },
   {
-    "path": "examples/returning.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
     "path": "examples/sets.blot",
     "node": "prepare:NODE_PREPARE_ERROR",
     "rust": "accepted",
@@ -449,31 +337,7 @@
     ]
   },
   {
-    "path": "examples/simd.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
-    "path": "examples/simd_integer.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
     "path": "examples/storage.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
-    "path": "examples/tags.blot",
     "node": "prepare:NODE_PREPARE_ERROR",
     "rust": "accepted",
     "differences": [
@@ -497,23 +361,7 @@
     ]
   },
   {
-    "path": "examples/type_dispatch.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
     "path": "examples/types.blot",
-    "node": "prepare:NODE_PREPARE_ERROR",
-    "rust": "accepted",
-    "differences": [
-      "acceptance"
-    ]
-  },
-  {
-    "path": "examples/vectors.blot",
     "node": "prepare:NODE_PREPARE_ERROR",
     "rust": "accepted",
     "differences": [
