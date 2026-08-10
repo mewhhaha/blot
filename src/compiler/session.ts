@@ -1,6 +1,10 @@
 import { resolve } from "@std/path";
 import { checkFile, checkSource } from "../check/mod.ts";
-import { refreshLoadedModules } from "../load.ts";
+import {
+  load,
+  type Loaded,
+  refreshLoadedModules,
+} from "../load.ts";
 import {
   type BlotRuntimeModule,
   validateBlotRuntimeModule,
@@ -10,6 +14,7 @@ import {
   warmBlotRuntimeEmitter,
 } from "../conformance/gpufuck/runtime/target.ts";
 import { warmBabaRuntime } from "../syntax/baba_runtime.ts";
+import { encodePortableModule } from "../syntax/portable.ts";
 import { prepareGpupaperHir } from "./node_hir.ts";
 
 export interface CompilerArtifact {
@@ -30,6 +35,14 @@ interface CachedArtifact {
   readonly capabilities: readonly string[];
 }
 
+interface ResidentRevision {
+  readonly key: string;
+  checked?: CheckedModule;
+  hir?: BlotRuntimeModule;
+}
+
+const revisionKeyByLoaded = new WeakMap<Loaded, string>();
+
 /**
  * A Node-hosted compiler session.
  *
@@ -40,6 +53,7 @@ interface CachedArtifact {
  */
 export class Compiler {
   readonly #compiled = new WeakMap<BlotRuntimeModule, CachedArtifact>();
+  readonly #revisions = new Map<string, ResidentRevision>();
   #destroyed = false;
 
   private constructor() {}
@@ -52,9 +66,13 @@ export class Compiler {
 
   async check(path: string): Promise<CheckedModule> {
     this.#requireActive();
-    await refreshLoadedModules();
-    const checked = await checkFile(resolve(path));
-    return { type: checked.type, effects: checked.effects };
+    const absolute = resolve(path);
+    const revision = await this.#revision(absolute);
+    if (revision.checked !== undefined) return revision.checked;
+    const checked = await checkFile(absolute);
+    const summary = { type: checked.type, effects: checked.effects };
+    revision.checked = summary;
+    return summary;
   }
 
   async checkSource(path: string, source: string): Promise<CheckedModule> {
@@ -65,8 +83,12 @@ export class Compiler {
 
   async prepare(path: string): Promise<BlotRuntimeModule> {
     this.#requireActive();
-    await refreshLoadedModules();
-    return await prepareGpupaperHir(resolve(path));
+    const absolute = resolve(path);
+    const revision = await this.#revision(absolute);
+    if (revision.hir !== undefined) return revision.hir;
+    const hir = await prepareGpupaperHir(absolute);
+    revision.hir = hir;
+    return hir;
   }
 
   async compile(path: string): Promise<CompilerArtifact> {
@@ -116,11 +138,49 @@ export class Compiler {
     this.#destroyed = true;
   }
 
+  async #revision(path: string): Promise<ResidentRevision> {
+    await refreshLoadedModules();
+    const loaded = await load(path);
+    const key = loadedRevisionKey(loaded);
+    const cached = this.#revisions.get(path);
+    if (cached !== undefined && cached.key === key) return cached;
+    const revision: ResidentRevision = { key };
+    this.#revisions.set(path, revision);
+    return revision;
+  }
+
   #requireActive(): void {
     if (this.#destroyed) {
       throw new Error("Compiler session has been destroyed");
     }
   }
+}
+
+function loadedRevisionKey(loaded: Loaded): string {
+  const cached = revisionKeyByLoaded.get(loaded);
+  if (cached !== undefined) return cached;
+
+  const dependencies = [...loaded.dependencies].map(
+    ([specifier, dependency]) => ({
+      specifier,
+      revision: loadedRevisionKey(dependency),
+    }),
+  );
+  const includedFiles = [...loaded.includedFiles].map(
+    ([specifier, included]) => ({
+      specifier,
+      path: included.path,
+      source: included.source,
+    }),
+  );
+  const key = JSON.stringify({
+    path: loaded.path,
+    module: encodePortableModule(loaded.module),
+    dependencies,
+    includedFiles,
+  });
+  revisionKeyByLoaded.set(loaded, key);
+  return key;
 }
 
 let sharedCompiler: Promise<Compiler> | undefined;
