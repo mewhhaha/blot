@@ -18,7 +18,7 @@ jobs:
       - run: corepack prepare pnpm@11.21.0 --activate
       - run: pnpm install --no-frozen-lockfile
       - name: Benchmark Node pipeline
-        run: node --import ./src/node/polyfills.mjs --experimental-transform-types experiments/node-wasm-benchmark.ts examples/storage.blot
+        run: node --import ./src/node/polyfills.mjs --experimental-transform-types experiments/node-wasm-benchmark.ts examples/minimal.blot
       - uses: actions/checkout@v6
         with:
           ref: main
@@ -28,4 +28,4 @@ jobs:
           deno-version: v2.x
       - name: Benchmark Rust/Wasm baseline
         working-directory: rust-baseline
-        run: deno task benchmark:compiler examples/storage.blot
+        run: deno task benchmark:compiler examples/minimal.blot
