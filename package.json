@@ -10,8 +10,10 @@
   "scripts": {
     "blot": "node --import ./src/node/polyfills.mjs --experimental-transform-types src/node/cli.ts",
     "check": "node --import ./src/node/polyfills.mjs --experimental-transform-types src/node/cli.ts check examples/minimal.blot",
-    "test": "node --import ./src/node/polyfills.mjs --experimental-transform-types --test src/node/pipeline.test.ts",
-    "smoke": "node --import ./src/node/polyfills.mjs --experimental-transform-types src/node/cli.ts build examples/minimal.blot"
+    "test": "node --import ./src/node/polyfills.mjs --experimental-transform-types --test src/node/*.test.ts",
+    "smoke": "node --import ./src/node/polyfills.mjs --experimental-transform-types src/node/cli.ts build examples/minimal.blot",
+    "parity": "node --import ./src/node/polyfills.mjs --experimental-transform-types src/node/parity.ts",
+    "parity:strict": "node --import ./src/node/polyfills.mjs --experimental-transform-types src/node/parity.ts --strict"
   },
   "dependencies": {
     "@mewhhaha/baba": "npm:@jsr/mewhhaha__baba@9.0.0",
