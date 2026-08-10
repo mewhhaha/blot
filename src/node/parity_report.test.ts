@@ -4,6 +4,8 @@ import {
   type CompilerAcceptance,
   type CompilerRejection,
   compareObservations,
+  parityGapSignature,
+  sameParityGapBaseline,
 } from "./parity_report.ts";
 
 const accepted: CompilerAcceptance = {
@@ -36,4 +38,19 @@ test("parity gaps identify the differing compiler boundary", () => {
       differences: ["acceptance"],
     },
   );
+});
+
+test("parity baselines identify new or resolved gaps", () => {
+  const rejected: CompilerRejection = {
+    status: "rejected",
+    stage: "prepare",
+    code: "NODE_PREPARE_ERROR",
+    message: "not lowered yet",
+  };
+  const gap = compareObservations("examples/storage.blot", rejected, accepted);
+  assert.notEqual(gap, undefined);
+  if (gap === undefined) throw new Error("expected a parity gap");
+  const signature = parityGapSignature(gap);
+  assert.equal(sameParityGapBaseline([signature], [signature]), true);
+  assert.equal(sameParityGapBaseline([], [signature]), false);
 });
