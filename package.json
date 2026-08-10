@@ -8,10 +8,10 @@
     "./compiler": "./src/compiler.ts"
   },
   "scripts": {
-    "blot": "node --experimental-transform-types src/node/cli.ts",
-    "check": "node --experimental-transform-types src/node/cli.ts check examples/minimal.blot",
-    "test": "node --experimental-transform-types --test src/node/pipeline.test.ts",
-    "smoke": "node --experimental-transform-types src/node/cli.ts build examples/minimal.blot"
+    "blot": "node --import ./src/node/polyfills.mjs --experimental-transform-types src/node/cli.ts",
+    "check": "node --import ./src/node/polyfills.mjs --experimental-transform-types src/node/cli.ts check examples/minimal.blot",
+    "test": "node --import ./src/node/polyfills.mjs --experimental-transform-types --test src/node/pipeline.test.ts",
+    "smoke": "node --import ./src/node/polyfills.mjs --experimental-transform-types src/node/cli.ts build examples/minimal.blot"
   },
   "dependencies": {
     "@mewhhaha/baba": "npm:@jsr/mewhhaha__baba@9.0.0",
