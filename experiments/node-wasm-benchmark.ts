@@ -20,6 +20,7 @@ try {
   });
   const sourceOnly = await incremental(compiler, sourcePath, samples, editedComment);
   const changed = await incremental(compiler, sourcePath, samples, editedModule);
+  const changedPhases = await incrementalPhases(compiler, sourcePath, samples);
   console.log(JSON.stringify({
     source: sourcePath,
     samples,
@@ -33,6 +34,7 @@ try {
       node_wasm_source_only_edit: sourceOnly,
       node_wasm_changed_module_edit: changed,
     },
+    changed_module_phases: changedPhases,
   }, null, 2));
 } finally {
   compiler.destroy();
@@ -59,6 +61,53 @@ async function incremental(
   } finally {
     await rm(temporary, { recursive: true });
   }
+}
+
+async function incrementalPhases(
+  compiler: Compiler,
+  measuredPath: string,
+  count: number,
+): Promise<{
+  readonly check: number;
+  readonly prepareAfterCheck: number;
+  readonly compileAfterPrepare: number;
+}> {
+  const source = await readFile(measuredPath, "utf8");
+  const temporary = await mkdtemp(join(dirname(measuredPath), ".node-phases-"));
+  const path = join(temporary, "revision.blot");
+  const checks: number[] = [];
+  const preparations: number[] = [];
+  const compilations: number[] = [];
+  try {
+    await writeFile(path, editedModule(source, 0));
+    await compiler.compile(path);
+    for (let revision = 1; revision <= count; revision += 1) {
+      await writeFile(path, editedModule(source, revision));
+      let started = performance.now();
+      await compiler.check(path);
+      checks.push(performance.now() - started);
+      started = performance.now();
+      await compiler.prepare(path);
+      preparations.push(performance.now() - started);
+      started = performance.now();
+      await compiler.compile(path);
+      compilations.push(performance.now() - started);
+    }
+  } finally {
+    await rm(temporary, { recursive: true });
+  }
+  return {
+    check: medianValue(checks),
+    prepareAfterCheck: medianValue(preparations),
+    compileAfterPrepare: medianValue(compilations),
+  };
+}
+
+function medianValue(measurements: number[]): number {
+  measurements.sort((left, right) => left - right);
+  const result = measurements[Math.floor(measurements.length / 2)];
+  if (result === undefined) throw new Error("benchmark produced no samples");
+  return result;
 }
 
 function editedComment(source: string, revision: number): string {
