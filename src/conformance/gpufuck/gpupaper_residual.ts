@@ -26,7 +26,7 @@ import {
   coreResultExpression,
   type CoreStep,
 } from "../../core/computation.ts";
-import type { Decl, Expr, Pattern, Span } from "../../syntax/ast.ts";
+import type { Decl, Expr, Module, Pattern, Span } from "../../syntax/ast.ts";
 import { liveDeclarations } from "../../syntax/live.ts";
 import type { StagedExport } from "../../stage.ts";
 
@@ -141,8 +141,11 @@ export function exportResidualRuntimeHir(
   checked: CheckResult,
   stagedExports: readonly StagedExport[],
   wasmName: string,
+  stagedModule?: Module,
 ): BlotRuntimeModule {
   const builder = new ResidualHirBuilder(source, checked);
+  let residualModule: CoreComputation | Module = checked.core;
+  if (stagedModule !== undefined) residualModule = stagedModule;
   const functions: BlotRuntimeFunction[] = [];
   const runtimeFunctions = new Map<string, BlotRuntimeFunction>();
   for (const exported of stagedExports) {
@@ -150,7 +153,7 @@ export function exportResidualRuntimeHir(
     let exportedWasmName = `blot:${exported.sourceName}`;
     if (exported.sourceName === "default") exportedWasmName = wasmName;
     const function_ = builder.build(
-      checked.core,
+      residualModule,
       exportedWasmName,
       functions.length,
       exported.sourceName,
@@ -229,7 +232,7 @@ class ResidualHirBuilder {
   }
 
   build(
-    computation: CoreComputation,
+    computation: CoreComputation | Module,
     wasmName: string,
     functionId: number,
     sourceName: string,
@@ -241,8 +244,19 @@ class ResidualHirBuilder {
     this.#nextValue = 0;
     this.block();
     const environment = this.environment(null, this.#checked.values);
-    this.coreDeclarations(computation.steps, environment);
-    const resultExpression = coreResultExpression(computation.result);
+    let resultExpression: ResidualExpression;
+    if ("declarations" in computation) {
+      const scheduled = scheduleSourceComputation(
+        computation.declarations,
+        computation.result,
+        computation.resultEffects,
+      );
+      this.declarations(scheduled.steps, environment);
+      resultExpression = scheduledSourceResultExpression(scheduled.result);
+    } else {
+      this.coreDeclarations(computation.steps, environment);
+      resultExpression = coreResultExpression(computation.result);
+    }
     let residual = this.evaluate(resultExpression, environment);
     if (sourceName !== "default" || residual.kind === "shape") {
       residual = this.project(residual, sourceName, resultExpression.span);
