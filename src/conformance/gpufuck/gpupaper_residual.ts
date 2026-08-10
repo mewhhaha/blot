@@ -85,6 +85,7 @@ type ResidualCase =
 type ResidualValue =
   | { readonly kind: "static"; readonly value: Value }
   | { readonly kind: "empty-store"; elementType?: TypeId }
+  | { readonly kind: "array"; readonly elements: readonly ResidualValue[] }
   | {
     readonly kind: "dynamic";
     readonly value: ValueId;
@@ -261,7 +262,15 @@ class ResidualHirBuilder {
     if (sourceName !== "default" || residual.kind === "shape") {
       residual = this.project(residual, sourceName, resultExpression.span);
     }
-    const result = this.dynamic(residual);
+    const resultType = this.typeForResidualValue(
+      residual,
+      resultExpression.span,
+    );
+    const result = this.materialize(
+      residual,
+      resultType,
+      resultExpression.span,
+    );
     this.terminate({
       kind: "return",
       value: result.value,
@@ -421,6 +430,28 @@ class ResidualHirBuilder {
         environment,
         self: null,
       };
+    }
+    if (expr.tag === "array") {
+      const elements: ResidualValue[] = [];
+      for (const element of expr.elements) {
+        const value = this.evaluate(element.value, environment);
+        if (!element.spread) {
+          elements.push(value);
+          continue;
+        }
+        if (value.kind === "array") {
+          elements.push(...value.elements);
+          continue;
+        }
+        const spread = this.staticValue(value);
+        if (spread === undefined || spread.tag !== "array") {
+          throw this.outside(element.value.span, "dynamic array spread");
+        }
+        for (const spreadElement of spread.elements) {
+          elements.push({ kind: "static", value: spreadElement });
+        }
+      }
+      return { kind: "array", elements };
     }
     if (expr.tag === "tuple") {
       return {
@@ -764,6 +795,30 @@ class ResidualHirBuilder {
       });
       return { kind: "dynamic", value: result, type: storeType.elementType };
     }
+    if (fn.name === "@array.set") {
+      const store = this.store(applied[0], span, fn.name);
+      const storeType = this.types[store.type];
+      if (storeType.kind !== "store") {
+        throw this.outside(span, `${fn.name} over a non-store`);
+      }
+      const index = this.integer(applied[1], span, fn.name);
+      const element = this.materialize(
+        applied[2],
+        storeType.elementType,
+        span,
+      );
+      const result = this.nextValue();
+      this.current().operations.push({
+        kind: "store.write",
+        result,
+        type: store.type,
+        operands: [store.value, index.value, element.value],
+        ownership: "owned",
+        update: "persistent",
+        span: this.span(span),
+      });
+      return { kind: "dynamic", value: result, type: store.type };
+    }
     if (fn.name === "@array.push") {
       const elementType = this.typeForResidualValue(applied[1], span);
       if (applied[0].kind === "empty-store") {
@@ -774,31 +829,13 @@ class ResidualHirBuilder {
       if (storeType.kind !== "store" || storeType.elementType !== elementType) {
         throw this.outside(span, `${fn.name} element type disagreement`);
       }
-      const length = this.nextValue();
-      this.current().operations.push({
-        kind: "store.length",
-        result: length,
-        type: this.type("signed-integer-64"),
-        operands: [store.value],
-        ownership: "plain",
-        span: this.span(span),
-      });
-      const one = this.constant(1n, this.type("signed-integer-64"), span);
-      const grownLength = this.operation(
-        "scalar",
-        this.type("signed-integer-64"),
-        [length, one.value],
-        span,
-        undefined,
-        "add",
-      );
       const element = this.materialize(applied[1], elementType, span);
       const result = this.nextValue();
       this.current().operations.push({
         kind: "store.grow",
         result,
         type: store.type,
-        operands: [store.value, grownLength.value, element.value],
+        operands: [store.value, element.value],
         ownership: "owned",
         update: "persistent",
         span: this.span(span),
@@ -1648,7 +1685,7 @@ class ResidualHirBuilder {
       result,
       type,
       operands: [dynamicPayload.value],
-      ownership: "plain",
+      ownership: this.ownership(type),
       case: selectedCase,
       span: this.span(span),
     });
@@ -1947,6 +1984,14 @@ class ResidualHirBuilder {
     value: ResidualValue,
   ): Extract<ResidualValue, { kind: "dynamic" }> {
     if (value.kind === "dynamic") return value;
+    if (
+      value.kind === "array" || value.kind === "shape" ||
+      value.kind === "tuple"
+    ) {
+      const span = { start: 0, end: 0 };
+      const type = this.typeForResidualValue(value, span);
+      return this.materialize(value, type, span);
+    }
     if (value.kind === "empty-store" && value.elementType !== undefined) {
       return this.emptyStore(value.elementType, { start: 0, end: 0 });
     }
@@ -2002,6 +2047,11 @@ class ResidualHirBuilder {
         { start: 0, end: 0 },
       );
     }
+    if (staticValue.tag === "shape" || staticValue.tag === "array") {
+      const span = { start: 0, end: 0 };
+      const type = this.typeForResidualValue(value, span);
+      return this.materialize(value, type, span);
+    }
     if (staticValue.tag === "sealed") {
       return this.dynamic({ kind: "static", value: staticValue.inner });
     }
@@ -2022,6 +2072,42 @@ class ResidualHirBuilder {
       return value;
     }
     const expected = this.types[expectedType];
+    if (expected.kind === "store") {
+      if (value.kind === "empty-store") {
+        return this.emptyStore(expected.elementType, span);
+      }
+      let elements: readonly ResidualValue[] | undefined;
+      if (value.kind === "array") elements = value.elements;
+      if (value.kind === "static" && value.value.tag === "array") {
+        elements = value.value.elements.map((element) => ({
+          kind: "static",
+          value: element,
+        }));
+      }
+      if (elements === undefined) {
+        throw this.outside(span, "non-array Store value");
+      }
+      let store = this.emptyStore(expected.elementType, span);
+      for (const element of elements) {
+        const dynamicElement = this.materialize(
+          element,
+          expected.elementType,
+          span,
+        );
+        const result = this.nextValue();
+        this.current().operations.push({
+          kind: "store.grow",
+          result,
+          type: expectedType,
+          operands: [store.value, dynamicElement.value],
+          ownership: "owned",
+          update: "persistent",
+          span: this.span(span),
+        });
+        store = { kind: "dynamic", value: result, type: expectedType };
+      }
+      return store;
+    }
     if (expected.kind !== "product") {
       const scalar = this.dynamic(value);
       if (scalar.type !== expectedType) {
@@ -2072,6 +2158,19 @@ class ResidualHirBuilder {
     if (value.kind === "empty-store" && value.elementType !== undefined) {
       return this.storeType(value.elementType);
     }
+    if (value.kind === "array") {
+      const first = value.elements[0];
+      if (first === undefined) {
+        throw this.outside(span, "untyped empty residual array");
+      }
+      const elementType = this.typeForResidualValue(first, span);
+      for (const element of value.elements.slice(1)) {
+        if (this.typeForResidualValue(element, span) !== elementType) {
+          throw this.outside(span, "residual array element type disagreement");
+        }
+      }
+      return this.storeType(elementType);
+    }
     if (value.kind === "shape") {
       const fields = new Map<string, TypeId>();
       for (const [name, field] of value.fields) {
@@ -2109,6 +2208,26 @@ class ResidualHirBuilder {
       (staticValue.name === "True" || staticValue.name === "False")
     ) {
       return this.type("boolean");
+    }
+    if (staticValue.tag === "array") {
+      const first = staticValue.elements[0];
+      if (first === undefined) {
+        throw this.outside(span, "untyped empty residual array");
+      }
+      const elementType = this.typeForResidualValue(
+        { kind: "static", value: first },
+        span,
+      );
+      for (const element of staticValue.elements.slice(1)) {
+        const type = this.typeForResidualValue(
+          { kind: "static", value: element },
+          span,
+        );
+        if (type !== elementType) {
+          throw this.outside(span, "residual array element type disagreement");
+        }
+      }
+      return this.storeType(elementType);
     }
     if (staticValue.tag === "shape") {
       const fields = new Map<string, TypeId>();
@@ -2567,6 +2686,16 @@ class ResidualHirBuilder {
 
   private staticValue(value: ResidualValue): Value | undefined {
     if (value.kind === "static") return value.value;
+    if (value.kind === "array") {
+      const elements = value.elements.map((element) =>
+        this.staticValue(element)
+      );
+      if (elements.some((element) => element === undefined)) return undefined;
+      return {
+        tag: "array",
+        elements: elements as Value[],
+      };
+    }
     if (value.kind === "tuple") {
       const elements = value.elements.map((element) =>
         this.staticValue(element)
@@ -2727,7 +2856,10 @@ class ResidualHirBuilder {
 
   private ownership(type: TypeId): "plain" | "owned" {
     const kind = this.types[type].kind;
-    if (kind === "text" || kind === "product") return "owned";
+    if (
+      kind === "text" || kind === "product" || kind === "store" ||
+      kind === "sum" || kind === "sealed"
+    ) return "owned";
     return "plain";
   }
 
