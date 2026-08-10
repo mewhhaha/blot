@@ -1116,12 +1116,7 @@ fn ordering(ordering: std::cmp::Ordering) -> Value {
     }
 }
 
-fn float_ordering(
-    left: f64,
-    right: f64,
-    span: Span,
-    operation: &str,
-) -> Result<Value, Diagnostic> {
+fn float_ordering(left: f64, right: f64, span: Span, operation: &str) -> Result<Value, Diagnostic> {
     if left.is_nan() || right.is_nan() {
         return Err(Diagnostic::new(
             "BLOT_UNORDERED",
@@ -1795,13 +1790,8 @@ mod tests {
     #[test]
     fn float_ordering_refuses_nan() {
         for operation in ["@float.cmp", "@f32.cmp"] {
-            let error = float_ordering(
-                f64::NAN,
-                0.0,
-                Span { start: 1, end: 2 },
-                operation,
-            )
-            .expect_err("NaN has no ordering");
+            let error = float_ordering(f64::NAN, 0.0, Span { start: 1, end: 2 }, operation)
+                .expect_err("NaN has no ordering");
             assert_eq!(error.code, "BLOT_UNORDERED");
             assert!(error.message.starts_with(operation));
         }

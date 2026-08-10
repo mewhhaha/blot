@@ -509,7 +509,12 @@ impl TypeEnvironment {
         if self.names.contains_key(name) {
             return self.phases.get(name).copied();
         }
-        if self.opens.iter().rev().any(|opened| opened.get(name).is_some()) {
+        if self
+            .opens
+            .iter()
+            .rev()
+            .any(|opened| opened.get(name).is_some())
+        {
             return Some(Phase::Comptime);
         }
         self.parent.as_ref()?.binding_phase(name)
@@ -1382,7 +1387,10 @@ impl Checker {
                     ));
                 }
             }
-            Value::Shape(fields) | Value::Effect { operations: fields, .. } => {
+            Value::Shape(fields)
+            | Value::Effect {
+                operations: fields, ..
+            } => {
                 for (_, member) in fields {
                     self.refuse_runtime_const_captures(
                         path,
@@ -1394,9 +1402,7 @@ impl Checker {
                     )?;
                 }
             }
-            Value::Array(elements)
-            | Value::Union(elements)
-            | Value::IndexedStep { elements } => {
+            Value::Array(elements) | Value::Union(elements) | Value::IndexedStep { elements } => {
                 for element in elements {
                     self.refuse_runtime_const_captures(
                         path,
@@ -2563,8 +2569,7 @@ impl Checker {
                         Rc::make_mut(&mut remaining.names)
                             .insert(name.clone(), Typing::Mono(alternate));
                         if let Some(phase) = binding_phase {
-                            Rc::make_mut(&mut consequence_scope.phases)
-                                .insert(name.clone(), phase);
+                            Rc::make_mut(&mut consequence_scope.phases).insert(name.clone(), phase);
                             Rc::make_mut(&mut remaining.phases).insert(name, phase);
                         }
                     }
@@ -7096,9 +7101,7 @@ fn free_name_span(
         }
         Expression::Field { target, .. }
         | Expression::Rec { lambda: target, .. }
-        | Expression::Comptime { body: target, .. } => {
-            free_name_span(module, *target, name, bound)
-        }
+        | Expression::Comptime { body: target, .. } => free_name_span(module, *target, name, bound),
         Expression::Lambda {
             parameter, body, ..
         } => {
@@ -7155,9 +7158,7 @@ fn free_name_span(
                 return Some(span);
             }
             for arm in arms {
-                if !bound
-                    && let Some(span) = pattern_pin_name_span(module, arm.pattern, name)
-                {
+                if !bound && let Some(span) = pattern_pin_name_span(module, arm.pattern, name) {
                     return Some(span);
                 }
                 let pattern_binds_name = pattern_names(module, arm.pattern)

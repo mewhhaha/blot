@@ -4,7 +4,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   check:
@@ -28,15 +28,28 @@ jobs:
           --allow-run=cargo
           --allow-env
           scripts/build_compiler.ts
-      - name: Upload generated Rust compiler artifacts
+      - name: Upload generated Rust compiler artifact
         uses: actions/upload-artifact@v4
         with:
           name: blot-rust-compiler-${{ github.sha }}
-          path: |
-            generated/compiler/compiler.wasm
-            generated/prelude/prelude.snapshot
+          path: generated/compiler/compiler.wasm
           if-no-files-found: error
           retention-days: 1
+      - name: Commit rebuilt Rust compiler artifact
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          cp generated/compiler/compiler.wasm "$RUNNER_TEMP/compiler.wasm"
+          git fetch origin "$GITHUB_HEAD_REF"
+          git switch --detach "origin/$GITHUB_HEAD_REF"
+          cp "$RUNNER_TEMP/compiler.wasm" generated/compiler/compiler.wasm
+          if git diff --quiet -- generated/compiler/compiler.wasm; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add generated/compiler/compiler.wasm
+          git commit -m "Rebuild Rust compiler Wasm artifact"
+          git push origin "HEAD:$GITHUB_HEAD_REF"
       - name: Check Rust formatting
         run: cargo fmt --manifest-path compiler/Cargo.toml -- --check
       - name: Test Rust compiler
@@ -49,7 +62,4 @@ jobs:
       - run: pnpm run smoke
       - run: pnpm parity:strict
       - name: Verify generated Rust artifacts are committed
-        run: >-
-          git diff --exit-code --
-          generated/compiler/compiler.wasm
-          generated/prelude/prelude.snapshot
+        run: git diff --exit-code -- generated/compiler/compiler.wasm

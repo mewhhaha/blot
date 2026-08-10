@@ -1172,13 +1172,7 @@ impl ResidualTrace {
         operation: &str,
         span: crate::ast::Span,
     ) -> Result<(), Diagnostic> {
-        let unordered = self.operation(
-            "scalar",
-            1,
-            vec![value, value],
-            span,
-            Some("not-equal"),
-        );
+        let unordered = self.operation("scalar", 1, vec![value, value], span, Some("not-equal"));
         let branches = self.begin_conditional(&unordered, span)?;
         self.select_block(branches.consequent);
         self.trap_current_block(
@@ -7182,11 +7176,7 @@ mod tests {
     fn float_ordering_guards_trap_unordered_values() {
         let mut trace = ResidualTrace::new("nan-test.blot");
         trace
-            .trap_if_nan(
-                11,
-                "@float.cmp",
-                crate::ast::Span { start: 3, end: 7 },
-            )
+            .trap_if_nan(11, "@float.cmp", crate::ast::Span { start: 3, end: 7 })
             .expect("a float NaN guard should lower");
 
         assert_eq!(trace.blocks.len(), 4);

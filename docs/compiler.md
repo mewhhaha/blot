@@ -144,8 +144,8 @@ compiler Wasm; it is not a parity measurement.
 ## CI boundary
 
 Pull-request CI installs exact package versions with pnpm, runs the Node tests
-and checker, rebuilds the checked-in Rust compiler Wasm and prelude snapshot,
-runs Rust tests, and requires strict dual-compiler parity. Deno and Cargo exist
+and checker, rebuilds the checked-in Rust compiler Wasm, runs Rust tests, and
+requires strict dual-compiler parity. Deno and Cargo exist
 only in that artifact-verification job; ordinary `check`, `build`, tests, and
 benchmark execution host both checked-in Wasm components in Node. CI also
 rejects an uncommitted generated-artifact diff.
