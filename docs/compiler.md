@@ -100,8 +100,26 @@ artifact-cache key.
 parallel. Both runtimes are shared for the process lifetime; no semantic fact crosses a
 process or unvalidated revision boundary.
 
+## Dual-compiler development
+
+`pnpm parity` discovers every Blot file under `examples/`, `case-studies/`,
+and `src/prelude/`, then hosts both compilers in the same Node process. The
+experimental compiler uses Baba, the TypeScript semantic passes, and gpupaper.
+The comparison compiler uses the checked-in Rust compiler Wasm; neither path
+starts Deno, Cargo, or a native Rust process.
+
+For every corpus root, parity compares frontend acceptance, rejection stage and
+diagnostic code, Runtime-HIR export phases, canonical ABI manifest bytes, and
+capabilities. Internal type pretty-printing and emitted instruction bytes are
+not parity observations. `conformance/node-rust-gaps.json` records the current
+known gap signatures. CI fails when a gap is added, removed, or changes shape,
+so graduating a Node feature to Rust requires an intentional baseline update.
+`pnpm parity:strict` rejects every remaining gap and is the target for full
+feature equivalence.
+
 ## CI boundary
 
-Pull-request CI installs exact package versions with pnpm and runs the Node test
-and checker. It intentionally installs neither Deno nor Rust. The smoke test
-compiles `examples/minimal.blot` and validates the emitted WebAssembly.
+Pull-request CI installs exact package versions with pnpm and runs the Node
+tests, checker, and dual-compiler parity baseline. It intentionally installs
+neither Deno nor native Rust. The smoke test compiles
+`examples/minimal.blot` and validates the emitted WebAssembly.
