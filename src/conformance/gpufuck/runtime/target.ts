@@ -22,7 +22,7 @@ import {
   type CoreTypeId,
   type CoreValueId,
   type CoreWasmArtifact,
-  emitWasmPlanOnRustWasm,
+  createRustWasmEmitter,
   lowerCoreToWasm,
   PrimitiveId,
   type WasmTarget,
@@ -35,6 +35,26 @@ import type {
   ValidatedBlotRuntimeModule,
 } from "../../../runtime/hir.ts";
 import { addBlotAbiModuleShell } from "./wasm_shell.ts";
+
+type RustWasmEmitterInitialization = Awaited<
+  ReturnType<typeof createRustWasmEmitter>
+>;
+
+let sharedEmitter: Promise<RustWasmEmitterInitialization> | undefined;
+
+export function warmBlotRuntimeEmitter(): void {
+  void blotRuntimeEmitter();
+}
+
+function blotRuntimeEmitter(): Promise<RustWasmEmitterInitialization> {
+  if (sharedEmitter !== undefined) return sharedEmitter;
+  const initialization = createRustWasmEmitter();
+  sharedEmitter = initialization;
+  void initialization.catch(() => {
+    if (sharedEmitter === initialization) sharedEmitter = undefined;
+  });
+  return initialization;
+}
 
 export type BlotRuntimeTargetArtifact = CoreWasmArtifact & {
   readonly core: CoreModule;
@@ -139,7 +159,8 @@ export async function compileBlotRuntimeModulesOnRustWasm(
   const artifacts: RustWasmBlotRuntimeBatchArtifact[] = [];
   for (const [index, artifact] of planned.entries()) {
     const module = modules[index]!;
-    const wasm = (await emitWasmPlanOnRustWasm(artifact.wasmPlan)).bytes;
+    const { emitter } = await blotRuntimeEmitter();
+    const wasm = emitter.emit(artifact.wasmPlan).bytes;
     requireBlotWasm(module, wasm, artifact.manifestBytes, "Rust/WebAssembly");
     artifacts.push({ ...artifact, wasm });
   }
