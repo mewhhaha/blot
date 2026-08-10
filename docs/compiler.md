@@ -4,7 +4,8 @@ This experimental branch compiles Blot with Node as the only host:
 
 ```text
 source
-  -> Baba generated parser Wasm
+  -> Baba generated Wasm lexer
+  -> Baba general-profile CPU island parser
   -> Blot TypeScript semantics
   -> validated Runtime HIR
   -> gpupaper Core
@@ -62,9 +63,13 @@ try {
 ## Wasm boundaries
 
 The checked-in Blot parser binary and plan live under `generated/wasm/`.
-`src/syntax/parse.ts` instantiates them with Baba's generated-Wasm runtime and
-adapts Baba cursors only to restore original source offsets after layout
-elaboration.
+`src/syntax/layout.ts` and `src/syntax/parse.ts` instantiate the binary with
+Baba's generated-Wasm runtime for authoritative lexing. Blot's plan declares
+`general` throughput, while Baba's generated-Wasm island parser accepts only
+`strict`; `src/syntax/parse.ts` therefore hands the same source and plan to
+Baba's own `CpuFrontend` for island parsing and materializes its compact CST.
+This bridge duplicates lexing but does not duplicate Baba's lexer or parser
+logic.
 
 `src/compiler/node_hir.ts` runs the authoritative Blot semantic passes and
 freezes the Runtime-HIR snapshot. `src/conformance/gpufuck/runtime/target.ts`
