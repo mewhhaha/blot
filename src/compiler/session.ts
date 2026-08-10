@@ -5,7 +5,11 @@ import {
   type BlotRuntimeModule,
   validateBlotRuntimeModule,
 } from "../runtime/hir.ts";
-import { compileBlotRuntimeModulesOnRustWasm } from "../conformance/gpufuck/runtime/target.ts";
+import {
+  compileBlotRuntimeModulesOnRustWasm,
+  warmBlotRuntimeEmitter,
+} from "../conformance/gpufuck/runtime/target.ts";
+import { warmBabaRuntime } from "../syntax/baba_runtime.ts";
 import { prepareGpupaperHir } from "./node_hir.ts";
 
 export interface CompilerArtifact {
@@ -41,6 +45,8 @@ export class Compiler {
   private constructor() {}
 
   static async create(): Promise<Compiler> {
+    warmBabaRuntime();
+    warmBlotRuntimeEmitter();
     return new Compiler();
   }
 
