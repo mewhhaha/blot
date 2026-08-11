@@ -42,22 +42,23 @@ checked module capsule:
 ```
 
 The experimental Node CLI does not build package capsules yet. It does resolve
-existing source and capsule exports from `node_modules`. An importer writes `@import "@scope/package"`, or a declared package
-subpath, and Blot resolves the nearest `node_modules` package without executing
-its JavaScript. A valid `.blotc` is preferred and corrupt or unsupported built
-files fall back to the declared source. The capsule bundles the package-owned
-lowered AST graph and its includes without retaining source text, while package
-imports remain shared external edges. Consumer-specific typechecking and
-compile-time specialization still happen in the importer, so a reusable capsule
-is not final WebAssembly. See [spec/PACKAGES.md](spec/PACKAGES.md).
+existing source and capsule exports from `node_modules`. An importer writes
+`@import "@scope/package"`, or a declared package subpath, and Blot resolves the
+nearest `node_modules` package without executing its JavaScript. A valid
+`.blotc` is preferred and corrupt or unsupported built files fall back to the
+declared source. The capsule bundles the package-owned lowered AST graph and its
+includes without retaining source text, while package imports remain shared
+external edges. Consumer-specific typechecking and compile-time specialization
+still happen in the importer, so a reusable capsule is not final WebAssembly.
+See [spec/PACKAGES.md](spec/PACKAGES.md).
 
 The parser profile is a design tool, not an implementation afterthought. It
 rules out contextual lexing and recursive precedence grammar, keeping both the
-grammar and the language small enough to understand. Node instantiates Baba 9.0.0's generated lexer Wasm with Blot's checked-in
-binary and plan. Because that plan uses Baba's `general` throughput profile,
-Baba's own CPU island executor completes parsing; the generated-Wasm island
-parser intentionally accepts only `strict`. WebGPU remains a comparison
-target.
+grammar and the language small enough to understand. Node instantiates Baba
+9.0.0's generated lexer Wasm with Blot's checked-in binary and plan. Because
+that plan uses Baba's `general` throughput profile, Baba's own CPU island
+executor completes parsing; the generated-Wasm island parser intentionally
+accepts only `strict`. WebGPU remains a comparison target.
 
 ## Status
 
@@ -98,12 +99,11 @@ backend consumes. A final `@array.set` or `@array.push` on a proved linear array
 reuses its Store allocation; ordinary shared arrays remain persistent. See
 [docs/ownership.md](docs/ownership.md).
 
-The compiler (M4) lowers accepted programs through the experimental
-Baba-Wasm → Node → gpupaper-Wasm pipeline. `pnpm blot check` and
-`pnpm blot build` need neither Deno nor native Rust; building produces
-caller-facing WebAssembly plus a JSON ABI manifest without executing the
-program. The identical manifest is embedded in the `blot:abi` custom section.
-See [docs/abi.md](docs/abi.md).
+The compiler (M4) lowers accepted programs through the experimental Baba-Wasm →
+Node → gpupaper-Wasm pipeline. `pnpm blot check` and `pnpm blot build` need
+neither Deno nor native Rust; building produces caller-facing WebAssembly plus a
+JSON ABI manifest without executing the program. The identical manifest is
+embedded in the `blot:abi` custom section. See [docs/abi.md](docs/abi.md).
 Compile-time-only result fields are erased, runtime fields become named Wasm
 exports, host effects become typed imports, and one-shot handlers are
 specialized through non-tail resume and abort. See
@@ -144,10 +144,10 @@ pnpm blot build examples/minimal.blot examples/arithmetic.blot
 
 Blot owns parsing policy, checking, staging, specialization, Runtime HIR,
 canonical ABI adapters, and target orchestration. Baba's generated Wasm lexer
-and general-profile CPU island executor own syntax. Gpupaper owns Core-to-Wasm planning and uses its embedded Rust/Wasm
-emitter for the final bytes. Node supplies filesystem and package access and
-hosts both Wasm modules. No compiler command initializes WebGPU or invokes Deno,
-Cargo, or a native Rust binary.
+and general-profile CPU island executor own syntax. Gpupaper owns Core-to-Wasm
+planning and uses its embedded Rust/Wasm emitter for the final bytes. Node
+supplies filesystem and package access and hosts both Wasm modules. No compiler
+command initializes WebGPU or invokes Deno, Cargo, or a native Rust binary.
 
 `just install` builds the Tree-sitter grammar from the same grammar source as
 the GPU parser, installs highlight, indent, textobject, tag, and rainbow

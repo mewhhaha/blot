@@ -41,7 +41,26 @@ jobs:
         run: cargo test --manifest-path compiler/Cargo.toml
       - run: corepack enable
       - run: corepack prepare pnpm@11.21.0 --activate
-      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm install --frozen-lockfile
+      - name: Check TypeScript
+        run: deno check .
+      - name: Check formatting
+        run: deno fmt --check
+      - name: Check lint
+        run: deno lint
+      - name: Verify Baba frontend generation
+        run: >-
+          deno run
+          --allow-read
+          --allow-write
+          npm:@jsr/mewhhaha__baba@9.0.0/cli
+          grammar.baba
+          --out generated
+          --name blot
+          --root program
+          --metadata baba.json
+          --target wasm
+      - run: git diff --exit-code -- generated
       - name: Pack runnable Node workspace
         shell: bash
         run: |
@@ -68,8 +87,8 @@ jobs:
           test -f case-studies/agent/main.blot
           test -f conformance/node-rust-gaps.json
           test -f experiments/node-wasm-benchmark.ts
-          node --import ./src/node/polyfills.mjs --experimental-transform-types src/node/cli.ts check examples/minimal.blot
-          node --import ./src/node/polyfills.mjs --experimental-transform-types --test src/node/pipeline.test.ts
+          pnpm exec tsx --import ./src/node/polyfills.mjs src/node/cli.ts check examples/minimal.blot
+          pnpm exec tsx --import ./src/node/polyfills.mjs --test src/node/pipeline.test.ts
       - name: Upload runnable Node workspace
         uses: actions/upload-artifact@v4
         with:

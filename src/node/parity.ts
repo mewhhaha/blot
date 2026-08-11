@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { Compiler } from "../compiler.ts";
 import { CompilerWasm } from "../compiler/wasm.ts";
@@ -9,11 +9,11 @@ import { validateBlotRuntimeModule } from "../runtime/hir.ts";
 import { parse } from "../syntax/parse.ts";
 import { encodePortableModule } from "../syntax/portable.ts";
 import {
+  compareObservations,
   type CompilerAcceptance,
   type CompilerObservation,
   type CompilerRejection,
   type CompilerStage,
-  compareObservations,
   type ParityGap,
   type ParityGapSignature,
   parityGapSignature,
@@ -71,19 +71,23 @@ if (strict) {
   passes = sameParityGapBaseline(signatures, expected);
 }
 
-console.log(JSON.stringify({
-  mode,
-  passes,
-  corpus: paths.length,
-  matchingAcceptances,
-  matchingRejections,
-  gaps: signatures,
-  details: gaps.map((gap) => ({
-    path: gap.path,
-    node: observationDetail(gap.node),
-    rust: observationDetail(gap.rust),
-  })),
-}, null, 2));
+console.log(JSON.stringify(
+  {
+    mode,
+    passes,
+    corpus: paths.length,
+    matchingAcceptances,
+    matchingRejections,
+    gaps: signatures,
+    details: gaps.map((gap) => ({
+      path: gap.path,
+      node: observationDetail(gap.node),
+      rust: observationDetail(gap.rust),
+    })),
+  },
+  null,
+  2,
+));
 if (!passes) process.exitCode = 1;
 
 async function observeNode(
@@ -105,9 +109,8 @@ async function observeNode(
     return rejection("frontend", diagnostic.code, diagnostic.message);
   }
 
-  let checked: { readonly type: string; readonly effects: string };
   try {
-    checked = await compiler.check(absolute);
+    await compiler.check(absolute);
   } catch (error) {
     return errorRejection("check", error, "NODE_CHECK_ERROR");
   }
@@ -201,7 +204,7 @@ async function observeRust(
     if (!compiled.ok) {
       return rustFailure("compile", compiled, "RUST_COMPILE_ERROR");
     }
-    if (!WebAssembly.validate(compiled.wasm)) {
+    if (!WebAssembly.validate(Uint8Array.from(compiled.wasm))) {
       return rejection(
         "compile",
         "RUST_INVALID_WASM",

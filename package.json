@@ -8,18 +8,26 @@
     "./compiler": "./src/compiler.ts"
   },
   "scripts": {
-    "blot": "node --import ./src/node/polyfills.mjs --experimental-transform-types src/node/cli.ts",
-    "check": "node --import ./src/node/polyfills.mjs --experimental-transform-types src/node/cli.ts check examples/minimal.blot",
-    "test": "node --import ./src/node/polyfills.mjs --experimental-transform-types --test src/node/*.test.ts",
-    "smoke": "node --import ./src/node/polyfills.mjs --experimental-transform-types src/node/cli.ts build examples/minimal.blot",
-    "benchmark": "node --import ./src/node/polyfills.mjs --experimental-transform-types experiments/node-wasm-benchmark.ts",
-    "parity": "node --import ./src/node/polyfills.mjs --experimental-transform-types src/node/parity.ts",
-    "parity:strict": "node --import ./src/node/polyfills.mjs --experimental-transform-types src/node/parity.ts --strict"
+    "blot": "tsx --import ./src/node/polyfills.mjs src/node/cli.ts",
+    "check": "tsx --import ./src/node/polyfills.mjs src/node/cli.ts check examples/minimal.blot",
+    "test": "pnpm test:node && pnpm test:regression",
+    "test:node": "tsx --import ./src/node/polyfills.mjs --test src/node/*.test.ts",
+    "test:regression": "node scripts/node_regression_tests.mjs",
+    "smoke": "tsx --import ./src/node/polyfills.mjs src/node/cli.ts build examples/minimal.blot",
+    "benchmark": "tsx --import ./src/node/polyfills.mjs experiments/node-wasm-benchmark.ts",
+    "parity": "tsx --import ./src/node/polyfills.mjs src/node/parity.ts",
+    "parity:strict": "tsx --import ./src/node/polyfills.mjs src/node/parity.ts --strict"
   },
   "dependencies": {
     "@mewhhaha/baba": "npm:@jsr/mewhhaha__baba@9.0.0",
     "@mewhhaha/gpupaper": "npm:@jsr/mewhhaha__gpupaper@0.1.6",
     "@std/path": "npm:@jsr/std__path@1.1.6"
+  },
+  "devDependencies": {
+    "@std/assert": "npm:@jsr/std__assert@1.0.19",
+    "@types/node": "22.20.1",
+    "gpufuck": "npm:@jsr/mewhhaha__gpufuck@0.9.0",
+    "tsx": "4.23.5"
   },
   "engines": {
     "node": ">=22.16.0"

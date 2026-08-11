@@ -1,0 +1,1 @@
+{ .default = { .answer = 42; .verdict = "yes"; .neighbors = [40, 41, 42]; }; }

@@ -16,18 +16,18 @@ source
 Baba owns lexing and parsing. Blot checks, evaluates the compile-time fragment,
 proves ownership, stages the program, and exports Runtime HIR. Gpupaper owns
 Core-to-Wasm planning and final binary emission. Ordinary compilation uses no
-Deno runtime, native Rust toolchain, Cargo process, WebGPU device, or handwritten
-parser.
+Deno runtime, native Rust toolchain, Cargo process, WebGPU device, or
+handwritten parser.
 
 ## Versions
 
-| Component | Version |
-| --- | ---: |
-| Node | 22.16.0 or newer |
-| pnpm | 11.21.0 |
-| Baba | 9.0.0 |
-| gpupaper | 0.1.6 |
-| @std/path | 1.1.6 |
+| Component |          Version |
+| --------- | ---------------: |
+| Node      | 22.16.0 or newer |
+| pnpm      |          11.21.0 |
+| Baba      |            9.0.0 |
+| gpupaper  |            0.1.6 |
+| @std/path |            1.1.6 |
 
 The pnpm workspace applies a seven-day minimum release age and excludes the two
 `@mewhhaha` packages, whose coordinated releases may need immediate testing.
@@ -49,9 +49,8 @@ sealed results, then performs the ABI post-return exactly once for owned
 indirect values. Programs that require host capabilities must be embedded in a
 host that implements those operations.
 
-`build` writes `examples/minimal.wasm` and
-`examples/minimal.wasm.json`. The sidecar bytes match the `blot:abi` custom
-section embedded in the module.
+`build` writes `examples/minimal.wasm` and `examples/minimal.wasm.json`. The
+sidecar bytes match the `blot:abi` custom section embedded in the module.
 
 Library consumers use the same resident compiler:
 
@@ -104,21 +103,21 @@ root program by loader identity; dependency checks are not cached independently,
 because their facts can depend on importer constraints and staging context.
 
 A resident compiler also keys each source graph by the exact portable AST,
-including spans, dependency revision keys, and included file paths and bytes.
-An equal key may reuse the checked summary, Runtime HIR, and finished artifact.
-This permits comment-only edits that preserve the portable graph to return copied
-bytes marked `revision-cache`, while source-span, dependency, and include changes
-invalidate the result. The immutable Runtime-HIR object remains the final
-artifact-cache key.
+including spans, dependency revision keys, and included file paths and bytes. An
+equal key may reuse the checked summary, Runtime HIR, and finished artifact.
+This permits comment-only edits that preserve the portable graph to return
+copied bytes marked `revision-cache`, while source-span, dependency, and include
+changes invalidate the result. The immutable Runtime-HIR object remains the
+final artifact-cache key.
 
 `Compiler.create()` starts Baba runtime and gpupaper emitter initialization in
-parallel. Both runtimes are shared for the process lifetime; no semantic fact crosses a
-process or unvalidated revision boundary.
+parallel. Both runtimes are shared for the process lifetime; no semantic fact
+crosses a process or unvalidated revision boundary.
 
 ## Dual-compiler development
 
-`pnpm parity` discovers every Blot file under `examples/`, `case-studies/`,
-and `src/prelude/`, then hosts both compilers in the same Node process. The
+`pnpm parity` discovers every Blot file under `examples/`, `case-studies/`, and
+`src/prelude/`, then hosts both compilers in the same Node process. The
 experimental compiler uses Baba, the TypeScript semantic passes, and gpupaper.
 The comparison compiler uses the checked-in Rust compiler Wasm; neither path
 starts Deno, Cargo, or a native Rust process.
@@ -145,14 +144,14 @@ pnpm run benchmark -- --node-only examples/storage.blot
 
 It reports nine-sample medians for initialization, cold and resident builds,
 checks, comment-only edits, semantic edits, phase splits, emitted sizes, and
-Node-to-Rust ratios. `--node-only` is useful while rebuilding the checked-in Rust
-compiler Wasm; it is not a parity measurement.
+Node-to-Rust ratios. `--node-only` is useful while rebuilding the checked-in
+Rust compiler Wasm; it is not a parity measurement.
 
 ## CI boundary
 
 Pull-request CI installs exact package versions with pnpm, runs the Node tests
 and checker, rebuilds the checked-in Rust compiler Wasm, runs Rust tests, and
-requires strict dual-compiler parity. Deno and Cargo exist
-only in that artifact-verification job; ordinary `check`, `build`, tests, and
-benchmark execution host both checked-in Wasm components in Node. CI also
-rejects an uncommitted generated-artifact diff.
+requires strict dual-compiler parity. Deno and Cargo exist only in that
+artifact-verification job; ordinary `check`, `build`, tests, and benchmark
+execution host both checked-in Wasm components in Node. CI also rejects an
+uncommitted generated-artifact diff.

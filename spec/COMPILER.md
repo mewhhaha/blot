@@ -13,27 +13,28 @@ meaning. [`PAPER.md`](PAPER.md) develops the target language model.
 not a second definition of the language.
 
 On the experimental Node-Wasm branch, compilation is one deterministic pipeline
-with two checked-in Wasm boundaries. Node instantiates Baba's generated lexer Wasm and runs Baba's general-profile
-CPU island executor. Blot's TypeScript passes then elaborate and validate
-Runtime HIR before Node instantiates gpupaper's embedded Rust/Wasm emitter. Deno, native Rust, Cargo, and
-WebGPU are outside the compilation boundary.
+with two checked-in Wasm boundaries. Node instantiates Baba's generated lexer
+Wasm and runs Baba's general-profile CPU island executor. Blot's TypeScript
+passes then elaborate and validate Runtime HIR before Node instantiates
+gpupaper's embedded Rust/Wasm emitter. Deno, native Rust, Cargo, and WebGPU are
+outside the compilation boundary.
 
 Baba's Wasm runtime lexes layout-elaborated source. Its CPU island executor
-parses the general-profile plan and returns the compact CST.
-Gpupaper receives gpupaper Core lowered from validated Blot Runtime HIR. Blot
-owns every semantic judgment between those boundaries; neither Wasm component
-is permitted to reinterpret Blot source semantics. An implementation boundary
-is not a semantic boundary.
+parses the general-profile plan and returns the compact CST. Gpupaper receives
+gpupaper Core lowered from validated Blot Runtime HIR. Blot owns every semantic
+judgment between those boundaries; neither Wasm component is permitted to
+reinterpret Blot source semantics. An implementation boundary is not a semantic
+boundary.
 
 The Node CLI exposes `ast`, `check`, `run`, and `build`. `run` executes a
 zero-parameter default or sole runtime export when the module needs no host
 capabilities. It copies direct and canonical-memory values and completes owned
 indirect results through their declared post-return. Evaluation of arbitrary
-host-dependent programs, ownership reports,
-formatting, and package construction remain development tools outside this
-experimental CLI boundary. `pnpm parity` and `pnpm parity:strict` compare both
-compiler directions; comparing rejections alone would let either checker drift
-towards accepting a program the other refuses.
+host-dependent programs, ownership reports, formatting, and package construction
+remain development tools outside this experimental CLI boundary. `pnpm parity`
+and `pnpm parity:strict` compare both compiler directions; comparing rejections
+alone would let either checker drift towards accepting a program the other
+refuses.
 
 ## 1. Inputs, outputs, and observations
 
@@ -280,17 +281,16 @@ distribute(W_C, S(ast, interface))    decode_C(S) = (ast, interface)
 check_C(ast) = interface
 ```
 
-The premises are a release-build obligation over one distribution. The
-Rust/Wasm implementation resolves `blot:prelude` to the adjacent snapshot
-through the ordinary module loader, then validates the portable AST arena,
-certificate schema, closed flat type arena, and all arena references before
-installing the memoized result. The Node implementation loads the ordinary
-prelude source through its source graph and derives the same interface.
-The MessagePack envelope is a transport encoding of those existing artifacts,
-not another AST schema. If compile-time specialization needs values represented
-by the AST, the compiler evaluates the validated AST once per session and
-retains its result; the cached interface never substitutes an asserted runtime
-value.
+The premises are a release-build obligation over one distribution. The Rust/Wasm
+implementation resolves `blot:prelude` to the adjacent snapshot through the
+ordinary module loader, then validates the portable AST arena, certificate
+schema, closed flat type arena, and all arena references before installing the
+memoized result. The Node implementation loads the ordinary prelude source
+through its source graph and derives the same interface. The MessagePack
+envelope is a transport encoding of those existing artifacts, not another AST
+schema. If compile-time specialization needs values represented by the AST, the
+compiler evaluates the validated AST once per session and retains its result;
+the cached interface never substitutes an asserted runtime value.
 
 Performance is measured by phase work, not by repository boundaries. Cold, warm,
 resident, unchanged-revision, source-only-edit, and semantic-edit timings are
@@ -419,7 +419,7 @@ public artifact, or an explicit compiler command.
 | lower trapping arithmetic, wrapping arithmetic, comparisons, control, memory, host calls, and SIMD            | specified WebAssembly behavior       |
 | emit UTF-8 validation, text comparison, integer formatting, relocation, and allocation support when reachable | complete runtime support             |
 | encode deterministic WebAssembly and validate it                                                              | final module bytes                   |
-| expose the commands assigned to the selected host boundary                                                   | observable compiler tooling          |
+| expose the commands assigned to the selected host boundary                                                    | observable compiler tooling          |
 | retain reference, conformance, and emitted-Wasm executions                                                    | differential correctness evidence    |
 | cache frontend, interfaces, analyses, static values, runtime program, and final artifacts by valid revision   | incremental compilation              |
 
@@ -446,10 +446,9 @@ source graph
 ```
 
 The `Compiler` session caches final artifacts by immutable Runtime-HIR identity.
-Baba's Wasm lexer and CPU parser instances are process-shared; the Wasm
-instance is disposed explicitly. Gpupaper's
-emitter bytes are checked into its package and instantiated through the standard
-`WebAssembly` API.
+Baba's Wasm lexer and CPU parser instances are process-shared; the Wasm instance
+is disposed explicitly. Gpupaper's emitter bytes are checked into its package
+and instantiated through the standard `WebAssembly` API.
 
 Residual structured values use the settled checked boundary type, not only the
 constructor or element observed during staging. This keeps empty Store values,
@@ -532,13 +531,13 @@ permission to fork semantics.
 
 The branch uses Node as the only host and keeps one authority per boundary:
 
-| Boundary | Authority | Persisted input |
-| --- | --- | --- |
-| lexing | Baba generated Wasm lexer | `parser.wasm` plus `parser.plan` |
-| parsing | Baba CPU island executor | general-profile `parser.plan` |
-| semantics | Blot TypeScript passes | source graph and inference facts |
-| target lowering | gpupaper TypeScript Core lowering | validated Runtime HIR |
-| binary emission | gpupaper embedded Rust/Wasm emitter | validated Wasm plan |
+| Boundary        | Authority                           | Persisted input                  |
+| --------------- | ----------------------------------- | -------------------------------- |
+| lexing          | Baba generated Wasm lexer           | `parser.wasm` plus `parser.plan` |
+| parsing         | Baba CPU island executor            | general-profile `parser.plan`    |
+| semantics       | Blot TypeScript passes              | source graph and inference facts |
+| target lowering | gpupaper TypeScript Core lowering   | validated Runtime HIR            |
+| binary emission | gpupaper embedded Rust/Wasm emitter | validated Wasm plan              |
 
 `Runtime HIR` is the semantic/backend boundary. It contains settled runtime
 types and effects, residual operations, concrete representations, and source
@@ -592,8 +591,8 @@ dependent. No data layout makes that dependency disappear.
 The collapse should be tested by deletion or replacement in this order:
 
 1. **Experimental:** `build` and the public `Compiler` route through the
-   Baba-Wasm → Node semantics → gpupaper-Wasm pipeline. The checked-in Blot
-   Rust compiler Wasm remains the strict parity implementation.
+   Baba-Wasm → Node semantics → gpupaper-Wasm pipeline. The checked-in Blot Rust
+   compiler Wasm remains the strict parity implementation.
 2. **Complete on the Node path:** constant and residual programs share Runtime
    HIR and the gpupaper emitter, including structured canonical results.
 3. **Complete at the persistence boundary:** one `ClosedProgram` owns Runtime

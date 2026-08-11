@@ -12,9 +12,20 @@ type RuntimeValue =
   | boolean
   | string
   | readonly RuntimeValue[]
-  | { readonly kind: "record"; readonly fields: ReadonlyMap<string, RuntimeValue> }
-  | { readonly kind: "variant"; readonly name: string; readonly payload?: RuntimeValue }
-  | { readonly kind: "sealed"; readonly name: string; readonly value: RuntimeValue };
+  | {
+    readonly kind: "record";
+    readonly fields: ReadonlyMap<string, RuntimeValue>;
+  }
+  | {
+    readonly kind: "variant";
+    readonly name: string;
+    readonly payload?: RuntimeValue;
+  }
+  | {
+    readonly kind: "sealed";
+    readonly name: string;
+    readonly value: RuntimeValue;
+  };
 
 export async function runArtifact(artifact: CompilerArtifact): Promise<string> {
   const manifest = decodeManifest(artifact.manifestBytes);
@@ -35,18 +46,20 @@ export async function runArtifact(artifact: CompilerArtifact): Promise<string> {
       `run requires a zero-parameter export; ${exported.sourceName} takes ${exported.function.parameters.length}`,
     );
   }
-  const instantiated = await WebAssembly.instantiate(artifact.wasm);
+  const instantiated = await WebAssembly.instantiate(
+    Uint8Array.from(artifact.wasm),
+  );
   const callable = requiredFunction(instantiated.instance, exported.name);
   const resultType = exported.function.result;
   const flattened = flattenedAbiType(resultType);
   const postReturn = exported.postReturn;
-  if (flattened.length > 1 && postReturn === null) {
-    throw new TypeError(`${exported.name} omitted its indirect post-return`);
-  }
   const raw = callable();
   let value: RuntimeValue;
   if (flattened.length <= 1) value = readDirect(resultType, raw);
   else {
+    if (postReturn === null) {
+      throw new TypeError(`${exported.name} omitted its indirect post-return`);
+    }
     if (typeof raw !== "number") {
       throw new TypeError(`${exported.name} did not return a result pointer`);
     }
@@ -54,9 +67,6 @@ export async function runArtifact(artifact: CompilerArtifact): Promise<string> {
     try {
       value = readMemory(resultType, memory, raw);
     } finally {
-      if (postReturn === null) {
-        throw new TypeError(`${exported.name} omitted its indirect post-return`);
-      }
       requiredFunction(instantiated.instance, postReturn)(raw);
     }
   }
@@ -90,7 +100,9 @@ function selectExport(manifest: BlotAbiManifest) {
   }
   const names = runtime.map((exported) => exported.sourceName);
   throw new TypeError(
-    `run needs a default export when a module has several runtime exports: ${names.join(", ")}`,
+    `run needs a default export when a module has several runtime exports: ${
+      names.join(", ")
+    }`,
   );
 }
 
@@ -111,7 +123,9 @@ function requiredMemory(
 ): WebAssembly.Memory {
   const value = instance.exports[manifest.abi.memoryExport];
   if (!(value instanceof WebAssembly.Memory)) {
-    throw new TypeError(`Wasm export ${manifest.abi.memoryExport} is not memory`);
+    throw new TypeError(
+      `Wasm export ${manifest.abi.memoryExport} is not memory`,
+    );
   }
   return value;
 }
@@ -129,7 +143,11 @@ function readDirect(type: BlotAbiType, value: unknown): RuntimeValue {
     return value;
   }
   if (type.kind === "sealed") {
-    return { kind: "sealed", name: type.name, value: readDirect(type.inner, value) };
+    return {
+      kind: "sealed",
+      name: type.name,
+      value: readDirect(type.inner, value),
+    };
   }
   if (type.kind === "record") {
     const fields = new Map<string, RuntimeValue>();
@@ -143,7 +161,9 @@ function readDirect(type: BlotAbiType, value: unknown): RuntimeValue {
   if (type.kind === "variant" && typeof value === "number") {
     const cases = [...type.cases].sort(byName);
     const selected = cases[value];
-    if (selected === undefined) throw new RangeError(`invalid variant tag ${value}`);
+    if (selected === undefined) {
+      throw new RangeError(`invalid variant tag ${value}`);
+    }
     if (selected.payload === undefined) {
       return { kind: "variant", name: selected.name };
     }
@@ -180,7 +200,9 @@ function readMemory(
     const element = memoryLayout(type.element);
     const values: RuntimeValue[] = [];
     for (let index = 0; index < length; index += 1) {
-      values.push(readMemory(type.element, memory, pointer + index * element.size));
+      values.push(
+        readMemory(type.element, memory, pointer + index * element.size),
+      );
     }
     return values;
   }
@@ -194,7 +216,10 @@ function readMemory(
   if (type.kind === "record") {
     const fields = new Map<string, RuntimeValue>();
     for (const field of recordLayout(type)) {
-      fields.set(field.name, readMemory(field.type, memory, offset + field.offset));
+      fields.set(
+        field.name,
+        readMemory(field.type, memory, offset + field.offset),
+      );
     }
     return { kind: "record", fields };
   }
@@ -205,7 +230,9 @@ function readMemory(
   else tag = view.getUint32(offset, true);
   const cases = [...type.cases].sort(byName);
   const selected = cases[tag];
-  if (selected === undefined) throw new RangeError(`invalid variant tag ${tag}`);
+  if (selected === undefined) {
+    throw new RangeError(`invalid variant tag ${tag}`);
+  }
   if (selected.payload === undefined) {
     return { kind: "variant", name: selected.name };
   }

@@ -3,17 +3,13 @@ import { readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { Compiler } from "../src/compiler.ts";
 import { CompilerWasm } from "../src/compiler/wasm.ts";
-import {
-  load,
-  type Loaded,
-  refreshLoadedModules,
-} from "../src/load.ts";
+import { load, type Loaded, refreshLoadedModules } from "../src/load.ts";
 import type { BlotRuntimeModule } from "../src/runtime/hir.ts";
 import { validateBlotRuntimeModule } from "../src/runtime/hir.ts";
 import { encodePortableModule } from "../src/syntax/portable.ts";
 import {
-  type CompilerAcceptance,
   compareObservations,
+  type CompilerAcceptance,
 } from "../src/node/parity_report.ts";
 
 const samples = 9;
@@ -124,11 +120,12 @@ async function main(): Promise<void> {
     let rustResident: number | null = null;
     let rustCheck: number | null = null;
     if (rust !== undefined) {
+      const residentRust = rust;
       rustResident = await median(samples, async () => {
-        await rust.compile(sourcePath);
+        await residentRust.compile(sourcePath);
       });
       rustCheck = await median(samples, async () => {
-        await rust.check(sourcePath);
+        await residentRust.check(sourcePath);
       });
     }
 
@@ -200,42 +197,46 @@ async function main(): Promise<void> {
     if (rustArtifactHash !== null) {
       rustCompilerIdentity = { artifact_sha256: rustArtifactHash };
     }
-    console.log(JSON.stringify({
-      schema: 1,
-      source: sourcePath,
-      mode,
-      samples,
-      statistic: "median",
-      comparison,
-      compiler: {
-        node: {
-          host: process.version,
-          pipeline: "Baba Wasm -> Node -> gpupaper Rust/Wasm",
+    console.log(JSON.stringify(
+      {
+        schema: 1,
+        source: sourcePath,
+        mode,
+        samples,
+        statistic: "median",
+        comparison,
+        compiler: {
+          node: {
+            host: process.version,
+            pipeline: "Baba Wasm -> Node -> gpupaper Rust/Wasm",
+          },
+          rust: rustCompilerIdentity,
         },
-        rust: rustCompilerIdentity,
-      },
-      wasm_bytes: {
-        node: nodeArtifact.wasm.byteLength,
-        rust: rustWasmBytes,
-      },
-      milliseconds: {
-        node: {
-          compiler_initialization: nodeInitialization,
-          cold_after_initialization: nodeCold,
-          cold_end_to_end: nodeInitialization + nodeCold,
-          resident_compile: nodeResident,
-          resident_check: nodeCheck,
-          source_only_edit: sourceOnly.node,
-          changed_module_edit: changedModule.node,
+        wasm_bytes: {
+          node: nodeArtifact.wasm.byteLength,
+          rust: rustWasmBytes,
         },
-        rust: rustMilliseconds,
+        milliseconds: {
+          node: {
+            compiler_initialization: nodeInitialization,
+            cold_after_initialization: nodeCold,
+            cold_end_to_end: nodeInitialization + nodeCold,
+            resident_compile: nodeResident,
+            resident_check: nodeCheck,
+            source_only_edit: sourceOnly.node,
+            changed_module_edit: changedModule.node,
+          },
+          rust: rustMilliseconds,
+        },
+        changed_module_phases: {
+          node: requiredMapValue(changedPhases, "node"),
+          rust: rustPhases,
+        },
+        node_over_rust_ratio: ratios,
       },
-      changed_module_phases: {
-        node: requiredMapValue(changedPhases, "node"),
-        rust: rustPhases,
-      },
-      node_over_rust_ratio: ratios,
-    }, null, 2));
+      null,
+      2,
+    ));
   } finally {
     node.destroy();
     if (rust !== undefined) rust.destroy();
@@ -475,7 +476,7 @@ function acceptance(
 }
 
 function requireValidWasm(name: string, artifact: BenchmarkArtifact): void {
-  if (WebAssembly.validate(artifact.wasm)) return;
+  if (WebAssembly.validate(Uint8Array.from(artifact.wasm))) return;
   throw new Error(`${name} benchmark compiler emitted invalid WebAssembly`);
 }
 
@@ -489,10 +490,12 @@ function requireRustSuccess<T extends { readonly ok: boolean }>(
       readonly diagnostic:
         | { readonly code: string; readonly message: string }
         | undefined;
-      readonly diagnostics: readonly {
-        readonly code: string;
-        readonly message: string;
-      }[] | undefined;
+      readonly diagnostics:
+        | readonly {
+          readonly code: string;
+          readonly message: string;
+        }[]
+        | undefined;
     };
     let message = failure.message;
     if (failure.diagnostic !== undefined) {

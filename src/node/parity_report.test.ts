@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  compareObservations,
   type CompilerAcceptance,
   type CompilerRejection,
-  compareObservations,
   parityGapSignature,
   sameParityGapBaseline,
 } from "./parity_report.ts";
@@ -11,7 +11,7 @@ import {
 const accepted: CompilerAcceptance = {
   status: "accepted",
   exports: ["main:runtime"],
-  manifest: "{\"abi\":1}",
+  manifest: '{"abi":1}',
   capabilities: [],
 };
 

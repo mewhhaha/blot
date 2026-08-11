@@ -1,10 +1,6 @@
 import { resolve } from "@std/path";
 import { checkFile, checkSource } from "../check/mod.ts";
-import {
-  load,
-  type Loaded,
-  refreshLoadedModules,
-} from "../load.ts";
+import { load, type Loaded, refreshLoadedModules } from "../load.ts";
 import {
   type BlotRuntimeModule,
   validateBlotRuntimeModule,
@@ -59,10 +55,10 @@ export class Compiler {
 
   private constructor() {}
 
-  static async create(): Promise<Compiler> {
+  static create(): Promise<Compiler> {
     warmBabaRuntime();
     warmBlotRuntimeEmitter();
-    return new Compiler();
+    return Promise.resolve(new Compiler());
   }
 
   async check(path: string): Promise<CheckedModule> {

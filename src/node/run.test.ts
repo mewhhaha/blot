@@ -9,7 +9,9 @@ import { runArtifact } from "./run.ts";
 test("run copies and releases an indirect structured result", async () => {
   const compiler = await Compiler.create();
   try {
-    const artifact = await compiler.compile(resolve("examples/conditions.blot"));
+    const artifact = await compiler.compile(
+      resolve("examples/conditions.blot"),
+    );
     const expected =
       '{ .0 = "one"; .1 = "three"; .2 = "second"; .3 = "small"; .4 = "large" }';
     assert.equal(await runArtifact(artifact), expected);

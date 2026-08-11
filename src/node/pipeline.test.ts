@@ -45,7 +45,7 @@ test("Baba Wasm -> Node -> gpupaper Wasm compiles Blot", async () => {
   const compiler = await Compiler.create();
   try {
     const artifact = await compiler.compile(resolve("examples/minimal.blot"));
-    assert.equal(WebAssembly.validate(artifact.wasm), true);
+    assert.equal(WebAssembly.validate(Uint8Array.from(artifact.wasm)), true);
     assert.ok(artifact.manifestBytes.byteLength > 0);
   } finally {
     compiler.destroy();
@@ -119,9 +119,12 @@ test("multiple named runtime exports survive Runtime HIR and ABI lowering", asyn
       .filter((exported) => exported.phase === "runtime")
       .map((exported) => exported.sourceName);
     assert.deepEqual(runtimeAbiNames, expectedNames);
-    assert.deepEqual(blotFunctionExports(artifact.wasm), expectedNames.map(
-      (name) => `blot:${name}`,
-    ));
+    assert.deepEqual(
+      blotFunctionExports(artifact.wasm),
+      expectedNames.map(
+        (name) => `blot:${name}`,
+      ),
+    );
   } finally {
     compiler.destroy();
   }
@@ -134,10 +137,13 @@ test("array exports preserve the complete closed Option ABI", async () => {
       resolve("examples/polymorphic_collections.blot"),
     );
     const manifest = decodeManifest(artifact.manifestBytes);
-    assert.deepEqual(requiredRuntimeExport(manifest, "lengths").function.result, {
-      kind: "array",
-      element: { kind: "signed-integer-64" },
-    });
+    assert.deepEqual(
+      requiredRuntimeExport(manifest, "lengths").function.result,
+      {
+        kind: "array",
+        element: { kind: "signed-integer-64" },
+      },
+    );
     assert.deepEqual(
       requiredRuntimeExport(manifest, "map_previous").function.result,
       {
@@ -148,7 +154,7 @@ test("array exports preserve the complete closed Option ABI", async () => {
         ],
       },
     );
-    assert.equal(WebAssembly.validate(artifact.wasm), true);
+    assert.equal(WebAssembly.validate(Uint8Array.from(artifact.wasm)), true);
   } finally {
     compiler.destroy();
   }
@@ -172,7 +178,9 @@ test("a named .default field is projected as blot:default", async () => {
         ["other", "blot:other"],
       ],
     );
-    const instantiated = await WebAssembly.instantiate(artifact.wasm);
+    const instantiated = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm),
+    );
     assert.equal(
       exportedFunction(instantiated.instance, "blot:default")(),
       42n,
@@ -207,20 +215,25 @@ test("module grants keep Unit return typing through canonical text imports", asy
     assert.deepEqual(artifact.capabilities, ["Init"]);
 
     const writes: string[] = [];
-    let activeInstance: WebAssembly.Instance | undefined;
-    const instantiated = await WebAssembly.instantiate(artifact.wasm, {
-      "blot:host/Init": {
-        print(pointer: number, length: number): void {
-          if (activeInstance === undefined) {
-            throw new Error("host print called before instantiation completed");
-          }
-          const memory = exportedMemory(activeInstance);
-          const bytes = new Uint8Array(memory.buffer, pointer, length);
-          writes.push(new TextDecoder().decode(bytes));
+    const active: { instance?: WebAssembly.Instance } = {};
+    const instantiated = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm),
+      {
+        "blot:host/Init": {
+          print(pointer: number, length: number): void {
+            if (active.instance === undefined) {
+              throw new Error(
+                "host print called before instantiation completed",
+              );
+            }
+            const memory = exportedMemory(active.instance);
+            const bytes = new Uint8Array(memory.buffer, pointer, length);
+            writes.push(new TextDecoder().decode(bytes));
+          },
         },
       },
-    });
-    activeInstance = instantiated.instance;
+    );
+    active.instance = instantiated.instance;
     assert.equal(
       exportedFunction(instantiated.instance, "blot:default")(),
       42n,
@@ -238,7 +251,7 @@ test("module grants preserve dynamic non-Unit host results", async () => {
   try {
     await writeFile(
       path,
-      "module init\n\nopen @import \"blot:prelude\" ()\n\nvalue <- init.read ()\nreturn value + 1\n",
+      'module init\n\nopen @import "blot:prelude" ()\n\nvalue <- init.read ()\nreturn value + 1\n',
     );
     const artifact = await compiler.compile(path);
     const manifest = decodeManifest(artifact.manifestBytes);
@@ -256,13 +269,16 @@ test("module grants preserve dynamic non-Unit host results", async () => {
     ]);
 
     let hostValue = 41n;
-    const instantiated = await WebAssembly.instantiate(artifact.wasm, {
-      "blot:host/Init": {
-        read(): bigint {
-          return hostValue;
+    const instantiated = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm),
+      {
+        "blot:host/Init": {
+          read(): bigint {
+            return hostValue;
+          },
         },
       },
-    });
+    );
     const run = exportedFunction(instantiated.instance, "blot:default");
     assert.equal(run(), 42n);
     hostValue = -2n;
@@ -280,7 +296,7 @@ test("dynamic signed i64 to f64 conversion matches WebAssembly edge rounding", a
   try {
     await writeFile(
       path,
-      "module init\n\nopen @import \"blot:prelude\" ()\n\nvalue <- init.read ()\n<- init.observe (Float.of_int value)\nreturn ()\n",
+      'module init\n\nopen @import "blot:prelude" ()\n\nvalue <- init.read ()\n<- init.observe (Float.of_int value)\nreturn ()\n',
     );
     const artifact = await compiler.compile(path);
     const manifest = decodeManifest(artifact.manifestBytes);
@@ -300,16 +316,19 @@ test("dynamic signed i64 to f64 conversion matches WebAssembly edge rounding", a
 
     let hostValue = 0n;
     const observed: number[] = [];
-    const instantiated = await WebAssembly.instantiate(artifact.wasm, {
-      "blot:host/Init": {
-        read(): bigint {
-          return hostValue;
-        },
-        observe(value: number): void {
-          observed.push(value);
+    const instantiated = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm),
+      {
+        "blot:host/Init": {
+          read(): bigint {
+            return hostValue;
+          },
+          observe(value: number): void {
+            observed.push(value);
+          },
         },
       },
-    });
+    );
     const run = exportedFunction(instantiated.instance, "blot:default");
     const cases = [
       -9223372036854775808n,
@@ -361,7 +380,7 @@ test("agent-style recursion lowers to a dynamic back-edge and compiles", async (
       "default",
     );
     assert.deepEqual(exported.function.result, { kind: "signed-integer-64" });
-    assert.equal(WebAssembly.validate(artifact.wasm), true);
+    assert.equal(WebAssembly.validate(Uint8Array.from(artifact.wasm)), true);
   } finally {
     compiler.destroy();
   }

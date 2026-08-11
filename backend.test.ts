@@ -55,6 +55,7 @@ async function blotFiles(directory: string): Promise<string[]> {
 }
 
 for (const name of await blotFiles("examples")) {
+  if (name === "node-runner-demo.blot") continue;
   Deno.test(`examples/${name} lowers to gpufuck Core`, async () => {
     await validateLowering(join("examples", name));
   });

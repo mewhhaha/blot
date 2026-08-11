@@ -27,7 +27,8 @@ if (
           console.log(await runArtifact(artifact));
         } else if (command === "build") {
           const artifact = await compiler.compile(path);
-          const output = path.replace(/\.blot$/, ".wasm");
+          let output = `${path}.wasm`;
+          if (path.endsWith(".blot")) output = path.slice(0, -5) + ".wasm";
           const manifest = `${output}.json`;
           await writeFile(output, artifact.wasm);
           await writeFile(manifest, artifact.manifestBytes);

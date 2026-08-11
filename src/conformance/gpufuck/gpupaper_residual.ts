@@ -77,6 +77,11 @@ type BlotRuntimeScalarOperator = Extract<
   { readonly kind: "scalar" }
 >["operator"];
 type ResidualExpression = Expr | CoreExpression;
+
+function sourceExpression(expression: ResidualExpression): Expr {
+  if ("origin" in expression) return expression.origin;
+  return expression;
+}
 type ResidualIf =
   | Extract<Expr, { readonly tag: "if" }>
   | Extract<CoreExpression, { readonly tag: "if" }>;
@@ -414,7 +419,7 @@ class ResidualHirBuilder {
         fn,
         argument,
         expr.span,
-        this.#checked.expressionTypes.get(expr.arg),
+        this.#checked.expressionTypes.get(sourceExpression(expr.arg)),
       );
     }
     if (expr.tag === "intrinsic-apply") {
@@ -443,7 +448,7 @@ class ResidualHirBuilder {
           value,
           this.evaluate(argument, environment),
           expr.span,
-          this.#checked.expressionTypes.get(argument),
+          this.#checked.expressionTypes.get(sourceExpression(argument)),
         );
       }
       return value;
@@ -493,7 +498,9 @@ class ResidualHirBuilder {
         }
       }
       let elementType: TypeId | undefined;
-      const checkedType = this.#checked.expressionTypes.get(expr);
+      const checkedType = this.#checked.expressionTypes.get(
+        sourceExpression(expr),
+      );
       if (checkedType !== undefined) {
         const type = this.typeForSimpleType(checkedType, expr.span, new Set());
         if (type !== null) {
@@ -1819,10 +1826,12 @@ class ResidualHirBuilder {
     }
     const consequentTag = this.residualTag(consequent);
     const alternateTag = this.residualTag(alternate);
-    let consequentSum: Extract<
-      Extract<ResidualValue, { kind: "dynamic" }>["meaning"],
-      { kind: "sum" }
-    > | undefined;
+    let consequentSum:
+      | Extract<
+        Extract<ResidualValue, { kind: "dynamic" }>["meaning"],
+        { kind: "sum" }
+      >
+      | undefined;
     if (consequent.kind === "dynamic") {
       if (
         typeof consequent.meaning === "object" &&
@@ -1841,10 +1850,12 @@ class ResidualHirBuilder {
         }
       }
     }
-    let alternateSum: Extract<
-      Extract<ResidualValue, { kind: "dynamic" }>["meaning"],
-      { kind: "sum" }
-    > | undefined;
+    let alternateSum:
+      | Extract<
+        Extract<ResidualValue, { kind: "dynamic" }>["meaning"],
+        { kind: "sum" }
+      >
+      | undefined;
     if (alternate.kind === "dynamic") {
       if (
         typeof alternate.meaning === "object" &&
@@ -2523,7 +2534,10 @@ class ResidualHirBuilder {
         throw this.outside(span, `non-sealed value for ${expected.name}`);
       }
       if (value.value.name !== expected.name) {
-        throw this.outside(span, `sealed value ${value.value.name} for ${expected.name}`);
+        throw this.outside(
+          span,
+          `sealed value ${value.value.name} for ${expected.name}`,
+        );
       }
       const representation = this.materialize(
         { kind: "static", value: value.value.inner },

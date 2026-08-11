@@ -1,0 +1,21 @@
+{
+  "nodeModulesDir": "manual",
+  "lint": {
+    "exclude": [
+      "generated",
+      "tree-sitter-blot"
+    ]
+  },
+  "fmt": {
+    "exclude": [
+      "generated",
+      "compiler/src/frontend_plan.rs",
+      "AGENTS.md",
+      "CLAUDE.md",
+      "tree-sitter-blot",
+      "queries",
+      "formal/lean/lake-manifest.json",
+      "pnpm-lock.yaml"
+    ]
+  }
+}

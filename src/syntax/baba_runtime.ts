@@ -1,8 +1,5 @@
 import { readFile } from "node:fs/promises";
-import {
-  createParser,
-  type ParserInstance,
-} from "../../generated/wasm/mod.ts";
+import { createParser, type ParserInstance } from "../../generated/wasm/mod.ts";
 import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
 
 const parserWasmUrl = new URL(
