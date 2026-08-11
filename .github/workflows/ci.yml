@@ -45,6 +45,7 @@ jobs:
       - run: pnpm test
       - run: pnpm run check
       - run: pnpm run smoke
+      - run: pnpm blot run examples/node-runner-demo.blot
       - run: pnpm parity:strict
       - run: pnpm run benchmark -- examples/storage.blot
       - name: Verify generated Rust artifacts are committed
