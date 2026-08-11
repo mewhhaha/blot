@@ -9,7 +9,9 @@ let verdict = case answer == 42 of
   #False => "no"
 
 return {
-  .answer = answer;
-  .verdict = verdict;
-  .neighbors = [answer - 2, answer - 1, answer];
+  .default = {
+    .answer = answer;
+    .verdict = verdict;
+    .neighbors = [answer - 2, answer - 1, answer];
+  };
 }
