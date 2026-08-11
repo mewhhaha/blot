@@ -42,20 +42,39 @@ jobs:
       - run: corepack enable
       - run: corepack prepare pnpm@11.21.0 --activate
       - run: pnpm install --no-frozen-lockfile
+      - name: Pack runnable Node workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git ls-files -z
+            printf 'node_modules\0'
+          } > "$RUNNER_TEMP/blot-node-workspace.files"
+          tar \
+            --create \
+            --gzip \
+            --file=blot-node-workspace.tar.gz \
+            --null \
+            --files-from="$RUNNER_TEMP/blot-node-workspace.files"
+      - name: Verify packed Node workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace="$RUNNER_TEMP/blot-node-workspace"
+          mkdir "$workspace"
+          tar -xzf blot-node-workspace.tar.gz -C "$workspace"
+          cd "$workspace"
+          test -f AGENTS.md
+          test -f case-studies/agent/main.blot
+          test -f conformance/node-rust-gaps.json
+          test -f experiments/node-wasm-benchmark.ts
+          node --import ./src/node/polyfills.mjs --experimental-transform-types src/node/cli.ts check examples/minimal.blot
+          node --import ./src/node/polyfills.mjs --experimental-transform-types --test src/node/pipeline.test.ts
       - name: Upload runnable Node workspace
         uses: actions/upload-artifact@v4
         with:
           name: blot-node-workspace-${{ github.sha }}
-          path: |
-            .npmrc
-            package.json
-            pnpm-lock.yaml
-            pnpm-workspace.yaml
-            node_modules
-            src
-            examples
-            generated
-          include-hidden-files: true
+          path: blot-node-workspace.tar.gz
           if-no-files-found: error
           retention-days: 1
       - run: pnpm test
