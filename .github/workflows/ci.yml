@@ -42,6 +42,22 @@ jobs:
       - run: corepack enable
       - run: corepack prepare pnpm@11.21.0 --activate
       - run: pnpm install --no-frozen-lockfile
+      - name: Upload runnable Node workspace
+        uses: actions/upload-artifact@v4
+        with:
+          name: blot-node-workspace-${{ github.sha }}
+          path: |
+            .npmrc
+            package.json
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            node_modules
+            src
+            examples
+            generated
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
       - run: pnpm test
       - run: pnpm run check
       - run: pnpm run smoke
