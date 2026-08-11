@@ -1,0 +1,15 @@
+open @import "blot:prelude" ()
+
+let double = fn value => value * 2
+let start = 20 + 1
+let answer = start |> double
+
+let verdict = case answer == 42 of
+  #True => "yes"
+  #False => "no"
+
+return {
+  .answer = answer;
+  .verdict = verdict;
+  .neighbors = [answer - 2, answer - 1, answer];
+}
