@@ -76,7 +76,7 @@ jobs:
           name: blot-node-workspace-${{ github.sha }}
           path: blot-node-workspace.tar.gz
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 90
       - run: pnpm test
       - run: pnpm run check
       - run: pnpm run smoke
