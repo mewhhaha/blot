@@ -23,7 +23,7 @@ parser.
 
 | Component | Version |
 | --- | ---: |
-| Node | 22.18.0 or newer |
+| Node | 22.16.0 or newer |
 | pnpm | 11.21.0 |
 | Baba | 9.0.0 |
 | gpupaper | 0.1.6 |
