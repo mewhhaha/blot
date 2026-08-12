@@ -12,7 +12,8 @@ test("development compiler follows check, prepare, compile", async () => {
     assert.equal(runtime.schemaVersion, 2);
 
     const artifact = await compiler.compile("examples/minimal.blot");
-    assert.equal(WebAssembly.validate(artifact.wasm), true);
+    const wasm = Uint8Array.from(artifact.wasm).buffer;
+    assert.equal(WebAssembly.validate(wasm), true);
     assert.equal(artifact.artifactSource, "compiled");
   } finally {
     compiler.destroy();
