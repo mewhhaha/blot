@@ -24,6 +24,8 @@ import type {
 
 export interface StagedExport {
   readonly sourceName: string;
+  /** Whether this is a field of a module-result shape rather than its default. */
+  readonly named: boolean;
   readonly phase: "runtime" | "comptime";
   /** Present when staging computed the runtime value exactly. */
   readonly value?: Value;
@@ -52,6 +54,7 @@ export function stageModule(
         declaration.tag === "binding" && declaration.kind === "effect"
       ) {
         allDeclarationsStaged = false;
+        forgetPattern(declaration.pattern, stagingValues);
       }
       continue;
     }
@@ -74,26 +77,7 @@ export function stageModule(
     } catch (error) {
       if (!(error instanceof BlotError)) throw error;
       allDeclarationsStaged = false;
-      const pending: Pattern[] = [declaration.pattern];
-      while (pending.length > 0) {
-        const pattern = pending.pop();
-        if (pattern === undefined) continue;
-        if (pattern.tag === "name") {
-          stagingValues.names.delete(pattern.name);
-          continue;
-        }
-        if (pattern.tag === "tuple" || pattern.tag === "array") {
-          pending.push(...pattern.elements);
-          continue;
-        }
-        if (pattern.tag === "shape") {
-          pending.push(...pattern.fields.map((field) => field.pattern));
-          continue;
-        }
-        if (pattern.tag === "constructor" && pattern.payload !== null) {
-          pending.push(pattern.payload);
-        }
-      }
+      forgetPattern(declaration.pattern, stagingValues);
     }
   }
 
@@ -107,7 +91,7 @@ export function stageModule(
     if (staged.expression === null) {
       return {
         module: { ...module, result: unit(module.result.span) },
-        exports: [{ sourceName: "default", phase: "comptime" }],
+        exports: [{ sourceName: "default", named: false, phase: "comptime" }],
         shapes: new Map(),
       };
     }
@@ -121,6 +105,7 @@ export function stageModule(
       module: { ...module, declarations, result: staged.expression },
       exports: [{
         sourceName: "default",
+        named: false,
         phase: "runtime",
         value: staged.value,
       }],
@@ -155,6 +140,7 @@ export function stageModule(
       if (expression === null) phase = "comptime";
       exportedFields.set(member.name, {
         sourceName: member.name,
+        named: true,
         phase,
         value: staged.value,
       });
@@ -189,7 +175,12 @@ export function stageModule(
         finalFields.set(name, expression);
         let phase: StagedExport["phase"] = "runtime";
         if (expression === null) phase = "comptime";
-        exportedFields.set(name, { sourceName: name, phase, value });
+        exportedFields.set(name, {
+          sourceName: name,
+          named: true,
+          phase,
+          value,
+        });
       }
       continue;
     }
@@ -217,7 +208,11 @@ export function stageModule(
       };
       generatedShapes.set(expression, { tag: "fields", fields });
       finalFields.set(name, expression);
-      exportedFields.set(name, { sourceName: name, phase: "runtime" });
+      exportedFields.set(name, {
+        sourceName: name,
+        named: true,
+        phase: "runtime",
+      });
     }
   }
 
@@ -251,6 +246,29 @@ export function stageModule(
   };
 }
 
+function forgetPattern(pattern: Pattern, values: Env): void {
+  const pending: Pattern[] = [pattern];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) continue;
+    if (current.tag === "name") {
+      values.names.delete(current.name);
+      continue;
+    }
+    if (current.tag === "tuple" || current.tag === "array") {
+      pending.push(...current.elements);
+      continue;
+    }
+    if (current.tag === "shape") {
+      pending.push(...current.fields.map((field) => field.pattern));
+      continue;
+    }
+    if (current.tag === "constructor" && current.payload !== null) {
+      pending.push(current.payload);
+    }
+  }
+}
+
 interface StagedExpression {
   readonly expression: Expr | null;
   readonly folded: boolean;
@@ -279,6 +297,7 @@ function stageExpression(
     return { expression: expr, folded: false, value };
   } catch (error) {
     if (error instanceof BlotError) {
+      if (error.diagnostic.code === "BLOT_MISPLACED_REC") throw error;
       return { expression: expr, folded: false };
     }
     throw error;

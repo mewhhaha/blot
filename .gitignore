@@ -5,3 +5,4 @@ tree-sitter-blot/
 *.wasm.json
 formal/lean/.lake/
 compiler/target/
+node_modules/

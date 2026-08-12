@@ -12,8 +12,9 @@ incrementality, and cost model. Executable application studies live in
 program, an agent-style conversation loop, and a 3D engine with a browser host
 and hot reload.
 
-The package is published as `@mewhhaha/blot`. Its TypeScript surface is a thin
-filesystem and package host around the checked-in Rust/WebAssembly compiler:
+This experimental branch publishes `@mewhhaha/blot` as a Node package. Node
+hosts two checked-in Wasm components: Baba's generated parser and gpupaper's
+Rust/Wasm emitter. Blot's TypeScript passes connect them:
 
 ```ts
 import { parse } from "@mewhhaha/blot";
@@ -21,7 +22,7 @@ import { parse } from "@mewhhaha/blot";
 const result = await parse("return 42\n");
 ```
 
-Run `deno task publish:dry-run` to verify the package before publishing.
+Run `pnpm pack --dry-run` to verify the package before publishing.
 
 Blot libraries can be distributed through an ordinary npm-linked package. The
 package owns a `blot.json` manifest and may ship both readable source and a
@@ -40,26 +41,24 @@ checked module capsule:
 }
 ```
 
-Build every declared export with:
-
-```bash
-deno run --allow-read --allow-write src/cli.ts package ./blot.json
-```
-
-An importer then writes `@import "@scope/package"`, or a declared package
-subpath, and Blot resolves the nearest `node_modules` package without executing
-its JavaScript. A valid `.blotc` is preferred and corrupt or unsupported built
-files fall back to the declared source. The capsule bundles the package-owned
-lowered AST graph and its includes without retaining source text, while package
-imports remain shared external edges. Consumer-specific typechecking and
-compile-time specialization still happen in the importer, so a reusable capsule
-is not final WebAssembly. See [spec/PACKAGES.md](spec/PACKAGES.md).
+The experimental Node CLI does not build package capsules yet. It does resolve
+existing source and capsule exports from `node_modules`. An importer writes
+`@import "@scope/package"`, or a declared package subpath, and Blot resolves the
+nearest `node_modules` package without executing its JavaScript. A valid
+`.blotc` is preferred and corrupt or unsupported built files fall back to the
+declared source. The capsule bundles the package-owned lowered AST graph and its
+includes without retaining source text, while package imports remain shared
+external edges. Consumer-specific typechecking and compile-time specialization
+still happen in the importer, so a reusable capsule is not final WebAssembly.
+See [spec/PACKAGES.md](spec/PACKAGES.md).
 
 The parser profile is a design tool, not an implementation afterthought. It
 rules out contextual lexing and recursive precedence grammar, keeping both the
-grammar and the language small enough to understand. The default compiler uses
-the Baba 9 CPU frontend; the full Rust compiler executes tables generated from
-that same plan. The WebGPU frontend remains a comparison target.
+grammar and the language small enough to understand. Node instantiates Baba
+9.0.0's generated lexer Wasm with Blot's checked-in binary and plan. Because
+that plan uses Baba's `general` throughput profile, Baba's own CPU island
+executor completes parsing; the generated-Wasm island parser intentionally
+accepts only `strict`. WebGPU remains a comparison target.
 
 ## Status
 
@@ -100,24 +99,20 @@ backend consumes. A final `@array.set` or `@array.push` on a proved linear array
 reuses its Store allocation; ordinary shared arrays remain persistent. See
 [docs/ownership.md](docs/ownership.md).
 
-The compiler (M4) lowers every accepted catalog program. `blot check` and
-`blot build` use one checked Rust/WebAssembly compiler; building produces
-caller-facing WebAssembly plus a JSON ABI manifest without executing the
-program. The identical manifest is embedded in the `blot:abi` custom section.
-See [docs/abi.md](docs/abi.md). `just wasm` checks the interpreter, the
-independent conformance evaluator, and emitted Wasm against the same staged
-runtime result. The production corpus gate sends the entire catalog through the
-Rust compiler, so backend coverage does not require a WebGPU adapter.
+The compiler (M4) lowers accepted programs through the experimental Baba-Wasm →
+Node → gpupaper-Wasm pipeline. `pnpm blot check` and `pnpm blot build` need
+neither Deno nor native Rust; building produces caller-facing WebAssembly plus a
+JSON ABI manifest without executing the program. The identical manifest is
+embedded in the `blot:abi` custom section. See [docs/abi.md](docs/abi.md).
 Compile-time-only result fields are erased, runtime fields become named Wasm
 exports, host effects become typed imports, and one-shot handlers are
 specialized through non-tail resume and abort. See
 [docs/backend.md](docs/backend.md).
 
-The public `Compiler` API runs the same compiler as `blot build`. Its single
-checked-in Wasm parses source, checks and stages the program, constructs the
-caller ABI, and emits the final WebAssembly module. Baba generates the parser
-tables embedded at build time; normal compilation loads neither Baba nor
-gpupaper. The conformance gates and end-to-end benchmark are documented in
+The public `Compiler` API runs the same pipeline as `pnpm blot build`. Baba's
+generated Wasm parses source, Blot's TypeScript checker and staging passes
+produce validated Runtime HIR, and gpupaper 0.1.6 lowers Core through its
+embedded Rust/Wasm emitter. The operational boundary is documented in
 [docs/compiler.md](docs/compiler.md).
 
 ```ts
@@ -133,36 +128,26 @@ try {
 ```
 
 ```bash
-just run examples/tour.blot   # evaluate a program
-just check-file examples/tour.blot  # infer its type and check ownership
-just ownership examples/tour.blot   # last-use and linearity facts
-just build examples/compiled.blot   # compile to WebAssembly
-deno task blot package ./blot.json # build distributable module capsules
-just wasm                           # interpreter vs GPU evaluator vs Wasm
-just test                     # corpus goldens, rejections, profile gate
-just generate                 # regenerate the frontend plan; fails if its profile regresses
-just inspect                  # the counters recorded in docs/gpu-profile.md
-just install                  # Helix: grammar, queries, LSP, `.blot` association
-deno task blot fmt file.blot  # apply the source formatter
-deno task lsp                 # run the language server over stdio
+corepack enable
+pnpm install
+pnpm blot check examples/tour.blot
+pnpm blot build examples/compiled.blot
+pnpm blot ast examples/minimal.blot
+pnpm test
 ```
 
-Compile one or several modules with the default Rust/WebAssembly backend:
+Compile one or several modules through Node:
 
 ```bash
-deno run --allow-read --allow-write \
-  src/cli.ts build \
-  examples/minimal.blot examples/arithmetic.blot
+pnpm blot build examples/minimal.blot examples/arithmetic.blot
 ```
 
 Blot owns parsing policy, checking, staging, specialization, Runtime HIR,
-canonical ABI adapters, target orchestration, and its direct binary emitter. The
-production compiler consumes Baba-generated parser tables inside the checked-in
-Rust compiler Wasm. TypeScript supplies external files and package resolution;
-it does not repeat semantic compilation. Gpupaper is a bounded conformance
-oracle, not a production dependency path. No compiler command initializes
-WebGPU. Multiple paths are prepared independently and cache misses retain stable
-input order. A source failure remains local to its path.
+canonical ABI adapters, and target orchestration. Baba's generated Wasm lexer
+and general-profile CPU island executor own syntax. Gpupaper owns Core-to-Wasm
+planning and uses its embedded Rust/Wasm emitter for the final bytes. Node
+supplies filesystem and package access and hosts both Wasm modules. No compiler
+command initializes WebGPU or invokes Deno, Cargo, or a native Rust binary.
 
 `just install` builds the Tree-sitter grammar from the same grammar source as
 the GPU parser, installs highlight, indent, textobject, tag, and rainbow

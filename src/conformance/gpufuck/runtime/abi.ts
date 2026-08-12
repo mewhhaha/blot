@@ -114,7 +114,7 @@ export function buildBlotAbiManifest(
         ownership: exported.ownership,
       };
     }),
-    imports: module.capabilities.flatMap((capability) =>
+    imports: [...module.capabilities].sort(byName).flatMap((capability) =>
       capability.operations.map((operation) => {
         const signature = module.signatures[operation.signature];
         return {

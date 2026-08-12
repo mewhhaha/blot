@@ -678,6 +678,8 @@ impl ResidualTrace {
                 };
                 let left = self.lower_as(arguments.first(), expected, span)?;
                 let right = self.lower_as(arguments.get(1), expected, span)?;
+                self.trap_if_nan(left.id, name, span)?;
+                self.trap_if_nan(right.id, name, span)?;
                 RuntimeValue {
                     id: left.id,
                     type_id: left.type_id,
@@ -1162,6 +1164,25 @@ impl ResidualTrace {
             result
         };
         self.symbolic_value(result, span)
+    }
+
+    fn trap_if_nan(
+        &mut self,
+        value: usize,
+        operation: &str,
+        span: crate::ast::Span,
+    ) -> Result<(), Diagnostic> {
+        let unordered = self.operation("scalar", 1, vec![value, value], span, Some("not-equal"));
+        let branches = self.begin_conditional(&unordered, span)?;
+        self.select_block(branches.consequent);
+        self.trap_current_block(
+            &format!("{operation} cannot order NaN. Test for it before comparing."),
+            span,
+        );
+        self.select_block(branches.alternate);
+        let ordered_end = self.current_block();
+        self.join_survivor(&branches, ordered_end, span);
+        Ok(())
     }
 
     pub(crate) fn ordering_boolean(
@@ -7150,6 +7171,38 @@ fn hir_error(message: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn float_ordering_guards_trap_unordered_values() {
+        let mut trace = ResidualTrace::new("nan-test.blot");
+        trace
+            .trap_if_nan(11, "@float.cmp", crate::ast::Span { start: 3, end: 7 })
+            .expect("a float NaN guard should lower");
+
+        assert_eq!(trace.blocks.len(), 4);
+        assert_eq!(trace.blocks[0].operations.len(), 1);
+        assert_eq!(trace.blocks[0].operations[0].kind, "scalar");
+        assert_eq!(trace.blocks[0].operations[0].operands, [11, 11]);
+        assert_eq!(trace.blocks[0].operations[0].operator, Some("not-equal"));
+        let Some(RuntimeTerminator::Conditional {
+            consequent,
+            alternate,
+            ..
+        }) = &trace.blocks[0].terminator
+        else {
+            panic!("the NaN check did not branch");
+        };
+        assert_eq!((*consequent, *alternate), (1, 2));
+        let Some(RuntimeTerminator::Trap { message, .. }) = &trace.blocks[1].terminator else {
+            panic!("the unordered branch did not trap");
+        };
+        assert!(message.starts_with("@float.cmp cannot order NaN"));
+        let Some(RuntimeTerminator::Branch { target, .. }) = &trace.blocks[2].terminator else {
+            panic!("the ordered branch did not rejoin");
+        };
+        assert_eq!(*target, 3);
+        assert_eq!(trace.current_block, 3);
+    }
 
     #[test]
     fn direct_self_call_return_becomes_entry_back_edge() {

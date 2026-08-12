@@ -569,10 +569,12 @@ pub fn run_primitive(
         "@float.rem" => float_binary(arguments, span, name, |left, right| left % right),
         "@float.neg" => Ok(Value::Float(-float(&arguments[0], span, name)?)),
         "@float.is_nan" => Ok(boolean(float(&arguments[0], span, name)?.is_nan())),
-        "@float.cmp" => Ok(float_ordering(
+        "@float.cmp" => float_ordering(
             float(&arguments[0], span, name)?,
             float(&arguments[1], span, name)?,
-        )),
+            span,
+            name,
+        ),
         "@float.of_int" => Ok(Value::Float(
             integer(&arguments[0], span, name)?
                 .to_f64()
@@ -606,10 +608,12 @@ pub fn run_primitive(
         "@f32.div" => float32_binary(arguments, span, name, |left, right| left / right),
         "@f32.neg" => Ok(Value::Float32(-float32(&arguments[0], span, name)?)),
         "@f32.is_nan" => Ok(boolean(float32(&arguments[0], span, name)?.is_nan())),
-        "@f32.cmp" => Ok(float_ordering(
+        "@f32.cmp" => float_ordering(
             f64::from(float32(&arguments[0], span, name)?),
             f64::from(float32(&arguments[1], span, name)?),
-        )),
+            span,
+            name,
+        ),
         "@f32.of_float" => Ok(Value::Float32(float(&arguments[0], span, name)? as f32)),
         "@float.of_f32" => Ok(Value::Float(f64::from(float32(&arguments[0], span, name)?))),
         "@f32x4.of" => Ok(Value::Vector([
@@ -1112,14 +1116,21 @@ fn ordering(ordering: std::cmp::Ordering) -> Value {
     }
 }
 
-fn float_ordering(left: f64, right: f64) -> Value {
-    if left < right {
+fn float_ordering(left: f64, right: f64, span: Span, operation: &str) -> Result<Value, Diagnostic> {
+    if left.is_nan() || right.is_nan() {
+        return Err(Diagnostic::new(
+            "BLOT_UNORDERED",
+            format!("{operation} cannot order NaN. Test for it before comparing."),
+            span,
+        ));
+    }
+    Ok(if left < right {
         ordering(std::cmp::Ordering::Less)
     } else if left > right {
         ordering(std::cmp::Ordering::Greater)
     } else {
         ordering(std::cmp::Ordering::Equal)
-    }
+    })
 }
 
 fn float_binary(
@@ -1768,6 +1779,21 @@ fn json_to_value(value: serde_json::Value, span: Span) -> Result<Value, Diagnost
                 )
             })?;
             Ok(Value::Float(value))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn float_ordering_refuses_nan() {
+        for operation in ["@float.cmp", "@f32.cmp"] {
+            let error = float_ordering(f64::NAN, 0.0, Span { start: 1, end: 2 }, operation)
+                .expect_err("NaN has no ordering");
+            assert_eq!(error.code, "BLOT_UNORDERED");
+            assert!(error.message.starts_with(operation));
         }
     }
 }

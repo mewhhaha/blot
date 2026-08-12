@@ -1,4 +1,4 @@
-name: CI
+name: Node Wasm CI
 
 on:
   pull_request:
@@ -10,14 +10,97 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.16.0
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-          components: rustfmt,clippy
-      - uses: extractions/setup-just@v3
-      - run: just check
-      - run: just test
+      - name: Rebuild Rust compiler Wasm
+        run: >-
+          deno run
+          --allow-read
+          --allow-write
+          --allow-run=cargo
+          --allow-env
+          scripts/build_compiler.ts
+      - name: Upload generated Rust compiler artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: blot-rust-compiler-${{ github.sha }}
+          path: generated/compiler/compiler.wasm
+          if-no-files-found: error
+          retention-days: 1
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path compiler/Cargo.toml -- --check
+      - name: Test Rust compiler
+        run: cargo test --manifest-path compiler/Cargo.toml
+      - run: corepack enable
+      - run: corepack prepare pnpm@11.21.0 --activate
+      - run: pnpm install --frozen-lockfile
+      - name: Check TypeScript
+        run: deno check .
+      - name: Check formatting
+        run: deno fmt --check
+      - name: Check lint
+        run: deno lint
+      - name: Verify Baba frontend generation
+        run: >-
+          deno run
+          --allow-read
+          --allow-write
+          npm:@jsr/mewhhaha__baba@9.0.0/cli
+          grammar.baba
+          --out generated
+          --name blot
+          --root program
+          --metadata baba.json
+          --target wasm
+      - run: git diff --exit-code -- generated
+      - name: Pack runnable Node workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git ls-files -z
+            printf 'node_modules\0'
+          } > "$RUNNER_TEMP/blot-node-workspace.files"
+          tar \
+            --create \
+            --gzip \
+            --file=blot-node-workspace.tar.gz \
+            --null \
+            --files-from="$RUNNER_TEMP/blot-node-workspace.files"
+      - name: Verify packed Node workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace="$RUNNER_TEMP/blot-node-workspace"
+          mkdir "$workspace"
+          tar -xzf blot-node-workspace.tar.gz -C "$workspace"
+          cd "$workspace"
+          test -f AGENTS.md
+          test -f case-studies/agent/main.blot
+          test -f conformance/node-rust-gaps.json
+          test -f experiments/node-wasm-benchmark.ts
+          pnpm exec tsx --import ./src/node/polyfills.mjs src/node/cli.ts check examples/minimal.blot
+          pnpm exec tsx --import ./src/node/polyfills.mjs --test src/node/pipeline.test.ts
+      - name: Upload runnable Node workspace
+        uses: actions/upload-artifact@v4
+        with:
+          name: blot-node-workspace-${{ github.sha }}
+          path: blot-node-workspace.tar.gz
+          if-no-files-found: error
+          retention-days: 90
+      - run: pnpm test
+      - run: pnpm run check
+      - run: pnpm run smoke
+      - run: pnpm blot run examples/node-runner-demo.blot
+      - run: pnpm parity:strict
+      - run: pnpm run benchmark -- examples/storage.blot
+      - name: Verify generated Rust artifacts are committed
+        run: git diff --exit-code -- generated/compiler/compiler.wasm

@@ -7,6 +7,7 @@
 // Resolution happens before evaluation, so `@import` never touches the disk
 // while a program is running and the evaluator can stay synchronous.
 
+import { readFile } from "node:fs/promises";
 import { dirname, fromFileUrl, isAbsolute, relative, resolve } from "@std/path";
 import type { Expr, Module } from "./syntax/ast.ts";
 import type { Diagnostic } from "./diagnostic.ts";
@@ -204,12 +205,12 @@ export async function refreshLoadedModules(): Promise<void> {
     if (loaded.storage.tag === "capsule") {
       try {
         if (
-          await Deno.readTextFile(loaded.storage.path) !== loaded.storage.source
+          await readFile(loaded.storage.path, "utf8") !== loaded.storage.source
         ) {
           changed.add(path);
         }
       } catch (error) {
-        if (error instanceof Deno.errors.NotFound) {
+        if (isNotFound(error)) {
           changed.add(path);
           return;
         }
@@ -223,9 +224,9 @@ export async function refreshLoadedModules(): Promise<void> {
       return;
     }
     try {
-      if (await Deno.readTextFile(path) !== loaded.source) changed.add(path);
+      if (await readFile(path, "utf8") !== loaded.source) changed.add(path);
     } catch (error) {
-      if (error instanceof Deno.errors.NotFound) {
+      if (isNotFound(error)) {
         changed.add(path);
         return;
       }
@@ -238,12 +239,12 @@ export async function refreshLoadedModules(): Promise<void> {
     }
     for (const included of loaded.includedFiles.values()) {
       try {
-        if (await Deno.readTextFile(included.path) !== included.source) {
+        if (await readFile(included.path, "utf8") !== included.source) {
           changed.add(path);
           return;
         }
       } catch (error) {
-        if (error instanceof Deno.errors.NotFound) {
+        if (isNotFound(error)) {
           changed.add(path);
           return;
         }
@@ -300,7 +301,7 @@ export async function load(
     return await loadModuleCapsule(absolute, cache, active);
   }
 
-  const source = await Deno.readTextFile(absolute);
+  const source = await readFile(absolute, "utf8");
   return await loadSourceRevision(absolute, source, cache, nextActive, false);
 }
 
@@ -377,9 +378,9 @@ async function loadSourceRevision(
     }
     let includedSource: string;
     try {
-      includedSource = await Deno.readTextFile(includedPath);
+      includedSource = await readFile(includedPath, "utf8");
     } catch (error) {
-      if (error instanceof Deno.errors.NotFound) {
+      if (isNotFound(error)) {
         throw new LoadError(absolute, source, [{
           code: "BLOT_INCLUDE_NOT_FOUND",
           message: `Included file \`${specifier}\` does not exist.`,
@@ -448,7 +449,7 @@ async function loadImport(
   try {
     return await load(exported.source, cache, active);
   } catch (cause) {
-    if (!(cause instanceof Deno.errors.NotFound)) throw cause;
+    if (!(isNotFound(cause))) throw cause;
     throw new PackageArtifactError(
       `could not load Blot package ${
         JSON.stringify(exported.packageName)
@@ -467,7 +468,7 @@ async function loadModuleCapsule(
 ): Promise<Loaded> {
   let source: string;
   try {
-    source = await Deno.readTextFile(path);
+    source = await readFile(path, "utf8");
   } catch (cause) {
     throw new PackageArtifactError(
       `could not read Blot module capsule ${JSON.stringify(path)}`,
@@ -611,3 +612,9 @@ export function loadedSource(path: string): string | undefined {
 }
 
 export { BlotError };
+
+function isNotFound(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  if (!("code" in error)) return false;
+  return (error as { readonly code?: unknown }).code === "ENOENT";
+}

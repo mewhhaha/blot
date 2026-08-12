@@ -1,26 +1,19 @@
-// The parse entry point. Every compiler command uses baba's explicit CPU
-// frontend, so parsing never initializes WebGPU.
+// The parse entry point. Every compiler command runs Baba in Node: its
+// generated Wasm owns lexing, while Baba's general-profile CPU island executor
+// owns parsing. The general plan is intentionally not accepted by Baba's
+// strict-only generated-Wasm island parser.
 
-import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
+import type { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
 import type { Diagnostic } from "../diagnostic.ts";
 import { BlotError } from "../diagnostic.ts";
 import type { Module } from "./ast.ts";
-import { lowerModule } from "./lower.ts";
+import { babaRuntime, disposeBabaRuntime } from "./baba_runtime.ts";
 import type { Rule } from "./cursor.ts";
 import { materializeCpuCst } from "./cpu_cst.ts";
+import { lowerModule } from "./lower.ts";
 import { elaborateLayout } from "./layout.ts";
 import { rebindingFrameDiagnostics } from "./rebinding.ts";
 import { elaborateSurface } from "./surface.ts";
-
-const planUrl = new URL("../../generated/wasm/parser.plan", import.meta.url);
-
-let shared: CpuFrontend | null = null;
-
-async function parser(): Promise<CpuFrontend> {
-  if (shared !== null) return shared;
-  shared = CpuFrontend.create(await Deno.readFile(planUrl));
-  return shared;
-}
 
 export type ParseResult =
   | { readonly ok: true; readonly module: Module }
@@ -44,8 +37,27 @@ export async function parseConcrete(
 ): Promise<ConcreteParseResult> {
   const elaborated = await elaborateLayout(source);
   if (!elaborated.ok) return elaborated;
-  const instance = await parser();
-  const result = ingestCpuSource(instance, elaborated.layout.source);
+  const runtime = await babaRuntime();
+
+  const lexed = runtime.wasmLexer.lex(elaborated.layout.source);
+  if (lexed.diagnostics.length > 0) {
+    return {
+      ok: false,
+      diagnostics: lexed.diagnostics.map((diagnostic) => ({
+        code: diagnostic.code,
+        message: diagnostic.message,
+        span: {
+          start: elaborated.layout.originalOffset(diagnostic.span.start),
+          end: elaborated.layout.originalOffset(diagnostic.span.end),
+        },
+      })),
+    };
+  }
+
+  const result = ingestCpuSource(
+    runtime.cpuParser,
+    elaborated.layout.source,
+  );
   if (!result.ok) {
     return {
       ok: false,
@@ -62,7 +74,7 @@ export async function parseConcrete(
 
   try {
     const cst = materializeCpuCst(
-      instance,
+      runtime.cpuParser,
       result.program,
       elaborated.layout.source,
       elaborated.layout.originalOffset,
@@ -95,7 +107,7 @@ export function ingestCpuSource(
     // Baba owns syntax, but its compact frontend also applies an I32 policy
     // that is not part of Blot's I64 integer domain. Baba has already proved
     // these spans are integer tokens, so replacing their digits preserves token
-    // identities and offsets without duplicating any lexical logic in Blot.
+    // identities and offsets without duplicating lexical logic in Blot.
     let syntaxSource = source;
     for (const diagnostic of [...result.diagnostics].reverse()) {
       syntaxSource = syntaxSource.slice(0, diagnostic.start) +
@@ -108,5 +120,5 @@ export function ingestCpuSource(
 }
 
 export function dispose(): void {
-  shared = null;
+  disposeBabaRuntime();
 }

@@ -1,21 +1,11 @@
-import { createParserAsync, type Token } from "../../generated/wasm/mod.ts";
+import type { Token } from "../../generated/wasm/mod.ts";
 import type { Diagnostic } from "../diagnostic.ts";
+import { babaRuntime } from "./baba_runtime.ts";
 
 const layoutNewline = "\u{e000}";
 const layoutIndent = "\u{e001}";
 const layoutDedent = "\u{e002}";
 const layoutMarkers = new Set([layoutNewline, layoutIndent, layoutDedent]);
-
-const parserWasmUrl = new URL(
-  "../../generated/wasm/parser.wasm",
-  import.meta.url,
-);
-const parserPlanUrl = new URL(
-  "../../generated/wasm/parser.plan",
-  import.meta.url,
-);
-
-let sharedLexer: ReturnType<typeof createParserAsync> | null = null;
 
 export interface LayoutSource {
   readonly source: string;
@@ -57,7 +47,7 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
     }
   }
 
-  const lexer = await layoutLexer();
+  const lexer = (await babaRuntime()).wasmLexer;
   const lexed = lexer.lex(source, { preserveTrivia: true });
   if (lexed.diagnostics.length > 0) {
     return {
@@ -178,16 +168,6 @@ function closesLayoutExpression(token: Token): boolean {
   }
   if (token.type !== "named") return false;
   return token.kind === "ELSE_IF";
-}
-
-async function layoutLexer() {
-  if (sharedLexer === null) {
-    sharedLexer = createParserAsync({
-      url: parserWasmUrl,
-      planUrl: parserPlanUrl,
-    });
-  }
-  return await sharedLexer;
 }
 
 function identityLayout(source: string): LayoutSource {

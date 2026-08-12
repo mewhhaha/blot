@@ -20,13 +20,15 @@ import {
   type Value,
 } from "../../comptime/value.ts";
 import type { CheckResult } from "../../check/mod.ts";
+import type { SimpleType } from "../../check/type.ts";
+import { fail } from "../../diagnostic.ts";
 import {
   type CoreComputation,
   type CoreExpression,
   coreResultExpression,
   type CoreStep,
 } from "../../core/computation.ts";
-import type { Decl, Expr, Pattern, Span } from "../../syntax/ast.ts";
+import type { Decl, Expr, Module, Pattern, Span } from "../../syntax/ast.ts";
 import { liveDeclarations } from "../../syntax/live.ts";
 import type { StagedExport } from "../../stage.ts";
 
@@ -75,6 +77,11 @@ type BlotRuntimeScalarOperator = Extract<
   { readonly kind: "scalar" }
 >["operator"];
 type ResidualExpression = Expr | CoreExpression;
+
+function sourceExpression(expression: ResidualExpression): Expr {
+  if ("origin" in expression) return expression.origin;
+  return expression;
+}
 type ResidualIf =
   | Extract<Expr, { readonly tag: "if" }>
   | Extract<CoreExpression, { readonly tag: "if" }>;
@@ -86,12 +93,17 @@ type ResidualValue =
   | { readonly kind: "static"; readonly value: Value }
   | { readonly kind: "empty-store"; elementType?: TypeId }
   | {
+    readonly kind: "array";
+    readonly elements: readonly ResidualValue[];
+    readonly elementType?: TypeId;
+  }
+  | {
     readonly kind: "dynamic";
     readonly value: ValueId;
     readonly type: TypeId;
     readonly meaning?:
       | "ordering"
-      | { readonly kind: "integer-ordering"; readonly right: ValueId }
+      | { readonly kind: "scalar-ordering"; readonly right: ValueId }
       | {
         readonly kind: "sum";
         readonly cases: readonly string[];
@@ -102,6 +114,10 @@ type ResidualValue =
   | { readonly kind: "tuple"; readonly elements: readonly ResidualValue[] }
   | {
     readonly kind: "shape";
+    readonly fields: ReadonlyMap<string, ResidualValue>;
+  }
+  | {
+    readonly kind: "module-argument";
     readonly fields: ReadonlyMap<string, ResidualValue>;
   }
   | {
@@ -121,7 +137,22 @@ type ResidualValue =
     readonly name: string;
     readonly arity: number;
     readonly applied: readonly ResidualValue[];
-  };
+  }
+  | {
+    readonly kind: "host-operation";
+    readonly capability: "Init";
+    readonly operation: string;
+    readonly grant: {
+      readonly parameter: SimpleType;
+      readonly result: SimpleType;
+    };
+  }
+  | {
+    readonly kind: "tail-loop";
+    readonly block: number;
+    readonly parameterType: TypeId;
+  }
+  | { readonly kind: "never" };
 
 type ResidualEnvironment = {
   readonly names: Map<string, ResidualValue>;
@@ -141,39 +172,61 @@ export function exportResidualRuntimeHir(
   checked: CheckResult,
   stagedExports: readonly StagedExport[],
   wasmName: string,
+  stagedModule?: Module,
 ): BlotRuntimeModule {
-  const runtimeExports = stagedExports.filter((exported) =>
-    exported.phase === "runtime"
-  );
-  if (
-    runtimeExports.length !== 1 || runtimeExports[0].sourceName !== "default"
-  ) {
-    throw new TypeError(
-      `${source}: residual Runtime HIR currently requires one default runtime export`,
-    );
-  }
   const builder = new ResidualHirBuilder(source, checked);
-  const function_ = builder.build(checked.core, wasmName);
+  let residualModule: CoreComputation | Module = checked.core;
+  if (stagedModule !== undefined) residualModule = stagedModule;
+  const functions: BlotRuntimeFunction[] = [];
+  const runtimeFunctions = new Map<string, BlotRuntimeFunction>();
+  for (const exported of stagedExports) {
+    if (exported.phase !== "runtime") continue;
+    let exportedWasmName = `blot:${exported.sourceName}`;
+    if (exported.sourceName === "default") exportedWasmName = wasmName;
+    const function_ = builder.build(
+      residualModule,
+      exportedWasmName,
+      functions.length,
+      exported.sourceName,
+      exported.named,
+    );
+    functions.push(function_);
+    runtimeFunctions.set(exported.sourceName, function_);
+  }
+
+  const exports: BlotRuntimeModule["exports"][number][] = [];
+  for (const exported of stagedExports) {
+    if (exported.phase === "comptime") {
+      exports.push({
+        sourceName: exported.sourceName,
+        phase: "comptime",
+      });
+      continue;
+    }
+    const function_ = runtimeFunctions.get(exported.sourceName);
+    if (function_ === undefined) {
+      throw new Error(
+        `${source}: residual runtime export ${exported.sourceName} lost its function`,
+      );
+    }
+    exports.push({
+      sourceName: exported.sourceName,
+      phase: "runtime",
+      wasmName: function_.name,
+      function: function_.id,
+      signature: function_.signature,
+      ownership: "owned",
+    });
+  }
   return {
     format: "blot-runtime-hir",
     schemaVersion: 2,
     source,
     types: builder.types,
     signatures: builder.signatures,
-    functions: [function_],
+    functions,
     capabilities: builder.capabilities(),
-    exports: stagedExports.map((exported) =>
-      exported.phase === "comptime"
-        ? { sourceName: exported.sourceName, phase: "comptime" as const }
-        : {
-          sourceName: exported.sourceName,
-          phase: "runtime" as const,
-          wasmName,
-          function: 0,
-          signature: function_.signature,
-          ownership: "owned" as const,
-        }
-    ),
+    exports,
   };
 }
 
@@ -190,6 +243,7 @@ class ResidualHirBuilder {
     Map<string, { readonly signature: number; readonly key: string }>
   >();
   readonly #checked: CheckResult;
+  readonly #functionCapabilities = new Set<string>();
   readonly #sourceHandlers: {
     readonly effect: number;
     readonly handler: ResidualValue;
@@ -210,27 +264,63 @@ class ResidualHirBuilder {
   }
 
   build(
-    computation: CoreComputation,
+    computation: CoreComputation | Module,
     wasmName: string,
+    functionId: number,
+    sourceName: string,
+    namedExport: boolean,
   ): BlotRuntimeFunction {
+    this.#blocks.length = 0;
+    this.#sourceHandlers.length = 0;
+    this.#functionCapabilities.clear();
+    this.#currentBlock = 0;
+    this.#nextValue = 0;
     this.block();
     const environment = this.environment(null, this.#checked.values);
-    this.coreDeclarations(computation.steps, environment);
-    const resultExpression = coreResultExpression(computation.result);
-    const result = this.dynamic(
-      this.evaluate(resultExpression, environment),
+    this.bindModuleParameter(environment);
+    let resultExpression: ResidualExpression;
+    let projectResult = false;
+    if ("declarations" in computation) {
+      const sourceResult = computation.result;
+      projectResult = namedExport;
+      const scheduled = scheduleSourceComputation(
+        computation.declarations,
+        sourceResult,
+        computation.resultEffects,
+      );
+      this.declarations(scheduled.steps, environment);
+      resultExpression = scheduledSourceResultExpression(scheduled.result);
+    } else {
+      this.coreDeclarations(computation.steps, environment);
+      resultExpression = coreResultExpression(computation.result);
+      projectResult = namedExport;
+    }
+    let residual = this.evaluate(resultExpression, environment);
+    if (projectResult) {
+      residual = this.project(residual, sourceName, resultExpression.span);
+    }
+    const resultType = this.typeForExportValue(
+      residual,
+      sourceName,
+      namedExport,
+      resultExpression.span,
+    );
+    const result = this.materialize(
+      residual,
+      resultType,
+      resultExpression.span,
     );
     this.terminate({
       kind: "return",
       value: result.value,
       span: this.span(resultExpression.span),
     });
-    const effects = [...this.#capabilityOperations.keys()].sort();
+    const effects = [...this.#functionCapabilities].sort();
     const signature = this.signatures.length;
     this.signatures.push({ parameters: [], result: result.type, effects });
     return {
-      id: 0,
-      name: `blot$residual$${wasmName}`,
+      id: functionId,
+      name: wasmName,
       signature,
       entryBlock: 0,
       blocks: this.#blocks.map((block) => {
@@ -292,7 +382,7 @@ class ResidualHirBuilder {
           `${this.#source}:${expr.span.start}: residual name ${expr.name} is unbound`,
         );
       }
-      return value;
+      return this.residualizeStatic(value, environment);
     }
     if (expr.tag === "intrinsic") {
       if (expr.name === "@array.empty") {
@@ -323,8 +413,14 @@ class ResidualHirBuilder {
         );
       }
       const fn = this.evaluate(expr.fn, environment);
+      if (fn.kind === "never") return fn;
       const argument = this.evaluate(expr.arg, environment);
-      return this.apply(fn, argument, expr.span);
+      return this.apply(
+        fn,
+        argument,
+        expr.span,
+        this.#checked.expressionTypes.get(sourceExpression(expr.arg)),
+      );
     }
     if (expr.tag === "intrinsic-apply") {
       if (
@@ -352,6 +448,7 @@ class ResidualHirBuilder {
           value,
           this.evaluate(argument, environment),
           expr.span,
+          this.#checked.expressionTypes.get(sourceExpression(argument)),
         );
       }
       return value;
@@ -379,6 +476,41 @@ class ResidualHirBuilder {
         environment,
         self: null,
       };
+    }
+    if (expr.tag === "array") {
+      const elements: ResidualValue[] = [];
+      for (const element of expr.elements) {
+        const value = this.evaluate(element.value, environment);
+        if (!element.spread) {
+          elements.push(value);
+          continue;
+        }
+        if (value.kind === "array") {
+          elements.push(...value.elements);
+          continue;
+        }
+        const spread = this.staticValue(value);
+        if (spread === undefined || spread.tag !== "array") {
+          throw this.outside(element.value.span, "dynamic array spread");
+        }
+        for (const spreadElement of spread.elements) {
+          elements.push({ kind: "static", value: spreadElement });
+        }
+      }
+      let elementType: TypeId | undefined;
+      const checkedType = this.#checked.expressionTypes.get(
+        sourceExpression(expr),
+      );
+      if (checkedType !== undefined) {
+        const type = this.typeForSimpleType(checkedType, expr.span, new Set());
+        if (type !== null) {
+          const runtimeType = this.types[type];
+          if (runtimeType.kind === "store") {
+            elementType = runtimeType.elementType;
+          }
+        }
+      }
+      return { kind: "array", elements, elementType };
     }
     if (expr.tag === "tuple") {
       return {
@@ -525,7 +657,10 @@ class ResidualHirBuilder {
             `${this.#source}:${declaration.span.start}: checking omitted compile-time declaration value`,
           );
         }
-        value = { kind: "static", value: known };
+        value = this.residualizeStatic(
+          { kind: "static", value: known },
+          environment,
+        );
       } else if (declaration.value.tag === "rec") {
         if (declaration.pattern.tag !== "name") {
           throw this.outside(declaration.span, "recursive non-name binding");
@@ -541,6 +676,11 @@ class ResidualHirBuilder {
       } else {
         value = this.evaluate(declaration.value, environment);
       }
+      value = this.applyCheckedResidualType(
+        value,
+        declaration.value,
+        declaration.span,
+      );
       if (step.tag === "bind") {
         value = this.forceEffectValue(value, declaration.span);
       }
@@ -580,7 +720,11 @@ class ResidualHirBuilder {
     fn: ResidualValue,
     argument: ResidualValue,
     span: Span,
+    expectedArgumentType?: SimpleType,
   ): ResidualValue {
+    if (fn.kind === "never" || argument.kind === "never") {
+      return { kind: "never" };
+    }
     if (fn.kind === "static") {
       const value = fn.value;
       if (value.tag === "closure" || value.tag === "core-closure") {
@@ -624,10 +768,35 @@ class ResidualHirBuilder {
       throw this.outside(span, `application of static ${value.tag}`);
     }
     if (fn.kind === "closure") {
+      if (fn.self === "go$") {
+        return this.lowerTailRecursiveLoop(
+          fn,
+          argument,
+          span,
+          expectedArgumentType,
+        );
+      }
       const scope = this.environment(fn.environment, null);
       if (fn.self !== null) scope.names.set(fn.self, fn);
       this.bind(fn.parameter, argument, scope, span);
       return this.evaluate(fn.body, scope);
+    }
+    if (fn.kind === "host-operation") {
+      return this.hostGrantCall(fn, argument, span);
+    }
+    if (fn.kind === "tail-loop") {
+      const dynamicArgument = this.materialize(
+        argument,
+        fn.parameterType,
+        span,
+      );
+      this.terminate({
+        kind: "branch",
+        target: fn.block,
+        arguments: [dynamicArgument.value],
+        span: this.span(span),
+      });
+      return { kind: "never" };
     }
     if (fn.kind !== "primitive") {
       throw this.outside(span, `application of ${fn.kind}`);
@@ -722,16 +891,53 @@ class ResidualHirBuilder {
       });
       return { kind: "dynamic", value: result, type: storeType.elementType };
     }
+    if (fn.name === "@array.set") {
+      const store = this.store(applied[0], span, fn.name);
+      const storeType = this.types[store.type];
+      if (storeType.kind !== "store") {
+        throw this.outside(span, `${fn.name} over a non-store`);
+      }
+      const index = this.integer(applied[1], span, fn.name);
+      const element = this.materialize(
+        applied[2],
+        storeType.elementType,
+        span,
+      );
+      const result = this.nextValue();
+      this.current().operations.push({
+        kind: "store.write",
+        result,
+        type: store.type,
+        operands: [store.value, index.value, element.value],
+        ownership: "owned",
+        update: "persistent",
+        span: this.span(span),
+      });
+      return { kind: "dynamic", value: result, type: store.type };
+    }
     if (fn.name === "@array.push") {
-      const elementType = this.typeForResidualValue(applied[1], span);
       if (applied[0].kind === "empty-store") {
-        applied[0].elementType = elementType;
+        if (applied[0].elementType === undefined) {
+          let inferred: TypeId | null = null;
+          if (expectedArgumentType !== undefined) {
+            inferred = this.typeForSimpleType(
+              expectedArgumentType,
+              span,
+              new Set(),
+            );
+          }
+          if (inferred === null) {
+            inferred = this.typeForResidualValue(applied[1], span);
+          }
+          applied[0].elementType = inferred;
+        }
       }
       const store = this.store(applied[0], span, fn.name);
       const storeType = this.types[store.type];
-      if (storeType.kind !== "store" || storeType.elementType !== elementType) {
-        throw this.outside(span, `${fn.name} element type disagreement`);
+      if (storeType.kind !== "store") {
+        throw this.outside(span, `${fn.name} over a non-store`);
       }
+      const elementType = storeType.elementType;
       const length = this.nextValue();
       this.current().operations.push({
         kind: "store.length",
@@ -802,7 +1008,7 @@ class ResidualHirBuilder {
         kind: "dynamic",
         value: left.value,
         type: left.type,
-        meaning: { kind: "integer-ordering", right: right.value },
+        meaning: { kind: "scalar-ordering", right: right.value },
       };
     }
     if (fn.name === "@text.of_int") {
@@ -831,37 +1037,213 @@ class ResidualHirBuilder {
         "ordering",
       );
     }
+    if (fn.name === "@float.of_int") {
+      return this.floatOfInteger(applied[0], span);
+    }
+    if (fn.name === "@f32.of_float") {
+      const value = this.floating(
+        applied[0],
+        "float-64",
+        span,
+        fn.name,
+      );
+      return this.convert(
+        value,
+        this.type("float-32"),
+        "float-64-to-float-32",
+        span,
+      );
+    }
+    if (fn.name === "@float.of_f32") {
+      const value = this.floating(
+        applied[0],
+        "float-32",
+        span,
+        fn.name,
+      );
+      return this.convert(
+        value,
+        this.type("float-64"),
+        "float-32-to-float-64",
+        span,
+      );
+    }
+    if (fn.name === "@int.of_float") {
+      const value = this.floating(
+        applied[0],
+        "float-64",
+        span,
+        fn.name,
+      );
+      return this.convert(
+        value,
+        this.type("signed-integer-64"),
+        "float-64-to-signed-integer-64",
+        span,
+      );
+    }
+    if (
+      fn.name === "@float.add" || fn.name === "@float.sub" ||
+      fn.name === "@float.mul" || fn.name === "@float.div" ||
+      fn.name === "@float.rem" || fn.name === "@f32.add" ||
+      fn.name === "@f32.sub" || fn.name === "@f32.mul" ||
+      fn.name === "@f32.div"
+    ) {
+      let expected: "float-32" | "float-64" = "float-64";
+      if (fn.name.startsWith("@f32.")) expected = "float-32";
+      const left = this.floating(applied[0], expected, span, fn.name);
+      const right = this.floating(applied[1], expected, span, fn.name);
+      let operator: BlotRuntimeScalarOperator = "add";
+      if (fn.name.endsWith(".sub")) operator = "subtract";
+      if (fn.name.endsWith(".mul")) operator = "multiply";
+      if (fn.name.endsWith(".div")) operator = "divide";
+      if (fn.name.endsWith(".rem")) operator = "remainder";
+      return this.operation(
+        "scalar",
+        left.type,
+        [left.value, right.value],
+        span,
+        undefined,
+        operator,
+      );
+    }
+    if (fn.name === "@float.neg" || fn.name === "@f32.neg") {
+      let expected: "float-32" | "float-64" = "float-64";
+      if (fn.name === "@f32.neg") expected = "float-32";
+      const value = this.floating(applied[0], expected, span, fn.name);
+      const negativeOne = this.constant(-1, value.type, span);
+      return this.operation(
+        "scalar",
+        value.type,
+        [value.value, negativeOne.value],
+        span,
+        undefined,
+        "multiply",
+      );
+    }
+    if (fn.name === "@float.is_nan" || fn.name === "@f32.is_nan") {
+      let expected: "float-32" | "float-64" = "float-64";
+      if (fn.name === "@f32.is_nan") expected = "float-32";
+      const value = this.floating(applied[0], expected, span, fn.name);
+      return this.operation(
+        "scalar",
+        this.type("boolean"),
+        [value.value, value.value],
+        span,
+        undefined,
+        "not-equal",
+      );
+    }
+    if (fn.name === "@float.cmp" || fn.name === "@f32.cmp") {
+      let expected: "float-32" | "float-64" = "float-64";
+      if (fn.name === "@f32.cmp") expected = "float-32";
+      const left = this.floating(applied[0], expected, span, fn.name);
+      const right = this.floating(applied[1], expected, span, fn.name);
+      this.trapIfNaN(left, fn.name, span);
+      this.trapIfNaN(right, fn.name, span);
+      return {
+        ...left,
+        meaning: { kind: "scalar-ordering", right: right.value },
+      };
+    }
     const simd = this.simdPrimitive(fn.name, applied, span);
     if (simd !== undefined) return simd;
+    if (fn.name === "@text.contains") {
+      return this.unsupported(span, "dynamic @text.contains");
+    }
     throw this.outside(span, `dynamic primitive ${fn.name}`);
+  }
+
+  private lowerTailRecursiveLoop(
+    fn: Extract<ResidualValue, { readonly kind: "closure" }>,
+    argument: ResidualValue,
+    span: Span,
+    expectedArgumentType?: SimpleType,
+  ): ResidualValue {
+    let parameterType: TypeId | null = null;
+    if (expectedArgumentType !== undefined) {
+      parameterType = this.typeForSimpleType(
+        expectedArgumentType,
+        span,
+        new Set(),
+      );
+    }
+    if (parameterType === null) {
+      parameterType = this.typeForResidualValue(argument, span);
+    }
+    const dynamicArgument = this.materialize(argument, parameterType, span);
+    const source = this.current();
+    const header = this.block();
+    source.terminator = {
+      kind: "branch",
+      target: header.id,
+      arguments: [dynamicArgument.value],
+      span: this.span(span),
+    };
+    const parameter = this.nextValue();
+    header.parameters.push({
+      value: parameter,
+      type: parameterType,
+      ownership: this.ownership(parameterType),
+      span: this.span(span),
+    });
+    this.#currentBlock = header.id;
+    const scope = this.environment(fn.environment, null);
+    scope.names.set("go$", {
+      kind: "tail-loop",
+      block: header.id,
+      parameterType,
+    });
+    this.bind(
+      fn.parameter,
+      { kind: "dynamic", value: parameter, type: parameterType },
+      scope,
+      span,
+    );
+    return this.evaluate(fn.body, scope);
   }
 
   private conditional(
     expr: ResidualIf,
     environment: ResidualEnvironment,
   ): ResidualValue {
-    if (expr.branches.length !== 1 || expr.fallback === null) {
-      throw this.outside(expr.span, "multi-branch conditional");
+    return this.conditionalBranch(expr, 0, environment);
+  }
+
+  private conditionalBranch(
+    expr: ResidualIf,
+    index: number,
+    environment: ResidualEnvironment,
+  ): ResidualValue {
+    const branch = expr.branches[index];
+    if (branch === undefined) {
+      if (expr.fallback !== null) {
+        return this.evaluate(expr.fallback, environment);
+      }
+      this.terminate({
+        kind: "trap",
+        message: "BLOT_NO_BRANCH: no conditional branch matched.",
+        span: this.span(expr.span),
+      });
+      return { kind: "never" };
     }
-    const condition = this.evaluate(expr.branches[0].condition, environment);
+    const condition = this.evaluate(branch.condition, environment);
+    if (condition.kind === "never") return condition;
     const known = this.staticBoolean(condition);
     if (known !== undefined) {
-      return this.evaluate(
-        known ? expr.branches[0].consequence : expr.fallback,
-        environment,
-      );
+      if (known) return this.evaluate(branch.consequence, environment);
+      return this.conditionalBranch(expr, index + 1, environment);
     }
     const dynamicCondition = this.dynamic(condition);
     if (this.types[dynamicCondition.type].kind !== "boolean") {
       throw this.outside(
-        expr.branches[0].condition.span,
+        branch.condition.span,
         "non-Boolean condition",
       );
     }
     const sourceBlock = this.current();
     const consequence = this.block();
     const alternate = this.block();
-    const join = this.block();
     sourceBlock.terminator = {
       kind: "conditional",
       condition: dynamicCondition.value,
@@ -874,51 +1256,28 @@ class ResidualHirBuilder {
 
     this.#currentBlock = consequence.id;
     const consequentValue = this.evaluate(
-      expr.branches[0].consequence,
+      branch.consequence,
       environment,
     );
     const consequenceEnd = this.#currentBlock;
 
     this.#currentBlock = alternate.id;
-    const alternateValue = this.evaluate(expr.fallback, environment);
+    const alternateValue = this.conditionalBranch(
+      expr,
+      index + 1,
+      environment,
+    );
     const alternateEnd = this.#currentBlock;
 
-    const joined = this.joinBranchValues(
+    return this.finishBranchJoin(
       consequentValue,
       alternateValue,
       consequenceEnd,
       alternateEnd,
+      branch.consequence.span,
+      expr.span,
       expr.span,
     );
-    this.#currentBlock = consequenceEnd;
-    this.terminate({
-      kind: "branch",
-      target: join.id,
-      arguments: [joined.consequent.value],
-      span: this.span(expr.branches[0].consequence.span),
-    });
-    this.#currentBlock = alternateEnd;
-    this.terminate({
-      kind: "branch",
-      target: join.id,
-      arguments: [joined.alternate.value],
-      span: this.span(expr.fallback.span),
-    });
-
-    const joinedValue = this.nextValue();
-    join.parameters.push({
-      value: joinedValue,
-      type: joined.type,
-      ownership: this.ownership(joined.type),
-      span: this.span(expr.span),
-    });
-    this.#currentBlock = join.id;
-    return {
-      kind: "dynamic",
-      value: joinedValue,
-      type: joined.type,
-      meaning: joined.meaning,
-    };
   }
 
   private caseExpression(
@@ -926,6 +1285,7 @@ class ResidualHirBuilder {
     environment: ResidualEnvironment,
   ): ResidualValue {
     const target = this.evaluate(expr.target, environment);
+    if (target.kind === "never") return target;
     if (target.kind === "tag") {
       for (const arm of expr.arms) {
         const scope = this.environment(environment, null);
@@ -973,7 +1333,7 @@ class ResidualHirBuilder {
       target.kind !== "dynamic" ||
       (target.meaning !== "ordering" &&
         !(typeof target.meaning === "object" &&
-          target.meaning.kind === "integer-ordering"))
+          target.meaning.kind === "scalar-ordering"))
     ) {
       throw this.outside(expr.target.span, "dynamic non-ordering case");
     }
@@ -1050,7 +1410,6 @@ class ResidualHirBuilder {
     const source = this.current();
     const trueBlock = this.block();
     const falseBlock = this.block();
-    const join = this.block();
     source.terminator = {
       kind: "conditional",
       condition: target.value,
@@ -1086,41 +1445,15 @@ class ResidualHirBuilder {
     const consequenceEnd = this.#currentBlock;
     const alternate = evaluateArm("False", falseBlock);
     const alternateEnd = this.#currentBlock;
-    const joined = this.joinBranchValues(
+    return this.finishBranchJoin(
       consequent.value,
       alternate.value,
       consequenceEnd,
       alternateEnd,
+      consequent.arm.body.span,
+      alternate.arm.body.span,
       expr.span,
     );
-    this.#currentBlock = consequenceEnd;
-    this.terminate({
-      kind: "branch",
-      target: join.id,
-      arguments: [joined.consequent.value],
-      span: this.span(consequent.arm.body.span),
-    });
-    this.#currentBlock = alternateEnd;
-    this.terminate({
-      kind: "branch",
-      target: join.id,
-      arguments: [joined.alternate.value],
-      span: this.span(alternate.arm.body.span),
-    });
-    const joinedValue = this.nextValue();
-    join.parameters.push({
-      value: joinedValue,
-      type: joined.type,
-      ownership: this.ownership(joined.type),
-      span: this.span(expr.span),
-    });
-    this.#currentBlock = join.id;
-    return {
-      kind: "dynamic",
-      value: joinedValue,
-      type: joined.type,
-      meaning: joined.meaning,
-    };
   }
 
   private integerCase(
@@ -1154,7 +1487,6 @@ class ResidualHirBuilder {
       const source = this.current();
       const consequence = this.block();
       const alternate = this.block();
-      const join = this.block();
       source.terminator = {
         kind: "conditional",
         condition: condition.value,
@@ -1175,43 +1507,15 @@ class ResidualHirBuilder {
       this.#currentBlock = alternate.id;
       const alternateValue = evaluateArm(index + 1);
       const alternateEnd = this.#currentBlock;
-      const joined = this.joinBranchValues(
+      return this.finishBranchJoin(
         consequenceValue,
         alternateValue,
         consequenceEnd,
         alternateEnd,
+        arm.body.span,
+        expr.span,
         expr.span,
       );
-
-      this.#currentBlock = consequenceEnd;
-      this.terminate({
-        kind: "branch",
-        target: join.id,
-        arguments: [joined.consequent.value],
-        span: this.span(arm.body.span),
-      });
-      this.#currentBlock = alternateEnd;
-      this.terminate({
-        kind: "branch",
-        target: join.id,
-        arguments: [joined.alternate.value],
-        span: this.span(expr.span),
-      });
-
-      const joinedValue = this.nextValue();
-      join.parameters.push({
-        value: joinedValue,
-        type: joined.type,
-        ownership: this.ownership(joined.type),
-        span: this.span(expr.span),
-      });
-      this.#currentBlock = join.id;
-      return {
-        kind: "dynamic",
-        value: joinedValue,
-        type: joined.type,
-        meaning: joined.meaning,
-      };
     };
 
     return evaluateArm(0);
@@ -1312,7 +1616,6 @@ class ResidualHirBuilder {
     const source = this.current();
     const consequence = this.block();
     const alternate = this.block();
-    const join = this.block();
     source.terminator = {
       kind: "conditional",
       condition: condition.value,
@@ -1363,33 +1666,66 @@ class ResidualHirBuilder {
     const consequenceEnd = this.#currentBlock;
     const alternateValue = evaluateArm(1, alternate);
     const alternateEnd = this.#currentBlock;
-    const joined = this.joinBranchValues(
+    return this.finishBranchJoin(
       consequentValue,
       alternateValue,
       consequenceEnd,
       alternateEnd,
+      arms[0]!.body.span,
+      arms[1]!.body.span,
       expr.span,
+    );
+  }
+
+  private finishBranchJoin(
+    consequent: ResidualValue,
+    alternate: ResidualValue,
+    consequenceEnd: number,
+    alternateEnd: number,
+    consequenceSpan: Span,
+    alternateSpan: Span,
+    span: Span,
+  ): ResidualValue {
+    if (consequent.kind === "never" && alternate.kind === "never") {
+      this.#currentBlock = alternateEnd;
+      return { kind: "never" };
+    }
+    if (consequent.kind === "never") {
+      this.#currentBlock = alternateEnd;
+      return alternate;
+    }
+    if (alternate.kind === "never") {
+      this.#currentBlock = consequenceEnd;
+      return consequent;
+    }
+    const join = this.block();
+    const joined = this.joinBranchValues(
+      consequent,
+      alternate,
+      consequenceEnd,
+      alternateEnd,
+      span,
     );
     this.#currentBlock = consequenceEnd;
     this.terminate({
       kind: "branch",
       target: join.id,
       arguments: [joined.consequent.value],
-      span: this.span(arms[0]!.body.span),
+      span: this.span(consequenceSpan),
     });
     this.#currentBlock = alternateEnd;
     this.terminate({
       kind: "branch",
       target: join.id,
       arguments: [joined.alternate.value],
-      span: this.span(arms[1]!.body.span),
+      span: this.span(alternateSpan),
     });
     const joinedValue = this.nextValue();
     join.parameters.push({
       value: joinedValue,
       type: joined.type,
       ownership: this.ownership(joined.type),
-      span: this.span(expr.span),
+      span: this.span(span),
     });
     this.#currentBlock = join.id;
     return {
@@ -1442,48 +1778,140 @@ class ResidualHirBuilder {
         type: consequent.type,
       };
     }
+    const consequentBoolean = this.staticBoolean(consequent);
+    const alternateBoolean = this.staticBoolean(alternate);
+    if (
+      consequentBoolean !== undefined && alternate.kind === "dynamic" &&
+      this.types[alternate.type].kind === "boolean"
+    ) {
+      this.#currentBlock = consequenceEnd;
+      return {
+        consequent: this.constant(
+          consequentBoolean,
+          this.type("boolean"),
+          span,
+        ),
+        alternate,
+        type: alternate.type,
+      };
+    }
+    if (
+      consequent.kind === "dynamic" && alternateBoolean !== undefined &&
+      this.types[consequent.type].kind === "boolean"
+    ) {
+      this.#currentBlock = alternateEnd;
+      return {
+        consequent,
+        alternate: this.constant(
+          alternateBoolean,
+          this.type("boolean"),
+          span,
+        ),
+        type: consequent.type,
+      };
+    }
+    if (
+      consequentBoolean !== undefined && alternateBoolean !== undefined
+    ) {
+      const type = this.type("boolean");
+      this.#currentBlock = consequenceEnd;
+      const consequentValue = this.constant(consequentBoolean, type, span);
+      this.#currentBlock = alternateEnd;
+      const alternateValue = this.constant(alternateBoolean, type, span);
+      return {
+        consequent: consequentValue,
+        alternate: alternateValue,
+        type,
+      };
+    }
     const consequentTag = this.residualTag(consequent);
     const alternateTag = this.residualTag(alternate);
+    let consequentSum:
+      | Extract<
+        Extract<ResidualValue, { kind: "dynamic" }>["meaning"],
+        { kind: "sum" }
+      >
+      | undefined;
+    if (consequent.kind === "dynamic") {
+      if (
+        typeof consequent.meaning === "object" &&
+        consequent.meaning.kind === "sum"
+      ) {
+        consequentSum = consequent.meaning;
+      } else {
+        const type = this.types[consequent.type];
+        if (type.kind === "sum") {
+          consequentSum = {
+            kind: "sum",
+            cases: type.cases.map((case_) => case_.name),
+            payloadTypes: type.cases.map((case_) => case_.payloadType),
+            wrappedPayloads: type.cases.map(() => false),
+          };
+        }
+      }
+    }
+    let alternateSum:
+      | Extract<
+        Extract<ResidualValue, { kind: "dynamic" }>["meaning"],
+        { kind: "sum" }
+      >
+      | undefined;
+    if (alternate.kind === "dynamic") {
+      if (
+        typeof alternate.meaning === "object" &&
+        alternate.meaning.kind === "sum"
+      ) {
+        alternateSum = alternate.meaning;
+      } else {
+        const type = this.types[alternate.type];
+        if (type.kind === "sum") {
+          alternateSum = {
+            kind: "sum",
+            cases: type.cases.map((case_) => case_.name),
+            payloadTypes: type.cases.map((case_) => case_.payloadType),
+            wrappedPayloads: type.cases.map(() => false),
+          };
+        }
+      }
+    }
     if (
       consequentTag !== null && alternate.kind === "dynamic" &&
-      typeof alternate.meaning === "object" &&
-      alternate.meaning.kind === "sum" &&
-      alternate.meaning.cases.includes(consequentTag.name)
+      alternateSum !== undefined &&
+      alternateSum.cases.includes(consequentTag.name)
     ) {
       this.#currentBlock = consequenceEnd;
       const consequentValue = this.materializeTag(
         consequentTag,
         alternate.type,
-        alternate.meaning.cases,
-        alternate.meaning.wrappedPayloads,
+        alternateSum.cases,
+        alternateSum.wrappedPayloads,
         span,
       );
       return {
         consequent: consequentValue,
         alternate,
         type: alternate.type,
-        meaning: alternate.meaning,
+        meaning: alternateSum,
       };
     }
     if (
       consequent.kind === "dynamic" && alternateTag !== null &&
-      typeof consequent.meaning === "object" &&
-      consequent.meaning.kind === "sum" &&
-      consequent.meaning.cases.includes(alternateTag.name)
+      consequentSum !== undefined &&
+      consequentSum.cases.includes(alternateTag.name)
     ) {
       this.#currentBlock = alternateEnd;
       const alternateValue = this.materializeTag(
         alternateTag,
         consequent.type,
-        consequent.meaning.cases,
-        consequent.meaning.wrappedPayloads,
+        consequentSum.cases,
+        consequentSum.wrappedPayloads,
         span,
       );
       return {
         consequent,
         alternate: alternateValue,
         type: consequent.type,
-        meaning: consequent.meaning,
+        meaning: consequentSum,
       };
     }
     if (consequentTag !== null && alternateTag !== null) {
@@ -1584,16 +2012,17 @@ class ResidualHirBuilder {
     wrappedPayloads: readonly boolean[],
     span: Span,
   ): Extract<ResidualValue, { kind: "dynamic" }> {
-    const payload = tagged.payload.kind === "shape"
-      ? tagged.payload.fields.get("value")
-      : tagged.payload;
-    if (payload === undefined) {
-      throw this.outside(span, `tag ${tagged.name} without value payload`);
-    }
     const selectedCase = cases.indexOf(tagged.name);
     const selectedType = this.types[type];
     if (selectedType.kind !== "sum" || selectedCase < 0) {
       throw this.outside(span, `tag ${tagged.name} outside its sum`);
+    }
+    let payload: ResidualValue | undefined = tagged.payload;
+    if (wrappedPayloads[selectedCase] && payload.kind === "shape") {
+      payload = payload.fields.get("value");
+    }
+    if (payload === undefined) {
+      throw this.outside(span, `tag ${tagged.name} without value payload`);
     }
     const dynamicPayload = this.materialize(
       payload,
@@ -1606,7 +2035,7 @@ class ResidualHirBuilder {
       result,
       type,
       operands: [dynamicPayload.value],
-      ownership: "plain",
+      ownership: this.ownership(type),
       case: selectedCase,
       span: this.span(span),
     });
@@ -1639,6 +2068,7 @@ class ResidualHirBuilder {
         `${this.#source}:${span.start}: checked host operation ${operation.name} has no arrow signature`,
       );
     }
+    this.#functionCapabilities.add(operation.effect.name);
     const parameterType = this.typeFromValue(arrow.domain, span);
     const resultType = this.typeFromValue(arrow.codomain, span);
     const dynamicArgument = this.materialize(argument, parameterType, span);
@@ -1675,6 +2105,66 @@ class ResidualHirBuilder {
     return { kind: "dynamic", value: result, type: resultType };
   }
 
+  private hostGrantCall(
+    operation: Extract<ResidualValue, { readonly kind: "host-operation" }>,
+    argument: ResidualValue,
+    span: Span,
+  ): ResidualValue {
+    this.#functionCapabilities.add(operation.capability);
+    let parameterType = this.typeForSimpleType(
+      operation.grant.parameter,
+      span,
+      new Set(),
+    );
+    if (parameterType === null) {
+      parameterType = this.typeForResidualValue(argument, span);
+    }
+    let resultType = this.typeForSimpleType(
+      operation.grant.result,
+      span,
+      new Set(),
+    );
+    if (resultType === null) resultType = this.type("unit");
+    const dynamicArgument = this.materialize(argument, parameterType, span);
+    const key = `${parameterType}->${resultType}`;
+    let operations = this.#capabilityOperations.get(operation.capability);
+    if (operations === undefined) {
+      operations = new Map<
+        string,
+        { readonly signature: number; readonly key: string }
+      >();
+    }
+    const existing = operations.get(operation.operation);
+    if (existing !== undefined && existing.key !== key) {
+      throw new TypeError(
+        `${this.#source}:${span.start}: host operation ` +
+          `${operation.capability}.${operation.operation} has inconsistent signatures`,
+      );
+    }
+    if (existing === undefined) {
+      const signature = this.signatures.length;
+      this.signatures.push({
+        parameters: [parameterType],
+        result: resultType,
+        effects: [operation.capability],
+      });
+      operations.set(operation.operation, { signature, key });
+      this.#capabilityOperations.set(operation.capability, operations);
+    }
+    const result = this.nextValue();
+    this.current().operations.push({
+      kind: "host.call",
+      result,
+      type: resultType,
+      operands: [dynamicArgument.value],
+      ownership: this.ownership(resultType),
+      capability: operation.capability,
+      operation: operation.operation,
+      span: this.span(span),
+    });
+    return { kind: "dynamic", value: result, type: resultType };
+  }
+
   private handleSourceEffect(
     arguments_: readonly ResidualExpression[],
     environment: ResidualEnvironment,
@@ -1691,7 +2181,10 @@ class ResidualHirBuilder {
     }
 
     const computation = this.evaluate(arguments_[1], environment);
-    const handler = this.evaluate(arguments_[2], environment);
+    const handler = this.residualizeStatic(
+      this.evaluate(arguments_[2], environment),
+      environment,
+    );
     if (handler.kind !== "shape") {
       throw this.outside(span, "dynamic source effect handler");
     }
@@ -1767,6 +2260,7 @@ class ResidualHirBuilder {
     name: string,
     span: Span,
   ): ResidualValue {
+    if (value.kind === "never") return value;
     if (value.kind === "tuple") {
       const index = Number(name);
       if (Number.isSafeInteger(index) && index >= 0) {
@@ -1777,6 +2271,14 @@ class ResidualHirBuilder {
     if (value.kind === "shape") {
       const field = value.fields.get(name);
       if (field !== undefined) return field;
+    }
+    if (value.kind === "module-argument") {
+      const field = value.fields.get(name);
+      if (field !== undefined) return field;
+      return this.unsupported(
+        span,
+        `module capability ${name} is not a function`,
+      );
     }
     if (value.kind === "dynamic") {
       const type = this.types[value.type];
@@ -1852,12 +2354,34 @@ class ResidualHirBuilder {
           this.match(element, value.elements[index], environment)
         );
     }
+    if (pattern.tag === "tuple" && value.kind === "dynamic") {
+      const type = this.types[value.type];
+      if (type.kind !== "product") return false;
+      if (type.fields.length !== pattern.elements.length) return false;
+      return pattern.elements.every((element, index) =>
+        this.match(
+          element,
+          this.project(value, String(index), element.span),
+          environment,
+        )
+      );
+    }
     if (pattern.tag === "constructor" && value.kind === "tag") {
       if (pattern.name !== value.name) return false;
       return pattern.payload === null ||
         this.match(pattern.payload, value.payload, environment);
     }
     if (pattern.tag === "shape" && value.kind === "shape") {
+      return pattern.fields.every((field) => {
+        const member = value.fields.get(field.name);
+        return member !== undefined && this.match(
+          field.pattern,
+          member,
+          environment,
+        );
+      });
+    }
+    if (pattern.tag === "shape" && value.kind === "module-argument") {
       return pattern.fields.every((field) => {
         const member = value.fields.get(field.name);
         return member !== undefined && this.match(
@@ -1904,6 +2428,14 @@ class ResidualHirBuilder {
     value: ResidualValue,
   ): Extract<ResidualValue, { kind: "dynamic" }> {
     if (value.kind === "dynamic") return value;
+    if (
+      value.kind === "array" || value.kind === "shape" ||
+      value.kind === "tuple"
+    ) {
+      const span = { start: 0, end: 0 };
+      const type = this.typeForResidualValue(value, span);
+      return this.materialize(value, type, span);
+    }
     if (value.kind === "empty-store" && value.elementType !== undefined) {
       return this.emptyStore(value.elementType, { start: 0, end: 0 });
     }
@@ -1959,6 +2491,11 @@ class ResidualHirBuilder {
         { start: 0, end: 0 },
       );
     }
+    if (staticValue.tag === "shape" || staticValue.tag === "array") {
+      const span = { start: 0, end: 0 };
+      const type = this.typeForResidualValue(value, span);
+      return this.materialize(value, type, span);
+    }
     if (staticValue.tag === "sealed") {
       return this.dynamic({ kind: "static", value: staticValue.inner });
     }
@@ -1979,6 +2516,88 @@ class ResidualHirBuilder {
       return value;
     }
     const expected = this.types[expectedType];
+    if (expected.kind === "sum") {
+      const tagged = this.residualTag(value);
+      if (tagged === null) {
+        throw this.outside(span, "non-constructor sum value");
+      }
+      return this.materializeTag(
+        tagged,
+        expectedType,
+        expected.cases.map((case_) => case_.name),
+        expected.cases.map(() => false),
+        span,
+      );
+    }
+    if (expected.kind === "sealed") {
+      if (value.kind !== "static" || value.value.tag !== "sealed") {
+        throw this.outside(span, `non-sealed value for ${expected.name}`);
+      }
+      if (value.value.name !== expected.name) {
+        throw this.outside(
+          span,
+          `sealed value ${value.value.name} for ${expected.name}`,
+        );
+      }
+      const representation = this.materialize(
+        { kind: "static", value: value.value.inner },
+        expected.representationType,
+        span,
+      );
+      const result = this.nextValue();
+      this.current().operations.push({
+        kind: "seal.wrap",
+        result,
+        type: expectedType,
+        operands: [representation.value],
+        ownership: "owned",
+        span: this.span(span),
+      });
+      return { kind: "dynamic", value: result, type: expectedType };
+    }
+    if (expected.kind === "store") {
+      if (value.kind === "empty-store") {
+        return this.emptyStore(expected.elementType, span);
+      }
+      let elements: readonly ResidualValue[] | undefined;
+      if (value.kind === "array") elements = value.elements;
+      if (value.kind === "static" && value.value.tag === "array") {
+        elements = value.value.elements.map((element) => ({
+          kind: "static",
+          value: element,
+        }));
+      }
+      if (elements === undefined) {
+        throw this.outside(span, "non-array Store value");
+      }
+      let store = this.emptyStore(expected.elementType, span);
+      let index = 0;
+      for (const element of elements) {
+        index += 1;
+        const grownLength = this.constant(
+          BigInt(index),
+          this.type("signed-integer-64"),
+          span,
+        );
+        const dynamicElement = this.materialize(
+          element,
+          expected.elementType,
+          span,
+        );
+        const result = this.nextValue();
+        this.current().operations.push({
+          kind: "store.grow",
+          result,
+          type: expectedType,
+          operands: [store.value, grownLength.value, dynamicElement.value],
+          ownership: "owned",
+          update: "persistent",
+          span: this.span(span),
+        });
+        store = { kind: "dynamic", value: result, type: expectedType };
+      }
+      return store;
+    }
     if (expected.kind !== "product") {
       const scalar = this.dynamic(value);
       if (scalar.type !== expectedType) {
@@ -2026,8 +2645,30 @@ class ResidualHirBuilder {
 
   private typeForResidualValue(value: ResidualValue, span: Span): TypeId {
     if (value.kind === "dynamic") return value.type;
+    if (value.kind === "closure") {
+      return this.unsupported(span, "function export");
+    }
+    if (value.kind === "module-argument") {
+      return this.unsupported(span, "module argument as a runtime value");
+    }
     if (value.kind === "empty-store" && value.elementType !== undefined) {
       return this.storeType(value.elementType);
+    }
+    if (value.kind === "array") {
+      const first = value.elements[0];
+      if (first === undefined) {
+        if (value.elementType !== undefined) {
+          return this.storeType(value.elementType);
+        }
+        throw this.outside(span, "untyped empty residual array");
+      }
+      const elementType = this.typeForResidualValue(first, span);
+      for (const element of value.elements.slice(1)) {
+        if (this.typeForResidualValue(element, span) !== elementType) {
+          throw this.outside(span, "residual array element type disagreement");
+        }
+      }
+      return this.storeType(elementType);
     }
     if (value.kind === "shape") {
       const fields = new Map<string, TypeId>();
@@ -2067,6 +2708,46 @@ class ResidualHirBuilder {
     ) {
       return this.type("boolean");
     }
+    if (staticValue.tag === "tag") {
+      const payload = staticValue.payload;
+      let payloadValue: Value = { tag: "unit" };
+      if (payload !== null) payloadValue = payload;
+      const payloadType = this.typeForResidualValue(
+        { kind: "static", value: payloadValue },
+        span,
+      );
+      return this.sumType([staticValue.name], [payloadType]);
+    }
+    if (staticValue.tag === "sealed") {
+      const representationType = this.typeForResidualValue(
+        { kind: "static", value: staticValue.inner },
+        span,
+      );
+      return this.sealedType(staticValue.name, representationType);
+    }
+    if (staticValue.tag === "closure" || staticValue.tag === "core-closure") {
+      return this.unsupported(span, "function export");
+    }
+    if (staticValue.tag === "array") {
+      const first = staticValue.elements[0];
+      if (first === undefined) {
+        throw this.outside(span, "untyped empty residual array");
+      }
+      const elementType = this.typeForResidualValue(
+        { kind: "static", value: first },
+        span,
+      );
+      for (const element of staticValue.elements.slice(1)) {
+        const type = this.typeForResidualValue(
+          { kind: "static", value: element },
+          span,
+        );
+        if (type !== elementType) {
+          throw this.outside(span, "residual array element type disagreement");
+        }
+      }
+      return this.storeType(elementType);
+    }
     if (staticValue.tag === "shape") {
       const fields = new Map<string, TypeId>();
       for (const [name, field] of staticValue.fields) {
@@ -2080,6 +2761,202 @@ class ResidualHirBuilder {
     throw this.outside(span, `runtime type for static ${staticValue.tag}`);
   }
 
+  private typeForExportValue(
+    value: ResidualValue,
+    sourceName: string,
+    namedExport: boolean,
+    span: Span,
+  ): TypeId {
+    const exported = this.checkedExportType(
+      this.#checked.moduleType,
+      sourceName,
+      namedExport,
+      new Set(),
+    );
+    if (exported !== null) {
+      const expected = this.typeForSimpleType(exported, span, new Set());
+      if (expected !== null) return expected;
+      if (this.residualTag(value) !== null) {
+        const cases = this.variantCasesForSimpleType(exported, new Set());
+        if (cases !== null) {
+          const names = [...cases.keys()];
+          if (
+            names.length > 0 &&
+            names.every((name) => name === "True" || name === "False") &&
+            [...cases.values()].every((payload) => payload.tag === "unit")
+          ) {
+            return this.type("boolean");
+          }
+          const payloadTypes: TypeId[] = [];
+          for (const payload of cases.values()) {
+            const payloadType = this.typeForSimpleType(
+              payload,
+              span,
+              new Set(),
+            );
+            if (payloadType === null) {
+              return this.typeForResidualValue(value, span);
+            }
+            payloadTypes.push(payloadType);
+          }
+          return this.sumType(names, payloadTypes);
+        }
+      }
+    }
+    return this.typeForResidualValue(value, span);
+  }
+
+  private checkedExportType(
+    type: SimpleType,
+    sourceName: string,
+    namedExport: boolean,
+    seen: Set<number>,
+  ): SimpleType | null {
+    if (!namedExport) return type;
+    if (type.tag === "record") {
+      const field = type.fields.get(sourceName);
+      if (field !== undefined) return field;
+      return null;
+    }
+    if (type.tag !== "var" || seen.has(type.id)) return null;
+    seen.add(type.id);
+    for (const bound of [...type.lower, ...type.upper]) {
+      const field = this.checkedExportType(
+        bound,
+        sourceName,
+        namedExport,
+        seen,
+      );
+      if (field !== null) return field;
+    }
+    return null;
+  }
+
+  private typeForSimpleType(
+    type: SimpleType,
+    span: Span,
+    seen: Set<number>,
+  ): TypeId | null {
+    if (type.tag === "unit") return this.type("unit");
+    if (type.tag === "range") {
+      if (type.domain === "int") return this.type("signed-integer-64");
+      if (type.domain === "float") return this.type("float-64");
+      if (type.domain === "float32") return this.type("float-32");
+      return this.type("text");
+    }
+    if (type.tag === "record") {
+      const fields = new Map<string, TypeId>();
+      for (const [name, field] of type.fields) {
+        const fieldType = this.typeForSimpleType(
+          field,
+          span,
+          new Set(seen),
+        );
+        if (fieldType === null) return null;
+        fields.set(name, fieldType);
+      }
+      return this.productTypeFromRuntimeFields(fields);
+    }
+    if (type.tag === "array" || type.tag === "region") {
+      const elementType = this.typeForSimpleType(type.element, span, seen);
+      if (elementType === null) return null;
+      return this.storeType(elementType);
+    }
+    if (type.tag === "variant") {
+      if (type.open) return null;
+      const cases = [...type.cases.keys()];
+      if (
+        cases.length > 0 &&
+        cases.every((name) => name === "True" || name === "False") &&
+        [...type.cases.values()].every((payload) => payload.tag === "unit")
+      ) {
+        return this.type("boolean");
+      }
+      const payloadTypes: TypeId[] = [];
+      for (const payload of type.cases.values()) {
+        const payloadType = this.typeForSimpleType(payload, span, seen);
+        if (payloadType === null) return null;
+        payloadTypes.push(payloadType);
+      }
+      return this.sumType(cases, payloadTypes);
+    }
+    if (type.tag === "forall") {
+      return this.typeForSimpleType(type.body, span, seen);
+    }
+    if (type.tag === "var") {
+      if (seen.has(type.id)) return null;
+      seen.add(type.id);
+      const representations = new Set<TypeId>();
+      for (const bound of [...type.lower, ...type.upper]) {
+        const representation = this.typeForSimpleType(
+          bound,
+          span,
+          new Set(seen),
+        );
+        if (representation !== null) representations.add(representation);
+      }
+      if (representations.size !== 1) return null;
+      return representations.values().next().value as TypeId;
+    }
+    if (type.tag === "union") {
+      const representations = new Set<TypeId>();
+      for (const member of type.members) {
+        const representation = this.typeForSimpleType(
+          member,
+          span,
+          new Set(seen),
+        );
+        if (representation !== null) representations.add(representation);
+      }
+      if (representations.size !== 1) return null;
+      return representations.values().next().value as TypeId;
+    }
+    if (type.tag === "opaque") {
+      const simd = this.simdTypeFromName(type.name);
+      if (simd !== undefined) return simd;
+    }
+    return null;
+  }
+
+  private variantCasesForSimpleType(
+    type: SimpleType,
+    seen: Set<number>,
+  ): ReadonlyMap<string, SimpleType> | null {
+    if (type.tag === "variant") {
+      if (type.open) return null;
+      return type.cases;
+    }
+    if (type.tag === "var") {
+      if (seen.has(type.id)) return null;
+      seen.add(type.id);
+      const cases = new Map<string, SimpleType>();
+      for (const bound of [...type.lower, ...type.upper]) {
+        const found = this.variantCasesForSimpleType(
+          bound,
+          new Set(seen),
+        );
+        if (found === null) continue;
+        for (const [name, payload] of found) cases.set(name, payload);
+      }
+      if (cases.size === 0) return null;
+      return cases;
+    }
+    if (type.tag === "union") {
+      const cases = new Map<string, SimpleType>();
+      for (const member of type.members) {
+        const found = this.variantCasesForSimpleType(
+          member,
+          new Set(seen),
+        );
+        if (found === null) return null;
+        for (const [name, payload] of found) cases.set(name, payload);
+      }
+      if (cases.size === 0) return null;
+      return cases;
+    }
+    return null;
+  }
+
   private integer(
     value: ResidualValue,
     span: Span,
@@ -2090,6 +2967,180 @@ class ResidualHirBuilder {
       throw this.outside(span, `${primitive} over non-integer operand`);
     }
     return dynamic;
+  }
+
+  private floating(
+    value: ResidualValue,
+    expected: "float-32" | "float-64",
+    span: Span,
+    primitive: string,
+  ): Extract<ResidualValue, { kind: "dynamic" }> {
+    const dynamic = this.dynamic(value);
+    if (this.types[dynamic.type].kind !== expected) {
+      throw this.outside(span, `${primitive} over non-${expected} operand`);
+    }
+    return dynamic;
+  }
+
+  private floatOfInteger(
+    value: ResidualValue,
+    span: Span,
+  ): Extract<ResidualValue, { kind: "dynamic" }> {
+    const integer = this.integer(value, span, "@float.of_int");
+    const integerType = integer.type;
+    const base = this.constant(2_147_483_648n, integerType, span);
+    const quotient = this.operation(
+      "scalar",
+      integerType,
+      [integer.value, base.value],
+      span,
+      undefined,
+      "divide",
+    );
+    const quotientProduct = this.operation(
+      "scalar",
+      integerType,
+      [quotient.value, base.value],
+      span,
+      undefined,
+      "multiply",
+    );
+    const remainder = this.operation(
+      "scalar",
+      integerType,
+      [integer.value, quotientProduct.value],
+      span,
+      undefined,
+      "subtract",
+    );
+    const high = this.operation(
+      "scalar",
+      integerType,
+      [quotient.value, base.value],
+      span,
+      undefined,
+      "divide",
+    );
+    const highProduct = this.operation(
+      "scalar",
+      integerType,
+      [high.value, base.value],
+      span,
+      undefined,
+      "multiply",
+    );
+    const middle = this.operation(
+      "scalar",
+      integerType,
+      [quotient.value, highProduct.value],
+      span,
+      undefined,
+      "subtract",
+    );
+    const integer32Type = this.type("integer-32");
+    const floatType = this.type("float-64");
+    const high32 = this.convert(
+      high,
+      integer32Type,
+      "signed-integer-64-to-signed-integer-32",
+      span,
+    );
+    const middle32 = this.convert(
+      middle,
+      integer32Type,
+      "signed-integer-64-to-signed-integer-32",
+      span,
+    );
+    const remainder32 = this.convert(
+      remainder,
+      integer32Type,
+      "signed-integer-64-to-signed-integer-32",
+      span,
+    );
+    const highFloat = this.convert(
+      high32,
+      floatType,
+      "signed-integer-32-to-float-64",
+      span,
+    );
+    const middleFloat = this.convert(
+      middle32,
+      floatType,
+      "signed-integer-32-to-float-64",
+      span,
+    );
+    const remainderFloat = this.convert(
+      remainder32,
+      floatType,
+      "signed-integer-32-to-float-64",
+      span,
+    );
+    const floatBase = this.constant(2_147_483_648, floatType, span);
+    const highScaled = this.operation(
+      "scalar",
+      floatType,
+      [highFloat.value, floatBase.value],
+      span,
+      undefined,
+      "multiply",
+    );
+    const highAndMiddle = this.operation(
+      "scalar",
+      floatType,
+      [highScaled.value, middleFloat.value],
+      span,
+      undefined,
+      "add",
+    );
+    const quotientFloat = this.operation(
+      "scalar",
+      floatType,
+      [highAndMiddle.value, floatBase.value],
+      span,
+      undefined,
+      "multiply",
+    );
+    return this.operation(
+      "scalar",
+      floatType,
+      [quotientFloat.value, remainderFloat.value],
+      span,
+      undefined,
+      "add",
+    );
+  }
+
+  private trapIfNaN(
+    value: Extract<ResidualValue, { kind: "dynamic" }>,
+    primitive: string,
+    span: Span,
+  ): void {
+    const unordered = this.operation(
+      "scalar",
+      this.type("boolean"),
+      [value.value, value.value],
+      span,
+      undefined,
+      "not-equal",
+    );
+    const source = this.current();
+    const trap = this.block();
+    const ordered = this.block();
+    source.terminator = {
+      kind: "conditional",
+      condition: unordered.value,
+      consequent: trap.id,
+      consequentArguments: [],
+      alternate: ordered.id,
+      alternateArguments: [],
+      span: this.span(span),
+    };
+    trap.terminator = {
+      kind: "trap",
+      message: `${primitive} cannot order NaN. Test for it before comparing.`,
+      span: this.span(span),
+    };
+    this.#currentBlock = ordered.id;
   }
 
   private text(
@@ -2117,6 +3168,25 @@ class ResidualHirBuilder {
       operands: [],
       ownership: typeof value === "string" ? "owned" : "plain",
       value,
+      span: this.span(span),
+    });
+    return { kind: "dynamic", value: result, type };
+  }
+
+  private convert(
+    value: Extract<ResidualValue, { kind: "dynamic" }>,
+    type: TypeId,
+    conversion: string,
+    span: Span,
+  ): Extract<ResidualValue, { kind: "dynamic" }> {
+    const result = this.nextValue();
+    this.current().operations.push({
+      kind: "convert",
+      result,
+      type,
+      operands: [value.value],
+      ownership: "plain",
+      conversion,
       span: this.span(span),
     });
     return { kind: "dynamic", value: result, type };
@@ -2316,6 +3386,42 @@ class ResidualHirBuilder {
         [vector.value],
         span,
         floatLane as 0 | 1 | 2 | 3,
+      );
+    }
+    if (element === "f32" && operation === "sum") {
+      const vector = this.simd(inputs[0], "f32", false, span, name);
+      const lanes = ([0, 1, 2, 3] as const).map((lane) =>
+        this.vectorOperation(
+          "extract",
+          this.type("float-32"),
+          [vector.value],
+          span,
+          lane,
+        )
+      );
+      const left = this.operation(
+        "scalar",
+        this.type("float-32"),
+        [lanes[0].value, lanes[1].value],
+        span,
+        undefined,
+        "add",
+      );
+      const right = this.operation(
+        "scalar",
+        this.type("float-32"),
+        [lanes[2].value, lanes[3].value],
+        span,
+        undefined,
+        "add",
+      );
+      return this.operation(
+        "scalar",
+        this.type("float-32"),
+        [left.value, right.value],
+        span,
+        undefined,
+        "add",
       );
     }
     const laneMatch = /^(?:lane|with_lane)([0-3])$/.exec(operation);
@@ -2524,6 +3630,16 @@ class ResidualHirBuilder {
 
   private staticValue(value: ResidualValue): Value | undefined {
     if (value.kind === "static") return value.value;
+    if (value.kind === "array") {
+      const elements = value.elements.map((element) =>
+        this.staticValue(element)
+      );
+      if (elements.some((element) => element === undefined)) return undefined;
+      return {
+        tag: "array",
+        elements: elements as Value[],
+      };
+    }
     if (value.kind === "tuple") {
       const elements = value.elements.map((element) =>
         this.staticValue(element)
@@ -2551,6 +3667,82 @@ class ResidualHirBuilder {
       return { tag: "tag", name: value.name, payload };
     }
     return undefined;
+  }
+
+  private residualizeStatic(
+    value: ResidualValue,
+    environment: ResidualEnvironment | null = null,
+  ): ResidualValue {
+    if (value.kind !== "static") return value;
+    const known = value.value;
+    if (known.tag === "closure" || known.tag === "core-closure") {
+      return {
+        kind: "closure",
+        parameter: known.parameter,
+        body: known.body,
+        environment: this.environment(environment, known.env),
+        self: known.self,
+      };
+    }
+    if (known.tag === "array") {
+      return {
+        kind: "array",
+        elements: known.elements.map((element) =>
+          this.residualizeStatic(
+            { kind: "static", value: element },
+            environment,
+          )
+        ),
+      };
+    }
+    if (known.tag === "shape") {
+      return {
+        kind: "shape",
+        fields: new Map(
+          [...known.fields].map(([name, field]) => [
+            name,
+            this.residualizeStatic(
+              { kind: "static", value: field },
+              environment,
+            ),
+          ]),
+        ),
+      };
+    }
+    if (known.tag === "tag" && known.payload !== null) {
+      return {
+        kind: "tag",
+        name: known.name,
+        payload: this.residualizeStatic(
+          {
+            kind: "static",
+            value: known.payload,
+          },
+          environment,
+        ),
+      };
+    }
+    return value;
+  }
+
+  private applyCheckedResidualType(
+    value: ResidualValue,
+    expression: Expr,
+    span: Span,
+  ): ResidualValue {
+    if (
+      value.kind !== "array" && value.kind !== "empty-store"
+    ) return value;
+    const checked = this.#checked.expressionTypes.get(expression);
+    if (checked === undefined) return value;
+    const type = this.typeForSimpleType(checked, span, new Set());
+    if (type === null) return value;
+    const runtimeType = this.types[type];
+    if (runtimeType.kind !== "store") return value;
+    if (value.kind === "array") {
+      return { ...value, elementType: runtimeType.elementType };
+    }
+    return { ...value, elementType: runtimeType.elementType };
   }
 
   private staticBoolean(value: ResidualValue): boolean | undefined {
@@ -2644,6 +3836,16 @@ class ResidualHirBuilder {
     return type;
   }
 
+  private sealedType(name: string, representationType: TypeId): TypeId {
+    const key = `sealed:${name}:${representationType}`;
+    const existing = this.#typeByName.get(key);
+    if (existing !== undefined) return existing;
+    const type = this.types.length;
+    this.#typeByName.set(key, type);
+    this.types.push({ kind: "sealed", name, representationType });
+    return type;
+  }
+
   private emptyStore(
     elementType: TypeId,
     span: Span,
@@ -2684,7 +3886,10 @@ class ResidualHirBuilder {
 
   private ownership(type: TypeId): "plain" | "owned" {
     const kind = this.types[type].kind;
-    if (kind === "text" || kind === "product") return "owned";
+    if (
+      kind === "text" || kind === "product" || kind === "store" ||
+      kind === "sum" || kind === "sealed"
+    ) return "owned";
     return "plain";
   }
 
@@ -2780,6 +3985,31 @@ class ResidualHirBuilder {
     return { names: new Map(), parent, staticParent };
   }
 
+  private bindModuleParameter(environment: ResidualEnvironment): void {
+    const parameter = this.#checked.core.parameter;
+    if (parameter === null) return;
+    const fields = new Map<string, ResidualValue>();
+    for (const [projection, grant] of this.#checked.grants) {
+      if (projection.tag !== "field") {
+        throw new Error(
+          `${this.#source}:${projection.span.start}: a module grant is not a field projection`,
+        );
+      }
+      fields.set(projection.name, {
+        kind: "host-operation",
+        capability: "Init",
+        operation: projection.name,
+        grant,
+      });
+    }
+    this.bind(
+      parameter,
+      { kind: "module-argument", fields },
+      environment,
+      parameter.span,
+    );
+  }
+
   private lookup(
     environment: ResidualEnvironment,
     name: string,
@@ -2837,6 +4067,14 @@ class ResidualHirBuilder {
   private outside(span: Span, construct: string): TypeError {
     return new TypeError(
       `${this.#source}:${span.start}: ${construct} is outside the checked residual Runtime-HIR calculus`,
+    );
+  }
+
+  private unsupported(span: Span, construct: string): never {
+    fail(
+      "BLOT_UNSUPPORTED_LOWERING",
+      `${construct} is outside the Node residual calculus.`,
+      span,
     );
   }
 }

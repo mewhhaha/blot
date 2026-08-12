@@ -179,17 +179,23 @@ export async function checkUncheckedSource(
   return checkLoadedProgram(loaded);
 }
 
+const checkedPrograms = new WeakMap<Loaded, CheckResult>();
+
 function checkLoadedProgram(loaded: Loaded): CheckResult {
-  // Per call, not per process. A dependency's facts depend on its importers, so
-  // there is no one answer it could carry between two programs — and since they
-  // are keyed by AST node identity, one map could not hold both answers anyway.
-  // The loader's cache does stay process-wide, which is what keeps those
-  // identities stable from one call to the next.
+  // A dependency cannot carry a context-independent checked result because an
+  // importer can settle its variables. The complete root program can: loader
+  // identity covers the root and its dependency graph, and refresh invalidates
+  // every importer when a dependency changes.
+  const cached = checkedPrograms.get(loaded);
+  if (cached !== undefined) return cached;
+
   const checkedFiles = new Map<Loaded, CheckedFile>();
   const staging = newStaging();
   checkLoaded(loaded, checkedFiles, staging);
   settle(staging);
-  return assemble(loaded, checkedFiles, new Map());
+  const result = assemble(loaded, checkedFiles, new Map());
+  checkedPrograms.set(loaded, result);
+  return result;
 }
 
 interface CheckedFile {
