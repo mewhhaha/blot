@@ -21,9 +21,11 @@ for (let round = 0; round < rounds; round += 1) {
   const compiler = await Compiler.create();
   await compiler.check(baseline.root);
   await writeLeaf(baseline.leaf, round % 2 === 0 ? 2 : 1);
-  baselineTimes.push(await timed(async () => {
-    await compiler.check(baseline.root);
-  }));
+  baselineTimes.push(
+    await timed(async () => {
+      await compiler.check(baseline.root);
+    }),
+  );
   compiler.destroy();
 
   const sealed = await makeChain(depth, round % 2 === 0 ? 1 : 2);
@@ -31,9 +33,11 @@ for (let round = 0; round < rounds; round += 1) {
   await session.check(sealed.root);
   await writeLeaf(sealed.leaf, round % 2 === 0 ? 2 : 1);
   let rechecked = 0;
-  sealedTimes.push(await timed(async () => {
-    rechecked = (await session.check(sealed.root)).rechecked.length;
-  }));
+  sealedTimes.push(
+    await timed(async () => {
+      rechecked = (await session.check(sealed.root)).rechecked.length;
+    }),
+  );
   sealedRechecks.push(rechecked);
 }
 

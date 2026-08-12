@@ -5,15 +5,14 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { refreshProgram } from "../../src/compiler/frontend.ts";
 import { checkProgram } from "../../src/compiler/typecheck.ts";
-import {
-  SealedCheckSession,
-  typeOnlyFingerprint,
-} from "./session.ts";
+import { SealedCheckSession, typeOnlyFingerprint } from "./session.ts";
 
 async function chain(
   depth: number,
   leafSource: string,
-): Promise<{ readonly root: string; readonly leaf: string; readonly paths: string[] }> {
+): Promise<
+  { readonly root: string; readonly leaf: string; readonly paths: string[] }
+> {
   const directory = await mkdtemp(join(tmpdir(), "blot-sealed-"));
   const paths: string[] = [];
   const leaf = join(directory, "module-0.blot");

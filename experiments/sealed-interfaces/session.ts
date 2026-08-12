@@ -101,7 +101,10 @@ export class SealedCheckSession {
       }
 
       const checked = await checkProgram(nodePath);
-      const moduleInterface = observableTypeBoundary(checked.type, checked.effects);
+      const moduleInterface = observableTypeBoundary(
+        checked.type,
+        checked.effects,
+      );
       const baseFingerprint = moduleBaseFingerprint(
         node.loaded,
         moduleInterface,
@@ -145,8 +148,13 @@ export class SealedCheckSession {
       right[1].depth - left[1].depth
     );
     for (const [nodePath, node] of order) {
-      const moduleChecked = nodePath === rootPath ? checked : await checkProgram(nodePath);
-      const moduleInterface = observableTypeBoundary(moduleChecked.type, moduleChecked.effects);
+      const moduleChecked = nodePath === rootPath
+        ? checked
+        : await checkProgram(nodePath);
+      const moduleInterface = observableTypeBoundary(
+        moduleChecked.type,
+        moduleChecked.effects,
+      );
       const baseFingerprint = moduleBaseFingerprint(
         node.loaded,
         moduleInterface,
@@ -200,7 +208,10 @@ function observableTypeBoundary(type: string, effects: string): string {
  * own module but does not invalidate importers.
  */
 export function liveModuleFingerprint(loaded: Loaded): string {
-  const live = liveDeclarations(loaded.module.declarations, loaded.module.result);
+  const live = liveDeclarations(
+    loaded.module.declarations,
+    loaded.module.result,
+  );
   const sliced = {
     ...loaded.module,
     declarations: loaded.module.declarations.filter((declaration) =>

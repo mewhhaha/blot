@@ -7,8 +7,8 @@ not change anything an importer can observe.
 A type-only boundary is not sound for Blot. Checking runs the compile-time
 evaluator, and an importer may execute an exported closure even when that
 closure has an explicit, unchanged signature. The regression test in this
-directory changes an exported `Int -> Int` closure from `+ 1` to `+ 2`: the
-leaf module's canonical type interface is unchanged while the importing root's
+directory changes an exported `Int -> Int` closure from `+ 1` to `+ 2`: the leaf
+module's canonical type interface is unchanged while the importing root's
 inferred singleton changes from `42` to `43`.
 
 `SealedCheckSession` therefore uses a conservative observable fingerprint:
