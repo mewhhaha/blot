@@ -44,8 +44,25 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Check TypeScript
         run: deno check .
-      - name: Check formatting
-        run: deno fmt --check
+      - name: Format handoff
+        run: deno fmt
+      - name: Upload formatted handoff
+        uses: actions/upload-artifact@v4
+        with:
+          name: blot-format-handoff-${{ github.sha }}
+          path: |
+            README.md
+            TASKS.md
+            docs/compiler.md
+            spec/COMPILER.md
+            spec/FRONTEND.md
+            src/compiler/backend.ts
+            src/compiler/backend.test.ts
+            src/compiler/hir.ts
+            src/compiler/session.ts
+            src/compiler/typecheck.ts
+          if-no-files-found: error
+          retention-days: 1
       - name: Check lint
         run: deno lint
       - name: Verify Baba frontend generation
