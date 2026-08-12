@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { Compiler } from "../compiler.ts";
+import { CompilerInvariantFailure } from "../compiler/backend.ts";
 import { CompilerWasm } from "../compiler/wasm.ts";
 import { BlotError } from "../diagnostic.ts";
 import { load, type Loaded, LoadError } from "../load.ts";
@@ -278,6 +279,9 @@ function errorRejection(
   }
   if (error instanceof BlotError) {
     return rejection(stage, error.diagnostic.code, error.diagnostic.message);
+  }
+  if (stage === "compile" && error instanceof CompilerInvariantFailure) {
+    return rejection(stage, "BLOT_BACKEND_ERROR", error.message);
   }
   let message = String(error);
   if (error instanceof Error) message = error.message;
