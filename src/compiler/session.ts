@@ -6,7 +6,7 @@ import {
   resolveTargetPolicy,
   warmBackend,
 } from "./backend.ts";
-import { refreshProgram, type Loaded } from "./frontend.ts";
+import { type Loaded, refreshProgram } from "./frontend.ts";
 import { checkProgram, checkProgramSource } from "./typecheck.ts";
 import type { BlotRuntimeModule } from "../runtime/hir.ts";
 import { warmBabaRuntime } from "../syntax/baba_runtime.ts";

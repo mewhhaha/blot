@@ -49,8 +49,8 @@ checked module capsule:
 }
 ```
 
-The Node CLI does not build package capsules yet. It does resolve
-existing source and capsule exports from `node_modules`. An importer writes
+The Node CLI does not build package capsules yet. It does resolve existing
+source and capsule exports from `node_modules`. An importer writes
 `@import "@scope/package"`, or a declared package subpath, and Blot resolves the
 nearest `node_modules` package without executing its JavaScript. A valid
 `.blotc` is preferred and corrupt or unsupported built files fall back to the
@@ -109,14 +109,13 @@ reuses its Store allocation; ordinary shared arrays remain persistent. See
 
 The compiler (M4) develops accepted programs through the Baba-Wasm → Node →
 gpupaper-Wasm pipeline; the checked-in Rust compiler Wasm is the production
-implementation. `pnpm blot check` and `pnpm blot build` need
-neither Deno nor native Rust; building produces caller-facing WebAssembly plus a
-JSON ABI manifest without executing the program. The identical manifest is
-embedded in the `blot:abi` custom section. See [docs/abi.md](docs/abi.md).
-Compile-time-only result fields are erased, runtime fields become named Wasm
-exports, host effects become typed imports, and one-shot handlers are
-specialized through non-tail resume and abort. See
-[docs/backend.md](docs/backend.md).
+implementation. `pnpm blot check` and `pnpm blot build` need neither Deno nor
+native Rust; building produces caller-facing WebAssembly plus a JSON ABI
+manifest without executing the program. The identical manifest is embedded in
+the `blot:abi` custom section. See [docs/abi.md](docs/abi.md). Compile-time-only
+result fields are erased, runtime fields become named Wasm exports, host effects
+become typed imports, and one-shot handlers are specialized through non-tail
+resume and abort. See [docs/backend.md](docs/backend.md).
 
 The public `Compiler` API runs the same pipeline as `pnpm blot build`. Baba's
 generated Wasm parses source, Blot's TypeScript checker and staging passes

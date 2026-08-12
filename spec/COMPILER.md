@@ -12,12 +12,13 @@ meaning. [`PAPER.md`](PAPER.md) develops the target language model.
 [`TYPECHECKING.md`](TYPECHECKING.md) is a sub-reference of this specification,
 not a second definition of the language.
 
-Blot has one compiler contract and two maintained implementations. Node/TypeScript
-is the default development environment: Node instantiates Baba's generated lexer
-Wasm, runs Baba's general-profile CPU island executor, executes Blot's readable
-semantic passes, and instantiates gpupaper's embedded emitter. The checked-in
-Rust compiler Wasm is the production implementation. Deno, a native Rust process,
-Cargo, and WebGPU are outside an ordinary compilation boundary.
+Blot has one compiler contract and two maintained implementations.
+Node/TypeScript is the default development environment: Node instantiates Baba's
+generated lexer Wasm, runs Baba's general-profile CPU island executor, executes
+Blot's readable semantic passes, and instantiates gpupaper's embedded emitter.
+The checked-in Rust compiler Wasm is the production implementation. Deno, a
+native Rust process, Cargo, and WebGPU are outside an ordinary compilation
+boundary.
 
 Baba's Wasm runtime lexes layout-elaborated source. Its CPU island executor
 parses the general-profile plan and returns the compact CST. Gpupaper receives
@@ -31,8 +32,8 @@ zero-parameter default or sole runtime export when the module needs no host
 capabilities. It copies direct and canonical-memory values and completes owned
 indirect results through their declared post-return. Evaluation of arbitrary
 host-dependent programs, ownership reports, formatting, and package construction
-remain development tools outside this CLI boundary. `pnpm parity`
-and `pnpm parity:strict` compare both compiler directions; comparing rejections
+remain development tools outside this CLI boundary. `pnpm parity` and
+`pnpm parity:strict` compare both compiler directions; comparing rejections
 alone would let either checker drift towards accepting a program the other
 refuses.
 
@@ -46,11 +47,10 @@ G = (root, files, resolves, includes)
 
 where `files` maps canonical module identities to exact bytes, `resolves`
 records import edges, and `includes` records compile-time external inputs. A
-target policy `tau` contains the public ABI major and concrete Wasm target.
-The current default is `(1, wasm-simd128)`. Runtime-HIR schema compatibility is
+target policy `tau` contains the public ABI major and concrete Wasm target. The
+current default is `(1, wasm-simd128)`. Runtime-HIR schema compatibility is
 internal to a compiler/backend distribution and is therefore an invariant, not a
-caller-selected target policy.
-Compilation is a partial, deterministic judgment:
+caller-selected target policy. Compilation is a partial, deterministic judgment:
 
 ```text
 G ; tau |- compile(root) => Artifact(W, M, D)
@@ -118,8 +118,8 @@ Baba owns lexing and parsing. Blot owns deterministic layout-token insertion,
 source-offset recovery, elaboration, inference, compile-time evaluation, safety,
 ownership, specialization, Runtime HIR, ABI policy, and the module shell.
 Gpupaper owns Core-to-Wasm planning and binary emission. The checked-in Blot
-Rust compiler Wasm is the production implementation and parity counterpart; it is
-not invoked by an ordinary Node development compilation.
+Rust compiler Wasm is the production implementation and parity counterpart; it
+is not invoked by an ordinary Node development compilation.
 
 ## 3. Pass contract
 
@@ -254,9 +254,9 @@ skip a pass only when a revision key proves that every input observed by that
 pass is unchanged and its closed output certificate validates. This is specified
 in [`INCREMENTAL.md`](INCREMENTAL.md).
 
-In the Node development compiler, a resident source-graph revision key is
-the canonical root identity plus every module's exact portable AST (including
-source spans), dependency revision keys, and included file identities and bytes.
+In the Node development compiler, a resident source-graph revision key is the
+canonical root identity plus every module's exact portable AST (including source
+spans), dependency revision keys, and included file identities and bytes.
 Equality permits reuse of the root's checked summary, validated Runtime HIR, and
 emitted artifact. Loader-object memoization may additionally reuse a complete
 root checking judgment while that loader reports the same revision. It may not
@@ -305,15 +305,15 @@ Node-hosted benchmark runs both implementations in one process with
 `pnpm run benchmark -- <root.blot>` and verifies comparable observations before
 reporting phase medians, artifact sizes, and Node-to-Rust ratios.
 
-The Node and Rust/Wasm implementations are developed in sequence: Node/TypeScript
-is the readable default development implementation and Rust/Wasm is the production
-implementation. They remain implementations of this one judgment. Feature work
-normally begins in the Node phase that owns the behavior and is then ported to
-the correspondingly named Rust phase. A feature is production-complete only
-after both agree on acceptance or rejection, diagnostic code, Runtime-HIR export
-phases, public ABI manifest, capabilities, and the applicable runtime
-observations. Internal type pretty-printing and instruction-byte identity are
-not required observations.
+The Node and Rust/Wasm implementations are developed in sequence:
+Node/TypeScript is the readable default development implementation and Rust/Wasm
+is the production implementation. They remain implementations of this one
+judgment. Feature work normally begins in the Node phase that owns the behavior
+and is then ported to the correspondingly named Rust phase. A feature is
+production-complete only after both agree on acceptance or rejection, diagnostic
+code, Runtime-HIR export phases, public ABI manifest, capabilities, and the
+applicable runtime observations. Internal type pretty-printing and
+instruction-byte identity are not required observations.
 
 The repository-wide dual-compiler corpus runs both implementations under Node;
 the Rust implementation is the checked-in compiler Wasm, not a native toolchain
@@ -464,9 +464,9 @@ closed variants, records, and sealed values layout-stable. A staged self-tail
 call may become an explicit Runtime-HIR loop back-edge; a non-tail or escaping
 closure still requires the ordinary closure representation. Canonical adapters
 currently admit direct scalar results and the existing structured ABI policy.
-Unsupported target policy is a `TargetRefusal`; a failure after validated Runtime
-HIR is an `InvariantFailure`. Neither is a source diagnostic, and neither receives
-a fabricated source span.
+Unsupported target policy is a `TargetRefusal`; a failure after validated
+Runtime HIR is an `InvariantFailure`. Neither is a source diagnostic, and
+neither receives a fabricated source span.
 
 Node/TypeScript is the development implementation and the checked-in Rust/Wasm
 compiler is the production implementation. Semantic authority belongs to this
@@ -543,18 +543,18 @@ semantics.
 The compiler keeps one semantic contract per boundary and parallel development
 and production modules:
 
-| Phase | Node development | Rust production | Contract output |
-| --- | --- | --- | --- |
-| frontend | `src/compiler/frontend.ts` | `compiler/src/frontend.rs` + `source.rs` | source graph / AST |
-| typecheck | `src/compiler/typecheck.ts` | `compiler/src/typecheck.rs` | checked facts |
-| hir | `src/compiler/hir.ts` | `compiler/src/hir.rs` | validated Runtime HIR |
-| backend | `src/compiler/backend.ts` | `compiler/src/backend.rs` | closed program / Wasm artifact |
-| session | `src/compiler/session.ts` | `compiler/src/session.rs` | resident incremental API |
+| Phase     | Node development            | Rust production                          | Contract output                |
+| --------- | --------------------------- | ---------------------------------------- | ------------------------------ |
+| frontend  | `src/compiler/frontend.ts`  | `compiler/src/frontend.rs` + `source.rs` | source graph / AST             |
+| typecheck | `src/compiler/typecheck.ts` | `compiler/src/typecheck.rs`              | checked facts                  |
+| hir       | `src/compiler/hir.ts`       | `compiler/src/hir.rs`                    | validated Runtime HIR          |
+| backend   | `src/compiler/backend.ts`   | `compiler/src/backend.rs`                | closed program / Wasm artifact |
+| session   | `src/compiler/session.ts`   | `compiler/src/session.rs`                | resident incremental API       |
 
 Baba remains the syntax authority within both frontend implementations. The Node
-backend's ABI and gpupaper machinery live under `src/compiler/backend/`; compiler
-code does not depend on `src/conformance/`. Conformance code may consume compiler
-boundaries to compare them.
+backend's ABI and gpupaper machinery live under `src/compiler/backend/`;
+compiler code does not depend on `src/conformance/`. Conformance code may
+consume compiler boundaries to compare them.
 
 `Runtime HIR` is the semantic/backend boundary. It contains settled runtime
 types and effects, residual operations, concrete representations, and source
@@ -609,7 +609,8 @@ The collapse should be tested by deletion or replacement in this order:
 
 1. **Development path:** `build` and the public `Compiler` route through the
    Baba-Wasm → Node semantics → gpupaper-Wasm pipeline. The checked-in Blot Rust
-   compiler Wasm remains the production implementation and strict parity counterpart.
+   compiler Wasm remains the production implementation and strict parity
+   counterpart.
 2. **Complete on the Node path:** constant and residual programs share Runtime
    HIR and the gpupaper emitter, including structured canonical results.
 3. **Complete at the persistence boundary:** one `ClosedProgram` owns Runtime

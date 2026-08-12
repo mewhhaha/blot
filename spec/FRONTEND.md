@@ -51,8 +51,8 @@ parse_cpu(layoutSource) -> compact CST
 `parse_cpu` internally replays the lexer tables from the same checked-in Baba
 plan before running the general-profile island executor. That replay is an API
 implementation detail, not a second lexical contract. Blot must not interpret
-characters or assign token identities itself. A future Baba token-tape parser API
-may fuse the replay away without changing `F`.
+characters or assign token identities itself. A future Baba token-tape parser
+API may fuse the replay away without changing `F`.
 
 Required properties:
 

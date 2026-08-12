@@ -1,6 +1,6 @@
 import { checkProgram } from "./typecheck.ts";
 import type { Imports } from "../comptime/eval.ts";
-import { loadProgram, type Loaded } from "./frontend.ts";
+import { type Loaded, loadProgram } from "./frontend.ts";
 import type { BlotRuntimeModule } from "../runtime/hir.ts";
 import { stageModule } from "../stage.ts";
 import { exportResidualRuntimeHir } from "./lower/runtime_hir.ts";

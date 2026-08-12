@@ -16,12 +16,13 @@ implementation, but its Node host surface is still the lower-level
 `CompilerWasm` session API.
 
 Add a production host wrapper with the same high-level phase shape as `Compiler`
-without making ordinary repository development go through Rust. It should resolve
-and configure a source graph, expose matching `check`/`prepare`/`compile` methods,
-and translate the Rust transport's source diagnostics, target refusals, and
-invariant failures into the same public failure classes as the development
-compiler. Once that exists, release and embedding paths can select the production
-implementation without changing their compiler-facing code.
+without making ordinary repository development go through Rust. It should
+resolve and configure a source graph, expose matching
+`check`/`prepare`/`compile` methods, and translate the Rust transport's source
+diagnostics, target refusals, and invariant failures into the same public
+failure classes as the development compiler. Once that exists, release and
+embedding paths can select the production implementation without changing their
+compiler-facing code.
 
 Keep the source modules parallel while doing it: Node `frontend`, `typecheck`,
 `hir`, `backend`, and `session` should map directly to the correspondingly named

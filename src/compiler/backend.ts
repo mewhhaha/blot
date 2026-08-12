@@ -1,7 +1,7 @@
 import {
   type BlotRuntimeModule,
-  type ValidatedBlotRuntimeModule,
   validateBlotRuntimeModule,
+  type ValidatedBlotRuntimeModule,
 } from "../runtime/hir.ts";
 import {
   compileBlotRuntimeModulesOnRustWasm,
@@ -111,7 +111,9 @@ export function resolveTargetPolicy(
   const requested = policy === undefined ? defaultCompilerTargetPolicy : policy;
   if (requested.abiMajor !== 1) {
     throw new CompilerTargetRefusal(
-      `Blot ABI major ${String(requested.abiMajor)} is not supported; expected 1`,
+      `Blot ABI major ${
+        String(requested.abiMajor)
+      } is not supported; expected 1`,
     );
   }
   if (requested.wasmTarget !== "wasm-simd128") {

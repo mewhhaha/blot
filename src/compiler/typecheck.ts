@@ -1,8 +1,4 @@
-import {
-  checkFile,
-  checkSource,
-  type CheckResult,
-} from "../check/mod.ts";
+import { checkFile, type CheckResult, checkSource } from "../check/mod.ts";
 
 /** Typechecks one resolved program graph using Blot's TypeScript semantics. */
 export async function checkProgram(path: string): Promise<CheckResult> {

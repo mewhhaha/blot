@@ -1,8 +1,9 @@
 # Compiler development and production
 
-Node/TypeScript is Blot's default compiler development environment. The checked-in
-Rust compiler Wasm is the production implementation. Both implement the same
-compiler contract and are kept in strict observable parity. The Node pipeline is:
+Node/TypeScript is Blot's default compiler development environment. The
+checked-in Rust compiler Wasm is the production implementation. Both implement
+the same compiler contract and are kept in strict observable parity. The Node
+pipeline is:
 
 ```text
 source
@@ -18,23 +19,24 @@ source
 ```
 
 Baba owns lexing and parsing. Blot checks, evaluates the compile-time fragment,
-proves ownership, stages the program, and exports Runtime HIR. The compiler-owned
-backend lowers Runtime HIR through gpupaper Core; gpupaper owns final Wasm planning
-and emission. Ordinary Node development uses no Deno runtime, native Rust
-toolchain, Cargo process, WebGPU device, or handwritten parser.
+proves ownership, stages the program, and exports Runtime HIR. The
+compiler-owned backend lowers Runtime HIR through gpupaper Core; gpupaper owns
+final Wasm planning and emission. Ordinary Node development uses no Deno
+runtime, native Rust toolchain, Cargo process, WebGPU device, or handwritten
+parser.
 
 The source trees intentionally use the same phase vocabulary:
 
-| Phase | Node development | Rust production |
-| --- | --- | --- |
-| frontend | `src/compiler/frontend.ts` | `compiler/src/frontend.rs` + `source.rs` |
-| typecheck | `src/compiler/typecheck.ts` | `compiler/src/typecheck.rs` |
-| Runtime HIR | `src/compiler/hir.ts` | `compiler/src/hir.rs` |
-| backend | `src/compiler/backend.ts` | `compiler/src/backend.rs` |
-| session | `src/compiler/session.ts` | `compiler/src/session.rs` |
+| Phase       | Node development            | Rust production                          |
+| ----------- | --------------------------- | ---------------------------------------- |
+| frontend    | `src/compiler/frontend.ts`  | `compiler/src/frontend.rs` + `source.rs` |
+| typecheck   | `src/compiler/typecheck.ts` | `compiler/src/typecheck.rs`              |
+| Runtime HIR | `src/compiler/hir.ts`       | `compiler/src/hir.rs`                    |
+| backend     | `src/compiler/backend.ts`   | `compiler/src/backend.rs`                |
+| session     | `src/compiler/session.ts`   | `compiler/src/session.rs`                |
 
-Feature work should start in the Node phase that owns the behavior, then be ported
-to the correspondingly named Rust phase before it is production-complete.
+Feature work should start in the Node phase that owns the behavior, then be
+ported to the correspondingly named Rust phase before it is production-complete.
 
 ## Versions
 
@@ -85,15 +87,16 @@ try {
 
 ## Wasm boundaries
 
-The checked-in Blot parser binary and plan live under `generated/wasm/`.
-Layout first asks Baba's generated Wasm lexer for token boundaries on the original
-source. After Blot inserts private layout markers, `src/syntax/parse.ts` runs the
-same generated lexer over the elaborated source for authoritative lexical
+The checked-in Blot parser binary and plan live under `generated/wasm/`. Layout
+first asks Baba's generated Wasm lexer for token boundaries on the original
+source. After Blot inserts private layout markers, `src/syntax/parse.ts` runs
+the same generated lexer over the elaborated source for authoritative lexical
 acceptance. Baba's general-profile `CpuFrontend` then consumes the elaborated
-source; its current API accepts source rather than a token tape, so it internally
-replays the same lexer tables before executing the island parser. That replay is
-an implementation duplication, not a second syntax definition. The generated-Wasm
-island parser remains strict-profile-only and is not used for the general plan.
+source; its current API accepts source rather than a token tape, so it
+internally replays the same lexer tables before executing the island parser.
+That replay is an implementation duplication, not a second syntax definition.
+The generated-Wasm island parser remains strict-profile-only and is not used for
+the general plan.
 
 `src/compiler/hir.ts` runs the development semantic passes and freezes the
 Runtime-HIR snapshot. The heavy residual lowering lives under
@@ -118,15 +121,16 @@ does not read a toolchain artifact from disk.
 
 `Compiler.create()` uses an explicit immutable target policy. Today that policy
 is ABI major 1 and `wasm-simd128`; making it explicit keeps the implementation
-aligned with the `tau` parameter in `spec/COMPILER.md` and prevents hidden backend
-defaults from becoming part of the language by accident. Runtime-HIR schema
-compatibility is internal to the compiler/backend pair: a mismatch is an invariant
-failure, not a caller-selected target.
+aligned with the `tau` parameter in `spec/COMPILER.md` and prevents hidden
+backend defaults from becoming part of the language by accident. Runtime-HIR
+schema compatibility is internal to the compiler/backend pair: a mismatch is an
+invariant failure, not a caller-selected target.
 
-Source diagnostics, target refusals, and compiler invariant failures are distinct.
-An unsupported target policy throws `CompilerTargetRefusal`. A failure after
-validated Runtime HIR throws `CompilerInvariantFailure`; it is not rewritten as a
-`BLOT_BACKEND_ERROR` source diagnostic with a synthetic offset-zero span.
+Source diagnostics, target refusals, and compiler invariant failures are
+distinct. An unsupported target policy throws `CompilerTargetRefusal`. A failure
+after validated Runtime HIR throws `CompilerInvariantFailure`; it is not
+rewritten as a `BLOT_BACKEND_ERROR` source diagnostic with a synthetic
+offset-zero span.
 
 ## Cache and invalidation
 
@@ -150,10 +154,10 @@ crosses a process or unvalidated revision boundary.
 ## Dual-compiler development
 
 `pnpm parity` discovers every Blot file under `examples/`, `case-studies/`, and
-`src/prelude/`, then hosts both compilers in the same Node process. The development
-compiler uses Baba, the TypeScript semantic passes, and the compiler-owned
-backend. The production compiler is the checked-in Rust compiler Wasm. Neither
-path starts Deno, Cargo, or a native Rust process during parity.
+`src/prelude/`, then hosts both compilers in the same Node process. The
+development compiler uses Baba, the TypeScript semantic passes, and the
+compiler-owned backend. The production compiler is the checked-in Rust compiler
+Wasm. Neither path starts Deno, Cargo, or a native Rust process during parity.
 
 For every corpus root, parity compares frontend acceptance, rejection stage and
 diagnostic code, Runtime-HIR export phases, canonical ABI manifest bytes, and
