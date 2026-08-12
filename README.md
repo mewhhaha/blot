@@ -12,9 +12,11 @@ incrementality, and cost model. Executable application studies live in
 program, an agent-style conversation loop, and a 3D engine with a browser host
 and hot reload.
 
-This experimental branch publishes `@mewhhaha/blot` as a Node package. Node
-hosts two checked-in Wasm components: Baba's generated parser and gpupaper's
-Rust/Wasm emitter. Blot's TypeScript passes connect them:
+`@mewhhaha/blot` uses Node/TypeScript as the default compiler development
+environment. Node hosts two checked-in Wasm components: Baba's generated parser
+and gpupaper's Rust/Wasm emitter. The checked-in Blot Rust compiler Wasm is the
+production implementation; strict parity keeps both implementations on the same
+compiler contract. Blot's TypeScript passes connect the development pipeline:
 
 ```ts
 import { parse } from "@mewhhaha/blot";
@@ -23,6 +25,12 @@ const result = await parse("return 42\n");
 ```
 
 Run `pnpm pack --dry-run` to verify the package before publishing.
+
+The development and production compilers intentionally use the same phase
+vocabulary: `frontend`, `typecheck`, `hir`, `backend`, and `session`. The Node
+modules under `src/compiler/` are arranged to resemble the corresponding Rust
+modules under `compiler/src/`, so a feature can be developed readably in
+TypeScript and then ported phase-for-phase to production Rust.
 
 Blot libraries can be distributed through an ordinary npm-linked package. The
 package owns a `blot.json` manifest and may ship both readable source and a
@@ -41,8 +49,8 @@ checked module capsule:
 }
 ```
 
-The experimental Node CLI does not build package capsules yet. It does resolve
-existing source and capsule exports from `node_modules`. An importer writes
+The Node CLI does not build package capsules yet. It does resolve existing
+source and capsule exports from `node_modules`. An importer writes
 `@import "@scope/package"`, or a declared package subpath, and Blot resolves the
 nearest `node_modules` package without executing its JavaScript. A valid
 `.blotc` is preferred and corrupt or unsupported built files fall back to the
@@ -99,15 +107,15 @@ backend consumes. A final `@array.set` or `@array.push` on a proved linear array
 reuses its Store allocation; ordinary shared arrays remain persistent. See
 [docs/ownership.md](docs/ownership.md).
 
-The compiler (M4) lowers accepted programs through the experimental Baba-Wasm →
-Node → gpupaper-Wasm pipeline. `pnpm blot check` and `pnpm blot build` need
-neither Deno nor native Rust; building produces caller-facing WebAssembly plus a
-JSON ABI manifest without executing the program. The identical manifest is
-embedded in the `blot:abi` custom section. See [docs/abi.md](docs/abi.md).
-Compile-time-only result fields are erased, runtime fields become named Wasm
-exports, host effects become typed imports, and one-shot handlers are
-specialized through non-tail resume and abort. See
-[docs/backend.md](docs/backend.md).
+The compiler (M4) develops accepted programs through the Baba-Wasm → Node →
+gpupaper-Wasm pipeline; the checked-in Rust compiler Wasm is the production
+implementation. `pnpm blot check` and `pnpm blot build` need neither Deno nor
+native Rust; building produces caller-facing WebAssembly plus a JSON ABI
+manifest without executing the program. The identical manifest is embedded in
+the `blot:abi` custom section. See [docs/abi.md](docs/abi.md). Compile-time-only
+result fields are erased, runtime fields become named Wasm exports, host effects
+become typed imports, and one-shot handlers are specialized through non-tail
+resume and abort. See [docs/backend.md](docs/backend.md).
 
 The public `Compiler` API runs the same pipeline as `pnpm blot build`. Baba's
 generated Wasm parses source, Blot's TypeScript checker and staging passes

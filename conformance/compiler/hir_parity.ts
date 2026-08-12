@@ -5,7 +5,7 @@ import {
   type BlotRuntimeModule,
   validateBlotRuntimeModule,
 } from "../../src/runtime/hir.ts";
-import { buildBlotAbiManifest } from "../../src/conformance/gpufuck/runtime/abi.ts";
+import { buildBlotAbiManifest } from "../../src/compiler/backend/runtime/abi.ts";
 import { load, type Loaded } from "../../src/load.ts";
 import { CompilerWasm } from "../../src/compiler/wasm.ts";
 

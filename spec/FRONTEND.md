@@ -2,17 +2,18 @@
 
 ## 1. Contract
 
-The frontend is the composition
+The logical frontend is the composition
 
 ```text
-F = elaborate o fixityFold o materialize o parse o layout o lex
+F = elaborate o fixityFold o materialize o parseGeneral o layout o lexBaba
 ```
 
-from exact source text to Blot AST. Baba owns `lex` and `parse`; Blot uses the
-generated Baba lexer to elaborate physical newlines into private layout tokens,
-then owns materialization, fixity folding, and surface elaboration. Compiler
-commands use Baba's CPU compact frontend. The WebGPU executor is a conformance
-tool, not a fallback source of syntax.
+from exact source text to Blot AST. Baba owns lexical identities and grammar
+recognition; Blot owns layout insertion, compact-CST materialization, fixity
+folding, and surface elaboration. The logical composition names semantic
+ownership, not the number of lexer executions in a host implementation. Compiler
+commands use Baba's CPU compact frontend for the general parser profile. The
+WebGPU executor is a conformance tool, not a fallback source of syntax.
 
 For source `s`, successful frontend execution produces
 
@@ -38,11 +39,28 @@ back to the exact boundary in the original source, so diagnostics and editor
 locations never expose the private characters. Inconsistent dedents are source
 diagnostics before parsing.
 
+The current Node host has an explicit physical bridge because Baba's
+`CpuFrontend` accepts source text rather than an already-produced token tape:
+
+```text
+lex_wasm(source) -> layout(source, tokens) -> layoutSource
+lex_wasm(layoutSource) -> authoritative lexical acceptance
+parse_cpu(layoutSource) -> compact CST
+```
+
+`parse_cpu` internally replays the lexer tables from the same checked-in Baba
+plan before running the general-profile island executor. That replay is an API
+implementation detail, not a second lexical contract. Blot must not interpret
+characters or assign token identities itself. A future Baba token-tape parser
+API may fuse the replay away without changing `F`.
+
 Required properties:
 
 ```text
-lex(s) = t1 and lex(s) = t2       implies t1 = t2
-parse(t) = c1 and parse(t) = c2   implies c1 = c2
+lex_wasm(s) = t1 and lex_wasm(s) = t2      implies t1 = t2
+layout(s, t) = l1 and layout(s, t) = l2    implies l1 = l2
+parse_cpu(l) = c1 and parse_cpu(l) = c2    implies c1 = c2
+tokens_cpu(l) = tokens_wasm(l)
 ```
 
 Compact-CST materialization preserves rule identity, field identity, token

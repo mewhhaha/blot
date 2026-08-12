@@ -7,27 +7,27 @@ HIR, and the Rust compiler admits the full executable example corpus. The work
 below is what remains; capacity-bearing Stores and new surface features are not
 part of this list.
 
-## 1. Answer every CLI command from the production compiler
+## 1. Give the Rust production compiler the development compiler's host API
 
-`check`, `build`, and `package` route through the Rust compiler; `eval` and
-`ownership` still run the TypeScript oracle. Two engines answering one CLI is
-how a checker disagreement stays invisible: a program can be accepted by
-`blot check` and rejected by `blot eval` without any gate noticing, because the
-two commands never meet.
+Node/TypeScript is now the default development compiler. `Compiler` exposes the
+resident `check`, `prepare`, and `compile` loop used by the CLI, tests, language
+service, and benchmarks. The checked-in Rust compiler Wasm is the production
+implementation, but its Node host surface is still the lower-level
+`CompilerWasm` session API.
 
-`CompilerWasm` already exposes `evaluateCompilerSessionModule`, and
-`conformance:eval` already drives it, so `eval` is mostly a matter of surfacing
-it on `Compiler` and matching the printed value format the example corpus
-asserts. `ownership` needs the Rust ownership facts exported from the session
-first.
+Add a production host wrapper with the same high-level phase shape as `Compiler`
+without making ordinary repository development go through Rust. It should
+resolve and configure a source graph, expose matching
+`check`/`prepare`/`compile` methods, and translate the Rust transport's source
+diagnostics, target refusals, and invariant failures into the same public
+failure classes as the development compiler. Once that exists, release and
+embedding paths can select the production implementation without changing their
+compiler-facing code.
 
-Until both move, `spec/COMPILER.md` records the exception and the usage text
-names which engine answered.
-
-Fold `conformance:eval`'s skip list in while doing it: it skips every module
-with a module parameter or an unhandled effect, so the two evaluators are never
-compared on a program that performs a host effect — the class where
-`spec/COMPILER.md` says operation order is the observable semantics.
+Keep the source modules parallel while doing it: Node `frontend`, `typecheck`,
+`hir`, `backend`, and `session` should map directly to the correspondingly named
+Rust phase. `pnpm parity:strict` remains the graduation gate, not the production
+host wrapper itself.
 
 ## 2. Recover the lower bound a nested `rec` fold loses
 

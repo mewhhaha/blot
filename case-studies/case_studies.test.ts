@@ -7,7 +7,7 @@ import { checkFile } from "../src/check/mod.ts";
 import { evaluateFile } from "../src/run.ts";
 import { show } from "../src/comptime/value.ts";
 import { validateBlotRuntimeModule } from "../src/runtime/hir.ts";
-import { compileBlotRuntimeModulesOnRustWasm } from "../src/conformance/gpufuck/runtime/target.ts";
+import { compileBlotRuntimeModulesOnRustWasm } from "../src/compiler/backend/runtime/target.ts";
 
 for (
   const source of [

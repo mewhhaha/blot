@@ -1,25 +1,25 @@
-import { checkFile } from "../check/mod.ts";
+import { checkProgram } from "./typecheck.ts";
 import type { Imports } from "../comptime/eval.ts";
-import { load, type Loaded } from "../load.ts";
+import { type Loaded, loadProgram } from "./frontend.ts";
 import type { BlotRuntimeModule } from "../runtime/hir.ts";
 import { stageModule } from "../stage.ts";
-import { exportResidualRuntimeHir } from "../conformance/gpufuck/gpupaper_residual.ts";
+import { exportResidualRuntimeHir } from "./lower/runtime_hir.ts";
 
 const hirByLoadedRevision = new WeakMap<Loaded, BlotRuntimeModule>();
 
 /**
  * Runs Blot's TypeScript semantics and lowers the settled program directly to
- * the Runtime HIR accepted by gpupaper. This path deliberately does not import
- * gpufuck or the native Rust compiler.
+ * validated Runtime HIR. This module is the Node counterpart of
+ * `compiler/src/hir.rs`; target emission begins only after this boundary.
  */
-export async function prepareGpupaperHir(
+export async function lowerRuntimeHir(
   path: string,
 ): Promise<BlotRuntimeModule> {
-  const loaded = await load(path);
+  const loaded = await loadProgram(path);
   const cached = hirByLoadedRevision.get(loaded);
   if (cached !== undefined) return cached;
 
-  const checked = await checkFile(path);
+  const checked = await checkProgram(path);
   if (loaded.closure.tag !== "closure") {
     throw new Error("a module must load as a closure");
   }

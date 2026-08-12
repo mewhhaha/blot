@@ -1,4 +1,4 @@
-import { compileBlotRuntimeModulesOnRustWasm } from "./runtime/target.ts";
+import { compileBlotRuntimeModulesOnRustWasm } from "../../compiler/backend/runtime/target.ts";
 import {
   type BlotRuntimeModule,
   validateBlotRuntimeModule,
