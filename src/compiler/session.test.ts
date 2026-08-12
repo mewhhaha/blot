@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Compiler } from "./session.ts";
 
-test("development compiler follows check, prepare, compile", async () => {
+test("development compiler exposes check, prepare, compile", async () => {
   const compiler = await Compiler.create();
   try {
     const checked = await compiler.check("examples/minimal.blot");
