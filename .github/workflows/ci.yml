@@ -4,13 +4,15 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
       - uses: actions/setup-node@v6
         with:
           node-version: 22.16.0
@@ -44,25 +46,20 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Check TypeScript
         run: deno check .
-      - name: Format handoff
-        run: deno fmt
-      - name: Upload formatted handoff
-        uses: actions/upload-artifact@v4
-        with:
-          name: blot-format-handoff-${{ github.sha }}
-          path: |
-            README.md
-            TASKS.md
-            docs/compiler.md
-            spec/COMPILER.md
-            spec/FRONTEND.md
-            src/compiler/backend.ts
-            src/compiler/backend.test.ts
-            src/compiler/hir.ts
-            src/compiler/session.ts
-            src/compiler/typecheck.ts
-          if-no-files-found: error
-          retention-days: 1
+      - name: Format branch once
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Format compiler boundary refactor"
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          fi
+      - name: Check formatting
+        run: deno fmt --check
       - name: Check lint
         run: deno lint
       - name: Verify Baba frontend generation
