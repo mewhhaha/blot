@@ -3,12 +3,9 @@ import { readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 
 const excluded = new Set([
-  // These suites specify the retired Rust Compiler wrapper or standalone
-  // experiments. They remain statically checked; the Node pipeline has its own
-  // Runtime HIR, artifact, parity, and ownership coverage.
+  // Standalone experiments remain outside the ordinary regression suite.
   "experiments/generated-code/benchmark.test.ts",
   "experiments/owned-regions/wasm_region.test.ts",
-  "src/compiler/session.test.ts",
 ]);
 
 const tests = [];

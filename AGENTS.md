@@ -3,20 +3,23 @@
 ## Goal
 
 The simplest language that keeps the reference feature set, fits Baba's parser
-profile, and compiles in Node without Deno, native Rust, or WebGPU.
+profile, develops by default in Node/TypeScript, and ships through the Rust/Wasm
+production compiler.
 
 ```txt
-source -> Baba Wasm lexer -> Baba CPU island parser -> compact CST -> AST
+source -> Baba Wasm lexer -> layout -> Baba lexical acceptance
+       -> Baba CPU island parser -> compact CST -> AST
        -> comptime evaluation -> biunification -> linearity/ownership
        -> Runtime HIR -> gpupaper Core -> gpupaper Rust/Wasm emitter -> Wasm
 ```
 
 Blot owns source elaboration, inference, comptime, ownership, Runtime HIR, ABI
 policy, and the module shell. Baba owns lexing and parsing; do not hand-write a
-lexer or parser. Node hosts Baba's checked-in generated lexer Wasm, Baba's general-profile CPU
-island executor, and gpupaper's checked-in Rust/Wasm emitter. Gpupaper owns Core-to-Wasm planning and
-emission on this experimental branch. The GPU paths remain explicit conformance
-tools, not compiler targets.
+lexer or parser. Node/TypeScript is the ordinary development implementation and
+hosts Baba plus gpupaper's embedded emitter. Rust/Wasm is the production
+implementation. Keep their compiler phase modules recognizably parallel:
+`frontend`, `typecheck`, `hir`, `backend`, and `session`. The GPU paths remain
+explicit conformance tools, not compiler targets.
 
 ## Invariants
 
@@ -43,18 +46,27 @@ certificate, cache key, target relation, or benchmark boundary must update the
 corresponding specification in the same diff. Operational notes in `docs/` do
 not replace that contract.
 
+**Compiler failures are not source diagnostics.** A diagnostic requires source
+evidence and a real source span. Unsupported target policy is a target refusal;
+a failed fact after successful checking is an invariant failure. Never turn a
+backend exception into a synthetic diagnostic at offset zero.
+
 **Baba owns the complete syntax contract.** Every accepted program first passes
 through the checked-in generated Wasm lexer, then through Baba's
 `CpuFrontend` general-profile island executor and Blot's compact-CST
 materializer. Baba's Wasm island parser is strict-profile-only and must not be
-used to misinterpret the general plan. Blot must not duplicate lexing or
-parsing. WebGPU remains a comparison target.
+used to misinterpret the general plan. Blot must not implement an independent lexer or parser. The current CPU parser
+API replays Baba's own lexer plan internally; that host-level replay is not a
+second syntax contract. WebGPU remains a comparison target.
 
 **Runtime HIR crosses the backend boundary.** The Node host resolves source,
 packages, imports, and includes, then Blot performs layout, CST-to-AST
 elaboration, checking, staging, specialization, and Runtime-HIR validation.
-Gpupaper receives only validated Runtime HIR lowered to its Core model. Its
-embedded Rust/Wasm emitter owns final binary planning and emission.
+`src/compiler/backend/` owns the development compiler's ABI and gpupaper bridge;
+conformance code may import that boundary, but compiler code must not import
+`src/conformance/`. Gpupaper receives only validated Runtime HIR lowered to its
+Core model. Its embedded Rust/Wasm emitter owns final binary planning and
+emission.
 
 **Nothing is implicitly in scope.** The prelude is an ordinary module reached
 through `@import` and spread with `open`; it gets no seeding, no privileged
@@ -136,13 +148,14 @@ evaluator, and the emitted Wasm run the same language. `just wasm` requires all
 three to produce the same value; a lowering that satisfies one and not another
 is wrong.
 
-**Node prototypes graduate through Rust/Wasm parity.** A feature may be
-implemented in the Node/TypeScript compiler first for iteration speed, but it is
-not production-complete until the checked-in Rust compiler Wasm agrees on
-acceptance, diagnostic code, Runtime-HIR exports, public ABI, capabilities, and
-runtime observations. `pnpm parity` must keep the known-gap inventory exact;
-`pnpm parity:strict` is the zero-gap target. Do not treat the inventory as a
-second language definition.
+**Node is development; Rust/Wasm is production.** Implement and debug compiler
+features in the Node/TypeScript pipeline by default, then port the same phase to
+the correspondingly named Rust module. A feature is not production-complete
+until the checked-in Rust compiler Wasm agrees on acceptance, diagnostic code,
+Runtime-HIR exports, public ABI, capabilities, and runtime observations.
+`pnpm parity` must keep the known-gap inventory exact; `pnpm parity:strict` is
+the zero-gap target. Neither implementation overrides the language or compiler
+specification.
 
 **The caller never sees gpufuck values.** Blot Core Wasm ABI 1 is the stable
 memory32, UTF-8 caller contract in `docs/abi.md`. Exports and host effects use

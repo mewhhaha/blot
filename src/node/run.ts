@@ -2,7 +2,7 @@ import {
   type BlotAbiManifest,
   type BlotAbiType,
   flattenedAbiType,
-} from "../conformance/gpufuck/runtime/abi.ts";
+} from "../compiler/backend/runtime/abi.ts";
 import type { CompilerArtifact } from "../compiler/session.ts";
 
 type RuntimeValue =

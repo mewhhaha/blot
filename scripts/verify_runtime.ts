@@ -3,7 +3,7 @@ import {
   runLoweringExport,
   validateLowering,
 } from "../src/conformance/gpufuck/compile.ts";
-import { compileBlotRuntimeModulesOnRustWasm } from "../src/conformance/gpufuck/runtime/target.ts";
+import { compileBlotRuntimeModulesOnRustWasm } from "../src/compiler/backend/runtime/target.ts";
 import {
   validateBlotRuntimeModule,
   type ValidatedBlotRuntimeModule,
@@ -13,12 +13,11 @@ import {
   decodeBlotAbiResult,
   equalBlotCanonicalValues,
   normalizeGpufuckValue,
-} from "../src/conformance/gpufuck/runtime/abi_decode.ts";
+} from "../src/compiler/backend/runtime/abi_decode.ts";
 import type {
   BlotAbiManifest,
   BlotAbiType,
-} from "../src/conformance/gpufuck/runtime/abi.ts";
-import { Compiler } from "../src/compiler/session.ts";
+} from "../src/compiler/backend/runtime/abi.ts";
 
 type EffectObservation = {
   readonly capability: string;
@@ -27,16 +26,6 @@ type EffectObservation = {
 };
 
 const root = new URL("../examples/", import.meta.url);
-const useFullRustCompiler = Deno.args.includes("--full-rust");
-let rustCompiler: Compiler | undefined;
-if (useFullRustCompiler) rustCompiler = await Compiler.create();
-const boundedOracleExclusions = new Set([
-  "data.blot",
-  "including.blot",
-  "newtype.blot",
-  "reflect.blot",
-  "storage.blot",
-]);
 const files: string[] = [];
 for await (const entry of Deno.readDir(root)) {
   if (entry.isFile && entry.name.endsWith(".blot")) files.push(entry.name);
@@ -46,35 +35,25 @@ files.sort();
 let admitted = 0;
 let observations = 0;
 const rejected: { file: string; reason: string }[] = [];
-const oracleSkipped: { file: string; reason: string }[] = [];
 for (const file of files) {
   const path = new URL(file, root).pathname;
   try {
-    let hir: ValidatedBlotRuntimeModule;
-    let artifact: {
+    const hir: ValidatedBlotRuntimeModule = validateBlotRuntimeModule(
+      await prepareGpupaperHir(path),
+    );
+    const compiledBatch = await compileBlotRuntimeModulesOnRustWasm([
+      hir,
+    ]);
+    const compiled = compiledBatch.artifacts[0];
+    if (compiled === undefined) {
+      throw new Error(
+        `${file}: Rust/WebAssembly emission omitted its artifact`,
+      );
+    }
+    const artifact: {
       readonly wasm: Uint8Array;
       readonly manifest: BlotAbiManifest;
-    };
-    if (rustCompiler !== undefined) {
-      hir = validateBlotRuntimeModule(await rustCompiler.prepare(path));
-      const compiled = await rustCompiler.compile(path);
-      artifact = {
-        wasm: compiled.wasm,
-        manifest: JSON.parse(new TextDecoder().decode(compiled.manifestBytes)),
-      };
-    } else {
-      hir = validateBlotRuntimeModule(await prepareGpupaperHir(path));
-      const compiledBatch = await compileBlotRuntimeModulesOnRustWasm([
-        hir,
-      ]);
-      const compiled = compiledBatch.artifacts[0];
-      if (compiled === undefined) {
-        throw new Error(
-          `${file}: Rust/WebAssembly emission omitted its artifact`,
-        );
-      }
-      artifact = compiled;
-    }
+    } = compiled;
     const targetEffects: EffectObservation[] = [];
     const targetState: { memory?: WebAssembly.Memory } = {};
     const instance = await WebAssembly.instantiate(
@@ -87,35 +66,19 @@ for (const file of files) {
       throw new Error("gpupaper omitted canonical memory");
     }
     targetState.memory = instance.exports.memory;
-    if (rustCompiler !== undefined && boundedOracleExclusions.has(file)) {
-      oracleSkipped.push({
-        file,
-        reason: "outside the bounded TypeScript/gpufuck oracle corpus",
-      });
-      admitted += 1;
-      continue;
-    }
-    let oracleManifest: BlotAbiManifest;
-    try {
-      oracleManifest = await validateLowering(path);
-    } catch (error) {
-      if (rustCompiler === undefined) throw error;
-      let reason = String(error);
-      if (error instanceof Error) reason = error.message;
-      oracleSkipped.push({ file, reason });
-      admitted += 1;
-      continue;
-    }
+    const oracleManifest = await validateLowering(path);
     if (JSON.stringify(artifact.manifest) !== JSON.stringify(oracleManifest)) {
       throw new Error(
-        "the production compiler and oracle ABI manifests differ",
+        "the TypeScript/gpupaper target and oracle ABI manifests differ",
       );
     }
     for (const exported of hir.exports) {
       if (exported.phase !== "runtime") continue;
       const target = instance.exports[exported.wasmName];
       if (!(target instanceof Function)) {
-        throw new Error(`the production compiler omitted ${exported.wasmName}`);
+        throw new Error(
+          `the TypeScript/gpupaper target omitted ${exported.wasmName}`,
+        );
       }
       targetEffects.length = 0;
       const actual = target();
@@ -284,21 +247,15 @@ function requireEqualEffects(
     throw new Error(`${sourceName} effect ${index} differs from the oracle`);
   }
 }
-if (rustCompiler !== undefined) rustCompiler.destroy();
-let compiler = "typescript-gpupaper";
-if (useFullRustCompiler) compiler = "full-rust";
-
 console.log(JSON.stringify(
   {
     corpus: "examples/*.blot",
-    compiler,
+    compiler: "typescript-gpupaper",
     files: files.length,
     admitted,
     observations,
     rejected: rejected.length,
     rejections: rejected,
-    oracleSkipped: oracleSkipped.length,
-    oracleSkips: oracleSkipped,
   },
   null,
   2,

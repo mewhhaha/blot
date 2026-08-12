@@ -35,21 +35,21 @@ export function normalizeGpufuckValue(
   runtimeTypeId?: number,
 ): BlotCanonicalValue {
   if (typeof value !== "object" || value === null || !("kind" in value)) {
-    throw new TypeError(`gpufuck omitted structured ${type.kind} result`);
+    throw new TypeError(`Wasm result omitted structured ${type.kind} value`);
   }
   if (
     type.kind === "signed-integer-64" || type.kind === "float-32" ||
     type.kind === "float-64" || type.kind === "boolean" || type.kind === "text"
   ) {
     if (!("value" in value)) {
-      throw new TypeError(`gpufuck omitted ${type.kind} value`);
+      throw new TypeError(`Wasm result omitted ${type.kind} value`);
     }
     return value.value as bigint | number | boolean | string;
   }
   if (type.kind === "unit") return null;
   if (type.kind === "array") {
     if (!("values" in value) || !Array.isArray(value.values)) {
-      throw new TypeError("gpufuck omitted array values");
+      throw new TypeError("Wasm result omitted array values");
     }
     const runtimeType = optionalRuntimeType(module, runtimeTypeId);
     let elementType: number | undefined;
@@ -100,7 +100,7 @@ export function normalizeGpufuckValue(
     name === candidate.name || name.endsWith(`_${candidate.name}`)
   );
   if (case_ === undefined) {
-    throw new TypeError(`gpufuck variant ${name} has no ABI case`);
+    throw new TypeError(`Wasm variant ${name} has no ABI case`);
   }
   let payload: BlotCanonicalValue | null = null;
   if (case_.payload !== undefined) {

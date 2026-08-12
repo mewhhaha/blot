@@ -1,18 +1,17 @@
 import { resolve } from "@std/path";
-import { checkFile, checkSource } from "../check/mod.ts";
-import { load, type Loaded, refreshLoadedModules } from "../load.ts";
 import {
-  type BlotRuntimeModule,
-  validateBlotRuntimeModule,
-} from "../runtime/hir.ts";
-import {
-  compileBlotRuntimeModulesOnRustWasm,
-  warmBlotRuntimeEmitter,
-} from "../conformance/gpufuck/runtime/target.ts";
+  close,
+  type CompilerTargetPolicy,
+  type ResolvedCompilerTargetPolicy,
+  resolveTargetPolicy,
+  warmBackend,
+} from "./backend.ts";
+import { refreshProgram, type Loaded } from "./frontend.ts";
+import { checkProgram, checkProgramSource } from "./typecheck.ts";
+import type { BlotRuntimeModule } from "../runtime/hir.ts";
 import { warmBabaRuntime } from "../syntax/baba_runtime.ts";
 import { encodePortableModule } from "../syntax/portable.ts";
-import { prepareGpupaperHir } from "./node_hir.ts";
-import { BlotError, fail } from "../diagnostic.ts";
+import { lowerRuntimeHir } from "./hir.ts";
 
 export interface CompilerArtifact {
   readonly wasm: Uint8Array;
@@ -24,6 +23,10 @@ export interface CompilerArtifact {
 export interface CheckedModule {
   readonly type: string;
   readonly effects: string;
+}
+
+export interface CompilerOptions {
+  readonly targetPolicy?: CompilerTargetPolicy;
 }
 
 interface CachedArtifact {
@@ -41,24 +44,28 @@ interface ResidentRevision {
 const revisionKeyByLoaded = new WeakMap<Loaded, string>();
 
 /**
- * A Node-hosted compiler session.
+ * The default Node/TypeScript development compiler session.
  *
  * Baba's checked-in parser Wasm owns syntax. Blot's TypeScript passes own source
- * semantics and Runtime HIR. Gpupaper's checked-in Rust/Wasm module owns final
+ * semantics and Runtime HIR. The compiler-owned backend boundary delegates final
  * binary-plan validation and emission. No Deno runtime or native Rust toolchain
  * participates in this path.
  */
 export class Compiler {
   readonly #compiled = new WeakMap<BlotRuntimeModule, CachedArtifact>();
   readonly #revisions = new Map<string, ResidentRevision>();
+  readonly #targetPolicy: ResolvedCompilerTargetPolicy;
   #destroyed = false;
 
-  private constructor() {}
+  private constructor(targetPolicy: ResolvedCompilerTargetPolicy) {
+    this.#targetPolicy = targetPolicy;
+  }
 
-  static create(): Promise<Compiler> {
+  static create(options: CompilerOptions = {}): Promise<Compiler> {
+    const targetPolicy = resolveTargetPolicy(options.targetPolicy);
     warmBabaRuntime();
-    warmBlotRuntimeEmitter();
-    return Promise.resolve(new Compiler());
+    warmBackend();
+    return Promise.resolve(new Compiler(targetPolicy));
   }
 
   async check(path: string): Promise<CheckedModule> {
@@ -66,7 +73,7 @@ export class Compiler {
     const absolute = resolve(path);
     const revision = await this.#revision(absolute);
     if (revision.checked !== undefined) return revision.checked;
-    const checked = await checkFile(absolute);
+    const checked = await checkProgram(absolute);
     const summary = { type: checked.type, effects: checked.effects };
     revision.checked = summary;
     return summary;
@@ -74,7 +81,7 @@ export class Compiler {
 
   async checkSource(path: string, source: string): Promise<CheckedModule> {
     this.#requireActive();
-    const checked = await checkSource(resolve(path), source);
+    const checked = await checkProgramSource(resolve(path), source);
     return { type: checked.type, effects: checked.effects };
   }
 
@@ -83,7 +90,7 @@ export class Compiler {
     const absolute = resolve(path);
     const revision = await this.#revision(absolute);
     if (revision.hir !== undefined) return revision.hir;
-    const hir = await prepareGpupaperHir(absolute);
+    const hir = await lowerRuntimeHir(absolute);
     revision.hir = hir;
     return hir;
   }
@@ -102,33 +109,12 @@ export class Compiler {
       };
     }
 
-    const module = validateBlotRuntimeModule(hir);
-    let batch;
-    try {
-      batch = await compileBlotRuntimeModulesOnRustWasm(
-        [module],
-        { target: "wasm-simd128" },
-      );
-    } catch (error) {
-      if (error instanceof BlotError) throw error;
-      let message = String(error);
-      if (error instanceof Error) message = error.message;
-      fail("BLOT_BACKEND_ERROR", message, { start: 0, end: 0 });
-    }
-    const emitted = batch.artifacts[0];
-    if (emitted === undefined || batch.artifacts.length !== 1) {
-      throw new Error(
-        `${absolute}: gpupaper emitted ${batch.artifacts.length} artifacts for one module`,
-      );
-    }
+    const program = close(hir, this.#targetPolicy);
+    const emitted = await program.compile();
     const artifact: CachedArtifact = {
       wasm: emitted.wasm.slice(),
       manifestBytes: emitted.manifestBytes.slice(),
-      capabilities: Object.freeze([
-        ...new Set(
-          emitted.manifest.imports.map((imported) => imported.capability),
-        ),
-      ].sort()),
+      capabilities: emitted.capabilities.slice(),
     };
     this.#compiled.set(hir, artifact);
     return {
@@ -144,8 +130,7 @@ export class Compiler {
   }
 
   async #revision(path: string): Promise<ResidentRevision> {
-    await refreshLoadedModules();
-    const loaded = await load(path);
+    const loaded = await refreshProgram(path);
     const key = loadedRevisionKey(loaded);
     const cached = this.#revisions.get(path);
     if (cached !== undefined && cached.key === key) return cached;
