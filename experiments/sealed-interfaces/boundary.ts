@@ -111,13 +111,17 @@ function addPatternReferences(
       return;
     case "tuple":
     case "array":
-      for (const element of pattern.elements) addPatternReferences(element, names);
+      for (const element of pattern.elements) {
+        addPatternReferences(element, names);
+      }
       return;
     case "constructor":
       addPatternReferences(pattern.payload, names);
       return;
     case "shape":
-      for (const field of pattern.fields) addPatternReferences(field.pattern, names);
+      for (const field of pattern.fields) {
+        addPatternReferences(field.pattern, names);
+      }
       return;
     default:
       return;
@@ -141,13 +145,19 @@ function addExpressionReferences(expr: Expr, names: Set<string>): void {
       addExpressionReferences(expr.body, names);
       return;
     case "array":
-      for (const element of expr.elements) addExpressionReferences(element.value, names);
+      for (const element of expr.elements) {
+        addExpressionReferences(element.value, names);
+      }
       return;
     case "tuple":
-      for (const element of expr.elements) addExpressionReferences(element, names);
+      for (const element of expr.elements) {
+        addExpressionReferences(element, names);
+      }
       return;
     case "shape":
-      for (const member of expr.members) addExpressionReferences(member.value, names);
+      for (const member of expr.members) {
+        addExpressionReferences(member.value, names);
+      }
       return;
     case "if":
       for (const branch of expr.branches) {

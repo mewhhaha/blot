@@ -29,7 +29,9 @@ export function collectGraph(root: Loaded): Map<string, GraphNode> {
     const loaded = pending.pop();
     if (loaded === undefined || loadedByPath.has(loaded.path)) continue;
     loadedByPath.set(loaded.path, loaded);
-    if (!parentsByPath.has(loaded.path)) parentsByPath.set(loaded.path, new Set());
+    if (!parentsByPath.has(loaded.path)) {
+      parentsByPath.set(loaded.path, new Set());
+    }
 
     const dependencies = [...loaded.dependencies].map(
       ([specifier, dependency]): Dependency => ({

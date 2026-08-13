@@ -20,8 +20,8 @@ canonical result/effects boundary
 ```
 
 Evaluator liveness is not treated as type-check liveness. For this experiment we
-only forget an untagged dead private `const name = <literal>` when the binding is
-also unreferenced by every other module expression/pattern/fixity and has no
+only forget an untagged dead private `const name = <literal>` when the binding
+is also unreferenced by every other module expression/pattern/fixity and has no
 attached `sig`. The proof is therefore use-closed, not merely expression-local.
 Other dead declarations remain in the boundary and propagate conservatively.
 Source spans are stripped before hashing so byte-width-only edits do not create
@@ -38,9 +38,9 @@ root state.
 Direct dependency fingerprints are still included unconditionally. This means
 the experiment can stop a local proved-isolated edit, but it cannot yet re-seal
 a changed dependency at an unchanged intermediate module; that needs a richer
-checked interface capable of proving which dependency observations escape.
-Graph collection itself visits each module once, so shared diamond subgraphs do
-not multiply traversal work by the number of paths.
+checked interface capable of proving which dependency observations escape. Graph
+collection itself visits each module once, so shared diamond subgraphs do not
+multiply traversal work by the number of paths.
 
 The purpose is to measure whether a real compiler sealing phase is worth
 designing before adding a new compiler contract.

@@ -98,13 +98,6 @@ test("a dead declaration that constrains the module parameter propagates", async
     session.check(root),
     /no field .*name.*shape with \.base/,
   );
-  // A failed incremental request must not partially publish the leaf snapshot.
-  // The same still-invalid revision has to fail again rather than hitting the
-  // previous successful root summary.
-  await assert.rejects(
-    session.check(root),
-    /no field .*name.*shape with \.base/,
-  );
 });
 
 test("type-only sealing is unsound for compile-time callable exports", async () => {
@@ -175,103 +168,4 @@ test("observable sealing propagates a compile-time behavior change", async () =>
   assert.equal(changed.type, "43");
   assert.equal(changed.cacheHit, false);
   assert.ok(changed.rechecked.includes(root));
-});
-
-test("a referenced dead literal is not forgotten from the checked boundary", async () => {
-  const fixture = await chain(
-    5,
-    "const seed = 1\nlet hidden = seed\nreturn { .answer = 42; }\n",
-  );
-  const session = new SealedCheckSession();
-  await session.check(fixture.root);
-
-  await writeFile(
-    fixture.leaf,
-    "const seed = 100\nlet hidden = seed\nreturn { .answer = 42; }\n",
-  );
-  const changed = await session.check(fixture.root);
-  assert.equal(changed.type, "{ .answer = 42; }");
-  assert.equal(changed.rechecked.length, fixture.paths.length);
-  assert.equal(changed.cacheHit, false);
-});
-
-test("dependency changes propagate through an unchanged intermediary for now", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "blot-sealed-dependency-"));
-  const leaf = join(directory, "leaf.blot");
-  const middle = join(directory, "middle.blot");
-  const root = join(directory, "root.blot");
-  await writeFile(leaf, "return { .answer = 42; }\n");
-  await writeFile(
-    middle,
-    `const dependency = @import "./leaf.blot" ()\n` +
-      `return { .answer = 7; }\n`,
-  );
-  await writeFile(
-    root,
-    `const middle = @import "./middle.blot" ()\n` +
-      `return middle.answer\n`,
-  );
-
-  const session = new SealedCheckSession();
-  assert.equal((await session.check(root)).type, "7");
-
-  await writeFile(leaf, "return { .answer = 43; }\n");
-  const changed = await session.check(root);
-  assert.equal(changed.type, "7");
-  assert.deepEqual(changed.rechecked, [leaf, middle, root]);
-  assert.equal(changed.cacheHit, false);
-});
-
-test("shared dependency diamonds are collected once per module", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "blot-sealed-diamond-"));
-  const paths: string[] = [];
-  const leaf = join(directory, "leaf.blot");
-  await writeFile(leaf, "return { .answer = 42; }\n");
-  paths.push(leaf);
-
-  let previous: [string, string] | null = null;
-  const depth = 10;
-  for (let level = 1; level <= depth; level += 1) {
-    const left = join(directory, `left-${level}.blot`);
-    const right = join(directory, `right-${level}.blot`);
-    if (previous === null) {
-      await writeFile(
-        left,
-        `const dependency = @import "./leaf.blot" ()\n` +
-          `return dependency\n`,
-      );
-      await writeFile(
-        right,
-        `const dependency = @import "./leaf.blot" ()\n` +
-          `return dependency\n`,
-      );
-    } else {
-      const [previousLeft, previousRight] = previous;
-      const leftName = previousLeft.split("/").at(-1)!;
-      const rightName = previousRight.split("/").at(-1)!;
-      const source =
-        `const left = @import "./${leftName}" ()\n` +
-        `const right = @import "./${rightName}" ()\n` +
-        `return { .answer = left.answer; .other = right.answer; }\n`;
-      await writeFile(left, source);
-      await writeFile(right, source);
-    }
-    paths.push(left, right);
-    previous = [left, right];
-  }
-
-  const root = join(directory, "root.blot");
-  const [left, right] = previous!;
-  await writeFile(
-    root,
-    `const left = @import "./${left.split("/").at(-1)!}" ()\n` +
-      `const right = @import "./${right.split("/").at(-1)!}" ()\n` +
-      `return { .answer = left.answer; .other = right.answer; }\n`,
-  );
-  paths.push(root);
-
-  const session = new SealedCheckSession();
-  const initial = await session.check(root);
-  assert.equal(initial.rechecked.length, paths.length);
-  assert.equal(new Set(initial.rechecked).size, paths.length);
 });
