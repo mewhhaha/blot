@@ -49,14 +49,14 @@ interface RootState {
 /**
  * Experimental check-only incremental cache.
  *
- * Blot can evaluate imported closures while checking, so a type signature alone
- * is not an honest module boundary. The cache therefore fingerprints both the
- * canonical module type and the live source slice that a downstream compile-time
- * evaluation can observe. Dead private declarations are deliberately forgotten.
+ * Blot can evaluate imported closures while checking, so a result type alone is
+ * not an honest module boundary. The cache combines the canonical module
+ * function interface with a conservative semantic source fingerprint. It only
+ * forgets dead declarations whose inference isolation is explicit and trivial.
  *
  * This does not feed Runtime HIR or artifact caching. It measures whether a real
- * sealing phase could make the Node development check loop cheaper before the
- * compiler contract is changed.
+ * checked-module boundary could make the Node development loop cheaper before
+ * the compiler contract is changed.
  */
 export class SealedCheckSession {
   readonly #roots = new Map<string, RootState>();
@@ -101,10 +101,7 @@ export class SealedCheckSession {
       }
 
       const checked = await checkProgram(nodePath);
-      const moduleInterface = observableTypeBoundary(
-        checked.type,
-        checked.effects,
-      );
+      const moduleInterface = checked.moduleInterface;
       const baseFingerprint = moduleBaseFingerprint(
         node.loaded,
         moduleInterface,
@@ -151,10 +148,7 @@ export class SealedCheckSession {
       const moduleChecked = nodePath === rootPath
         ? checked
         : await checkProgram(nodePath);
-      const moduleInterface = observableTypeBoundary(
-        moduleChecked.type,
-        moduleChecked.effects,
-      );
+      const moduleInterface = moduleChecked.moduleInterface;
       const baseFingerprint = moduleBaseFingerprint(
         node.loaded,
         moduleInterface,
@@ -187,27 +181,29 @@ function summarize(checked: Awaited<ReturnType<typeof checkProgram>>): Summary {
   return {
     type: checked.type,
     effects: checked.effects,
-    moduleInterface: observableTypeBoundary(checked.type, checked.effects),
+    moduleInterface: checked.moduleInterface,
   };
 }
 
 /** A type-only seal, useful for demonstrating why Blot needs more than types. */
 export function typeOnlyFingerprint(type: string, effects: string): string {
-  return digest(observableTypeBoundary(type, effects));
-}
-
-function observableTypeBoundary(type: string, effects: string): string {
-  return JSON.stringify({ type, effects });
+  return digest(JSON.stringify({ type, effects }));
 }
 
 /**
- * The source part of the observable boundary.
+ * The source-dependent part of the checked boundary.
  *
- * The evaluator and backend already use the same liveness calculation. Keeping
- * only live declarations means a changed dead private binding is checked in its
- * own module but does not invalidate importers.
+ * Evaluator/backend liveness alone is not a type-check deadness proof: an
+ * otherwise dead declaration may still constrain the module parameter or some
+ * other inference state. For now the experiment only forgets the deliberately
+ * tiny subset we can prove is isolated from inference outside the declaration:
+ * an untagged dead `const name = <literal>`. Everything else remains in the
+ * boundary and therefore propagates conservatively.
+ *
+ * Source spans are locations rather than semantics. They are removed before
+ * hashing so a dead edit may change byte width without invalidating live nodes.
  */
-export function liveModuleFingerprint(loaded: Loaded): string {
+export function checkedSourceFingerprint(loaded: Loaded): string {
   const live = liveDeclarations(
     loaded.module.declarations,
     loaded.module.result,
@@ -215,10 +211,37 @@ export function liveModuleFingerprint(loaded: Loaded): string {
   const sliced = {
     ...loaded.module,
     declarations: loaded.module.declarations.filter((declaration) =>
-      live.has(declaration)
+      live.has(declaration) || !provablyIsolatedDeadDeclaration(declaration)
     ),
   };
-  return digest(JSON.stringify(encodePortableModule(sliced)));
+  return digest(
+    JSON.stringify(withoutSourceLocations(encodePortableModule(sliced))),
+  );
+}
+
+function provablyIsolatedDeadDeclaration(
+  declaration: Loaded["module"]["declarations"][number],
+): boolean {
+  if (declaration.tag !== "binding" || declaration.kind !== "const") {
+    return false;
+  }
+  if (declaration.tags.length !== 0 || declaration.pattern.tag !== "name") {
+    return false;
+  }
+  return declaration.value.tag === "int" ||
+    declaration.value.tag === "float" ||
+    declaration.value.tag === "text" ||
+    declaration.value.tag === "unit";
+}
+
+function withoutSourceLocations(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutSourceLocations);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, child]) =>
+      key === "span" ? [] : [[key, withoutSourceLocations(child)]]
+    ),
+  );
 }
 
 function loadedInputRevision(loaded: Loaded): string {
@@ -239,7 +262,7 @@ function moduleBaseFingerprint(
 ): string {
   return digest(JSON.stringify({
     moduleInterface,
-    liveSource: liveModuleFingerprint(loaded),
+    checkedSource: checkedSourceFingerprint(loaded),
     includedFiles: [...loaded.includedFiles].map(([specifier, included]) => ({
       specifier,
       path: included.path,
