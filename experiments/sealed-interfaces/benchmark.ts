@@ -48,7 +48,8 @@ const sealedMedian = median(sealedTimes);
 const result = {
   depth,
   rounds,
-  edit: "width-changing dead private literal changes, checked boundary unchanged",
+  edit:
+    "width-changing dead private literal changes, checked boundary unchanged",
   baseline: {
     medianMs: baselineMedian,
     samplesMs: baselineTimes,
