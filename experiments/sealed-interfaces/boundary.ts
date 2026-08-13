@@ -1,0 +1,195 @@
+import { createHash } from "node:crypto";
+import type { Loaded } from "../../src/compiler/frontend.ts";
+import type { Decl, Expr, Pattern } from "../../src/syntax/ast.ts";
+import { liveDeclarations } from "../../src/syntax/live.ts";
+import { encodePortableModule } from "../../src/syntax/portable.ts";
+
+/**
+ * The source-dependent part of the checked boundary.
+ *
+ * Evaluator/backend liveness alone is not a type-check deadness proof: an
+ * otherwise dead declaration may still constrain the module parameter or some
+ * other inference state. For now the experiment only forgets the deliberately
+ * tiny subset we can prove is isolated from inference outside the declaration:
+ * an untagged dead `const name = <literal>` whose binding has no other syntactic
+ * references or attached signature. Everything else remains in the boundary
+ * and therefore propagates conservatively.
+ *
+ * Source spans are locations rather than semantics. They are removed before
+ * hashing so a dead edit may change byte width without invalidating live nodes.
+ */
+export function checkedSourceFingerprint(loaded: Loaded): string {
+  const forgotten = provablyIsolatedDeadDeclarations(loaded);
+  const sliced = {
+    ...loaded.module,
+    declarations: loaded.module.declarations.filter((declaration) =>
+      !forgotten.has(declaration)
+    ),
+  };
+  return digest(
+    JSON.stringify(withoutSourceLocations(encodePortableModule(sliced))),
+  );
+}
+
+function provablyIsolatedDeadDeclarations(loaded: Loaded): ReadonlySet<Decl> {
+  const declarations = loaded.module.declarations;
+  const live = liveDeclarations(declarations, loaded.module.result);
+  const referenced = moduleReferencedNames(loaded);
+  const forgotten = new Set<Decl>();
+
+  for (let index = 0; index < declarations.length; index += 1) {
+    const declaration = declarations[index];
+    if (
+      declaration === undefined || live.has(declaration) ||
+      !literalDeadCandidate(declaration)
+    ) {
+      continue;
+    }
+
+    // A `sig` immediately preceding a binding constrains that binding without a
+    // normal variable reference, so adjacency is part of the isolation proof.
+    const previous = declarations[index - 1];
+    if (previous?.tag === "binding" && previous.kind === "sig") continue;
+
+    if (referenced.has(declaration.pattern.name)) continue;
+    forgotten.add(declaration);
+  }
+  return forgotten;
+}
+
+function literalDeadCandidate(
+  declaration: Decl,
+): declaration is Extract<Decl, { readonly tag: "binding" }> & {
+  readonly pattern: Extract<Pattern, { readonly tag: "name" }>;
+} {
+  if (declaration.tag !== "binding" || declaration.kind !== "const") {
+    return false;
+  }
+  if (
+    declaration.tags.length !== 0 || declaration.pattern.tag !== "name" ||
+    declaration.pattern.qualifier !== "none"
+  ) {
+    return false;
+  }
+  return declaration.value.tag === "int" ||
+    declaration.value.tag === "float" ||
+    declaration.value.tag === "text" ||
+    declaration.value.tag === "unit";
+}
+
+function moduleReferencedNames(loaded: Loaded): ReadonlySet<string> {
+  const names = new Set<string>();
+  addPatternReferences(loaded.module.parameter, names);
+  for (const fixity of loaded.module.fixities) {
+    for (const segment of fixity.target) names.add(segment);
+  }
+  for (const declaration of loaded.module.declarations) {
+    addDeclarationReferences(declaration, names);
+  }
+  addExpressionReferences(loaded.module.result, names);
+  return names;
+}
+
+function addDeclarationReferences(declaration: Decl, names: Set<string>): void {
+  if (declaration.tag === "binding") {
+    for (const tag of declaration.tags) {
+      addExpressionReferences(tag.descriptor, names);
+    }
+    addPatternReferences(declaration.pattern, names);
+  }
+  addExpressionReferences(declaration.value, names);
+}
+
+function addPatternReferences(
+  pattern: Pattern | null,
+  names: Set<string>,
+): void {
+  if (pattern === null) return;
+  switch (pattern.tag) {
+    case "pin":
+      names.add(pattern.name);
+      return;
+    case "tuple":
+    case "array":
+      for (const element of pattern.elements) addPatternReferences(element, names);
+      return;
+    case "constructor":
+      addPatternReferences(pattern.payload, names);
+      return;
+    case "shape":
+      for (const field of pattern.fields) addPatternReferences(field.pattern, names);
+      return;
+    default:
+      return;
+  }
+}
+
+function addExpressionReferences(expr: Expr, names: Set<string>): void {
+  switch (expr.tag) {
+    case "var":
+      names.add(expr.name);
+      return;
+    case "apply":
+      addExpressionReferences(expr.fn, names);
+      addExpressionReferences(expr.arg, names);
+      return;
+    case "field":
+      addExpressionReferences(expr.target, names);
+      return;
+    case "lambda":
+      addPatternReferences(expr.parameter, names);
+      addExpressionReferences(expr.body, names);
+      return;
+    case "array":
+      for (const element of expr.elements) addExpressionReferences(element.value, names);
+      return;
+    case "tuple":
+      for (const element of expr.elements) addExpressionReferences(element, names);
+      return;
+    case "shape":
+      for (const member of expr.members) addExpressionReferences(member.value, names);
+      return;
+    case "if":
+      for (const branch of expr.branches) {
+        addExpressionReferences(branch.condition, names);
+        addExpressionReferences(branch.consequence, names);
+      }
+      if (expr.fallback !== null) addExpressionReferences(expr.fallback, names);
+      return;
+    case "case":
+      addExpressionReferences(expr.target, names);
+      for (const arm of expr.arms) {
+        addPatternReferences(arm.pattern, names);
+        addExpressionReferences(arm.body, names);
+      }
+      return;
+    case "block":
+      for (const declaration of expr.declarations) {
+        addDeclarationReferences(declaration, names);
+      }
+      addExpressionReferences(expr.result, names);
+      return;
+    case "rec":
+      addExpressionReferences(expr.lambda, names);
+      return;
+    case "comptime":
+      addExpressionReferences(expr.body, names);
+      return;
+    default:
+      return;
+  }
+}
+
+function withoutSourceLocations(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutSourceLocations);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, child]) =>
+      key === "span" ? [] : [[key, withoutSourceLocations(child)]]
+    ),
+  );
+}
+
+function digest(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
