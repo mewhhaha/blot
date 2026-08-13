@@ -17,10 +17,12 @@ const sealedTimes: number[] = [];
 const sealedRechecks: number[] = [];
 
 for (let round = 0; round < rounds; round += 1) {
-  const baseline = await makeChain(depth, round % 2 === 0 ? 1 : 2);
+  const before = round % 2 === 0 ? 1 : 100;
+  const after = before === 1 ? 100 : 1;
+  const baseline = await makeChain(depth, before);
   const compiler = await Compiler.create();
   await compiler.check(baseline.root);
-  await writeLeaf(baseline.leaf, round % 2 === 0 ? 2 : 1);
+  await writeLeaf(baseline.leaf, after);
   baselineTimes.push(
     await timed(async () => {
       await compiler.check(baseline.root);
@@ -28,10 +30,10 @@ for (let round = 0; round < rounds; round += 1) {
   );
   compiler.destroy();
 
-  const sealed = await makeChain(depth, round % 2 === 0 ? 1 : 2);
+  const sealed = await makeChain(depth, before);
   const session = new SealedCheckSession();
   await session.check(sealed.root);
-  await writeLeaf(sealed.leaf, round % 2 === 0 ? 2 : 1);
+  await writeLeaf(sealed.leaf, after);
   let rechecked = 0;
   sealedTimes.push(
     await timed(async () => {
@@ -46,7 +48,7 @@ const sealedMedian = median(sealedTimes);
 const result = {
   depth,
   rounds,
-  edit: "dead private binding changes, public/live module boundary unchanged",
+  edit: "width-changing dead private literal changes, checked boundary unchanged",
   baseline: {
     medianMs: baselineMedian,
     samplesMs: baselineTimes,
