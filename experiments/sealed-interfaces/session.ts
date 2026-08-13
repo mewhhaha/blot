@@ -9,7 +9,7 @@ import { encodePortableModule } from "../../src/syntax/portable.ts";
 export interface SealedCheckResult {
   readonly type: string;
   readonly effects: string;
-  readonly moduleInterface: string;
+  readonly typeBoundary: string;
   readonly rechecked: readonly string[];
   readonly cacheHit: boolean;
   readonly graphReset: boolean;
@@ -18,7 +18,7 @@ export interface SealedCheckResult {
 interface Summary {
   readonly type: string;
   readonly effects: string;
-  readonly moduleInterface: string;
+  readonly typeBoundary: string;
 }
 
 interface GraphNode {
@@ -38,7 +38,7 @@ interface SnapshotNode {
   readonly dependencies: readonly Dependency[];
   readonly baseFingerprint: string;
   readonly fingerprint: string;
-  readonly moduleInterface: string;
+  readonly typeBoundary: string;
 }
 
 interface RootState {
@@ -50,9 +50,9 @@ interface RootState {
  * Experimental check-only incremental cache.
  *
  * Blot can evaluate imported closures while checking, so a result type alone is
- * not an honest module boundary. The cache combines the canonical module
- * function interface with a conservative semantic source fingerprint. It only
- * forgets dead declarations whose inference isolation is explicit and trivial.
+ * not an honest module boundary. The cache combines the reported result/effects
+ * boundary with a conservative semantic source fingerprint. It only forgets
+ * dead declarations whose inference isolation is explicit and trivial.
  *
  * This does not feed Runtime HIR or artifact caching. It measures whether a real
  * checked-module boundary could make the Node development loop cheaper before
@@ -101,10 +101,13 @@ export class SealedCheckSession {
       }
 
       const checked = await checkProgram(nodePath);
-      const moduleInterface = checked.moduleInterface;
+      const typeBoundary = observableTypeBoundary(
+        checked.type,
+        checked.effects,
+      );
       const baseFingerprint = moduleBaseFingerprint(
         node.loaded,
-        moduleInterface,
+        typeBoundary,
       );
       const fingerprint = moduleFingerprint(
         baseFingerprint,
@@ -116,7 +119,7 @@ export class SealedCheckSession {
         dependencies: node.dependencies,
         baseFingerprint,
         fingerprint,
-        moduleInterface,
+        typeBoundary,
       });
       rechecked.push(nodePath);
 
@@ -148,10 +151,13 @@ export class SealedCheckSession {
       const moduleChecked = nodePath === rootPath
         ? checked
         : await checkProgram(nodePath);
-      const moduleInterface = moduleChecked.moduleInterface;
+      const typeBoundary = observableTypeBoundary(
+        moduleChecked.type,
+        moduleChecked.effects,
+      );
       const baseFingerprint = moduleBaseFingerprint(
         node.loaded,
-        moduleInterface,
+        typeBoundary,
       );
       const fingerprint = moduleFingerprint(
         baseFingerprint,
@@ -163,7 +169,7 @@ export class SealedCheckSession {
         dependencies: node.dependencies,
         baseFingerprint,
         fingerprint,
-        moduleInterface,
+        typeBoundary,
       });
     }
     const summary = summarize(checked);
@@ -181,13 +187,17 @@ function summarize(checked: Awaited<ReturnType<typeof checkProgram>>): Summary {
   return {
     type: checked.type,
     effects: checked.effects,
-    moduleInterface: checked.moduleInterface,
+    typeBoundary: observableTypeBoundary(checked.type, checked.effects),
   };
 }
 
 /** A type-only seal, useful for demonstrating why Blot needs more than types. */
 export function typeOnlyFingerprint(type: string, effects: string): string {
-  return digest(JSON.stringify({ type, effects }));
+  return digest(observableTypeBoundary(type, effects));
+}
+
+function observableTypeBoundary(type: string, effects: string): string {
+  return JSON.stringify({ type, effects });
 }
 
 /**
@@ -258,10 +268,10 @@ function loadedInputRevision(loaded: Loaded): string {
 
 function moduleBaseFingerprint(
   loaded: Loaded,
-  moduleInterface: string,
+  typeBoundary: string,
 ): string {
   return digest(JSON.stringify({
-    moduleInterface,
+    typeBoundary,
     checkedSource: checkedSourceFingerprint(loaded),
     includedFiles: [...loaded.includedFiles].map(([specifier, included]) => ({
       specifier,
