@@ -71,6 +71,7 @@ export function lowerModule(root: Rule, source: string): Module {
     loop: null,
     returnScope: true,
     escapeBoundary: "none",
+    patternHead: false,
   };
 
   const declarations = fieldList(root, "declarations")
@@ -127,6 +128,8 @@ interface Context {
   } | null;
   readonly returnScope: boolean;
   readonly escapeBoundary: "none" | "value-condition";
+  /** Reclassifies `^name` before fixity while lowering a `for ... in` head. */
+  readonly patternHead: boolean;
 }
 
 function statementRule(cursor: Cursor): Rule {
@@ -1340,8 +1343,11 @@ function lowerControlLoop(
   );
 
   expect(rule.name === "iteration", `expected a loop, got ${rule.name}`);
-  const head = lowerValue(asRule(field(rule, "head"), "value"), context);
   const drawn = field(rule, "drawn");
+  const head = lowerValue(
+    asRule(field(rule, "head"), "value"),
+    drawn === null ? context : { ...context, patternHead: true },
+  );
   if (drawn === null) {
     const loop = desugarLoop(
       null,
@@ -1564,8 +1570,11 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       };
     }
     const carried = carriedNames(statements);
-    const head = lowerValue(asRule(field(rule, "head"), "value"), context);
     const drawn = field(rule, "drawn");
+    const head = lowerValue(
+      asRule(field(rule, "head"), "value"),
+      drawn === null ? context : { ...context, patternHead: true },
+    );
     const body = statements.map((statement) => {
       const inner = asRule(unwrap(statement), "statement");
       return lowerDecl(inner, { ...context, loop: null });
@@ -1853,6 +1862,21 @@ function lowerPattern(rule: Rule): Pattern {
     ? null
     : tokenOf(qualifierCursor).text;
 
+  if (qualifierText === "^") {
+    if (
+      core.type === "token" &&
+      (core.kind === "IDENT" || core.kind === "TYPE_IDENT") &&
+      core.text !== "_"
+    ) {
+      return { tag: "pin", name: core.text, span: rule.span };
+    }
+    fail(
+      "BLOT_BAD_PIN",
+      "A pinned pattern is `^name`, naming one existing binding.",
+      rule.span,
+    );
+  }
+
   // `-` folds into the literal it negates rather than surviving as a qualifier.
   if (qualifierText === "-") {
     const token = core.type === "token" ? core : null;
@@ -1869,17 +1893,6 @@ function lowerPattern(rule: Rule): Pattern {
   const qualifier: Qualifier = qualifierText === null
     ? "none"
     : readQualifier(qualifierText, rule.span);
-
-  if (core.type === "rule" && core.name === "pinned_pattern") {
-    if (qualifierText !== null) {
-      fail(
-        "BLOT_BAD_PATTERN_QUALIFIER",
-        "A pinned pattern binds no name, so it cannot carry an ownership qualifier.",
-        rule.span,
-      );
-    }
-    return lowerPinnedPattern(core, rule.span);
-  }
 
   if (core.type === "token") {
     if (core.kind === "IDENT" || core.kind === "TYPE_IDENT") {
@@ -1958,15 +1971,6 @@ function lowerPattern(rule: Rule): Pattern {
   fail("BLOT_BAD_PATTERN", `\`${core.name}\` is not a pattern.`, rule.span);
 }
 
-function lowerPinnedPattern(rule: Rule, span = rule.span): Pattern {
-  expect(rule.name === "pinned_pattern", `expected a pin, got ${rule.name}`);
-  return {
-    tag: "pin",
-    name: tokenOf(required(rule, "name")).text,
-    span,
-  };
-}
-
 /**
  * Reclassifies a `for` head. The grammar could not commit to "pattern" before
  * seeing `in`, so the head arrives as an expression and is converted here. A
@@ -2022,6 +2026,16 @@ function patternFromExpr(expr: Expr): Pattern {
     };
   }
   if (expr.tag === "apply") {
+    if (expr.fn.tag === "intrinsic" && expr.fn.name === "@pattern.pin") {
+      if (expr.arg.tag !== "var" || expr.arg.name === "_") {
+        fail(
+          "BLOT_BAD_PIN",
+          "A pinned pattern is `^name`, naming one existing binding.",
+          expr.span,
+        );
+      }
+      return { tag: "pin", name: expr.arg.name, span: expr.span };
+    }
     if (expr.fn.tag === "tag") {
       return {
         tag: "constructor",
@@ -2176,6 +2190,15 @@ function lowerOperand(rule: Rule, context: Context): Expr {
     }
     if (prefix.text === "rec") {
       result = { tag: "rec", lambda: result, span };
+      continue;
+    }
+    if (prefix.text === "^" && context.patternHead) {
+      result = {
+        tag: "apply",
+        fn: { tag: "intrinsic", name: "@pattern.pin", span: prefix.span },
+        arg: result,
+        span,
+      };
       continue;
     }
     const fixity = context.table.prefix(prefix.text);

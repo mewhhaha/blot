@@ -328,12 +328,18 @@ function collectPatternNames(cursor: Cursor, found: string[]): void {
   }
 
   const rule = cursor;
-  if (rule.name === "binding_pattern" || rule.name === "pattern_core") {
+  if (rule.name === "binding_pattern") {
+    if (tokenText(cursorField(rule, "qualifier")) === "^") return;
     const value = cursorField(rule, "value") ?? rule.child(0) ?? null;
     if (value !== null) collectPatternNames(value, found);
     return;
   }
-  if (rule.name === "pinned_pattern" || rule.name === "unit_pattern") return;
+  if (rule.name === "pattern_core") {
+    const value = cursorField(rule, "value") ?? rule.child(0) ?? null;
+    if (value !== null) collectPatternNames(value, found);
+    return;
+  }
+  if (rule.name === "unit_pattern") return;
   if (rule.name === "constructor_pattern") {
     const payload = cursorField(rule, "payload");
     if (payload !== null) collectPatternNames(payload, found);

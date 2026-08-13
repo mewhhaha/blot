@@ -150,8 +150,8 @@ export type LiteralKind =
   | "break"
   | "open"
   | "return"
-  | "#"
   | ","
+  | "#"
   | "."
   | "rec"
   | "if"
@@ -241,7 +241,6 @@ export type RuleName =
   | "result"
   | "binding_pattern"
   | "pattern_core"
-  | "pinned_pattern"
   | "unit_pattern"
   | "tuple_pattern"
   | "array_pattern"
@@ -434,12 +433,6 @@ export interface BindingPatternCursor extends RuleCursorBase<"binding_pattern"> 
 }
 
 export interface PatternCoreCursor extends RuleCursorBase<"pattern_core"> {
-}
-
-export interface PinnedPatternCursor extends RuleCursorBase<"pinned_pattern"> {
-  field(name: "name"): TokenCursor<"named", "IDENT"> | TokenCursor<"named", "TYPE_IDENT">;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
 }
 
 export interface UnitPatternCursor extends RuleCursorBase<"unit_pattern"> {
@@ -758,7 +751,6 @@ export type AnyRuleCursor =
   | ResultCursor
   | BindingPatternCursor
   | PatternCoreCursor
-  | PinnedPatternCursor
   | UnitPatternCursor
   | TuplePatternCursor
   | ArrayPatternCursor

@@ -21,18 +21,18 @@ in a benchmark months later.
 | --------------------------- | ------: | -------------------------------------------------- |
 | `lexerStates`               |     113 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |      22 | worst-case island candidates allocated per token   |
-| `islandCount`               |      67 | one island for every grammar rule                  |
-| `islandStates`              |     392 |                                                    |
-| `islandTransitions`         |     401 |                                                    |
+| `islandCount`               |      66 | one island for every grammar rule                  |
+| `islandStates`              |     385 |                                                    |
+| `islandTransitions`         |     394 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 573,888 | immutable device table                             |
-| `packedBytes`               | 450,224 | version-3 runtime section                          |
+| `denseTransitionBytes`      | 559,020 | immutable device table                             |
+| `packedBytes`               | 439,213 | version-3 runtime section                          |
 | `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
-| `parallelLongRegionIslands` |       7 | islands admitted to parallel long-region execution |
+| `parallelLongRegionIslands` |       6 | islands admitted to parallel long-region execution |
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
-and edge arrays directly. Declaring all 67 rules as islands is what preserves
+and edge arrays directly. Declaring all 66 rules as islands is what preserves
 the full CST shape needed by source lowering.
 
 Removing element syntax while adding `compdo:` and effect-row tails moves the
@@ -43,6 +43,14 @@ contraction rounds are unchanged; parallel long-region admission moves from 9 to
 7 islands because the retired element regions no longer exist. These are the
 current counters above; the element measurements later in this document remain
 historical records of the retired syntax.
+
+Replacing the retired `#(name)` pin rule with the qualifier-shaped `^name`
+spelling removes one island, seven island states, seven island transitions,
+14,868 dense-transition bytes, and 11,011 packed bytes. Parallel long-region
+admission falls from seven islands to six; lexer states, candidate multiplicity,
+contraction rounds, and scratch factors are unchanged. A direct `for ^name in`
+head uses the existing expression grammar and is reclassified during lowering,
+so it adds no parser state or resolution.
 
 Adding the explicit `do:` value scope adds two lexer states, one island, eleven
 island states, twelve island transitions, 31,260 dense-transition bytes, and
@@ -145,14 +153,14 @@ and the island count remain unchanged. Exact `?` has a dedicated token but
 remains available to prefix and infix fixities through the shared operator
 rules; longer operators beginning with `?` remain ordinary operator tokens.
 
-Pinned patterns add five island states, with 4,320 more dense-transition bytes
-and 3,679 more packed bytes. Lexer states, candidate multiplicity, and
-contraction rounds remain unchanged. The pin keeps `#` and `(` as their existing
-tokens. A combined `#(` token would make the GPU delimiter proof see a second
-opener for `)`, while admitting the pattern directly as a `for` head would make
-the portable parser choose between a constructor expression and a pin at `#`.
-Keeping `for`'s existing expression-shaped head avoids both and needs no parser
-resolution.
+The now-retired `#(name)` pinned-pattern spelling added five island states, with
+4,320 more dense-transition bytes and 3,679 more packed bytes. Lexer states,
+candidate multiplicity, and contraction rounds remained unchanged. That pin kept
+`#` and `(` as their existing tokens. A combined `#(` token would have made the
+GPU delimiter proof see a second opener for `)`, while admitting the pattern
+directly as a `for` head would have made the portable parser choose between a
+constructor expression and a pin at `#`. Keeping `for`'s existing
+expression-shaped head avoided both and needed no parser resolution.
 
 Updating baba from 7.9.0 to 7.10.0 changed no counter at all — `lexerStates`,
 `islandStates`, `denseTransitionBytes`, and `packedBytes` were byte-identical

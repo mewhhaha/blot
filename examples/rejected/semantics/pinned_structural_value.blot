@@ -3,5 +3,5 @@ open @import "blot:prelude" ()
 let wanted = [1]
 
 return case [1] of
-  #(wanted) => "same"
+  ^wanted => "same"
   _ => "different"

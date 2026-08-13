@@ -231,6 +231,7 @@ const REJECTIONS: Record<
     code: "BLOT_UNMATCHABLE_PIN",
     stage: "check",
   },
+  "bad_pin": { code: "BLOT_BAD_PIN", stage: "check" },
   // A guard may be false, so a guarded arm is dropped from the matrix that
   // decides coverage. With every arm guarded there is no matrix left, and the
   // scrutinee's own set is what reports the rest: a constructor named only

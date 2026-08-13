@@ -422,12 +422,24 @@ fn collect_pattern_names(
         unreachable!()
     };
     match cst.rule_name(rule_id)? {
-        "binding_pattern" | "pattern_core" => {
+        "binding_pattern" => {
+            let qualifier = match field(cst, rule_id, "qualifier")? {
+                Some(qualifier) => token_text(cst, qualifier)?,
+                None => None,
+            };
+            if qualifier.as_deref() == Some("^") {
+                return Ok(());
+            }
             if let Some(value) = field(cst, rule_id, "value")?.or(cst.child(rule_id, 0)?) {
                 collect_pattern_names(cst, value, found)?;
             }
         }
-        "pinned_pattern" | "unit_pattern" => {}
+        "pattern_core" => {
+            if let Some(value) = field(cst, rule_id, "value")?.or(cst.child(rule_id, 0)?) {
+                collect_pattern_names(cst, value, found)?;
+            }
+        }
+        "unit_pattern" => {}
         "constructor_pattern" => {
             if let Some(payload) = field(cst, rule_id, "payload")? {
                 collect_pattern_names(cst, payload, found)?;
