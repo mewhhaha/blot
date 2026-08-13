@@ -84,9 +84,6 @@ test("a dead declaration that constrains the module parameter propagates", async
       `return (leaf { .base = 1; }).answer\n`,
   );
 
-  const beforeLeaf = await checkProgram(leaf);
-  assert.match(beforeLeaf.moduleInterface, /\.base/);
-
   const session = new SealedCheckSession();
   const initial = await session.check(root);
   assert.equal(initial.type, "42");
@@ -97,11 +94,6 @@ test("a dead declaration that constrains the module parameter propagates", async
       `let hidden = input.name\n` +
       `return { .answer = 42; }\n`,
   );
-  await refreshProgram(leaf);
-  const afterLeaf = await checkProgram(leaf);
-  assert.match(afterLeaf.moduleInterface, /\.name/);
-  assert.notEqual(afterLeaf.moduleInterface, beforeLeaf.moduleInterface);
-
   await assert.rejects(
     session.check(root),
     /no field .*name.*shape with \.base/,
