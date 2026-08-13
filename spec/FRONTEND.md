@@ -121,6 +121,10 @@ top-level `if` after the newline remains the first statement of the existing
 binding block form, avoiding a second interpretation of its branch suites. The
 wrapper changes layout only and does not introduce an AST node or scope. A bare
 element is a child only; ordinary statement regions require explicit sequencing.
+A `for` head remains expression-shaped until the following `in` proves it is a
+pattern. During that reclassification, `^name` becomes a pinned pattern before
+ordinary operator fixity is folded; this contextual interpretation does not
+change the token identity or introduce a second parser path.
 
 Write `surface(s) ⇓ a` for elaboration and `~` for observational equivalence in
 the source semantics. Every translation has the obligation

@@ -29,6 +29,7 @@ struct LoweringContext<'a> {
     loop_control: Option<LoopControl>,
     return_scope: bool,
     escape_boundary: EscapeBoundary,
+    pattern_head: bool,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -38,6 +39,7 @@ impl<'a> LoweringContext<'a> {
             loop_control: None,
             return_scope: true,
             escape_boundary: EscapeBoundary::None,
+            pattern_head: false,
         }
     }
 
@@ -47,6 +49,7 @@ impl<'a> LoweringContext<'a> {
             loop_control: None,
             return_scope: false,
             escape_boundary: EscapeBoundary::None,
+            pattern_head: false,
         }
     }
 
@@ -56,6 +59,7 @@ impl<'a> LoweringContext<'a> {
             loop_control: None,
             return_scope: false,
             escape_boundary: EscapeBoundary::ValueCondition,
+            pattern_head: false,
         }
     }
 }
@@ -1245,8 +1249,11 @@ fn lower_control_loop(
         arena,
     )?;
 
-    let head = lower_value(cst, required(cst, rule, "head")?, context, arena)?;
-    let (binder, source) = match cst.field(rule, "drawn")? {
+    let drawn = cst.field(rule, "drawn")?;
+    let mut head_context = context.clone();
+    head_context.pattern_head = drawn.is_some();
+    let head = lower_value(cst, required(cst, rule, "head")?, &head_context, arena)?;
+    let (binder, source) = match drawn {
         None => (None, head),
         Some(drawn) => {
             let binder = pattern_from_expression(head, arena)?;
@@ -1321,8 +1328,10 @@ fn lower_iteration(
     }
     let carried = rebound_names(cst, &statements)?;
     let effectful = statements_contain_effect(cst, &statements)?;
-    let head = lower_value(cst, required(cst, rule, "head")?, context, arena)?;
     let drawn = cst.field(rule, "drawn")?;
+    let mut head_context = context.clone();
+    head_context.pattern_head = drawn.is_some();
+    let head = lower_value(cst, required(cst, rule, "head")?, &head_context, arena)?;
     let (binder, source) = match drawn {
         None => (None, head),
         Some(drawn) => {
@@ -1840,6 +1849,24 @@ fn pattern_from_expression(
             span,
         } => {
             let function_node = arena.expressions[function.0 as usize].clone();
+            if let Expression::Intrinsic { name, .. } = &function_node
+                && name == "@pattern.pin"
+            {
+                let Expression::Var { name, .. } = arena.expressions[argument.0 as usize].clone()
+                else {
+                    return Err(
+                        "BLOT_BAD_PIN: a pinned pattern is `^name`, naming one existing binding"
+                            .to_owned(),
+                    );
+                };
+                if name == "_" {
+                    return Err(
+                        "BLOT_BAD_PIN: a pinned pattern is `^name`, naming one existing binding"
+                            .to_owned(),
+                    );
+                }
+                return Ok(arena.pattern(Pattern::Pin { name, span }));
+            }
             if let Expression::Tag { name, .. } = function_node {
                 let payload = pattern_from_expression(argument, arena)?;
                 return Ok(arena.pattern(Pattern::Constructor {
@@ -2090,6 +2117,13 @@ fn pattern_names_from_cst(
     names: &mut Vec<String>,
 ) -> Result<(), String> {
     let rule = as_rule(cursor)?;
+    let qualifier = match cst.field(rule, "qualifier")? {
+        Some(qualifier) => Some(token_text(cst, qualifier)?),
+        None => None,
+    };
+    if qualifier.as_deref() == Some("^") {
+        return Ok(());
+    }
     let core = cst.unwrap(required(cst, rule, "value")?)?;
     if let Cursor::Token(token) = core {
         let kind = cst.token_kind(token)?;
@@ -2148,6 +2182,21 @@ fn lower_pattern(
         .map(|cursor| token_text(cst, cursor))
         .transpose()?;
     let core = cst.unwrap(required(cst, rule, "value")?)?;
+    if qualifier_text.as_deref() == Some("^") {
+        let Cursor::Token(token) = core else {
+            return Err(
+                "BLOT_BAD_PIN: a pinned pattern is `^name`, naming one existing binding".to_owned(),
+            );
+        };
+        let kind = cst.token_kind(token)?;
+        let name = cst.text(core)?;
+        if !matches!(kind.as_str(), "IDENT" | "TYPE_IDENT") || name == "_" {
+            return Err(
+                "BLOT_BAD_PIN: a pinned pattern is `^name`, naming one existing binding".to_owned(),
+            );
+        }
+        return Ok(arena.pattern(Pattern::Pin { name, span }));
+    }
     if qualifier_text.as_deref() == Some("-") {
         let Cursor::Token(token) = core else {
             return Err("BLOT_BAD_NEGATION: `-` applies only to an integer pattern".to_owned());
@@ -2193,10 +2242,6 @@ fn lower_pattern(
     }
     let core = as_rule(core)?;
     match cst.rule_name(core)? {
-        "pinned_pattern" => Ok(arena.pattern(Pattern::Pin {
-            name: token_text(cst, required(cst, core, "name")?)?,
-            span,
-        })),
         "unit_pattern" => Ok(arena.pattern(Pattern::Unit { span })),
         "tuple_pattern" | "array_pattern" => {
             let mut elements = Vec::new();
@@ -2430,6 +2475,18 @@ fn lower_operand(
         if text == "rec" {
             result = arena.expression(Expression::Rec {
                 lambda: result,
+                span,
+            });
+            continue;
+        }
+        if text == "^" && context.pattern_head {
+            let function = arena.expression(Expression::Intrinsic {
+                name: "@pattern.pin".to_owned(),
+                span: cst.span(prefix)?,
+            });
+            result = arena.expression(Expression::Apply {
+                function,
+                argument: result,
                 span,
             });
             continue;
