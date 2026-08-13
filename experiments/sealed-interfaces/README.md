@@ -14,8 +14,8 @@ inferred singleton changes from `42` to `43`.
 `SealedCheckSession` therefore uses a conservative checked-boundary fingerprint:
 
 ```text
-canonical result/effects/module-parameter boundary
-+ canonical source for every live or inference-coupled declaration
+canonical result/effects boundary
++ canonical source for every live or potentially inference-coupled declaration
 + direct dependency fingerprints
 ```
 
@@ -26,10 +26,11 @@ declarations remain in the boundary and propagate conservatively. Source spans
 are stripped before hashing so byte-width-only edits do not create false changes.
 
 This is intentionally check-only. It does not change Runtime HIR, artifact
-caching, or checking semantics; it only exposes the checker's existing canonical
-module-function interface for the experiment. The purpose is to measure whether
-a real compiler sealing phase is worth designing before adding a new compiler
-contract.
+caching, or the default checker. Parameter constraints are handled
+conservatively rather than serialized into a new interface: any declaration
+that could constrain them remains in the source boundary and therefore
+propagates. The purpose is to measure whether a real compiler sealing phase is
+worth designing before adding a new compiler contract.
 
 Run the focused experiment with:
 
