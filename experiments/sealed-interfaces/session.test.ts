@@ -42,7 +42,7 @@ test("a dead private edit stops at a sealed module boundary", async () => {
 
   await writeFile(
     fixture.leaf,
-    "const hidden = 2\nreturn { .answer = 42; }\n",
+    "const hidden = 100\nreturn { .answer = 42; }\n",
   );
   const changed = await session.check(fixture.root);
   assert.equal(changed.type, "{ .answer = 42; }");
@@ -66,6 +66,46 @@ test("a live public change propagates through every importer", async () => {
   assert.equal(changed.type, "{ .answer = 43; }");
   assert.equal(changed.rechecked.length, fixture.paths.length);
   assert.equal(changed.cacheHit, false);
+});
+
+test("a dead declaration that constrains the module parameter propagates", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-parameter-boundary-"));
+  const leaf = join(directory, "leaf.blot");
+  const root = join(directory, "root.blot");
+  await writeFile(
+    leaf,
+    `module input\n` +
+      `let hidden = input.base\n` +
+      `return { .answer = 42; }\n`,
+  );
+  await writeFile(
+    root,
+    `const leaf = @import "./leaf.blot"\n` +
+      `return (leaf { .base = 1; }).answer\n`,
+  );
+
+  const beforeLeaf = await checkProgram(leaf);
+  assert.match(beforeLeaf.moduleInterface, /\.base/);
+
+  const session = new SealedCheckSession();
+  const initial = await session.check(root);
+  assert.equal(initial.type, "42");
+
+  await writeFile(
+    leaf,
+    `module input\n` +
+      `let hidden = input.name\n` +
+      `return { .answer = 42; }\n`,
+  );
+  await refreshProgram(leaf);
+  const afterLeaf = await checkProgram(leaf);
+  assert.match(afterLeaf.moduleInterface, /\.name/);
+  assert.notEqual(afterLeaf.moduleInterface, beforeLeaf.moduleInterface);
+
+  await assert.rejects(
+    session.check(root),
+    /no field .*name.*shape with \.base/,
+  );
 });
 
 test("type-only sealing is unsound for compile-time callable exports", async () => {
