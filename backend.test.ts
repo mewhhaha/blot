@@ -556,11 +556,11 @@ Deno.test("a pinned pattern compares runtime scalar values", async () => {
     `open @import "blot:prelude" ()
 sig matches = Int -> Int -> Int
 let matches = fn expected => fn actual => case actual of
-  #(expected) => 1
+  ^expected => 1
   _ => 0
 sig text_matches = Str -> Str -> Int
 let text_matches = fn expected => fn actual => case actual of
-  #(expected) => 1
+  ^expected => 1
   _ => 0
 return { .matches = matches; .text_matches = text_matches; }
 `,
@@ -1307,7 +1307,7 @@ const Host = @effect.host {
 const ready = 1
 event <- Host.read ()
 _ <- case event.kind of
-  #(ready) => Host.write { .active = True; .kind = event.kind + 1; .label = @text.of_int event.target; }
+  ^ready => Host.write { .active = True; .kind = event.kind + 1; .label = @text.of_int event.target; }
   _ => Host.write { .active = False; .kind = 0; .label = "idle"; }
 return ()
 `,

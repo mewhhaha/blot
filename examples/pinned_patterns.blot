@@ -5,21 +5,27 @@ open @import "blot:prelude" ()
 let wanted = 2
 
 let classify = fn value => case value of
-  #(wanted) => "wanted"
+  ^wanted => "wanted"
   _ => "other"
 
 let greeting = "hello"
 let greeted = case "hello" of
-  #(greeting) => True
+  ^greeting => True
   _ => False
 
 let payload = case #Code 2 of
-  #Code #(wanted) => wanted
+  #Code ^wanted => wanted
   _ => 0
+
+let matches = 0
+for ^wanted in Iter.items [1, 2, 2, 3]:
+  matches := matches + 1
+  let ^matches = matches
 
 return {
   .same = classify 2;
   .different = classify 3;
   .greeted = greeted;
   .payload = payload;
+  .matches = matches;
 }

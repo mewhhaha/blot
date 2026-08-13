@@ -1,0 +1,3 @@
+let reject = fn ^_ => 0
+
+return reject

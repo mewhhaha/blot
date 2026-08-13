@@ -586,7 +586,7 @@ check(
   "a pinned pattern keeps the existing binding and joins its arms",
   `let wanted = 1
 let choose = fn actual => case actual of
-  #(wanted) => "yes"
+  ^wanted => "yes"
   _ => "no"
 return choose
 `,
@@ -598,7 +598,7 @@ rejects(
   `let wanted = 1
 sig choose = Int -> Str
 let choose = fn actual => case actual of
-  #(wanted) => "yes"
+  ^wanted => "yes"
 return choose
 `,
   "BLOT_INCOMPLETE_CASE",
@@ -607,7 +607,7 @@ return choose
 rejects(
   "a pinned pattern requires an existing binding",
   `return case 1 of
-  #(missing) => "yes"
+  ^missing => "yes"
   _ => "no"
 `,
   "BLOT_UNBOUND",
@@ -617,7 +617,7 @@ rejects(
   "a pinned pattern requires a scalar equality domain",
   `let wanted = [1]
 return case [1] of
-  #(wanted) => "yes"
+  ^wanted => "yes"
   _ => "no"
 `,
   "BLOT_UNMATCHABLE_PIN",
@@ -626,7 +626,7 @@ return case [1] of
 rejects(
   "a pinned parameter needs a known scalar type",
   `let matches = fn expected => fn actual => case actual of
-  #(expected) => 1
+  ^expected => 1
   _ => 0
 return matches
 `,
@@ -638,7 +638,7 @@ rejects(
   `let wanted = "one"
 sig choose = (Int, Int) -> Str
 let choose = fn pair => case pair of
-  (#(wanted), _) => "yes"
+  (^wanted, _) => "yes"
   _ => "no"
 return choose
 `,

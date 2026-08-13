@@ -703,7 +703,7 @@ parameters, and `if let` guards.
 | -------------------------- | --------------------------------------------- |
 | `name`                     | bind any value                                |
 | `_`                        | match any value without binding               |
-| `#(name)`                  | match the scalar value of an existing binding |
+| `^name`                    | match the scalar value of an existing binding |
 | `42`, `-1`, `"text"`, `()` | match that literal                            |
 | `(left, right)`            | match a tuple of exactly that arity           |
 | `[first, second]`          | match an array of exactly that length         |
@@ -718,7 +718,7 @@ exact arity or length.
 `_` lexes as an ordinary lower-case identifier and is reclassified as a wildcard
 during lowering.
 
-`#(name)` is a pinned-value pattern. It reads the binding already in lexical
+`^name` is a pinned-value pattern. It reads the binding already in lexical
 scope, compares the matched value with it, and binds nothing; in particular, it
 does not shadow `name`. Pins currently admit bindings known to be `Int` or `Str`
 at the pattern, the two scalar domains with exact equality in every execution. A
@@ -729,12 +729,14 @@ literal, so a case normally needs another arm:
 ```blot
 let wanted = 1
 let label = case actual of
-  #(wanted) => "wanted"
+  ^wanted => "wanted"
   _ => "other"
 ```
 
-A direct `for` binder is the one exception: it is parsed as an expression and
-reclassified after `in`, and a pin is not an expression.
+In `for ^name in iterator`, the same refutable-pattern rule skips values that do
+not equal the existing binding. A `for` head is expression-shaped in Baba's CST,
+so lowering recognizes `^name` as a pin after seeing `in` and before folding
+operator fixity. Everywhere else, `^` remains an ordinary custom operator.
 
 ### 5.1 Ownership qualifiers
 

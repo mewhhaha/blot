@@ -123,12 +123,6 @@
         }
       },
       {
-        "rule": "pinned_pattern",
-        "boundary": {
-          "kind": "root"
-        }
-      },
-      {
         "rule": "unit_pattern",
         "boundary": {
           "kind": "root"

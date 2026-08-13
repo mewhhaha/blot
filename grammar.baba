@@ -210,11 +210,12 @@ result = (
   LAYOUT_NEWLINE
 ) ;
 
-// Patterns. The qualifier carries `!` (linear, consumed exactly once) and `&`
-// (bounded borrow), and absorbs `-` so that negative literal patterns need no
-// separate rule. It is OPERATOR rather than a set of literals because spelling
-// those as literals would shadow them out of the operator class entirely,
-// costing every custom operator that uses those characters.
+// Patterns. The qualifier carries `!` (linear, consumed exactly once), `&`
+// (bounded borrow), and `^` (pin an existing scalar), and absorbs `-` so that
+// negative literal patterns need no separate rule. It is OPERATOR rather than a
+// set of literals because spelling those as literals would shadow them out of
+// the operator class entirely, costing every custom operator that uses those
+// characters.
 binding_pattern = (
   qualifier:operator_token?
   value:pattern_core
@@ -234,20 +235,11 @@ pattern_core = (
   | INTEGER
   | FLOAT
   | TEXT
-  | pinned_pattern
   | unit_pattern
   | tuple_pattern
   | array_pattern
   | constructor_pattern
   | shape_pattern
-) ;
-
-// A pin compares against the value of an existing binding and binds nothing.
-pinned_pattern = (
-  "#"
-  "("
-  name:(IDENT | TYPE_IDENT)
-  ")"
 ) ;
 
 unit_pattern = ("(" ")") ;

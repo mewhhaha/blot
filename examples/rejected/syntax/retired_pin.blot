@@ -1,0 +1,6 @@
+// Pins use `^name`; the retired `#(name)` spelling is not a constructor.
+let wanted = 1
+
+return case 1 of
+  #(wanted) => "same"
+  _ => "other"

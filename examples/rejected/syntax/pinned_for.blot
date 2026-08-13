@@ -1,6 +1,0 @@
-let wanted = 1
-
-for #(wanted) in []:
-  break
-
-return ()
