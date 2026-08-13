@@ -23,14 +23,15 @@ Evaluator liveness is not treated as type-check liveness. For this experiment we
 only forget an untagged dead private `const name = <literal>`, because that tiny
 form is closed and cannot constrain importer-visible inference state. Other dead
 declarations remain in the boundary and propagate conservatively. Source spans
-are stripped before hashing so byte-width-only edits do not create false changes.
+are stripped before hashing so byte-width-only edits do not create false
+changes.
 
 This is intentionally check-only. It does not change Runtime HIR, artifact
 caching, or the default checker. Parameter constraints are handled
-conservatively rather than serialized into a new interface: any declaration
-that could constrain them remains in the source boundary and therefore
-propagates. The purpose is to measure whether a real compiler sealing phase is
-worth designing before adding a new compiler contract.
+conservatively rather than serialized into a new interface: any declaration that
+could constrain them remains in the source boundary and therefore propagates.
+The purpose is to measure whether a real compiler sealing phase is worth
+designing before adding a new compiler contract.
 
 Run the focused experiment with:
 
