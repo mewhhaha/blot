@@ -170,7 +170,11 @@ export function invalidIncludeExpressions(module: Module): readonly Expr[] {
   return dependencyExpressions(module).invalidIncludePaths;
 }
 
+const dependencySitesByModule = new WeakMap<Module, DependencySites>();
+
 function dependencyExpressions(module: Module): DependencySites {
+  const cached = dependencySitesByModule.get(module);
+  if (cached !== undefined) return cached;
   const found: DependencySites = {
     imports: new Map(),
     includes: new Map(),
@@ -180,6 +184,7 @@ function dependencyExpressions(module: Module): DependencySites {
     collectDependencies(declaration.value, found);
   }
   collectDependencies(module.result, found);
+  dependencySitesByModule.set(module, found);
   return found;
 }
 
