@@ -539,6 +539,41 @@ That restriction keeps the proof local:
 A new region family can reuse the pattern only after it supplies checked
 partition/combine/transform laws.
 
+### 11.1 Why regular-path borrow tracking is deferred
+
+Nowacki et al.'s
+[regex-based Move borrow checker](https://verse-lab.org/papers/regex-borrows-oopsla26.pdf)
+gives a useful design for a different boundary. It assigns each live reference
+an abstract identity and labels reachability edges with regular languages of
+field paths. Brzozowski derivatives expose the paths reachable after a field
+borrow, union joins alternative control-flow paths, Kleene star summarizes
+unknown borrow chains across calls, and write safety reduces to regular-language
+emptiness. The path environment remains an auxiliary judgment rather than
+ordinary value-type structure.
+
+That machinery is justified when references are first-class, may escape a call,
+and coexist with mutation. Blot's borrow is none of those things: it is a
+transient read-only view, and the region proposal exposes linear capabilities
+rather than addresses. Adding a regular-path environment now would duplicate the
+existing ownership control-flow analysis without discharging either Store
+provenance or the family-specific region derivation.
+
+It is also too coarse for the motivating array program. The Move model gives
+every vector element the same path symbol, deliberately refusing to distinguish
+simultaneous borrows of different indices. Blot's quicksort proof instead needs
+the exact interval separation algebra in section 2. A regex can describe a set
+of structural access paths; it does not prove that two numeric intervals are a
+disjoint exact cover. Recombination witnesses likewise preserve the exact
+sibling relation that a conservative call summary would forget.
+
+If Blot later admits stored or returned borrows, regular-path reachability is a
+candidate provenance calculus. A bounded experiment should then use fresh
+abstract references, derivative-based extension, union at branch joins, removal
+of consumed references, and checked call/return summaries. It must remain
+separate from algebraic subtyping and compose with, rather than replace, Store
+roots and region-family laws. No such experiment is warranted until a concrete
+program requires a borrow to escape the current lexical boundary.
+
 ## 12. Production gates
 
 Before moving any of this into `LANGUAGE.md`, require:
