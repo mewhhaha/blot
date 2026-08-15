@@ -217,10 +217,8 @@ fn declare(pattern: PatternId, produced: Produced, scope: &ScopeRef, analysis: &
                     _ => Produced::None,
                 };
                 declare(*payload, payload_value, scope, analysis);
-            } else {
-                if let Produced::Variant(payload) = produced {
-                    report_discarded(pattern, &payload, analysis);
-                }
+            } else if let Produced::Variant(payload) = produced {
+                report_discarded(pattern, &payload, analysis);
             }
         }
         Pattern::Shape { fields, .. } => {

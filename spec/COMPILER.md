@@ -180,7 +180,11 @@ the compiler-distributed module certificate serializes the closed signature with
 that identity. Representation facts additionally record the concrete call-site
 layout of a residual type expression and of an unambiguous structural product
 shape. A conflicting observation invalidates the fact; it never selects one
-observation by order. Safety owns coverage decisions and relational proofs.
+observation by order. Safety owns coverage decisions and relational proofs. It
+may instantiate only a summary derived from the compile-time closure value or a
+trusted primitive contract; a binding path or source name is not a safety
+premise. The current summary certificate is unary array length plus a literal
+affine offset and is erased after the direct-operation proof is constructed.
 Ownership owns path consumption, extraction lineage, and reuse permission.
 Ownership certificate schema 2 identifies every lineage source by module-local
 binding identity and requires a complete dynamic extraction partition. Staging
@@ -454,6 +458,12 @@ source graph
 ```
 
 The `Compiler` session caches final artifacts by immutable Runtime-HIR identity.
+Its check-only cache additionally stores conservative per-module sealed
+fingerprints. A changed module is freshly checked; unchanged fingerprints stop
+reverse propagation, while changed fingerprints enqueue every importer.
+Fingerprints contain the closed type/effect observation, derived relational
+facts and schema, checked live source, includes, capsule input, and dependency
+fingerprints. Updates commit only after the complete requested check succeeds.
 Baba's Wasm lexer and CPU parser instances are process-shared; the Wasm instance
 is disposed explicitly. Gpupaper's emitter bytes are checked into its package
 and instantiated through the standard `WebAssembly` API.

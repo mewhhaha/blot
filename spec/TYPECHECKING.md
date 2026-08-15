@@ -335,6 +335,27 @@ whose lowering spends them, contain the identities of every premise, and are
 rechecked by Core construction. A certificate copied to a different expression
 or used after an identity-changing rebinding is invalid.
 
+`Phi` also consumes verified function summaries without extending the value type
+lattice. The initial summary language has one canonical form:
+
+```txt
+summary(f) = result = length(parameter_0) + k
+```
+
+where `k` is a compile-time integer. A summary is derived from the closure value
+by structurally checking its body against `@array.len`, transparent linearity
+wrappers, affine literal shifts, or another already derived summary. The closure
+environment resolves callees; source spelling never does. At application, the
+argument's immutable value identity replaces `parameter_0` and the resulting
+term enters `Phi`. Cycles and bodies outside this fragment derive no fact.
+
+When `:=` removes the last visible name for an old identity, the refinement
+graph projects that identity out by shortest-path closure before deleting its
+incident edges. The projected graph preserves every entailed difference bound
+between remaining identities. Merely dropping incident facts is not sound: a
+dead identity may be the intermediate node proving a relation between two live
+ones.
+
 ### Compile-time immediates
 
 Write `K(e) = n` when evaluation of `e` in the compile-time environment

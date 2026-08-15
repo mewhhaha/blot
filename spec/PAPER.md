@@ -608,12 +608,14 @@ requires phi_in; ensures phi_out
 ```
 
 Application substitutes the caller's value identities into the summary. The
-compiler may infer simple summaries, while a prelude or host primitive may
-declare one through a compile-time descriptor. A declared summary is a proof
-obligation checked against the body or against the primitive's trusted contract;
-it is never believed like an unchecked annotation. This mechanism lets a wrapper
-around `length`, a slice constructor, or an iterator preserve facts without
-placing those facts in the algebraic type lattice.
+implemented fragment derives `result = length(parameter) + literal` from a unary
+closure's compile-time value. Derivation follows exact applications, transparent
+linear wrappers, literal `@int.add`/`@int.sub`, and another derived closure
+summary. `@array.len` supplies the only trusted primitive contract in this
+fragment. Source names are not evidence, recursive closures and unrecognised
+bodies publish no summary, and the result is erased after proof construction. A
+future descriptor syntax would be a proof obligation checked against the body or
+a trusted primitive contract, never an unchecked annotation.
 
 ### 7.2 Safe and direct array operations
 

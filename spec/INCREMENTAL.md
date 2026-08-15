@@ -89,9 +89,19 @@ is an implementation technique, not a different parser contract.
 ## 5. Interface and specialization caches
 
 A cached module interface contains settled closed schemes, effects, result and
-parameter types, and a dependency fingerprint. Encoding rejects live inference
-variables and unbound rigid identities. Decoding instantiates quantified
-identities freshly.
+parameter types, verified erased relational summaries reachable from the
+compile-time boundary, and a dependency fingerprint. Encoding rejects live
+inference variables and unbound rigid identities. Decoding instantiates
+quantified identities freshly.
+
+An in-process checker may stop reverse propagation after rechecking a changed
+module only when a sealed boundary fingerprint is unchanged. That fingerprint
+contains the closed type/effect boundary, relational-summary schema and facts,
+every checked live source node that can constrain an importer, includes, capsule
+input, and dependency fingerprints. Dead source may be omitted only by a
+separate proof that it cannot affect inference, evaluation, diagnostics, or a
+published fact. Cache publication is transactional: failure leaves the previous
+revision intact.
 
 A specialization capsule additionally contains deterministic compile-time values
 and closed source closures. Its coherence law is given in

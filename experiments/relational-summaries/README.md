@@ -1,6 +1,7 @@
-# Relational summary experiment
+# Relational summaries
 
-Status: experiment. Nothing here is source syntax or a compiler contract.
+Status: the unary affine array-length slice is a compiler contract. This
+directory retains the broader model, adversarial tests, and scaling benchmark.
 
 This experiment tests the boundary sketched in
 [The facts live beside the values](https://stillbrook.dev/articles/the-facts-live-beside-the-values):
@@ -34,10 +35,10 @@ The published boundary contains the slot summary and nothing else. Concrete
 `ValueId`s, solver state, local facts, and source spans cannot cross it.
 
 A rebinding models the article's fact lifetime without adding assignment to
-Blot. It creates a fresh value identity, removes every fact incident to the old
-identity, and records both where each fact came from and which rebinding
-invalidated it. A failed proof may then explain that the needed fact was known
-at one operation and forgotten at another.
+Blot. Production refinement state projects a dead identity out through
+shortest-path closure, preserving every entailed relation between remaining
+identities. The experimental provenance layer additionally records where a fact
+came from and which rebinding invalidated it.
 
 An explicit alias result is the first, deliberately tiny frame rule. A known
 identity function may return its parameter's identity and therefore preserve
@@ -93,14 +94,14 @@ wall time and less body work; timings alone are not treated as evidence.
 
 - source syntax for named facts or contracts;
 - arbitrary predicates, quantifiers, `min`, or collection-specific theories;
-- inference of relational summaries from function bodies;
 - a general higher-order frame rule;
-- production-checker integration; and
-- changing which Blot programs are accepted.
+- source syntax for user-declared summaries; and
+- summary forms beyond unary array length plus a literal affine offset.
 
-Promotion requires a concrete source program that current proof-producing
-operations cannot express cleanly. Until then, this experiment is evidence about
-the boundary, not a language proposal.
+The production slice structurally verifies `Array.length`, aliases, transitive
+wrappers, and literal affine shifts. It accepts the real `Array.length` bounds
+proof that previously failed, while same-named impostors and recursive or
+unrecognised bodies publish no fact. Node and Rust implement the same rule.
 
 ## Result
 
@@ -128,10 +129,9 @@ nothing about names such as `Sized`; such a name would have to expand to this
 existing proposition fragment. A direct result alias is not a general
 higher-order or structural frame rule. Diagnostic provenance lives beside the
 solver because `RefinementContext` correctly stores logical assumptions rather
-than source history. The body callback and incremental session are compiler
-models, not production typed-Core or module-interface integration. Their
-fingerprint isolates the relational component; a production module fingerprint
-must also seal types, effects, ownership, comptime observations, and ABI facts.
+than source history. The broader body callback remains a model; the production
+slice instead verifies real compile-time closure values and contributes its
+canonical facts to the conservative module fingerprint.
 
 ## Benchmark
 
@@ -163,12 +163,16 @@ logical result is stronger than the absolute timings: sealing changes wrapper
 body work from 200 executions to one, a private edit changes caller rechecks
 from 200 to zero, and value-lifetime pruning bounds retained facts at zero in
 this independent-call workload. Production impact depends on finding real
-wrappers with enough body work or enough callers to amortize verification and
-serialization.
+wrappers with enough body work or enough callers to amortize verification.
 
-The result supports an internal relational-summary representation, not new
-syntax. The next justified step would be one real compiler-owned operation whose
-wrapper currently loses a useful affine fact. Its body or trusted primitive
-contract must produce the summary, and the importing caller must consume a
-validated slot-only encoding. Without that program, this directory should remain
-an experiment.
+The real-module benchmark is:
+
+```sh
+pnpm benchmark:relational:production -- --callers 100 --rounds 9
+```
+
+On Node v26.7.0, checking 100 direct `@array.len` proof sites took 271.49 ms
+median; the same sites through one verified wrapper took 281.37 ms, a 1.036x
+relative cost. The wrapper enables a source abstraction that was previously
+rejected while keeping derivation overhead to 3.6% in this deliberately
+summary-heavy workload. This is an overhead result, not a speedup claim.

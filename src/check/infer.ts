@@ -374,6 +374,59 @@ function assumeTerm(
   });
 }
 
+function visibleIdentityReference(
+  env: TypeEnv,
+  identity: RefinementVariable,
+): boolean {
+  const names = new Set<string>();
+  let scope: TypeEnv | null = env;
+  while (scope !== null) {
+    for (const name of scope.names.keys()) names.add(name);
+    scope = scope.parent;
+  }
+  for (const name of names) {
+    if (lookupBinding(env, name) === identity) return true;
+    const integer = lookupIntegerValue(env, name);
+    if (integer !== null && termReferences(integer, identity)) return true;
+    const length = lookupArrayLength(env, name);
+    if (length !== null && termReferences(length, identity)) return true;
+    const relation = lookupRelation(env, name);
+    if (relation !== null && relationReferences(relation, identity)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function termReferences(
+  term: RefinementTerm,
+  identity: RefinementVariable,
+): boolean {
+  return term.tag === "variable" && term.identity === identity;
+}
+
+function relationReferences(
+  relation: RelationalValue,
+  identity: RefinementVariable,
+): boolean {
+  if (relation.tag === "index") {
+    return termReferences(relation.value, identity) ||
+      termReferences(relation.length, identity);
+  }
+  if (relation.tag === "indexed-iterator") {
+    return termReferences(relation.length, identity);
+  }
+  if (relation.tag === "tuple") {
+    return relation.elements.some((element) =>
+      element !== null && relationReferences(element, identity)
+    );
+  }
+  for (const value of relation.cases.values()) {
+    if (value !== null && relationReferences(value, identity)) return true;
+  }
+  return false;
+}
+
 /** The immutable value identity an alias keeps. */
 function aliasedBinding(expr: Expr, scope: TypeEnv): number | null {
   if (expr.tag === "var") return lookupBinding(scope, expr.name);
@@ -2974,6 +3027,10 @@ function inferDeclarations(
           declaration.span,
         );
       }
+      const previousIdentity = lookupBinding(
+        context.types,
+        declaration.name,
+      );
       const integerValue = witness(declaration.value, context.types);
       const knownArrayLength = arrayLength(
         declaration.value,
@@ -3071,6 +3128,12 @@ function inferDeclarations(
       }
       if (relation !== null) {
         recordRelation(context.types, declaration.name, relation);
+      }
+      if (
+        previousIdentity !== null && previousIdentity !== identity &&
+        !visibleIdentityReference(context.types, previousIdentity)
+      ) {
+        context.types.refinements.forget(previousIdentity);
       }
       continue;
     }

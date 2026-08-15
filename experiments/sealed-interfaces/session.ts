@@ -1,2 +1,7 @@
-export { SealedCheckSession, typeOnlyFingerprint } from "./session_impl.ts";
-export type { SealedCheckResult } from "./session_impl.ts";
+export {
+  IncrementalCheckCache as SealedCheckSession,
+  typeOnlyFingerprint,
+} from "../../src/compiler/check_cache.ts";
+export type {
+  IncrementalCheckResult as SealedCheckResult,
+} from "../../src/compiler/check_cache.ts";

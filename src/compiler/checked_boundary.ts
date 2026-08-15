@@ -1,31 +1,19 @@
 import { createHash } from "node:crypto";
-import type { Loaded } from "../../src/compiler/frontend.ts";
-import type { Decl, Expr, Pattern } from "../../src/syntax/ast.ts";
-import { liveDeclarations } from "../../src/syntax/live.ts";
-import { encodePortableModule } from "../../src/syntax/portable.ts";
+import type { Loaded } from "./frontend.ts";
+import type { Decl, Expr, Pattern } from "../syntax/ast.ts";
+import { liveDeclarations } from "../syntax/live.ts";
+import { encodePortableModule } from "../syntax/portable.ts";
 
 /**
- * The source-dependent part of the checked boundary.
- *
- * Evaluator/backend liveness alone is not a type-check deadness proof: an
- * otherwise dead declaration may still constrain the module parameter or some
- * other inference state. For now the experiment only forgets the deliberately
- * tiny subset we can prove is isolated from inference outside the declaration:
- * an untagged dead `const name = <literal>` whose binding has no other syntactic
- * references or attached signature. Everything else remains in the boundary
- * and therefore propagates conservatively.
- *
- * Source spans are locations rather than semantics. They are removed before
- * hashing so a dead edit may change byte width without invalidating live nodes.
+ * Hashes every checked source node except an isolated dead literal declaration.
+ * Omitting anything broader would require a stronger inference-deadness proof.
  */
 export function checkedSourceFingerprint(loaded: Loaded): string {
   const forgotten = provablyIsolatedDeadDeclarations(loaded);
-  const sliced = {
-    ...loaded.module,
-    declarations: loaded.module.declarations.filter((declaration) =>
-      !forgotten.has(declaration)
-    ),
-  };
+  const declarations = loaded.module.declarations.filter((declaration) =>
+    !forgotten.has(declaration)
+  );
+  const sliced = { ...loaded.module, declarations };
   return digest(
     JSON.stringify(withoutSourceLocations(encodePortableModule(sliced))),
   );
@@ -36,21 +24,17 @@ function provablyIsolatedDeadDeclarations(loaded: Loaded): ReadonlySet<Decl> {
   const live = liveDeclarations(declarations, loaded.module.result);
   const referenced = moduleReferencedNames(loaded);
   const forgotten = new Set<Decl>();
-
   for (let index = 0; index < declarations.length; index += 1) {
     const declaration = declarations[index];
     if (
       declaration === undefined || live.has(declaration) ||
       !literalDeadCandidate(declaration)
-    ) {
-      continue;
-    }
-
-    // A `sig` immediately preceding a binding constrains that binding without a
-    // normal variable reference, so adjacency is part of the isolation proof.
+    ) continue;
     const previous = declarations[index - 1];
-    if (previous?.tag === "binding" && previous.kind === "sig") continue;
-
+    if (
+      previous !== undefined && previous.tag === "binding" &&
+      previous.kind === "sig"
+    ) continue;
     if (referenced.has(declaration.pattern.name)) continue;
     forgotten.add(declaration);
   }
@@ -68,9 +52,7 @@ function literalDeadCandidate(
   if (
     declaration.tags.length !== 0 || declaration.pattern.tag !== "name" ||
     declaration.pattern.qualifier !== "none"
-  ) {
-    return false;
-  }
+  ) return false;
   return declaration.value.tag === "int" ||
     declaration.value.tag === "float" ||
     declaration.value.tag === "text" ||
@@ -193,11 +175,12 @@ function addExpressionReferences(expr: Expr, names: Set<string>): void {
 function withoutSourceLocations(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(withoutSourceLocations);
   if (value === null || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value).flatMap(([key, child]) =>
-      key === "span" ? [] : [[key, withoutSourceLocations(child)]]
-    ),
-  );
+  const entries: [string, unknown][] = [];
+  for (const [key, child] of Object.entries(value)) {
+    if (key === "span") continue;
+    entries.push([key, withoutSourceLocations(child)]);
+  }
+  return Object.fromEntries(entries);
 }
 
 function digest(value: string): string {

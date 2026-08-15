@@ -136,8 +136,10 @@ offset-zero span.
 
 The module loader retains stable AST identity for unchanged source and
 invalidates changed modules plus their importers. Checking memoizes a complete
-root program by loader identity; dependency checks are not cached independently,
-because their facts can depend on importer constraints and staging context.
+root program by loader identity. A resident check session may independently
+recheck a changed dependency and stop before its importers when its conservative
+sealed boundary is unchanged; importer-dependent live inference state itself
+never crosses that boundary.
 
 A resident compiler also keys each source graph by the exact portable AST,
 including spans, dependency revision keys, and included file paths and bytes. An

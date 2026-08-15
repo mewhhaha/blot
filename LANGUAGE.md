@@ -1433,9 +1433,10 @@ can name without running the program, and there are two of them.
 The first is a single compile-time integer — an integer literal, or a name whose
 `const` value is one. `if 0 < n` reads the same as `if n > 0`.
 
-The second is the length of an array a name in scope holds, written
-`@array.len xs`. Inference records that value relationship in the refinement
-context rather than in the integer's type:
+The second is the length of an array a name in scope holds, written directly as
+`@array.len xs` or through a verified unary wrapper such as `Array.length xs`.
+Inference records that value relationship in the refinement context rather than
+in the integer's type:
 
 ```blot
 sig at = [Int] -> Int -> Int
@@ -1453,6 +1454,13 @@ The inner branch retains `n : Int` and records `n < length(identity(xs))`;
 inside both branches it additionally records `0 <= n`. An array's type carries
 no length (§13.3), and neither does the integer type. These propositions live
 only in `Phi`, the refinement context consumed by proof-required operations.
+
+A wrapper contributes this fact only when its compile-time closure value is
+structurally verified to return `@array.len` of its parameter, optionally with a
+literal affine offset or through another verified wrapper. The spelling
+`Array.length` is not privileged: aliases keep the verified summary, while a
+shadowed function with that name proves nothing. The summary is erased and does
+not change the function's ordinary arrow type.
 
 A length is keyed to the immutable array value a binding denotes. blot has no
 assignment and arrays are immutable, so that identity denotes one length for its

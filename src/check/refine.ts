@@ -25,6 +25,7 @@ import type {
   RefinementVariable,
 } from "../core/refinement.ts";
 import type { SimpleType, Typing } from "./type.ts";
+import { relationalSummary } from "./relational.ts";
 import {
   childTypeEnv,
   type Context,
@@ -552,13 +553,16 @@ export function witness(expr: Expr, scope: TypeEnv): ComparisonWitness | null {
   }
   const head = spine(expr);
   if (head === null) return null;
-  if (head.callee.tag !== "intrinsic") return null;
-  if (head.callee.name === "@array.len" && head.args.length === 1) {
+  if (
+    head.callee.tag === "intrinsic" &&
+    head.callee.name === "@array.len" && head.args.length === 1
+  ) {
     const length = arrayLength(head.args[0], scope);
     if (length === null) return null;
     return comparisonWitness(length);
   }
   if (
+    head.callee.tag === "intrinsic" &&
     (head.callee.name === "@int.add" || head.callee.name === "@int.sub") &&
     head.args.length === 2
   ) {
@@ -576,7 +580,15 @@ export function witness(expr: Expr, scope: TypeEnv): ComparisonWitness | null {
       right !== null && typeof right !== "bigint"
     ) return shiftRefinementTerm(right, left);
   }
-  return null;
+  const path = namePath(head.callee);
+  if (path === null || head.args.length !== 1) return null;
+  const value = comptimeAt(path, scope);
+  if (value === null) return null;
+  const summary = relationalSummary(value);
+  if (summary === null || summary.tag !== "array-length") return null;
+  const length = arrayLength(head.args[summary.parameter], scope);
+  if (length === null) return null;
+  return comparisonWitness(shiftRefinementTerm(length, summary.offset));
 }
 
 function comparisonWitness(term: RefinementTerm): ComparisonWitness {

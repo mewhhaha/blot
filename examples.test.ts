@@ -216,6 +216,10 @@ const REJECTIONS: Record<
     code: "BLOT_REFLECTION_NOT_INDEXED",
     stage: "check",
   },
+  "relational_summary_impostor": {
+    code: "BLOT_UNPROVEN_INDEX",
+    stage: "check",
+  },
   "unrepresentable_integer": {
     code: "BLOT_UNREPRESENTABLE_INTEGER",
     stage: "check",
