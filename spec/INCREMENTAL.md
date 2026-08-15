@@ -36,6 +36,21 @@ texts produces equal ASTs including source origins, downstream semantic phases
 may share a revision. If an edit moves a diagnostic span, that equality does not
 hold.
 
+A recursive key names each direct dependency by a fixed-size digest of that
+dependency's own canonical key material:
+
+```text
+key_P(m) = H(local_P(m), [(specifier_i, key_P(dep_i))])
+```
+
+`key_P(dep_i)` is the digest, not the serialized payload that produced it.
+Recursively embedding complete child keys is semantically redundant and makes an
+importer's key construction repeat transitive dependency bytes. Digesting the
+canonical child key once preserves the same phase equality while bounding every
+dependency edge to constant-size identity material. The digest algorithm and
+canonical encoding are part of the process-local compiler implementation; a
+persistent cache additionally namespaces them by compiler/schema version.
+
 An editor buffer is another supplier of the root module's exact source bytes,
 not a weaker checking mode. Checking an in-memory root revision replaces that
 module's source component while its imports and includes retain their resolved
