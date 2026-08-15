@@ -104,6 +104,15 @@ module path plus the enclosing block's expression identity. Replacing that
 module invalidates every such entry before evaluation can observe the
 replacement AST.
 
+Pure structural queries over immutable AST nodes may use the AST object itself
+as an in-process key. The cached result may contain only data determined by the
+reachable immutable syntax, such as import/include sites, free or pinned names,
+and names bound by a pattern; it may not contain inference variables, settled
+constraints, evaluator state, or source-external facts. Loader identity makes
+this a local memo table rather than a cross-revision certificate: an unchanged
+dependency retains the exact AST objects, while replacing a source revision
+allocates replacement nodes and therefore misses automatically.
+
 ## 6. Prelude snapshots
 
 The prelude is an ordinary module and obeys the same rules. A distributed
