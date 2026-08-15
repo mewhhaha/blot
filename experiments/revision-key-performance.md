@@ -19,7 +19,7 @@ pnpm exec tsx --import ./src/node/polyfills.mjs experiments/revision-key-benchma
 
 Three consecutive 1,000-iteration local runs on Node 22.16.0 measured:
 
-| Representation | Median mean per root key | Final key size | Direct dependency key material |
+| Representation | Median of 3 run means | Final key size | Direct dependency key material |
 | --- | ---: | ---: | ---: |
 | nested serialized key | 1.424 ms | 609,419 bytes | 493,630 bytes |
 | SHA-256 child digest | 0.071 ms | 64 bytes | 64 bytes |
