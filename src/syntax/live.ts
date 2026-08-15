@@ -72,9 +72,14 @@ function addDependencies(
   for (const name of names) target.add(name);
 }
 
+const freeNamesByExpression = new WeakMap<Expr, ReadonlySet<string>>();
+
 export function freeNames(expr: Expr): ReadonlySet<string> {
+  const cached = freeNamesByExpression.get(expr);
+  if (cached !== undefined) return cached;
   const names = new Set<string>();
   collectFreeNames(expr, names);
+  freeNamesByExpression.set(expr, names);
   return names;
 }
 
@@ -143,7 +148,11 @@ function collectFreeNames(expr: Expr, names: Set<string>): void {
   }
 }
 
+const pinnedNamesByPattern = new WeakMap<Pattern, ReadonlySet<string>>();
+
 function pinnedNames(pattern: Pattern): ReadonlySet<string> {
+  const cached = pinnedNamesByPattern.get(pattern);
+  if (cached !== undefined) return cached;
   const names = new Set<string>();
   const collect = (current: Pattern): void => {
     switch (current.tag) {
@@ -165,5 +174,6 @@ function pinnedNames(pattern: Pattern): ReadonlySet<string> {
     }
   };
   collect(pattern);
+  pinnedNamesByPattern.set(pattern, names);
   return names;
 }
