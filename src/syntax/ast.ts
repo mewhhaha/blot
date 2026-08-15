@@ -273,25 +273,37 @@ function recursiveMember(declaration: Decl): RecursiveMember | null {
   };
 }
 
+const namesByPattern = new WeakMap<Pattern, readonly string[]>();
+
 /** Every name a pattern binds, in the order it binds them. */
 export function patternNames(pattern: Pattern): readonly string[] {
+  const cached = namesByPattern.get(pattern);
+  if (cached !== undefined) return cached;
+  let names: readonly string[];
   switch (pattern.tag) {
     case "name":
-      return [pattern.name];
+      names = [pattern.name];
+      break;
     case "wildcard":
     case "pin":
     case "int":
     case "float":
     case "text":
     case "unit":
-      return [];
+      names = [];
+      break;
     case "tuple":
     case "array":
-      return pattern.elements.flatMap(patternNames);
+      names = pattern.elements.flatMap(patternNames);
+      break;
     case "constructor":
-      if (pattern.payload === null) return [];
-      return patternNames(pattern.payload);
+      if (pattern.payload === null) names = [];
+      else names = patternNames(pattern.payload);
+      break;
     case "shape":
-      return pattern.fields.flatMap((field) => patternNames(field.pattern));
+      names = pattern.fields.flatMap((field) => patternNames(field.pattern));
+      break;
   }
+  namesByPattern.set(pattern, names);
+  return names;
 }
