@@ -128,6 +128,43 @@ type ConstraintState = {
   readonly insertions: BoundInsertion[];
 };
 
+interface DeferredRecordLower {
+  readonly fields: ReadonlyMap<string, SimpleType>;
+  readonly name: string;
+}
+
+const deferredRecordLowers = new WeakMap<
+  Variable,
+  DeferredRecordLower[]
+>();
+
+function deferRecordLower(
+  variable: Variable,
+  fields: ReadonlyMap<string, SimpleType>,
+  name: string,
+): void {
+  const deferred = deferredRecordLowers.get(variable);
+  const next = { fields, name };
+  if (deferred === undefined) {
+    deferredRecordLowers.set(variable, [next]);
+    return;
+  }
+  deferred.push(next);
+}
+
+function materializeDeferredRecordLowers(variable: Variable): void {
+  const deferred = deferredRecordLowers.get(variable);
+  if (deferred === undefined) return;
+  deferredRecordLowers.delete(variable);
+  for (const { fields, name } of deferred) {
+    const bound = fields.get(name);
+    if (bound === undefined) {
+      throw new Error(`deferred record field .${name} disappeared`);
+    }
+    variable.lower.push(bound);
+  }
+}
+
 export function constrain(
   lhs: SimpleType,
   rhs: SimpleType,
@@ -191,12 +228,29 @@ function constrainWithState(
     // Width subtyping: a wider value satisfies a narrower requirement. This is
     // the whole of what a `duck` contract needed to be.
     for (const [name, required] of rhs.fields) {
-      const present = lhs.fields.get(name);
-      if (present === undefined) {
+      if (!lhs.fields.has(name)) {
         if (admitsOmission(required)) continue;
         throw new TypeError_(
           `no field \`.${name}\` on ${describe(lhs)}`,
         );
+      }
+      // `A.field <= beta` cannot fail while beta is a fresh unconstrained
+      // variable. Keep the relation as a field thunk until beta is actually
+      // observed. This is especially important for `open`: checking the prelude
+      // should not recursively instantiate every exported field merely to put
+      // its name in scope. Speculative union candidates stay eager so rollback
+      // has no hidden state to undo.
+      if (
+        lhs.fields instanceof LazyFreshenedFields && required.tag === "var" &&
+        required.lower.length === 0 && required.upper.length === 0 &&
+        state.cache.parent === null
+      ) {
+        deferRecordLower(required, lhs.fields, name);
+        continue;
+      }
+      const present = lhs.fields.get(name);
+      if (present === undefined) {
+        throw new Error(`record field .${name} disappeared after membership`);
       }
       constrainWithState(present, required, state);
     }
@@ -265,6 +319,7 @@ function constrainWithState(
   }
 
   if (lhs.tag === "var" && levelOf(rhs) <= lhs.level) {
+    materializeDeferredRecordLowers(lhs);
     insertBound(lhs, "upper", rhs, state);
     for (const bound of [...lhs.lower]) {
       constrainWithState(bound, rhs, state);
@@ -401,6 +456,7 @@ function extrude(
   seen: Map<Variable, Variable>,
   state: ConstraintState,
 ): SimpleType {
+  if (type.tag === "var") materializeDeferredRecordLowers(type);
   if (levelBelow(type, level)) return type;
 
   switch (type.tag) {
@@ -510,6 +566,73 @@ function levelBelow(type: SimpleType, level: Level): boolean {
   }
 }
 
+class LazyFreshenedFields implements ReadonlyMap<string, SimpleType> {
+  readonly #source: ReadonlyMap<string, SimpleType>;
+  readonly #freshen: (field: SimpleType) => SimpleType;
+  readonly #cache = new Map<string, SimpleType>();
+
+  constructor(
+    source: ReadonlyMap<string, SimpleType>,
+    freshen: (field: SimpleType) => SimpleType,
+  ) {
+    this.#source = source;
+    this.#freshen = freshen;
+  }
+
+  get size(): number {
+    return this.#source.size;
+  }
+
+  get(name: string): SimpleType | undefined {
+    const cached = this.#cache.get(name);
+    if (cached !== undefined) return cached;
+    const source = this.#source.get(name);
+    if (source === undefined) return undefined;
+    const freshened = this.#freshen(source);
+    this.#cache.set(name, freshened);
+    return freshened;
+  }
+
+  has(name: string): boolean {
+    return this.#source.has(name);
+  }
+
+  keys(): MapIterator<string> {
+    return this.#source.keys();
+  }
+
+  *values(): MapIterator<SimpleType> {
+    for (const name of this.#source.keys()) {
+      const field = this.get(name);
+      if (field !== undefined) yield field;
+    }
+  }
+
+  *entries(): MapIterator<[string, SimpleType]> {
+    for (const name of this.#source.keys()) {
+      const field = this.get(name);
+      if (field !== undefined) yield [name, field];
+    }
+  }
+
+  [Symbol.iterator](): MapIterator<[string, SimpleType]> {
+    return this.entries();
+  }
+
+  forEach(
+    callbackfn: (
+      value: SimpleType,
+      key: string,
+      map: ReadonlyMap<string, SimpleType>,
+    ) => void,
+    thisArg?: unknown,
+  ): void {
+    for (const [name, field] of this) {
+      callbackfn.call(thisArg, field, name, this);
+    }
+  }
+}
+
 /**
  * Where each definition-site variable's instantiation copies went.
  *
@@ -555,7 +678,11 @@ function freshenAbove(
   freshenedTypes: Map<SimpleType, SimpleType>,
   instances: Instances,
 ): SimpleType {
-  if (levelBelow(type, limit)) return type;
+  if (type.tag === "var") materializeDeferredRecordLowers(type);
+  // A record scheme is often a module interface. Do not recursively copy every
+  // field merely to project or open a handful of them; preserve the one
+  // instantiation graph and freshen fields when they are actually observed.
+  if (type.tag !== "record" && levelBelow(type, limit)) return type;
   const existing = freshenedTypes.get(type);
   if (existing !== undefined) return existing;
 
@@ -626,17 +753,12 @@ function freshenAbove(
       return freshened;
     }
     case "record": {
-      const freshened: SimpleType = {
-        tag: "record",
-        fields: new Map(
-          [...type.fields].map((
-            [n, t],
-          ) => [
-            n,
-            freshenAbove(t, limit, level, freshenedTypes, instances),
-          ]),
-        ),
-      };
+      const fields = new LazyFreshenedFields(
+        type.fields,
+        (field) =>
+          freshenAbove(field, limit, level, freshenedTypes, instances),
+      );
+      const freshened: SimpleType = { tag: "record", fields };
       freshenedTypes.set(type, freshened);
       return freshened;
     }
