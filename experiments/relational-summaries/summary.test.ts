@@ -296,6 +296,22 @@ test("an alias keeps old facts live after another name is rebound", () => {
   assert.equal(state.entails(equal(changed, count)), false);
 });
 
+test("facts leave Phi when their last value binding is dropped", () => {
+  const state = new RelationalState();
+  const count = state.bindFresh("count", declared);
+  const bytes = state.bindFresh("bytes", declared);
+  state.assume(equal(bytes, count), { description: "decoded packet" });
+  state.alias("kept", "bytes", { description: "kept alias" });
+
+  state.drop("bytes");
+  assert.equal(state.factCount(), 1);
+  assert.equal(state.entails(equal(bytes, count)), true);
+
+  state.drop("kept");
+  assert.equal(state.factCount(), 0);
+  assert.equal(state.entails(equal(bytes, count)), false);
+});
+
 function accepted(
   call: SummaryCall,
 ): Extract<SummaryCall, { tag: "accepted" }> {

@@ -63,13 +63,39 @@ identity and inherits nothing.
   site?
 - Can all of this reuse the current refinement kernel unchanged?
 
+## Expansion hypotheses
+
+The second stage tests compile-time reuse rather than another proposition form.
+It compares two checking strategies over the same symbolic wrapper body:
+
+- **Replay:** execute the wrapper body independently for every caller.
+- **Sealed summary:** verify the body once, publish its canonical slot summary,
+  and instantiate only that summary at every caller.
+
+The sealed path is sound only when verification starts with fresh symbolic
+parameter identities, assumes exactly the declared preconditions, executes the
+body, and proves every declared postcondition about its returned identities. The
+verified artifact is keyed by both the body revision and canonical summary. A
+private body edit must therefore be reverified, but callers may be retained when
+the published summary fingerprint is unchanged.
+
+Two costs are measured separately:
+
+1. **Call reuse:** how wall time scales with caller count and wrapper-body work.
+2. **Fact pressure:** how summary instantiation scales as independent facts
+   accumulate in the caller's `Phi`.
+
+The benchmark reports medians over alternating replay/sealed order after warmup.
+It also reports logical work counts. A speedup claim requires both lower median
+wall time and less body work; timings alone are not treated as evidence.
+
 ## Non-goals
 
 - source syntax for named facts or contracts;
 - arbitrary predicates, quantifiers, `min`, or collection-specific theories;
 - inference of relational summaries from function bodies;
 - a general higher-order frame rule;
-- module-interface or production-checker integration; and
+- production-checker integration; and
 - changing which Blot programs are accepted.
 
 Promotion requires a concrete source program that current proof-producing
@@ -88,15 +114,57 @@ it. They establish that:
 - the loader rejects result-dependent preconditions, invalid aliases, and
   non-canonical integers;
 - a rebinding can retain the origin and invalidation site of a missing fact; and
-- an alias that still names the old immutable value keeps its facts live.
+- an alias that still names the old immutable value keeps its facts live;
+- a declared summary can be verified from one fresh symbolic execution of a
+  wrapper body;
+- false postconditions and false alias policies are rejected;
+- a private body revision reverifies once while retaining every caller whose
+  dependency fingerprint is unchanged;
+- failed caller checks publish no partial incremental state; and
+- facts are removed from `Phi` when their final value binding dies.
 
 The experiment also exposes the remaining costs. The solver intentionally knows
 nothing about names such as `Sized`; such a name would have to expand to this
 existing proposition fragment. A direct result alias is not a general
 higher-order or structural frame rule. Diagnostic provenance lives beside the
 solver because `RefinementContext` correctly stores logical assumptions rather
-than source history. Body-side summary verification and module-interface
-integration remain untested.
+than source history. The body callback and incremental session are compiler
+models, not production typed-Core or module-interface integration. Their
+fingerprint isolates the relational component; a production module fingerprint
+must also seal types, effects, ownership, comptime observations, and ABI facts.
+
+## Benchmark
+
+Run the reproducible microbenchmark with:
+
+```sh
+pnpm benchmark:relational
+```
+
+On Node v26.7.0, the default workload uses 200 callers, a 12-step symbolic
+wrapper body, nine alternating samples, and median wall time:
+
+| Check             | Replay body | Sealed summary |                             Work removed | Speedup |
+| ----------------- | ----------: | -------------: | ---------------------------------------: | ------: |
+| Cold callers      |    39.90 ms |        0.94 ms |                      199 body executions |   42.4x |
+| Private body edit |    40.81 ms |        0.24 ms | 199 body executions, 200 caller rechecks |  171.7x |
+
+The fact-pressure run isolates the cost of allowing unrelated facts to remain in
+one caller context:
+
+| Calls | Accumulating `Phi` | Lifetime-pruned `Phi` | Retained facts | Speedup |
+| ----: | -----------------: | --------------------: | -------------: | ------: |
+|    32 |            0.78 ms |               0.11 ms |        32 vs 0 |    7.3x |
+|    64 |            4.63 ms |               0.14 ms |        64 vs 0 |   33.9x |
+|   128 |           33.15 ms |               0.26 ms |       128 vs 0 |  125.7x |
+
+These are synthetic compiler microbenchmarks, not production Blot speedups. The
+logical result is stronger than the absolute timings: sealing changes wrapper
+body work from 200 executions to one, a private edit changes caller rechecks
+from 200 to zero, and value-lifetime pruning bounds retained facts at zero in
+this independent-call workload. Production impact depends on finding real
+wrappers with enough body work or enough callers to amortize verification and
+serialization.
 
 The result supports an internal relational-summary representation, not new
 syntax. The next justified step would be one real compiler-owned operation whose

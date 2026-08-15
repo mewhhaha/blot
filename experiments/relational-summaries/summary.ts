@@ -138,6 +138,30 @@ export class RelationalState {
     return identity;
   }
 
+  hasIdentity(identity: RefinementVariable): boolean {
+    return this.#allocated.has(identity);
+  }
+
+  factCount(): number {
+    return this.#facts.length;
+  }
+
+  drop(name: string): void {
+    const identity = this.#bindings.get(name);
+    if (identity === undefined) {
+      throw new Error(`cannot drop unknown relational binding \`${name}\``);
+    }
+    this.#bindings.delete(name);
+    const identityRemains = [...this.#bindings.values()].some((bound) =>
+      bound === identity
+    );
+    if (identityRemains) return;
+    this.#facts = this.#facts.filter((fact) =>
+      !propositionVariables(fact.proposition).includes(identity)
+    );
+    this.#rebuildContext();
+  }
+
   rebindFresh(name: string, cause: FactSite): RefinementVariable {
     if (!this.#bindings.has(name)) {
       throw new Error(`cannot rebind unknown relational binding \`${name}\``);
@@ -419,6 +443,20 @@ export function loadRelationalSummary(
   };
   if (validateSummary(loaded) !== null) return null;
   return loaded;
+}
+
+export function relationalSummaryError(
+  summary: RelationalSummary,
+): string | null {
+  return validateSummary(summary);
+}
+
+export function instantiateSummaryProposition(
+  proposition: SummaryProposition,
+  parameters: readonly RefinementVariable[],
+  results: readonly RefinementVariable[],
+): RefinementProposition {
+  return instantiate(proposition, parameters, results);
 }
 
 function validateSummary(summary: RelationalSummary): string | null {

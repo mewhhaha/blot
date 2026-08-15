@@ -15,6 +15,7 @@
     "test:regression": "node scripts/node_regression_tests.mjs",
     "smoke": "tsx --import ./src/node/polyfills.mjs src/node/cli.ts build examples/minimal.blot",
     "benchmark": "tsx --import ./src/node/polyfills.mjs experiments/node-wasm-benchmark.ts",
+    "benchmark:relational": "tsx --import ./src/node/polyfills.mjs experiments/relational-summaries/benchmark.ts",
     "benchmark:sealed": "tsx --import ./src/node/polyfills.mjs experiments/sealed-interfaces/benchmark.ts",
     "parity": "tsx --import ./src/node/polyfills.mjs src/node/parity.ts",
     "parity:strict": "tsx --import ./src/node/polyfills.mjs src/node/parity.ts --strict"
