@@ -112,6 +112,16 @@ Compile-time evaluation can dominate these bounds because it executes source
 programs. Its budget and measured reductions are reported separately from
 structural compiler traversal.
 
+For a resident module `m`, let `A_m` be the size of the canonical phase input for
+that module and `d_m` its number of direct dependency/include edges. Once child
+revisions are known, constructing `m`'s recursive revision identity should cost
+`O(A_m + d_m)` and store one fixed-size digest. A parent references each child
+by that digest. Embedding a child's complete serialized key instead would make
+parents repeatedly copy transitive key material; on chains it repeats each
+descendant in every ancestor and on diamonds it repeats shared subgraphs per
+path. That cost carries no semantic information and is therefore duplicate
+compiler work.
+
 For a Runtime-HIR function with `H` blocks and `D` executed block transitions,
 the fallback dispatcher can perform `O(D H)` block-identity comparisons. A
 reducible entry cycle instead executes one structured path per iteration and no
@@ -166,8 +176,10 @@ The compiler performs each semantic derivation once:
 - a complete checked compile-time environment may feed staging;
 - `prepare` and `compile` share Runtime HIR;
 - ABI layout planning feeds both manifest and adapters;
-- validation does not re-infer source types; and
-- an unchanged revision returns its certified artifact.
+- validation does not re-infer source types;
+- an unchanged revision returns its certified artifact; and
+- recursive revision keys retain only fixed-size child digests rather than
+  reserializing transitive dependency keys in every importer.
 
 If a later phase appears to need the same traversal, first decide whether the
 earlier artifact omitted a necessary certificate. Moving work between
