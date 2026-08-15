@@ -1,5 +1,5 @@
 import { assertEquals, assertThrows } from "@std/assert";
-import { constrain } from "./constrain.ts";
+import { constrain, instantiate, scheme } from "./constrain.ts";
 import {
   boundAbove,
   boundAtMost,
@@ -92,6 +92,33 @@ Deno.test("a failed union candidate restores inference identities", () => {
 
   const after = freshVar(0);
   assertEquals(after.id, before.id + 2);
+});
+
+Deno.test("record scheme instantiation freshens fields on demand", () => {
+  const used = freshVar(1);
+  const unused = freshVar(1);
+  const instances = new Map();
+  const instantiated = instantiate(
+    scheme(record([["used", used], ["unused", unused]]), 0),
+    0,
+    instances,
+  );
+
+  assertEquals(instantiated.tag, "record");
+  if (instantiated.tag !== "record") throw new Error("expected record");
+  assertEquals(instances.size, 0);
+
+  const alias = freshVar(0);
+  constrain(instantiated, record([["used", alias]]));
+  assertEquals(instances.size, 0);
+
+  instantiate(scheme(alias, -1), 0, instances);
+  assertEquals(instances.has(used), true);
+  assertEquals(instances.has(unused), false);
+
+  const first = instantiated.fields.get("used");
+  const second = instantiated.fields.get("used");
+  assertEquals(first, second);
 });
 
 function union(members: readonly SimpleType[]): SimpleType {
