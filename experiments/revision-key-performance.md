@@ -17,18 +17,18 @@ Run:
 pnpm exec tsx --import ./src/node/polyfills.mjs experiments/revision-key-benchmark.ts
 ```
 
-Three consecutive 1,000-iteration local runs on Node 22.16.0 measured:
+Three consecutive local runs on Node 22.16.0 measured these median run means:
 
-| Representation | Median of 3 run means | Final key size | Direct dependency key material |
+| Boundary | Nested serialized key | SHA-256 child digest | Change |
 | --- | ---: | ---: | ---: |
-| nested serialized key | 1.424 ms | 609,419 bytes | 493,630 bytes |
-| SHA-256 child digest | 0.071 ms | 64 bytes | 64 bytes |
+| cold graph key, 100 iterations | 4.028 ms | 2.925 ms | 27.4% less |
+| resident root after dependency keyed, 1,000 iterations | 1.431 ms | 0.073 ms | 19.7x less time |
 
-That is about **20x less time** at this boundary and removes about **609 KB of
-short-lived key text per edited root revision**. The semantic key still hashes
-the exact portable AST including source locations, so comment-only revisions
-that previously compared equal continue to compare equal, while dependency or
-location-changing edits still miss.
+The resident final key shrinks from 609,419 bytes to 64 bytes, and direct
+prelude-key material in the parent shrinks from 493,630 bytes to 64 bytes. The
+semantic key still hashes the exact portable AST including source locations, so
+comment-only revisions that previously compared equal continue to compare equal,
+while dependency or location-changing edits still miss.
 
 The end-to-end changed-module benchmark moves less because type inference remains
 the dominant phase. The main purpose of this change is restoring the intended
