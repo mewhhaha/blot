@@ -23,7 +23,10 @@ test("semantic revision keys are fixed-size recursive digests", async () => {
     const firstKey = loadedRevisionKey(first);
     assert.match(firstKey, /^[0-9a-f]{64}$/);
 
-    const rootCommentOnly = await loadSource(root, `${source}\n// comment only\n`);
+    const rootCommentOnly = await loadSource(
+      root,
+      `${source}\n// comment only\n`,
+    );
     assert.equal(loadedRevisionKey(rootCommentOnly), firstKey);
 
     await writeFile(leaf, "return 42\n// dependency comment only\n");
