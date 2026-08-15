@@ -6,12 +6,12 @@ import {
   resolveTargetPolicy,
   warmBackend,
 } from "./backend.ts";
-import { type Loaded, refreshProgram } from "./frontend.ts";
+import { refreshProgram } from "./frontend.ts";
 import { checkProgram, checkProgramSource } from "./typecheck.ts";
 import type { BlotRuntimeModule } from "../runtime/hir.ts";
 import { warmBabaRuntime } from "../syntax/baba_runtime.ts";
-import { encodePortableModule } from "../syntax/portable.ts";
 import { lowerRuntimeHir } from "./hir.ts";
+import { loadedRevisionKey } from "./revision.ts";
 
 export interface CompilerArtifact {
   readonly wasm: Uint8Array;
@@ -45,8 +45,6 @@ interface ResidentRevision {
   checked?: CheckedModule;
   hir?: BlotRuntimeModule;
 }
-
-const revisionKeyByLoaded = new WeakMap<Loaded, string>();
 
 /**
  * The default Node/TypeScript development compiler session.
@@ -150,33 +148,6 @@ export class Compiler {
       throw new Error("Compiler session has been destroyed");
     }
   }
-}
-
-function loadedRevisionKey(loaded: Loaded): string {
-  const cached = revisionKeyByLoaded.get(loaded);
-  if (cached !== undefined) return cached;
-
-  const dependencies = [...loaded.dependencies].map(
-    ([specifier, dependency]) => ({
-      specifier,
-      revision: loadedRevisionKey(dependency),
-    }),
-  );
-  const includedFiles = [...loaded.includedFiles].map(
-    ([specifier, included]) => ({
-      specifier,
-      path: included.path,
-      source: included.source,
-    }),
-  );
-  const key = JSON.stringify({
-    path: loaded.path,
-    module: encodePortableModule(loaded.module),
-    dependencies,
-    includedFiles,
-  });
-  revisionKeyByLoaded.set(loaded, key);
-  return key;
 }
 
 let sharedCompiler: Promise<Compiler> | undefined;
