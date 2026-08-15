@@ -145,11 +145,18 @@ locality first; SIMD is justified only when a contiguous finite-set scan remains
 a measured dominant cost.
 
 Opening an immutable compile-time record is represented by a shared field table
-plus a target-to-source index. For `F` opened names and recursively sized values
-of total size `S`, constructing the scope costs `O(F log F)` name-index work and
-`O(F)` indices, not `O(S)` recursive value and type cloning. Lookup retains the
-same lexical result by the open-frame lemma in
-[`TYPECHECKING.md`](TYPECHECKING.md).
+plus a target-to-source index. For `F` opened names, `D <= F` names actually
+demanded by the checked program, and `S_D` type nodes reachable from those
+demanded fields, constructing the scope costs `O(F log F)` name-index work and
+`O(F)` indices while type freshening costs `O(S_D)`, not `O(S)` recursive
+cloning of the complete opened record. If every field is demanded then `S_D = S`
+and this reduces to eager work. One per-instantiation memo preserves sharing
+when several demanded fields mention the same generalized variable. A
+record-to-fresh-variable field relation may remain suspended until that variable
+is observed, so enumerating `F` opened names need not force their recursive field
+types. Lookup retains the same lexical result by the open-frame lemma in
+[`TYPECHECKING.md`](TYPECHECKING.md); demanded freshening and suspended-bound
+equivalence are specified in [`DEMAND_CHECKING.md`](DEMAND_CHECKING.md).
 
 Parallelism begins at independent module or declaration-group boundaries. One
 connected mutable inference graph remains sequential unless a different solver
@@ -161,6 +168,8 @@ for graphs without simultaneous ready work.
 The compiler performs each semantic derivation once:
 
 - checking records facts that lowering consumes;
+- immutable AST-local queries such as import discovery and free/bound-name
+  analysis are derived once per exact AST node identity;
 - an unchanged top-level declaration prefix retains deterministic values across
   a later semantic edit while the checker derives the new revision;
 - a complete checked compile-time environment may feed staging;
