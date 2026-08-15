@@ -1,8 +1,8 @@
 # Resident closed-leaf check reuse
 
 This experiment measures the first full TypeScript checker reuse boundary from
-`spec/TYPECHECKING.md`: an unchanged dependency may reuse its complete check when
-it is a nullary leaf, its lexical specialization interface closes, and that
+`spec/TYPECHECKING.md`: an unchanged dependency may reuse its complete check
+when it is a nullary leaf, its lexical specialization interface closes, and that
 interface contains no generative effect brand. The check is first settled in an
 isolated staging sink, so caller-specific fact reads are not retained.
 
@@ -22,10 +22,10 @@ Three independent nine-sample runs were taken on Node 22.16.0. The baseline is
 merged PR #35; the optimized column is the resident-leaf implementation. Values
 below are the median of those three run medians.
 
-| Boundary | #35 baseline | resident leaf | Change |
-| --- | ---: | ---: | ---: |
-| changed-module check | 63.795 ms | 31.950 ms | **49.9% less / 2.00x** |
-| changed-module compile | 72.438 ms | 37.203 ms | **48.6% less / 1.95x** |
+| Boundary               | #35 baseline | resident leaf |                 Change |
+| ---------------------- | -----------: | ------------: | ---------------------: |
+| changed-module check   |    63.795 ms |     31.950 ms | **49.9% less / 2.00x** |
+| changed-module compile |    72.438 ms |     37.203 ms | **48.6% less / 1.95x** |
 
 Cold compilation remains in the same band: the three-run medians were 458.162 ms
 baseline and 444.662 ms with resident leaf reuse. Source-only edits remain in
