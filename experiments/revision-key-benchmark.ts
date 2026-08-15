@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
-import { loadProgram } from "../src/compiler/frontend.ts";
+import { loadProgram, type Loaded } from "../src/compiler/frontend.ts";
 import { encodePortableModule } from "../src/syntax/portable.ts";
 
 const root = await loadProgram(resolve("examples/storage.blot"));
@@ -10,49 +10,107 @@ if (dependency === undefined) {
 }
 const [specifier, loadedDependency] = dependency;
 
-const dependencyPayload = JSON.stringify({
-  path: loadedDependency.path,
-  module: encodePortableModule(loadedDependency.module),
-  dependencies: [],
-  includedFiles: [],
-});
-const dependencyDigest = digest(dependencyPayload);
+const dependencyPayload = nestedRevisionKey(loadedDependency, new WeakMap());
+const dependencyDigest = digestRevisionKey(loadedDependency, new WeakMap());
 const rootModule = encodePortableModule(root.module);
-const samples = 1_000;
+const coldSamples = 100;
+const residentSamples = 1_000;
 
-const nested = measure(() =>
+const nestedCold = measure(coldSamples, () =>
+  nestedRevisionKey(root, new WeakMap())
+);
+const hashedCold = measure(coldSamples, () =>
+  digestRevisionKey(root, new WeakMap())
+);
+const nestedResident = measure(residentSamples, () =>
   JSON.stringify({
     path: root.path,
     module: rootModule,
     dependencies: [{ specifier, revision: dependencyPayload }],
-    includedFiles: [],
+    includedFiles: includedFiles(root),
   })
 );
-const hashed = measure(() =>
+const hashedResident = measure(residentSamples, () =>
   digest(JSON.stringify({
     path: root.path,
     module: rootModule,
     dependencies: [{ specifier, revision: dependencyDigest }],
-    includedFiles: [],
+    includedFiles: includedFiles(root),
   }))
 );
 
 console.log(JSON.stringify({
   source: root.path,
-  samples,
+  samples: { cold_graph: coldSamples, resident_root: residentSamples },
   milliseconds: {
-    nested_serialized_key: nested.milliseconds,
-    fixed_size_digest: hashed.milliseconds,
+    cold_graph: {
+      nested_serialized_key: nestedCold.milliseconds,
+      fixed_size_digest: hashedCold.milliseconds,
+    },
+    resident_root_after_dependency_keyed: {
+      nested_serialized_key: nestedResident.milliseconds,
+      fixed_size_digest: hashedResident.milliseconds,
+    },
   },
   key_bytes: {
-    nested_serialized_key: nested.value.length,
-    fixed_size_digest: hashed.value.length,
+    nested_serialized_key: nestedResident.value.length,
+    fixed_size_digest: hashedResident.value.length,
     dependency_serialized_key: dependencyPayload.length,
     dependency_digest: dependencyDigest.length,
   },
 }, null, 2));
 
-function measure(operation: () => string): {
+function nestedRevisionKey(
+  loaded: Loaded,
+  cache: WeakMap<Loaded, string>,
+): string {
+  const cached = cache.get(loaded);
+  if (cached !== undefined) return cached;
+  const key = JSON.stringify({
+    path: loaded.path,
+    module: encodePortableModule(loaded.module),
+    dependencies: [...loaded.dependencies].map(([name, child]) => ({
+      specifier: name,
+      revision: nestedRevisionKey(child, cache),
+    })),
+    includedFiles: includedFiles(loaded),
+  });
+  cache.set(loaded, key);
+  return key;
+}
+
+function digestRevisionKey(
+  loaded: Loaded,
+  cache: WeakMap<Loaded, string>,
+): string {
+  const cached = cache.get(loaded);
+  if (cached !== undefined) return cached;
+  const key = digest(JSON.stringify({
+    path: loaded.path,
+    module: encodePortableModule(loaded.module),
+    dependencies: [...loaded.dependencies].map(([name, child]) => ({
+      specifier: name,
+      revision: digestRevisionKey(child, cache),
+    })),
+    includedFiles: includedFiles(loaded),
+  }));
+  cache.set(loaded, key);
+  return key;
+}
+
+function includedFiles(loaded: Loaded): readonly {
+  readonly specifier: string;
+  readonly path: string;
+  readonly source: string;
+}[] {
+  return [...loaded.includedFiles].map(([specifier, included]) => ({
+    specifier,
+    path: included.path,
+    source: included.source,
+  }));
+}
+
+function measure(samples: number, operation: () => string): {
   readonly milliseconds: number;
   readonly value: string;
 } {
