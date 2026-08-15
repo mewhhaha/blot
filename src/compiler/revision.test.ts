@@ -6,13 +6,18 @@ import test from "node:test";
 import { loadSource } from "../load.ts";
 import { loadedRevisionKey } from "./revision.ts";
 
-test("semantic revision keys are fixed-size dependency digests", async () => {
+test("semantic revision keys are fixed-size recursive digests", async () => {
   const directory = await mkdtemp(join(tmpdir(), "blot-revision-key-"));
+  const leaf = join(directory, "leaf.blot");
   const dependency = join(directory, "dependency.blot");
   const root = join(directory, "root.blot");
   const source = 'const dependency = @import "./dependency.blot"\nreturn dependency ()\n';
   try {
-    await writeFile(dependency, "module ()\nreturn 42\n");
+    await writeFile(leaf, "return 42\n");
+    await writeFile(
+      dependency,
+      'const leaf = @import "./leaf.blot"\nreturn leaf ()\n',
+    );
     const first = await loadSource(root, source);
     const firstKey = loadedRevisionKey(first);
     assert.match(firstKey, /^[0-9a-f]{64}$/);
@@ -20,10 +25,10 @@ test("semantic revision keys are fixed-size dependency digests", async () => {
     const commentOnly = await loadSource(root, `${source}\n// comment only\n`);
     assert.equal(loadedRevisionKey(commentOnly), firstKey);
 
-    await writeFile(dependency, "module ()\nreturn 43\n");
-    const changedDependency = await loadSource(root, source);
-    assert.notEqual(loadedRevisionKey(changedDependency), firstKey);
-    assert.match(loadedRevisionKey(changedDependency), /^[0-9a-f]{64}$/);
+    await writeFile(leaf, "return 43\n");
+    const changedGrandchild = await loadSource(root, source);
+    assert.notEqual(loadedRevisionKey(changedGrandchild), firstKey);
+    assert.match(loadedRevisionKey(changedGrandchild), /^[0-9a-f]{64}$/);
   } finally {
     await rm(directory, { recursive: true });
   }
