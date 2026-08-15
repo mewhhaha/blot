@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { Compiler } from "./session.ts";
 
@@ -28,3 +31,72 @@ test("destroyed development compiler refuses new work", async () => {
     /Compiler session has been destroyed/,
   );
 });
+
+test(
+  "resident checker reuses a closed nullary leaf across root edits",
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "blot-resident-leaf-"));
+    const library = join(directory, "library.blot");
+    const root = join(directory, "root.blot");
+    const source = (x: number, other: string, value: number): string =>
+      `const library = @import "./library.blot"\n` +
+      `const api = library ()\n` +
+      `return api.project { .x = ${x}; .${other} = ${value}; }\n`;
+    const compiler = await Compiler.create();
+    try {
+      await writeFile(
+        library,
+        "const project = fn value => value.x\nreturn { .project = project; }\n",
+      );
+      await writeFile(root, source(1, "y", 2));
+      assert.equal((await compiler.check(root)).type, "1");
+
+      await writeFile(root, source(3, "z", 4));
+      assert.equal((await compiler.check(root)).type, "3");
+
+      await writeFile(
+        library,
+        "const project = fn value => value.z\nreturn { .project = project; }\n",
+      );
+      assert.equal((await compiler.check(root)).type, "4");
+    } finally {
+      compiler.destroy();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "resident checker never reuses a parameterized leaf check",
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "blot-resident-param-"));
+    const library = join(directory, "library.blot");
+    const root = join(directory, "root.blot");
+    const compiler = await Compiler.create();
+    try {
+      await writeFile(
+        library,
+        "module input\nlet hidden = input.base\nreturn { .answer = 42; }\n",
+      );
+      await writeFile(
+        root,
+        'const library = @import "./library.blot"\n' +
+          "return (library { .base = 1; }).answer\n",
+      );
+      assert.equal((await compiler.check(root)).type, "42");
+
+      await writeFile(
+        root,
+        'const library = @import "./library.blot"\n' +
+          "return (library { .name = 1; }).answer\n",
+      );
+      await assert.rejects(
+        compiler.check(root),
+        /no field `\.base`/,
+      );
+    } finally {
+      compiler.destroy();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);

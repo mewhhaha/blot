@@ -725,6 +725,39 @@ invalidation ensure that environment denotes the same module application.
 Parameterised analyses remain per-check because their values may depend on the
 caller's argument.
 
+The Node checker implements the first full-check reuse case at a stronger
+boundary than the Rust type-interface cache. For a leaf module `m`,
+
+```txt
+parameter(m) = unit    closed-interface(m)    no-generative-brand(m)
+-------------------------------------------------------------------- resident-leaf
+check_root(..., m, ...) may reuse settled_check(m)
+```
+
+The cache miss checks `m` with a private `Staging`, settles every local fact
+read, and only then publishes the result. Because `m` is a leaf there is no
+contextual dependency result to copy into another compilation; because it is
+nullary no caller argument can settle its module parameter. The module result
+may still contain inference variables, but it is retained only as a read-only
+scheme template: the ordinary `@import` rule wraps the module function at level
+`-1` and instantiates it, so importer constraints land on fresh copies. The
+lexical specialization interface is stricter: it must close because selected
+source closures reconstruct their captured typing scope from that interface.
+
+On a hit the importing compilation installs the closed specialization interface
+but derives new call-site specializations and their fact sinks in its own
+`Staging`. User effect labels are generative (`name#id`), so a branded closed
+leaf may use its isolated check in the compilation that produced the brand but
+is not retained for the next compilation. Fixed compiler-private labels are not
+generative brands. A leaf that cannot publish a closed interface is remembered
+as unsealable for that loader revision and uses the ordinary shared-staging path
+on later checks.
+
+This is intentionally a leaf theorem, not a prelude exception. Generalizing it
+to modules with dependencies requires a packaged transitive checked artifact so
+all dependency facts cross one coherent revision boundary rather than being
+transplanted piecemeal.
+
 The source text and the semantic revision are distinct. Write `lower(s) = m` for
 Baba tokenisation, island parsing, compact-CST materialisation, and Blot
 lowering together. When an edit satisfies `lower(s') = lower(s)`, equality here

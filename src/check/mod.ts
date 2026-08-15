@@ -180,6 +180,19 @@ export async function checkUncheckedSource(
 }
 
 const checkedPrograms = new WeakMap<Loaded, CheckResult>();
+/**
+ * Complete checks whose fact sinks were settled without an importer.
+ *
+ * Leaf + nullary is intentionally stronger than the closed-interface premise:
+ * there is no dependency result to transplant and no caller parameter that can
+ * settle this module's inference variables.
+ */
+interface ReusableLeafCheck {
+  readonly checked: CheckedFile;
+  readonly interface: NonNullable<ReturnType<typeof specializationInterface>>;
+}
+const reusableLeafChecks = new WeakMap<Loaded, ReusableLeafCheck>();
+const unsealableLeafChecks = new WeakSet<Loaded>();
 const linearityByModule = new WeakMap<
   Loaded["module"],
   ReturnType<typeof checkLinearity>
@@ -195,7 +208,7 @@ function checkLoadedProgram(loaded: Loaded): CheckResult {
 
   const checkedFiles = new Map<Loaded, CheckedFile>();
   const staging = newStaging();
-  checkLoaded(loaded, checkedFiles, staging);
+  checkLoaded(loaded, checkedFiles, staging, false);
   settle(staging);
   const result = assemble(loaded, checkedFiles, new Map());
   checkedPrograms.set(loaded, result);
@@ -210,16 +223,67 @@ interface CheckedFile {
   readonly values: ValueEnv;
 }
 
+function specializationInterface(staging: Staging, identity: object) {
+  return staging.interfaces.get(identity) ?? null;
+}
+
+function hasGenerativeBrand(
+  published: NonNullable<ReturnType<typeof specializationInterface>>,
+): boolean {
+  return published.declarationIdentity.split("\u0000").some((label) =>
+    label.includes("#")
+  );
+}
+
 function checkLoaded(
   loaded: Loaded,
   cache: Map<Loaded, CheckedFile>,
   staging: Staging,
+  allowResidentReuse = true,
 ): CheckedFile {
   const cached = cache.get(loaded);
   if (cached !== undefined) return cached;
 
   if (loaded.closure.tag !== "closure") {
     throw new Error("a module must load as a closure");
+  }
+
+  const reusableLeaf = allowResidentReuse && loaded.module.parameter === null &&
+    loaded.dependencies.size === 0 && !unsealableLeafChecks.has(loaded);
+  if (reusableLeaf) {
+    const resident = reusableLeafChecks.get(loaded);
+    if (resident !== undefined) {
+      staging.interfaces.set(loaded.closure, resident.interface);
+      cache.set(loaded, resident.checked);
+      return resident.checked;
+    }
+
+    // A leaf has no dependency facts to transplant. Check it once against an
+    // isolated staging sink so its settled facts cannot retain observations
+    // from whichever importer happened to reach it first. Only a closed lexical
+    // interface without generative effect brands makes the result reusable.
+    const isolatedStaging = newStaging();
+    const isolatedCache = new Map<Loaded, CheckedFile>();
+    const candidate = checkLoaded(
+      loaded,
+      isolatedCache,
+      isolatedStaging,
+      false,
+    );
+    settle(isolatedStaging);
+    const published = specializationInterface(isolatedStaging, loaded.closure);
+    if (published !== null) {
+      if (!hasGenerativeBrand(published)) {
+        reusableLeafChecks.set(loaded, {
+          checked: candidate,
+          interface: published,
+        });
+      }
+      staging.interfaces.set(loaded.closure, published);
+      cache.set(loaded, candidate);
+      return candidate;
+    }
+    unsealableLeafChecks.add(loaded);
   }
 
   // Nothing is seeded. The prelude is reached through `@import` like any other
