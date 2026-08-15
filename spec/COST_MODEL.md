@@ -112,12 +112,12 @@ Compile-time evaluation can dominate these bounds because it executes source
 programs. Its budget and measured reductions are reported separately from
 structural compiler traversal.
 
-For a resident module `m`, let `A_m` be the size of the canonical phase input for
-that module and `d_m` its number of direct dependency/include edges. Once child
-revisions are known, constructing `m`'s recursive revision identity should cost
-`O(A_m + d_m)` and store one fixed-size digest. A parent references each child
-by that digest. Embedding a child's complete serialized key instead would make
-parents repeatedly copy transitive key material; on chains it repeats each
+For a resident module `m`, let `A_m` be the size of the canonical phase input
+for that module and `d_m` its number of direct dependency/include edges. Once
+child revisions are known, constructing `m`'s recursive revision identity should
+cost `O(A_m + d_m)` and store one fixed-size digest. A parent references each
+child by that digest. Embedding a child's complete serialized key instead would
+make parents repeatedly copy transitive key material; on chains it repeats each
 descendant in every ancestor and on diamonds it repeats shared subgraphs per
 path. That cost carries no semantic information and is therefore duplicate
 compiler work.
