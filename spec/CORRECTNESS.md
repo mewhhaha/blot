@@ -122,6 +122,14 @@ The implementation should advance in this order:
 language. A claim graduates from “tested invariant” to “proved lemma” only when
 its formal assumptions and conclusion match the artifact contract used here.
 
+Auxiliary analysis may remain outside the mechanized trusted core only through
+translation validation. A producer may infer control-flow environments,
+ownership summaries, or certificates; the checked boundary must reconstruct
+their premises from stable identities and reject an invalid fact. Conservative
+joins need a weakening lemma, and any structural-path claim needs a coherence
+invariant relating the abstract path to the concrete evaluator value. This keeps
+fact discovery replaceable without making its output axiomatic.
+
 ## 7. Whole-compiler theorem
 
 The theorem in [`COMPILER.md`](COMPILER.md) follows by composing the relations

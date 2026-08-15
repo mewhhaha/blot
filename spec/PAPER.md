@@ -944,6 +944,24 @@ parameters to the type lattice. If first-class slices or references are added,
 Blot will need an explicit provenance/region calculus rather than extending the
 current marker informally.
 
+A candidate for that future calculus is the regular-path environment of Nowacki
+et al.'s
+[Tracking Borrows with Regular Expressions](https://verse-lab.org/papers/regex-borrows-oopsla26.pdf).
+It summarizes reachability between abstract references with regular languages:
+field borrowing uses derivatives, control-flow joins use union, calls use a
+conservative closure, and mutation safety becomes an emptiness check. This is a
+better fit than lifetime inference when references are restricted to structured
+access paths, and it preserves the present separation between ordinary types and
+ownership facts.
+
+It is not part of the minimal language. The model assumes first-class references
+and mutation, whereas Blot's current borrow cannot escape and source values
+remain immutable. Its vector abstraction also merges all indices into one path
+symbol, so it cannot replace the exact interval algebra needed by partitioned
+regions. If an escaping-borrow experiment becomes necessary, its path
+environment must remain an auxiliary ownership judgment and compose with Store
+provenance and family-specific region proofs rather than subsuming them.
+
 ### 10.4 Reuse theorem
 
 Source arrays are immutable. An implementation may update an array allocation in
@@ -1364,6 +1382,15 @@ The first mechanized artifact should omit modules, reflection, SIMD, and the
 ABI. It should include live bindings, functions, variants, effects, handlers,
 and affine continuations, because those choices determine the rest.
 
+Mechanization should separate fact production from checking. An implementation
+may infer branch environments, path summaries, or ownership certificates, but a
+smaller formal checker must reconstruct their premises and reject an invalid
+fact. Its state invariant should connect source binding identities and
+structural paths to the evaluator's concrete values, while weakening proves that
+conservative branch joins preserve acceptance. This follows the useful
+translation-validation boundary demonstrated by the regex-based Move checker
+without importing its first-class-reference semantics into Blot.
+
 Generated pure and staged arithmetic programs now compare loaded-AST execution
 with a small typed-Core interpreter. Generated one-shot handler programs compare
 loaded-AST and production typed-Core execution. Nested ownership-path generators
@@ -1429,6 +1456,11 @@ association.
 - Weiss et al.'s [Oxide](https://arxiv.org/abs/1903.00982) is a warning that
   first-class borrowing requires a real provenance and lifetime model; Blot's
   initial lexical borrow is deliberately smaller.
+- Nowacki et al.'s
+  [Tracking Borrows with Regular Expressions](https://verse-lab.org/papers/regex-borrows-oopsla26.pdf)
+  gives a mechanized, translation-validated provenance model for structured
+  first-class references. Blot treats it as a deferred design if lexical borrows
+  ever become insufficient, not as machinery required by the current language.
 - The [WebAssembly Core Specification](https://www.w3.org/TR/wasm-core/)
   supplies the target machine safety model. Blot's canonical adapters and ABI
   remain additional compiler obligations.
