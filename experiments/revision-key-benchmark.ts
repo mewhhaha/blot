@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
-import { loadProgram, type Loaded } from "../src/compiler/frontend.ts";
+import { type Loaded, loadProgram } from "../src/compiler/frontend.ts";
 import { encodePortableModule } from "../src/syntax/portable.ts";
 
 const root = await loadProgram(resolve("examples/storage.blot"));
@@ -16,11 +16,13 @@ const rootModule = encodePortableModule(root.module);
 const coldSamples = 100;
 const residentSamples = 1_000;
 
-const nestedCold = measure(coldSamples, () =>
-  nestedRevisionKey(root, new WeakMap())
+const nestedCold = measure(
+  coldSamples,
+  () => nestedRevisionKey(root, new WeakMap()),
 );
-const hashedCold = measure(coldSamples, () =>
-  digestRevisionKey(root, new WeakMap())
+const hashedCold = measure(
+  coldSamples,
+  () => digestRevisionKey(root, new WeakMap()),
 );
 const nestedResident = measure(residentSamples, () =>
   JSON.stringify({
@@ -28,37 +30,39 @@ const nestedResident = measure(residentSamples, () =>
     module: rootModule,
     dependencies: [{ specifier, revision: dependencyPayload }],
     includedFiles: includedFiles(root),
-  })
-);
+  }));
 const hashedResident = measure(residentSamples, () =>
   digest(JSON.stringify({
     path: root.path,
     module: rootModule,
     dependencies: [{ specifier, revision: dependencyDigest }],
     includedFiles: includedFiles(root),
-  }))
-);
+  })));
 
-console.log(JSON.stringify({
-  source: root.path,
-  samples: { cold_graph: coldSamples, resident_root: residentSamples },
-  milliseconds: {
-    cold_graph: {
-      nested_serialized_key: nestedCold.milliseconds,
-      fixed_size_digest: hashedCold.milliseconds,
+console.log(JSON.stringify(
+  {
+    source: root.path,
+    samples: { cold_graph: coldSamples, resident_root: residentSamples },
+    milliseconds: {
+      cold_graph: {
+        nested_serialized_key: nestedCold.milliseconds,
+        fixed_size_digest: hashedCold.milliseconds,
+      },
+      resident_root_after_dependency_keyed: {
+        nested_serialized_key: nestedResident.milliseconds,
+        fixed_size_digest: hashedResident.milliseconds,
+      },
     },
-    resident_root_after_dependency_keyed: {
-      nested_serialized_key: nestedResident.milliseconds,
-      fixed_size_digest: hashedResident.milliseconds,
+    key_bytes: {
+      nested_serialized_key: nestedResident.value.length,
+      fixed_size_digest: hashedResident.value.length,
+      dependency_serialized_key: dependencyPayload.length,
+      dependency_digest: dependencyDigest.length,
     },
   },
-  key_bytes: {
-    nested_serialized_key: nestedResident.value.length,
-    fixed_size_digest: hashedResident.value.length,
-    dependency_serialized_key: dependencyPayload.length,
-    dependency_digest: dependencyDigest.length,
-  },
-}, null, 2));
+  null,
+  2,
+));
 
 function nestedRevisionKey(
   loaded: Loaded,
