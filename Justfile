@@ -49,7 +49,7 @@ format-check file:
 ownership file:
   deno run --allow-read src/cli.ts ownership {{file}}
 
-# Compile one program through the checked-in Rust/WebAssembly compiler.
+# Compile one program through the Node development compiler.
 build file:
   deno run --allow-read --allow-write src/cli.ts build {{file}}
 
@@ -79,8 +79,7 @@ check:
   cargo fmt --manifest-path compiler/Cargo.toml --check
   cargo clippy --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
   cargo test --manifest-path compiler/Cargo.toml
-  # Exact bytes, so this reproduces only under the Rust release CI pins.
-  deno task check:compiler-artifact
+  deno run --allow-read --allow-write --allow-run=cargo --allow-env scripts/build_compiler.ts --check
   deno task conformance:frontend
   deno task conformance:check
   deno task conformance:eval

@@ -2,6 +2,10 @@ name: Node Wasm CI
 
 on:
   pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,6 +23,7 @@ jobs:
           deno-version: v2.x
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.97.1
           targets: wasm32-unknown-unknown
       - name: Rebuild Rust compiler Wasm
         run: >-
@@ -28,13 +33,22 @@ jobs:
           --allow-run=cargo
           --allow-env
           scripts/build_compiler.ts
-      - name: Upload generated Rust compiler artifact
+      - name: Describe Rust compiler artifact
+        run: >-
+          deno run
+          --allow-read
+          --allow-write
+          --allow-run=git,rustc
+          scripts/package_compiler_artifact.ts
+      - name: Upload Rust compiler artifact
         uses: actions/upload-artifact@v4
         with:
-          name: blot-rust-compiler-${{ github.sha }}
-          path: generated/compiler/compiler.wasm
+          name: blot-rust-compiler
+          path: |
+            generated/compiler/compiler.wasm
+            generated/compiler/compiler-artifact.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 90
       - name: Check Rust formatting
         run: cargo fmt --manifest-path compiler/Cargo.toml -- --check
       - name: Test Rust compiler
@@ -67,6 +81,8 @@ jobs:
           set -euo pipefail
           {
             git ls-files -z
+            printf 'generated/compiler/compiler.wasm\0'
+            printf 'generated/compiler/compiler-artifact.json\0'
             printf 'node_modules\0'
           } > "$RUNNER_TEMP/blot-node-workspace.files"
           tar \
@@ -87,8 +103,11 @@ jobs:
           test -f case-studies/agent/main.blot
           test -f conformance/node-rust-gaps.json
           test -f experiments/node-wasm-benchmark.ts
+          test -f generated/compiler/compiler.wasm
+          test -f generated/compiler/compiler-artifact.json
           pnpm exec tsx --import ./src/node/polyfills.mjs src/node/cli.ts check examples/minimal.blot
           pnpm exec tsx --import ./src/node/polyfills.mjs --test src/node/pipeline.test.ts
+          pnpm parity:strict examples/minimal.blot
       - name: Upload runnable Node workspace
         uses: actions/upload-artifact@v4
         with:
@@ -102,5 +121,15 @@ jobs:
       - run: pnpm blot run examples/node-runner-demo.blot
       - run: pnpm parity:strict
       - run: pnpm run benchmark -- examples/storage.blot
-      - name: Verify generated Rust artifacts are committed
-        run: git diff --exit-code -- generated/compiler/compiler.wasm
+      - name: Verify compiler artifact is derived output
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s generated/compiler/compiler.wasm
+          test -s generated/compiler/compiler-artifact.json
+          git check-ignore --quiet generated/compiler/compiler.wasm
+          git check-ignore --quiet generated/compiler/compiler-artifact.json
+          if git ls-files --error-unmatch generated/compiler/compiler.wasm >/dev/null 2>&1; then
+            echo 'generated/compiler/compiler.wasm must not be tracked' >&2
+            exit 1
+          fi

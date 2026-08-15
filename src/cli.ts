@@ -1,8 +1,8 @@
 // blot's command line.
 //
-// `build` runs the checked-in Rust compiler Wasm over Baba-generated parser
-// tables. WebGPU belongs only to explicit conformance tools such as `just
-// parity` and `just wasm`.
+// `build` runs the Node development compiler over Baba-generated parser tables.
+// WebGPU belongs only to explicit conformance tools such as `just parity` and
+// `just wasm`.
 
 import { resolve } from "@std/path";
 import { BlotError, locate, render } from "./diagnostic.ts";
@@ -95,7 +95,7 @@ function printUsage(): void {
     "usage: blot <check|test|eval|ast|ownership|fmt> <path>...",
   );
   console.error(
-    "       check, build, and package answer from the production Rust compiler;",
+    "       check, build, and package answer from the Node development compiler;",
   );
   console.error(
     "       eval and ownership answer from the TypeScript conformance oracle.",

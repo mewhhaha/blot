@@ -1,9 +1,9 @@
 # Compiler development and production
 
-Node/TypeScript is Blot's default compiler development environment. The
-checked-in Rust compiler Wasm is the production implementation. Both implement
-the same compiler contract and are kept in strict observable parity. The Node
-pipeline is:
+Node/TypeScript is Blot's default compiler development environment. The CI-built
+Rust compiler Wasm is the production implementation. Both implement the same
+compiler contract and are kept in strict observable parity. The Node pipeline
+is:
 
 ```text
 source
@@ -158,8 +158,9 @@ crosses a process or unvalidated revision boundary.
 `pnpm parity` discovers every Blot file under `examples/`, `case-studies/`, and
 `src/prelude/`, then hosts both compilers in the same Node process. The
 development compiler uses Baba, the TypeScript semantic passes, and the
-compiler-owned backend. The production compiler is the checked-in Rust compiler
-Wasm. Neither path starts Deno, Cargo, or a native Rust process during parity.
+compiler-owned backend. The production compiler is the validated CI-built Rust
+compiler Wasm. Neither path starts Deno, Cargo, or a native Rust process during
+parity.
 
 For every corpus root, parity compares frontend acceptance, rejection stage and
 diagnostic code, Runtime-HIR export phases, canonical ABI manifest bytes, and
@@ -183,14 +184,22 @@ pnpm run benchmark -- --node-only examples/storage.blot
 
 It reports nine-sample medians for initialization, cold and resident builds,
 checks, comment-only edits, semantic edits, phase splits, emitted sizes, and
-Node-to-Rust ratios. `--node-only` is useful while rebuilding the checked-in
-Rust compiler Wasm; it is not a parity measurement.
+Node-to-Rust ratios. `--node-only` is useful while rebuilding the local Rust
+compiler Wasm; it is not a parity measurement.
 
 ## CI boundary
 
-Pull-request CI installs exact package versions with pnpm, runs the Node tests
-and checker, rebuilds the checked-in Rust compiler Wasm, runs Rust tests, and
-requires strict dual-compiler parity. Deno and Cargo exist only in that
-artifact-verification job; ordinary `check`, `build`, tests, and benchmark
-execution host both checked-in Wasm components in Node. CI also rejects an
-uncommitted generated-artifact diff.
+Pull-request and main-branch CI install exact package versions with pnpm, run
+the Node tests and checker, build the Rust compiler Wasm once, run Rust tests,
+and require strict dual-compiler parity against those exact bytes. CI records
+the pinned Rust version, SHA-256, byte length, and source-tree identity, then
+publishes the compiler and a Cargo-free runnable workspace for 90 days. The
+workspace includes the compiler artifact used by parity and benchmarks in that
+run.
+
+The binary itself is ignored derived output. `pnpm compiler:download` selects a
+successful CI run for the current commit, downloads `blot-rust-compiler`, and
+installs it only when its manifest matches the checkout tree and content.
+`pnpm compiler:build` is the local Cargo fallback and refreshes the tracked
+prelude snapshot. Ordinary `pnpm blot check` and `pnpm blot build` need neither
+the production compiler artifact nor Cargo; parity and Rust conformance do.

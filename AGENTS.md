@@ -151,11 +151,19 @@ is wrong.
 **Node is development; Rust/Wasm is production.** Implement and debug compiler
 features in the Node/TypeScript pipeline by default, then port the same phase to
 the correspondingly named Rust module. A feature is not production-complete
-until the checked-in Rust compiler Wasm agrees on acceptance, diagnostic code,
+until the CI-built Rust compiler Wasm agrees on acceptance, diagnostic code,
 Runtime-HIR exports, public ABI, capabilities, and runtime observations.
 `pnpm parity` must keep the known-gap inventory exact; `pnpm parity:strict` is
 the zero-gap target. Neither implementation overrides the language or compiler
 specification.
+
+**The production compiler binary is derived output.** Git tracks the Rust
+source and generated prelude snapshot, not `generated/compiler/compiler.wasm`.
+CI builds the binary once with the pinned Rust toolchain, records its SHA-256
+and source-tree identity, uses it for parity and benchmarks, and publishes it
+both directly and inside the runnable workspace artifact. A downloaded binary
+must match the checkout tree before use; ordinary Node compiler commands do not
+require it.
 
 **The caller never sees gpufuck values.** Blot Core Wasm ABI 1 is the stable
 memory32, UTF-8 caller contract in `docs/abi.md`. Exports and host effects use

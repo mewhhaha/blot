@@ -16,9 +16,11 @@ Blot has one compiler contract and two maintained implementations.
 Node/TypeScript is the default development environment: Node instantiates Baba's
 generated lexer Wasm, runs Baba's general-profile CPU island executor, executes
 Blot's readable semantic passes, and instantiates gpupaper's embedded emitter.
-The checked-in Rust compiler Wasm is the production implementation. Deno, a
-native Rust process, Cargo, and WebGPU are outside an ordinary compilation
-boundary.
+The Rust compiler Wasm built by CI is the production implementation. It is a
+transport artifact, not source: Git tracks the Rust implementation and its
+generated prelude snapshot, while successful CI runs publish the exact Wasm with
+a content hash and source-tree identity. Deno, a native Rust process, Cargo, and
+WebGPU are outside an ordinary compilation boundary.
 
 Baba's Wasm runtime lexes layout-elaborated source. Its CPU island executor
 parses the general-profile plan and returns the compact CST. Gpupaper receives
@@ -117,9 +119,27 @@ source -> Baba lexer -> layout elaboration -> Baba CPU frontend -> compact CST -
 Baba owns lexing and parsing. Blot owns deterministic layout-token insertion,
 source-offset recovery, elaboration, inference, compile-time evaluation, safety,
 ownership, specialization, Runtime HIR, ABI policy, and the module shell.
-Gpupaper owns Core-to-Wasm planning and binary emission. The checked-in Blot
-Rust compiler Wasm is the production implementation and parity counterpart; it
-is not invoked by an ordinary Node development compilation.
+Gpupaper owns Core-to-Wasm planning and binary emission. The CI-built Blot Rust
+compiler Wasm is the production implementation and parity counterpart; it is not
+invoked by an ordinary Node development compilation.
+
+### 2.1 Production compiler distribution
+
+`compiler.wasm` is derived output. A distribution manifest binds its byte length
+and SHA-256 digest to the pinned Rust toolchain and complete Git source-tree
+identity used by the build. A consumer may install an artifact only after
+validating the Wasm magic, the byte length, the digest, and equality between the
+manifest tree and its checkout tree. A mismatched tree is not a source
+diagnostic and must not be silently accepted as a nearby compiler revision.
+
+Each pull-request or main-branch CI run builds this artifact once and uses those
+same bytes for Rust parity, conformance, benchmarks, and the downloadable
+runnable workspace. The raw compiler artifact and workspace are retained as CI
+products; neither is a second semantic authority. Local development may
+reproduce the artifact with the pinned build procedure or download the artifact
+for an exactly matching source tree. Ordinary Node compilation still uses Baba
+and gpupaper's embedded emitter and therefore requires neither artifact nor
+Cargo.
 
 ## 3. Pass contract
 
@@ -320,9 +340,9 @@ applicable runtime observations. Internal type pretty-printing and
 instruction-byte identity are not required observations.
 
 The repository-wide dual-compiler corpus runs both implementations under Node;
-the Rust implementation is the checked-in compiler Wasm, not a native toolchain
-process. Its known-gap file is an inventory, not permission to weaken a
-judgment. CI requires that inventory to change explicitly, and the strict mode
+the Rust implementation is the validated CI-built compiler Wasm, not a native
+toolchain process. Its known-gap file is an inventory, not permission to weaken
+a judgment. CI requires that inventory to change explicitly, and the strict mode
 requires the inventory to be empty.
 
 Staging evaluates a module result as one computation before selecting a named
@@ -478,7 +498,7 @@ Unsupported target policy is a `TargetRefusal`; a failure after validated
 Runtime HIR is an `InvariantFailure`. Neither is a source diagnostic, and
 neither receives a fabricated source span.
 
-Node/TypeScript is the development implementation and the checked-in Rust/Wasm
+Node/TypeScript is the development implementation and the CI-built Rust/Wasm
 compiler is the production implementation. Semantic authority belongs to this
 specification and `LANGUAGE.md`, not to either implementation. gpufuck/WebGPU
 routes are conformance implementations and are not reachable from the public
@@ -618,7 +638,7 @@ dependent. No data layout makes that dependency disappear.
 The collapse should be tested by deletion or replacement in this order:
 
 1. **Development path:** `build` and the public `Compiler` route through the
-   Baba-Wasm → Node semantics → gpupaper-Wasm pipeline. The checked-in Blot Rust
+   Baba-Wasm → Node semantics → gpupaper-Wasm pipeline. The CI-built Blot Rust
    compiler Wasm remains the production implementation and strict parity
    counterpart.
 2. **Complete on the Node path:** constant and residual programs share Runtime

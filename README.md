@@ -13,10 +13,10 @@ program, an agent-style conversation loop, and a 3D engine with a browser host
 and hot reload.
 
 `@mewhhaha/blot` uses Node/TypeScript as the default compiler development
-environment. Node hosts two checked-in Wasm components: Baba's generated parser
-and gpupaper's Rust/Wasm emitter. The checked-in Blot Rust compiler Wasm is the
-production implementation; strict parity keeps both implementations on the same
-compiler contract. Blot's TypeScript passes connect the development pipeline:
+environment. Node hosts Baba's checked-in generated parser and gpupaper's
+embedded Rust/Wasm emitter. Blot's CI-built Rust compiler Wasm is the production
+implementation; strict parity keeps both implementations on the same compiler
+contract. Blot's TypeScript passes connect the development pipeline:
 
 ```ts
 import { parse } from "@mewhhaha/blot";
@@ -108,7 +108,7 @@ reuses its Store allocation; ordinary shared arrays remain persistent. See
 [docs/ownership.md](docs/ownership.md).
 
 The compiler (M4) develops accepted programs through the Baba-Wasm → Node →
-gpupaper-Wasm pipeline; the checked-in Rust compiler Wasm is the production
+gpupaper-Wasm pipeline; the CI-built Rust compiler Wasm is the production
 implementation. `pnpm blot check` and `pnpm blot build` need neither Deno nor
 native Rust; building produces caller-facing WebAssembly plus a JSON ABI
 manifest without executing the program. The identical manifest is embedded in
@@ -122,6 +122,15 @@ generated Wasm parses source, Blot's TypeScript checker and staging passes
 produce validated Runtime HIR, and gpupaper 0.1.6 lowers Core through its
 embedded Rust/Wasm emitter. The operational boundary is documented in
 [docs/compiler.md](docs/compiler.md).
+
+The production compiler binary is not committed to Git. CI publishes a 90-day
+`blot-rust-compiler` artifact and a runnable workspace containing the same
+bytes. From a checkout at the corresponding commit, `pnpm compiler:download`
+downloads the latest successful artifact for that commit and verifies its source
+tree, pinned toolchain provenance, byte length, Wasm header, and SHA-256 before
+installing it under `generated/compiler/`. `pnpm compiler:build` reproduces it
+locally when Cargo and the Wasm target are available. Downloading requires an
+authenticated GitHub CLI that can read Actions artifacts for the repository.
 
 ```ts
 import { Compiler } from "@mewhhaha/blot";

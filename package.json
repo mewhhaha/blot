@@ -18,6 +18,8 @@
     "benchmark:relational": "tsx --import ./src/node/polyfills.mjs experiments/relational-summaries/benchmark.ts",
     "benchmark:relational:production": "tsx --import ./src/node/polyfills.mjs experiments/relational-summaries/production_benchmark.ts",
     "benchmark:sealed": "tsx --import ./src/node/polyfills.mjs experiments/sealed-interfaces/benchmark.ts",
+    "compiler:build": "deno run --allow-read --allow-write --allow-run=cargo --allow-env scripts/build_compiler.ts",
+    "compiler:download": "deno run --allow-read --allow-write --allow-run=gh,git scripts/download_compiler.ts",
     "parity": "tsx --import ./src/node/polyfills.mjs src/node/parity.ts",
     "parity:strict": "tsx --import ./src/node/polyfills.mjs src/node/parity.ts --strict"
   },

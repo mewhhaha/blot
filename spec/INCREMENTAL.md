@@ -166,17 +166,19 @@ makes no checked-interface or specialization-cache claim.
 
 The full Rust compiler additionally ships the dependency-free prelude's portable
 AST and closed checked interface as a generated artifact beside the compiler
-WebAssembly. The loader resolves the explicit `blot:prelude` import to that
-artifact, installs it under the same module identity, and evaluates its
-validated AST once per compiler session. The compiler artifact is already part
-of the trusted computing base, so this is equivalent to retaining a successful
-frontend and check in a process cache across compiler sessions. The build
-regenerates the snapshot from the exact source with the current Baba plan and
-checker; its check mode rejects a stale snapshot. Loading validates the AST
-arena, certificate schema, every flat-arena reference, and closed rigid-variable
-scope before installing it. The compiler then evaluates the validated module
-once per session and retains that compile-time result rather than asserting a
-serialized value graph.
+WebAssembly. Git tracks this source-derived snapshot; CI packages it with the
+compiler binary whose source-tree manifest names the same revision. The loader
+resolves the explicit `blot:prelude` import to that artifact, installs it under
+the same module identity, and evaluates its validated AST once per compiler
+session. The compiler artifact is already part of the trusted computing base, so
+this is equivalent to retaining a successful frontend and check in a process
+cache across compiler sessions. The build regenerates the snapshot from the
+exact source with the current Baba plan and checker; its check mode rejects a
+stale snapshot before materializing the untracked compiler binary. Loading
+validates the AST arena, certificate schema, every flat-arena reference, and
+closed rigid-variable scope before installing it. The compiler then evaluates
+the validated module once per session and retains that compile-time result
+rather than asserting a serialized value graph.
 
 This authority does not extend to registry capsules. A package-controlled hash
 proves only that its payload was transported unchanged; it cannot prove that the

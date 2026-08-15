@@ -1,8 +1,8 @@
 tree-sitter-blot/
 *.wasm
-!generated/compiler/compiler.wasm
 !generated/wasm/parser.wasm
 *.wasm.json
+generated/compiler/compiler-artifact.json
 formal/lean/.lake/
 compiler/target/
 node_modules/
