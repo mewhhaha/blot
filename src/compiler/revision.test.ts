@@ -11,7 +11,8 @@ test("semantic revision keys are fixed-size recursive digests", async () => {
   const leaf = join(directory, "leaf.blot");
   const dependency = join(directory, "dependency.blot");
   const root = join(directory, "root.blot");
-  const source = 'const dependency = @import "./dependency.blot"\nreturn dependency ()\n';
+  const source =
+    'const dependency = @import "./dependency.blot"\nreturn dependency ()\n';
   try {
     await writeFile(leaf, "return 42\n");
     await writeFile(
