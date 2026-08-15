@@ -189,11 +189,10 @@ const checkedPrograms = new WeakMap<Loaded, CheckResult>();
  */
 interface ReusableLeafCheck {
   readonly checked: CheckedFile;
-  readonly interface: NonNullable<
-    ReturnType<typeof reusableSpecializationInterface>
-  >;
+  readonly interface: NonNullable<ReturnType<typeof specializationInterface>>;
 }
 const reusableLeafChecks = new WeakMap<Loaded, ReusableLeafCheck>();
+const unsealableLeafChecks = new WeakSet<Loaded>();
 const linearityByModule = new WeakMap<
   Loaded["module"],
   ReturnType<typeof checkLinearity>
@@ -224,15 +223,16 @@ interface CheckedFile {
   readonly values: ValueEnv;
 }
 
-function reusableSpecializationInterface(
-  staging: Staging,
-  identity: object,
-) {
-  const published = staging.interfaces.get(identity);
-  if (published === undefined) return null;
-  const labels = published.declarationIdentity.split("\u0000");
-  if (labels.some((label) => label.includes("#"))) return null;
-  return published;
+function specializationInterface(staging: Staging, identity: object) {
+  return staging.interfaces.get(identity) ?? null;
+}
+
+function hasGenerativeBrand(
+  published: NonNullable<ReturnType<typeof specializationInterface>>,
+): boolean {
+  return published.declarationIdentity.split("\u0000").some((label) =>
+    label.includes("#")
+  );
 }
 
 function checkLoaded(
@@ -249,7 +249,7 @@ function checkLoaded(
   }
 
   const reusableLeaf = allowResidentReuse && loaded.module.parameter === null &&
-    loaded.dependencies.size === 0;
+    loaded.dependencies.size === 0 && !unsealableLeafChecks.has(loaded);
   if (reusableLeaf) {
     const resident = reusableLeafChecks.get(loaded);
     if (resident !== undefined) {
@@ -271,16 +271,19 @@ function checkLoaded(
       false,
     );
     settle(isolatedStaging);
-    const published = reusableSpecializationInterface(
-      isolatedStaging,
-      loaded.closure,
-    );
+    const published = specializationInterface(isolatedStaging, loaded.closure);
     if (published !== null) {
-      reusableLeafChecks.set(loaded, { checked: candidate, interface: published });
+      if (!hasGenerativeBrand(published)) {
+        reusableLeafChecks.set(loaded, {
+          checked: candidate,
+          interface: published,
+        });
+      }
       staging.interfaces.set(loaded.closure, published);
       cache.set(loaded, candidate);
       return candidate;
     }
+    unsealableLeafChecks.add(loaded);
   }
 
   // Nothing is seeded. The prelude is reached through `@import` like any other
