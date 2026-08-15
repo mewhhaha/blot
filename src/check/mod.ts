@@ -180,6 +180,10 @@ export async function checkUncheckedSource(
 }
 
 const checkedPrograms = new WeakMap<Loaded, CheckResult>();
+const linearityByModule = new WeakMap<
+  Loaded["module"],
+  ReturnType<typeof checkLinearity>
+>();
 
 function checkLoadedProgram(loaded: Loaded): CheckResult {
   // A dependency cannot carry a context-independent checked result because an
@@ -268,7 +272,11 @@ function checkLoaded(
     }
     // Ownership is checked after types. A use-after-move reported on a program
     // that does not type-check would be the second-best diagnostic.
-    const linear = checkLinearity(loaded.module);
+    let linear = linearityByModule.get(loaded.module);
+    if (linear === undefined) {
+      linear = checkLinearity(loaded.module);
+      linearityByModule.set(loaded.module, linear);
+    }
     if (linear.diagnostics.length > 0) {
       throw new BlotError(linear.diagnostics[0]);
     }

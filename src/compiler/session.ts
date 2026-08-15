@@ -35,6 +35,11 @@ interface CachedArtifact {
   readonly capabilities: readonly string[];
 }
 
+interface PreparedArtifact {
+  readonly hir: BlotRuntimeModule;
+  readonly artifact: CachedArtifact;
+}
+
 interface ResidentRevision {
   readonly key: string;
   checked?: CheckedModule;
@@ -53,6 +58,7 @@ const revisionKeyByLoaded = new WeakMap<Loaded, string>();
  */
 export class Compiler {
   readonly #compiled = new WeakMap<BlotRuntimeModule, CachedArtifact>();
+  readonly #compiledByPath = new Map<string, PreparedArtifact>();
   readonly #revisions = new Map<string, ResidentRevision>();
   readonly #targetPolicy: ResolvedCompilerTargetPolicy;
   #destroyed = false;
@@ -100,13 +106,12 @@ export class Compiler {
     const absolute = resolve(path);
     const hir = await this.prepare(absolute);
     const cached = this.#compiled.get(hir);
-    if (cached !== undefined) {
-      return {
-        wasm: cached.wasm.slice(),
-        manifestBytes: cached.manifestBytes.slice(),
-        capabilities: cached.capabilities.slice(),
-        artifactSource: "revision-cache",
-      };
+    if (cached !== undefined) return cachedArtifact(cached);
+
+    const previous = this.#compiledByPath.get(absolute);
+    if (previous !== undefined && sameRuntimeProgram(previous.hir, hir)) {
+      this.#compiled.set(hir, previous.artifact);
+      return cachedArtifact(previous.artifact);
     }
 
     const program = close(hir, this.#targetPolicy);
@@ -117,6 +122,7 @@ export class Compiler {
       capabilities: emitted.capabilities.slice(),
     };
     this.#compiled.set(hir, artifact);
+    this.#compiledByPath.set(absolute, { hir, artifact });
     return {
       wasm: artifact.wasm.slice(),
       manifestBytes: artifact.manifestBytes.slice(),
@@ -191,4 +197,41 @@ export async function compileArtifact(
     sharedCompiler = Compiler.create();
   }
   return await (await sharedCompiler).compile(path);
+}
+
+function cachedArtifact(artifact: CachedArtifact): CompilerArtifact {
+  return {
+    wasm: artifact.wasm.slice(),
+    manifestBytes: artifact.manifestBytes.slice(),
+    capabilities: artifact.capabilities.slice(),
+    artifactSource: "revision-cache",
+  };
+}
+
+/** Runtime source locations do not affect a successfully emitted program. */
+function sameRuntimeProgram(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (typeof left !== typeof right || left === null || right === null) {
+    return false;
+  }
+  if (typeof left !== "object") return false;
+  if (Array.isArray(left)) {
+    if (!Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((value, index) =>
+      sameRuntimeProgram(value, right[index])
+    );
+  }
+  if (Array.isArray(right)) return false;
+
+  const leftRecord = left as Readonly<Record<string, unknown>>;
+  const rightRecord = right as Readonly<Record<string, unknown>>;
+  const leftKeys = Object.keys(leftRecord).filter((key) => key !== "span");
+  const rightKeys = Object.keys(rightRecord).filter((key) => key !== "span");
+  if (leftKeys.length !== rightKeys.length) return false;
+  for (let index = 0; index < leftKeys.length; index += 1) {
+    const key = leftKeys[index]!;
+    if (key !== rightKeys[index]) return false;
+    if (!sameRuntimeProgram(leftRecord[key], rightRecord[key])) return false;
+  }
+  return true;
 }

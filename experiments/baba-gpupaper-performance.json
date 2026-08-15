@@ -1,0 +1,25 @@
+{
+  "workload": "examples/storage.blot",
+  "mode": "node-only paired local",
+  "trials": 4,
+  "samples_per_trial": 9,
+  "edit": "width-changing dead private literal 1 <-> 100; Runtime HIR unchanged",
+  "milliseconds": {
+    "main": {
+      "changed_module_edit": 83.047,
+      "check": 72.365,
+      "prepare_after_check": 1.912,
+      "compile_after_prepare": 3.753,
+      "cold_end_to_end": 456.745,
+      "source_only_edit": 8.797
+    },
+    "branch": {
+      "changed_module_edit": 70.639,
+      "check": 65.338,
+      "prepare_after_check": 2.081,
+      "compile_after_prepare": 0.502,
+      "cold_end_to_end": 445.657,
+      "source_only_edit": 8.705
+    }
+  }
+}

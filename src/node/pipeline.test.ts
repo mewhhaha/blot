@@ -94,6 +94,51 @@ test("comment-only revisions reuse the compiled artifact", async () => {
   }
 });
 
+test("runtime-neutral semantic revisions reuse the compiled artifact", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-node-semantic-cache-"));
+  const path = join(directory, "minimal.blot");
+  const compiler = await Compiler.create();
+  try {
+    await writeFile(path, "const hidden = 1\nreturn 42\n");
+    const first = await compiler.compile(path);
+    await writeFile(path, "const hidden = 100\nreturn 42\n");
+    const second = await compiler.compile(path);
+    assert.equal(second.artifactSource, "revision-cache");
+    assert.deepEqual(second.wasm, first.wasm);
+    assert.deepEqual(second.manifestBytes, first.manifestBytes);
+
+    const fresh = await Compiler.create();
+    try {
+      const rebuilt = await fresh.compile(path);
+      assert.equal(rebuilt.artifactSource, "compiled");
+      assert.deepEqual(second.wasm, rebuilt.wasm);
+      assert.deepEqual(second.manifestBytes, rebuilt.manifestBytes);
+    } finally {
+      fresh.destroy();
+    }
+  } finally {
+    compiler.destroy();
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("runtime-changing semantic revisions recompile", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-node-semantic-miss-"));
+  const path = join(directory, "minimal.blot");
+  const compiler = await Compiler.create();
+  try {
+    await writeFile(path, "return 42\n");
+    const first = await compiler.compile(path);
+    await writeFile(path, "return 43\n");
+    const second = await compiler.compile(path);
+    assert.equal(second.artifactSource, "compiled");
+    assert.notDeepEqual(second.wasm, first.wasm);
+  } finally {
+    compiler.destroy();
+    await rm(directory, { recursive: true });
+  }
+});
+
 test("multiple named runtime exports survive Runtime HIR and ABI lowering", async () => {
   const compiler = await Compiler.create();
   try {
