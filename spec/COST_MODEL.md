@@ -193,6 +193,13 @@ programs. Its cost is governed by the same phase terms, not by a special
 semantic rule. A resident or distributed certified snapshot may remove repeated
 frontend, checking, and staging work under [`INCREMENTAL.md`](INCREMENTAL.md).
 
+For a closed nullary leaf of check cost `C_m`, the resident-leaf rule pays
+`C_m` once per module revision rather than once per edited importer. A cache hit
+still pays fresh importer specialization work; it removes only the leaf's own
+inference, evaluation, ownership, and locally settled fact work. The leaf
+restriction keeps the first implementation from hiding transitive work in a
+nominally constant cache lookup.
+
 Current measurements are observations, not specification constants. Before the
 prebuilt snapshot, five independent nine-sample runs on 2026-08-04 placed the
 full Rust/Wasm compiler at a 73.6 ms fresh-process cold median, a 0.280 ms
