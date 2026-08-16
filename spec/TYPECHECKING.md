@@ -349,6 +349,16 @@ environment resolves callees; source spelling never does. At application, the
 argument's immutable value identity replaces `parameter_0` and the resulting
 term enters `Phi`. Cycles and bodies outside this fragment derive no fact.
 
+A runtime name bound to one of these terms receives an affine equality between
+its binding identity and the retained term. When that name is compared with a
+compile-time integer, it is the comparison subject even though the same name can
+also serve as a stable witness elsewhere. Branch constraints attach to the
+binding identity, and shortest-path entailment transports them through the
+equality to the array length. Thus the untaken branch of `length < 2`, after
+`let length = @array.len xs`, proves literal index zero below `length(xs)`. Two
+retained non-literal terms remain witnesses with no subject and are not compared
+by this initial fragment.
+
 When `:=` removes the last visible name for an old identity, the refinement
 graph projects that identity out by shortest-path closure before deleting its
 incident edges. The projected graph preserves every entailed difference bound

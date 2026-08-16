@@ -114,31 +114,42 @@ export function narrowing(condition: Expr, scope: TypeEnv): Narrowing | null {
   const answers = recognise(callee);
   if (answers === null) return null;
 
-  // The witness decides which side is the subject. One side must name a single
-  // value — a compile-time integer, or one array's length — and not merely have
-  // a ground type. `n == m` where `m`'s type is `1 | 2` would let the untaken
-  // branch conclude `n ∉ {1, 2}`, but all the condition said is that `n` differs
-  // from *this* `m`. A whole type is a sound witness for the intersection and an
-  // unsound one for the complement, so neither is taken unless the witness is
-  // one value. A length is one value for the same reason a `const` is: the
-  // immutable value identity it names holds one array for its whole lifetime.
+  // A witness decides what the named subject is compared against. It must name
+  // one value — a compile-time integer, or one array's length — and not merely
+  // have a ground type. `n == m` where `m`'s type is `1 | 2` would let the
+  // untaken branch conclude `n ∉ {1, 2}`, but all the condition said is that
+  // `n` differs from *this* `m`. A whole type is a sound witness for the
+  // intersection and an unsound one for the complement, so neither is taken
+  // unless the witness is one value. A length is one value for the same reason
+  // a `const` is: the immutable value identity it names holds one array for its
+  // whole lifetime. A name retaining such a length may itself be the subject
+  // when the other side is a literal; the selection below keeps that case
+  // separate from comparing two independent length witnesses.
   const left = condition.fn.arg;
   const right = condition.arg;
   const leftWitness = witness(left, scope);
   const rightWitness = witness(right, scope);
-  if (leftWitness !== null && rightWitness !== null) return null;
+  const leftSubject = comparedName(left, scope);
+  const rightSubject = comparedName(right, scope);
 
-  if (rightWitness !== null) {
-    const subject = comparedName(left, scope);
-    if (subject === null) return null;
-    return proves(subject, answers, rightWitness);
+  // A name retaining `length(array) + k` is both a stable witness and a valid
+  // subject when compared with a literal. Choosing its binding identity as the
+  // subject lets the equality already recorded in Phi carry the branch bound
+  // back to that array. Two retained relationships still have no subject: the
+  // initial fragment deliberately does not compare independent lengths.
+  if (
+    rightWitness !== null && leftSubject !== null &&
+    (leftWitness === null || typeof rightWitness === "bigint")
+  ) {
+    return proves(leftSubject, answers, rightWitness);
   }
-  if (leftWitness !== null) {
-    const subject = comparedName(right, scope);
-    if (subject === null) return null;
+  if (
+    leftWitness !== null && rightSubject !== null &&
+    (rightWitness === null || typeof leftWitness === "bigint")
+  ) {
     // `1 < n` is `n > 1`. Mirroring the three-element ordering set is a
     // bijection, so mirroring before complementing and after agree.
-    return proves(subject, mirror(answers), leftWitness);
+    return proves(rightSubject, mirror(answers), leftWitness);
   }
   return null;
 }

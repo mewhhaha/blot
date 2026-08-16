@@ -1483,7 +1483,10 @@ whole lifetime. Every consequence follows from that key.
   against `@array.len xs` may prove a direct access through `ys`.
 - A measured length may itself be bound. `let length = @array.len xs;` keeps the
   relationship, as do aliases of `length` and affine shifts by an integer
-  literal such as `length - 1`. Arbitrary arithmetic widens back to `Int`.
+  literal such as `length - 1`. When such a binding is compared with a literal,
+  it remains the comparison subject: the untaken side of `length < 2` records
+  `2 <= length`, and that fact can prove literal index `0` against `xs`.
+  Arbitrary arithmetic widens back to `Int`.
 - Two arrays are never related. `len xs` and `len ys` are not compared, ordered,
   or solved against one another merely because their array types agree.
 - The one thing assumed about a length nobody measured is
@@ -1519,7 +1522,9 @@ the branch failing to cover a set the condition would have shrunk.
   identity, so there is no symbol to compare against. The primitive applied to a
   name, or a binding that retained such a measurement, is a witness.
 - **Two lengths.** `@array.len xs == @array.len ys` has a witness on both sides
-  and a subject on neither.
+  and a subject on neither. Binding both lengths does not change that: a bound
+  affine relationship becomes a subject only when its other operand is a
+  compile-time integer.
 - **A witness that is another runtime name.** `n == m` says `n` equals this `m`,
   not that `n` is somewhere in `m`'s type. Intersecting against a whole type
   would be sound and complementing against it would not, so neither is done.

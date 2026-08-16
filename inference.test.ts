@@ -1666,6 +1666,49 @@ return at
 );
 
 check(
+  "the untaken branch of a bound length guard proves a literal index",
+  `sig first = [Int] -> Int
+let first = fn xs =>
+  let length = Array.length xs
+  if length < 2:
+    return 0
+  else:
+    return @array.get xs 0
+return first
+`,
+  "[Int] -> Int",
+);
+
+check(
+  "a bound affine length may prove itself as an index",
+  `sig last = [Int] -> Int
+let last = fn xs =>
+  let index = @int.sub (@array.len xs) 1
+  if index < 0:
+    return 0
+  else:
+    return @array.get xs index
+return last
+`,
+  "[Int] -> Int",
+);
+
+rejects(
+  "two bound lengths still do not become subject and witness",
+  `sig first = [Int] -> [Int] -> Int
+let first = fn xs => fn ys =>
+  let xs_length = @array.len xs
+  let ys_length = @array.len ys
+  if xs_length < ys_length:
+    return @array.get ys 0
+  else:
+    return 0
+return first
+`,
+  "BLOT_UNPROVEN_INDEX",
+);
+
+check(
   "affine arithmetic preserves a bound length relationship",
   `sig at = [Int] -> Int -> Int
 let at = fn xs => fn n =>

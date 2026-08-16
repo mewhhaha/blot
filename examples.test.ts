@@ -73,6 +73,7 @@ const REJECTIONS: Record<
     stage: "check",
   },
   "compared_names": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
+  "compared_lengths": { code: "BLOT_UNPROVEN_INDEX", stage: "check" },
   // The one bounds failure the checker can already decide: both the index and
   // the array's length are written out in the source. It is the same code the
   // evaluator raises, and it has migrated from `run` to `check`.
