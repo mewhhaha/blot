@@ -1,0 +1,12 @@
+// An ordinary source module can publish an ownership-transforming wrapper.
+// The compiler records the wrapper's structural contract; neither this module
+// name nor the exported field receives special treatment.
+
+open import "blot:prelude"
+
+const Vault =
+  {
+    .finish = fn !region => Slice.freeze (!region);
+  }
+
+return Vault

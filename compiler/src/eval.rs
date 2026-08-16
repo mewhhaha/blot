@@ -49,6 +49,8 @@ pub struct Context {
     pub(crate) evaluated_bindings: RefCell<EvaluatedBindings>,
     pub(crate) closure_signatures: RefCell<HashMap<(String, ExpressionId), Value>>,
     pub(crate) recursive_closures: RefCell<HashSet<(String, ExpressionId)>>,
+    pub(crate) ownership_contracts:
+        RefCell<HashMap<(String, ExpressionId), crate::ownership::OwnershipContract>>,
     next_effect: Cell<u32>,
     effect_ids: RefCell<HashMap<EffectIdentity, u32>>,
     named_effects: RefCell<HashMap<(String, String, bool), u32>>,

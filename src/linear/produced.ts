@@ -641,9 +641,21 @@ export function functionContract(
       result: knownResult,
     };
   }
-  if (expr.tag !== "var") return NO_FUNCTION_CONTRACT;
+  if (expr.tag !== "var") {
+    const imported = analysis.importedContract(expr, scope);
+    if (imported !== null) return imported;
+    return NO_FUNCTION_CONTRACT;
+  }
   const binding = analysisBinding(scope, expr.name);
-  if (binding === null) return NO_FUNCTION_CONTRACT;
+  if (binding === null) {
+    const imported = analysis.importedContract(expr, scope);
+    if (imported !== null) return imported;
+    return NO_FUNCTION_CONTRACT;
+  }
+  if (binding.parameterPattern === null) {
+    const imported = analysis.importedContract(expr, scope);
+    if (imported !== null) return imported;
+  }
   return {
     parameter: binding.parameter,
     input: binding.parameterInput,
@@ -752,7 +764,14 @@ export function transparentOwnership(
     );
     if (argument === null) return null;
     const contract = functionContract(expr.fn, NONE, scope, analysis);
-    if (!returnsConsumedParameter(contract)) return null;
+    if (returnsConsumedParameter(contract)) return argument;
+    if (expr.fn.tag !== "var") return null;
+    const recursive = analysisBinding(scope, expr.fn.name);
+    if (recursive === null || recursive.value?.tag !== "rec") return null;
+    if (recursive.value.lambda.tag !== "lambda") return null;
+    if (!patternContains(recursive.value.lambda.parameter, parameter)) {
+      return null;
+    }
     return argument;
   }
   if (expr.tag === "lambda") {
@@ -842,6 +861,22 @@ export function transparentOwnership(
     scope,
     analysis,
   );
+}
+
+function patternContains(pattern: Pattern, target: Pattern): boolean {
+  if (pattern === target) return true;
+  if (pattern.tag === "tuple" || pattern.tag === "array") {
+    return pattern.elements.some((element) => patternContains(element, target));
+  }
+  if (pattern.tag === "shape") {
+    return pattern.fields.some((field) =>
+      patternContains(field.pattern, target)
+    );
+  }
+  if (pattern.tag === "constructor" && pattern.payload !== null) {
+    return patternContains(pattern.payload, target);
+  }
+  return false;
 }
 
 export function oneTransparent(

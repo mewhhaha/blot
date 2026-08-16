@@ -16,6 +16,7 @@ import {
 } from "../load.ts";
 import {
   type Env as ValueEnv,
+  lookup as lookupValue,
   moduleEnv,
   type Value,
 } from "../comptime/value.ts";
@@ -51,6 +52,7 @@ import {
   type PublishedOwnershipLineage,
   verifyOwnershipCertificate,
 } from "../linear/certificate.ts";
+import type { FunctionContract } from "../linear/produced.ts";
 
 /**
  * What the linearity pass proved about one binding, once it has left its module.
@@ -199,6 +201,52 @@ const linearityByModule = new WeakMap<
   Loaded["module"],
   ReturnType<typeof checkLinearity>
 >();
+const ownershipContracts = new WeakMap<
+  object,
+  ReadonlyMap<Expr, FunctionContract>
+>();
+
+function calleeValue(expression: Expr, values: ValueEnv): Value | null {
+  if (expression.tag === "var") {
+    const value = lookupValue(values, expression.name);
+    if (value === undefined) return null;
+    return value;
+  }
+  if (expression.tag !== "field") return null;
+  const target = calleeValue(expression.target, values);
+  if (target === null) return null;
+  if (target.tag === "shape") {
+    const value = target.fields.get(expression.name);
+    if (value === undefined) return null;
+    return value;
+  }
+  if (target.tag === "extended") {
+    const value = target.members.get(expression.name);
+    if (value === undefined) return null;
+    return value;
+  }
+  if (target.tag !== "sealed") return null;
+  if (target.inner.tag !== "shape") return null;
+  const value = target.inner.fields.get(expression.name);
+  if (value === undefined) return null;
+  return value;
+}
+
+function importedOwnershipContract(
+  expression: Expr,
+  values: ValueEnv,
+): FunctionContract | null {
+  const value = calleeValue(expression, values);
+  if (value === null || value.tag !== "closure") return null;
+  if (value.source === undefined) return null;
+  const module = value.env.module;
+  if (module === null) return null;
+  const contracts = ownershipContracts.get(module.identity);
+  if (contracts === undefined) return null;
+  const contract = contracts.get(value.source);
+  if (contract === undefined) return null;
+  return contract;
+}
 
 function checkLoadedProgram(loaded: Loaded): CheckResult {
   // A dependency cannot carry a context-independent checked result because an
@@ -340,12 +388,19 @@ function checkLoaded(
     // that does not type-check would be the second-best diagnostic.
     let linear = linearityByModule.get(loaded.module);
     if (linear === undefined) {
-      linear = checkLinearity(loaded.module);
+      linear = checkLinearity(
+        loaded.module,
+        (expression) => importedOwnershipContract(expression, values),
+      );
       linearityByModule.set(loaded.module, linear);
     }
     if (linear.diagnostics.length > 0) {
       throw new BlotError(linear.diagnostics[0]);
     }
+    ownershipContracts.set(
+      loaded.closure,
+      linear.contracts,
+    );
     const complete: CheckedFile = {
       checked,
       effects: row,

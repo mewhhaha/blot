@@ -26,11 +26,13 @@ where `Delta_rep` maps every residual binding to a concrete representation and
 3. every effect operation has a concrete capability, operation, and signature;
 4. every proved operation carries valid evidence;
 5. every destructive Store operation carries ownership permission;
-6. every private recursive root was authorized by a checked closure-SCC
+6. every private Region operation carries checked authority and uses one
+   Store-plus-bounds representation;
+7. every private recursive root was authorized by a checked closure-SCC
    certificate and has a finite constructor case;
-7. every private function-choice table has at least one alternative, one case
+8. every private function-choice table has at least one alternative, one case
    per alternative, and one capture product per case; and
-8. every export and import is admitted by the selected ABI policy.
+9. every export and import is admitted by the selected ABI policy.
 
 Validation does not infer a missing source fact. A well-typed internal program
 that reaches an open shape or polymorphic operation exposes a specialization or
@@ -137,6 +139,17 @@ Staged non-empty arrays become ordinary Store construction. Store memory uses
 the canonical scalar layout internally as well as at adapters, so reads and
 writes preserve `i64`, `f32`, and `f64` element representations rather than
 reinterpreting an unconstrained element as `Unit`.
+
+A residual Region is one compiler-private product of a Store, inclusive start,
+and exclusive end. `claim` reuses only a fresh Store whose binding ownership
+proves it unavailable elsewhere; a shared or unknown Store receives one
+persistent copy before authority is minted. Relative reads and writes add the
+start only after proving the relative index inside `[0,end-start)`. `split`
+branches on the relative offset and returns either two products over the same
+Store or the unchanged parent. The ownership pass has already checked the linear
+recombination witness, so `join` erases that witness and rebuilds the parent
+bounds. `freeze` erases a complete root product to its Store. Region products
+and live witnesses are private layouts and are refused at ABI 1.
 
 An owned-reuse Store growth receives the previous pointer and byte length. When
 that allocation ends at the private heap cursor and still satisfies the

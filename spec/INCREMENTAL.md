@@ -90,9 +90,9 @@ is an implementation technique, not a different parser contract.
 
 A cached module interface contains settled closed schemes, effects, result and
 parameter types, verified erased relational summaries reachable from the
-compile-time boundary, and a dependency fingerprint. Encoding rejects live
-inference variables and unbound rigid identities. Decoding instantiates
-quantified identities freshly.
+compile-time boundary, closure ownership contracts, and a dependency
+fingerprint. Encoding rejects live inference variables and unbound rigid
+identities. Decoding instantiates quantified identities freshly.
 
 An in-process checker may stop reverse propagation after rechecking a changed
 module only when a sealed boundary fingerprint is unchanged. That fingerprint
@@ -107,6 +107,13 @@ A specialization capsule additionally contains deterministic compile-time values
 and closed source closures. Its coherence law is given in
 [`TYPECHECKING.md`](TYPECHECKING.md). Mutable bounds, pending worklists, AST
 object identities, and fact sinks do not cross the cache boundary.
+
+An ownership contract is keyed by the defining module and closure body and may
+retain pattern identities only from the exact AST packaged by that interface.
+Changing that AST invalidates the contract with the rest of the module. An
+importer resolves a source closure value to this identity and substitutes the
+argument through the published pattern; it never re-runs the dependency's
+ownership analysis or recognizes a source name.
 
 Checked compile-time environments, ownership results, safety certificates,
 Runtime HIR, and emitted artifacts may be retained only under the strongest

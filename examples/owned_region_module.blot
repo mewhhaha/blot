@@ -1,0 +1,12 @@
+// Ownership contracts follow closures through module interfaces. `finish` is
+// intentionally neither a primitive nor a `Slice`-named binding.
+
+open import "blot:prelude"
+
+const Vault = import "./lib/region_vault.blot"
+
+let region = Slice.claim [4, 2, 9]
+let frozen = Vault.finish (!region)
+return case Array.get (frozen, 2) of
+  #Some value => value
+  #None => 0

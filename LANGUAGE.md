@@ -1970,6 +1970,47 @@ authorize another branch's update. This is not mutation in the language: the
 source binding is unavailable after the consuming use, and updates of ordinary
 shared arrays remain persistent with the immutable behavior specified in §6.1.
 
+### 11.3 Regions and `Slice`
+
+`Slice.of T` is an opaque linear authority over an interval of one private array
+Store. Its backing Store, interval bounds, and recombination identities cannot
+be projected by source. The prelude exposes the ordinary source wrapper `Slice`;
+only its `@region.*` bodies are primitive:
+
+- `Slice.claim values` consumes an explicitly owned array allocation when one is
+  available, otherwise copies a shared array into a private Store;
+- `Slice.length (&slice)` and `Slice.get ((&slice), index)` borrow authority;
+- `Slice.set ((!slice), index, value)` and `Slice.swap ((!slice), left, right)`
+  consume and return the same authority;
+- `Slice.split ((!slice), offset)` consumes the parent and returns either
+  `#Split (!left, !right, !rejoin)` or `#SplitOutOfBounds !original`;
+- `Slice.join ((!rejoin), (!left), (!right))` consumes the exact sibling
+  authorities and their witness and returns their parent; and
+- `Slice.freeze (!slice)` consumes a complete root authority and returns an
+  immutable array.
+
+Every total failure returns the authority it received. A successful split's left
+and right intervals are disjoint, adjacent, in bounds, and an exact cover of the
+parent. Its linear `rejoin` witness records that sibling relation; reversal,
+substitution of an unrelated part, duplicate use, or loss of the witness is
+rejected. Only a complete root may freeze, so a part cannot discard the rest of
+its Store.
+
+Ownership-transforming closures publish a structural contract keyed by their
+defining module and lambda body. The contract records the parameter pattern and
+the ownership value produced by the body. An importer resolves an ordinary
+source closure and substitutes the caller's concrete authority through that
+contract, so a user wrapper in another module behaves exactly like the same
+wrapper locally. No `Slice` module, binding, or field name is recognized by the
+checker. Unknown and host-supplied functions retain the conservative ordinary
+call rule.
+
+Regions and rejoin witnesses are compiler-private values. Blot Core Wasm ABI 1
+has no encoding for either and refuses a live one at a public boundary. Internal
+Runtime HIR lowers a Region to private Store-plus-bounds data, erases the
+witness after checking, uses persistent acquisition for shared inputs, and may
+emit owned Store writes only for authority proven unique by ownership.
+
 ## 12. Effects and handlers
 
 An effect is a compile-time value built from a shape of operation types:

@@ -725,7 +725,8 @@ flat arena:
 ```txt
 FlatTypeId = u32
 FlatNode   = tag + child FlatTypeId values
-Interface = <arena, result, effects, parameter, evaluated-value-certificate>
+Interface = <arena, result, effects, parameter, evaluated-value-certificate,
+             closure-signatures, ownership-contracts>
 ```
 
 Encoding rejects every inference variable and every rigid not bound by an
@@ -823,13 +824,23 @@ reverse-import invalidation removes both caches. Thus a cache hit cannot retain
 code produced from a stale dependency, and `prepare` followed by `compile`
 shares work without introducing a second authority.
 
-Checked-module certificate schema 3 also carries the closure bodies belonging to
-recursive components. The checker builds the free-name graph for each prebound
-`rec` group and finds its strongly connected components with forward and reverse
-graph traversals. A singleton is recursive only when it has a self-edge. The
+Checked-module certificates also carry the closure bodies belonging to recursive
+components. The checker builds the free-name graph for each prebound `rec` group
+and finds its strongly connected components with forward and reverse graph
+traversals. A singleton is recursive only when it has a self-edge. The
 serialized body set must be duplicate-free and a subset of the certificate's
 closure signatures. Runtime lowering may allocate a private recursive
 representation only for a body in that set.
+
+The certificate also carries each source closure's ownership contract, keyed by
+the same `(module, body-expression)` identity as its runtime closure signature.
+Its parameter pattern and produced-result tree are interpreted only against the
+certificate's exact installed AST. Validation rejects unknown body or pattern
+identities, invalid spans, and malformed region derivation trees before the
+contract becomes visible to an importer. At a statically resolved call, the
+importer substitutes its concrete argument authority through that defining
+pattern. This is interface transport of the same ownership judgement, not
+re-inference and not trust attached to an exported name.
 
 ### Flat constraint graph
 
