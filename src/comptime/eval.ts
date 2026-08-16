@@ -396,7 +396,7 @@ export function* evaluateCoreModule(
   if (!match(parameter, argument, scope)) {
     fail(
       "BLOT_ARGUMENT_MISMATCH",
-      `${show(argument)} does not match this module parameter.`,
+      `${show(argument)} does not match this module input.`,
       parameter.span,
     );
   }

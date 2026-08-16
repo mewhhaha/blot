@@ -4,7 +4,7 @@
 // Neither is in the type lattice — they are a separate flow analysis, which is
 // what keeps biunification polynomial.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let consume = fn !value => value + 1
 let peek = fn &point => point.x + point.y
@@ -58,7 +58,7 @@ let flipped = case 1 < 2 of
   #True => consume (!coin)
   #False => consume (!coin)
 
-return {
+export {
   .owned = owned;
   .borrowed = borrowed;
   .settled = settled;

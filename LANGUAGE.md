@@ -59,7 +59,7 @@ tag continues with `[`. Section 4.2 defines declaration tags.
 The reserved words are:
 
 ```text
-module operators infixl infixr infix prefix
+module with export import operators infixl infixr infix prefix
 let const sig return
 if else case of rec open
 for in break do compdo fn
@@ -201,34 +201,43 @@ lowering folds that chain using the active fixity table.
 A file has this order:
 
 ```blot
-module parameter         // optional
+module with parameter    // optional
 
 operators {             // optional
   infixl 60 (+) = Num.add;
 }
 
 declarations
-return result
+export result
 ```
 
 The `module` header, when present, must be first. The `operators` header, when
-present, follows it. At least one declaration is required, and the final
-declaration must be `return value`.
+present, follows it. Zero or more declarations follow, and the file ends with
+exactly one `export value`. `export` is a module boundary, not a declaration
+modifier: exporting a record gives named fields, while exporting any other value
+gives the module one default result. There are no live export bindings or
+implicitly assembled export records.
 
-A module is a unary function from its parameter to its returned value. A module
-without an explicit header has a unit parameter that its body ignores; callers
-invoke it with `()`.
+`return value` before the final export exits the module early with that value,
+just as it exits an explicit `do` scope. The final `export` names the ordinary
+fallthrough value; it is not a second control-transfer statement.
+
+A module is an ordered computation from an optional input to its exported value.
+`module with pattern` binds an explicit input. A file without that header
+receives unit and does not name it. The implementation may represent a module as
+a unary closure internally, but that closure is not a source value.
 
 ```blot
-const library = @import "./library.blot"
-let exports = library ()
+let library = import "./library.blot"
+let configured = import "./configured.blot" with capabilities
 ```
 
-`@import` accepts a literal text specifier and returns the module function. It
-does not call that function and has no implicit parentheses. Relative paths are
-resolved from the importing file. A `blot:name` specifier resolves to the
-corresponding compiler-supplied library module; `blot:prelude` is the standard
-prelude. A bare package specifier resolves through the nearest
+`import "specifier"` instantiates the named module with unit and evaluates to
+its exported value. `import "specifier" with value` instantiates it with the
+explicit input. The specifier must be literal text. Relative paths are resolved
+from the importing file. A `blot:name` specifier resolves to the corresponding
+compiler-supplied library module; `blot:prelude` is the standard prelude. A bare
+package specifier resolves through the nearest
 `node_modules/<package>/blot.json`; the package name selects export `.` and a
 package subpath selects the corresponding `./subpath` export. Package manifests
 may name both ordinary source and a built `.blotc` module capsule. A valid built
@@ -249,18 +258,23 @@ source specifiers or required directory names.
 
 Imports are resolved before evaluation. Importing a module grants it no
 authority: the imported module can observe only the value passed as its module
-argument. The entry module's parameter is therefore its complete host authority.
+input. The entry module's input is therefore its complete host authority.
 
-Applying an imported module checks the argument against the parameter type
-inference found _inside_ that module. Nothing declares that requirement — a
-module never writes a signature for its parameter, and the demand is whatever
-its bodies reach for — so the rule is that the importer's record must satisfy
-every field the module projects off its parameter. A record missing one is
-`BLOT_TYPE_ERROR` at the application, naming the field. A fresh variable in the
-parameter's place would satisfy every argument, and the program would then read
-a field that is not there.
-`examples/rejected/semantics/module_argument_missing_field.blot` is the catalog
-entry.
+An evaluated import occurrence creates one module instance and runs that
+instance's top-level declarations once, in source order. Aliasing or
+re-exporting the resulting value does not run them again. Two written import
+occurrences denote two instances, even when their literal specifiers and inputs
+are equal. A compiler may inline an instance, but it may not merge distinct
+occurrences or replay one occurrence separately for several exported fields.
+
+An explicit import input is checked against the input demand inferred _inside_
+that module. Nothing separately declares that requirement: the demand is
+whatever its body reaches for. The importer's record must satisfy every field
+the module projects off its input. A record missing one is `BLOT_TYPE_ERROR` at
+the import expression, naming the field. A fresh variable in the input's place
+would satisfy every argument, and the program would then read a field that is
+not there. `examples/rejected/semantics/module_argument_missing_field.blot` is
+the catalog entry.
 
 The argument may carry _more_ fields than the module reads. Width subtyping
 holds across the boundary in both directions: as the argument to a module, and
@@ -273,11 +287,11 @@ Nothing, including the prelude, is implicitly in scope. The conventional prelude
 opening is:
 
 ```blot
-open @import "blot:prelude" ()
+open import "blot:prelude"
 ```
 
 At compilation, imported module bodies are specialized and inlined. This does
-not alter their source semantics as functions.
+not alter module-instance identity or top-level execution order.
 
 ### 3.1 Included files
 
@@ -437,10 +451,10 @@ After a module has been checked, imported specialization uses its immutable
 specialization capsule rather than the module's live inference environment. The
 capsule contains closed lexical schemes and its deterministic compile-time
 environment; mutable inference variables and pending constraints never cross the
-module boundary. A module parameter is not cached: each module application
-captures and types the concrete argument it received. Unchanged loader revisions
-may reuse a capsule across root checks, while a source, include, transitive
-dependency, or generative effect-identity change replaces it.
+module boundary. A module input is not cached: each import occurrence captures
+and types the concrete input it received. Unchanged loader revisions may reuse a
+capsule across root checks, while a source, include, transitive dependency, or
+generative effect-identity change replaces it.
 
 A recursive function is typed the same way. Its body names the binding being
 defined, which is not a capture: the name is bound to a placeholder and the body
@@ -520,11 +534,11 @@ Resolved tag names and metadata are available to compiler tools but are not part
 of the runtime value or the Wasm ABI. `blot test` selects the semantic name
 `"test"`, including aliases and descriptors built without the prelude. Each test
 must be a named top-level binding usable as a pure `Unit -> Unit` function. Test
-files have no explicit module parameter or ambient initializer effects. Every
-test runs against a fresh evaluation of the declarations through its own
-binding, failures do not stop later tests, imported modules contribute tests
-only when passed directly to the command, and a run finding no tests fails.
-Normal checking, evaluation, and building never execute tests.
+files have no explicit module input or ambient initializer effects. Every test
+runs against a fresh evaluation of the declarations through its own binding,
+failures do not stop later tests, imported modules contribute tests only when
+passed directly to the command, and a run finding no tests fails. Normal
+checking, evaluation, and building never execute tests.
 
 ### 4.3 Signatures
 
@@ -611,13 +625,12 @@ on the right of `<-`; its result is bound directly. A projected nullary
 operation is itself an effect value, so `time <- Clock.now` and
 `time <- Clock.now ()` have the same result and effect row.
 
-`let`, `const`, `:=`, `open`, function results written without a block, and
-module results are pure value positions. The expression in `return value` is a
+`let`, `const`, `:=`, `open`, function results written without a block, and the
+final `export` are pure value positions. The expression in `return value` is a
 tail computation of its current module or explicit indentation scope and may
-contribute effects to the enclosing function. Pure `let` bindings may be
-reordered, inlined, or discarded when their values are not demanded; sequencing
-an effect before the tail therefore requires `<-` even when its result is
-ignored.
+contribute effects to that scope. Pure `let` bindings may be reordered, inlined,
+or discarded when their values are not demanded; sequencing an effect before the
+tail therefore requires `<-` even when its result is ignored.
 
 ### 4.6 Components are ordinary functions
 
@@ -697,7 +710,7 @@ expression, rather than escaping farther.
 ## 5. Patterns
 
 Patterns occur in bindings, lambda parameters, case arms, `for` binders, module
-parameters, and `if let` guards.
+inputs, and `if let` guards.
 
 | pattern                    | meaning                                       |
 | -------------------------- | --------------------------------------------- |
@@ -2071,8 +2084,8 @@ effects; host effects remain caller capabilities.
 
 ### 12.3 Host boundary
 
-The entry module parameter and host effects are the only sources of host
-authority. No filesystem, clock, terminal, or network capability is ambient.
+The entry module input and host effects are the only sources of host authority.
+No filesystem, clock, terminal, or network capability is ambient.
 
 Host-effect operations may use the concrete first-order boundary values listed
 in section 15: integers, text, unit, booleans, records, arrays, variants, and
@@ -2144,11 +2157,10 @@ arguments to other primitives returns a partially applied primitive.
 
 Everything not listed here belongs in source, normally the prelude.
 
-### 13.1 Control, modules, and effects
+### 13.1 Control, files, and effects
 
 | primitive         | meaning                                                       |
 | ----------------- | ------------------------------------------------------------- |
-| `@import`         | resolve a text module specifier and return its function       |
 | `@include`        | parse a dependency-tracked file at compile time               |
 | `@json.parse`     | decode JSON under an explicit compile-time inference policy   |
 | `@effect`         | create a fresh source effect from operation types             |
@@ -2791,13 +2803,13 @@ The byte-level layouts and host calling example are in
 ## 16. Complete example
 
 ```blot
-module init
+module with init
 
 operators {
   infixl 65 (++) = Text.append;
 }
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Console = @effect.host {
   .write = Str -> Unit;
@@ -2820,7 +2832,7 @@ let report = fn () =>
   <- Console.write text
   return text
 
-return {
+export {
   .attempts = attempts;
   .report = report;
 }
@@ -2828,5 +2840,5 @@ return {
 
 This module receives its authority through `init`, explicitly opens the prelude,
 constructs types as values, uses `for` as a fold with an inferred accumulator,
-declares a host effect as its interface, and returns a concrete record suitable
+declares a host effect as its interface, and exports a concrete record suitable
 for staging and WebAssembly lowering.

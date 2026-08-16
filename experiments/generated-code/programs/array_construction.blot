@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig construct_go = (Int, [Int]) -> Int
 const construct_go = rec (fn (remaining, values) =>
@@ -11,4 +11,4 @@ const construct_go = rec (fn (remaining, values) =>
 sig construct = Int -> Int
 const construct = fn count => construct_go (count, @array.empty)
 
-return { .construct = construct; }
+export { .construct = construct; }

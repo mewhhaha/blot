@@ -21,7 +21,7 @@
 // turn of sines reaches WebAssembly as data and the polynomial that produced it
 // is not in the artifact.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const PI = 3.141592653589793
 const TAU = 6.283185307179586
@@ -89,7 +89,7 @@ const sin_steps = fn steps =>
 
 const cos_steps = fn steps => sin_steps (steps + QUARTER)
 
-return {
+export {
   .pi = Float32.of_float PI;
   .tau = Float32.of_float TAU;
   .turn = TURN;

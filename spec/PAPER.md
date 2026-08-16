@@ -838,8 +838,8 @@ determines whether its use is affine or linear.
 
 An ordinary effect row must be empty at the module boundary. A host effect row
 is an external capability declaration and lowers to typed synchronous imports.
-The entry module parameter and explicitly supplied host effects are the only
-ambient authority.
+The entry module input and explicitly supplied host effects are the only ambient
+authority.
 
 Host calls may diverge, trap, or violate their contract. Canonical adapters
 validate representational claims before constructing a Blot value. Once lifted,

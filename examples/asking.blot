@@ -10,7 +10,7 @@
 // so `reflect` and `refines` are all it needs and the prelude adds no
 // machinery — `Is` and `Has` are two lines each.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 // The type is what is asked about, never the value — which is why this works
 // on an expression whose value only exists at run time. `@type.of` cannot do
@@ -44,7 +44,7 @@ let exact = @type.satisfies (reading, Is Reading)
 // predicate answers `#False`, and it is refused while compiling rather than
 // trapping.
 
-return {
+export {
   .value = checked.value;
   .label = counted.label;
   .both = exact.value;

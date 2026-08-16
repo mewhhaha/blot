@@ -15,8 +15,8 @@ async function chain(depth: number, leafSource: string) {
     const path = join(directory, `module-${index}.blot`);
     await writeFile(
       path,
-      `const dependency = @import "./module-${index - 1}.blot" ()\n` +
-        `return { .answer = dependency.answer; }\n`,
+      `const dependency = import "./module-${index - 1}.blot"\n` +
+        `export { .answer = dependency.answer; }\n`,
     );
     paths.push(path);
   }
@@ -29,19 +29,19 @@ test("failed incremental checks do not publish partial snapshots", async () => {
   const root = join(directory, "root.blot");
   await writeFile(
     leaf,
-    `module input\nlet hidden = input.base\nreturn { .answer = 42; }\n`,
+    `module with input\nlet hidden = input.base\nexport { .answer = 42; }\n`,
   );
   await writeFile(
     root,
-    `const leaf = @import "./leaf.blot"\n` +
-      `return (leaf { .base = 1; }).answer\n`,
+    `const leaf = import "./leaf.blot" with { .base = 1; }\n` +
+      `export leaf.answer\n`,
   );
 
   const session = new SealedCheckSession();
   assert.equal((await session.check(root)).type, "42");
   await writeFile(
     leaf,
-    `module input\nlet hidden = input.name\nreturn { .answer = 42; }\n`,
+    `module with input\nlet hidden = input.name\nexport { .answer = 42; }\n`,
   );
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -55,14 +55,14 @@ test("failed incremental checks do not publish partial snapshots", async () => {
 test("referenced dead literals stay in the checked boundary", async () => {
   const fixture = await chain(
     5,
-    "const seed = 1\nlet hidden = seed\nreturn { .answer = 42; }\n",
+    "const seed = 1\nlet hidden = seed\nexport { .answer = 42; }\n",
   );
   const session = new SealedCheckSession();
   await session.check(fixture.root);
 
   await writeFile(
     fixture.leaf,
-    "const seed = 100\nlet hidden = seed\nreturn { .answer = 42; }\n",
+    "const seed = 100\nlet hidden = seed\nexport { .answer = 42; }\n",
   );
   const changed = await session.check(fixture.root);
   assert.equal(changed.rechecked.length, fixture.paths.length);

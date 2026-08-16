@@ -2,4 +2,4 @@
 loop:
   break
 
-return ()
+export ()

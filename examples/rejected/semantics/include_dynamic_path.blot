@@ -3,4 +3,4 @@ const path = "../../assets/greeting.txt"
 const direct = @include "../../assets/greeting.txt" as_raw
 const included = @include path as_raw
 
-return (direct, included)
+export (direct, included)

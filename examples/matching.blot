@@ -5,7 +5,7 @@
 // inside its constructor's arm, and a `case` over literals is a chain of
 // equality tests.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Message = #Ready | #Progress Int | #Failed Int
 
@@ -39,5 +39,5 @@ let unpack = fn m => case m of
 // parameter rather than inside the body.
 let span = fn { .from; .to; } => to - from
 
-return
+export
   describe #Ready + describe (#Progress 0) + describe (#Progress 4) + describe (#Failed 3) + classify 1 + classify 7 + unpack (#Pair (5, 6)) + rank 2 + span { .from = 2; .to = 5; } - 333

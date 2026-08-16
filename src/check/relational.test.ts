@@ -2,7 +2,7 @@ import { assertEquals, assertRejects } from "@std/assert";
 import { BlotError } from "../diagnostic.ts";
 import { checkSource } from "./mod.ts";
 
-const PRELUDE = `open @import "blot:prelude" ()\n`;
+const PRELUDE = `open import "blot:prelude"\n`;
 
 function checkedWith(bound: string, declarations = ""): Promise<unknown> {
   return checkSource(
@@ -12,7 +12,7 @@ function checkedWith(bound: string, declarations = ""): Promise<unknown> {
 let at = fn xs => fn n => case n >= 0 && ${bound} of
   #True => @array.get xs n
   #False => 0
-return at
+export at
 `,
   );
 }

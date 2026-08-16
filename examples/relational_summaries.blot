@@ -1,5 +1,5 @@
 // A verified erased summary carries Array.length through an ordinary wrapper.
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const count = fn values => Array.length values
 
@@ -8,4 +8,4 @@ let at = fn values => fn index => case index >= 0 && index < count values of
   #True => @array.get values index
   #False => 0
 
-return at [10, 20, 30] 1
+export at [10, 20, 30] 1

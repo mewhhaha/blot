@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Arguments =
   @effect.host {
@@ -29,4 +29,4 @@ for index in Iter.range (0, line_count):
     #True => count + 1
     #False => count
 
-return count
+export count

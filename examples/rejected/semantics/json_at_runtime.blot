@@ -4,4 +4,4 @@ let parsed = @json.parse #Widen {
   .text = "{}";
 }
 
-return parsed
+export parsed

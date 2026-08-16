@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Terminal =
   @effect.host {
@@ -14,4 +14,4 @@ if text_eq (name, ""):
   return ()
 
 result <- Terminal.write (Text.append "Hello, " name)
-return result
+export result

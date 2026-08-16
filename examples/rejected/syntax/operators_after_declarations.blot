@@ -8,4 +8,4 @@ operators {
   infixl 60 (+) = Num.add;
 }
 
-return x
+export x

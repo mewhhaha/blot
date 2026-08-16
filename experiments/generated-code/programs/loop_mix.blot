@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig mix_go = (Int, Int) -> Int
 const mix_go =
@@ -13,4 +13,4 @@ const mix_go =
 sig mix = Int -> Int
 const mix = fn count => mix_go (count, 1)
 
-return { .mix = mix; }
+export { .mix = mix; }

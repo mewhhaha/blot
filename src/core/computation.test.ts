@@ -5,7 +5,7 @@ import { elaborateModule } from "./computation.ts";
 
 Deno.test("typed core contains settled types and independent expression structure", async () => {
   const parsed = await parse(`let value = ()
-return value
+export value
 `);
   if (!parsed.ok) throw new Error("typed-core fixture did not parse");
   const declaration = parsed.module.declarations[0];

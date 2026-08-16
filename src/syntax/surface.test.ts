@@ -4,7 +4,7 @@ import { parse, parseConcrete } from "./parse.ts";
 
 Deno.test("a deferred lambda parameter is recorded on the lambda", async () => {
   const parsed = await parse(`let lazy = fn ~value => value
-return lazy
+export lazy
 `);
   assert(parsed.ok);
   if (!parsed.ok) return;
@@ -19,7 +19,7 @@ return lazy
 
 Deno.test("a deferred lambda parameter must be one name", async () => {
   const parsed = await parse(`let lazy = fn ~(left, right) => left
-return lazy
+export lazy
 `);
   assert(!parsed.ok);
   if (parsed.ok) return;
@@ -30,7 +30,7 @@ Deno.test("do is an explicit value-producing statement scope", async () => {
   const source = `let value = do:
   let local = 1
   return local
-return value
+export value
 `;
   const parsed = await parse(source);
   assert(parsed.ok);
@@ -49,7 +49,7 @@ Deno.test("a closure cannot rebind a captured outer lineage", async () => {
 let change = fn () => do:
   x := 1
   return x
-return change
+export change
 `;
   const parsed = await parse(source);
   assert(!parsed.ok);
@@ -63,7 +63,7 @@ let change = fn () => do:
   let x = x
   x := 1
   return x
-return change
+export change
 `;
   const parsed = await parse(source);
   assert(parsed.ok);
@@ -73,7 +73,7 @@ Deno.test("a closure parameter belongs to its rebinding frame", async () => {
   const source = `let bump = fn x => do:
   x := @int.add x 1
   return x
-return bump
+export bump
 `;
   const parsed = await parse(source);
   assert(parsed.ok);
@@ -83,7 +83,7 @@ Deno.test("an inner curried closure cannot rebind an outer parameter", async () 
   const source = `let update = fn outer => fn inner => do:
   outer := inner
   return outer
-return update
+export update
 `;
   const parsed = await parse(source);
   assert(!parsed.ok);
@@ -96,7 +96,7 @@ Deno.test("a curried closure can start a local lineage from its capture", async 
   let outer = outer
   outer := inner
   return outer
-return update
+export update
 `;
   const parsed = await parse(source);
   assert(parsed.ok);
@@ -109,7 +109,7 @@ if True:
 for ever:
   x := @int.add x 1
   break
-return x
+export x
 `;
   const parsed = await parse(source);
   assert(parsed.ok);
@@ -122,7 +122,7 @@ Deno.test("a nested do cannot rebind its enclosing do lineage", async () => {
     x := 1
     return x
   return nested
-return value
+export value
 `;
   const parsed = await parse(source);
   assert(!parsed.ok);
@@ -137,7 +137,7 @@ let value = case True of
     x := 1
     return x
   #False => 0
-return value
+export value
 `;
   const parsed = await parse(source);
   assert(!parsed.ok);
@@ -151,7 +151,7 @@ Deno.test(
     const source = `const Effect = @effect { .read = Unit -> Int; }
 let handler = { .read = fn ((), ?resume) => resume 1; }
 let transformer = @handle (Effect, handler)
-return transformer
+export transformer
 `;
     const parsed = await parse(source);
     assert(parsed.ok);
@@ -179,7 +179,7 @@ return transformer
 );
 
 Deno.test("handler pipelines become nested handled computations", async () => {
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 const First = @effect { .read = Unit -> Int; }
 const Second = @effect { .write = Int -> Unit; }
 let first_handler = { .read = fn ((), ?resume) => resume 1; }
@@ -188,7 +188,7 @@ let program = fn () => 1
 let handled = program
   |> @handle (First, first_handler)
   |> @handle (Second, second_handler)
-return handled
+export handled
 `;
   const parsed = await parse(source);
   assert(parsed.ok);
@@ -218,7 +218,7 @@ Deno.test("boolean case uses the internal conditional representation", async () 
   const source = `let choose = fn ready => case ready of
   #True => 1
   #False => 2
-return choose
+export choose
 `;
   const parsed = await parse(source);
   assert(parsed.ok);
@@ -241,25 +241,23 @@ Deno.test("value if is absent from the production grammar", async () => {
   return 1
 else:
   return 2
-return value
+export value
 `;
   const parsed = await parseConcrete(source);
   assert(!parsed.ok);
 });
 
 Deno.test("try-with is absent from the production grammar", async () => {
-  // `try` and `with` are ordinary identifiers, so the retired spelling
-  // parses as the application `try program with (@handle ...)` — the
-  // indented line is a layout continuation, not a handler suite — and is
-  // left to fail at check because nothing binds `try`.
+  // `with` belongs to module inputs, so the retired handler spelling is
+  // rejected by the syntax contract rather than reinterpreted as application.
   const source = `let program = fn () => 1
 let handler = {}
 let value = try program with
   @handle (Effect, handler)
-return value
+export value
 `;
   const parsed = await parse(source);
-  assert(parsed.ok);
+  assert(!parsed.ok);
 });
 
 function handledArguments(expression: Expr): readonly Expr[] | null {

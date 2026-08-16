@@ -1,6 +1,6 @@
 // A generic instantiated with a type it refuses. The diagnostic is the one the
 // program wrote, not one the compiler invented.
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const adding = fn T => case expect (
   refines (T, Int),
@@ -10,4 +10,4 @@ const adding = fn T => case expect (
 
 const broken = adding Str
 
-return broken ("a", "b")
+export broken ("a", "b")

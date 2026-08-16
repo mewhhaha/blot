@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig count_to = Int -> Int
 const count_to = fn limit =>
@@ -11,4 +11,4 @@ const count_to = fn limit =>
   )
   return go (0, 0)
 
-return { .count_to = count_to; }
+export { .count_to = count_to; }

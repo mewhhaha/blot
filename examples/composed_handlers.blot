@@ -3,7 +3,7 @@
 // written order inner-to-outer. Sequencing the final effect value executes the
 // fully handled program.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Terminal = @effect { .read = Unit -> Int; }
 const Clock = @effect { .now = Unit -> Int; }
@@ -46,7 +46,7 @@ let handled =
 result <- handled
 discarded <- handled
 
-return {
+export {
   .named = result;
   .discarded = discarded;
 }

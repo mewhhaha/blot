@@ -1,7 +1,7 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let consume = fn !value => @int.add value 1
 let twice = fn f => @int.add (f ()) (f ())
 let !token = 41
 let go = fn () => consume (!token)
-return twice go
+export twice go

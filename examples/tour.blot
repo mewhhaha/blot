@@ -4,7 +4,7 @@
 // `try`, `with`, `handler`, and assignment do not exist — each is either a
 // `const`, a call, or nothing at all.
 
-module init
+module with init
 
 // The header only adds precedence; `open` is what brings the names in. `+` is
 // `Num.add` either way — nothing about it is built in.
@@ -13,7 +13,7 @@ operators {
   infix 40 (===) = Eq.eq;
 }
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 // --- types are values -------------------------------------------------------
 
@@ -124,7 +124,7 @@ let printing =
 let !token = 41
 let consume = fn !value => value + 1
 
-return {
+export {
   .small = Small;
   .message = Message;
   .counter_fields = Counter.fields;

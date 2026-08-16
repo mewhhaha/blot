@@ -54,7 +54,7 @@ export async function testFile(path: string): Promise<readonly TestOutcome[]> {
   if (loaded.module.parameter !== null) {
     invalidSuite(
       loaded,
-      "A file run by `blot test` cannot declare a module parameter.",
+      "A file run by `blot test` cannot declare a module input.",
       loaded.module.parameter.span,
     );
   }

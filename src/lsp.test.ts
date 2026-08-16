@@ -13,7 +13,7 @@ Deno.test("the LSP advertises and returns lint code actions", async () => {
         textDocument: {
           uri,
           version: 1,
-          text: `return Num.rem 5 2
+          text: `export Num.rem 5 2
 `,
         },
       },

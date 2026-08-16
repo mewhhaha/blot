@@ -2,7 +2,7 @@ operators {
   infixl 65 (++) = Text.append;
 }
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Terminal =
   @effect.host {
@@ -30,4 +30,4 @@ for ever:
   transcript := request ++ " " ++ reply
   turns := turns + 1
 
-return turns
+export turns

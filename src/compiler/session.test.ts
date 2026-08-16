@@ -39,14 +39,13 @@ test(
     const library = join(directory, "library.blot");
     const root = join(directory, "root.blot");
     const source = (x: number, other: string, value: number): string =>
-      `const library = @import "./library.blot"\n` +
-      `const api = library ()\n` +
-      `return api.project { .x = ${x}; .${other} = ${value}; }\n`;
+      `const api = import "./library.blot"\n` +
+      `export api.project { .x = ${x}; .${other} = ${value}; }\n`;
     const compiler = await Compiler.create();
     try {
       await writeFile(
         library,
-        "const project = fn value => value.x\nreturn { .project = project; }\n",
+        "const project = fn value => value.x\nexport { .project = project; }\n",
       );
       await writeFile(root, source(1, "y", 2));
       assert.equal((await compiler.check(root)).type, "1");
@@ -56,7 +55,7 @@ test(
 
       await writeFile(
         library,
-        "const project = fn value => value.z\nreturn { .project = project; }\n",
+        "const project = fn value => value.z\nexport { .project = project; }\n",
       );
       assert.equal((await compiler.check(root)).type, "4");
     } finally {
@@ -76,19 +75,19 @@ test(
     try {
       await writeFile(
         library,
-        "module input\nlet hidden = input.base\nreturn { .answer = 42; }\n",
+        "module with input\nlet hidden = input.base\nexport { .answer = 42; }\n",
       );
       await writeFile(
         root,
-        'const library = @import "./library.blot"\n' +
-          "return (library { .base = 1; }).answer\n",
+        'const library = import "./library.blot" with { .base = 1; }\n' +
+          "export library.answer\n",
       );
       assert.equal((await compiler.check(root)).type, "42");
 
       await writeFile(
         root,
-        'const library = @import "./library.blot"\n' +
-          "return (library { .name = 1; }).answer\n",
+        'const library = import "./library.blot" with { .name = 1; }\n' +
+          "export library.answer\n",
       );
       await assert.rejects(
         compiler.check(root),

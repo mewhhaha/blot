@@ -8,10 +8,10 @@
 // The way out is to test the payload rather than the value that owns it: match
 // the linear target once and put the condition inside the arm.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let spend = fn !token => case token of
   #Ready n if n > 0 => n
   #Ready n => 0 - n
   #Idle => 0
-return spend (#Ready 3)
+export spend (#Ready 3)

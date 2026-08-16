@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const node = fn (value, previous, next) => {
     .value = value;
@@ -49,7 +49,7 @@ let total_backward =
 let nodes = Arena.singleton (node (0, 0, 0))
 let nodes = build (1, nodes)
 
-return {
+export {
   .first = 1;
   .last = 10;
   .forward = total_forward ((&nodes), 1, 0);

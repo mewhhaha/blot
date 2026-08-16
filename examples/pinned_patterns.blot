@@ -1,6 +1,6 @@
 // A pin tests a value against an existing binding without shadowing it.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let wanted = 2
 
@@ -22,7 +22,7 @@ for ^wanted in Iter.items [1, 2, 2, 3]:
   matches := matches + 1
   let ^matches = matches
 
-return {
+export {
   .same = classify 2;
   .different = classify 3;
   .greeted = greeted;

@@ -11,7 +11,7 @@
 // be followed by the binding it constrains, so a `sig` inside a run belongs to
 // a member of that run.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 // One expression tree, flattened into prefix order. `0` is a sum node and `1`
 // a product node; every larger token is the literal `token - 2`. So this is
@@ -54,4 +54,4 @@ let (value, consumed) = walk program 0
 
 // A well-formed tree consumes the whole array; anything left over means the
 // walk stopped early.
-return { .value = value; .whole = consumed == @array.len program; }
+export { .value = value; .whole = consumed == @array.len program; }

@@ -4,9 +4,9 @@
 //
 // The sibling `missing_case.blot` is the same rule over a constructor set.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig describe = 1 | 2 | 3 -> Str
 let describe = fn level => case level of
   1 => "low"
-return describe
+export describe

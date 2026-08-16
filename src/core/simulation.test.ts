@@ -301,7 +301,7 @@ Deno.test("typed Core elaboration simulates generated pure surface programs", as
     seed = next(seed);
     const second = seed % values.length;
     const source = `${declarations.join("\n")}
-return (value_${first}, value_${second})
+export (value_${first}, value_${second})
 `;
     const path = `${directory}/generated_${example}.blot`;
     await Deno.writeTextFile(path, source);
@@ -326,12 +326,12 @@ Deno.test("typed Core preserves host effect order", async () => {
   const path = `${directory}/effects.blot`;
   await Deno.writeTextFile(
     path,
-    `open @import "blot:prelude" ()
+    `open import "blot:prelude"
 const Console = @effect.host { .write = Str -> Unit; }
 _ <- Console.write "compiled"
 _ <- Console.write "linked"
 result <- Console.write "done"
-return result
+export result
 `,
   );
   const directWrites: string[] = [];
@@ -356,7 +356,7 @@ Deno.test("typed Core simulates generated staged arithmetic", async () => {
     const argument = BigInt(seed % 1000);
     const source = `const offset = ${offset}
 let add_offset = fn value => @int.add value offset
-return add_offset ${argument}
+export add_offset ${argument}
 `;
     const path = `${directory}/staged_${example}.blot`;
     await Deno.writeTextFile(path, source);
@@ -380,7 +380,7 @@ Deno.test("typed Core simulates generated one-shot handlers", async () => {
     const second = BigInt(seed % 100);
     seed = next(seed);
     const offset = BigInt(seed % 100);
-    const source = `open @import "blot:prelude" ()
+    const source = `open import "blot:prelude"
 const Shift = @effect { .by = Int -> Int; }
 let shifting =
   { .by = fn (value, ?resume) =>
@@ -391,7 +391,7 @@ let work = fn () =>
   left <- Shift.by ${first}
   right <- Shift.by ${second}
   return left + right
-return @handle (Shift, work, shifting)
+export @handle (Shift, work, shifting)
 `;
     const path = `${directory}/handler_${example}.blot`;
     await Deno.writeTextFile(path, source);

@@ -4,7 +4,7 @@
 // a macro, an attribute, or a plugin — it is code you can read, step through,
 // and call from anywhere.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let folded = compdo:
   return 20 * 2 + 1
@@ -62,7 +62,7 @@ let evens =
   )
 let squares = map (evens, fn n => n * n)
 
-return {
+export {
   .folded = folded;
   .packed_size = packed_layout.size;
   .packed_fields = packed_layout.fields;

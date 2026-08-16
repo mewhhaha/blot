@@ -10,7 +10,7 @@
 // `@array.get` is the direct path and requires that proof. When an index is not
 // proved, `Array.get` is total and returns `#Some value | #None`.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig at = [Int] -> Int -> Int
 let at = fn xs => fn n =>
@@ -39,7 +39,7 @@ let indexed_read_sum = 0
 for (index, _) in Iter.indexed values:
   indexed_read_sum := indexed_read_sum + @array.get values index
 
-return {
+export {
   .inside = at values 1;
   .past_end = at values 3;
   .negative = at values (0 - 1);

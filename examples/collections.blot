@@ -5,7 +5,7 @@
 // compiles: `rec` becomes a Core `let-rec` rather than a lifted definition,
 // because the lambda captures the block it is written in.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let numbers = upto (0, 6)
 let total = sum numbers
@@ -35,7 +35,7 @@ sig count_values = Length [Int] -> [Int] -> Int
 let count_values = fn implementation => fn values =>
   return implementation.length values
 
-return {
+export {
   .answer = total + doubled + counted * 8 + sum small - 36;
   .empty_length = count_values Array Array.empty;
   .joined = joined;

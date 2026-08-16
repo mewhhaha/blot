@@ -7,7 +7,7 @@
 // assignment anywhere — `:=` was already "a new binding, not a new value in
 // the old one", and it must preserve the binding's stable type.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 // An iterator is a `.state` and a `.step`, where `step state` answers
 // `#Some (value, next_state)` or `#None`. `Iter.range` and `Iter.items` are
@@ -99,7 +99,7 @@ let steps = 0
 for value in halving 40:
   steps := steps + value
 
-return {
+export {
   .counted = counted;
   .total = total;
   .joined = joined;

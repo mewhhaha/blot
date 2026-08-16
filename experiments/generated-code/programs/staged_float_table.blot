@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const table = [Float32.of_int 10, Float32.of_int 20, Float32.of_int 30]
 
@@ -15,4 +15,4 @@ const classify = fn index =>
   else:
     return Float32.truncate (Float32.negate value)
 
-return { .classify = classify; }
+export { .classify = classify; }

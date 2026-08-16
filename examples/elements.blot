@@ -3,7 +3,7 @@
 // historical example name while the grammar-removal prototype is evaluated so
 // its existing golden continues to compare the same behavior.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Draw =
   @effect {
@@ -90,7 +90,7 @@ let collecting =
     .return = fn _ => "";
   }
 
-return @handle (
+export @handle (
   Draw,
   (fn () =>
     <- view ()

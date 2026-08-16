@@ -39,7 +39,7 @@ console.log(JSON.stringify(
 ));
 
 function program(count: number, wrapper: boolean): string {
-  let source = `open @import "blot:prelude" ()\n`;
+  let source = `open import "blot:prelude"\n`;
   if (wrapper) source += `const count = fn values => Array.length values\n`;
   for (let index = 0; index < count; index += 1) {
     let length = "@array.len values";
@@ -49,7 +49,7 @@ function program(count: number, wrapper: boolean): string {
       `  #True => @array.get values index\n` +
       `  #False => 0\n`;
   }
-  return source + "return 0\n";
+  return source + "export 0\n";
 }
 
 async function timed(source: string, name: string): Promise<number> {

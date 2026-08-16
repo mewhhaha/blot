@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Console = @effect { .write = Str -> Unit; }
 
@@ -13,7 +13,7 @@ let recording =
     .return = fn _ => "none";
   }
 
-return {
+export {
   .first = @handle (
     Console,
     (fn () =>

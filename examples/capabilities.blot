@@ -1,14 +1,14 @@
 // Capabilities.
 //
-// A module is a function from an input record to an export record. Importing
-// one grants it nothing. The entry module's parameter is the entire authority
-// the program has: there is no ambient filesystem, no ambient clock, and no
-// ambient print. `init.print` below is an opaque host function — the program
-// can call it and do nothing else with it.
+// A module is an ordered computation from an input record to an export record.
+// Importing one grants it nothing. The entry module's input is the entire
+// authority the program has: there is no ambient filesystem, no ambient clock,
+// and no ambient print. `init.print` below is an opaque host function — the
+// program can call it and do nothing else with it.
 
-module init
+module with init
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Console =
   @effect {
@@ -43,7 +43,7 @@ const to_memory =
     .return = fn _ => "";
   }
 
-return {
+export {
   .printed = @handle (Console, report, to_host);
   .captured = @handle (Console, report, to_memory);
 }

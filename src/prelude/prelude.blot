@@ -1607,7 +1607,7 @@ const Type =
     .attach = attach;
   }
 
-return {
+export {
   .Fn = Fn;
   .identity = identity;
   .always = always;

@@ -7,7 +7,7 @@
 // The prelude is compiled, not inlined at every use — `+` is `Num.add`, an
 // ordinary closure that becomes one Core definition.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Message = #Ready | #Busy Int | #Done Int
 
@@ -51,4 +51,4 @@ let compared = case 20 < 22 of
   #True => 1
   #False => 0
 
-return total + counted + described + compared + picked + stored - 66
+export total + counted + described + compared + picked + stored - 66

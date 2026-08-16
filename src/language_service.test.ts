@@ -7,7 +7,7 @@ Deno.test("language diagnostics check the open editor revision", async () => {
   const path = join(directory, "revision.blot");
   await Deno.writeTextFile(
     path,
-    `return 1
+    `export 1
 `,
   );
   const uri = toFileUrl(path).href;
@@ -15,7 +15,7 @@ Deno.test("language diagnostics check the open editor revision", async () => {
   try {
     service.open(
       uri,
-      `return missing
+      `export missing
 `,
       1,
     );
@@ -34,7 +34,7 @@ Deno.test("language formatting returns one whole-document edit", async () => {
   try {
     service.open(
       uri,
-      ` return 1
+      ` export 1
 `,
       1,
     );
@@ -42,7 +42,7 @@ Deno.test("language formatting returns one whole-document edit", async () => {
     assertEquals(edits.length, 1);
     assertEquals(
       edits[0]?.newText,
-      `return 1
+      `export 1
 `,
     );
   } finally {
@@ -53,17 +53,17 @@ Deno.test("language formatting returns one whole-document edit", async () => {
 Deno.test("value hover shows its inferred signature, compact definition, and documentation", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "hover-value.blot");
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 
 /// Adds two integers without changing either input.
 sig add = Int -> Int -> Int
 let add = fn left => fn right => left + right
 let answer = add 20 22
-return answer
+export answer
 `;
   await Deno.writeTextFile(
     path,
-    `return 0
+    `export 0
 `,
   );
   const uri = toFileUrl(path).href;
@@ -92,11 +92,11 @@ return answer
 Deno.test("token hover documents keywords and resolved operators", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "hover-token.blot");
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 let total = 20 + 22
 let negative = -total
 let count = Array.length [negative]
-return count
+export count
 `;
   await Deno.writeTextFile(path, source);
   const uri = toFileUrl(path).href;
@@ -123,9 +123,12 @@ return count
       field.contents.value,
       "sig Array.length = ['a] -> Int",
     );
-    const keyword = await service.hover(uri, { line: 4, character: 1 });
-    assert(keyword !== null);
-    assertStringIncludes(keyword.contents.value, "nearest module");
+    const imported = await service.hover(uri, { line: 0, character: 7 });
+    assert(imported !== null);
+    assertStringIncludes(imported.contents.value, "Instantiates a module once");
+    const exported = await service.hover(uri, { line: 4, character: 1 });
+    assert(exported !== null);
+    assertStringIncludes(exported.contents.value, "fallthrough value");
   } finally {
     await service.destroy();
   }
@@ -134,7 +137,7 @@ return count
 Deno.test("shape and attached member hover keeps the selected member", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "hover-member.blot");
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 const Point = Int <+ {
   .fields = 42;
   .new = fn value => value + 0;
@@ -143,11 +146,11 @@ let reflected = {
   .hello = Point.fields;
 }
 let point = Point.new 1
-return (reflected, point)
+export (reflected, point)
 `;
   await Deno.writeTextFile(
     path,
-    `return 0
+    `export 0
 `,
   );
   const uri = toFileUrl(path).href;
@@ -194,7 +197,7 @@ Deno.test("correctness lints are warnings", async () => {
     service.open(
       uri,
       `let forgotten = 1
-return 2
+export 2
 `,
       1,
     );
@@ -211,8 +214,8 @@ return 2
 Deno.test("a direct array access action is published only after compiler proof", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "proved-lookup.blot");
-  const source = `open @import "blot:prelude" ()
-return case Array.get ([1], 0) of
+  const source = `open import "blot:prelude"
+export case Array.get ([1], 0) of
   #Some value => value
   #None => 0
 `;
@@ -248,7 +251,7 @@ Deno.test("a self rebinding that widens the public type is not a no-op", async (
   const path = join(directory, "widening-rebinding.blot");
   const source = `let value = 1
 value := value
-return value
+export value
 `;
   await Deno.writeTextFile(path, source);
   const uri = toFileUrl(path).href;
@@ -272,7 +275,7 @@ Deno.test("an unused effect result offers an explicit discard action", async () 
   const source = `let run = fn () =>
   ignored <- perform_work ()
   return ()
-return run
+export run
 `;
   try {
     service.open(uri, source, 4);
@@ -292,14 +295,14 @@ return run
 Deno.test("a terminal Option match offers a compiler-checked guard action", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "option-guard.blot");
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 sig unwrap = Option Unit -> Unit
 let unwrap = fn option =>
   return case option of
     #None =>
       return ()
     #Some value => value
-return unwrap
+export unwrap
 `;
   await Deno.writeTextFile(path, source);
   const uri = toFileUrl(path).href;

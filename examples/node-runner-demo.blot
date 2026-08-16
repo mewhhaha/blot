@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let double = fn value => value * 2
 let start = 20 + 1
@@ -8,7 +8,7 @@ let verdict = case answer == 42 of
   #True => "yes"
   #False => "no"
 
-return {
+export {
   .default = {
     .answer = answer;
     .verdict = verdict;

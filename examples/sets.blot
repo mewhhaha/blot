@@ -10,7 +10,7 @@
 // `Type` provides set algebra because types denote sets. The value-level `Set`
 // below is an ordinary polymorphic collection factory with explicit equality.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Method = "GET" | "POST" | "PUT" | "DELETE"
 const Safe = Method \ "PUT" \ "DELETE"
@@ -26,7 +26,7 @@ const IntSet = Set.with Ord.eq
 const evens = [2, 4, 6]
 const small = [1, 2, 3, 4]
 
-return {
+export {
   .safe = Safe;
   .tag = Tag;
   .readonly = readonly;

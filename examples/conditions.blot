@@ -16,7 +16,7 @@
 // `examples/narrowing.blot` is the sibling rule for `case`, where the arm's own
 // pattern is the proof.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig name = 1 | 2 | 3 -> Str
 let name = fn n => case n == 1 of
@@ -53,4 +53,4 @@ let size = fn n =>
   else:
     return large n
 
-return (name 1, name 3, ordinal 2, size 4, size 40)
+export (name 1, name 3, ordinal 2, size 4, size 40)

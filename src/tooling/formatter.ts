@@ -242,10 +242,14 @@ function formatOneStatementValue(
   const statements: ConcreteRule[] = [];
   collectRules(root, "binding", statements);
   collectRules(root, "result", statements);
+  collectRules(root, "module_export", statements);
   statements.sort((left, right) => left.span.start - right.span.start);
   for (const statement of statements) {
     let introducer = directToken(statement, "return");
     if (statement.name === "binding") introducer = directToken(statement, "=");
+    if (statement.name === "module_export") {
+      introducer = directToken(statement, "export");
+    }
     if (introducer === null) continue;
     let value = directRule(statement, "value");
     const indentedValue = directRule(statement, "indented_value");
@@ -989,7 +993,7 @@ function collectIndentRegions(
       }
     }
   }
-  if (node.name === "result") {
+  if (node.name === "result" || node.name === "module_export") {
     const value = directRule(node, "value");
     if (value !== null) {
       const startsAtLine = lineAtOffset(lineStarts, node.span.start);

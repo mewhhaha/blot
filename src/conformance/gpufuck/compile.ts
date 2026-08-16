@@ -789,7 +789,7 @@ function residualizeUnitHostModule(
     }
     if (!match(parameter, shapeOf([...grants]), environment)) {
       throw new TypeError(
-        `${prepared.loaded.path}: symbolic grants do not match the module parameter`,
+        `${prepared.loaded.path}: symbolic grants do not match the module input`,
       );
     }
   }

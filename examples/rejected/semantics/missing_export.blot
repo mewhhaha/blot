@@ -1,0 +1,7 @@
+// A module has one explicit value boundary. Declarations may return early, but
+// ordinary fallthrough must end in `export value`.
+
+open import "blot:prelude"
+
+let x = 1
+let y = 2

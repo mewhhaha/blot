@@ -88,6 +88,8 @@ pub(crate) const RULE_NAMES: &[&str] = &[
     "qualified_name_part",
     "effect_row_part",
     "effect_row_tail",
+    "module_export",
+    "import_expression",
 ];
 
 pub(crate) const FIELD_NAMES: &[&str] = &[
@@ -151,6 +153,9 @@ pub(crate) const FIELD_NAMES: &[&str] = &[
     "target",
     "value",
     "phase",
+    "exported",
+    "input",
+    "specifier",
 ];
 
 pub(crate) const NAMED_TOKEN_KINDS: &[&str] = &[

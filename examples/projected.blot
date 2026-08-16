@@ -12,7 +12,7 @@
 // both, so that program is refused rather than compiled against a shape nobody
 // writes.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Console =
   @effect.host {
@@ -35,7 +35,7 @@ point <-
   <- Console.write "projected"
   return { .x = 7; .y = 0; }
 
-return {
+export {
   .direct = get_x point;
   .forwarded = twice point;
   .destructured = first point;

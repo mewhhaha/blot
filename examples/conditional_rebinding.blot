@@ -10,7 +10,7 @@
 // `for`. A loop's accumulator is the set of names its body rebinds, and a name
 // rebound only inside a branch is still one of them.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 // One branch, last statement of the loop. The missing `else` is the
 // pass-through: it hands `counted` back as it already is.
@@ -57,7 +57,7 @@ let flagged = 0
 if 1 < 2:
   flagged := flagged + 1
 
-return {
+export {
   .counted = counted;
   .scored = scored;
   .mixed = mixed;

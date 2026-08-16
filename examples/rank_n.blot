@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig use = @forall (fn T => T -> T) -> { .number = Int; .text = Str; }
 let use = fn identity => {
@@ -6,4 +6,4 @@ let use = fn identity => {
     .text = identity "forty-two";
   }
 let identity = fn value => value
-return use identity
+export use identity

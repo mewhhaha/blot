@@ -15,7 +15,7 @@ const scratch = await Deno.makeTempDir();
 // Every snippet opens the prelude, because every module does: it has no
 // privilege, and a fixture that skipped it would be testing a language where
 // `+` is unbound.
-const PRELUDE = `open @import "blot:prelude" ()
+const PRELUDE = `open import "blot:prelude"
 `;
 
 async function typeOf(source: string): Promise<string> {
@@ -54,7 +54,7 @@ Deno.test("checking retains expression types for backend lowering", async () => 
   await Deno.writeTextFile(
     path,
     `${PRELUDE}let answer = 40 + 2
-return answer
+export answer
 `,
   );
   const checked = await checkFile(path);
@@ -68,7 +68,7 @@ Deno.test("direct array access carries an explicit proof certificate", async () 
   await Deno.writeTextFile(
     path,
     `${PRELUDE}let values = [42]
-return @array.get values 0
+export @array.get values 0
 `,
   );
   const checked = await checkFile(path);
@@ -108,7 +108,7 @@ Deno.test("generative effect identities are recorded once per declaration", asyn
 check(
   "a deferred parameter appears in the inferred arrow",
   `const lazy = fn ~value => value
-return lazy
+export lazy
 `,
   "~'a -> 'a",
 );
@@ -117,7 +117,7 @@ check(
   "a deferred arrow can be written in a signature",
   `sig lazy = ~Int -> Int
 const lazy = fn ~value => value
-return lazy 42
+export lazy 42
 `,
   "Int",
 );
@@ -126,7 +126,7 @@ rejects(
   "a strict implementation does not satisfy a deferred arrow",
   `sig lazy = ~Int -> Int
 let lazy = fn value => value
-return lazy
+export lazy
 `,
   "function",
 );
@@ -135,7 +135,7 @@ rejects(
   "a deferred argument must be pure",
   `const Console = @effect { .write = Str -> Unit; }
 const lazy = fn ~value => value
-return lazy (Console.write "hello")
+export lazy (Console.write "hello")
 `,
   "deferred argument",
 );
@@ -144,7 +144,7 @@ return lazy (Console.write "hello")
 
 check(
   "an integer literal is its own type",
-  `return 42
+  `export 42
 `,
   "42",
 );
@@ -155,14 +155,14 @@ check(
 let measure_array = fn implementation => fn values => implementation.length values
 sig measure_text = Length Str -> Str -> Int
 let measure_text = fn implementation => fn value => implementation.length value
-return (measure_array Array [1, 2, 3], measure_text Text "blot")
+export (measure_array Array [1, 2, 3], measure_text Text "blot")
 `,
   "(Int, Int)",
 );
 
 check(
   "a float literal is not a singleton",
-  `return 1.5
+  `export 1.5
 `,
   "F64",
 );
@@ -173,114 +173,114 @@ check(
 const Second = seal ("Token", I32)
 sig same = #True
 const same = refines (First, Second)
-return same
+export same
 `,
   "#True",
 );
 
 check(
   "float arithmetic stays in the one float type",
-  `open @import "blot:prelude" ()
-return Float.add 1.5 2.5
+  `open import "blot:prelude"
+export Float.add 1.5 2.5
 `,
   "F64",
 );
 
 check(
   "a float has no equality, only an ordering that refuses NaN",
-  `open @import "blot:prelude" ()
-return { .same = is_equal (Float.cmp 0.5 0.5); .nan = Float.is_nan 1.0; }
+  `open import "blot:prelude"
+export { .same = is_equal (Float.cmp 0.5 0.5); .nan = Float.is_nan 1.0; }
 `,
   "{ .same = (#True | #False); .nan = #True | #False; }",
 );
 
 check(
   "a four-lane vector is an opaque type, not a range",
-  `open @import "blot:prelude" ()
-return Vec4.splat (Float32.of_int 1)
+  `open import "blot:prelude"
+export Vec4.splat (Float32.of_int 1)
 `,
   "F32x4",
 );
 
 check(
   "a lane read leaves the vector for the scalar type",
-  `open @import "blot:prelude" ()
-return Vec4.x (Vec4.splat (Float32.of_int 1))
+  `open import "blot:prelude"
+export Vec4.x (Vec4.splat (Float32.of_int 1))
 `,
   "F32",
 );
 
 check(
   "integer lane width is part of the vector type",
-  `return Int16x8.add (Int16x8.splat 1) (Int16x8.splat 2)
+  `export Int16x8.add (Int16x8.splat 1) (Int16x8.splat 2)
 `,
   "I16x8",
 );
 
 check(
   "integer comparisons produce a width-specific mask",
-  `return Int8x16.less_unsigned (Int8x16.splat 1) (Int8x16.splat 2)
+  `export Int8x16.less_unsigned (Int8x16.splat 1) (Int8x16.splat 2)
 `,
   "I8x16Mask",
 );
 
 rejects(
   "integer vectors with different lane widths do not mix",
-  `return Int32x4.add (Int32x4.splat 1) (Int16x8.splat 2)
+  `export Int32x4.add (Int32x4.splat 1) (Int16x8.splat 2)
 `,
   "BLOT_TYPE_ERROR",
 );
 
 rejects(
   "literal arms cannot cover a vector",
-  `open @import "blot:prelude" ()
+  `open import "blot:prelude"
 sig f = F32x4 -> Int
 let f = fn v => case v of
   1 => 1
-return f (Vec4.splat (Float32.of_int 1))
+export f (Vec4.splat (Float32.of_int 1))
 `,
   "BLOT_INCOMPLETE_CASE",
 );
 
 check(
   "single precision is its own type",
-  `open @import "blot:prelude" ()
-return Float32.mul (Float32.of_int 2) (Float32.of_float 1.5)
+  `open import "blot:prelude"
+export Float32.mul (Float32.of_int 2) (Float32.of_float 1.5)
 `,
   "F32",
 );
 
 rejects(
   "the two float precisions do not mix",
-  `open @import "blot:prelude" ()
-return Float.add 1.5 (Float32.of_int 1)
+  `open import "blot:prelude"
+export Float.add 1.5 (Float32.of_int 1)
 `,
   "BLOT_TYPE_ERROR",
 );
 
 check(
   "crossing between the numeric types is explicit and exact",
-  `open @import "blot:prelude" ()
-return { .up = Float.of_int 7; .down = Float.truncate 3.75; }
+  `open import "blot:prelude"
+export { .up = Float.of_int 7; .down = Float.truncate 3.75; }
 `,
   "{ .up = F64; .down = Int; }",
 );
 
 rejects(
   "a float case is never exhaustive on its own",
-  `open @import "blot:prelude" ()
+  `open import "blot:prelude"
 sig pick = F64 -> Int
 let pick = fn x => case x of
   1.5 => 1
-return pick 1.5
+export pick 1.5
 `,
   "BLOT_INCOMPLETE_CASE",
 );
 
 rejects(
   "the two numeric types do not mix",
-  `open @import "blot:prelude" ()
-return Float.add 1.5 2
+  `open import "blot:prelude"
+export Float.add 1.5 2
 `,
   "BLOT_TYPE_ERROR",
 );
@@ -288,14 +288,14 @@ return Float.add 1.5 2
 check(
   "identity preserves the singleton",
   `let identity = fn x => x
-return identity 42
+export identity 42
 `,
   "42",
 );
 
 check(
   "arithmetic widens to the domain, because it cannot prove a width",
-  `return @int.add 20 22
+  `export @int.add 20 22
 `,
   "Int",
 );
@@ -305,7 +305,7 @@ check(
 check(
   "identity is polymorphic",
   `let identity = fn x => x
-return identity
+export identity
 `,
   "'a -> 'a",
 );
@@ -316,7 +316,7 @@ check(
   "a declaration tag may replace the binding value and its type",
   `const text = tag ("text", (), (fn _ => "changed"))
 @[text] let value = 1
-return value
+export value
 `,
   '"changed"',
 );
@@ -325,7 +325,7 @@ check(
   "stacked declaration tags apply nearest-first",
   `const add = fn n => tag ("add", n, (fn value => value + n))
 @[add(1)] @[add(2)] let value = 3
-return value
+export value
 `,
   "Int",
 );
@@ -334,7 +334,7 @@ check(
   "a declaration tag transforms before its binding pattern matches",
   `const pair = tag ("pair", (), (fn _ => (1, "two")))
 @[pair] let (number, text) = ()
-return { .number = number; .text = text; }
+export { .number = number; .text = text; }
 `,
   '{ .number = 1; .text = "two"; }',
 );
@@ -342,7 +342,7 @@ return { .number = number; .text = text; }
 rejects(
   "a declaration tag descriptor must be a shape",
   `@[1] let value = 2
-return value
+export value
 `,
   "BLOT_BAD_DECLARATION_TAG",
 );
@@ -351,7 +351,7 @@ rejects(
   "a declaration tag descriptor transform must be callable",
   `@[{ .name = "broken"; .metadata = (); .transform = 1; }]
 let value = 2
-return value
+export value
 `,
   "BLOT_BAD_DECLARATION_TAG",
 );
@@ -361,7 +361,7 @@ rejects(
   `let tagged = fn descriptor =>
   @[descriptor] let value = 1
   return value
-return tagged test
+export tagged test
 `,
   "BLOT_NOT_COMPTIME",
 );
@@ -369,7 +369,7 @@ return tagged test
 check(
   "one binding instantiates independently per use",
   `let identity = fn x => x
-return { .a = identity 1; .b = identity "two"; }
+export { .a = identity 1; .b = identity "two"; }
 `,
   '{ .a = 1; .b = "two"; }',
 );
@@ -378,7 +378,7 @@ check(
   "rebinding preserves the integer domain",
   `let value = 1
 value := 2
-return value
+export value
 `,
   "Int",
 );
@@ -387,7 +387,7 @@ rejects(
   "rebinding rejects a different type",
   `let value = 1
 value := "two"
-return value
+export value
 `,
   "Use `let value = ...;`",
 );
@@ -396,7 +396,7 @@ check(
   "a repeated let may shadow with a different type",
   `let value = 1
 let value = "two"
-return value
+export value
 `,
   '"two"',
 );
@@ -405,7 +405,7 @@ check(
   "rebinding preserves polymorphism",
   `let identity = fn x => x
 identity := fn x => x
-return { .number = identity 1; .text = identity "two"; }
+export { .number = identity 1; .text = identity "two"; }
 `,
   '{ .number = 1; .text = "two"; }',
 );
@@ -414,7 +414,7 @@ check(
   "an unconditional return determines its block result",
   `let answer = fn () =>
   return 42
-return answer
+export answer
 `,
   "() -> 42",
 );
@@ -425,7 +425,7 @@ check(
   if value < 0:
     return "negative"
   return "positive"
-return describe
+export describe
 `,
   'Int -> ("negative" | "positive")',
 );
@@ -437,7 +437,7 @@ check(
     if value == wanted:
       return value
   return -1
-return find
+export find
 `,
   "Int -> (Int | 0 | -1)",
 );
@@ -451,7 +451,7 @@ check(
     if count >= limit:
       return count
   return 0
-return count_to
+export count_to
 `,
   "Int -> (Int | 0)",
 );
@@ -464,7 +464,7 @@ check(
       return 41
     #False => 0
   return inner + 1
-return answer
+export answer
 `,
   "() -> Int",
 );
@@ -478,7 +478,7 @@ check(
 
     #None => 0
   return inner + 1
-return answer
+export answer
 `,
   "() -> Int",
 );
@@ -486,7 +486,7 @@ return answer
 rejects(
   "rebinding requires an existing name",
   `missing := 1
-return missing
+export missing
 `,
   "cannot shadow a name that is not in scope",
 );
@@ -494,7 +494,7 @@ return missing
 check(
   "a curried section keeps its remaining parameter",
   `let add = fn a => fn b => @int.add a b
-return add 2
+export add 2
 `,
   "Int -> Int",
 );
@@ -505,7 +505,7 @@ return add 2
 check(
   "applying a parameter twice intersects its two uses",
   `let twice = fn f => fn x => f (f x)
-return twice
+export twice
 `,
   "('a -> 'b & 'b -> 'c) -> 'a -> 'c",
 );
@@ -515,7 +515,7 @@ return twice
 check(
   "a projection constrains only the field it reaches for",
   `let width = fn shape => shape.w
-return width
+export width
 `,
   "{ .w = 'a; } -> 'a",
 );
@@ -523,7 +523,7 @@ return width
 check(
   "two projections accumulate one record constraint",
   `let area = fn s => @int.mul s.w s.h
-return area
+export area
 `,
   "{ .w = Int; .h = Int; } -> Int",
 );
@@ -531,7 +531,7 @@ return area
 rejects(
   "a missing field is an ordinary constraint failure",
   `let area = fn s => @int.mul s.w s.h
-return area { .w = 2; }
+export area { .w = 2; }
 `,
   "no field `.h`",
 );
@@ -542,7 +542,7 @@ check(
 let count = fn properties => case properties.value of
   () => 0
   value => value
-return count {}
+export count {}
 `,
   "Int",
 );
@@ -555,7 +555,7 @@ Deno.test("an omitted optional field records its call-site coercion", async () =
 let count = fn properties => case properties.value of
   () => 0
   value => value
-return count {}
+export count {}
 `,
   );
   const checked = await checkFile(path);
@@ -577,7 +577,7 @@ check(
   `let f = fn m => case m of
   #Ready => 1
   #Failed r => r
-return f
+export f
 `,
   "#Ready | #Failed 'a -> ('a | 1)",
 );
@@ -588,7 +588,7 @@ check(
 let choose = fn actual => case actual of
   ^wanted => "yes"
   _ => "no"
-return choose
+export choose
 `,
   'Int -> ("yes" | "no")',
 );
@@ -599,14 +599,14 @@ rejects(
 sig choose = Int -> Str
 let choose = fn actual => case actual of
   ^wanted => "yes"
-return choose
+export choose
 `,
   "BLOT_INCOMPLETE_CASE",
 );
 
 rejects(
   "a pinned pattern requires an existing binding",
-  `return case 1 of
+  `export case 1 of
   ^missing => "yes"
   _ => "no"
 `,
@@ -616,7 +616,7 @@ rejects(
 rejects(
   "a pinned pattern requires a scalar equality domain",
   `let wanted = [1]
-return case [1] of
+export case [1] of
   ^wanted => "yes"
   _ => "no"
 `,
@@ -628,7 +628,7 @@ rejects(
   `let matches = fn expected => fn actual => case actual of
   ^expected => 1
   _ => 0
-return matches
+export matches
 `,
   "BLOT_UNMATCHABLE_PIN",
 );
@@ -640,7 +640,7 @@ sig choose = (Int, Int) -> Str
 let choose = fn pair => case pair of
   (^wanted, _) => "yes"
   _ => "no"
-return choose
+export choose
 `,
   "BLOT_TYPE_ERROR",
 );
@@ -650,7 +650,7 @@ check(
   `let f = fn (flag, other) => case flag of
   #No => #Off
   #Yes => other
-return f
+export f
 `,
   "(#No | #Yes, 'a) -> ('a | #Off)",
 );
@@ -660,7 +660,7 @@ check(
   `let f = fn m => case m of
   #Some inner => inner
   _ => 0
-return f
+export f
 `,
   "#Some 'a | .. -> ('a | 0)",
 );
@@ -670,7 +670,7 @@ check(
   `let f = fn m => case m of
   #Some inner => inner
   _ => 0
-return f (#Some "hi")
+export f (#Some "hi")
 `,
   '(0 | "hi")',
 );
@@ -679,7 +679,7 @@ check(
   "a name arm is the target",
   `let f = fn m => case m of
   other => other
-return f
+export f
 `,
   "'a -> 'a",
 );
@@ -690,7 +690,7 @@ check(
   if let #Some inner = m else:
     return "none"
   return inner
-return f (#Some 7)
+export f (#Some 7)
 `,
   '("none" | 7)',
 );
@@ -701,7 +701,7 @@ rejects(
   if let #Some inner = m else:
     return "none"
   return Text.append inner "!"
-return f (#Some 3)
+export f (#Some 3)
 `,
   "`3` is not `Str`",
 );
@@ -711,7 +711,7 @@ rejects(
   `let f = fn m => case m of
   #Ready => 1
   #Busy n => n
-return f (#Failed "x")
+export f (#Failed "x")
 `,
   "`#Failed` is not one of",
 );
@@ -720,7 +720,7 @@ rejects(
   "a declared literal union rejects a value outside it",
   `sig level = 1 | 2 | 3
 let level = 7
-return level
+export level
 `,
   "`7` is not one of `1` | `2` | `3`",
 );
@@ -738,7 +738,7 @@ rejects(
   `sig f = 1 | 2 | 3 -> Str
 let f = fn n => case n of
   1 => "one"
-return f
+export f
 `,
   "No arm covers `2 | 3`",
 );
@@ -748,7 +748,7 @@ rejects(
   `sig f = "up" | "down" -> Int
 let f = fn d => case d of
   "up" => 1
-return f
+export f
 `,
   'No arm covers `"down"`',
 );
@@ -760,7 +760,7 @@ let f = fn n => case n of
   1 => "one"
   2 => "two"
   3 => "three"
-return f
+export f
 `,
   "1 | 2 | 3 -> Str",
 );
@@ -771,7 +771,7 @@ check(
 let f = fn n => case n of
   1 => "one"
   _ => "rest"
-return f
+export f
 `,
   "1 | 2 | 3 -> Str",
 );
@@ -781,7 +781,7 @@ rejects(
   `let f = fn n => case n of
   1 => "one"
   2 => "two"
-return f
+export f
 `,
   "not known well enough",
 );
@@ -791,7 +791,7 @@ rejects(
   `sig f = Int -> Str
 let f = fn n => case n of
   1 => "one"
-return f
+export f
 `,
   "BLOT_INCOMPLETE_CASE",
 );
@@ -802,7 +802,7 @@ check(
 let f = fn n => case n of
   1 => "one"
   _ => @panic "not one"
-return f
+export f
 `,
   "Int -> Str",
 );
@@ -813,7 +813,7 @@ check(
   #Some 1 => "one"
   #Some n => "many"
   #None => "none"
-return f (#Some 2)
+export f (#Some 2)
 `,
   '("one" | "many" | "none")',
 );
@@ -832,7 +832,7 @@ rejects(
 let f = fn n => case n of
   1 => "one"
   m if m > 1 => "big"
-return f
+export f
 `,
   "No arm covers `2`",
 );
@@ -842,7 +842,7 @@ rejects(
   `let f = fn n => case n of
   m if m > 0 => "up"
   m if m < 0 => "down"
-return f
+export f
 `,
   "No arm of this `case` can be the one that matches",
 );
@@ -852,7 +852,7 @@ rejects(
   `let f = fn o => case o of
   #Some n if n > 0 => "big"
   #None => "none"
-return f (#Some 1)
+export f (#Some 1)
 `,
   "`#Some` is not one of #None",
 );
@@ -863,7 +863,7 @@ check(
   #Some n if n > 0 => "big"
   #Some _ => "small"
   #None => "none"
-return f (#Some 1)
+export f (#Some 1)
 `,
   '("big" | "small" | "none")',
 );
@@ -875,7 +875,7 @@ let f = fn n => case n of
   1 => "one"
   m if m > 1 => "big"
   _ => "rest"
-return f 2
+export f 2
 `,
   "Str",
 );
@@ -891,7 +891,7 @@ let join = fn pair => case pair of
   (#Some a, #None) => a
   (#None, #Some b) => b
   (#None, #None) if 1 > 0 => 0
-return join (None, None)
+export join (None, None)
 `,
   "No arm covers `(#None, #None)`",
 );
@@ -903,7 +903,7 @@ rejects(
   `let f = fn n => case n of
   m if m => "yes"
   _ => "no"
-return f 1
+export f 1
 `,
   "BLOT_TYPE_ERROR",
 );
@@ -925,7 +925,7 @@ check(
   "a signature binds a parameter to the ground union itself",
   `sig f = 1 | 2 | 3 -> 1 | 2 | 3
 let f = fn n => n
-return f
+export f
 `,
   "1 | 2 | 3 -> 1 | 2 | 3",
 );
@@ -936,7 +936,7 @@ rejects(
 let h = fn k => "one"
 sig f = 1 | 2 | 3 -> Str
 let f = fn n => h n
-return f
+export f
 `,
   "`2` is outside `1`",
 );
@@ -949,7 +949,7 @@ sig f = 1 | 2 | 3 -> Str
 let f = fn n => case n == 1 of
   #True => h n
   #False => "rest"
-return f
+export f
 `,
   "1 | 2 | 3 -> Str",
 );
@@ -964,7 +964,7 @@ sig f = 1 | 2 | 3 -> Str
 let f = fn n => case n == 1 of
   #True => h n
   #False => "rest"
-return f
+export f
 `,
   "`1` is outside `2`",
 );
@@ -977,7 +977,7 @@ sig f = 1 | 2 | 3 -> Str
 let f = fn n => case n == 1 of
   #True => "one"
   #False => h n
-return f
+export f
 `,
   "`2` is outside `1`",
 );
@@ -990,7 +990,7 @@ sig f = 1 | 2 | 3 -> Str
 let f = fn n => case n == 1 of
   #True => "one"
   #False => k n
-return f
+export f
 `,
   "1 | 2 | 3 -> Str",
 );
@@ -1004,7 +1004,7 @@ let f = fn n => case n == 1 of
   #False => case n of
       2 => "two"
       3 => "three"
-return f
+export f
 `,
   "1 | 2 | 3 -> Str",
 );
@@ -1017,7 +1017,7 @@ let f = fn n => case n == 1 of
       1 => "one"
   #False => case n of
       2 => "two"
-return f
+export f
 `,
   "No arm covers `3`",
 );
@@ -1031,7 +1031,7 @@ let f = fn n => case n == 1 of
     #True => "two"
     #False => case n of
         3 => "three"
-return f
+export f
 `,
   "1 | 2 | 3 -> Str",
 );
@@ -1047,7 +1047,7 @@ sig f = Int -> Str
 let f = fn n => case n < 10 of
   #True => low n
   #False => "high"
-return f
+export f
 `,
   "Int -> Str",
 );
@@ -1060,7 +1060,7 @@ sig f = Int -> Str
 let f = fn n => case n < 10 of
   #True => "low"
   #False => high n
-return f
+export f
 `,
   "Int -> Str",
 );
@@ -1073,7 +1073,7 @@ sig f = Int -> Str
 let f = fn n => case 0 < n of
   #True => high n
   #False => "low"
-return f
+export f
 `,
   "Int -> Str",
 );
@@ -1086,7 +1086,7 @@ sig f = Int -> Str
 let f = fn n => case n <= 9 of
   #True => low n
   #False => "high"
-return f
+export f
 `,
   "Int -> Str",
 );
@@ -1099,7 +1099,7 @@ let f = fn n => case n != 1 of
       2 => "two"
       3 => "three"
   #False => "one"
-return f
+export f
 `,
   "1 | 2 | 3 -> Str",
 );
@@ -1116,7 +1116,7 @@ let f = fn n =>
   if n == 1:
     return h n
   return "rest"
-return f
+export f
 `,
   "1 | 2 | 3 -> Str",
 );
@@ -1137,7 +1137,7 @@ let f = fn n => case n != 1 of
           #False => "c"
       #False => "b"
   #False => "a"
-return f
+export f
 `,
   "Int -> Str",
 );
@@ -1148,7 +1148,7 @@ rejects(
 let only = fn k => "k"
 sig f = Int -> Str
 let f = fn n => only n
-return f
+export f
 `,
   "`Int` is not one of `..0` | `4..`",
 );
@@ -1160,7 +1160,7 @@ check(
   `let f = fn n => case n == 1 of
   #True => "y"
   #False => "n"
-return f
+export f
 `,
   'Int -> ("y" | "n")',
 );
@@ -1176,7 +1176,7 @@ let f = fn n =>
     #True => "x"
     #False => "y"
   return Text.append a b
-return f
+export f
 `,
   "1 | 2 | 3 -> Str",
 );
@@ -1193,7 +1193,7 @@ let f = fn n => case n == 1 of
     n := 5
     return n
   #False => 0
-return f
+export f
 `,
   "1 | 2 | 3 -> Int",
 );
@@ -1212,7 +1212,7 @@ let f = fn n => case n == 1 of
   #True => case n of
       1 => "one"
   #False => "rest"
-return f
+export f
 `,
   "No arm covers `2 | 3`",
 );
@@ -1224,7 +1224,7 @@ let g = fn Eq => fn n => case n == 1 of
   #True => case n of
       1 => "one"
   #False => "rest"
-return g
+export g
 `,
   "No arm covers `2 | 3`",
 );
@@ -1236,7 +1236,7 @@ let f = fn n => fn m => case n == m of
   #True => "same"
   #False => case n of
       3 => "three"
-return f
+export f
 `,
   "No arm covers `1 | 2`",
 );
@@ -1249,7 +1249,7 @@ let f = fn n => case n == k of
   #True => case n of
       1 => "one"
   #False => "rest"
-return f
+export f
 `,
   "No arm covers `2 | 3`",
 );
@@ -1264,7 +1264,7 @@ let f = fn n => case n == k of
   #False => case n of
       2 => "two"
       3 => "three"
-return f
+export f
 `,
   "1 | 2 | 3 -> Str",
 );
@@ -1282,7 +1282,7 @@ let f = fn n => case Eq.eq n 1 of
   #False => case n of
       2 => "two"
       3 => "three"
-return f
+export f
 `,
   "1 | 2 | 3 -> Str",
 );
@@ -1296,7 +1296,7 @@ let f = fn n =>
     #True => case n of
           1 => "one"
     #False => "rest"
-return f
+export f
 `,
   "No arm covers `2 | 3`",
 );
@@ -1307,7 +1307,7 @@ check(
 let f = fn n => case Ord.min n 1 == 1 of
   #True => "y"
   #False => "n"
-return f
+export f
 `,
   "1 | 2 | 3 -> Str",
 );
@@ -1324,7 +1324,7 @@ let f = fn n => case n == 7 of
       1 => "a"
       2 => "b"
       3 => "c"
-return f
+export f
 `,
   "1 | 2 | 3 -> Str",
 );
@@ -1339,14 +1339,14 @@ return f
 check(
   "an index inside the array is still an ordinary read",
   `let xs = [1, 2, 3]
-return @array.get xs 2
+export @array.get xs 2
 `,
   "(1 | 2 | 3)",
 );
 
 rejects(
   "an index outside an array written at the call site is refused",
-  `return @array.get [1, 2, 3] 99
+  `export @array.get [1, 2, 3] 99
 `,
   "Index 99 is outside an array of 3",
 );
@@ -1354,7 +1354,7 @@ rejects(
 rejects(
   "an index outside the literal a `let` was given is refused",
   `let xs = [1, 2, 3]
-return @array.get xs 99
+export @array.get xs 99
 `,
   "Index 99 is outside an array of 3",
 );
@@ -1362,7 +1362,7 @@ return @array.get xs 99
 rejects(
   "an index outside a compile-time array is refused",
   `const xs = [1, 2, 3]
-return @array.get xs 99
+export @array.get xs 99
 `,
   "Index 99 is outside an array of 3",
 );
@@ -1370,7 +1370,7 @@ return @array.get xs 99
 rejects(
   "`@array.set` is decided by the same rule",
   `let xs = [1, 2, 3]
-return @array.set xs 99 0
+export @array.set xs 99 0
 `,
   "Index 99 is outside an array of 3",
 );
@@ -1379,7 +1379,7 @@ rejects(
   "a rebinding is measured by the array it rebound to",
   `let xs = [1, 2, 3]
 xs := [4, 5, 6, 7]
-return @array.get xs 5
+export @array.get xs 5
 `,
   "Index 5 is outside an array of 4",
 );
@@ -1393,7 +1393,7 @@ rejects(
   "a parameter shadowing an array binding needs its own proof",
   `let xs = [1, 2, 3]
 let read = fn xs => @array.get xs 99
-return read
+export read
 `,
   "BLOT_UNPROVEN_INDEX",
 );
@@ -1402,7 +1402,7 @@ rejects(
   "an alias retains a literal array's known length",
   `let xs = [1, 2, 3]
 let ys = xs
-return @array.get ys 99
+export @array.get ys 99
 `,
   "Index 99 is outside an array of 3",
 );
@@ -1411,7 +1411,7 @@ rejects(
   "an unproved access into an array with a spread is refused",
   `let base = [1, 2, 3]
 let xs = [0, ...base]
-return @array.get xs 99
+export @array.get xs 99
 `,
   "BLOT_UNPROVEN_INDEX",
 );
@@ -1419,7 +1419,7 @@ return @array.get xs 99
 rejects(
   "a direct array read cannot be partially applied around its proof site",
   `let read = fn xs => @array.get xs
-return read
+export read
 `,
   "BLOT_ARRAY_ACCESS_NOT_DIRECT",
 );
@@ -1427,7 +1427,7 @@ return read
 rejects(
   "a direct array write cannot be aliased away from its proof site",
   `let write = @array.set
-return write
+export write
 `,
   "BLOT_ARRAY_ACCESS_NOT_DIRECT",
 );
@@ -1442,7 +1442,7 @@ rejects(
   "an index bound by `let` is rejected when its ground type is outside",
   `let n = 99
 let xs = [1, 2, 3]
-return @array.get xs n
+export @array.get xs n
 `,
   "BLOT_OUT_OF_BOUNDS",
 );
@@ -1463,7 +1463,7 @@ let at = fn xs => fn n => case n >= 0 of
 
 check(
   "a guarded read is an ordinary read, and its signature is untouched",
-  `${GUARDED}return { .fn = at; .call = at [1, 2, 3] 0; }
+  `${GUARDED}export { .fn = at; .call = at [1, 2, 3] 0; }
 `,
   "{ .fn = [Int] -> Int -> Int; .call = Int; }",
 );
@@ -1482,7 +1482,7 @@ let at = fn xs => fn n => case n >= 0 of
       #True => small n
       #False => "hi"
   #False => "lo"
-return at
+export at
 `,
   "`0..9223372036854775807` is not one of `1` | `2`",
 );
@@ -1494,7 +1494,7 @@ let n = 5
 let g = fn xs => case n < @array.len xs of
   #True => n
   #False => 0
-return g
+export g
 `,
   "['a] -> (Int | 0)",
 );
@@ -1509,7 +1509,7 @@ let f = fn i => case i > 0 && i < 3 of
       1 => "a"
       2 => "b"
   #False => "out"
-return f
+export f
 `,
   "Int -> Str",
 );
@@ -1523,7 +1523,7 @@ let f = fn i => case i > 0 && i < 3 of
       1 => "a"
       2 => "b"
   #False => "out"
-return f
+export f
 `,
   "BLOT_INCOMPLETE_CASE",
 );
@@ -1538,7 +1538,7 @@ sig at = [Int] -> Int -> Str
 let at = fn xs => fn n => case n >= 0 && n < @array.len xs of
   #True => small n
   #False => "lo"
-return at
+export at
 `,
   "is not one of `1` | `2`",
 );
@@ -1552,7 +1552,7 @@ rejects(
 let at = fn xs => fn n => case n >= @array.len xs of
   #True => @array.get xs n
   #False => 0
-return at
+export at
 `,
   "BLOT_OUT_OF_BOUNDS",
 );
@@ -1563,7 +1563,7 @@ rejects(
 let at = fn xs => fn n => case n == @array.len xs of
   #True => @array.get xs n
   #False => 0
-return at
+export at
 `,
   "BLOT_OUT_OF_BOUNDS",
 );
@@ -1574,7 +1574,7 @@ rejects(
 let put = fn xs => fn n => case n >= @array.len xs of
   #True => @array.set xs n 0
   #False => xs
-return put
+export put
 `,
   "BLOT_OUT_OF_BOUNDS",
 );
@@ -1588,7 +1588,7 @@ rejects(
 let at = fn xs => fn ys => fn n => case n >= @array.len xs of
   #True => @array.get ys n
   #False => 0
-return at
+export at
 `,
   "BLOT_UNPROVEN_INDEX",
 );
@@ -1601,7 +1601,7 @@ let at = fn xs => fn n =>
   return case n >= @array.len xs of
     #True => @array.get ys n
     #False => 0
-return at
+export at
 `,
   "BLOT_OUT_OF_BOUNDS",
 );
@@ -1615,7 +1615,7 @@ let at = fn xs => fn ws => fn n => case n >= @array.len xs of
     xs := ws
     return @array.get xs n
   #False => 0
-return at
+export at
 `,
   "BLOT_UNPROVEN_INDEX",
 );
@@ -1625,7 +1625,7 @@ rejects(
   `let at = fn xs => fn n => case n >= @array.len xs of
   #True => @array.get xs n
   #False => 0
-return at
+export at
 `,
   "BLOT_OUT_OF_BOUNDS",
 );
@@ -1636,7 +1636,7 @@ check(
 let at = fn box => fn n => case n >= 0 && n < @array.len box.values of
   #True => @array.get box.values n
   #False => 0
-return at
+export at
 `,
   "{ .values = [Int]; } -> Int -> Int",
 );
@@ -1647,7 +1647,7 @@ rejects(
 let at = fn box => fn n => case n >= 0 && n < @array.len box.left of
   #True => @array.get box.right n
   #False => 0
-return at
+export at
 `,
   "BLOT_UNPROVEN_INDEX",
 );
@@ -1660,7 +1660,7 @@ let at = fn xs => fn n =>
   return case n >= 0 && n < length of
     #True => @array.get xs n
     #False => 0
-return at
+export at
 `,
   "[Int] -> Int -> Int",
 );
@@ -1673,7 +1673,7 @@ let at = fn xs => fn n =>
   return case n >= 0 && n <= last of
     #True => @array.get xs n
     #False => 0
-return at
+export at
 `,
   "[Int] -> Int -> Int",
 );
@@ -1686,7 +1686,7 @@ let at = fn xs => fn n =>
   return case n >= 0 && n < @array.len xs of
     #True => @array.get ys n
     #False => 0
-return at
+export at
 `,
   "[Int] -> Int -> Int",
 );
@@ -1695,7 +1695,7 @@ check(
   "total array access returns an option for an unproved index",
   `sig at = [Int] -> Int -> Option Int
 let at = fn xs => fn n => Array.get (xs, n)
-return at
+export at
 `,
   "[Int] -> Int -> #None | #Some Int",
 );
@@ -1704,7 +1704,7 @@ check(
   "total array replacement returns an option for an unproved index",
   `sig put = [Int] -> Int -> Int -> Option [Int]
 let put = fn xs => fn n => fn value => Array.set (xs, n, value)
-return put
+export put
 `,
   "[Int] -> Int -> Int -> #None | #Some [Int]",
 );
@@ -1717,7 +1717,7 @@ let sum = fn values =>
   for (index, _) in Iter.indexed values:
     total := total + @array.get values index
   return total
-return sum
+export sum
 `,
   "[Int] -> Int",
 );
@@ -1737,7 +1737,7 @@ let sum = fn values =>
   for (index, _) in iterator:
     total := total + @array.get values index
   return total
-return sum
+export sum
 `,
   "BLOT_UNPROVEN_INDEX",
 );
@@ -1747,7 +1747,7 @@ return sum
 check(
   "a pure function has no row",
   `let f = fn n => @int.add n 1
-return f
+export f
 `,
   "Int -> Int",
 );
@@ -1758,7 +1758,7 @@ check(
 let greet = fn name =>
   result <- Console.write name
   return result
-return { .greet = greet; }
+export { .greet = greet; }
 `,
   "{ .greet = Str -> () ~ { Console }; }",
 );
@@ -1774,7 +1774,7 @@ let adjust = fn () =>
       current := current - 1
     result := current
   return result
-return { .adjust = adjust; }
+export { .adjust = adjust; }
 `,
   "{ .adjust = () -> (Int | 0) ~ { Counter }; }",
 );
@@ -1783,7 +1783,7 @@ check(
   "a compile-time SIMD lane selector produces an immediate-certified access",
   `const lane = 2
 let pick = fn vector => Int32x4.lane vector lane
-return pick
+export pick
 `,
   "I32x4 -> Int",
 );
@@ -1791,21 +1791,21 @@ return pick
 rejects(
   "a runtime SIMD lane selector is not a target immediate",
   `let pick = fn vector => fn lane => Int32x4.lane vector lane
-return pick
+export pick
 `,
   "BLOT_SIMD_IMMEDIATE_NOT_COMPTIME",
 );
 
 rejects(
   "checked SIMD construction rejects an out-of-width lane",
-  `return Int8x16.splat 128
+  `export Int8x16.splat 128
 `,
   "BLOT_TYPE_ERROR",
 );
 
 check(
   "wrapping SIMD construction names truncation explicitly",
-  `return Int8x16.splat_wrapping 128
+  `export Int8x16.splat_wrapping 128
 `,
   "I8x16",
 );
@@ -1816,7 +1816,7 @@ check(
 let operation = fn () =>
   read <- Clock.now
   return read
-return { .operation = operation; }
+export { .operation = operation; }
 `,
   "{ .operation = () -> Int ~ { Clock }; }",
 );
@@ -1829,7 +1829,7 @@ let stamped = fn name =>
   t <- Clock.now ()
   _ <- Console.write name
   return t
-return { .stamped = stamped; }
+export { .stamped = stamped; }
 `,
   "{ .stamped = Str -> Int ~ { Clock, Console }; }",
 );
@@ -1843,7 +1843,7 @@ const system = fn () =>
 const metadata = case @type.reflect (@type.of system) of
   #Arrow arrow => sum (map (arrow.effects, (fn effect => (@type.members effect).ecs)))
   _ => -1
-return metadata
+export metadata
 `,
   "7",
 );
@@ -1857,7 +1857,7 @@ let logged = fn f => fn x =>
   _ <- Console.write "call"
   result <- f x
   return result
-return { .logged = logged; }
+export { .logged = logged; }
 `,
   "{ .logged = ('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }; }",
 );
@@ -1869,7 +1869,7 @@ let logged = fn f => fn x =>
   <- Console.write "call"
   result <- f x
   return result
-return logged
+export logged
 `);
   assertStringIncludes(type, "Console");
 });
@@ -1878,7 +1878,7 @@ rejects(
   "an effect row tail must relate two positions",
   `sig quiet = Int -> Int ~ { ..e }
 let quiet = fn value => value
-return quiet
+export quiet
 `,
   "BLOT_EFFECT_ROW_TAIL_UNCONSTRAINED",
 );
@@ -1887,7 +1887,7 @@ check(
   "an effect nothing performs stays out of the row",
   `const Console = @effect { .write = Str -> Unit; }
 let quiet = fn n => @int.add n 1
-return { .quiet = quiet; }
+export { .quiet = quiet; }
 `,
   "{ .quiet = Int -> Int; }",
 );
@@ -1904,7 +1904,7 @@ sig greet = Str -> Unit ~ { Console }
 let greet = fn name =>
   result <- Console.write name
   return result
-return { .greet = greet; }
+export { .greet = greet; }
 `,
   "{ .greet = Str -> () ~ { Console }; }",
 );
@@ -1914,7 +1914,7 @@ check(
   `const Console = @effect { .write = Str -> Unit; }
 sig quiet = Int -> Int ~ { Console }
 let quiet = fn n => @int.add n 1
-return { .quiet = quiet; }
+export { .quiet = quiet; }
 `,
   "{ .quiet = Int -> Int ~ { Console }; }",
 );
@@ -1926,7 +1926,7 @@ sig greet = Str -> Unit
 let greet = fn name =>
   result <- Console.write name
   return result
-return { .greet = greet; }
+export { .greet = greet; }
 `,
   "is not handled",
 );
@@ -1941,7 +1941,7 @@ sig join = Str -> Str -> Unit ~ { Console }
 let join = fn a => fn b =>
   result <- Console.write (a <> b)
   return result
-return { .join = join; }
+export { .join = join; }
 `,
   "{ .join = Str -> Str -> () ~ { Console }; }",
 );
@@ -1952,7 +1952,7 @@ rejects(
   "a row lists effects and nothing else",
   `sig f = Int -> Int ~ { Int }
 let f = fn n => n
-return f
+export f
 `,
   "BLOT_SIG_NOT_COMPTIME",
 );
@@ -1961,7 +1961,7 @@ rejects(
   "an unhandled effect at the module boundary is rejected",
   `const Console = @effect { .write = Str -> Unit; }
 _ <- Console.write "nobody is listening"
-return ()
+export ()
 `,
   "Nothing handles { Console }",
 );
@@ -1972,7 +1972,7 @@ check(
   "a signature narrows what inference would have produced",
   `sig increment = Int -> Int
 let increment = fn value => value + 1
-return increment
+export increment
 `,
   "Int -> Int",
 );
@@ -1981,7 +1981,7 @@ rejects(
   "a signature that disagrees with the body is rejected",
   `sig double = Int -> Int
 let double = fn v => @text.concat v "!"
-return double
+export double
 `,
   "`Int` is not `Str`",
 );
@@ -1993,7 +1993,7 @@ check(
   `const Bit = 0 | 1
 sig b = Bit
 let b = 1
-return b
+export b
 `,
   "0 | 1",
 );
@@ -2002,7 +2002,7 @@ check(
   "a range accepts what it contains",
   `sig small = range (0, 9)
 let small = 7
-return small
+export small
 `,
   "0..9",
 );
@@ -2011,7 +2011,7 @@ check(
   "a parameterized unsigned range includes its largest value",
   `sig small = U 2
 let small = 3
-return small
+export small
 `,
   "0..3",
 );
@@ -2020,14 +2020,14 @@ rejects(
   "a full unsigned storage width is not a runtime integer type",
   `sig word = U64
 let word = 0
-return word
+export word
 `,
   "BLOT_UNREPRESENTABLE_INTEGER",
 );
 
 rejects(
   "a runtime literal must fit signed i64",
-  "return 9223372036854775808\n",
+  "export 9223372036854775808\n",
   "BLOT_RUNTIME_INTEGER_RANGE",
 );
 
@@ -2035,7 +2035,7 @@ rejects(
   "a parameterized signed range excludes its positive boundary",
   `sig small = I 2
 let small = 2
-return small
+export small
 `,
   "`2` is outside `-2..1`",
 );
@@ -2044,7 +2044,7 @@ rejects(
   "a range rejects what it does not contain",
   `sig small = range (0, 9)
 let small = 42
-return small
+export small
 `,
   "is outside",
 );
@@ -2055,7 +2055,7 @@ rejects(
   "a range names the bound the value fell outside of",
   `sig n = Nat
 let n = -1
-return n
+export n
 `,
   "`-1` is outside `0..9223372036854775807`",
 );
@@ -2069,7 +2069,7 @@ Deno.test("a type error renders with a file, line, and column", async () => {
     PRELUDE +
       `sig greet = Str -> Str
 let greet = fn name => name
-return greet 1
+export greet 1
 `,
   );
   try {
@@ -2094,7 +2094,7 @@ rejects(
   "a const cannot silently become a runtime binding",
   `let runtime = 41
 const copied = runtime + 1
-return copied
+export copied
 `,
   "BLOT_NOT_COMPTIME",
 );
@@ -2102,7 +2102,7 @@ return copied
 rejects(
   "a compdo expression cannot depend on a runtime binding",
   `let runtime = 41
-return compdo:
+export compdo:
   return runtime + 1
 `,
   "BLOT_NOT_COMPTIME",
@@ -2113,7 +2113,7 @@ rejects(
   `sig answer = Int
 let unrelated = 0
 let answer = 42
-return answer
+export answer
 `,
   "must be immediately followed",
 );
@@ -2121,7 +2121,7 @@ return answer
 rejects(
   "a signature cannot be left without a binding",
   `sig answer = Int
-return 42
+export 42
 `,
   "has no adjacent binding",
 );
@@ -2129,7 +2129,7 @@ return 42
 rejects(
   "satisfies is a static constraint when its type is known",
   `const Digit = range (0, 9)
-return @satisfies 42 Digit
+export @satisfies 42 Digit
 `,
   "is outside",
 );
@@ -2147,7 +2147,7 @@ let text = {
   ;
   .return = fn value => @text.concat value ".";
 }
-return @handle (Ask, work, text)
+export @handle (Ask, work, text)
 `,
   "Str",
 );
@@ -2165,7 +2165,7 @@ let wrong = {
   ;
   .return = fn value => value;
 }
-return @handle (Ask, work, wrong)
+export @handle (Ask, work, wrong)
 `,
   "`Int` is not `Str`",
 );
@@ -2176,7 +2176,7 @@ check(
   "an explicit forall preserves a polymorphic binding",
   `sig identity = @forall (fn T => T -> T)
 let identity = fn value => value
-return identity
+export identity
 `,
   "forall 'q0. 'q0 -> 'q0",
 );
@@ -2189,7 +2189,7 @@ let use = fn identity => {
   .text = identity "forty-two";
   }
 let identity = fn value => value
-return use identity
+export use identity
 `,
   "{ .number = Int; .text = Str; }",
 );
@@ -2202,7 +2202,7 @@ let use = fn identity => {
   .text = identity "forty-two";
   }
 let increment = fn value => @int.add value 1
-return use increment
+export use increment
 `,
   "rigid type",
 );
@@ -2219,7 +2219,7 @@ check(
   "a member call the checker can run is typed by its value",
   `const T = { .x = Int; } <+ { .make = fn n => #Some { .x = n; }; }
 let found = T.make 7
-return case found of
+export case found of
   #Some p => p.x
   #None => 0
 `,
@@ -2230,7 +2230,7 @@ check(
   "a call to a struct accessor is typed by the storage it reads",
   `const Point = struct { .x = I32; .y = I32; }
 let somewhere = Point.new { .y = 20; .x = 10; }
-return Point.x somewhere
+export Point.x somewhere
 `,
   "10",
 );
@@ -2238,7 +2238,7 @@ return Point.x somewhere
 check(
   "a member call the checker cannot run knows nothing",
   `const Money = #Money I32 <+ { .of = fn n => #Money n; }
-return fn amount => Money.of amount
+export fn amount => Money.of amount
 `,
   "'a -> ⊤",
 );
@@ -2250,7 +2250,7 @@ const priced = fn amount =>
   sig converted = Money
   let converted = Money.of amount
   return converted
-return priced 42
+export priced 42
 `,
   "anything is not #Money",
 );
@@ -2258,7 +2258,7 @@ return priced 42
 check(
   "a member that is not a function keeps its own type",
   `const Money = #Money I32 <+ { .zero = #Money 0; }
-return Money.zero
+export Money.zero
 `,
   "#Money 0",
 );
@@ -2268,7 +2268,7 @@ check(
   `const World = seal ("World", Unit) <+ {
   .Position = { .increment = fn value => value + 1; };
   }
-return fn value => World.Position.increment value
+export fn value => World.Position.increment value
 `,
   "Int -> Int",
 );
@@ -2281,7 +2281,7 @@ check(
   };
   }
 const World = bind "x"
-return fn value => World.Position.read value
+export fn value => World.Position.read value
 `,
   "{ .x = 'a; } -> 'a",
 );
@@ -2303,7 +2303,7 @@ let join = fn pair => case pair of
   (#Some a, #None) => a
   (#None, #Some b) => b
   (#None, #None) => 0
-return join (Some 1, None)
+export join (Some 1, None)
 `,
   "Int",
 );
@@ -2315,7 +2315,7 @@ let join = fn pair => case pair of
   (#Some a, #Some b) => a + b
   (#Some a, #None) => a
   (#None, #Some b) => b
-return join (None, None)
+export join (None, None)
 `,
   "No arm covers `(#None, #None)`",
 );
@@ -2325,7 +2325,7 @@ rejects(
   `sig join = (Option Int, Option Int) -> Int
 let join = fn pair => case pair of
   (#Some a, #Some b) => a + b
-return join (None, None)
+export join (None, None)
 `,
   "No arm covers `(#None, _)`",
 );
@@ -2337,7 +2337,7 @@ rejects(
   "arms close an undeclared column",
   `let join = fn pair => case pair of
   (#Some a, #Some b) => a + b
-return join (None, None)
+export join (None, None)
 `,
   "`#None` is not one of #Some",
 );
@@ -2348,7 +2348,7 @@ rejects(
 let pick = fn pair => case pair of
   (1, #Some a) => a
   (_, #None) => 0
-return pick (2, Some 1)
+export pick (2, Some 1)
 `,
   "No arm covers `(_, #Some)`",
 );
@@ -2359,7 +2359,7 @@ check(
 let pick = fn pair => case pair of
   (1, #Some a) => a
   (_, _) => 0
-return pick (2, Some 1)
+export pick (2, Some 1)
 `,
   "Int",
 );
@@ -2372,7 +2372,7 @@ rejects(
 let pick = fn pair => case pair of
   (1.0, #Some a) => a
   (_, #None) => 0
-return pick (1.0, Some 1)
+export pick (1.0, Some 1)
 `,
   "No arm covers `(_, #Some)`",
 );
@@ -2385,7 +2385,7 @@ let triple = fn t => case t of
   (#True, #True, #False) => 2
   (#True, #False, _) => 3
   (#False, _, _) => 4
-return triple (True, False, True)
+export triple (True, False, True)
 `,
   "Int",
 );
@@ -2397,7 +2397,7 @@ let triple = fn t => case t of
   (#True, #True, #True) => 1
   (#True, #False, _) => 3
   (#False, _, _) => 4
-return triple (True, True, False)
+export triple (True, True, False)
 `,
   "No arm covers `(#True, #True, #False)`",
 );
@@ -2411,7 +2411,7 @@ let nested = fn v => case v of
   ((#Some a, #False), _) => a
   ((#None, _), #Some c) => c
   ((#None, _), #None) => 0
-return nested ((Some 1, True), None)
+export nested ((Some 1, True), None)
 `,
   "Int",
 );
@@ -2424,7 +2424,7 @@ let nested = fn v => case v of
   ((#Some a, #False), _) => a
   ((#None, _), #Some c) => c
   ((#None, _), #None) => 0
-return nested ((Some 1, True), Some 2)
+export nested ((Some 1, True), Some 2)
 `,
   "No arm covers `((#Some, #True), #Some)`",
 );
@@ -2440,7 +2440,7 @@ return nested ((Some 1, True), Some 2)
 check(
   "a field named by a literal has that field's type",
   `let r = { .a = 7; .b = "x"; }
-return @shape.get r "a"
+export @shape.get r "a"
 `,
   "7",
 );
@@ -2450,7 +2450,7 @@ rejects(
   `let r = { .a = 7; }
 sig z = 0
 let z = @shape.get r "a"
-return z
+export z
 `,
   "`7` is outside `0`",
 );
@@ -2458,7 +2458,7 @@ return z
 rejects(
   "a field the shape does not have is refused rather than trapped",
   `let r = { .a = 7; }
-return @shape.get r "c"
+export @shape.get r "c"
 `,
   "no field `.c`",
 );
@@ -2466,7 +2466,7 @@ return @shape.get r "c"
 check(
   "setting a field named by a literal answers with the whole shape",
   `let r = { .a = 7; }
-return @shape.set r "b" "x"
+export @shape.set r "b" "x"
 `,
   '{ .a = 7; .b = "x"; }',
 );
@@ -2474,7 +2474,7 @@ return @shape.set r "b" "x"
 check(
   "removing a field named by a literal answers with the rest",
   `let r = { .a = 7; .b = 1; }
-return @shape.remove r "b"
+export @shape.remove r "b"
 `,
   "{ .a = 7; }",
 );
@@ -2483,7 +2483,7 @@ return @shape.remove r "b"
 // still an ordinary field demand on it.
 check(
   "a literal name types a projection off a parameter",
-  `return fn shape => @shape.get shape "a"
+  `export fn shape => @shape.get shape "a"
 `,
   "{ .a = 'a; } -> 'a",
 );
@@ -2491,7 +2491,7 @@ check(
 rejects(
   "a runtime field name cannot invent a structural result type",
   `let get = fn (shape, name) => @shape.get shape name
-return get ({ .a = 1; }, "a")
+export get ({ .a = 1; }, "a")
 `,
   "BLOT_DYNAMIC_SHAPE_FIELD",
 );
@@ -2502,7 +2502,7 @@ rejects(
 let reflected = fn value => case @type.reflect value of
   #Shape payload => payload
   _ => 0
-return reflected
+export reflected
 `,
   "BLOT_REFLECTION_NOT_INDEXED",
 );
@@ -2512,7 +2512,7 @@ rejects(
   `let reflected = fn value => case @type.reflect value of
   #Shape payload => payload
   _ => 0
-return @int.add (reflected 1) 1
+export @int.add (reflected 1) 1
 `,
   "BLOT_REFLECTION_NOT_INDEXED",
 );
@@ -2534,7 +2534,7 @@ let is_odd = rec (fn n => case n == 0 of
   #True => False
   #False => is_even (n - 1)
 )
-return is_even 10
+export is_even 10
 `,
   "(#True | #False)",
 );
@@ -2553,7 +2553,7 @@ let c = rec (fn n => case n == 0 of
   #True => 2
   #False => a (n - 1)
 )
-return a 7
+export a 7
 `,
   "(0 | 1 | 2)",
 );
@@ -2571,14 +2571,14 @@ let pong = rec (fn n => case n == 0 of
   #False => ping (n - 1)
 )
 let plain = rec (fn n => n + 1)
-return plain (ping 5)
+export plain (ping 5)
 `,
   "Int",
 );
 
 check(
   "a group inside a nested block sees itself",
-  `return do:
+  `export do:
   let up = rec (fn n => case n == 0 of
     #True => 0
     #False => down (n - 1)
@@ -2604,7 +2604,7 @@ check(
     #False => up (n - 1)
   )
   return up start
-return outer 9
+export outer 9
 `,
   "(0 | 1)",
 );
@@ -2623,7 +2623,7 @@ let pong = rec (fn n => case n == 0 of
   #True => 1
   #False => ping (n - 1)
 )
-return ping 4
+export ping 4
 `,
   "Int",
 );
@@ -2638,7 +2638,7 @@ const odd = rec (fn n => case n == 0 of
   #True => False
   #False => even (n - 1)
 )
-return even 12
+export even 12
 `,
   "(#True | #False)",
 );
@@ -2650,7 +2650,7 @@ check(
   `let value = 1
 let value = value + 1
 let value = value + 1
-return value
+export value
 `,
   "Int",
 );
@@ -2660,7 +2660,7 @@ rejects(
   `let a = rec (fn n => b n)
 let gap = 1
 let b = rec (fn n => n + gap)
-return a 1
+export a 1
 `,
   "`b` is bound further down",
 );
@@ -2669,7 +2669,7 @@ rejects(
   "a value that reads a later binding names the ordering, not a typo",
   `let total = later + 1
 let later = 2
-return total
+export total
 `,
   "`later` is bound further down",
 );
@@ -2678,7 +2678,7 @@ return total
 rejects(
   "a name no declaration binds is still an ordinary unbound name",
   `let total = nowhere + 1
-return total
+export total
 `,
   "`nowhere` is not in scope",
 );
@@ -2687,7 +2687,7 @@ rejects(
   "a group member that is not a function is refused",
   `let total = rec (later 1)
 let later = rec (fn n => n + 1)
-return total
+export total
 `,
   "`rec` applies to a lambda",
 );
@@ -2696,7 +2696,7 @@ rejects(
   "one name cannot be bound twice in one group",
   `let step = rec (fn n => step n)
 let step = rec (fn n => n + 1)
-return step 3
+export step 3
 `,
   "bound twice in one recursive group",
 );
@@ -2714,7 +2714,7 @@ let down = rec (fn n => case n == 0 of
   #True => 1
   #False => up (n - 1)
 )
-return up 4
+export up 4
 `,
   "`down` is bound further down",
 );
@@ -2732,7 +2732,7 @@ let down = rec (fn n => case n == 0 of
   #True => 1
   #False => up (n - 1)
 )
-return up 5
+export up 5
 `,
   "`down` is bound further down",
 );
@@ -2746,7 +2746,7 @@ rejects(
   let t = 1
   return t + later
 let later = 2
-return a
+export a
 `,
   "`later` is bound further down",
 );

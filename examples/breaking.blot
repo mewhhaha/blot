@@ -1,7 +1,7 @@
 // An unbounded loop is still a fold. Its direct `:=` rebindings are the
 // accumulator, and `break` returns the accumulator as it exists at that point.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let iterations = 0
 let completed = 0
@@ -52,7 +52,7 @@ for ever:
 
   guard_total := guard_total + value
 
-return {
+export {
   .iterations = iterations;
   .completed = completed;
   .outer = outer;

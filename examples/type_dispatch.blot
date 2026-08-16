@@ -18,7 +18,7 @@
 // `const` name straight to its value and has always emitted the selected
 // closure, which is why the two now agree rather than one following the other.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 // One definition, two implementations, and nothing at run time chooses between
 // them: `measuring` is applied while compiling and the loser is never emitted.
@@ -80,7 +80,7 @@ const count = counting Int
 // way — otherwise one helper in scope would sink the whole attempt.
 const ignoring = counting Str
 
-return {
+export {
   .text_length = text_length;
   .int_itself = int_itself;
   .added = add (20, 22);

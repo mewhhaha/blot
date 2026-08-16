@@ -1,4 +1,4 @@
-open @import "../../../src/prelude/prelude.blot" ()
+open import "../../../src/prelude/prelude.blot"
 
 sig build = (Int, [(Int, Int)], Int) -> ([(Int, Int)], Int)
 let build = rec (fn (remaining, ?nodes, head) =>
@@ -25,4 +25,4 @@ let arena_list = fn count =>
   let (nodes, head) = build (count, nodes, 0)
   return total ((&nodes), head, 0)
 
-return { .arena_list = arena_list; }
+export { .arena_list = arena_list; }

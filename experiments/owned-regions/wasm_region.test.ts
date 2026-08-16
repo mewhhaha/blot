@@ -106,9 +106,9 @@ Deno.test("owned Slice quicksort executes through Rust Core Wasm without recursi
 });
 
 Deno.test("Slice-relative get and set cannot reach a sibling Region", async () => {
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 let whole = Slice.claim [10, 20, 30]
-return case Slice.split ((!whole), 1) of
+export case Slice.split ((!whole), 1) of
   #Split (!left, !right, !rejoin) =>
     let crossed = case Slice.get ((&left), 1) of
       #Some _ => 1
@@ -135,7 +135,7 @@ return case Slice.split ((!whole), 1) of
 });
 
 Deno.test("dynamic Slice split conserves authority on success and failure", async () => {
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 const Source = @effect.host { .offset = Int -> Int; }
 at <- Source.offset 0
 let whole = Slice.claim [4, 5, 6]
@@ -149,7 +149,7 @@ let first = case Array.get (frozen, 0) of
 let last = case Array.get (frozen, 2) of
   #Some value => value
   #None => 0
-return first * 10 + last
+export first * 10 + last
 `;
 
   await withSource(source, async (compiler, path) => {
@@ -165,13 +165,13 @@ return first * 10 + last
 
 Deno.test("Slice claim copies shared Stores but reuses proven private Stores", async () => {
   const source = (owned: boolean) =>
-    `open @import "blot:prelude" ()
+    `open import "blot:prelude"
 const Source = @effect.host { .value = Int -> Int; }
 x <- Source.value 0
 ${owned ? "let !candidate" : "let candidate"} = @array.set [x, 2, 3] 1 2
 let region = Slice.claim ${owned ? "(!candidate)" : "candidate"}
 let frozen = Slice.freeze (!region)
-return case Array.get (frozen, 0) of
+export case Array.get (frozen, 0) of
   #Some value => value
   #None => 0
 `;
@@ -192,7 +192,7 @@ Deno.test("a user wrapper carries the rejoin witness across its boundary", async
   // No compiler trust and no recognized name: the witness travels as an
   // ordinary linear value, so the wrapper certifies by deferring its join
   // proof to this call site.
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 sig rejoin_parts =
   (@region.rejoin, @region.type Int, @region.type Int) -> @region.type Int
 let rejoin_parts =
@@ -202,7 +202,7 @@ let restored = case Slice.split ((!whole), 1) of
   #Split (!left, !right, !rejoin) => rejoin_parts ((!rejoin), (!left), (!right))
   #SplitOutOfBounds !original => original
 let frozen = Slice.freeze (!restored)
-return case Array.get (frozen, 2) of
+export case Array.get (frozen, 2) of
   #Some value => value
   #None => 0
 `;
@@ -215,7 +215,7 @@ return case Array.get (frozen, 2) of
 });
 
 Deno.test("a user wrapper cannot launder reversed parts past the witness", async () => {
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 sig rejoin_parts =
   (@region.rejoin, @region.type Int, @region.type Int) -> @region.type Int
 let rejoin_parts =
@@ -224,7 +224,7 @@ let whole = Slice.claim [7, 8, 9]
 let restored = case Slice.split ((!whole), 1) of
   #Split (!left, !right, !rejoin) => rejoin_parts ((!rejoin), (!right), (!left))
   #SplitOutOfBounds !original => original
-return Slice.freeze (!restored)
+export Slice.freeze (!restored)
 `;
 
   const error = await assertRejects(
@@ -237,11 +237,11 @@ return Slice.freeze (!restored)
 Deno.test("a wrapper freeze of a split part is caught at the call site", async () => {
   // The full-root proof defers through the wrapper parameter and is
   // discharged against the caller's concrete part authority.
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 sig freeze_it = @region.type Int -> [Int]
 let freeze_it = fn !region => Slice.freeze (!region)
 let whole = Slice.claim [4, 5, 6]
-return case Slice.split ((!whole), 1) of
+export case Slice.split ((!whole), 1) of
   #Split (!left, !right, !rejoin) =>
     let frozen = freeze_it (!left)
     let restored = Slice.join ((!rejoin), (Slice.claim frozen), (!right))
@@ -257,12 +257,12 @@ return case Slice.split ((!whole), 1) of
 });
 
 Deno.test("Rust ownership rejects reversed Slice siblings", async () => {
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 let whole = Slice.claim [3, 1, 2]
 let restored = case Slice.split ((!whole), 1) of
   #Split (!left, !right, !rejoin) => Slice.join ((!rejoin), (!right), (!left))
   #SplitOutOfBounds !original => original
-return Slice.freeze (!restored)
+export Slice.freeze (!restored)
 `;
 
   const error = await assertRejects(
@@ -273,14 +273,14 @@ return Slice.freeze (!restored)
 });
 
 Deno.test("live Slice capabilities are refused at Core Wasm ABI 1", async () => {
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 sig length = (@region.type Int) -> Int
 let length = fn !region =>
   let size = Slice.length (&region)
   let frozen = Slice.freeze (!region)
   let _ = Array.length (&frozen)
   return size
-return length
+export length
 `;
 
   const error = await assertRejects(

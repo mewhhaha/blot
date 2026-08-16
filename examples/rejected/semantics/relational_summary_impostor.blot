@@ -1,5 +1,5 @@
 // A familiar field path is not a relational proof; the closure body must verify.
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let Array = { .length = fn _ => 10; }
 
@@ -8,4 +8,4 @@ let at = fn values => fn index => case index >= 0 && index < Array.length values
   #True => @array.get values index
   #False => 0
 
-return at
+export at

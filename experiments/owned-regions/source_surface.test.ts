@@ -19,13 +19,13 @@ async function expectDiagnostic(source: string, code: string): Promise<void> {
 Deno.test("Region split and join preserve one fresh root", async () => {
   const checked = await checkSource(
     path,
-    `open @import "blot:prelude" ()
+    `open import "blot:prelude"
 let values = [3, 1, 2]
 let whole = @region.claim values
 let rejoined = case @region.split (!whole) 1 of
   #Split (!left, !right, !rejoin) => @region.join (!rejoin) (!left) (!right)
   #SplitOutOfBounds !original => original
-return @region.freeze (!rejoined)
+export @region.freeze (!rejoined)
 `,
   );
   assertEquals(checked.type, "[(3 | 1 | 2)]");
@@ -34,7 +34,7 @@ return @region.freeze (!rejoined)
 Deno.test("Region claim is copy-safe for a shared source array", async () => {
   const checked = await checkSource(
     path,
-    `open @import "blot:prelude" ()
+    `open import "blot:prelude"
 let values = [3, 1, 2]
 let region = @region.claim values
 let shared_first = case Array.get (values, 0) of
@@ -44,7 +44,7 @@ let frozen = @region.freeze (!region)
 let frozen_first = case Array.get (frozen, 0) of
   #Some value => value
   #None => 0
-return shared_first * 10 + frozen_first
+export shared_first * 10 + frozen_first
 `,
   );
   assertEquals(checked.type, "Int");
@@ -52,13 +52,13 @@ return shared_first * 10 + frozen_first
 
 Deno.test("Region join rejects reversed siblings", async () => {
   await expectDiagnostic(
-    `open @import "blot:prelude" ()
+    `open import "blot:prelude"
 let values = [3, 1, 2]
 let whole = @region.claim values
 let rejoined = case @region.split (!whole) 1 of
   #Split (!left, !right, !rejoin) => @region.join (!rejoin) (!right) (!left)
   #SplitOutOfBounds !original => original
-return @region.freeze (!rejoined)
+export @region.freeze (!rejoined)
 `,
     "BLOT_REGION_JOIN_UNPROVED",
   );
@@ -70,13 +70,13 @@ Deno.test("Region evaluator mutates only its private Store", async () => {
   try {
     await Deno.writeTextFile(
       file,
-      `open @import "blot:prelude" ()
+      `open import "blot:prelude"
 let values = [3, 1, 2]
 let region = @region.claim values
 let changed = case @region.swap (!region) 0 2 of
   #Updated !updated => updated
   #SwapOutOfBounds !original => original
-return @region.freeze (!changed)
+export @region.freeze (!changed)
 `,
     );
     const result = await evaluateFile(file, { write() {} });

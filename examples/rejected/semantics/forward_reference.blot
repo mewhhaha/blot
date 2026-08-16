@@ -8,9 +8,9 @@
 // is read, and the message says the name is bound further down rather than
 // leaving the reader to hunt for a typo.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let total = later + 1
 let later = 2
 
-return total
+export total

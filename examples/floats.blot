@@ -11,7 +11,7 @@
 // meaning there. So a float literal inhabits `F64` and the narrowing machinery
 // never has to answer a question about reals.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 // --- arithmetic -------------------------------------------------------------
 //
@@ -127,7 +127,7 @@ let lossy_round_trip =
 // `F32x4` is the value that genuinely cannot cross. Publishing one is
 // `BLOT_VECTOR_AT_BOUNDARY`; extract a lane or select a vector first.
 
-return {
+export {
   .quarter = Float.truncate (Float.mul quarter 100.0);
   .sum = Float.truncate (Float.mul sum 100.0);
   .scaled = Float.truncate scaled;

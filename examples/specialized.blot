@@ -5,7 +5,7 @@
 // WebAssembly is the `@int.add` the check selected. `examples/generics.blot`
 // is the catalog; this is the proof it costs nothing.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const adding = fn T =>
   let _ =
@@ -17,4 +17,4 @@ const adding = fn T =>
 
 const add_i32 = adding I32
 const add_u8 = adding U8
-return add_i32 (add_u8 (1, 2), 39)
+export add_i32 (add_u8 (1, 2), 39)

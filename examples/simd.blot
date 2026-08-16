@@ -12,7 +12,7 @@
 // back out of the bytes, which is the only thing that distinguishes an emitted
 // instruction from an answer the evaluator already knew.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Console =
   @effect.host {
@@ -67,7 +67,7 @@ let shuffled = Vec4.shuffle (exact, normalized, 0, 5, 2, 7)
 // Scalars may cross the canonical boundary directly. This example converts to
 // integers so its answers remain compact and obvious; `F32x4` itself stays an
 // internal register value and cannot be exported.
-return {
+export {
   .first = Float32.truncate (Vec4.x normalized);
   .second = Float32.truncate (Vec4.y normalized);
   .last = Float32.truncate (Vec4.w normalized);

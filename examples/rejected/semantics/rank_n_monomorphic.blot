@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig use = @forall (fn T => T -> T) -> { .number = Int; .text = Str; }
 let use = fn identity => {
@@ -6,4 +6,4 @@ let use = fn identity => {
   .text = identity "forty-two";
   }
 let increment = fn value => @int.add value 1
-return use increment
+export use increment

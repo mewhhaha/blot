@@ -1,5 +1,5 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let direct = @array.get
 
-return direct
+export direct

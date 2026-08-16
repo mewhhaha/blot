@@ -1,7 +1,7 @@
 // `fn` is the only way to write a lambda. The arrow is reserved for the
 // parameter boundary, so omitting `fn` is rejected during parsing.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let apply_twice = f => x => f (f x)
-return apply_twice
+export apply_twice

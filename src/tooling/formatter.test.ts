@@ -26,7 +26,7 @@ Deno.test("formatting indents nested conditionals within calls", async () => {
     <- Residences.remove tile
 
   return ()
-return remove_residence
+export remove_residence
 `;
 
   const formatted = await formatSource(source);
@@ -57,7 +57,7 @@ return remove_residence
     <- Residences.remove tile
 
   return ()
-return remove_residence
+export remove_residence
 `,
   );
   assertEquals(await formatSource(formatted.source), formatted);
@@ -75,7 +75,7 @@ Deno.test("formatting places each long array element on its own line", async () 
     EditorState, SimulationClock, SimulationCursors, CityStats,
   CityInfrastructure];
 }
-return World
+export World
 `;
 
   const formatted = await formatSource(source);
@@ -100,7 +100,7 @@ return World
       CityInfrastructure
     ];
   }
-return World
+export World
 `,
   );
   assertEquals(await formatSource(formatted.source), formatted);
@@ -113,7 +113,7 @@ return World
 Deno.test("formatting moves an existing multiline array into its value scope", async () => {
   const source = `let components = [Terrain,
   Construction]
-return components
+export components
 `;
 
   const formatted = await formatSource(source);
@@ -123,7 +123,7 @@ return components
     formatted.source,
     `let components =
   [Terrain, Construction]
-return components
+export components
 `,
   );
   assertEquals(await formatSource(formatted.source), formatted);
@@ -139,14 +139,14 @@ Deno.test("formatting changes layout only after the 80-column boundary", async (
   const overflowingLambdaBody = `${fittingLambdaBody}x`;
 
   await assertStableFormatting(
-    `${lambdaPrefix}${fittingLambdaBody}\nreturn choose\n`,
-    `${lambdaPrefix}${fittingLambdaBody}\nreturn choose\n`,
+    `${lambdaPrefix}${fittingLambdaBody}\nexport choose\n`,
+    `${lambdaPrefix}${fittingLambdaBody}\nexport choose\n`,
   );
   await assertStableFormatting(
-    `${lambdaPrefix}${overflowingLambdaBody}\nreturn choose\n`,
+    `${lambdaPrefix}${overflowingLambdaBody}\nexport choose\n`,
     `const choose =
   fn value => ${overflowingLambdaBody}
-return choose
+export choose
 `,
   );
 
@@ -156,30 +156,30 @@ return choose
   );
   const overflowingElement = `${fittingElement}x`;
   await assertStableFormatting(
-    `${arrayPrefix}[${fittingElement}]\nreturn values\n`,
-    `${arrayPrefix}[${fittingElement}]\nreturn values\n`,
+    `${arrayPrefix}[${fittingElement}]\nexport values\n`,
+    `${arrayPrefix}[${fittingElement}]\nexport values\n`,
   );
   await assertStableFormatting(
-    `${arrayPrefix}[${overflowingElement}]\nreturn values\n`,
+    `${arrayPrefix}[${overflowingElement}]\nexport values\n`,
     `let values =
   [${overflowingElement}]
-return values
+export values
 `,
   );
 
-  const returnPrefix = "return ";
-  const fittingReturnValue = "x".repeat(
-    80 - returnPrefix.length,
+  const exportPrefix = "export ";
+  const fittingExportValue = "x".repeat(
+    80 - exportPrefix.length,
   );
-  const overflowingReturnValue = `${fittingReturnValue}x`;
+  const overflowingExportValue = `${fittingExportValue}x`;
   await assertStableFormatting(
-    `${returnPrefix}${fittingReturnValue}\n`,
-    `${returnPrefix}${fittingReturnValue}\n`,
+    `${exportPrefix}${fittingExportValue}\n`,
+    `${exportPrefix}${fittingExportValue}\n`,
   );
   await assertStableFormatting(
-    `${returnPrefix}${overflowingReturnValue}\n`,
-    `return
-  ${overflowingReturnValue}
+    `${exportPrefix}${overflowingExportValue}\n`,
+    `export
+  ${overflowingExportValue}
 `,
   );
 });
@@ -190,7 +190,7 @@ Deno.test("formatting indents a separated return inside a colon block", async ()
   if ready:
     return ${returnedValue}
   return fallback
-return choose
+export choose
 `;
   const expected = `let choose = fn ready =>
   if ready:
@@ -198,7 +198,7 @@ return choose
       ${returnedValue}
 
   return fallback
-return choose
+export choose
 `;
   await assertStableFormatting(source, expected);
 });
@@ -207,7 +207,7 @@ Deno.test("formatting keeps nested arrays and spreads structurally clear", async
   const source = `let empty = []
 let singleton = [only]
 let values = [firstComponent, [secondComponent, thirdComponent], ...remainingComponents, fourthComponent, fifthComponent]
-return (empty, singleton, values)
+export (empty, singleton, values)
 `;
 
   await assertStableFormatting(
@@ -222,7 +222,7 @@ let values =
     fourthComponent,
     fifthComponent
   ]
-return (empty, singleton, values)
+export (empty, singleton, values)
 `,
   );
 });
@@ -237,7 +237,7 @@ let pair = (
  firstComponent, // retained on the left
  secondComponent
 )
-return (values, pair)
+export (values, pair)
 `;
 
   await assertStableFormatting(
@@ -253,7 +253,7 @@ let pair =
     firstComponent, // retained on the left
     secondComponent
   )
-return (values, pair)
+export (values, pair)
 `,
   );
 });
@@ -268,7 +268,7 @@ Deno.test("formatting removes parentheses around a tuple lambda argument", async
   )
   )
   return store
-return load
+export load
 `;
 
   await assertStableFormatting(
@@ -281,7 +281,7 @@ return load
         return append (store, id)
     )
   return store
-return load
+export load
 `,
   );
 });
@@ -294,7 +294,7 @@ Deno.test("formatting staggers adjacent vertical delimiters", async () => {
     <- visit value
   )
   )
-return draw
+export draw
 `;
 
   await assertStableFormatting(
@@ -305,7 +305,7 @@ return draw
       fn value =>
         <- visit value
     )
-return draw
+export draw
 `,
   );
 });
@@ -316,14 +316,14 @@ Deno.test("formatting closes a vertical record outside its fields", async () => 
   .empty = [];
   .append = fn left => fn right => left;
   }
-return Namespace
+export Namespace
 `,
     `const Namespace =
   {
     .empty = [];
     .append = fn left => fn right => left;
   }
-return Namespace
+export Namespace
 `,
   );
 });
@@ -334,15 +334,15 @@ Deno.test("formatting closes an operator section outside its declarations", asyn
   infix 30 (!=) = Eq.ne;
   }
 
-open @import "blot:prelude" ()
-return 1 != 2
+open import "blot:prelude"
+export 1 != 2
 `,
     `operators {
   infix 30 (!=) = Eq.ne;
 }
 
-open @import "blot:prelude" ()
-return 1 != 2
+open import "blot:prelude"
+export 1 != 2
 `,
   );
 });
@@ -357,7 +357,7 @@ Deno.test("formatting separates a completed statement suite", async () => {
     generation := current
   transforms := advance transforms
   return transforms
-return update
+export update
 `,
     `let update = fn generation =>
   current <- Generation.current ()
@@ -368,7 +368,7 @@ return update
 
   transforms := advance transforms
   return transforms
-return update
+export update
 `,
   );
 });
@@ -381,7 +381,7 @@ Deno.test("formatting attaches a dedented comment to the following statement", a
     // Advance the current generation.
   transforms := advance transforms
   return transforms
-return update
+export update
 `,
     `let update = fn generation =>
   if current != generation:
@@ -390,26 +390,26 @@ return update
   // Advance the current generation.
   transforms := advance transforms
   return transforms
-return update
+export update
 `,
   );
 });
 
 Deno.test("formatting normalizes line endings and trailing whitespace", async () => {
   await assertStableFormatting(
-    "let value = [first, second]  \r\nreturn value\t\r\n\r\n",
+    "let value = [first, second]  \r\nexport value\t\r\n\r\n",
     `let value = [first, second]
-return value
+export value
 `,
   );
 });
 
 Deno.test("formatting prefers leading discard sequencing", async () => {
   const sugared = `<- perform_work ()
-return ()
+export ()
 `;
   const explicit = `_ <- perform_work ()
-return ()
+export ()
 `;
   assertEquals(
     semanticTree(await parse(sugared)),
@@ -453,28 +453,28 @@ Deno.test("formatting refuses source the compiler cannot parse", async () => {
   const formatted = await formatSource(`let value = 1
 `);
   if (formatted.ok) throw new Error("invalid source formatted successfully");
-  assertEquals(formatted.diagnostics[0]?.code, "BLOT_MISSING_RESULT");
+  assertEquals(formatted.diagnostics[0]?.code, "BLOT_MISSING_EXPORT");
 });
 
 Deno.test("formatting removes only precedence-redundant parentheses", async () => {
-  const source = `let imported = (@import "module") ()
+  const source = `let imported = import "module"
 let atom = (1)
 let left = (apply 1) 2
 let right = apply (apply 1)
 let grouped = (1 + 2) * 3
-return (imported, atom, left, right, grouped)
+export (imported, atom, left, right, grouped)
 `;
 
   const formatted = await formatSource(source);
   if (!formatted.ok) throw new Error("valid source did not format");
   assertEquals(
     formatted.source,
-    `let imported = @import "module" ()
+    `let imported = import "module"
 let atom = 1
 let left = apply 1 2
 let right = apply (apply 1)
 let grouped = (1 + 2) * 3
-return (imported, atom, left, right, grouped)
+export (imported, atom, left, right, grouped)
 `,
   );
   assertEquals(
@@ -486,7 +486,7 @@ return (imported, atom, left, right, grouped)
 Deno.test("formatting retains interacting parentheses when flattening changes application", async () => {
   const source = `let nested = apply ((apply 1))
 let called = (fn value => value) 1
-return (nested, called)
+export (nested, called)
 `;
   const formatted = await formatSource(source);
   if (!formatted.ok) throw new Error("valid source did not format");
@@ -498,7 +498,7 @@ Deno.test("formatting indents scoped returns as statements", async () => {
  if 1 == 1:
   return 1
  return 2
-return result
+export result
 `;
   const formatted = await formatSource(source);
   if (!formatted.ok) throw new Error("valid source did not format");
@@ -509,7 +509,7 @@ return result
     return 1
 
   return 2
-return result
+export result
 `,
   );
 });
@@ -520,7 +520,7 @@ Deno.test("formatting joins a short layout-significant continuation", async () =
 if sum (1, 2) == 3:
   <- effect ()
 
-return ()
+export ()
 `;
   const formatted = await formatSource(source);
   if (!formatted.ok) throw new Error("valid source did not format");
@@ -530,7 +530,7 @@ return ()
 if sum (1, 2) == 3:
   <- effect ()
 
-return ()
+export ()
 `,
   );
   assertEquals(await formatSource(formatted.source), formatted);
@@ -543,7 +543,7 @@ Deno.test("formatting does not extend a nested function over following statement
   for value in values:
     let selected = value
   return inner
-return outer
+export outer
 `;
   const formatted = await formatSource(source);
   if (!formatted.ok) throw new Error("valid source did not format");
@@ -556,7 +556,7 @@ return outer
     let selected = value
 
   return inner
-return outer
+export outer
 `,
   );
   assertEquals(await formatSource(formatted.source), formatted);
@@ -605,7 +605,7 @@ Deno.test("formatting preserves explicit do block scope", async () => {
   const source = `let value = do:
     let local = 1
     return local
-return value
+export value
 `;
   const formatted = await formatSource(source);
   if (!formatted.ok) throw new Error("valid do block did not format");
@@ -614,7 +614,7 @@ return value
     `let value = do:
   let local = 1
   return local
-return value
+export value
 `,
   );
   assertEquals(await formatSource(formatted.source), formatted);

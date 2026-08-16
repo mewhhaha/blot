@@ -1,12 +1,10 @@
-// An imported module is applied to a record that omits a field it reads.
+// An imported module is instantiated with a record that omits a field it reads.
 //
 // `lib/score.blot` reads `.base` and `.bonus` off its parameter, and this
 // record has only one of them. Nothing declares that requirement — the demand
 // is whatever the module's bodies reach for — so the argument is checked
-// against the parameter variable inference found *inside* the module. A fresh
-// variable in its place would satisfy every argument, and this program would be
+// against the input variable inference found *inside* the module. A fresh
+// variable in its place would satisfy every input, and this program would be
 // accepted and then read a field that is not there.
 
-const score = @import "./../../lib/score.blot"
-
-return (score { .base = 40; }).run
+export (import "./../../lib/score.blot" with { .base = 40; }).run

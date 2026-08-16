@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let consume = fn !value => value + 1
 let !left = 40
@@ -9,4 +9,4 @@ let holder = {
 }
 let { .first; } = holder
 
-return first ()
+export first ()

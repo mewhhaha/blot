@@ -8,13 +8,13 @@ Deno.test("layout elaboration inserts suites only outside delimiters", async () 
     2,
   ];
   return if condition : values.0 else: values.1;
-return choose;
+export choose;
 `;
   const result = await elaborateLayout(source);
   if (!result.ok) throw new Error(result.diagnostics[0]?.message);
   assertEquals(
     visible(result.layout.source),
-    `let choose = fn condition =>\n  <NL><IN>let values = [\n    1,\n    2,\n  ];\n  <NL>return if condition : values.0 else: values.1;\n<NL><DED><NL>return choose;<NL>\n`,
+    `let choose = fn condition =>\n  <NL><IN>let values = [\n    1,\n    2,\n  ];\n  <NL>return if condition : values.0 else: values.1;\n<NL><DED><NL>export choose;<NL>\n`,
   );
   for (let offset = 0; offset <= result.layout.source.length; offset += 1) {
     const original = result.layout.originalOffset(offset);
@@ -39,7 +39,7 @@ Deno.test("layout elaboration rejects a dedent between active suites", async () 
     let value =
       return 1;
    return value;
-return outer;
+export outer;
 `;
   const result = await elaborateLayout(source);
   if (result.ok) throw new Error("inconsistent indentation was accepted");
@@ -50,7 +50,7 @@ Deno.test("layout elaboration opens an explicit do suite", async () => {
   const source = `let value = do:
   let local = 1
   return local
-return value
+export value
 `;
   const result = await elaborateLayout(source);
   if (!result.ok) throw new Error(result.diagnostics[0]?.message);
@@ -65,7 +65,7 @@ Deno.test("parentheses do not introduce statement suites", async () => {
   let local = 1
   return local
 )
-return value
+export value
 `;
   const result = await elaborateLayout(source);
   if (!result.ok) throw new Error(result.diagnostics[0]?.message);
@@ -73,11 +73,11 @@ return value
 });
 
 Deno.test("layout markers precede a trailing line comment", async () => {
-  const result = await elaborateLayout("return 1 // changed");
+  const result = await elaborateLayout("export 1 // changed");
   if (!result.ok) throw new Error(result.diagnostics[0]?.message);
   assertEquals(
     visible(result.layout.source),
-    "return 1<NL> // changed",
+    "export 1<NL> // changed",
   );
 });
 

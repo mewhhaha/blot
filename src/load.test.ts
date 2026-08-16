@@ -12,12 +12,12 @@ Deno.test("refreshing loaded modules replaces an edited dependency and its impor
   const entryPath = join(directory, "entry.blot");
   await Deno.writeTextFile(
     dependencyPath,
-    `return 1
+    `export 1
 `,
   );
   await Deno.writeTextFile(
     entryPath,
-    `return (@import "./dependency.blot") ()
+    `export import "./dependency.blot"
 `,
   );
 
@@ -29,7 +29,7 @@ Deno.test("refreshing loaded modules replaces an edited dependency and its impor
 
   await Deno.writeTextFile(
     dependencyPath,
-    `return 2
+    `export 2
 `,
   );
   await refreshLoadedModules();
@@ -43,7 +43,7 @@ Deno.test("refreshing loaded modules replaces an edited dependency and its impor
   assertNotStrictEquals(secondDependency, firstDependency);
   assertEquals(
     secondDependency.source,
-    `return 2
+    `export 2
 `,
   );
 });
@@ -58,12 +58,12 @@ Deno.test("refreshing loaded modules replaces an edited include and its importer
     dependencyPath,
     `const raw = fn source => source.text
 const message = @include "./message.txt" raw
-return message
+export message
 `,
   );
   await Deno.writeTextFile(
     entryPath,
-    `return (@import "./dependency.blot") ()
+    `export import "./dependency.blot"
 `,
   );
 
@@ -96,7 +96,7 @@ Deno.test("loading reports a missing included file at the include site", async (
   await Deno.writeTextFile(
     entryPath,
     `const raw = fn source => source.text
-return @include "./missing.txt" raw
+export @include "./missing.txt" raw
 `,
   );
 

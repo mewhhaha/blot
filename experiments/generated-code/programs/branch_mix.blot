@@ -1,7 +1,7 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
-const Workloads = @import "../workloads.blot" ()
+const Workloads = import "../workloads.blot"
 const Benchmark = @effect.host { .input = Unit -> Int; }
 
 input <- Benchmark.input ()
-return Workloads.branch_mix input
+export Workloads.branch_mix input

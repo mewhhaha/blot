@@ -1,11 +1,11 @@
 // The arms of a `case` must cover the scrutinee. A constructor no arm mentions
 // is caught here rather than at runtime.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Message = #Ready | #Progress Int | #Failed Str
 sig describe = Message -> Str
 let describe = fn m => case m of
   #Ready => "ready"
   #Progress n => "working"
-return describe
+export describe

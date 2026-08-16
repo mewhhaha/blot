@@ -92,17 +92,14 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
     };
     let table = FixityTable::new(&fixities);
     let context = LoweringContext::root(&table);
-    let declarations = cst.field_list(root, "declarations")?;
-    let Some(last) = declarations.last().copied() else {
-        return Err("BLOT_MISSING_RESULT: a module ends with `return expr`".to_owned());
-    };
-    let last = unwrapped_rule(cst, last)?;
-    if cst.rule_name(last)? != "result" {
-        return Err("BLOT_MISSING_RESULT: a module ends with `return expr`".to_owned());
-    }
-    let statements = &declarations[..declarations.len() - 1];
-    let mut result = lower_value(cst, required(cst, last, "value")?, &context, &mut arena)?;
-    let (lowered_declarations, result_effects) = if statements_need_control(cst, statements)? {
+    let statements = cst.field_list(root, "declarations")?;
+    let exported = cst
+        .field(root, "exported")?
+        .ok_or_else(|| "BLOT_MISSING_EXPORT: a module ends with `export value`".to_owned())?;
+    let exported = as_rule(exported)?;
+    require_rule(cst, exported, "module_export")?;
+    let mut result = lower_value(cst, required(cst, exported, "value")?, &context, &mut arena)?;
+    let (lowered_declarations, result_effects) = if statements_need_control(cst, &statements)? {
         let pure_result = arena.expression(Expression::Block {
             declarations: Vec::new(),
             result,
@@ -110,12 +107,12 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
             span: arena.expression_span(result),
         });
         result =
-            resolve_control_sequence(cst, statements, pure_result, &context, span, &mut arena)?;
+            resolve_control_sequence(cst, &statements, pure_result, &context, span, &mut arena)?;
         (Vec::new(), ResultEffects::Ambient)
     } else {
         let mut lowered = Vec::new();
         for declaration in statements {
-            let declaration = unwrapped_rule(cst, *declaration)?;
+            let declaration = unwrapped_rule(cst, declaration)?;
             let name = cst.rule_name(declaration)?;
             lowered.push(
                 lower_declaration(cst, declaration, &context, &mut arena)
@@ -2579,12 +2576,52 @@ fn lower_primary(
                 value: decode_text(&text)?,
                 span,
             })),
+            "INTRINSIC" if text == "@import" => Err(concat!(
+                "BLOT_RETIRED_IMPORT: `@import` is retired; write ",
+                "`import \"path\"` or `import \"path\" with value`."
+            )
+            .to_owned()),
             "INTRINSIC" => Ok(arena.expression(Expression::Intrinsic { name: text, span })),
             _ => Err(format!("BLOT_BAD_EXPRESSION: `{text}`")),
         };
     }
     let rule = as_rule(cursor)?;
     match cst.rule_name(rule)? {
+        "import_expression" => {
+            let specifier_cursor = required(cst, rule, "specifier")?;
+            let specifier_span = cst.span(specifier_cursor)?;
+            let specifier = arena.expression(Expression::Text {
+                value: decode_text(&cst.text(specifier_cursor)?)?,
+                span: specifier_span,
+            });
+            let intrinsic = arena.expression(Expression::Intrinsic {
+                name: "@import".to_owned(),
+                span,
+            });
+            let loaded = arena.expression(Expression::Apply {
+                function: intrinsic,
+                argument: specifier,
+                span: Span {
+                    start: span.start,
+                    end: specifier_span.end,
+                },
+            });
+            let input_field = cst.field_list(rule, "input")?;
+            let input = if input_field.is_empty() {
+                arena.expression(Expression::Unit { span })
+            } else {
+                let input = input_field
+                    .get(1)
+                    .copied()
+                    .ok_or_else(|| "import input has no value".to_owned())?;
+                lower_value(cst, input, context, arena)?
+            };
+            Ok(arena.expression(Expression::Apply {
+                function: loaded,
+                argument: input,
+                span,
+            }))
+        }
         "constructor_expression" => Ok(arena.expression(Expression::Tag {
             name: token_text(cst, required(cst, rule, "constructor")?)?,
             span,

@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const leaf = fn value => { .value = value; .left = 0; .right = 0; }
 const branch = fn (value, left, right) => {
@@ -26,7 +26,7 @@ let total =
         #None => 0
   )
 
-return {
+export {
   .root = root;
   .nodes = Array.length (&nodes);
   .sum = total ((&nodes), root);

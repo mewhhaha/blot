@@ -9,7 +9,7 @@
 // operations on it, and a bound the checker enforces — with no instances, no
 // coherence rules, and no dispatch at run time.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 // Declared first, then rebound with its table. `:=` requires the new value to
 // keep the binding's type, and `<+` is transparent — so attaching members is
@@ -60,7 +60,7 @@ let differs = Money.eq price Money.zero
 sig summed = Money
 let summed = Money.add price (Money.of 8)
 
-return {
+export {
   .type = Money;
   .value = price;
   .distinct_from_i32 = refines (Money, I32);

@@ -14,7 +14,7 @@
 // list of them. A bare `->` is not silence about effects: it is the empty row,
 // so `sig greet = Unit -> Str;` below would be rejected.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Console =
   @effect {
@@ -110,7 +110,7 @@ let nested =
 
 let asked = @handle (Terminal, ask, answering)
 
-return {
+export {
   .transcript = transcript;
   .writes = writes;
   .silenced = silenced;

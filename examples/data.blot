@@ -3,7 +3,7 @@
 // One structural aggregate. A tuple is a shape with integer labels, so there is
 // no stored-tuple versus transient-pack distinction to learn.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Point =
   struct {
@@ -46,7 +46,7 @@ let nested_match = fn value => case value of
   #Progress n => n
   _ => 0
 
-return {
+export {
   .point_fields = Point.fields;
   .constructed = Point.new { .x = 1; .y = 2; };
   .projected = moved.x;

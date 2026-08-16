@@ -2,7 +2,7 @@
 // operation name used to be a silent no-op at run time; naming the effect makes
 // it a type error.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Console = @effect { .write = Str -> Unit; }
 let handler = { .wrote = fn (m, ?resume) =>
@@ -12,4 +12,4 @@ let handler = { .wrote = fn (m, ?resume) =>
 let work = fn () =>
   result <- Console.write "x"
   return result
-return @handle (Console, work, handler)
+export @handle (Console, work, handler)

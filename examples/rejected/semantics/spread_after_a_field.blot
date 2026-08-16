@@ -14,10 +14,10 @@
 // subtyping this lattice has. Writing the spread first — `{ ...r; .tag = 1; }`
 // — is decided, and so is naming the fields wanted from `r`.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let defaulting = fn r => { .tag = 1; ...r; }
 
 let tagged = defaulting { .tag = "hi"; }
 
-return tagged.tag
+export tagged.tag

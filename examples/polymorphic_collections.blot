@@ -2,7 +2,7 @@
 // Equality-dependent collections are created explicitly, so no hidden
 // typeclass lookup chooses how keys or values compare.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig map_lengths =
   Mappable (List.of Str, List.of Int, Str, Int) -> List.of Str -> List.of Int
@@ -74,7 +74,7 @@ let colours = TextSet.union colours more_colours
 let colour_lengths = TextSet.map_with (colours, Ord.eq, Text.length)
 let incremented_lengths = increment_members (Set.with Ord.eq) colour_lengths
 
-return {
+export {
   .lengths = List.to_array lengths;
   .total_length = total_lengths List words;
   .long_words = List.to_array long_words;

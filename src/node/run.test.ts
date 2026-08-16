@@ -26,7 +26,7 @@ test("run renders arrays and variants from canonical memory", async () => {
   const path = join(directory, "structured.blot");
   const compiler = await Compiler.create();
   try {
-    await writeFile(path, "return ([1, 2, 3], #Some 7)\n");
+    await writeFile(path, "export ([1, 2, 3], #Some 7)\n");
     const artifact = await compiler.compile(path);
     assert.equal(
       await runArtifact(artifact),

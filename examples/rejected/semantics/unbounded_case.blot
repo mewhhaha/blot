@@ -1,10 +1,10 @@
 // Literal arms cannot cover a domain the checker does not enumerate. The
 // choice is to narrow the type or write an irrefutable arm.
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig describe = Int -> Str
 let describe = fn n => case n of
   1 => "one"
   2 => "two"
 
-return describe 1
+export describe 1

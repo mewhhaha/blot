@@ -1,8 +1,8 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let unwrap = fn option =>
   if let #Some value = option else:
     let ignored = ()
   return value
 
-return unwrap (Some 1)
+export unwrap (Some 1)

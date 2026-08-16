@@ -4,7 +4,7 @@
 // set. A bounded integer range is finite, so `case` can cover it — the proof
 // and the coverage check meet, which is what "branches prove stuff" is for.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig classify = Int -> Str
 let classify = fn i => case i < 3 of
@@ -25,7 +25,7 @@ let only_small = fn n => case n of
   1 => "one"
   _ => @panic "callers narrow to 0 | 1 before calling"
 
-return {
+export {
   .below = classify 0;
   .one = classify 1;
   .two = classify 2;

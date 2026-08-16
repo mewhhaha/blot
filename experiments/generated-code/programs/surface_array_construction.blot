@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig construct = Int -> Int
 const construct = fn count =>
@@ -9,4 +9,4 @@ const construct = fn count =>
 
   return Array.length values
 
-return { .construct = construct; }
+export { .construct = construct; }

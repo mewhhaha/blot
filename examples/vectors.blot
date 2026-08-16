@@ -10,7 +10,7 @@
 // comptime evaluator does the same arithmetic one lane at a time and must agree
 // with the register.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 // There is no f32 literal and no vector literal. `Float32.of_int` narrows and
 // `Vec4.of` gathers, which keeps the grammar at one float token and makes both
@@ -80,7 +80,7 @@ let thirds =
     (Vec4.splat (Float32.of_float (Float.div 1.0 3.0)))
   (Vec4.splat (lane 3)))
 
-return {
+export {
   .first = first;
   .last = last;
   .second_of_difference = Float32.truncate (Vec4.y difference);

@@ -1,11 +1,11 @@
 // A loop body is a recursive function, so a linear value spent inside one is
 // spent again on every iteration. `for` desugars to `rec`/`case`, and ownership
 // has to see the same program the desugaring produced.
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let consume = fn !value => value + 1
 let !token = 41
 let total = 0
 for n in Iter.range (0, 3):
   total := total + consume (!token)
-return total
+export total

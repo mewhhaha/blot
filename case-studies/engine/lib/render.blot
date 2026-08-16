@@ -12,7 +12,7 @@
 //
 // The two capabilities this module draws through are declared here rather than
 // handed in. An effect's identity is its declaration site: a renderer that took
-// a canvas as a module argument would be taking a compile-time value with no
+// a canvas as a module input would be taking a compile-time value with no
 // runtime representation, and two modules that each declared their own would be
 // two capabilities and two host imports. A library that uses an authority
 // therefore owns it, and its importer receives that authority in its own effect
@@ -22,9 +22,9 @@
 // module boundary at all: the scene and the camera arrive as thousandths and
 // the screen leaves as pixels, and everything between them is a lane.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
-const M = @import "./math.blot" ()
+const M = import "./math.blot"
 
 // There is one float token in the grammar and it reads as an `F64`, so every
 // single-precision constant below is a narrowing the module wrote down.
@@ -378,10 +378,10 @@ let frame = fn paint =>
   <- Canvas.present ()
 
 // `Canvas` and `View` are not exported. An effect is a compile-time value and a
-// module's returned record is a runtime one, so a capability cannot be handed
+// module's exported record is a runtime one, so a capability cannot be handed
 // out — and it does not need to be, because importing this module is already
 // what puts `Canvas` and `View` in the importer's effect row.
-return {
+export {
   .unit = unit;
   .point = point;
   .frame = frame;

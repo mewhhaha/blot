@@ -4,7 +4,7 @@ import { checkFile } from "./check/mod.ts";
 import { testFile } from "./test.ts";
 
 const scratch = await Deno.makeTempDir();
-const PRELUDE = `open @import "blot:prelude" ()
+const PRELUDE = `open import "blot:prelude"
 `;
 
 async function sourceFile(source: string): Promise<string> {
@@ -17,7 +17,7 @@ Deno.test("test discovery uses resolved descriptor names through aliases", async
   const path = await sourceFile(
     `const alias = tag ("test", "fast", identity)
 @[alias] let discovered = fn () => ()
-return ()
+export ()
 `,
   );
   const checked = await checkFile(path);
@@ -36,7 +36,7 @@ Deno.test("a failed test does not stop the tests after it", async () => {
     `@[test] let before = fn () => ()
 @[test] let failure = fn () => @fail "expected failure"
 @[test] let after = fn () => ()
-return ()
+export ()
 `,
   );
   const outcomes = await testFile(path);
@@ -51,7 +51,7 @@ Deno.test("each test resolves the binding occurrence carrying its tag", async ()
   const path = await sourceFile(
     `@[test] let same = fn () => ()
 @[tag ("plain", (), identity)] let same = fn () => @fail "wrong shadow"
-return ()
+export ()
 `,
   );
   const outcomes = await testFile(path);
@@ -61,7 +61,7 @@ return ()
 Deno.test("a test must be a pure nullary unit function", async () => {
   const path = await sourceFile(
     `@[test] let wrong = fn () => 1
-return ()
+export ()
 `,
   );
   const error = await assertRejects(() => testFile(path), BlotError);
@@ -72,7 +72,7 @@ Deno.test("a nested test is rejected instead of silently undiscovered", async ()
   const path = await sourceFile(
     `let outer = fn () =>
   @[test] let hidden = fn () => ()
-return outer
+export outer
 `,
   );
   const error = await assertRejects(() => testFile(path), BlotError);
@@ -83,13 +83,13 @@ Deno.test("a test file cannot require a module argument", async () => {
   const path = `${scratch}/${crypto.randomUUID()}.blot`;
   await Deno.writeTextFile(
     path,
-    "module init\n" + PRELUDE +
+    "module with init\n" + PRELUDE +
       `@[test] let needs_host = fn () => ()
-return ()
+export ()
 `,
   );
   const error = await assertRejects(() => testFile(path), BlotError);
-  assertStringIncludes(error.message, "cannot declare a module parameter");
+  assertStringIncludes(error.message, "cannot declare a module input");
 });
 
 Deno.test("a test file cannot perform ambient initialization effects", async () => {
@@ -97,7 +97,7 @@ Deno.test("a test file cannot perform ambient initialization effects", async () 
     `const Console = @effect.host { .write = Str -> Unit; }
 @[test] let isolated = fn () => ()
 _ <- Console.write "initializing"
-return ()
+export ()
 `,
   );
   const error = await assertRejects(() => testFile(path), BlotError);
@@ -106,7 +106,7 @@ return ()
 
 Deno.test("a file without test descriptors returns an empty suite", async () => {
   const path = await sourceFile(`let value = 1
-return value
+export value
 `);
   assertEquals(await testFile(path), []);
 });

@@ -14,7 +14,7 @@ operators {
   prefix 90 (~) = Num.negate;
 }
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Value = I32 :| Str
 const Method = "GET" :| "POST" :| "PUT"
@@ -66,7 +66,7 @@ let precedence = True || False && False
 let appended = is_equal (Text.cmp ("a" <> "b") "ab")
 let counted = "n" <> Text.of_int (1 + 2)
 
-return {
+export {
   .arrow_bare = arrow_bare;
   .arrow_grouped = arrow_grouped;
   .algebra_bare = algebra_bare;

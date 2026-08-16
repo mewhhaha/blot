@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let consume = fn !value => value + 1
 let !token = 41
@@ -11,4 +11,4 @@ let even =
   )
 let odd = rec (fn n => even (n - 1))
 
-return even 4
+export even 4

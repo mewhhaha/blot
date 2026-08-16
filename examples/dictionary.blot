@@ -1,4 +1,4 @@
-open @import "../src/prelude/prelude.blot" ()
+open import "../src/prelude/prelude.blot"
 
 let empty = Dict.empty
 let first = Dict.put (empty, "count", 1)
@@ -14,7 +14,7 @@ let bool_int = fn value => case value of
   #True => 1
   #False => 0
 
-return {
+export {
   .first_previous = option_or (first.0, -1);
   .replaced_previous = option_or (replaced.0, -1);
   .visible = option_or (Dict.get (replaced.1, "count"), -1);

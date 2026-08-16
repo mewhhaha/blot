@@ -10,9 +10,9 @@
 // `helper` is perfectly in scope here, it is in the wrong phase. Writing
 // `let use = fn y => helper y;` compiles.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let helper = fn x => x + 1
 const use = fn y => helper y
 
-return use 1
+export use 1

@@ -95,7 +95,7 @@ Deno.test("a package capsule keeps registry dependencies as shared external edge
   );
   await Deno.writeTextFile(
     join(baseRoot, "src", "mod.blot"),
-    `return 41
+    `export 41
 `,
   );
   await Deno.writeTextFile(
@@ -110,15 +110,15 @@ Deno.test("a package capsule keeps registry dependencies as shared external edge
   );
   await Deno.writeTextFile(
     join(derivedRoot, "src", "mod.blot"),
-    `const base = @import "@example/base"
-return base ()
+    `const base = import "@example/base"
+export base
 `,
   );
   const entryPath = join(directory, "entry.blot");
   await Deno.writeTextFile(
     entryPath,
-    `const derived = @import "@example/derived"
-return derived ()
+    `const derived = import "@example/derived"
+export derived
 `,
   );
 
@@ -150,8 +150,8 @@ Deno.test("a relative capsule import compiles without a package manifest lookup"
   const entryPath = join(directory, "direct-entry.blot");
   await Deno.writeTextFile(
     entryPath,
-    `const answer = @import "./node_modules/@example/answer/dist/mod.blotc"
-return (answer ()).answer
+    `const answer = import "./node_modules/@example/answer/dist/mod.blotc"
+export answer.answer
 `,
   );
 
@@ -176,14 +176,14 @@ Deno.test("a package subpath selects its matching manifest export", async () => 
   );
   await Deno.writeTextFile(
     join(packageRoot, "src", "answer.blot"),
-    `return 41
+    `export 41
 `,
   );
   const entryPath = join(directory, "entry.blot");
   await Deno.writeTextFile(
     entryPath,
-    `const answer = @import "@example/library/answer"
-return answer ()
+    `const answer = import "@example/library/answer"
+export answer
 `,
   );
 
@@ -206,8 +206,8 @@ Deno.test("an explicit capsule import has no source fallback", async () => {
   const entryPath = join(directory, "direct-entry.blot");
   await Deno.writeTextFile(
     entryPath,
-    `const answer = @import "./node_modules/@example/answer/dist/mod.blotc"
-return (answer ()).answer
+    `const answer = import "./node_modules/@example/answer/dist/mod.blotc"
+export answer.answer
 `,
   );
 
@@ -255,20 +255,20 @@ async function packageFixture(): Promise<string> {
     join(packageRoot, "src", "mod.blot"),
     `const as_raw = fn source => source.text
 const message = @include "./message.txt" as_raw
-const dependency = @import "./answer.blot"
-return { .answer = dependency (); .message = message; }
+const dependency = import "./answer.blot"
+export { .answer = dependency; .message = message; }
 `,
   );
   await Deno.writeTextFile(
     join(packageRoot, "src", "answer.blot"),
-    `return 41
+    `export 41
 `,
   );
   await Deno.writeTextFile(join(packageRoot, "src", "message.txt"), "");
   await Deno.writeTextFile(
     join(directory, "entry.blot"),
-    `const answer = @import "@example/answer"
-return (answer ()).answer
+    `const answer = import "@example/answer"
+export answer.answer
 `,
   );
   return directory;

@@ -43,18 +43,26 @@ operator_token = OPERATOR | ANGLE_LEFT | ANGLE_RIGHT | QUESTION ;
 skip WHITESPACE = /[ \t\r\n]+/ ;
 skip COMMENT = /\/\/[^\r\n]*/ ;
 
-// A module is a block: bounded headers, then one repeated line-terminated
-// island. `return` is a declaration form rather than a trailing bare
-// expression so that the root remains a bounded declaration sequence.
+// A module is a block: bounded headers, then repeated line-terminated
+// declarations and one final export. Exporting one value keeps named fields an
+// ordinary record convention rather than introducing live export bindings.
 program = (
   header:module_header?
   operators:operator_section?
-  declarations:declaration+
+  declarations:declaration*
+  exported:module_export?
 ) ;
 
 module_header = (
   "module"
+  "with"
   parameter:binding_pattern
+  LAYOUT_NEWLINE
+) ;
+
+module_export = (
+  "export"
+  value:(value | indented_value)
   LAYOUT_NEWLINE
 ) ;
 
@@ -200,10 +208,9 @@ opening = (
   LAYOUT_NEWLINE
 ) ;
 
-// The indented branch is the formatter's vertical form. Keeping it explicit
-// lets the raw Tree-sitter target distinguish continuation indentation from a
-// following statement without changing the compiler's whitespace-equivalent
-// inline form.
+// `return` transfers control from an explicit `do` scope or exits a module
+// early. A module's ordinary fallthrough value is instead named by its final
+// `export`, so control flow and the module boundary do not share a spelling.
 result = (
   "return"
   value:(value | indented_value)
@@ -313,6 +320,7 @@ continued_primary_expression = (
   | FLOAT
   | TEXT
   | INTRINSIC
+  | import_expression
   | constructor_expression
   | unit
   | case_expression
@@ -361,7 +369,8 @@ field_suffix = ("." field:field_name) ;
 field_name = (IDENT | TYPE_IDENT | INTEGER | keyword) ;
 
 keyword = (
-  "module" | "operators" | "infixl" | "infixr" | "infix" | "prefix"
+  "module" | "with" | "export" | "import"
+  | "operators" | "infixl" | "infixr" | "infix" | "prefix"
   | "let" | "const" | "sig" | "return"
   | "if" | "else" | "case" | "of" | "rec" | "open"
   | "for" | "in" | "break" | "do" | "compdo" | "fn"
@@ -374,6 +383,7 @@ primary_expression = (
   | FLOAT
   | TEXT
   | INTRINSIC
+  | import_expression
   | constructor_expression
   | unit
   | case_expression
@@ -383,6 +393,15 @@ primary_expression = (
   | shape
   | effect_row
   | parenthesized_or_tuple
+) ;
+
+// Importing never exposes the compiler's internal module closure. Omitting an
+// input instantiates with unit; `with` supplies the one explicit input value.
+// The literal edge remains visible to graph discovery after surface lowering.
+import_expression = (
+  "import"
+  specifier:TEXT
+  input:("with" value)?
 ) ;
 
 // The set of effects a function may perform, written the way the printer

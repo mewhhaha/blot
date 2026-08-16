@@ -72,8 +72,8 @@ async function makeChain(depth: number, hidden: number): Promise<Fixture> {
     root = join(directory, `module-${index}.blot`);
     await writeFile(
       root,
-      `const dependency = @import "./module-${index - 1}.blot" ()\n` +
-        `return { .answer = dependency.answer; }\n`,
+      `const dependency = import "./module-${index - 1}.blot"\n` +
+        `export { .answer = dependency.answer; }\n`,
     );
   }
   return { root, leaf };
@@ -82,7 +82,7 @@ async function makeChain(depth: number, hidden: number): Promise<Fixture> {
 async function writeLeaf(path: string, hidden: number): Promise<void> {
   await writeFile(
     path,
-    `const hidden = ${hidden}\nreturn { .answer = 42; }\n`,
+    `const hidden = ${hidden}\nexport { .answer = 42; }\n`,
   );
 }
 

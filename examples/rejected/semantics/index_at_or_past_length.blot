@@ -11,7 +11,7 @@
 //
 // Writing `<` instead of `>=` is the accepted program, in `examples/indexed.blot`.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig at = [Int] -> Int -> Int
 let at = fn xs => fn n =>
@@ -20,4 +20,4 @@ let at = fn xs => fn n =>
   else:
     return 0
 
-return at [1, 2, 3] 0
+export at [1, 2, 3] 0

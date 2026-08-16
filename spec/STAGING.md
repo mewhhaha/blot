@@ -47,9 +47,10 @@ compile-time input in the source graph.
 
 ## 3. Modules and generative identity
 
-An imported module evaluates as an ordinary compile-time function over its
-explicit parameter. A closure retains its defining module revision and closed
-lexical environment. Re-exporting the closure does not replace that origin.
+An import occurrence evaluates one internal module closure over its explicit
+input. The closure retains its defining module revision and closed lexical
+environment. Re-exporting a value reached through it does not replace that
+origin.
 
 Generative declarations, currently effects and seals, mint an identity per
 evaluated declaration occurrence. Cache reuse preserves an identity only when

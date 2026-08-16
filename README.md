@@ -21,7 +21,7 @@ contract. Blot's TypeScript passes connect the development pipeline:
 ```ts
 import { parse } from "@mewhhaha/blot";
 
-const result = await parse("return 42\n");
+const result = await parse("export 42\n");
 ```
 
 Run `pnpm pack --dry-run` to verify the package before publishing.
@@ -51,7 +51,7 @@ checked module capsule:
 
 The Node CLI does not build package capsules yet. It does resolve existing
 source and capsule exports from `node_modules`. An importer writes
-`@import "@scope/package"`, or a declared package subpath, and Blot resolves the
+`import "@scope/package"`, or a declared package subpath, and Blot resolves the
 nearest `node_modules` package without executing its JavaScript. A valid
 `.blotc` is preferred and corrupt or unsupported built files fall back to the
 declared source. The capsule bundles the package-owned lowered AST graph and its
@@ -196,6 +196,7 @@ name := expr             // shadow a name while preserving its type
 name <- expr             // sequence an effect and bind its result
 <- expr                  // sequence an effect and discard its result
 return expr              // exit the current explicit result scope
+export expr              // name the module's fallthrough value
 ```
 
 Value selection is written with `case`, including Boolean choices:
@@ -329,7 +330,7 @@ Nothing is in scope that the module did not ask for. The prelude is an ordinary
 module with no privilege, so every file begins by opening it:
 
 ```blot
-open @import "blot:prelude" ()
+open import "blot:prelude"
 ```
 
 Selective binding and renaming use the ordinary record pattern instead:
@@ -338,8 +339,9 @@ Selective binding and renaming use the ordinary record pattern instead:
 const { .source = target; .value; } = exports
 ```
 
-`@import` returns the imported module function, and the final `()` supplies its
-empty module parameter.
+`import "specifier"` evaluates one module instance with unit. A module that
+declares `module with input` is instantiated explicitly with
+`import "specifier" with value`.
 
 Non-Blot files enter through `@include`. The second argument is an ordinary
 compile-time function, so the program owns both parsing and representation:
@@ -348,7 +350,7 @@ compile-time function, so the program owns both parsing and representation:
 const as_raw = fn source => source.text
 const shader = @include "./shaders/main.wgsl" as_raw
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 const config = @include "./config.json" as_json
 const fixed_config = @include "./config.json" as_const_json
 ```
@@ -363,14 +365,13 @@ That line is what makes `+` work: the default fixity for `+` names `Num.add`,
 and a fixity whose target is not in scope is useless. A module that skips it
 does not have `+`.
 
-A module's parameter is checked, and nothing declares it. No module writes a
-signature for its own parameter, so the demand is whatever its bodies reach for:
-the record an importer hands over must carry every field the module projects,
-and one that omits a field is a type error at the application rather than a
-missing field at run time. It may carry _more_ — width subtyping holds across
-the boundary in both directions, and such a record lowers, because the field
-sets are settled once the whole program has been checked rather than as each
-file finishes.
+A module's input is checked, and nothing separately declares it. The demand is
+whatever its body reaches for: the record an importer hands over must carry
+every field the module projects, and one that omits a field is a type error at
+the import rather than a missing field at run time. It may carry _more_ — width
+subtyping holds across the boundary in both directions, and such a record
+lowers, because the field sets are settled once the whole program has been
+checked rather than as each file finishes.
 
 Types and effects do not need separate declaration forms because they are
 ordinary compile-time values:
@@ -516,11 +517,11 @@ let report = fn () =>
 ```
 
 A handler the program did not write is a host capability. The entry module's
-parameter is the entire authority it has — no ambient filesystem, no ambient
-clock, nothing to import for more:
+input is the entire authority it has — no ambient filesystem, no ambient clock,
+nothing to import for more:
 
 ```blot
-module init
+module with init
 
 let printing = {
   .write = fn (message, resume) =>

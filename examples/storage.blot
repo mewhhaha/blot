@@ -11,7 +11,7 @@
 // inference looks at it, and storage that is imprecise is not predictable
 // storage.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Point = struct { .x = I32; .y = I32; }
 
@@ -84,7 +84,7 @@ const Meters =
 
 const Located = Point <+ { .origin = { .x = 0; .y = 0; }; }
 
-return {
+export {
   .meters_unit = Meters.unit;
   .origin = Located.new Located.origin;
   .type = Point;

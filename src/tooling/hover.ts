@@ -664,8 +664,10 @@ function tokenAt(rule: Rule, offset: number): TokenCursor | null {
 }
 
 const KEYWORD_DOCUMENTATION: Readonly<Record<string, string>> = {
-  module:
-    "Declares the single explicit authority parameter accepted by a module.",
+  module: "Introduces the single explicit input pattern accepted by a module.",
+  with: "Separates a module or import from its explicit input.",
+  import: "Instantiates a module once with unit or the value following `with`.",
+  export: "Names the module's single ordinary fallthrough value.",
   operators: "Begins the module's fixity declarations.",
   infixl: "Declares a left-associative infix operator.",
   infixr: "Declares a right-associative infix operator.",
@@ -674,7 +676,7 @@ const KEYWORD_DOCUMENTATION: Readonly<Record<string, string>> = {
   let: "Binds a runtime value in the current scope.",
   const: "Evaluates and binds a compile-time value.",
   sig: "Constrains the declaration immediately following it.",
-  return: "Returns a value from the nearest module or explicit value scope.",
+  return: "Exits the nearest module or explicit `do` scope with a value.",
   if:
     "Selects a branch; a standalone suite inherits its surrounding control targets.",
   else: "Provides the fallback branch of an `if` or deconstructing guard.",

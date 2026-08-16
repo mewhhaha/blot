@@ -1234,7 +1234,7 @@ function inferUnrecorded(
         const shape = shapeOf(target, context.staging.instances);
         if (shape !== null) context.shapes.set(expr, shape);
       });
-      // A projection off the module parameter is a granted capability. Read
+      // A projection off the module input is a granted capability. Read
       // after checking, because the signature comes from how the program
       // *uses* it and at the projection nothing has used it yet.
       if (
@@ -3233,6 +3233,22 @@ function inferDeclarations(
       declarationContext = { ...context, phase: "comptime" };
     }
 
+    // Import syntax instantiates immediately, and a `const` can evaluate that
+    // instance all the way to its exported value. The evaluated value still
+    // cannot replace the ordinary application judgment: that judgment is what
+    // checks the explicit input against the dependency's inferred demand.
+    if (type !== null && instantiatedImport(declaration.value)) {
+      const inferred = inferPure(
+        declaration.value,
+        declarationContext,
+        level,
+        "A `const` import",
+      );
+      located(declaration.value.span, () => {
+        constrain(type as SimpleType, inferred);
+      });
+    }
+
     const group = groups.get(declaration);
     if (type === null && group !== undefined) {
       // Typed once, at the first member: the group's names have to be in scope
@@ -4402,6 +4418,12 @@ function inferPure(
   const inferred = infer(expr, context, level, row);
   requirePure(row, expr.span, description);
   return inferred;
+}
+
+function instantiatedImport(expr: Expr): boolean {
+  const head = spine(expr);
+  return head !== null && head.callee.tag === "intrinsic" &&
+    head.callee.name === "@import" && head.args.length >= 2;
 }
 
 function requirePure(

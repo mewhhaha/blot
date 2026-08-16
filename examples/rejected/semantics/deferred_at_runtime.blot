@@ -1,11 +1,11 @@
 // Deferral is settled while compiling. Here the call survives into the emitted
 // program, where the argument runs whether or not the parameter is read — so
 // the evaluator would answer 42 while WebAssembly divides by zero.
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let ignore = fn ~_ => 42
 
 sig run = Int -> Int
 let run = fn n => ignore (@int.div 1 n)
 
-return { .run = run; }
+export { .run = run; }

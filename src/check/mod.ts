@@ -286,7 +286,7 @@ function checkLoaded(
     unsealableLeafChecks.add(loaded);
   }
 
-  // Nothing is seeded. The prelude is reached through `@import` like any other
+  // Nothing is seeded. The prelude is reached through `import` like any other
   // module, so its exports arrive as a dependency's type and `assemble` folds
   // its facts in the way it folds any other's — there is no branch here that
   // knows what a prelude is.
@@ -500,7 +500,7 @@ function assemble(
   return result;
 }
 
-/** Each literal `@import` in one module, paired with what it resolved to. */
+/** Each literal import occurrence in one module, paired with what it resolved to. */
 function importSites(
   loaded: Loaded,
   dependencies: ReadonlyMap<string, CheckResult>,
