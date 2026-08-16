@@ -71,23 +71,20 @@ grammar-check:
   deno run --allow-read --allow-run=tree-sitter scripts/check_grammar.ts
 
 check:
-  deno task check
+  deno check .
   deno fmt --check
   deno lint
-  deno task corpus
   rustfmt --edition 2024 --check experiments/generated-code/counterpart.rs
   cargo fmt --manifest-path compiler/Cargo.toml --check
   cargo clippy --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
   cargo test --manifest-path compiler/Cargo.toml
   deno run --allow-read --allow-write --allow-run=cargo --allow-env scripts/build_compiler.ts --check
-  deno task conformance:frontend
-  deno task conformance:check
-  deno task conformance:eval
-  deno task conformance:hir
-  deno task verify:compiler
+  pnpm run check
+  pnpm run smoke
+  pnpm parity:strict
 
 test:
-  deno test --allow-read --allow-write
+  pnpm test
 
 fmt:
   deno fmt
