@@ -169,3 +169,32 @@ test("observable sealing propagates a compile-time behavior change", async () =>
   assert.equal(changed.cacheHit, false);
   assert.ok(changed.rechecked.includes(root));
 });
+
+test("a relational summary change invalidates its importing proof", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-summary-seal-"));
+  const leaf = join(directory, "leaf.blot");
+  const root = join(directory, "root.blot");
+  await writeFile(
+    leaf,
+    `open @import "blot:prelude" ()\n` +
+      `const count = fn values => Array.length values\n` +
+      `return { .count = count; }\n`,
+  );
+  await writeFile(
+    root,
+    `open @import "blot:prelude" ()\n` +
+      `const leaf = @import "./leaf.blot" ()\n` +
+      `let at = fn values => fn index => case index >= 0 && index < leaf.count values of\n` +
+      `  #True => @array.get values index\n` +
+      `  #False => 0\n` +
+      `return at\n`,
+  );
+
+  const session = new SealedCheckSession();
+  assert.match((await session.check(root)).type, /-> Int ->/);
+  await writeFile(
+    leaf,
+    `const count = fn _ => 10\nreturn { .count = count; }\n`,
+  );
+  await assert.rejects(session.check(root), /BLOT_UNPROVEN_INDEX/);
+});

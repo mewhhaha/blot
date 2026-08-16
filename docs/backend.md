@@ -1,13 +1,14 @@
 # The Backend
 
 ```bash
-just build examples/compiled.blot   # checked-in Rust compiler Wasm
+just build examples/compiled.blot   # Node development compiler
+pnpm compiler:download              # matching production compiler Wasm
 just wasm                           # interpreter vs GPU evaluator vs Wasm
 ```
 
 The compiler executes Baba-generated parser tables, checks and specializes the
 program, constructs validated Blot Runtime HIR, derives ABI 1 adapters, and
-emits WebAssembly in one checked-in Rust-built WebAssembly instance. The
+emits WebAssembly in one validated Rust-built WebAssembly instance. The
 TypeScript host supplies files and package resolution. It does not repeat
 checking, staging, ABI planning, or emission.
 
@@ -23,17 +24,20 @@ a second source-language meaning. There is no WAT route.
 
 ## Production compiler
 
-`blot build` runs the complete compiler in one WebAssembly instance. The host
+The Rust/Wasm production compiler runs in one WebAssembly instance. The host
 supplies source modules and included file contents. Rust executes Baba's
 generated DFA and island plan, lowers the compact CST, evaluates comptime,
 infers and checks the program, performs ownership analysis and staging,
 constructs Runtime HIR and ABI 1, and emits the final WebAssembly binary.
 
-The compiler is checked in as `generated/compiler/compiler.wasm`, so normal use
-and package consumers do not need Cargo. One process owns a resident Rust
-session. A revision consists of the entry source plus the revisions of every
-resolved import and included file; an unchanged revision returns the cached
-binary artifact. Changes invalidate the affected entry before compilation.
+The compiler is generated as `generated/compiler/compiler.wasm` but is not
+tracked by Git. CI publishes it directly and inside a runnable workspace, so
+consumers can use the production compiler without Cargo. Its adjacent manifest
+binds the bytes to a SHA-256, pinned Rust toolchain, and exact source tree. One
+process owns a resident Rust session. A revision consists of the entry source
+plus the revisions of every resolved import and included file; an unchanged
+revision returns the cached binary artifact. Changes invalidate the affected
+entry before compilation.
 
 Rust residual staging emits named recursive closures as internal Runtime-HIR
 functions and uses `call.direct` for recursive and outer calls. A source

@@ -89,9 +89,19 @@ is an implementation technique, not a different parser contract.
 ## 5. Interface and specialization caches
 
 A cached module interface contains settled closed schemes, effects, result and
-parameter types, and a dependency fingerprint. Encoding rejects live inference
-variables and unbound rigid identities. Decoding instantiates quantified
-identities freshly.
+parameter types, verified erased relational summaries reachable from the
+compile-time boundary, and a dependency fingerprint. Encoding rejects live
+inference variables and unbound rigid identities. Decoding instantiates
+quantified identities freshly.
+
+An in-process checker may stop reverse propagation after rechecking a changed
+module only when a sealed boundary fingerprint is unchanged. That fingerprint
+contains the closed type/effect boundary, relational-summary schema and facts,
+every checked live source node that can constrain an importer, includes, capsule
+input, and dependency fingerprints. Dead source may be omitted only by a
+separate proof that it cannot affect inference, evaluation, diagnostics, or a
+published fact. Cache publication is transactional: failure leaves the previous
+revision intact.
 
 A specialization capsule additionally contains deterministic compile-time values
 and closed source closures. Its coherence law is given in
@@ -156,17 +166,19 @@ makes no checked-interface or specialization-cache claim.
 
 The full Rust compiler additionally ships the dependency-free prelude's portable
 AST and closed checked interface as a generated artifact beside the compiler
-WebAssembly. The loader resolves the explicit `blot:prelude` import to that
-artifact, installs it under the same module identity, and evaluates its
-validated AST once per compiler session. The compiler artifact is already part
-of the trusted computing base, so this is equivalent to retaining a successful
-frontend and check in a process cache across compiler sessions. The build
-regenerates the snapshot from the exact source with the current Baba plan and
-checker; its check mode rejects a stale snapshot. Loading validates the AST
-arena, certificate schema, every flat-arena reference, and closed rigid-variable
-scope before installing it. The compiler then evaluates the validated module
-once per session and retains that compile-time result rather than asserting a
-serialized value graph.
+WebAssembly. Git tracks this source-derived snapshot; CI packages it with the
+compiler binary whose source-tree manifest names the same revision. The loader
+resolves the explicit `blot:prelude` import to that artifact, installs it under
+the same module identity, and evaluates its validated AST once per compiler
+session. The compiler artifact is already part of the trusted computing base, so
+this is equivalent to retaining a successful frontend and check in a process
+cache across compiler sessions. The build regenerates the snapshot from the
+exact source with the current Baba plan and checker; its check mode rejects a
+stale snapshot before materializing the untracked compiler binary. Loading
+validates the AST arena, certificate schema, every flat-arena reference, and
+closed rigid-variable scope before installing it. The compiler then evaluates
+the validated module once per session and retains that compile-time result
+rather than asserting a serialized value graph.
 
 This authority does not extend to registry capsules. A package-controlled hash
 proves only that its payload was transported unchanged; it cannot prove that the

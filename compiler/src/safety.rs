@@ -9,6 +9,7 @@ use crate::ast::{
 use crate::diagnostic::Diagnostic;
 use crate::eval::Context;
 use crate::recognise::{self, Comparison, Junction};
+use crate::relational::Summaries;
 use crate::value::{Environment, Value, lookup};
 
 type Identity = u32;
@@ -55,6 +56,7 @@ struct Analysis<'a> {
     context: &'a std::rc::Rc<Context>,
     values: &'a Environment,
     next_identity: Identity,
+    summaries: Summaries,
 }
 
 pub fn check(
@@ -67,6 +69,7 @@ pub fn check(
         context,
         values,
         next_identity: 0,
+        summaries: Summaries::default(),
     };
     let mut scope = Scope {
         top_level: true,
@@ -220,7 +223,7 @@ impl Analysis<'_> {
                     let length = self.array_length(value, scope);
                     let relation = self.relation(value, scope);
                     let identity = self.identity();
-                    scope.identities.insert(name.clone(), identity);
+                    let previous = scope.identities.insert(name.clone(), identity);
                     scope.lengths.remove(&name);
                     scope.relations.remove(&name);
                     scope.shadowed.insert(name.clone());
@@ -232,6 +235,11 @@ impl Analysis<'_> {
                     }
                     if let Some(relation) = relation {
                         scope.relations.insert(name, relation);
+                    }
+                    if let Some(previous) = previous
+                        && !identity_referenced(scope, previous)
+                    {
+                        forget_identity(&mut scope.constraints, previous);
                     }
                 }
                 Declaration::Open { value, .. } => {
@@ -482,23 +490,28 @@ impl Analysis<'_> {
             }
             Expression::Apply { .. } => {
                 let (callee, arguments) = application_spine(expression, self.module);
-                let Expression::Intrinsic { name, .. } =
+                if let Expression::Intrinsic { name, .. } =
                     &self.module.arena.expressions[callee.0 as usize]
-                else {
+                {
+                    if name == "@array.len" && arguments.len() == 1 {
+                        return self.array_length(arguments[0], scope);
+                    }
+                    if matches!(name.as_str(), "@int.add" | "@int.sub") && arguments.len() == 2 {
+                        let left = self.term(arguments[0], scope)?;
+                        let Term::Literal(right) = self.term(arguments[1], scope)? else {
+                            return None;
+                        };
+                        let offset = if name == "@int.sub" { -right } else { right };
+                        return Some(shift(left, offset));
+                    }
+                }
+                if arguments.len() != 1 {
                     return None;
-                };
-                if name == "@array.len" && arguments.len() == 1 {
-                    return self.array_length(arguments[0], scope);
                 }
-                if matches!(name.as_str(), "@int.add" | "@int.sub") && arguments.len() == 2 {
-                    let left = self.term(arguments[0], scope)?;
-                    let Term::Literal(right) = self.term(arguments[1], scope)? else {
-                        return None;
-                    };
-                    let offset = if name == "@int.sub" { -right } else { right };
-                    return Some(shift(left, offset));
-                }
-                None
+                let callee = self.callee_value(callee, scope)?;
+                let summary = self.summaries.derive(&callee, self.context)?;
+                self.array_length(arguments[0], scope)
+                    .map(|length| shift(length, summary.offset))
             }
             _ => None,
         }
@@ -712,10 +725,111 @@ fn shortest_paths(constraints: &[Constraint]) -> HashMap<Node, HashMap<Node, Big
     result
 }
 
+fn identity_referenced(scope: &Scope, identity: Identity) -> bool {
+    scope.identities.values().any(|found| *found == identity)
+        || scope
+            .lengths
+            .values()
+            .any(|term| term_references(term, identity))
+        || scope
+            .relations
+            .values()
+            .any(|relation| relation_references(relation, identity))
+}
+
+fn term_references(term: &Term, identity: Identity) -> bool {
+    matches!(term, Term::Variable { identity: found, .. } if *found == identity)
+}
+
+fn relation_references(relation: &Relation, identity: Identity) -> bool {
+    match relation {
+        Relation::IndexedIterator(term) | Relation::Index(term) => term_references(term, identity),
+        Relation::Tuple(elements) => elements
+            .iter()
+            .flatten()
+            .any(|relation| relation_references(relation, identity)),
+        Relation::Choice(cases) => cases
+            .values()
+            .flatten()
+            .any(|relation| relation_references(relation, identity)),
+    }
+}
+
+fn forget_identity(constraints: &mut Vec<Constraint>, identity: Identity) {
+    let dead = Node::Variable(identity);
+    if !constraints
+        .iter()
+        .any(|constraint| constraint.left == dead || constraint.right == dead)
+    {
+        return;
+    }
+    let distances = shortest_paths(constraints);
+    let nodes: Vec<Node> = distances
+        .keys()
+        .copied()
+        .filter(|node| *node != dead)
+        .collect();
+    let mut projected = Vec::new();
+    for right in &nodes {
+        let Some(from) = distances.get(right) else {
+            continue;
+        };
+        for left in &nodes {
+            if left == right {
+                continue;
+            }
+            let Some(bound) = from.get(left) else {
+                continue;
+            };
+            projected.push(Constraint {
+                left: *left,
+                right: *right,
+                bound: bound.clone(),
+            });
+        }
+    }
+    *constraints = projected;
+}
+
 fn unproven(span: Span) -> Diagnostic {
     Diagnostic::new(
         "BLOT_UNPROVEN_INDEX",
         "Direct array access needs an index proved against this array's length.",
         span,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forgetting_an_identity_preserves_live_transitive_bounds() {
+        let mut constraints = vec![
+            Constraint {
+                left: Node::Variable(1),
+                right: Node::Variable(2),
+                bound: BigInt::from(3),
+            },
+            Constraint {
+                left: Node::Variable(2),
+                right: Node::Variable(3),
+                bound: BigInt::from(4),
+            },
+        ];
+
+        forget_identity(&mut constraints, 2);
+
+        assert!(entails(
+            &[Constraint {
+                left: Node::Variable(1),
+                right: Node::Variable(3),
+                bound: BigInt::from(7),
+            }],
+            &constraints,
+        ));
+        assert!(constraints.iter().all(|constraint| {
+            constraint.left != Node::Variable(2) && constraint.right != Node::Variable(2)
+        }));
+    }
 }

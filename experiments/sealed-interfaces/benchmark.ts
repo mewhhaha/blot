@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { Compiler } from "../../src/compiler/session.ts";
-import { SealedCheckSession } from "./session.ts";
+import { refreshProgram } from "../../src/compiler/frontend.ts";
+import { checkProgram } from "../../src/compiler/typecheck.ts";
 
 interface Fixture {
   readonly root: string;
@@ -13,38 +14,35 @@ interface Fixture {
 const depth = integerArg("--depth", 30);
 const rounds = integerArg("--rounds", 5);
 const baselineTimes: number[] = [];
-const sealedTimes: number[] = [];
-const sealedRechecks: number[] = [];
+const incrementalTimes: number[] = [];
 
 for (let round = 0; round < rounds; round += 1) {
   const before = round % 2 === 0 ? 1 : 100;
   const after = before === 1 ? 100 : 1;
   const baseline = await makeChain(depth, before);
-  const compiler = await Compiler.create();
-  await compiler.check(baseline.root);
+  await checkProgram(baseline.root);
   await writeLeaf(baseline.leaf, after);
   baselineTimes.push(
     await timed(async () => {
-      await compiler.check(baseline.root);
+      await refreshProgram(baseline.root);
+      await checkProgram(baseline.root);
+    }),
+  );
+
+  const incremental = await makeChain(depth, before);
+  const compiler = await Compiler.create();
+  await compiler.check(incremental.root);
+  await writeLeaf(incremental.leaf, after);
+  incrementalTimes.push(
+    await timed(async () => {
+      await compiler.check(incremental.root);
     }),
   );
   compiler.destroy();
-
-  const sealed = await makeChain(depth, before);
-  const session = new SealedCheckSession();
-  await session.check(sealed.root);
-  await writeLeaf(sealed.leaf, after);
-  let rechecked = 0;
-  sealedTimes.push(
-    await timed(async () => {
-      rechecked = (await session.check(sealed.root)).rechecked.length;
-    }),
-  );
-  sealedRechecks.push(rechecked);
 }
 
 const baselineMedian = median(baselineTimes);
-const sealedMedian = median(sealedTimes);
+const incrementalMedian = median(incrementalTimes);
 const result = {
   depth,
   rounds,
@@ -55,12 +53,12 @@ const result = {
     samplesMs: baselineTimes,
     dependencyClosure: depth,
   },
-  sealed: {
-    medianMs: sealedMedian,
-    samplesMs: sealedTimes,
-    recheckedModules: sealedRechecks,
+  incremental: {
+    medianMs: incrementalMedian,
+    samplesMs: incrementalTimes,
+    dependencyClosure: 1,
   },
-  speedup: baselineMedian / sealedMedian,
+  speedup: baselineMedian / incrementalMedian,
 };
 
 console.log(JSON.stringify(result, null, 2));

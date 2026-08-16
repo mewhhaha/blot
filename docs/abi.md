@@ -150,17 +150,17 @@ private constructor numbers.
 
 ## Runtime target status
 
-`blot build` runs the checked-in Rust compiler Wasm. One `ClosedProgram` owns
-the checked and staged Runtime HIR and one `PublicLayout` derives both the
-canonical ABI manifest and the adapters emitted by the direct Rust backend.
-Gpupaper is not part of the production ABI path. The current target implements
-dynamic direct scalar parameters and results, direct scalar host imports, closed
-composite results, and the canonical dynamic `Text` calculus used by the
-terminal case study. A `Text` host result uses an indirect result header, is
-range- and UTF-8-validated before observation, and may flow through comparison,
-concatenation, control, and later `Text -> Unit` host calls. Generated
-unit-payload control sums remain internal. Direct-result calls restore their
-allocation checkpoint before returning. Closed composite calls permit one
+The production Rust/Wasm path runs the validated CI-built compiler. One
+`ClosedProgram` owns the checked and staged Runtime HIR and one `PublicLayout`
+derives both the canonical ABI manifest and the adapters emitted by the direct
+Rust backend. Gpupaper is not part of the production ABI path. The current
+target implements dynamic direct scalar parameters and results, direct scalar
+host imports, closed composite results, and the canonical dynamic `Text`
+calculus used by the terminal case study. A `Text` host result uses an indirect
+result header, is range- and UTF-8-validated before observation, and may flow
+through comparison, concatenation, control, and later `Text -> Unit` host calls.
+Generated unit-payload control sums remain internal. Direct-result calls restore
+their allocation checkpoint before returning. Closed composite calls permit one
 outstanding result: the matching `cabi_post_*` restores the call's allocation
 checkpoint in constant time. Reentry, a wrong root pointer, a post-return for
 another export, and double post-return trap.

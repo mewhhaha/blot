@@ -12,6 +12,7 @@ mod ownership;
 mod primitives;
 mod rebinding;
 mod recognise;
+mod relational;
 mod safety;
 mod session;
 mod source;

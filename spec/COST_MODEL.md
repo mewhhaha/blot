@@ -122,6 +122,20 @@ descendant in every ancestor and on diamonds it repeats shared subgraphs per
 path. That cost carries no semantic information and is therefore duplicate
 compiler work.
 
+For reachable closure values with total inspected summary-body size `B`,
+deriving relational summaries is `O(B)` per fresh value graph and memoized
+lookup is `O(1)` by closure identity. Instantiation is constant time for the
+current unary affine fragment. A summary benchmark must use checked Blot modules
+and report cold derivation separately from repeated lookup; a synthetic
+fact-graph replay is evidence about solver scaling, not end-to-end compiler
+speed.
+
+Projecting one dead refinement identity from `V` graph nodes and `E` difference
+edges costs `O(VE)` with the current repeated-relaxation closure and may emit
+`O(V^2)` canonical remaining bounds. It is therefore performed only when a
+rebinding removes the last visible alias, and benchmarks report both retained
+fact count and wall time.
+
 For a Runtime-HIR function with `H` blocks and `D` executed block transitions,
 the fallback dispatcher can perform `O(D H)` block-identity comparisons. A
 reducible entry cycle instead executes one structured path per iteration and no

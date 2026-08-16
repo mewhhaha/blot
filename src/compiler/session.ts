@@ -7,11 +7,12 @@ import {
   warmBackend,
 } from "./backend.ts";
 import { refreshProgram } from "./frontend.ts";
-import { checkProgram, checkProgramSource } from "./typecheck.ts";
+import { checkProgramSource } from "./typecheck.ts";
 import type { BlotRuntimeModule } from "../runtime/hir.ts";
 import { warmBabaRuntime } from "../syntax/baba_runtime.ts";
 import { lowerRuntimeHir } from "./hir.ts";
 import { loadedRevisionKey } from "./revision.ts";
+import { IncrementalCheckCache } from "./check_cache.ts";
 
 export interface CompilerArtifact {
   readonly wasm: Uint8Array;
@@ -42,7 +43,6 @@ interface PreparedArtifact {
 
 interface ResidentRevision {
   readonly key: string;
-  checked?: CheckedModule;
   hir?: BlotRuntimeModule;
 }
 
@@ -58,6 +58,7 @@ export class Compiler {
   readonly #compiled = new WeakMap<BlotRuntimeModule, CachedArtifact>();
   readonly #compiledByPath = new Map<string, PreparedArtifact>();
   readonly #revisions = new Map<string, ResidentRevision>();
+  readonly #checks = new IncrementalCheckCache();
   readonly #targetPolicy: ResolvedCompilerTargetPolicy;
   #destroyed = false;
 
@@ -75,12 +76,8 @@ export class Compiler {
   async check(path: string): Promise<CheckedModule> {
     this.#requireActive();
     const absolute = resolve(path);
-    const revision = await this.#revision(absolute);
-    if (revision.checked !== undefined) return revision.checked;
-    const checked = await checkProgram(absolute);
-    const summary = { type: checked.type, effects: checked.effects };
-    revision.checked = summary;
-    return summary;
+    const checked = await this.#checks.check(absolute);
+    return { type: checked.type, effects: checked.effects };
   }
 
   async checkSource(path: string, source: string): Promise<CheckedModule> {

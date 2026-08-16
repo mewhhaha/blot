@@ -68,3 +68,35 @@ Deno.test("a rejected refinement leaves earlier facts intact", () => {
     value: -1n,
   }));
 });
+
+Deno.test("forgetting a dead identity preserves live transitive facts", () => {
+  const refinements = new RefinementContext();
+  assert(refinements.assume({
+    tag: "difference-at-most",
+    left: 1,
+    right: 2,
+    offset: 3n,
+  }));
+  assert(refinements.assume({
+    tag: "difference-at-most",
+    left: 2,
+    right: 3,
+    offset: 4n,
+  }));
+
+  refinements.forget(2);
+
+  assert(refinements.entails({
+    tag: "difference-at-most",
+    left: 1,
+    right: 3,
+    offset: 7n,
+  }));
+  assertFalse(
+    refinements.assumptions().some((proposition) =>
+      "variable" in proposition && proposition.variable === 2 ||
+      "left" in proposition &&
+        (proposition.left === 2 || proposition.right === 2)
+    ),
+  );
+});

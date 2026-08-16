@@ -90,6 +90,66 @@ export class RefinementContext {
     return true;
   }
 
+  /**
+   * Removes one dead identity while preserving every difference bound entailed
+   * between the remaining identities.
+   *
+   * Deleting incident edges alone would lose facts whose shortest path passes
+   * through the dead node. Materialising the closure first is variable
+   * elimination for difference constraints and keeps certificate replay exact.
+   */
+  forget(variable: RefinementVariable): void {
+    const present = this.#constraints.some((constraint) =>
+      constraint.left === variable || constraint.right === variable
+    );
+    if (!present) return;
+
+    const distances = shortestPaths(this.#constraints);
+    const nodes = [...distances.keys()].filter((node) => node !== variable);
+    const constraints: DifferenceConstraint[] = [];
+    const assumptions: RefinementProposition[] = [];
+    for (const right of nodes) {
+      const from = distances.get(right);
+      if (from === undefined) continue;
+      for (const left of nodes) {
+        if (left === right) continue;
+        const bound = from.get(left);
+        if (bound === undefined) continue;
+        if (left === ZERO) {
+          if (right === ZERO) continue;
+          const proposition: RefinementProposition = {
+            tag: "at-least",
+            variable: right,
+            value: -bound,
+          };
+          constraints.push(...constraintsFor(proposition));
+          assumptions.push(proposition);
+          continue;
+        }
+        if (right === ZERO) {
+          const proposition: RefinementProposition = {
+            tag: "at-most",
+            variable: left,
+            value: bound,
+          };
+          constraints.push(...constraintsFor(proposition));
+          assumptions.push(proposition);
+          continue;
+        }
+        const proposition: RefinementProposition = {
+          tag: "difference-at-most",
+          left,
+          right,
+          offset: bound,
+        };
+        constraints.push(...constraintsFor(proposition));
+        assumptions.push(proposition);
+      }
+    }
+    this.#constraints.splice(0, this.#constraints.length, ...constraints);
+    this.#assumptions.splice(0, this.#assumptions.length, ...assumptions);
+  }
+
   #consistent(): boolean {
     const distances = shortestPaths(this.#constraints);
     for (const [node, from] of distances) {
