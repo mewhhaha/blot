@@ -44,6 +44,7 @@ enum Node {
 #[derive(Clone, Default)]
 struct Scope {
     identities: HashMap<String, Identity>,
+    affines: HashMap<String, Term>,
     lengths: HashMap<String, Term>,
     relations: HashMap<String, Relation>,
     constraints: Vec<Constraint>,
@@ -99,6 +100,7 @@ impl Analysis<'_> {
             Pattern::Name { name, .. } => {
                 let identity = self.identity();
                 scope.identities.insert(name.clone(), identity);
+                scope.affines.remove(name);
                 scope.lengths.remove(name);
                 scope.relations.remove(name);
                 scope.shadowed.insert(name.clone());
@@ -204,6 +206,7 @@ impl Analysis<'_> {
             match declaration {
                 Declaration::Binding { pattern, value, .. } => {
                     self.walk(value, scope, false)?;
+                    let affine = self.term(value, scope);
                     let length = self.array_length(value, scope);
                     let relation = self.relation(value, scope);
                     self.bind_pattern(pattern, scope);
@@ -212,23 +215,51 @@ impl Analysis<'_> {
                     }
                     if let Pattern::Name { name, .. } =
                         &self.module.arena.patterns[pattern.0 as usize]
-                        && let Some(length) = length
                     {
-                        scope.lengths.insert(name.clone(), length);
+                        if let Some(affine) = affine {
+                            let identity = scope
+                                .identities
+                                .get(name)
+                                .copied()
+                                .expect("a bound name has an affine identity");
+                            let subject = Term::Variable {
+                                identity,
+                                offset: BigInt::from(0),
+                            };
+                            scope
+                                .constraints
+                                .extend(constraints_equal(&subject, &affine));
+                            scope.affines.insert(name.clone(), affine);
+                        }
+                        if let Some(length) = length {
+                            scope.lengths.insert(name.clone(), length);
+                        }
                     }
                     self.bind_relation(pattern, relation, scope);
                 }
                 Declaration::Shadow { name, value, .. } => {
                     self.walk(value, scope, false)?;
+                    let affine = self.term(value, scope);
                     let length = self.array_length(value, scope);
                     let relation = self.relation(value, scope);
                     let identity = self.identity();
                     let previous = scope.identities.insert(name.clone(), identity);
+                    scope.affines.remove(&name);
                     scope.lengths.remove(&name);
                     scope.relations.remove(&name);
                     scope.shadowed.insert(name.clone());
                     if scope.top_level && lookup(self.values, &name).is_some() {
                         scope.shadowed.remove(&name);
+                    }
+                    if let Some(affine) = affine {
+                        let subject = Term::Variable {
+                            identity,
+                            offset: BigInt::from(0),
+                        };
+                        scope
+                            .constraints
+                            .extend(constraints_equal(&subject, &affine));
+                        scope.affines.insert(name.clone(), affine);
                     }
                     if let Some(length) = length {
                         scope.lengths.insert(name.clone(), length);
@@ -423,6 +454,16 @@ impl Analysis<'_> {
         if arguments.len() != 2 {
             return (Vec::new(), Vec::new());
         }
+        let left_witness = self.witness(arguments[0], scope);
+        let right_witness = self.witness(arguments[1], scope);
+        if left_witness.is_none() && right_witness.is_none() {
+            return (Vec::new(), Vec::new());
+        }
+        if matches!(left_witness, Some(Term::Variable { .. }))
+            && matches!(right_witness, Some(Term::Variable { .. }))
+        {
+            return (Vec::new(), Vec::new());
+        }
         let Some(left) = self.term(arguments[0], scope) else {
             return (Vec::new(), Vec::new());
         };
@@ -512,6 +553,30 @@ impl Analysis<'_> {
                 let summary = self.summaries.derive(&callee, self.context)?;
                 self.array_length(arguments[0], scope)
                     .map(|length| shift(length, summary.offset))
+            }
+            _ => None,
+        }
+    }
+
+    fn witness(&self, expression: ExpressionId, scope: &Scope) -> Option<Term> {
+        match &self.module.arena.expressions[expression.0 as usize] {
+            Expression::Int { value, .. } => Some(Term::Literal(value.clone())),
+            Expression::Var { name, .. } => scope.affines.get(name).cloned(),
+            Expression::Apply { .. } => {
+                let (callee, arguments) = application_spine(expression, self.module);
+                if let Expression::Intrinsic { name, .. } =
+                    &self.module.arena.expressions[callee.0 as usize]
+                    && matches!(name.as_str(), "@int.add" | "@int.sub")
+                    && arguments.len() == 2
+                {
+                    let left = self.witness(arguments[0], scope)?;
+                    let Term::Literal(right) = self.witness(arguments[1], scope)? else {
+                        return None;
+                    };
+                    let offset = if name == "@int.sub" { -right } else { right };
+                    return Some(shift(left, offset));
+                }
+                self.term(expression, scope)
             }
             _ => None,
         }
@@ -652,6 +717,12 @@ fn constraints_greater_than(left: &Term, right: &Term) -> Vec<Constraint> {
     constraints_difference(right, left, BigInt::from(-1))
 }
 
+fn constraints_equal(left: &Term, right: &Term) -> Vec<Constraint> {
+    let mut constraints = constraints_difference(left, right, BigInt::from(0));
+    constraints.extend(constraints_difference(right, left, BigInt::from(0)));
+    constraints
+}
+
 fn constraints_difference(left: &Term, right: &Term, delta: BigInt) -> Vec<Constraint> {
     let (left_node, left_offset) = term_node(left);
     let (right_node, right_offset) = term_node(right);
@@ -727,6 +798,10 @@ fn shortest_paths(constraints: &[Constraint]) -> HashMap<Node, HashMap<Node, Big
 
 fn identity_referenced(scope: &Scope, identity: Identity) -> bool {
     scope.identities.values().any(|found| *found == identity)
+        || scope
+            .affines
+            .values()
+            .any(|term| term_references(term, identity))
         || scope
             .lengths
             .values()

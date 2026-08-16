@@ -1,0 +1,16 @@
+// Binding two measured lengths does not make either array a bound for the
+// other. The comparison has two stable witnesses and no independent subject,
+// so it proves nothing about the literal index zero for `ys`.
+
+open import "blot:prelude"
+
+sig first = [Int] -> [Int] -> Int
+let first = fn xs => fn ys =>
+  let xs_length = Array.length xs
+  let ys_length = Array.length ys
+  if xs_length < ys_length:
+    return @array.get ys 0
+  else:
+    return 0
+
+return first
