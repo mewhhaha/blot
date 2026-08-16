@@ -11,4 +11,4 @@ const sum_go = rec (fn (remaining, total) =>
 sig sum_to = Int -> Int
 const sum_to = fn count => sum_go (count, 0)
 
-export { .sum_to = sum_to; }
+return { .sum_to = sum_to; }

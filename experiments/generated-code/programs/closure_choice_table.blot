@@ -20,4 +20,4 @@ let select = fn (flag, value) =>
   let second = selected 7
   return first + second
 
-export { .select = select; }
+return { .select = select; }

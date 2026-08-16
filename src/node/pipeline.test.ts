@@ -99,9 +99,9 @@ test("runtime-neutral semantic revisions reuse the compiled artifact", async () 
   const path = join(directory, "minimal.blot");
   const compiler = await Compiler.create();
   try {
-    await writeFile(path, "const hidden = 1\nexport 42\n");
+    await writeFile(path, "const hidden = 1\nreturn 42\n");
     const first = await compiler.compile(path);
-    await writeFile(path, "const hidden = 100\nexport 42\n");
+    await writeFile(path, "const hidden = 100\nreturn 42\n");
     const second = await compiler.compile(path);
     assert.equal(second.artifactSource, "revision-cache");
     assert.deepEqual(second.wasm, first.wasm);
@@ -127,9 +127,9 @@ test("runtime-changing semantic revisions recompile", async () => {
   const path = join(directory, "minimal.blot");
   const compiler = await Compiler.create();
   try {
-    await writeFile(path, "export 42\n");
+    await writeFile(path, "return 42\n");
     const first = await compiler.compile(path);
-    await writeFile(path, "export 43\n");
+    await writeFile(path, "return 43\n");
     const second = await compiler.compile(path);
     assert.equal(second.artifactSource, "compiled");
     assert.notDeepEqual(second.wasm, first.wasm);
@@ -212,7 +212,7 @@ test("a named .default field is projected as blot:default", async () => {
   try {
     await writeFile(
       path,
-      "export {\n  .default = 42;\n  .other = 7;\n}\n",
+      "return {\n  .default = 42;\n  .other = 7;\n}\n",
     );
     const artifact = await compiler.compile(path);
     const manifest = decodeManifest(artifact.manifestBytes);
@@ -289,14 +289,14 @@ test("module grants keep Unit return typing through canonical text imports", asy
   }
 });
 
-test("module grants preserve dynamic non-Unit host results", async () => {
+test("a module may directly return an effectful computation", async () => {
   const directory = await mkdtemp(join(tmpdir(), "blot-node-host-result-"));
   const path = join(directory, "host-result.blot");
   const compiler = await Compiler.create();
   try {
     await writeFile(
       path,
-      'module with init\n\nopen import "blot:prelude"\n\nvalue <- init.read ()\nexport value + 1\n',
+      'module with init\n\nopen import "blot:prelude"\n\nreturn init.read () + 1\n',
     );
     const artifact = await compiler.compile(path);
     const manifest = decodeManifest(artifact.manifestBytes);
@@ -334,14 +334,14 @@ test("module grants preserve dynamic non-Unit host results", async () => {
   }
 });
 
-test("effectful top-level work is never replayed across runtime exports", async () => {
+test("effectful top-level work is never replayed across runtime fields", async () => {
   const directory = await mkdtemp(join(tmpdir(), "blot-node-module-instance-"));
-  const path = join(directory, "effectful-exports.blot");
+  const path = join(directory, "effectful-fields.blot");
   const compiler = await Compiler.create();
   try {
     await writeFile(
       path,
-      "module with init\n\nvalue <- init.read ()\nexport { .first = value; .second = value; }\n",
+      "module with init\n\nvalue <- init.read ()\nreturn { .first = value; .second = value; }\n",
     );
     await assert.rejects(
       compiler.compile(path),
@@ -380,7 +380,7 @@ test("dynamic signed i64 to f64 conversion matches WebAssembly edge rounding", a
   try {
     await writeFile(
       path,
-      'module with init\n\nopen import "blot:prelude"\n\nvalue <- init.read ()\n<- init.observe (Float.of_int value)\nexport ()\n',
+      'module with init\n\nopen import "blot:prelude"\n\nvalue <- init.read ()\n<- init.observe (Float.of_int value)\nreturn ()\n',
     );
     const artifact = await compiler.compile(path);
     const manifest = decodeManifest(artifact.manifestBytes);

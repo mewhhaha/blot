@@ -13,4 +13,4 @@ const twice = { .pick = fn (_, resume) =>
 let work = fn () =>
   result <- Choice.pick ()
   return result
-export @handle (Choice, work, twice)
+return @handle (Choice, work, twice)

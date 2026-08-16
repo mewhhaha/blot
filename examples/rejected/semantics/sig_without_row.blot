@@ -17,4 +17,4 @@ sig notify = Str -> Unit
 let notify = fn message =>
   result <- Console.write message
   return result
-export notify
+return notify

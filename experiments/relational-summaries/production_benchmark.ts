@@ -49,7 +49,7 @@ function program(count: number, wrapper: boolean): string {
       `  #True => @array.get values index\n` +
       `  #False => 0\n`;
   }
-  return source + "export 0\n";
+  return source + "return 0\n";
 }
 
 async function timed(source: string, name: string): Promise<number> {

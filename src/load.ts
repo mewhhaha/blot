@@ -1,6 +1,6 @@
 // Module loading.
 //
-// A module is an ordered computation from an input value to an export value.
+// A module is an ordered computation from an input value to a returned value.
 // Importing one grants it nothing: it sees only the value its importer supplies,
 // and the entry module's input is the entire authority the program has.
 //

@@ -6,4 +6,4 @@ open import "blot:prelude"
 if 1 < 2:
   return 42
 
-export 0
+return 0

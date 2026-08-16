@@ -124,7 +124,7 @@ let printing =
 let !token = 41
 let consume = fn !value => value + 1
 
-export {
+return {
   .small = Small;
   .message = Message;
   .counter_fields = Counter.fields;

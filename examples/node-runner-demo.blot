@@ -8,7 +8,7 @@ let verdict = case answer == 42 of
   #True => "yes"
   #False => "no"
 
-export {
+return {
   .default = {
     .answer = answer;
     .verdict = verdict;

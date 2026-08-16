@@ -60,7 +60,7 @@ let differs = Money.eq price Money.zero
 sig summed = Money
 let summed = Money.add price (Money.of 8)
 
-export {
+return {
   .type = Money;
   .value = price;
   .distinct_from_i32 = refines (Money, I32);

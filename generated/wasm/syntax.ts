@@ -126,7 +126,6 @@ export type AnyNamedTokenKind = NamedTokenKind extends never
 export type LiteralKind =
   | "module"
   | "with"
-  | "export"
   | "operators"
   | "{"
   | "}"
@@ -228,7 +227,6 @@ export type RuleName =
   | "operator_token"
   | "program"
   | "module_header"
-  | "module_export"
   | "operator_section"
   | "fixity_declaration"
   | "declaration"
@@ -332,7 +330,6 @@ export interface OperatorTokenCursor extends RuleCursorBase<"operator_token"> {
 
 export interface ProgramCursor extends RuleCursorBase<"program"> {
   field(name: "declarations"): ReadonlyArray<DeclarationCursor>;
-  field(name: "exported"): ModuleExportCursor | null;
   field(name: "header"): ModuleHeaderCursor | null;
   field(name: "operators"): OperatorSectionCursor | null;
   field(name: string): CursorFieldValue | undefined;
@@ -341,12 +338,6 @@ export interface ProgramCursor extends RuleCursorBase<"program"> {
 
 export interface ModuleHeaderCursor extends RuleCursorBase<"module_header"> {
   field(name: "parameter"): BindingPatternCursor;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
-export interface ModuleExportCursor extends RuleCursorBase<"module_export"> {
-  field(name: "value"): IndentedValueCursor | ValueCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -754,7 +745,6 @@ export type AnyRuleCursor =
   | OperatorTokenCursor
   | ProgramCursor
   | ModuleHeaderCursor
-  | ModuleExportCursor
   | OperatorSectionCursor
   | FixityDeclarationCursor
   | DeclarationCursor

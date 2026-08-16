@@ -3,4 +3,4 @@
 open import "blot:prelude"
 
 let x = 1 <?> 2
-export x
+return x

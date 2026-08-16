@@ -6,4 +6,4 @@ for Iter.range (0, 3):
   total := "not a number"
   total := total + 1
 
-export total
+return total

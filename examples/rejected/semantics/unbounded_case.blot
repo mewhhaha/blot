@@ -7,4 +7,4 @@ let describe = fn n => case n of
   1 => "one"
   2 => "two"
 
-export describe 1
+return describe 1

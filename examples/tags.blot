@@ -42,4 +42,4 @@ let transformations_work = fn () =>
     "tags apply nearest-first"
   )
 
-export { .ordered = ordered; .label = Count.label; .factorial = factorial 5; }
+return { .ordered = ordered; .label = Count.label; .factorial = factorial 5; }

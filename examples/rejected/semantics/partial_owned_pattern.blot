@@ -9,4 +9,4 @@ let holder = {
 }
 let { .first; } = holder
 
-export first ()
+return first ()

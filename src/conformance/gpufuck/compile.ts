@@ -551,6 +551,7 @@ async function prepare(path: string) {
     loaded.module,
     checked.values,
     imports,
+    checked.resultEffects,
     checked.shapes,
     checked.recordAdaptations,
   );
@@ -726,6 +727,7 @@ async function prepareResidualFrontend(path: string): Promise<{
     loaded.module,
     checked.values,
     imports,
+    checked.resultEffects,
     checked.shapes,
     checked.recordAdaptations,
   );

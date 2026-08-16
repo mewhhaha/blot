@@ -4,4 +4,4 @@
 open import "blot:prelude"
 
 let apply_twice = f => x => f (f x)
-export apply_twice
+return apply_twice

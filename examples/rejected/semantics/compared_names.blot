@@ -20,4 +20,4 @@ let name = fn n => fn m =>
     return case n of
       3 => "three"
 
-export name 1 2
+return name 1 2

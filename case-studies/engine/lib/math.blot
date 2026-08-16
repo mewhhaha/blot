@@ -89,7 +89,7 @@ const sin_steps = fn steps =>
 
 const cos_steps = fn steps => sin_steps (steps + QUARTER)
 
-export {
+return {
   .pi = Float32.of_float PI;
   .tau = Float32.of_float TAU;
   .turn = TURN;

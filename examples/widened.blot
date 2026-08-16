@@ -24,4 +24,4 @@ let observed = fn zoom =>
 
 seen <- observed 4
 
-export camera.zoom_of seen + camera.doubled seen
+return camera.zoom_of seen + camera.doubled seen

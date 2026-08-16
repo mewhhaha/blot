@@ -30,4 +30,4 @@ for ever:
   transcript := request ++ " " ++ reply
   turns := turns + 1
 
-export turns
+return turns

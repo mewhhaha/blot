@@ -32,7 +32,7 @@ function zoomShapes(checked: CheckResult): string[] {
 
 /** A library that reads one field of a record its callers build. */
 const READS_ONE_FIELD = `open import "blot:prelude"
-export { .zoom_of = fn c => c.zoom; }
+return { .zoom_of = fn c => c.zoom; }
 `;
 
 Deno.test("checking includes ownership errors in transitive dependencies", async () => {
@@ -41,21 +41,21 @@ Deno.test("checking includes ownership errors in transitive dependencies", async
     directory,
     "leaf",
     `let !token = 1
-export @int.add token token
+return @int.add token token
 `,
   );
   await writeModule(
     directory,
     "middle",
     `const leaf = import "./leaf.blot"
-export 0
+return 0
 `,
   );
   const root = await writeModule(
     directory,
     "root",
     `const middle = import "./middle.blot"
-export 0
+return 0
 `,
   );
 
@@ -71,21 +71,21 @@ Deno.test("transitive module result types reach the importer", async () => {
   await writeModule(
     directory,
     "leaf",
-    `export { .answer = 42; }
+    `return { .answer = 42; }
 `,
   );
   await writeModule(
     directory,
     "middle",
     `const leaf = import "./leaf.blot"
-export { .answer = leaf.answer; }
+return { .answer = leaf.answer; }
 `,
   );
   const root = await writeModule(
     directory,
     "root",
     `const middle = import "./middle.blot"
-export middle.answer
+return middle.answer
 `,
   );
 
@@ -104,14 +104,14 @@ const component_2 = fn _ => { .pack = fn (left, right) => @int.add left right; }
 const component = fn definition => case @array.len (@shape.names definition.fields) of
   1 => component_1 definition
   _ => component_2 definition
-export { .component = component; }
+return { .component = component; }
 `,
   );
   await writeModule(
     directory,
     "components",
     `const Ecs = import "./ecs.blot"
-export { .component = Ecs.component; }
+return { .component = Ecs.component; }
 `,
   );
   const root = await writeModule(
@@ -124,7 +124,7 @@ const Unary = Ecs.component { .fields = { .value = Int; }; }
 const Binary = Components.component { .fields = { .left = Int; .right = Int; }; }
 let unary_value = 7
 let binary_value = (20, 22)
-export { .unary = Unary.pack unary_value; .binary = Binary.pack binary_value; }
+return { .unary = Unary.pack unary_value; .binary = Binary.pack binary_value; }
 `,
   );
 
@@ -150,7 +150,7 @@ const component_2 = fn _ => {
 const component = fn definition => case @array.len (@shape.names definition.fields) of
   1 => component_1 definition
   _ => component_2 definition
-export { .component = component; }
+return { .component = component; }
 `,
   );
   const root = await writeModule(
@@ -159,7 +159,7 @@ export { .component = component; }
     `open import "blot:prelude"
 const Components = import "./components.blot" with { .offset = 40; }
 const Position = Components.component { .fields = { .x = Int; }; }
-export Position.pack 2
+return Position.pack 2
 `,
   );
 
@@ -177,7 +177,7 @@ const component_2 = fn _ => { .pack = fn (left, right) => left + right; }
 const component = fn definition => case @array.len (@shape.names definition.fields) of
   1 => component_1 definition
   _ => component_2 definition
-export { .component = component; }
+return { .component = component; }
 `,
   );
   const integerRoot = await writeModule(
@@ -186,7 +186,7 @@ export { .component = component; }
     `open import "blot:prelude"
 const Components = import "./components.blot"
 const One = Components.component { .fields = { .value = Int; }; }
-export One.pack 7
+return One.pack 7
 `,
   );
   const textRoot = await writeModule(
@@ -195,7 +195,7 @@ export One.pack 7
     `open import "blot:prelude"
 const Components = import "./components.blot"
 const One = Components.component { .fields = { .value = Str; }; }
-export One.pack "seven"
+return One.pack "seven"
 `,
   );
 
@@ -210,7 +210,7 @@ const component_2 = fn _ => { .pack = fn (left, right) => left + right; }
 const component = fn definition => case @array.len (@shape.names definition.fields) of
   1 => component_1 definition
   _ => component_2 definition
-export { .component = component; }
+return { .component = component; }
 `,
   );
   await refreshLoadedModules();
@@ -223,20 +223,20 @@ Deno.test("checking observes an edited dependency after a cached build", async (
   const dependency = await writeModule(
     directory,
     "dependency",
-    `export 1
+    `return 1
 `,
   );
   const root = await writeModule(
     directory,
     "root",
-    `export import "./dependency.blot"
+    `return import "./dependency.blot"
 `,
   );
   assertEquals((await checkFile(root)).type, "1");
 
   await Deno.writeTextFile(
     dependency,
-    `export 2
+    `return 2
 `,
   );
   await refreshLoadedModules();
@@ -256,7 +256,7 @@ Deno.test("JSON include parsers choose widened or literal inference", async () =
     `open import "blot:prelude"
 const normal = @include "./config.json" as_json
 const exact = @include "./config.json" as_const_json
-export { .normal = normal; .exact = exact; }
+return { .normal = normal; .exact = exact; }
 `,
   );
 
@@ -274,7 +274,7 @@ Deno.test("a library reads a record with more fields than it projects", async ()
     "root",
     `open import "blot:prelude"
 const lib = import "./lib.blot"
-export lib.zoom_of { .zoom = 3; .angle = 7; }
+return lib.zoom_of { .zoom = 3; .angle = 7; }
 `,
   );
 
@@ -292,13 +292,13 @@ Deno.test("a module missing a field the imported module reads is rejected", asyn
     directory,
     "lib",
     `module with input
-export input.zoom
+return input.zoom
 `,
   );
   const root = await writeModule(
     directory,
     "root",
-    `export import "./lib.blot" with { .angle = 7; }
+    `return import "./lib.blot" with { .angle = 7; }
 `,
   );
 
@@ -314,7 +314,7 @@ Deno.test("two programs sharing a library each get their own field sets", async 
     "narrow",
     `open import "blot:prelude"
 const lib = import "./lib.blot"
-export lib.zoom_of { .zoom = 3; .angle = 7; }
+return lib.zoom_of { .zoom = 3; .angle = 7; }
 `,
   );
   const wide = await writeModule(
@@ -322,7 +322,7 @@ export lib.zoom_of { .zoom = 3; .angle = 7; }
     "wide",
     `open import "blot:prelude"
 const lib = import "./lib.blot"
-export lib.zoom_of { .zoom = 3; .scale = 1; .tint = 2; }
+return lib.zoom_of { .zoom = 3; .scale = 1; .tint = 2; }
 `,
   );
 
@@ -346,14 +346,14 @@ Deno.test("a field set found two modules down reaches the root's facts", async (
     "middle",
     `open import "blot:prelude"
 const lib = import "./lib.blot"
-export { .v = lib.zoom_of { .zoom = 3; .angle = 7; }; }
+return { .v = lib.zoom_of { .zoom = 3; .angle = 7; }; }
 `,
   );
   const root = await writeModule(
     directory,
     "root",
     `const middle = import "./middle.blot"
-export middle.v
+return middle.v
 `,
   );
 
@@ -370,7 +370,7 @@ Deno.test("two records reaching one library retain both representation facts", a
     "left",
     `open import "blot:prelude"
 const lib = import "./lib.blot"
-export { .v = lib.zoom_of { .zoom = 3; .angle = 7; }; }
+return { .v = lib.zoom_of { .zoom = 3; .angle = 7; }; }
 `,
   );
   await writeModule(
@@ -378,7 +378,7 @@ export { .v = lib.zoom_of { .zoom = 3; .angle = 7; }; }
     "right",
     `open import "blot:prelude"
 const lib = import "./lib.blot"
-export { .v = lib.zoom_of { .zoom = 3; .scale = 1; }; }
+return { .v = lib.zoom_of { .zoom = 3; .scale = 1; }; }
 `,
   );
   const root = await writeModule(
@@ -387,7 +387,7 @@ export { .v = lib.zoom_of { .zoom = 3; .scale = 1; }; }
     `open import "blot:prelude"
 const left = import "./left.blot"
 const right = import "./right.blot"
-export left.v + right.v
+return left.v + right.v
 `,
   );
 
@@ -410,7 +410,7 @@ Deno.test("checking one program twice records the same field sets", async () => 
     "root",
     `open import "blot:prelude"
 const lib = import "./lib.blot"
-export lib.zoom_of { .zoom = 3; .angle = 7; }
+return lib.zoom_of { .zoom = 3; .angle = 7; }
 `,
   );
 
@@ -431,14 +431,14 @@ Deno.test("an import cycle reports the complete cycle", async () => {
     directory,
     "left",
     `const right = import "./right.blot"
-export 0
+return 0
 `,
   );
   await writeModule(
     directory,
     "right",
     `const left = import "./left.blot"
-export 0
+return 0
 `,
   );
 

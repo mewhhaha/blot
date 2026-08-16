@@ -8,4 +8,4 @@ let at = fn values => fn index => case index >= 0 && index < Array.length values
   #True => @array.get values index
   #False => 0
 
-export at
+return at

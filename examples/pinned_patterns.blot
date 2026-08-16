@@ -22,7 +22,7 @@ for ^wanted in Iter.items [1, 2, 2, 3]:
   matches := matches + 1
   let ^matches = matches
 
-export {
+return {
   .same = classify 2;
   .different = classify 3;
   .greeted = greeted;

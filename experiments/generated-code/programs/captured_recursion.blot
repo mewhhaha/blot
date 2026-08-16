@@ -11,4 +11,4 @@ const count_to = fn limit =>
   )
   return go (0, 0)
 
-export { .count_to = count_to; }
+return { .count_to = count_to; }

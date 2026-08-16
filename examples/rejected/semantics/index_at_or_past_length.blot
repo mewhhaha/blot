@@ -20,4 +20,4 @@ let at = fn xs => fn n =>
   else:
     return 0
 
-export at [1, 2, 3] 0
+return at [1, 2, 3] 0

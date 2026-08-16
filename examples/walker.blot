@@ -54,4 +54,4 @@ let (value, consumed) = walk program 0
 
 // A well-formed tree consumes the whole array; anything left over means the
 // walk stopped early.
-export { .value = value; .whole = consumed == @array.len program; }
+return { .value = value; .whole = consumed == @array.len program; }

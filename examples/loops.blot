@@ -99,7 +99,7 @@ let steps = 0
 for value in halving 40:
   steps := steps + value
 
-export {
+return {
   .counted = counted;
   .total = total;
   .joined = joined;

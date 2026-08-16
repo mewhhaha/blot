@@ -29,7 +29,7 @@ Deno.test("a terminal statement equality ladder becomes a returned case", async 
       return "two"
     else:
       return "other"
-export label
+return label
 `;
   const parsed = await parseConcrete(source);
   if (!parsed.ok) throw new Error("terminal equality fixture did not parse");
@@ -48,7 +48,7 @@ export label
     1 => "one"
     2 => "two"
     _ => "other"
-export label
+return label
 `,
   );
   const fixedParse = await parseConcrete(fixed);
@@ -73,7 +73,7 @@ Deno.test("a nested statement conditional becomes an else-if ladder", async () =
     else:
       choice := 3
   return choice
-export choose
+return choose
 `;
 
   assertEquals(
@@ -87,7 +87,7 @@ export choose
   else:
     choice := 3
   return choice
-export choose
+return choose
 `,
   );
 });
@@ -101,7 +101,7 @@ Deno.test("an else suite with work after its conditional stays nested", async ()
       _ <- two ()
     _ <- finish ()
   return ()
-export choose
+return choose
 `;
   const parsed = await parseConcrete(source);
   if (!parsed.ok) throw new Error("nested statement fixture did not parse");
@@ -123,7 +123,7 @@ const RULE_CASES: readonly {
     name: "an unread pure binding is removable",
     code: "BLOT_LINT_UNUSED_BINDING",
     source: `let forgotten = 1
-export 2
+return 2
 `,
   },
   {
@@ -131,13 +131,13 @@ export 2
     code: "BLOT_LINT_NOOP_REBINDING",
     source: `let count = 1
 count := count
-export count
+return count
 `,
   },
   {
     name: "an arm after a wildcard is unreachable",
     code: "BLOT_LINT_UNREACHABLE_CASE_ARM",
-    source: `export case 1 of
+    source: `return case 1 of
   _ => 1
   1 => 2
 `,
@@ -150,7 +150,7 @@ export count
     #None =>
       return ()
     #Some value => value
-export unwrap
+return unwrap
 `,
   },
   {
@@ -161,19 +161,19 @@ export unwrap
   @array.empty,
   fn (state, value) => Array.append state [value]
 )
-export copy
+return copy
 `,
   },
   {
     name: "an explicit primitive function prefers its operator",
     code: "BLOT_LINT_OPERATOR_SPELLING",
-    source: `export Num.rem 5 2
+    source: `return Num.rem 5 2
 `,
   },
   {
     name: "a proved total lookup can become direct access",
     code: "BLOT_LINT_PROVED_ARRAY_LOOKUP",
-    source: `export case Array.get ([1], 0) of
+    source: `return case Array.get ([1], 0) of
   #Some value => value
   #None => 0
 `,
@@ -184,7 +184,7 @@ export copy
     source: `let values = [1]
 let updated = @array.push values 2
 let previous_length = Array.length values
-export (updated, previous_length)
+return (updated, previous_length)
 `,
   },
   {
@@ -193,7 +193,7 @@ export (updated, previous_length)
     source: `let run = fn () =>
   ignored <- perform_work ()
   return ()
-export run
+return run
 `,
   },
   {
@@ -202,7 +202,7 @@ export run
     source: `let project = fn point => point.x
 let first = project { .x = 1; }
 let second = project { .x = 1; .y = 2; }
-export (first, second)
+return (first, second)
 `,
   },
 ];
@@ -267,7 +267,7 @@ Deno.test("every actionable default rule provides a fix", async () => {
 });
 
 Deno.test("a compiler-proved rewrite requests semantic validation", async () => {
-  const source = `export case Array.get ([1], 0) of
+  const source = `return case Array.get ([1], 0) of
   #Some value => value
   #None => 0
 `;
@@ -280,11 +280,11 @@ Deno.test("a compiler-proved rewrite requests semantic validation", async () => 
 });
 
 Deno.test("a registered rule receives typed AST and concrete syntax visits", async () => {
-  const source = `export chosen
+  const source = `return chosen
 `;
   const parsed = await parseConcrete(source);
   if (!parsed.ok) throw new Error("lint fixture did not parse");
-  let sawExport = false;
+  let sawResult = false;
   const rule: LintRule = {
     name: "chosen-name",
     code: "TEST_CHOSEN_NAME",
@@ -296,7 +296,7 @@ Deno.test("a registered rule receives typed AST and concrete syntax visits", asy
           context.report({ message: "chosen", span: path.node.span });
         },
         concrete(node) {
-          if (node.name === "module_export") sawExport = true;
+          if (node.name === "result") sawResult = true;
         },
       };
     },
@@ -308,7 +308,7 @@ Deno.test("a registered rule receives typed AST and concrete syntax visits", asy
     ),
     ["TEST_CHOSEN_NAME"],
   );
-  assert(sawExport);
+  assert(sawResult);
 });
 
 Deno.test("guard lowering does not create unreachable-arm diagnostics", async () => {
@@ -316,7 +316,7 @@ Deno.test("guard lowering does not create unreachable-arm diagnostics", async ()
   m if m > 0 => "positive"
   m if m < 0 => "negative"
   _ => "zero"
-export classify
+return classify
 `;
   const parsed = await parseConcrete(source);
   if (!parsed.ok) throw new Error("lint fixture did not parse");
@@ -331,7 +331,7 @@ export classify
 Deno.test("loop lowering does not create a second unused binding", async () => {
   const source = `for ever:
   let forgotten = 1
-export ()
+return ()
 `;
   const parsed = await parseConcrete(source);
   if (!parsed.ok) throw new Error("lint fixture did not parse");
@@ -347,7 +347,7 @@ Deno.test("an effect result used after a statement suite is not unused", async (
   const source = `let value = ()
 if refresh:
   value <- reload ()
-export value
+return value
 `;
   const parsed = await parseConcrete(source);
   if (!parsed.ok) throw new Error("effect continuation fixture did not parse");
@@ -363,8 +363,8 @@ Deno.test("every default operator target has a spelling action", async () => {
   for (const fixity of DEFAULT_FIXITIES) {
     const target = fixity.target.join(".");
     const source = fixity.associativity === "prefix"
-      ? `export ${target} operand\n`
-      : `export ${target} left right\n`;
+      ? `return ${target} operand\n`
+      : `return ${target} left right\n`;
     const parsed = await parseConcrete(source);
     if (!parsed.ok) {
       throw new Error(`operator fixture for ${target} did not parse`);
@@ -390,7 +390,7 @@ Deno.test("a terminal Option match offers a guard action", async () => {
     #None =>
       return ()
     #Some value => value
-export unwrap
+return unwrap
 `;
   const parsed = await parseConcrete(source);
   if (!parsed.ok) throw new Error("guard action fixture did not parse");
@@ -414,7 +414,7 @@ let run = fn () =>
 let composed = run
   |> @handle (Host, host_handler)
   |> @handle (Console, handler)
-export (
+return (
   Empty Int,
   Length Str,
   Semigroup Int,

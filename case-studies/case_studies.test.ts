@@ -29,7 +29,7 @@ Deno.test("Text.contains searches Unicode text", async () => {
   await Deno.writeTextFile(
     source,
     `open import "blot:prelude"
-export Text.contains "GPU 😀 frontend" "😀 front"
+return Text.contains "GPU 😀 frontend" "😀 front"
 `,
   );
   const value = await evaluateFile(source, { write: () => {} });

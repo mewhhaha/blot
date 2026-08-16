@@ -4,7 +4,7 @@ module with capabilities
 
 open import "blot:prelude"
 
-export {
+return {
   .run = capabilities.base + capabilities.bonus;
   .scaled = capabilities.base * 2;
 }

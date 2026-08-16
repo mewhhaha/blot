@@ -62,7 +62,7 @@ const describe = fn names =>
     fn (state, name) => @text.concat state (@text.concat name " ")
   )
 
-export {
+return {
   .one = One;
   .method = Method;
   .verb = Verb;

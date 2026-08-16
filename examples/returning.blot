@@ -62,7 +62,7 @@ let nested_case = fn () =>
     #None => 0
   return inner + 1
 
-export {
+return {
   .negative = describe (-1);
   .zero = describe 0;
   .positive = describe 1;

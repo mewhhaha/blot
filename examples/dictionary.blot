@@ -14,7 +14,7 @@ let bool_int = fn value => case value of
   #True => 1
   #False => 0
 
-export {
+return {
   .first_previous = option_or (first.0, -1);
   .replaced_previous = option_or (replaced.0, -1);
   .visible = option_or (Dict.get (replaced.1, "count"), -1);

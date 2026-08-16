@@ -9,4 +9,4 @@ open import "blot:prelude"
 sig describe = 1 | 2 | 3 -> Str
 let describe = fn level => case level of
   1 => "low"
-export describe
+return describe

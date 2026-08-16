@@ -6,4 +6,4 @@ let use = fn identity => {
     .text = identity "forty-two";
   }
 let identity = fn value => value
-export use identity
+return use identity

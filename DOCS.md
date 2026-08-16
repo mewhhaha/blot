@@ -56,7 +56,7 @@ immutable binding, `for` lowers to a fold, branches produce values, and effects
 are explicit in `<-`. Nothing mutates an earlier value.
 
 Compose at the larger scale. Functions take values and return values; modules
-execute in source order from an optional input to one explicit export value:
+execute in source order from an optional input to one returned value:
 
 ```blot
 let prepare = fn values =>
@@ -100,11 +100,11 @@ let clamp = fn value =>
 
   return value
 
-export { .clamp = clamp; }
+return { .clamp = clamp; }
 ```
 
-Treat the final record as the module's public surface. Keep support values above
-it and export only what another module should depend on.
+Treat the returned record as the module's public surface. Keep support values
+above it and return only what another module should depend on.
 
 When a small module benefits from an explicit namespace, keep the prelude behind
 a name instead:
@@ -114,11 +114,11 @@ const prelude = import "blot:prelude"
 
 let answer = prelude.Num.add 20 22
 
-export { .answer = answer; }
+return { .answer = answer; }
 ```
 
 An import is a module instance. Supply capabilities or configuration with
-`with`, then use its exported value:
+`with`, then use its returned value:
 
 ```blot
 let Counter = import "./counter.blot" with {
@@ -126,7 +126,7 @@ let Counter = import "./counter.blot" with {
   .limit = 100;
 }
 
-export { .run = Counter.run; }
+return { .run = Counter.run; }
 ```
 
 ## Open records in the smallest useful scope
@@ -147,7 +147,7 @@ let calculate = fn values =>
 
   return total
 
-export { .calculate = calculate; }
+return { .calculate = calculate; }
 ```
 
 This makes `Iter`, `Some`, `map`, and the operator targets available only where
@@ -174,7 +174,7 @@ it. For narrower dependencies, prefer a local `open`. If only two or three
 fields are wanted, destructure them instead of opening everything:
 
 ```blot
-const { .source = input; .value; } = exports
+const { .source = input; .value; } = library
 ```
 
 Treat an `open` like entering a vocabulary scope, not like copying a record.
@@ -703,7 +703,7 @@ const Pipeline = {
 let prepare = decode >>> validate >>> normalize
 let result = prepare input
 
-export result
+return result
 ```
 
 Prefer the operator once it exists. Repeating

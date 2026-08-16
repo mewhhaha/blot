@@ -8,4 +8,4 @@ let ignore = fn ~_ => 42
 sig run = Int -> Int
 let run = fn n => ignore (@int.div 1 n)
 
-export { .run = run; }
+return { .run = run; }

@@ -1,4 +1,4 @@
 const as_raw = fn source => source.text
 let included = @include "../../assets/greeting.txt" as_raw
 
-export included
+return included

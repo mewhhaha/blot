@@ -14,4 +14,4 @@ let step = rec (fn n =>
 )
 let step = rec (fn n => n + 1)
 
-export step 3
+return step 3

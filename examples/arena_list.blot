@@ -39,7 +39,7 @@ let iterated_total = 0
 for value in List.items runtime_list:
   iterated_total := iterated_total + value
 
-export {
+return {
   .runtime_total = List.fold (
     runtime_list,
     0,

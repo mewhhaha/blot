@@ -88,10 +88,10 @@ draw, and its inferred type says so:
 case-studies/engine/main.blot: (Int | 0) ~ { Assets, Canvas, Host, View }
 ```
 
-The same reason keeps `Canvas` out of the renderer's exports: a module's
-exported record is a runtime value and an effect cannot be a field of one. The
-renderer exports a `frame` instead, which clears, reads the camera, hands the
-application two brushes, and presents.
+The same reason keeps `Canvas` out of the renderer's returned API: the record is
+a runtime value and an effect cannot be a field of one. The renderer returns a
+`frame` instead, which clears, reads the camera, hands the application two
+brushes, and presents.
 
 A camera is one record inside `lib/render.blot` and a different field subset at
 each of the four places that reads one, and those shapes agree because inference

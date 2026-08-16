@@ -61,7 +61,7 @@ let region = Slice.claim [dynamic, 4, 7, 3, 8, 2, 6, 1, 5]
 let sorted_region = quicksort (!region)
 let sorted = Slice.freeze (!sorted_region)
 
-export fold (
+return fold (
   sorted,
   0,
   fn (state, value) => state * 10 + value

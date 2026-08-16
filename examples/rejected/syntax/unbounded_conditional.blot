@@ -2,4 +2,4 @@
 // constructor known at compile time.
 let label = if #True:
   return "yes"
-export label
+return label

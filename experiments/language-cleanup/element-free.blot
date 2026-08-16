@@ -85,7 +85,7 @@ let collecting =
     .return = fn _ => "";
   }
 
-export @handle (
+return @handle (
   Draw,
   (fn () =>
     <- view ()

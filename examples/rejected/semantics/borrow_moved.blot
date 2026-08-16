@@ -4,4 +4,4 @@
 open import "blot:prelude"
 
 let steal = fn &p => p
-export steal { .x = 1; }
+return steal { .x = 1; }

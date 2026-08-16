@@ -38,7 +38,7 @@ let progress = fn m => case m of
   #Step p => p
   #Failed code => 0 - code
 
-export {
+return {
   .zero = describe 0;
   .positive = describe 7;
   .negative = describe (0 - 7);

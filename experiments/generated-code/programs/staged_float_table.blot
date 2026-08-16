@@ -15,4 +15,4 @@ const classify = fn index =>
   else:
     return Float32.truncate (Float32.negate value)
 
-export { .classify = classify; }
+return { .classify = classify; }

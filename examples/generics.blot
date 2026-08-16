@@ -72,7 +72,7 @@ const described_text = describing Str
 const described_record = describing Point2
 const described_arrow = describing (I32 -> I32)
 
-export {
+return {
   .sum = add_i32 (20, 22);
   .byte = add_u8 (1, 2);
   .x2 = x_of_2 { .x = 3; .y = 4; };

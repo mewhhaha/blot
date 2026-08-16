@@ -9,4 +9,4 @@ const exports =
 
 open exports
 
-export { .source = source; .value = value; .rest = rest; }
+return { .source = source; .value = value; .rest = rest; }

@@ -8,4 +8,4 @@ const sum_to = fn count =>
 
   return total
 
-export { .sum_to = sum_to; }
+return { .sum_to = sum_to; }

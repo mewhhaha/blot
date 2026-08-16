@@ -25,7 +25,7 @@ let whole = @region.claim values
 let rejoined = case @region.split (!whole) 1 of
   #Split (!left, !right, !rejoin) => @region.join (!rejoin) (!left) (!right)
   #SplitOutOfBounds !original => original
-export @region.freeze (!rejoined)
+return @region.freeze (!rejoined)
 `,
   );
   assertEquals(checked.type, "[(3 | 1 | 2)]");
@@ -44,7 +44,7 @@ let frozen = @region.freeze (!region)
 let frozen_first = case Array.get (frozen, 0) of
   #Some value => value
   #None => 0
-export shared_first * 10 + frozen_first
+return shared_first * 10 + frozen_first
 `,
   );
   assertEquals(checked.type, "Int");
@@ -58,7 +58,7 @@ let whole = @region.claim values
 let rejoined = case @region.split (!whole) 1 of
   #Split (!left, !right, !rejoin) => @region.join (!rejoin) (!right) (!left)
   #SplitOutOfBounds !original => original
-export @region.freeze (!rejoined)
+return @region.freeze (!rejoined)
 `,
     "BLOT_REGION_JOIN_UNPROVED",
   );
@@ -76,7 +76,7 @@ let region = @region.claim values
 let changed = case @region.swap (!region) 0 2 of
   #Updated !updated => updated
   #SwapOutOfBounds !original => original
-export @region.freeze (!changed)
+return @region.freeze (!changed)
 `,
     );
     const result = await evaluateFile(file, { write() {} });

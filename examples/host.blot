@@ -24,4 +24,4 @@ let report = fn () =>
   <- Console.write "done"
 
 result <- report ()
-export result
+return result

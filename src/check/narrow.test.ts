@@ -79,7 +79,7 @@ const Probes = {
     #False => True
   ;
 }
-export 0
+return 0
 `;
 
 const path = `${scratch}/probes.blot`;

@@ -1562,7 +1562,7 @@ function inferSpecial(
     return freshVar(level);
   }
 
-  // A module is a function from its input record to its export record, and it
+  // A module is internally a function from its input to its returned value, and it
   // is checked once and shared. Typing the import is what lets a caller see
   // the module's exports instead of an opaque value.
   if (callee.name === "@import" && head.args.length >= 1) {
@@ -3234,7 +3234,7 @@ function inferDeclarations(
     }
 
     // Import syntax instantiates immediately, and a `const` can evaluate that
-    // instance all the way to its exported value. The evaluated value still
+    // instance all the way to its returned value. The evaluated value still
     // cannot replace the ordinary application judgment: that judgment is what
     // checks the explicit input against the dependency's inferred demand.
     if (type !== null && instantiatedImport(declaration.value)) {
@@ -4538,6 +4538,8 @@ export interface Checked {
    */
   readonly parameter: SimpleType | null;
   readonly effects: SimpleType;
+  /** Effects performed by the returned tail, excluding preceding declarations. */
+  readonly resultEffects: SimpleType;
   /** The existing inference result for each expression; backends must not re-infer it. */
   readonly expressionTypes: ReadonlyMap<Expr, SimpleType>;
   /** Independently consumable evidence for every admitted direct array access. */
@@ -4716,6 +4718,7 @@ export function checkModule(
 
   inferDeclarations(module.declarations, context, level, row);
   let result: SimpleType;
+  let resultEffects = effects([]);
   if (module.resultEffects === "pure") {
     result = inferPure(
       module.result,
@@ -4724,7 +4727,9 @@ export function checkModule(
       "The module result",
     );
   } else {
-    result = infer(module.result, context, level, row);
+    resultEffects = freshVar(level);
+    result = infer(module.result, context, level, resultEffects);
+    located(module.result.span, () => constrain(resultEffects, row));
   }
   for (const [cancellation, identity] of cancelledContinuations) {
     if (continuationBindings.has(identity)) continue;
@@ -4746,6 +4751,7 @@ export function checkModule(
     type: result,
     parameter,
     effects: row,
+    resultEffects,
     expressionTypes,
     arrayProofs,
     opens,

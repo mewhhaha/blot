@@ -8,4 +8,4 @@ const twice = fn ~value => (value, value)
 
 const pair = twice 21
 
-export pair
+return pair

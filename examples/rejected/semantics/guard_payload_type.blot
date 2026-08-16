@@ -11,4 +11,4 @@ let shout = fn () =>
     return "none"
   return Text.append inner "!"
 
-export shout ()
+return shout ()

@@ -7,7 +7,7 @@
 
 open import "blot:prelude"
 
-export {
+return {
   .zoom_of = fn camera => camera.zoom;
   .doubled = fn camera => camera.zoom * 2;
 }

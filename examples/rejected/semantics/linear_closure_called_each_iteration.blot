@@ -8,4 +8,4 @@ let spend = fn () => consume (!ticket)
 let total = 0
 for n in Iter.range (0, 2):
   total := total + spend ()
-export total
+return total

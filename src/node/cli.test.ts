@@ -11,7 +11,7 @@ const execute = promisify(execFile);
 test("build never overwrites an extensionless source", async () => {
   const directory = await mkdtemp(join(tmpdir(), "blot-node-cli-"));
   const path = join(directory, "program");
-  const source = "export 42\n";
+  const source = "return 42\n";
   try {
     await writeFile(path, source);
     await execute(

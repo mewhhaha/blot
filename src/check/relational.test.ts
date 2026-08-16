@@ -12,7 +12,7 @@ function checkedWith(bound: string, declarations = ""): Promise<unknown> {
 let at = fn xs => fn n => case n >= 0 && ${bound} of
   #True => @array.get xs n
   #False => 0
-export at
+return at
 `,
   );
 }

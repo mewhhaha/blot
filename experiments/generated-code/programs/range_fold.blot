@@ -11,4 +11,4 @@ const fold_go = rec (fn (remaining, total) =>
 sig fold = Int -> Int
 const fold = fn count => fold_go (count, 0)
 
-export { .fold = fold; }
+return { .fold = fold; }

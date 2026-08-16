@@ -44,7 +44,7 @@ let exact = @type.satisfies (reading, Is Reading)
 // predicate answers `#False`, and it is refused while compiling rather than
 // trapping.
 
-export {
+return {
   .value = checked.value;
   .label = counted.label;
   .both = exact.value;

@@ -437,11 +437,11 @@ derivation the same unknown label is rejected immediately. Thus generic
 structural source can be checked before unrolling without admitting a runtime
 operation over heterogeneous record keys.
 
-`M(v)` is invariant under aliasing and re-export. This yields the coherence
-property
+`M(v)` is invariant under aliasing and return through another module. This
+yields the coherence property
 
 ```txt
-VType_m(f a) = VType_m((reexport f) a)
+VType_m(f a) = VType_m((alias_through_module f) a)
 ```
 
 for the same evaluated argument. The per-compilation origin table may refer to

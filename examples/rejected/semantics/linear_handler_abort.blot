@@ -7,4 +7,4 @@ let work = fn () =>
   _ <- Ask.ask ()
   return consume (!token)
 let aborting = { .ask = fn (_, ?resume) => 0; }
-export @handle (Ask, work, aborting)
+return @handle (Ask, work, aborting)

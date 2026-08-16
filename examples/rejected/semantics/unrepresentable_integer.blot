@@ -2,4 +2,4 @@ open import "blot:prelude"
 
 sig word = U64
 let word = 0
-export word
+return word

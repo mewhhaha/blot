@@ -5,4 +5,4 @@ let !token = 41
 let source = { .go = fn () => consume (!token); }
 let moved = { ...source; .value = 1; }
 
-export moved.value
+return moved.value

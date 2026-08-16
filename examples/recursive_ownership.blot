@@ -11,4 +11,4 @@ let even =
   )
 let odd = rec (fn n => even (n - 1))
 
-export even 4
+return even 4

@@ -64,7 +64,7 @@ const element_of = fn t => unwrap_or (opened ("List", t), Unit)
 
 const Header = struct { .code = U8; .label = Str; }
 
-export {
+return {
   .literal = describe 42;
   .range = describe Status;
   .union = describe Message;

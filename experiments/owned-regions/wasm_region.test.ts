@@ -108,7 +108,7 @@ Deno.test("owned Slice quicksort executes through Rust Core Wasm without recursi
 Deno.test("Slice-relative get and set cannot reach a sibling Region", async () => {
   const source = `open import "blot:prelude"
 let whole = Slice.claim [10, 20, 30]
-export case Slice.split ((!whole), 1) of
+return case Slice.split ((!whole), 1) of
   #Split (!left, !right, !rejoin) =>
     let crossed = case Slice.get ((&left), 1) of
       #Some _ => 1
@@ -149,7 +149,7 @@ let first = case Array.get (frozen, 0) of
 let last = case Array.get (frozen, 2) of
   #Some value => value
   #None => 0
-export first * 10 + last
+return first * 10 + last
 `;
 
   await withSource(source, async (compiler, path) => {
@@ -171,7 +171,7 @@ x <- Source.value 0
 ${owned ? "let !candidate" : "let candidate"} = @array.set [x, 2, 3] 1 2
 let region = Slice.claim ${owned ? "(!candidate)" : "candidate"}
 let frozen = Slice.freeze (!region)
-export case Array.get (frozen, 0) of
+return case Array.get (frozen, 0) of
   #Some value => value
   #None => 0
 `;
@@ -202,7 +202,7 @@ let restored = case Slice.split ((!whole), 1) of
   #Split (!left, !right, !rejoin) => rejoin_parts ((!rejoin), (!left), (!right))
   #SplitOutOfBounds !original => original
 let frozen = Slice.freeze (!restored)
-export case Array.get (frozen, 2) of
+return case Array.get (frozen, 2) of
   #Some value => value
   #None => 0
 `;
@@ -224,7 +224,7 @@ let whole = Slice.claim [7, 8, 9]
 let restored = case Slice.split ((!whole), 1) of
   #Split (!left, !right, !rejoin) => rejoin_parts ((!rejoin), (!right), (!left))
   #SplitOutOfBounds !original => original
-export Slice.freeze (!restored)
+return Slice.freeze (!restored)
 `;
 
   const error = await assertRejects(
@@ -241,7 +241,7 @@ Deno.test("a wrapper freeze of a split part is caught at the call site", async (
 sig freeze_it = @region.type Int -> [Int]
 let freeze_it = fn !region => Slice.freeze (!region)
 let whole = Slice.claim [4, 5, 6]
-export case Slice.split ((!whole), 1) of
+return case Slice.split ((!whole), 1) of
   #Split (!left, !right, !rejoin) =>
     let frozen = freeze_it (!left)
     let restored = Slice.join ((!rejoin), (Slice.claim frozen), (!right))
@@ -262,7 +262,7 @@ let whole = Slice.claim [3, 1, 2]
 let restored = case Slice.split ((!whole), 1) of
   #Split (!left, !right, !rejoin) => Slice.join ((!rejoin), (!right), (!left))
   #SplitOutOfBounds !original => original
-export Slice.freeze (!restored)
+return Slice.freeze (!restored)
 `;
 
   const error = await assertRejects(
@@ -280,7 +280,7 @@ let length = fn !region =>
   let frozen = Slice.freeze (!region)
   let _ = Array.length (&frozen)
   return size
-export length
+return length
 `;
 
   const error = await assertRejects(

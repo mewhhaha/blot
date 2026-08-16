@@ -24,13 +24,6 @@
         }
       },
       {
-        "rule": "module_export",
-        "boundary": {
-          "kind": "terminated",
-          "terminal": "LAYOUT_NEWLINE"
-        }
-      },
-      {
         "rule": "operator_section",
         "boundary": {
           "kind": "terminated",

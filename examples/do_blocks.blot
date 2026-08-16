@@ -3,4 +3,4 @@ let value = do:
   let b = 2
   return a
 
-export value
+return value

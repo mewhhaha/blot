@@ -2,12 +2,12 @@ import { assert, assertEquals } from "@std/assert";
 import type { Expr } from "./ast.ts";
 import { parse } from "./parse.ts";
 
-Deno.test("a module exports one value and imports instantiate immediately", async () => {
+Deno.test("a module returns one value and imports instantiate immediately", async () => {
   const parsed = await parse(
     `module with capabilities
 let plain = import "./plain.blot"
 let configured = import "./configured.blot" with capabilities
-export { .plain = plain; .configured = configured; }
+return { .plain = plain; .configured = configured; }
 `,
   );
   assert(parsed.ok);
@@ -23,18 +23,22 @@ export { .plain = plain; .configured = configured; }
   assertEquals(importInput(configured.value), "var");
 });
 
-Deno.test("the module boundary requires export and permits an early return", async () => {
-  const missing = await parse("let value = 1\n");
-  assert(!missing.ok);
-  assertEquals(missing.diagnostics[0]?.code, "BLOT_MISSING_EXPORT");
+Deno.test("modules share return and unit fallthrough with do blocks", async () => {
+  const empty = await parse("");
+  assert(empty.ok);
+  assertEquals(empty.module.result.tag, "unit");
 
-  const returning = await parse("return 1\nexport 2\n");
+  const fallthrough = await parse("let value = 1\n");
+  assert(fallthrough.ok);
+  assertEquals(fallthrough.module.result.tag, "unit");
+
+  const returning = await parse("return 1\nlet unreachable = 2\n");
   assert(returning.ok);
   assertEquals(returning.module.result.tag, "case");
 });
 
 Deno.test("the exposed module-function import spelling is retired", async () => {
-  const parsed = await parse('export @import "./dependency.blot" ()\n');
+  const parsed = await parse('return @import "./dependency.blot" ()\n');
   assert(!parsed.ok);
   assertEquals(parsed.diagnostics[0]?.code, "BLOT_RETIRED_IMPORT");
 });

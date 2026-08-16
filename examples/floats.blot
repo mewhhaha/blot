@@ -127,7 +127,7 @@ let lossy_round_trip =
 // `F32x4` is the value that genuinely cannot cross. Publishing one is
 // `BLOT_VECTOR_AT_BOUNDARY`; extract a lane or select a vector first.
 
-export {
+return {
   .quarter = Float.truncate (Float.mul quarter 100.0);
   .sum = Float.truncate (Float.mul sum 100.0);
   .scaled = Float.truncate scaled;

@@ -92,18 +92,21 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
     };
     let table = FixityTable::new(&fixities);
     let context = LoweringContext::root(&table);
-    let statements = cst.field_list(root, "declarations")?;
-    let exported = cst
-        .field(root, "exported")?
-        .ok_or_else(|| "BLOT_MISSING_EXPORT: a module ends with `export value`".to_owned())?;
-    let exported = as_rule(exported)?;
-    require_rule(cst, exported, "module_export")?;
-    let mut result = lower_value(cst, required(cst, exported, "value")?, &context, &mut arena)?;
+    let mut statements = cst.field_list(root, "declarations")?;
+    let mut result = arena.expression(Expression::Unit { span });
+    let mut result_effects = ResultEffects::Pure;
+    if let Some(last) = statements.last().copied()
+        && let Some(terminal_return) = lower_terminal_return(cst, last, &context, &mut arena)?
+    {
+        result = terminal_return;
+        result_effects = ResultEffects::Ambient;
+        statements.pop();
+    }
     let (lowered_declarations, result_effects) = if statements_need_control(cst, &statements)? {
         let pure_result = arena.expression(Expression::Block {
             declarations: Vec::new(),
             result,
-            result_effects: ResultEffects::Pure,
+            result_effects,
             span: arena.expression_span(result),
         });
         result =
@@ -119,7 +122,7 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
                     .map_err(|error| format!("while lowering {name}: {error}"))?,
             );
         }
-        (lowered, ResultEffects::Pure)
+        (lowered, result_effects)
     };
     elaborate_handler_steps(&mut arena);
     Ok(Module {

@@ -15,4 +15,4 @@ const priced = fn amount =>
   let converted = Money.of amount
   return converted
 
-export priced 42
+return priced 42

@@ -19,4 +19,4 @@ let cancelling =
     ;
   }
 
-export @handle (Ask, work, cancelling)
+return @handle (Ask, work, cancelling)

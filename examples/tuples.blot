@@ -55,7 +55,7 @@ let rest = fn pair => case pair of
   (0, y) => y
   whole => difference whole
 
-export {
+return {
   .both = combine (Some 3, Some 4);
   .left = combine (Some 3, None);
   .right = combine (None, Some 4);

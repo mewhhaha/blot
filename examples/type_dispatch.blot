@@ -80,7 +80,7 @@ const count = counting Int
 // way — otherwise one helper in scope would sink the whole attempt.
 const ignoring = counting Str
 
-export {
+return {
   .text_length = text_length;
   .int_itself = int_itself;
   .added = add (20, 22);

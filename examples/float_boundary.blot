@@ -7,4 +7,4 @@ open import "blot:prelude"
 sig ratio = F64
 let ratio = Float.div 22.0 7.0
 
-export ratio
+return ratio

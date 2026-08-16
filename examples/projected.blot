@@ -35,7 +35,7 @@ point <-
   <- Console.write "projected"
   return { .x = 7; .y = 0; }
 
-export {
+return {
   .direct = get_x point;
   .forwarded = twice point;
   .destructured = first point;

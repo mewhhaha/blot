@@ -8,4 +8,4 @@ sig describe = Message -> Str
 let describe = fn m => case m of
   #Ready => "ready"
   #Progress n => "working"
-export describe
+return describe

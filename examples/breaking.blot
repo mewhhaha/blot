@@ -52,7 +52,7 @@ for ever:
 
   guard_total := guard_total + value
 
-export {
+return {
   .iterations = iterations;
   .completed = completed;
   .outer = outer;

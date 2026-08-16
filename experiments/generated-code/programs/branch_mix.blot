@@ -4,4 +4,4 @@ const Workloads = import "../workloads.blot"
 const Benchmark = @effect.host { .input = Unit -> Int; }
 
 input <- Benchmark.input ()
-export Workloads.branch_mix input
+return Workloads.branch_mix input

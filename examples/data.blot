@@ -46,7 +46,7 @@ let nested_match = fn value => case value of
   #Progress n => n
   _ => 0
 
-export {
+return {
   .point_fields = Point.fields;
   .constructed = Point.new { .x = 1; .y = 2; };
   .projected = moved.x;

@@ -15,7 +15,7 @@ const prelude = import "blot:prelude"
 // exports behind the `prelude` name.
 let explicit = prelude.Num.add 20 22
 
-export {
+return {
   .run = application.run;
   .scaled = application.scaled;
   .explicit = explicit;

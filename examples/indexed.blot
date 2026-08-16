@@ -39,7 +39,7 @@ let indexed_read_sum = 0
 for (index, _) in Iter.indexed values:
   indexed_read_sum := indexed_read_sum + @array.get values index
 
-export {
+return {
   .inside = at values 1;
   .past_end = at values 3;
   .negative = at values (0 - 1);

@@ -99,7 +99,7 @@ open import "blot:prelude"
 const Source = @effect.host { .value = Unit -> Int; };
 let get_x = fn v => v.x;
 n <- Source.value ();
-export get_x { .x = n; .y = 0; }
+return get_x { .x = n; .y = 0; }
 ```
 
 It compiled to `F2102: expected Shape0['a], received Shape2[I64, I64]` and now
@@ -630,8 +630,8 @@ diagnostics carry no expectation. Every syntax mistake reports
 `Unexpected token
 ";"`, including the omitted `else` on an expression `if` — the
 language's most emphatic rule. A missing comma between `case` arms reports
-`BLOT_BAD_BINDER`. A missing `;` after `let x = 1` reports `BLOT_MISSING_EXPORT`
-at 1:1 for an error on line 2, and the claim is false. Surfacing baba's
+`BLOT_BAD_BINDER`. A missing `;` after `let x = 1` reports a root parse error at
+1:1 for an error on line 2, and the claim is false. Surfacing Baba's
 admissible-token set at the failure state is the real fix and a baba question; a
 table of recovery patterns keyed on (failing rule, unexpected token) needs no
 baba change.

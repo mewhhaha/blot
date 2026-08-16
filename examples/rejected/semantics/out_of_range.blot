@@ -3,4 +3,4 @@
 open import "blot:prelude"
 
 const Digit = range (0, 9)
-export @satisfies 42 Digit
+return @satisfies 42 Digit

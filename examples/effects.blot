@@ -110,7 +110,7 @@ let nested =
 
 let asked = @handle (Terminal, ask, answering)
 
-export {
+return {
   .transcript = transcript;
   .writes = writes;
   .silenced = silenced;

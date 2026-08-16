@@ -11,4 +11,4 @@ open import "blot:prelude"
 let describe = fn option => case option of
   #Some n if n > 0 => "positive"
   #None => "none"
-export describe (#Some 1)
+return describe (#Some 1)

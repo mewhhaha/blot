@@ -10,7 +10,7 @@ const included = @include "./assets/greeting.txt" inspect
 const normal_json = @include "./assets/config.json" as_json
 const exact_json = @include "./assets/config.json" as_const_json
 
-export {
+return {
   .included = included;
   .normal_json = normal_json;
   .exact_json = exact_json;

@@ -4,4 +4,4 @@ sig reflected = Int -> 0
 let reflected = fn value => case @type.reflect value of
   #Shape payload => payload
   _ => 0
-export reflected
+return reflected

@@ -30,4 +30,4 @@ const report = fn () =>
   <- Console.write "linked"
   return 42
 
-export @handle (Console, report, to_host)
+return @handle (Console, report, to_host)

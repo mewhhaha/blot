@@ -58,7 +58,7 @@ let flipped = case 1 < 2 of
   #True => consume (!coin)
   #False => consume (!coin)
 
-export {
+return {
   .owned = owned;
   .borrowed = borrowed;
   .settled = settled;

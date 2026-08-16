@@ -10,4 +10,4 @@ const adding = fn T => case expect (
 
 const broken = adding Str
 
-export broken ("a", "b")
+return broken ("a", "b")

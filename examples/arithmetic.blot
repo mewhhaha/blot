@@ -17,7 +17,7 @@ let branch = case 3 < 4 of
   #True => "less"
   #False => "not less"
 
-export {
+return {
   .sum = sum;
   .nested = nested;
   .negated = negated;

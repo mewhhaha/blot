@@ -1168,7 +1168,7 @@ function resolveExit(scope: Scope, constructor: string): string | null {
  * What a four-lane vector says at the module boundary.
  *
  * It says the truth, which the boundary then refuses. The domain switches that
- * produce a boundary type ended in `export HostTypes.text`, so a domain none of
+ * produce a boundary type ended in `return HostTypes.text`, so a domain none of
  * them named was published as `Text` — a vector reached gpufuck claiming to be
  * a string, and the diagnostic was a type mismatch in the target rather than a
  * fact about the program.
@@ -1205,7 +1205,7 @@ function opaqueSchema(name: string): TypeSchema | null {
  * What a range says at the module boundary.
  *
  * One function rather than the four copies this used to be. Each copy ended in
- * `export HostTypes.text`, so every domain added since — `float32`, and the
+ * `return HostTypes.text`, so every domain added since — `float32`, and the
  * vector that was briefly a domain of its own — silently became `Text` in
  * whichever copies were missed, and the diagnostic arrived as a type mismatch
  * inside gpufuck rather than as a fact about the program. A `switch` the

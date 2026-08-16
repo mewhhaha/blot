@@ -15,4 +15,4 @@ let total = rec (fn list => case list of
 sig recursive_list = Int -> Int
 let recursive_list = fn count => total (build count)
 
-export { .recursive_list = recursive_list; }
+return { .recursive_list = recursive_list; }

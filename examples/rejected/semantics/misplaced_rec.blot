@@ -3,4 +3,4 @@
 
 open import "blot:prelude"
 
-export rec (fn n => n)
+return rec (fn n => n)

@@ -79,7 +79,7 @@ const visit_2 = fn (left, right, visit) =>
 
   return ()
 
-export {
+return {
   .Store = Store;
   .attach = attach;
   .at = at;

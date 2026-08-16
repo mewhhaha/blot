@@ -25,4 +25,4 @@ let arena_list = fn count =>
   let (nodes, head) = build (count, nodes, 0)
   return total ((&nodes), head, 0)
 
-export { .arena_list = arena_list; }
+return { .arena_list = arena_list; }

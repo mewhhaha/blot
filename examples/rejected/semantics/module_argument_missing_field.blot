@@ -7,4 +7,4 @@
 // variable in its place would satisfy every input, and this program would be
 // accepted and then read a field that is not there.
 
-export (import "./../../lib/score.blot" with { .base = 40; }).run
+return (import "./../../lib/score.blot" with { .base = 40; }).run

@@ -44,4 +44,4 @@ let scaled = fn () =>
   return result
 
 // Nested handlers discharge only what they replace.
-export @handle (Counter, counted, doubling) - @handle (Scale, scaled, stepping)
+return @handle (Counter, counted, doubling) - @handle (Scale, scaled, stepping)

@@ -25,7 +25,7 @@ let only_small = fn n => case n of
   1 => "one"
   _ => @panic "callers narrow to 0 | 1 before calling"
 
-export {
+return {
   .below = classify 0;
   .one = classify 1;
   .two = classify 2;

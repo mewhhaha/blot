@@ -25,4 +25,4 @@ let total_odd = rec (fn values => case values of
 sig mutual_recursive_values = Int -> Int
 let mutual_recursive_values = fn count => total_even (build_even count)
 
-export { .mutual_recursive_values = mutual_recursive_values; }
+return { .mutual_recursive_values = mutual_recursive_values; }

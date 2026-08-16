@@ -46,7 +46,7 @@ let handled =
 result <- handled
 discarded <- handled
 
-export {
+return {
   .named = result;
   .discarded = discarded;
 }

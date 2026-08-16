@@ -13,4 +13,4 @@ const mix_go =
 sig mix = Int -> Int
 const mix = fn count => mix_go (count, 1)
 
-export { .mix = mix; }
+return { .mix = mix; }

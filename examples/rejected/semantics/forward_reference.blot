@@ -13,4 +13,4 @@ open import "blot:prelude"
 let total = later + 1
 let later = 2
 
-export total
+return total

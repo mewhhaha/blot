@@ -36,7 +36,7 @@ produce:
 
 ```blot
 open import "blot:prelude"
-export iterate (Iter.range (1, 4), 1, fn (product, n) => product * n)
+return iterate (Iter.range (1, 4), 1, fn (product, n) => product * n)
 ```
 
 `blot check` says `⊥`; `blot eval` says `6`. `collect (Iter.range (0, 4))`

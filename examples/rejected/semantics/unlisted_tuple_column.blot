@@ -13,4 +13,4 @@ sig pick = (Int, Option Int) -> Int
 let pick = fn pair => case pair of
   (1, #Some a) => a
   (_, #None) => 0
-export pick (2, Some 1)
+return pick (2, Some 1)

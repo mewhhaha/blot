@@ -15,4 +15,4 @@ let tagging = fn r => { ...r; .tag = 1; }
 
 let tagged = tagging { .x = 1; }
 
-export tagged.x
+return tagged.x

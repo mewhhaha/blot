@@ -20,4 +20,4 @@ let defaulting = fn r => { .tag = 1; ...r; }
 
 let tagged = defaulting { .tag = "hi"; }
 
-export tagged.tag
+return tagged.tag

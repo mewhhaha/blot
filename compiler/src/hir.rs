@@ -5908,7 +5908,7 @@ pub fn elaborate(
     if !host_calls.is_empty() && runtime_export_count > 1 {
         return Err(Diagnostic::new(
             "BLOT_TARGET_REFUSAL",
-            "An effectful module top level cannot be replayed across multiple runtime exports; export one runtime value or move the effect into an exported function.",
+            "An effectful module top level cannot be replayed across multiple runtime fields; return one runtime value or move the effect into a returned function.",
             result_span,
         ));
     }

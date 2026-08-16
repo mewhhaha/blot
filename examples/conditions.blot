@@ -53,4 +53,4 @@ let size = fn n =>
   else:
     return large n
 
-export (name 1, name 3, ordinal 2, size 4, size 40)
+return (name 1, name 3, ordinal 2, size 4, size 40)

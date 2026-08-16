@@ -13,7 +13,7 @@ let recording =
     .return = fn _ => "none";
   }
 
-export {
+return {
   .first = @handle (
     Console,
     (fn () =>

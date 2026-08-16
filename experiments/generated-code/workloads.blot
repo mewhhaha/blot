@@ -75,7 +75,7 @@ const array_pipeline = fn input =>
   let [a, b, c, d, e, f, g, h] = values
   return a + b + c + d + e + f + g + h
 
-export {
+return {
   .scalar_mix = scalar_mix;
   .branch_mix = branch_mix;
   .function_chain = function_chain;

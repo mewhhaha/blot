@@ -11,4 +11,4 @@ const construct_go = rec (fn (remaining, values) =>
 sig construct = Int -> Int
 const construct = fn count => construct_go (count, @array.empty)
 
-export { .construct = construct; }
+return { .construct = construct; }

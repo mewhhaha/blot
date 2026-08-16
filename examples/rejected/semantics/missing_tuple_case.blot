@@ -15,4 +15,4 @@ let join = fn pair => case pair of
   (#Some a, #Some b) => a + b
   (#Some a, #None) => a
   (#None, #Some b) => b
-export join (None, None)
+return join (None, None)

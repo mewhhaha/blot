@@ -5,7 +5,7 @@ import { definitionAt } from "./definition.ts";
 Deno.test("definition lookup follows lexical shadowing", async () => {
   const source = `let value = 1
 let inner = fn value => value
-export (inner value, value)
+return (inner value, value)
 `;
   const parsed = await parse(source);
   if (!parsed.ok) throw new Error("definition fixture did not parse");
@@ -27,7 +27,7 @@ export (inner value, value)
 Deno.test("definition lookup sees every member of a recursive group", async () => {
   const source = `let even = rec (fn n => odd n)
 let odd = rec (fn n => even n)
-export even
+return even
 `;
   const parsed = await parse(source);
   if (!parsed.ok) throw new Error("definition fixture did not parse");

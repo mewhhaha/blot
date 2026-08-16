@@ -80,7 +80,7 @@ let thirds =
     (Vec4.splat (Float32.of_float (Float.div 1.0 3.0)))
   (Vec4.splat (lane 3)))
 
-export {
+return {
   .first = first;
   .last = last;
   .second_of_difference = Float32.truncate (Vec4.y difference);

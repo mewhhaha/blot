@@ -10,4 +10,4 @@ open import "blot:prelude"
 let sign = fn n => case n of
   m if m > 0 => "positive"
   m if m < 0 => "negative"
-export sign
+return sign

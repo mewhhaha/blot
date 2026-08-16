@@ -1,6 +1,6 @@
 // Capabilities.
 //
-// A module is an ordered computation from an input record to an export record.
+// A module is an ordered computation from an input record to a returned value.
 // Importing one grants it nothing. The entry module's input is the entire
 // authority the program has: there is no ambient filesystem, no ambient clock,
 // and no ambient print. `init.print` below is an opaque host function — the
@@ -43,7 +43,7 @@ const to_memory =
     .return = fn _ => "";
   }
 
-export {
+return {
   .printed = @handle (Console, report, to_host);
   .captured = @handle (Console, report, to_memory);
 }

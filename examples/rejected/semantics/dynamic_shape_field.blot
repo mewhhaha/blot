@@ -1,2 +1,2 @@
 let get = fn (shape, name) => @shape.get shape name
-export get ({ .a = 1; }, "a")
+return get ({ .a = 1; }, "a")

@@ -33,6 +33,7 @@ export async function lowerRuntimeHir(
     loaded.module,
     checked.values,
     imports,
+    checked.resultEffects,
     checked.shapes,
     checked.recordAdaptations,
   );
@@ -57,7 +58,7 @@ export async function lowerRuntimeHir(
     runtimeExports.length > 1
   ) {
     throw new CompilerTargetRefusal(
-      "an effectful module top level cannot be replayed across multiple runtime exports; export one runtime value or move the effect into an exported function",
+      "an effectful module top level cannot be replayed across multiple runtime fields; return one runtime value or move the effect into a returned function",
     );
   }
   hirByLoadedRevision.set(loaded, hir);

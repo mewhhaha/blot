@@ -74,29 +74,26 @@ export function lowerModule(root: Rule, source: string): Module {
     patternHead: false,
   };
 
-  const statements = fieldList(root, "declarations")
+  let statements = fieldList(root, "declarations")
     .map((cursor) => unwrap(cursor));
-  const exported = field(root, "exported");
-  if (exported === null) {
-    fail(
-      "BLOT_MISSING_EXPORT",
-      "A module ends with `export value`.",
-      root.span,
-    );
-  }
-  const resultRule = asRule(exported, "module_export");
-  let result = lowerValue(
-    asRule(field(resultRule, "value"), "value"),
-    context,
-  );
+  let result: Expr = { tag: "unit", span: root.span };
   let resultEffects: Module["resultEffects"] = "pure";
+  const last = statements.at(-1);
+  if (last !== undefined) {
+    const terminalReturn = lowerTerminalReturn(last, context);
+    if (terminalReturn !== null) {
+      result = terminalReturn;
+      resultEffects = "ambient";
+      statements = statements.slice(0, -1);
+    }
+  }
   let loweredDeclarations: readonly Decl[];
   if (statementsNeedControlLowering(statements)) {
     result = {
       tag: "block",
       declarations: [],
       result,
-      resultEffects: "pure",
+      resultEffects,
       span: result.span,
     };
     result = resolveControlSequence(statements, result, context, root.span);

@@ -2,4 +2,4 @@ open import "blot:prelude"
 
 let direct = @array.get
 
-export direct
+return direct

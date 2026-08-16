@@ -74,7 +74,7 @@ let colours = TextSet.union colours more_colours
 let colour_lengths = TextSet.map_with (colours, Ord.eq, Text.length)
 let incremented_lengths = increment_members (Set.with Ord.eq) colour_lengths
 
-export {
+return {
   .lengths = List.to_array lengths;
   .total_length = total_lengths List words;
   .long_words = List.to_array long_words;

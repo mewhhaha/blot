@@ -797,7 +797,7 @@ mod tests {
     #[test]
     fn binary_module_snapshot_restores_interface_and_value() {
         const MODULE_PATH: &str = "snapshot:library";
-        const MODULE_SOURCE: &str = "let increment = rec (fn value => @int.add value 1)\n\u{e000}export { .answer = increment 42; }\u{e000}\n";
+        const MODULE_SOURCE: &str = "let increment = rec (fn value => @int.add value 1)\n\u{e000}return { .answer = increment 42; }\u{e000}\n";
         let mut builder = CompilerSession::default();
         builder
             .add_source(MODULE_PATH.to_owned(), source(MODULE_SOURCE))
@@ -834,14 +834,14 @@ mod tests {
     fn comment_only_edit_preserves_resident_module() {
         let mut session = CompilerSession::default();
         session
-            .add_source("main.blot".to_owned(), source("export 1\u{e000}"))
+            .add_source("main.blot".to_owned(), source("return 1\u{e000}"))
             .expect("initial source should load");
         let initial = session.context.modules.borrow()["main.blot"].module.clone();
 
         session
             .add_source(
                 "main.blot".to_owned(),
-                source("export 1\u{e000} // changed"),
+                source("return 1\u{e000} // changed"),
             )
             .expect("edited source should load");
         let edited = session.context.modules.borrow()["main.blot"].module.clone();
@@ -853,7 +853,7 @@ mod tests {
     fn closed_program_and_artifact_follow_semantic_revision() {
         let mut session = CompilerSession::default();
         session
-            .add_source("main.blot".to_owned(), source("export 1\u{e000}"))
+            .add_source("main.blot".to_owned(), source("return 1\u{e000}"))
             .expect("initial source should load");
         session
             .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
@@ -875,25 +875,25 @@ mod tests {
         session
             .add_source(
                 "main.blot".to_owned(),
-                source("export 1\u{e000} // changed"),
+                source("return 1\u{e000} // changed"),
             )
             .expect("comment edit should load");
         assert_eq!(session.closed_programs.borrow().len(), 1);
 
         session
-            .add_source("main.blot".to_owned(), source("export 2\u{e000}"))
+            .add_source("main.blot".to_owned(), source("return 2\u{e000}"))
             .expect("semantic edit should load");
         assert!(session.closed_programs.borrow().is_empty());
     }
 
     #[test]
-    fn effectful_top_level_is_not_replayed_for_multiple_exports() {
+    fn effectful_top_level_is_not_replayed_for_multiple_runtime_fields() {
         let mut session = CompilerSession::default();
         session
             .add_source(
                 "main.blot".to_owned(),
                 source(
-                    "module with init\n\nvalue <- init.read ()\nexport { .first = value; .second = value; }\n",
+                    "module with init\n\nvalue <- init.read ()\nreturn { .first = value; .second = value; }\n",
                 ),
             )
             .expect("source should load");
@@ -918,7 +918,7 @@ mod tests {
         session
             .add_source(
                 path.to_owned(),
-                source("const answer = 42\u{e000}export answer\u{e000}"),
+                source("const answer = 42\u{e000}return answer\u{e000}"),
             )
             .expect("initial source should load");
         session
@@ -930,7 +930,7 @@ mod tests {
         session
             .add_source(
                 path.to_owned(),
-                source("const answer = 42\u{e000}let unused = answer\u{e000}export answer\u{e000}"),
+                source("const answer = 42\u{e000}let unused = answer\u{e000}return answer\u{e000}"),
             )
             .expect("appended declaration should load");
         assert_eq!(session.context.evaluated_bindings.borrow()[path].len(), 1);
@@ -940,7 +940,7 @@ mod tests {
         session
             .add_source(
                 path.to_owned(),
-                source("const answer = 43\u{e000}let unused = answer\u{e000}export answer\u{e000}"),
+                source("const answer = 43\u{e000}let unused = answer\u{e000}return answer\u{e000}"),
             )
             .expect("changed prefix should load");
         assert!(
@@ -958,7 +958,7 @@ mod tests {
         let root_path = "main.blot";
         let mut session = CompilerSession::default();
         session
-            .add_source(dependency_path.to_owned(), source("export 1\u{e000}"))
+            .add_source(dependency_path.to_owned(), source("return 1\u{e000}"))
             .expect("dependency source should load");
         session
             .configure_module(dependency_path, BTreeMap::new(), BTreeMap::new())
@@ -966,7 +966,7 @@ mod tests {
         session
             .add_source(
                 root_path.to_owned(),
-                source("const dependency = import \"dep\"\u{e000}export dependency\u{e000}"),
+                source("const dependency = import \"dep\"\u{e000}return dependency\u{e000}"),
             )
             .expect("root source should load");
         session
@@ -986,7 +986,7 @@ mod tests {
         );
 
         session
-            .add_source(dependency_path.to_owned(), source("export 2\u{e000}"))
+            .add_source(dependency_path.to_owned(), source("return 2\u{e000}"))
             .expect("changed dependency should load");
         assert!(
             !session
@@ -1004,7 +1004,7 @@ mod tests {
         session
             .add_source(
                 path.to_owned(),
-                source("const answer = 42\u{e000}export missing\u{e000}"),
+                source("const answer = 42\u{e000}return missing\u{e000}"),
             )
             .expect("rejected source should load");
         session
@@ -1093,15 +1093,15 @@ mod tests {
         assert_eq!(dependencies.includes, ["shader.wgsl"]);
     }
 
-    const DIRECT_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}sig pick = @type.int -> { .x = @type.int; } -> @type.int\n\u{e000}let pick = fn flag =>\n  \u{e000}\u{e001}return case positive flag of\n    \u{e000}\u{e001}#True => fn record => @int.add record.x flag\n    \u{e000}#False => fn record => @int.sub record.x flag\n\n\u{e000}\u{e002}\u{e000}\u{e002}\u{e000}export { .pick = pick; }\u{e000}\n";
+    const DIRECT_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}sig pick = @type.int -> { .x = @type.int; } -> @type.int\n\u{e000}let pick = fn flag =>\n  \u{e000}\u{e001}return case positive flag of\n    \u{e000}\u{e001}#True => fn record => @int.add record.x flag\n    \u{e000}#False => fn record => @int.sub record.x flag\n\n\u{e000}\u{e002}\u{e000}\u{e002}\u{e000}return { .pick = pick; }\u{e000}\n";
 
-    const SHARED_BODY_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const bump = fn step => fn value => @int.add value step\n\n\u{e000}sig run = @type.int -> @type.int\n\u{e000}let run = fn flag =>\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => bump 1\n    \u{e000}#False => bump 2\n  \u{e000}\u{e002}\u{e000}return selected flag\n\n\u{e000}\u{e002}\u{e000}export { .run = run; }\u{e000}\n";
+    const SHARED_BODY_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const bump = fn step => fn value => @int.add value step\n\n\u{e000}sig run = @type.int -> @type.int\n\u{e000}let run = fn flag =>\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => bump 1\n    \u{e000}#False => bump 2\n  \u{e000}\u{e002}\u{e000}return selected flag\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
 
-    const PRIMITIVE_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}sig run = @type.int -> @type.int\n\u{e000}let run = fn flag =>\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => @int.add flag\n    \u{e000}#False => @int.sub flag\n  \u{e000}\u{e002}\u{e000}let first = selected 10\n  \u{e000}let second = selected 20\n  \u{e000}return @int.add first second\n\n\u{e000}\u{e002}\u{e000}export { .run = run; }\u{e000}\n";
+    const PRIMITIVE_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}sig run = @type.int -> @type.int\n\u{e000}let run = fn flag =>\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => @int.add flag\n    \u{e000}#False => @int.sub flag\n  \u{e000}\u{e002}\u{e000}let first = selected 10\n  \u{e000}let second = selected 20\n  \u{e000}return @int.add first second\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
 
-    const EXPORTED_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}sig hold = @type.int -> { .apply = { .x = @type.int; } -> @type.int; }\n\u{e000}let hold = fn flag =>\n  \u{e000}\u{e001}let chosen = case positive flag of\n    \u{e000}\u{e001}#True => fn record => @int.add record.x flag\n    \u{e000}#False => fn record => @int.sub record.x flag\n  \u{e000}\u{e002}\u{e000}return { .apply = chosen; }\n\n\u{e000}\u{e002}\u{e000}export { .hold = hold; }\u{e000}\n";
+    const EXPORTED_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}sig hold = @type.int -> { .apply = { .x = @type.int; } -> @type.int; }\n\u{e000}let hold = fn flag =>\n  \u{e000}\u{e001}let chosen = case positive flag of\n    \u{e000}\u{e001}#True => fn record => @int.add record.x flag\n    \u{e000}#False => fn record => @int.sub record.x flag\n  \u{e000}\u{e002}\u{e000}return { .apply = chosen; }\n\n\u{e000}\u{e002}\u{e000}return { .hold = hold; }\u{e000}\n";
 
-    const INCOMPATIBLE_CAPTURES: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}sig run = @type.int -> @type.int\n\u{e000}let run = fn flag =>\n  \u{e000}\u{e001}let ratio = @float.of_int flag\n  \u{e000}let selected = case positive flag of\n    \u{e000}\u{e001}#True => fn n => @int.add n flag\n    \u{e000}#False => do:\n      \u{e000}\u{e001}let scaled = @float.mul ratio 2.0\n      \u{e000}return fn n => @int.add n (@int.of_float scaled)\n  \u{e000}\u{e002}\u{e000}\u{e002}\u{e000}let first = selected 10\n  \u{e000}let second = selected 20\n  \u{e000}return @int.add first second\n\n\u{e000}\u{e002}\u{e000}export { .run = run; }\u{e000}\n";
+    const INCOMPATIBLE_CAPTURES: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}sig run = @type.int -> @type.int\n\u{e000}let run = fn flag =>\n  \u{e000}\u{e001}let ratio = @float.of_int flag\n  \u{e000}let selected = case positive flag of\n    \u{e000}\u{e001}#True => fn n => @int.add n flag\n    \u{e000}#False => do:\n      \u{e000}\u{e001}let scaled = @float.mul ratio 2.0\n      \u{e000}return fn n => @int.add n (@int.of_float scaled)\n  \u{e000}\u{e002}\u{e000}\u{e002}\u{e000}let first = selected 10\n  \u{e000}let second = selected 20\n  \u{e000}return @int.add first second\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
 
     #[test]
     fn a_dynamic_function_choice_becomes_a_private_tagged_table() {
@@ -1225,10 +1225,10 @@ mod tests {
 
     /// A tail call is not a transfer. This body hands the recursion a value it
     /// computed by spending the capture, so the next entry spends it again.
-    const SPENDS_EACH_ITERATION: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const consume = fn !value => @int.add value 1\n\u{e000}let !token = 41\n\u{e000}let go =\n  \u{e000}\u{e001}rec (fn (n, carried) => case positive n of\n    \u{e000}\u{e001}#True => go (@int.sub n 1, @int.add carried (consume (!token)))\n    \u{e000}#False => carried\n  \u{e000}\u{e002})\n\u{e000}\u{e002}\u{e000}export go (3, 0)\u{e000}\n";
+    const SPENDS_EACH_ITERATION: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const consume = fn !value => @int.add value 1\n\u{e000}let !token = 41\n\u{e000}let go =\n  \u{e000}\u{e001}rec (fn (n, carried) => case positive n of\n    \u{e000}\u{e001}#True => go (@int.sub n 1, @int.add carried (consume (!token)))\n    \u{e000}#False => carried\n  \u{e000}\u{e002})\n\u{e000}\u{e002}\u{e000}return go (3, 0)\u{e000}\n";
 
     /// The same recursion spending the capture only where it stops.
-    const SPENDS_WHERE_IT_ENDS: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const consume = fn !value => @int.add value 1\n\u{e000}let !token = 41\n\u{e000}let go =\n  \u{e000}\u{e001}rec (fn (n, carried) => case positive n of\n    \u{e000}\u{e001}#True => go (@int.sub n 1, carried)\n    \u{e000}#False => @int.add carried (consume (!token))\n  \u{e000}\u{e002})\n\u{e000}\u{e002}\u{e000}export go (3, 0)\u{e000}\n";
+    const SPENDS_WHERE_IT_ENDS: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const consume = fn !value => @int.add value 1\n\u{e000}let !token = 41\n\u{e000}let go =\n  \u{e000}\u{e001}rec (fn (n, carried) => case positive n of\n    \u{e000}\u{e001}#True => go (@int.sub n 1, carried)\n    \u{e000}#False => @int.add carried (consume (!token))\n  \u{e000}\u{e002})\n\u{e000}\u{e002}\u{e000}return go (3, 0)\u{e000}\n";
 
     #[test]
     fn a_capture_spent_on_a_recursing_path_is_refused() {

@@ -15,4 +15,4 @@ open import "blot:prelude"
 
 let nothing = Float.div 0.0 0.0
 
-export is_less (Float.cmp nothing 1.0)
+return is_less (Float.cmp nothing 1.0)

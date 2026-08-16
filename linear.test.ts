@@ -51,7 +51,7 @@ accepts(
   "a linear value consumed once is accepted",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-export consume (!token)
+return consume (!token)
 `,
 );
 
@@ -59,7 +59,7 @@ rejects(
   "spending a linear value twice is rejected",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-export @int.add (consume (!token)) (consume (!token))
+return @int.add (consume (!token)) (consume (!token))
 `,
   "BLOT_LINEAR_CONSUMED_TWICE",
 );
@@ -67,7 +67,7 @@ export @int.add (consume (!token)) (consume (!token))
 accepts(
   "an unused linear definition is discarded",
   `let !handle = 41
-export 0
+return 0
 `,
 );
 
@@ -75,7 +75,7 @@ accepts(
   "branches that both consume agree",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-export case 1 < 2 of
+return case 1 < 2 of
   #True => consume (!token)
   #False => consume (!token)
 `,
@@ -85,7 +85,7 @@ Deno.test("ownership certificates publish every branch consumption", async () =>
   const { checked, path } = await analyze(
     `let consume = fn !value => @int.add value 1
 let !token = 41
-export case 1 < 2 of
+return case 1 < 2 of
   #True => consume (!token)
   #False => consume (!token)
 `,
@@ -102,7 +102,7 @@ rejects(
   "branches that disagree about consuming are rejected",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-export case 1 < 2 of
+return case 1 < 2 of
   #True => consume (!token)
   #False => 0
 `,
@@ -117,7 +117,7 @@ accepts(
   `let consume = fn !value => @int.add value 1
 let !token = 41
 let go = fn () => consume (!token)
-export go ()
+return go ()
 `,
 );
 
@@ -126,7 +126,7 @@ rejects(
   `let consume = fn !value => @int.add value 1
 let !token = 41
 let go = fn () => consume (!token)
-export @int.add (go ()) (go ())
+return @int.add (go ()) (go ())
 `,
   "BLOT_LINEAR_CONSUMED_TWICE",
 );
@@ -136,7 +136,7 @@ accepts(
   `let consume = fn !value => @int.add value 1
 let !token = 41
 let go = fn () => consume (!token)
-export 0
+return 0
 `,
 );
 
@@ -145,7 +145,7 @@ rejects(
   `let consume = fn !value => @int.add value 1
 let !token = 41
 let go = fn () => @int.add (consume (!token)) (consume (!token))
-export go ()
+return go ()
 `,
   "BLOT_LINEAR_CONSUMED_TWICE",
 );
@@ -154,7 +154,7 @@ rejects(
   "an owned aggregate cannot escape the module boundary",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-export { .go = fn () => consume (!token); }
+return { .go = fn () => consume (!token); }
 `,
   "BLOT_LINEAR_RESULT_ESCAPES",
 );
@@ -165,7 +165,7 @@ accepts(
 let !token = 41
 let holder = { .go = fn () => consume (!token); }
 let { .go; } = holder
-export go ()
+return go ()
 `,
 );
 
@@ -174,7 +174,7 @@ accepts(
   `let consume = fn !value => @int.add value 1
 let !token = 41
 let holder = #Held (fn () => consume (!token))
-export case holder of
+return case holder of
   #Held go => go ()
 `,
 );
@@ -189,7 +189,7 @@ let holder = {
   .second = fn () => consume (!right);
   }
 let first = holder.first ()
-export @int.add first (holder.second ())
+return @int.add first (holder.second ())
 `,
 );
 
@@ -207,7 +207,7 @@ let consume_holder = fn !value =>
   let { .first; .second; } = !value
   let _ = first ()
   return second ()
-export @int.add first (consume_holder holder)
+return @int.add first (consume_holder holder)
 `,
   "BLOT_LINEAR_PARTIAL_REUSE",
 );
@@ -218,7 +218,7 @@ rejects(
 let twice = fn f => @int.add (f ()) (f ())
 let !token = 41
 let go = fn () => consume (!token)
-export twice go
+return twice go
 `,
   "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
 );
@@ -228,7 +228,7 @@ rejects(
   `let consume = fn !value => @int.add value 1
 let ignore = fn value => 0
 let !token = 41
-export ignore (!token)
+return ignore (!token)
 `,
   "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
 );
@@ -237,7 +237,7 @@ rejects(
   "a runtime shadow cannot impersonate a consuming numeric operation",
   `let Num = { .add = fn value => fn _ => 0; }
 let !token = 41
-export Num.add (!token) 1
+return Num.add (!token) 1
 `,
   "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
 );
@@ -248,14 +248,14 @@ accepts(
 let once = fn !f => f ()
 let !token = 41
 let go = fn () => consume (!token)
-export once go
+return once go
 `,
 );
 
 accepts(
   "a linear identity returns only the obligation supplied by its caller",
   `let identity = fn !value => value
-export identity 1
+return identity 1
 `,
 );
 
@@ -265,7 +265,7 @@ accepts(
 let identity = fn !value => value
 let !token = 41
 let returned = identity (!token)
-export consume (!returned)
+return consume (!returned)
 `,
 );
 
@@ -275,7 +275,7 @@ accepts(
 let identity = fn value => value
 let !token = 41
 let returned = identity (!token)
-export consume (!returned)
+return consume (!returned)
 `,
 );
 
@@ -286,7 +286,7 @@ let identity = fn value => value
 let forward = fn value => identity value
 let !token = 41
 let returned = forward (!token)
-export consume (!returned)
+return consume (!returned)
 `,
 );
 
@@ -297,7 +297,7 @@ let select = fn holder => holder.value
 let !token = 41
 let holder = { .value = fn () => consume (!token); .label = 0; }
 let selected = select holder
-export selected ()
+return selected ()
 `,
 );
 
@@ -312,7 +312,7 @@ let holder = {
   .other = fn () => consume (!right);
   }
 let selected = select holder
-export selected ()
+return selected ()
 `,
   "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
 );
@@ -326,7 +326,7 @@ let select = fn holder =>
 let !token = 41
 let holder = { .value = fn () => consume (!token); .label = 0; }
 let selected = select holder
-export selected ()
+return selected ()
 `,
 );
 
@@ -346,7 +346,7 @@ let select = fn holder => holder${path}
 let !token = 41
 let holder = ${holder}
 let selected = select holder
-export selected ()
+return selected ()
 `,
     );
     assert(verifyOwnershipCertificate(checked.ownershipCertificate) !== null);
@@ -374,7 +374,7 @@ let !selected_token = 40
 let !other_token = 41
 let holder = ${holder}
 let selected = select holder
-export selected ()
+return selected ()
 `,
       );
     } catch (error) {
@@ -392,7 +392,7 @@ accepts(
 let first = fn (!value, _) => value
 let !token = 41
 let returned = first ((!token), 0)
-export consume (!returned)
+return consume (!returned)
 `,
 );
 
@@ -400,7 +400,7 @@ rejects(
   "an ordinary component in a destructured parameter rejects ownership",
   `let ignore = fn (value, result) => result
 let !token = 41
-export ignore ((!token), 0)
+return ignore ((!token), 0)
 `,
   "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
 );
@@ -412,7 +412,7 @@ let defer = fn !value => fn () => value
 let !token = 41
 let later = defer (!token)
 let returned = later ()
-export consume (!returned)
+return consume (!returned)
 `,
 );
 
@@ -420,7 +420,7 @@ accepts(
   "a returned closure does not invent ownership for an ordinary argument",
   `let defer = fn !value => fn () => value
 let later = defer 41
-export later ()
+return later ()
 `,
 );
 
@@ -432,7 +432,7 @@ let holder = case 1 < 2 of
   #True => { .go = fn () => consume (!token); .value = 1; }
   #False => { .go = fn () => consume (!token); .value = 2; }
 let { .go; .value; } = holder
-export value
+return value
 `,
   "BLOT_LINEAR_NOT_CONSUMED",
 );
@@ -443,7 +443,7 @@ rejects(
 let chosen = case 1 < 2 of
   #True => fn () => token
   #False => fn () => token
-export chosen ()
+return chosen ()
 `,
   "BLOT_LINEAR_RESULT_ESCAPES",
 );
@@ -458,7 +458,7 @@ let holder = {
   .second = fn () => consume (!right);
   }
 let { .first; } = holder
-export first ()
+return first ()
 `,
   "BLOT_LINEAR_PATTERN_DISCARDS",
 );
@@ -469,7 +469,7 @@ rejects(
 let !token = 41
 let values = @array.push [1] (fn () => consume (!token))
 let [first, go] = values
-export first
+return first
 `,
   "BLOT_LINEAR_NOT_CONSUMED",
 );
@@ -481,7 +481,7 @@ let !token = 41
 let initial = [1]
 let values = [...initial, fn () => consume (!token)]
 let [first, go] = values
-export first
+return first
 `,
   "BLOT_LINEAR_ARRAY_SPREAD",
 );
@@ -492,7 +492,7 @@ accepts(
 let !left = 40
 let !right = 41
 let values = [fn () => consume (!left), fn () => consume (!right)]
-export case @array.take values 1 of
+return case @array.take values 1 of
   #Taken (selected, remainder) => case remainder of
     [other] => @int.add (selected ()) (other ())
 
@@ -509,7 +509,7 @@ let values = [fn () => consume (!token)]
 let index = case 1 < 2 of
   #True => 0
   #False => 1
-export case @array.take values index of
+return case @array.take values index of
   #Taken (selected, remainder) =>
     return case remainder of
       _ => selected ()
@@ -527,7 +527,7 @@ let values = [fn () => consume (!token)]
 let index = case 1 < 2 of
   #True => 0
   #False => 1
-export case @array.split values index of
+return case @array.split values index of
   #Split (before, selected, after) =>
     return case before of
       _ => case after of
@@ -544,7 +544,7 @@ let values = [fn () => consume (!token)]
 let index = case 1 < 2 of
   #True => 0
   #False => 1
-export case @array.split values index of
+return case @array.split values index of
   #Split (before, selected, after) =>
     return case before of
       _ => case after of
@@ -587,7 +587,7 @@ rejects(
 let !token = 41
 let source = { .go = fn () => consume (!token); }
 let moved = { ...source; .value = 1; }
-export moved.value
+return moved.value
 `,
   "BLOT_LINEAR_SHAPE_SPREAD",
 );
@@ -595,7 +595,7 @@ export moved.value
 accepts(
   "a wildcard pattern consumes the whole linear value it matches",
   `let !token = 41
-export case token of
+return case token of
   _ => 0
 `,
 );
@@ -603,7 +603,7 @@ export case token of
 accepts(
   "a wildcard pattern may discard an affine value",
   `let ?token = 41
-export case token of
+return case token of
   _ => 0
 `,
 );
@@ -612,7 +612,7 @@ export case token of
 accepts(
   "a borrowed parameter may be projected",
   `let peek = fn &p => @int.add p.x p.y
-export peek { .x = 1; .y = 2; }
+return peek { .x = 1; .y = 2; }
 `,
 );
 
@@ -622,14 +622,14 @@ accepts(
 let consume_point = fn !value => case value of
   { .x; } => x
 let !point = { .x = 40; }
-export @int.add (peek ((&point), 1)) (consume_point (!point))
+return @int.add (peek ((&point), 1)) (consume_point (!point))
 `,
 );
 
 rejects(
   "a borrowed parameter may not be moved",
   `let steal = fn &p => p
-export steal { .x = 1; }
+return steal { .x = 1; }
 `,
   "BLOT_BORROW_MOVED",
 );
@@ -639,7 +639,7 @@ rejects(
   `let consume = fn !value => @int.add value 1
 let !token = 41
 let view = &token
-export { .view = view; .consumed = consume (!token); }
+return { .view = view; .consumed = consume (!token); }
 `,
   "BLOT_BORROW_STORED",
 );
@@ -650,7 +650,7 @@ rejects(
 let !token = 41
 let view = 0
 view := &token
-export @int.add view (consume (!token))
+return @int.add view (consume (!token))
 `,
   "BLOT_BORROW_STORED",
 );
@@ -658,7 +658,7 @@ export @int.add view (consume (!token))
 rejects(
   "a borrowing function cannot return a projected view",
   `let leak = fn &point => point.x
-export leak { .x = 41; }
+return leak { .x = 41; }
 `,
   "BLOT_BORROW_RESULT_ESCAPES",
 );
@@ -668,7 +668,7 @@ rejects(
   `let consume = fn !value => @int.add value 1
 let ignore = fn value => 0
 let !token = 41
-export @int.add (ignore (&token)) (consume (!token))
+return @int.add (ignore (&token)) (consume (!token))
 `,
   "BLOT_BORROW_ARGUMENT_ESCAPES",
 );
@@ -679,7 +679,7 @@ rejects(
 sig send = Int -> Unit ~ { Sink }
 let send = fn &value =>
   _ <- Sink.write (&value)
-export send
+return send
 `,
   "BLOT_BORROW_ARGUMENT_ESCAPES",
 );
@@ -690,7 +690,7 @@ rejects(
 let !token = 41
 let result = case #View (&token) of
   #View view => @int.add view 1
-export @int.add result (consume (!token))
+return @int.add result (consume (!token))
 `,
   "BLOT_BORROW_STORED",
 );
@@ -700,7 +700,7 @@ rejects(
   `let inspect = fn &point =>
   let later = fn () => @int.add point.x 0
   return later ()
-export inspect { .x = 41; }
+return inspect { .x = 41; }
 `,
   "BLOT_BORROW_STORED",
 );
@@ -708,7 +708,7 @@ export inspect { .x = 41; }
 accepts(
   "an immediately called closure may inspect a borrow",
   `let inspect = fn &point => (fn () => @int.add point.x 0) ()
-export inspect { .x = 41; }
+return inspect { .x = 41; }
 `,
 );
 
@@ -718,21 +718,21 @@ export inspect { .x = 41; }
 accepts(
   "an affine value spent once is accepted",
   `let once = fn ?r => r 1
-export once (fn x => x)
+return once (fn x => x)
 `,
 );
 
 accepts(
   "an affine value never spent is accepted, unlike a linear one",
   `let never = fn ?r => 0
-export never (fn x => x)
+return never (fn x => x)
 `,
 );
 
 rejects(
   "spending an affine value twice is rejected",
   `let twice = fn ?r => @int.add (r 1) (r 2)
-export twice (fn x => x)
+return twice (fn x => x)
 `,
   "BLOT_LINEAR_CONSUMED_TWICE",
 );
@@ -742,7 +742,7 @@ accepts(
   `let some = fn ?r => case 1 < 2 of
   #True => r 1
   #False => 0
-export some (fn x => x)
+return some (fn x => x)
 `,
 );
 
@@ -755,7 +755,7 @@ let work = fn () =>
   _ <- Ask.ask ()
   return consume (!token)
 let aborting = { .ask = fn (_, ?resume) => 0; }
-export @handle (Ask, work, aborting)
+return @handle (Ask, work, aborting)
 `,
   "BLOT_LINEAR_HANDLER_MAY_ABORT",
 );
@@ -769,7 +769,7 @@ let work = fn () =>
   _ <- Ask.ask ()
   return consume (!token)
 let resuming = { .ask = fn (_, !resume) => resume (); }
-export @handle (Ask, work, resuming)
+return @handle (Ask, work, resuming)
 `,
 );
 
@@ -785,7 +785,7 @@ let cancelling = { .ask = fn (_, !resume) =>
   _ <- Continuation.cancel resume
   return 0
 ; }
-export @handle (Ask, work, cancelling)
+return @handle (Ask, work, cancelling)
 `,
 );
 
@@ -798,7 +798,7 @@ let cancelling = { .ask = fn (_, !resume) =>
   _ <- Continuation.cancel resume
   _ <- Continuation.cancel resume
 ; }
-export @handle (Ask, work, cancelling)
+return @handle (Ask, work, cancelling)
 `,
   "BLOT_LINEAR_CONSUMED_TWICE",
 );
@@ -806,7 +806,7 @@ export @handle (Ask, work, cancelling)
 rejects(
   "cancellation rejects an ordinary function",
   `let ordinary = fn value => value
-export do:
+return do:
   _ <- Continuation.cancel ordinary
 `,
   "BLOT_CANCEL_NOT_CONTINUATION",
@@ -821,7 +821,7 @@ let cancelling = { .ask = fn (_, !resume) =>
   let cancelled = Continuation.cancel resume
   return cancelled
 ; }
-export @handle (Ask, work, cancelling)
+return @handle (Ask, work, cancelling)
 `,
   "BLOT_UNSEQUENCED_EFFECT",
 );
@@ -839,7 +839,7 @@ accepts(
 let !token = 41
 let start = rec (fn n => hold n)
 let hold = rec (fn n => consume (!token))
-export start 1
+return start 1
 `,
 );
 
@@ -849,7 +849,7 @@ rejects(
 let !token = 41
 let user = rec (fn n => @int.add (hold n) (hold n))
 let hold = rec (fn n => consume (!token))
-export user 1
+return user 1
 `,
   "BLOT_LINEAR_CONSUMED_TWICE",
 );
@@ -863,7 +863,7 @@ rejects(
 let !token = 41
 let start = rec (fn n => hold n)
 let hold = rec (fn n => consume (!token))
-export @int.add (start 1) (hold 2)
+return @int.add (start 1) (hold 2)
 `,
   "BLOT_LINEAR_CONSUMED_TWICE",
 );
@@ -879,7 +879,7 @@ let go = rec (fn n => case n < 1 of
   #True => consume (!token)
   #False => go (@int.sub n 1)
 )
-export go 3
+return go 3
 `,
 );
 
@@ -892,7 +892,7 @@ let even = rec (fn n => case n < 1 of
   #False => odd (@int.sub n 1)
 )
 let odd = rec (fn n => even (@int.sub n 1))
-export even 4
+return even 4
 `,
 );
 
@@ -904,7 +904,7 @@ let go = rec (fn n => case n < 1 of
   #True => consume (!token)
   #False => @int.add (go (@int.sub n 1)) 0
 )
-export go 3
+return go 3
 `,
   "BLOT_RECURSIVE_OWNERSHIP_UNPROVED",
 );
@@ -922,7 +922,7 @@ let odd = rec (fn n => case n < 1 of
   #True => 0
   #False => even (@int.sub n 1)
 )
-export @int.add (even 4) (odd 3)
+return @int.add (even 4) (odd 3)
 `,
   );
   const members = own.filter(([pattern]) =>
@@ -943,7 +943,7 @@ Deno.test("every linear binding proved spent is recorded", async () => {
   const { own } = await analyze(
     `let consume = fn !value => @int.add value 1
 let !token = 41
-export consume (!token)
+return consume (!token)
 `,
   );
   const spent = own
@@ -956,7 +956,7 @@ Deno.test("the last use of each binding is recorded", async () => {
   const { own } = await analyze(
     `let a = 1
 let b = @int.add a 2
-export @int.add b 3
+return @int.add b 3
 `,
   );
   const read = own
@@ -974,7 +974,7 @@ Deno.test("two bindings sharing a name keep separate facts", async () => {
   const { own } = await analyze(
     `let x = 1
 let f = fn x => @int.add x 1
-export @int.add x (f 2)
+return @int.add x (f 2)
 `,
   );
   const read = own
@@ -998,7 +998,7 @@ let peek = rec (fn n => case Array.get ((&cells), n) of
 )
 let write = rec (fn n => @array.set cells 0 n)
 let [first, _, _] = write 1
-export @int.add first (peek 0)
+return @int.add first (peek 0)
 `,
   );
   const cells = own.find(([pattern]) => pattern.name === "cells");
@@ -1019,7 +1019,7 @@ let start = rec (fn n => case Array.get (bump n, 0) of
   #None => 0
 )
 let bump = rec (fn n => @array.set cells 0 n)
-export start 4
+return start 4
 `,
   );
   const cells = own.find(([pattern]) => pattern.name === "cells");
@@ -1034,7 +1034,7 @@ export start 4
 // emits. Every fixture opens the prelude, so the prelude is the evidence.
 Deno.test("ownership facts cover every module that contributed code", async () => {
   const { checked, path } = await analyze(`let a = 1
-export a
+return a
 `);
   const paths = new Set(
     [...checked.ownership.values()].map((fact) => fact.path),

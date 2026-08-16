@@ -90,6 +90,8 @@ export interface CheckResult {
   readonly module: Loaded["module"];
   readonly type: string;
   readonly effects: string;
+  /** Settled effects of the returned tail alone. */
+  readonly resultEffects: string;
   /** Inferred module result retained for specialization and boundary lowering. */
   readonly moduleType: SimpleType;
   /** Inferred module row retained for the emitted ABI manifest. */
@@ -431,14 +433,20 @@ function assemble(
     ...below.map((dependency) => dependency.opens),
     checked.opens,
   ]);
+  let coreModule = loaded.module;
+  const resultEffects = showRow(checked.resultEffects);
+  if (coreModule.resultEffects === "ambient" && resultEffects === "") {
+    coreModule = { ...coreModule, resultEffects: "pure" };
+  }
   const result: CheckResult = {
     module: loaded.module,
     type: show(checked.type),
     effects: file.effects,
+    resultEffects,
     moduleType: checked.type,
     moduleEffects: checked.effects,
     core: elaborateModule(
-      loaded.module,
+      coreModule,
       expressionTypes,
       checked.type,
       comptimeValues,

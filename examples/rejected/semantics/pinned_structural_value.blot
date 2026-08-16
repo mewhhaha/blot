@@ -2,6 +2,6 @@ open import "blot:prelude"
 
 let wanted = [1]
 
-export case [1] of
+return case [1] of
   ^wanted => "same"
   _ => "different"

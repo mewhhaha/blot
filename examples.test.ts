@@ -33,7 +33,6 @@ const REJECTIONS: Record<
 > = {
   "does_not_satisfy": { code: "BLOT_DOES_NOT_SATISFY", stage: "check" },
   "misplaced_rec": { code: "BLOT_MISPLACED_REC", stage: "run" },
-  "missing_export": { code: "BLOT_MISSING_EXPORT", stage: "check" },
   "out_of_range": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "resume_twice": {
     code: "BLOT_HANDLER_RESUME_NOT_AFFINE",

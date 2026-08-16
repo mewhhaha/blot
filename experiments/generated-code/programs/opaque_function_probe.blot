@@ -9,4 +9,4 @@ let run = fn (flag, value) =>
   let right = selected { .x = value; .right = 0; }
   return left + right
 
-export { .run = run; }
+return { .run = run; }

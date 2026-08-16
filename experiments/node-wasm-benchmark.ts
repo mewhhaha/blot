@@ -527,9 +527,9 @@ function editedComment(source: string, revision: number): string {
 }
 
 function editedModule(source: string, revision: number): string {
-  const exportStart = source.lastIndexOf("\nexport ");
+  const exportStart = source.lastIndexOf("\nreturn ");
   if (exportStart < 0) {
-    throw new Error("benchmark source has no top-level export");
+    throw new Error("benchmark source has no runtime result");
   }
   const insertion = `\nlet benchmark_revision = ${revision}`;
   return source.slice(0, exportStart) + insertion + source.slice(exportStart);

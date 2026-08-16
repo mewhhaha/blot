@@ -14,4 +14,4 @@ if text_eq (name, ""):
   return ()
 
 result <- Terminal.write (Text.append "Hello, " name)
-export result
+return result

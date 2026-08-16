@@ -84,7 +84,7 @@ const Meters =
 
 const Located = Point <+ { .origin = { .x = 0; .y = 0; }; }
 
-export {
+return {
   .meters_unit = Meters.unit;
   .origin = Located.new Located.origin;
   .type = Point;

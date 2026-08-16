@@ -5,4 +5,4 @@ let tagged = fn descriptor =>
   let value = 1
   return value
 
-export tagged test
+return tagged test

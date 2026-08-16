@@ -43,26 +43,19 @@ operator_token = OPERATOR | ANGLE_LEFT | ANGLE_RIGHT | QUESTION ;
 skip WHITESPACE = /[ \t\r\n]+/ ;
 skip COMMENT = /\/\/[^\r\n]*/ ;
 
-// A module is a block: bounded headers, then repeated line-terminated
-// declarations and one final export. Exporting one value keeps named fields an
-// ordinary record convention rather than introducing live export bindings.
+// A module is an implicit `do` block: bounded headers followed by repeated
+// line-terminated declarations. `return` supplies its value; falling through
+// supplies unit.
 program = (
   header:module_header?
   operators:operator_section?
   declarations:declaration*
-  exported:module_export?
 ) ;
 
 module_header = (
   "module"
   "with"
   parameter:binding_pattern
-  LAYOUT_NEWLINE
-) ;
-
-module_export = (
-  "export"
-  value:(value | indented_value)
   LAYOUT_NEWLINE
 ) ;
 
@@ -208,9 +201,8 @@ opening = (
   LAYOUT_NEWLINE
 ) ;
 
-// `return` transfers control from an explicit `do` scope or exits a module
-// early. A module's ordinary fallthrough value is instead named by its final
-// `export`, so control flow and the module boundary do not share a spelling.
+// `return` supplies the result of the nearest explicit `do` scope or module.
+// Reaching the end of either scope supplies unit.
 result = (
   "return"
   value:(value | indented_value)
@@ -369,7 +361,7 @@ field_suffix = ("." field:field_name) ;
 field_name = (IDENT | TYPE_IDENT | INTEGER | keyword) ;
 
 keyword = (
-  "module" | "with" | "export" | "import"
+  "module" | "with" | "import"
   | "operators" | "infixl" | "infixr" | "infix" | "prefix"
   | "let" | "const" | "sig" | "return"
   | "if" | "else" | "case" | "of" | "rec" | "open"

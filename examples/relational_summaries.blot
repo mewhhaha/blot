@@ -8,4 +8,4 @@ let at = fn values => fn index => case index >= 0 && index < count values of
   #True => @array.get values index
   #False => 0
 
-export at [10, 20, 30] 1
+return at [10, 20, 30] 1

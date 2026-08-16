@@ -6,4 +6,4 @@ let use = fn identity => {
   .text = identity "forty-two";
   }
 let increment = fn value => @int.add value 1
-export use increment
+return use increment

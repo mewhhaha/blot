@@ -36,4 +36,4 @@ let kept = 0
 for #Some n in Iter.items [Some 3, None, Some 4]:
   kept := kept + n
 
-export total + ticks + shrunk + kept - 29
+return total + ticks + shrunk + kept - 29

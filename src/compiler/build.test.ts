@@ -31,7 +31,7 @@ Deno.test("Blot compiler artifact reuse owns its published bytes", async () => {
   const path = `${await Deno.makeTempDir({ dir: "/tmp" })}/stable.blot`;
   await Deno.writeTextFile(
     path,
-    `export 41
+    `return 41
 `,
   );
 
@@ -65,7 +65,7 @@ Deno.test("Blot compiler artifact reuse misses after a direct edit", async () =>
   const path = `${await Deno.makeTempDir({ dir: "/tmp" })}/direct-edit.blot`;
   await Deno.writeTextFile(
     path,
-    `export 41
+    `return 41
 `,
   );
   const [first] = await buildBatch([path]);
@@ -75,7 +75,7 @@ Deno.test("Blot compiler artifact reuse misses after a direct edit", async () =>
 
   await Deno.writeTextFile(
     path,
-    `export 42
+    `return 42
 `,
   );
   const [edited] = await buildBatch([path]);
@@ -100,13 +100,13 @@ Deno.test("Blot compiler artifact reuse misses after a dependency edit", async (
   await Deno.writeTextFile(
     dependency,
     `module with capabilities
-export { .run = capabilities.base; }
+return { .run = capabilities.base; }
 `,
   );
   await Deno.writeTextFile(
     root,
     `let application = import "./dependency.blot" with { .base = 41; }
-export application.run
+return application.run
 `,
   );
   const [first] = await buildBatch([root]);
@@ -121,7 +121,7 @@ export application.run
   await Deno.writeTextFile(
     dependency,
     `module with capabilities
-export { .run = 42; }
+return { .run = 42; }
 `,
   );
   const [edited] = await buildBatch([root]);
@@ -138,12 +138,12 @@ Deno.test("Blot compiler compiles only misses in stable mixed batches", async ()
   const editedPath = `${directory}/edited.blot`;
   await Deno.writeTextFile(
     stablePath,
-    `export 1
+    `return 1
 `,
   );
   await Deno.writeTextFile(
     editedPath,
-    `export 2
+    `return 2
 `,
   );
   const warmed = await buildBatch([stablePath, editedPath]);
@@ -157,7 +157,7 @@ Deno.test("Blot compiler compiles only misses in stable mixed batches", async ()
 
   await Deno.writeTextFile(
     editedPath,
-    `export 3
+    `return 3
 `,
   );
   const mixed = await buildBatch([editedPath, stablePath]);
@@ -179,7 +179,7 @@ Deno.test("Blot compiler compiles only misses in stable mixed batches", async ()
 
 Deno.test("Blot compiler does not cache a failed source revision", async () => {
   const path = `${await Deno.makeTempDir({ dir: "/tmp" })}/repaired.blot`;
-  await Deno.writeTextFile(path, "export ;");
+  await Deno.writeTextFile(path, "return ;");
   const [failed] = await buildBatch([path]);
   let failedStatus: string | undefined;
   if (failed !== undefined) failedStatus = failed.status;
@@ -187,7 +187,7 @@ Deno.test("Blot compiler does not cache a failed source revision", async () => {
 
   await Deno.writeTextFile(
     path,
-    `export 42
+    `return 42
 `,
   );
   const [repaired] = await buildBatch([path]);

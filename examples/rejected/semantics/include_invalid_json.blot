@@ -2,4 +2,4 @@ open import "blot:prelude"
 
 const invalid = @include "../../assets/invalid-json.txt" as_json
 
-export invalid
+return invalid

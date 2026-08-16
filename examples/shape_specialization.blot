@@ -4,4 +4,4 @@ open import "blot:prelude"
 
 let get_x = fn value => value.x
 
-export get_x { .x = 1; .y = 2; } + get_x { .x = 3; .z = 4; }
+return get_x { .x = 1; .y = 2; } + get_x { .x = 3; .z = 4; }

@@ -6,4 +6,4 @@ open import "blot:prelude"
 let consume = fn !value => @int.add value 1
 let !token = 41
 let go = fn () => consume (!token)
-export @int.add (go ()) (go ())
+return @int.add (go ()) (go ())

@@ -21,7 +21,7 @@ contract. Blot's TypeScript passes connect the development pipeline:
 ```ts
 import { parse } from "@mewhhaha/blot";
 
-const result = await parse("export 42\n");
+const result = await parse("return 42\n");
 ```
 
 Run `pnpm pack --dry-run` to verify the package before publishing.
@@ -195,8 +195,7 @@ if let p = x else:       // bind p or leave through the else branch
 name := expr             // shadow a name while preserving its type
 name <- expr             // sequence an effect and bind its result
 <- expr                  // sequence an effect and discard its result
-return expr              // exit the current explicit result scope
-export expr              // name the module's fallthrough value
+return expr              // exit the nearest function, `do`, or module
 ```
 
 Value selection is written with `case`, including Boolean choices:
@@ -336,7 +335,7 @@ open import "blot:prelude"
 Selective binding and renaming use the ordinary record pattern instead:
 
 ```blot
-const { .source = target; .value; } = exports
+const { .source = target; .value; } = library
 ```
 
 `import "specifier"` evaluates one module instance with unit. A module that

@@ -346,17 +346,25 @@ a judgment. CI requires that inventory to change explicitly, and the strict mode
 requires the inventory to be empty.
 
 Staging evaluates one module instance as one ordered computation before
-selecting any named field from its exported value. A written import occurrence
+selecting any named field from its returned value. A written import occurrence
 is one instance: aliasing its value does not re-evaluate it, while a second
 written occurrence is distinct. Export selection may duplicate or remove only
 work proved pure. It may not replay requests, traps, returns, or divergence for
 each runtime field.
 
-The current Wasm boundary exposes separate functions for runtime fields and has
-no shared module-initialization state. A root whose top-level computation is
-effectful may therefore expose at most one runtime field. More than one is a
-target refusal after successful checking, not a source diagnostic. Pure roots
-may expose several fields because selecting them cannot change observations.
+`return` initially lowers as a tail computation. Checking records its effect row
+separately from effects performed by preceding top-level declarations. An empty
+settled result row certifies that the tail has no observable requests, so Core
+construction and staging may normalize it to an ordinary returned value. This is
+a checked fact, not syntax reconstruction; a non-empty result row stays an
+ordered computation.
+
+The current Wasm boundary exposes separate functions for fields of a returned
+record and has no shared module-initialization state. A root whose top-level
+computation is effectful may therefore expose at most one runtime field. More
+than one is a target refusal after successful checking, not a source diagnostic.
+Pure roots may expose several fields because selecting them cannot change
+observations.
 
 ## 9. Complete responsibility inventory
 

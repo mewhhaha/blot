@@ -34,4 +34,4 @@ let other = fn () =>
   return result
 let second = @handle (Log, other, tripling)
 
-export first + second
+return first + second

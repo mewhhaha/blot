@@ -17,4 +17,4 @@ sig answer = 0
 let answer = case found of
   #Some p => p.x
   #None => 0
-export answer
+return answer

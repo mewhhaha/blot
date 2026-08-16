@@ -11,4 +11,4 @@ const Source = @effect.host { .read = Unit -> Int; }
 
 reading <- { .value = Source.read (); }
 
-export @type.satisfies (reading, Has { .missing = Int; })
+return @type.satisfies (reading, Has { .missing = Int; })

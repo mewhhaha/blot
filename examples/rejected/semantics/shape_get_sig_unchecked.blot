@@ -15,4 +15,4 @@ open import "blot:prelude"
 let r = { .a = 7; }
 sig z = 0
 let z = @shape.get r "a"
-export z
+return z

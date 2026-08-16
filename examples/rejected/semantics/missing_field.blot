@@ -5,4 +5,4 @@ open import "blot:prelude"
 
 let origin = { .x = 1; }
 let distance = fn p => @int.add p.x p.y
-export distance origin
+return distance origin

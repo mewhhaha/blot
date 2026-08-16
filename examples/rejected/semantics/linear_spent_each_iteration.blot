@@ -8,4 +8,4 @@ let !token = 41
 let total = 0
 for n in Iter.range (0, 3):
   total := total + consume (!token)
-export total
+return total

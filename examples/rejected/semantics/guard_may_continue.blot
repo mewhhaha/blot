@@ -5,4 +5,4 @@ let unwrap = fn option =>
     let ignored = ()
   return value
 
-export unwrap (Some 1)
+return unwrap (Some 1)

@@ -6,4 +6,4 @@ open import "blot:prelude"
 
 sig double = Int -> Int
 let double = fn value => @text.concat value "!"
-export double
+return double

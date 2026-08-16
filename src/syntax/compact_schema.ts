@@ -88,7 +88,6 @@ export const compactRuleNames = [
   "qualified_name_part",
   "effect_row_part",
   "effect_row_tail",
-  "module_export",
   "import_expression",
 ] as const;
 
@@ -155,7 +154,6 @@ export const compactFieldNames = [
   "target",
   "value",
   "phase",
-  "exported",
   "input",
   "specifier",
 ] as const;
@@ -176,7 +174,6 @@ export const currentCompactFieldNames = [
   "descriptor",
   "drawn",
   "elements",
-  "exported",
   "fallback",
   "field",
   "fields",

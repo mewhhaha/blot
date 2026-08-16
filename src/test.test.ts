@@ -17,7 +17,7 @@ Deno.test("test discovery uses resolved descriptor names through aliases", async
   const path = await sourceFile(
     `const alias = tag ("test", "fast", identity)
 @[alias] let discovered = fn () => ()
-export ()
+return ()
 `,
   );
   const checked = await checkFile(path);
@@ -36,7 +36,7 @@ Deno.test("a failed test does not stop the tests after it", async () => {
     `@[test] let before = fn () => ()
 @[test] let failure = fn () => @fail "expected failure"
 @[test] let after = fn () => ()
-export ()
+return ()
 `,
   );
   const outcomes = await testFile(path);
@@ -51,7 +51,7 @@ Deno.test("each test resolves the binding occurrence carrying its tag", async ()
   const path = await sourceFile(
     `@[test] let same = fn () => ()
 @[tag ("plain", (), identity)] let same = fn () => @fail "wrong shadow"
-export ()
+return ()
 `,
   );
   const outcomes = await testFile(path);
@@ -61,7 +61,7 @@ export ()
 Deno.test("a test must be a pure nullary unit function", async () => {
   const path = await sourceFile(
     `@[test] let wrong = fn () => 1
-export ()
+return ()
 `,
   );
   const error = await assertRejects(() => testFile(path), BlotError);
@@ -72,7 +72,7 @@ Deno.test("a nested test is rejected instead of silently undiscovered", async ()
   const path = await sourceFile(
     `let outer = fn () =>
   @[test] let hidden = fn () => ()
-export outer
+return outer
 `,
   );
   const error = await assertRejects(() => testFile(path), BlotError);
@@ -85,7 +85,7 @@ Deno.test("a test file cannot require a module argument", async () => {
     path,
     "module with init\n" + PRELUDE +
       `@[test] let needs_host = fn () => ()
-export ()
+return ()
 `,
   );
   const error = await assertRejects(() => testFile(path), BlotError);
@@ -97,7 +97,7 @@ Deno.test("a test file cannot perform ambient initialization effects", async () 
     `const Console = @effect.host { .write = Str -> Unit; }
 @[test] let isolated = fn () => ()
 _ <- Console.write "initializing"
-export ()
+return ()
 `,
   );
   const error = await assertRejects(() => testFile(path), BlotError);
@@ -106,7 +106,7 @@ export ()
 
 Deno.test("a file without test descriptors returns an empty suite", async () => {
   const path = await sourceFile(`let value = 1
-export value
+return value
 `);
   assertEquals(await testFile(path), []);
 });

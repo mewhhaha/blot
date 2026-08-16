@@ -29,7 +29,7 @@ async function evaluate(source: string, fuel = 1_000): Promise<unknown> {
 Deno.test("an unused deferred argument is never evaluated", async () => {
   assertEquals(
     await evaluate(`let ignore = fn ~_ => 42
-export ignore (@panic "unused")
+return ignore (@panic "unused")
 `),
     { tag: "int", value: 42n },
   );
@@ -38,7 +38,7 @@ export ignore (@panic "unused")
 Deno.test("a demanded deferred argument is evaluated once", async () => {
   assertEquals(
     await evaluate(`let use = fn ~value => value
-export use 42
+return use 42
 `),
     { tag: "int", value: 42n },
   );
@@ -48,7 +48,7 @@ Deno.test("a deferred parameter cannot be demanded twice directly", async () => 
   const error = await assertRejects(
     async () => {
       await evaluate(`let twice = fn ~value => (value, value)
-export twice 21
+return twice 21
 `);
     },
     BlotError,
@@ -61,7 +61,7 @@ Deno.test("a deferred parameter can be forced once into an ordinary binding", as
     await evaluate(`let twice = fn ~value => do:
   let value = value
   return @int.add value value
-export twice 21
+return twice 21
 `),
     { tag: "int", value: 42n },
   );
@@ -72,7 +72,7 @@ Deno.test("evaluation stops at its deterministic fuel limit", async () => {
     async () => {
       await evaluate(
         `const spin = rec (fn () => spin ())
-export spin ()
+return spin ()
 `,
         100,
       );
@@ -86,7 +86,7 @@ Deno.test("runtime integer addition traps outside signed i64", async () => {
   const error = await assertRejects(
     async () => {
       await evaluate(
-        `export @int.mul (@int.mul 2147483647 2147483647) 3
+        `return @int.mul (@int.mul 2147483647 2147483647) 3
 `,
       );
     },
@@ -97,7 +97,7 @@ Deno.test("runtime integer addition traps outside signed i64", async () => {
 
 Deno.test("comptime integer addition remains arbitrary precision", async () => {
   const parsed = await parse(
-    `export @int.mul (@int.mul 2147483647 2147483647) 3
+    `return @int.mul (@int.mul 2147483647 2147483647) 3
 `,
   );
   if (!parsed.ok) {
@@ -117,7 +117,7 @@ Deno.test("comptime integer addition remains arbitrary precision", async () => {
 Deno.test("an unused pure binding is not evaluated", async () => {
   assertEquals(
     await evaluate(`let unused = @panic "unused"
-export 42
+return 42
 `),
     { tag: "int", value: 42n },
   );
@@ -129,7 +129,7 @@ Deno.test("live pure bindings evaluate once in source order", async () => {
       await evaluate(
         `let first = @panic "first"
 let second = @panic "second"
-export @int.add second first
+return @int.add second first
 `,
       );
     },

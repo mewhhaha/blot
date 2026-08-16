@@ -57,7 +57,7 @@ let flagged = 0
 if 1 < 2:
   flagged := flagged + 1
 
-export {
+return {
   .counted = counted;
   .scored = scored;
   .mixed = mixed;

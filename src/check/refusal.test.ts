@@ -46,7 +46,7 @@ Deno.test("a refusal from the prelude points at the caller, not the prelude", as
 ` +
       `const _ = expect (False, "nope")
 ` +
-      `export 1
+      `return 1
 `,
   );
   assertEquals(found.message, "nope");
@@ -64,7 +64,7 @@ Deno.test("a refusal from a `@type.satisfies` predicate points at the predicate"
       `let _ = @type.satisfies (reading, fn t =>\n` +
       `  return expect (refines (t, Has { .missing = Int; }), "needs .missing")\n` +
       `)\n` +
-      `export reading.value
+      `return reading.value
 `,
   );
   assertEquals(found.message, "needs .missing");

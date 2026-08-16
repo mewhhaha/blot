@@ -9,4 +9,4 @@ const construct = fn count =>
 
   return Array.length values
 
-export { .construct = construct; }
+return { .construct = construct; }

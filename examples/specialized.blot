@@ -17,4 +17,4 @@ const adding = fn T =>
 
 const add_i32 = adding I32
 const add_u8 = adding U8
-export add_i32 (add_u8 (1, 2), 39)
+return add_i32 (add_u8 (1, 2), 39)

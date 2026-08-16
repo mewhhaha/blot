@@ -5,6 +5,6 @@ open import "blot:prelude"
 
 let !token = 41
 let consume = fn !value => value
-export case 1 < 2 of
+return case 1 < 2 of
   #True => consume (!token)
   #False => 0

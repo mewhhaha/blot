@@ -7,4 +7,4 @@ open import "blot:prelude"
 let total = rec later 1
 let later = rec (fn n => n + 1)
 
-export total
+return total

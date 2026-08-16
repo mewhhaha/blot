@@ -59,7 +59,7 @@ tag continues with `[`. Section 4.2 defines declaration tags.
 The reserved words are:
 
 ```text
-module with export import operators infixl infixr infix prefix
+module with import operators infixl infixr infix prefix
 let const sig return
 if else case of rec open
 for in break do compdo fn
@@ -208,21 +208,18 @@ operators {             // optional
 }
 
 declarations
-export result
+return result             // optional
 ```
 
 The `module` header, when present, must be first. The `operators` header, when
-present, follows it. Zero or more declarations follow, and the file ends with
-exactly one `export value`. `export` is a module boundary, not a declaration
-modifier: exporting a record gives named fields, while exporting any other value
-gives the module one default result. There are no live export bindings or
-implicitly assembled export records.
+present, follows it. Zero or more declarations follow.
 
-`return value` before the final export exits the module early with that value,
-just as it exits an explicit `do` scope. The final `export` names the ordinary
-fallthrough value; it is not a second control-transfer statement.
+A module is an implicit `do` computation from an optional input to one result.
+Its declarations execute in source order. `return value` exits the module with
+that value, exactly as it exits an explicit `do` scope; reaching the end returns
+unit. A returned record is the ordinary convention for a named module API. There
+is no export declaration, live export binding, or separate module namespace.
 
-A module is an ordered computation from an optional input to its exported value.
 `module with pattern` binds an explicit input. A file without that header
 receives unit and does not name it. The implementation may represent a module as
 a unary closure internally, but that closure is not a source value.
@@ -233,7 +230,7 @@ let configured = import "./configured.blot" with capabilities
 ```
 
 `import "specifier"` instantiates the named module with unit and evaluates to
-its exported value. `import "specifier" with value` instantiates it with the
+its returned value. `import "specifier" with value` instantiates it with the
 explicit input. The specifier must be literal text. Relative paths are resolved
 from the importing file. A `blot:name` specifier resolves to the corresponding
 compiler-supplied library module; `blot:prelude` is the standard prelude. A bare
@@ -261,11 +258,12 @@ authority: the imported module can observe only the value passed as its module
 input. The entry module's input is therefore its complete host authority.
 
 An evaluated import occurrence creates one module instance and runs that
-instance's top-level declarations once, in source order. Aliasing or
-re-exporting the resulting value does not run them again. Two written import
-occurrences denote two instances, even when their literal specifiers and inputs
-are equal. A compiler may inline an instance, but it may not merge distinct
-occurrences or replay one occurrence separately for several exported fields.
+instance's top-level declarations once, in source order. Aliasing or returning
+the resulting value through another module does not run it again. Two written
+import occurrences denote two instances, even when their literal specifiers and
+inputs are equal. A compiler may inline an instance, but it may not merge
+distinct occurrences or replay one occurrence separately for several returned
+fields.
 
 An explicit import input is checked against the input demand inferred _inside_
 that module. Nothing separately declares that requirement: the demand is
@@ -278,7 +276,7 @@ the catalog entry.
 
 The argument may carry _more_ fields than the module reads. Width subtyping
 holds across the boundary in both directions: as the argument to a module, and
-as an argument to a function that module exports. Such a program checks and
+as an argument to a function that module returns. Such a program checks and
 lowers — the record the importer built is what reaches the projection inside the
 dependency, so the nominal the backend mints is the one the value has.
 `examples/widened.blot` and `examples/lib/camera.blot` are the catalog entry.
@@ -443,9 +441,9 @@ application cannot be evaluated or its settled result is already precise, that
 ordinary result remains authoritative.
 
 The defining-module provenance belongs to the function value, not to the field
-path used to reach it. Aliasing or re-exporting the function through another
-module therefore preserves specialization. Each concrete call is inferred with
-fresh variables; one importer's selection cannot constrain another's.
+path used to reach it. Aliasing or returning the function through another module
+therefore preserves specialization. Each concrete call is inferred with fresh
+variables; one importer's selection cannot constrain another's.
 
 After a module has been checked, imported specialization uses its immutable
 specialization capsule rather than the module's live inference environment. The
@@ -625,12 +623,12 @@ on the right of `<-`; its result is bound directly. A projected nullary
 operation is itself an effect value, so `time <- Clock.now` and
 `time <- Clock.now ()` have the same result and effect row.
 
-`let`, `const`, `:=`, `open`, function results written without a block, and the
-final `export` are pure value positions. The expression in `return value` is a
-tail computation of its current module or explicit indentation scope and may
-contribute effects to that scope. Pure `let` bindings may be reordered, inlined,
-or discarded when their values are not demanded; sequencing an effect before the
-tail therefore requires `<-` even when its result is ignored.
+`let`, `const`, `:=`, `open`, and function results written without a block are
+pure value positions. The expression in `return value` is a tail computation of
+its current module or explicit `do` scope and may contribute effects to that
+scope. Pure `let` bindings may be reordered, inlined, or discarded when their
+values are not demanded; sequencing an effect before the tail therefore requires
+`<-` even when its result is ignored.
 
 ### 4.6 Components are ordinary functions
 
@@ -2832,7 +2830,7 @@ let report = fn () =>
   <- Console.write text
   return text
 
-export {
+return {
   .attempts = attempts;
   .report = report;
 }
@@ -2840,5 +2838,5 @@ export {
 
 This module receives its authority through `init`, explicitly opens the prelude,
 constructs types as values, uses `for` as a fold with an inferred accumulator,
-declares a host effect as its interface, and exports a concrete record suitable
+declares a host effect as its interface, and returns a concrete record suitable
 for staging and WebAssembly lowering.

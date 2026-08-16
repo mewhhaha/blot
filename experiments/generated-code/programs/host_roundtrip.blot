@@ -3,4 +3,4 @@ open import "blot:prelude"
 const Benchmark = @effect.host { .input = Unit -> Int; }
 
 input <- Benchmark.input ()
-export input
+return input

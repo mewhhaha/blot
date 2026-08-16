@@ -19,20 +19,20 @@ in a benchmark months later.
 
 | counter                     |    blot | note                                               |
 | --------------------------- | ------: | -------------------------------------------------- |
-| `lexerStates`               |     127 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`               |     122 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |      22 | worst-case island candidates allocated per token   |
-| `islandCount`               |      68 | one island for every grammar rule                  |
-| `islandStates`              |     402 |                                                    |
-| `islandTransitions`         |     413 |                                                    |
+| `islandCount`               |      67 | one island for every grammar rule                  |
+| `islandStates`              |     395 |                                                    |
+| `islandTransitions`         |     403 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 607,824 | immutable device table                             |
-| `packedBytes`               | 474,618 | version-3 runtime section                          |
-| `rootLoopIsland`            |       6 | root loop still proven under general throughput    |
+| `denseTransitionBytes`      | 587,760 | immutable device table                             |
+| `packedBytes`               | 459,807 | version-3 runtime section                          |
+| `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |       6 | islands admitted to parallel long-region execution |
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
-and edge arrays directly. Declaring all 68 rules as islands is what preserves
+and edge arrays directly. Declaring all 67 rules as islands is what preserves
 the full CST shape needed by source lowering.
 
 Removing element syntax while adding `compdo:` and effect-row tails moves the
@@ -45,14 +45,15 @@ historical counters immediately before later module-syntax changes; the element
 measurements later in this document remain historical records of the retired
 syntax.
 
-Replacing exposed module functions with `module with input`, immediate
-`import "path" [with value]`, and one final `export value` adds two retained
-islands, seventeen island states, nineteen island transitions, fourteen lexer
-states, 48,804 dense-transition bytes, and 35,405 packed bytes. The maximum
-candidate multiplicity, contraction rounds, scratch bounds, and parallel
-long-region admission do not change. The root loop moves from island 5 to 6
-because `module_export` is inserted after the module header; the loop proof
-remains valid.
+Replacing exposed module functions with `module with input` and immediate
+`import "path" [with value]` adds one retained island, ten island states, nine
+island transitions, nine lexer states, 28,740 dense-transition bytes, and 20,594
+packed bytes. The maximum candidate multiplicity, contraction rounds, scratch
+bounds, root loop, and parallel long-region admission do not change. Treating a
+module as the same return-or-unit computation as `do` avoids a separate export
+island; compared with that discarded design it saves one island, seven island
+states, ten transitions, five lexer states, 20,064 dense-transition bytes, and
+14,811 packed bytes.
 
 Replacing the retired `#(name)` pin rule with the qualifier-shaped `^name`
 spelling removes one island, seven island states, seven island transitions,

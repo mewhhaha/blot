@@ -381,7 +381,7 @@ let frame = fn paint =>
 // module's exported record is a runtime one, so a capability cannot be handed
 // out — and it does not need to be, because importing this module is already
 // what puts `Canvas` and `View` in the importer's effect row.
-export {
+return {
   .unit = unit;
   .point = point;
   .frame = frame;

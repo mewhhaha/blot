@@ -13,4 +13,4 @@ let consume_holder = fn !value =>
   let first_value = first ()
   return first_value + second ()
 
-export first + consume_holder holder
+return first + consume_holder holder

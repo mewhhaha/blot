@@ -1,4 +1,4 @@
 let stop = fn () =>
   break
 
-export stop ()
+return stop ()

@@ -19,7 +19,7 @@ let shout = fn m =>
 
 // The default arm keeps the union open: `#Missing` is not one of the arms and
 // is still accepted.
-export {
+return {
   .found = unwrap_or (#Some "here");
   .absent = unwrap_or #Missing;
   .shouted = shout (#Some "hi");

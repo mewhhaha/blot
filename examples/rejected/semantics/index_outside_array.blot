@@ -13,4 +13,4 @@
 open import "blot:prelude"
 
 let xs = [1, 2, 3]
-export @array.get xs 99
+return @array.get xs 99

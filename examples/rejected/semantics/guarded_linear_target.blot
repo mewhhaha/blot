@@ -14,4 +14,4 @@ let spend = fn !token => case token of
   #Ready n if n > 0 => n
   #Ready n => 0 - n
   #Idle => 0
-export spend (#Ready 3)
+return spend (#Ready 3)

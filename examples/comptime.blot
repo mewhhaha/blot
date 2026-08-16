@@ -62,7 +62,7 @@ let evens =
   )
 let squares = map (evens, fn n => n * n)
 
-export {
+return {
   .folded = folded;
   .packed_size = packed_layout.size;
   .packed_fields = packed_layout.fields;

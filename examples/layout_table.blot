@@ -33,6 +33,6 @@ let layout =
   )
 
 let frames = layout (0, [])
-export case Array.get (frames, 2) of
+return case Array.get (frames, 2) of
   #Some frame => frame.x + frame.width
   #None => 0

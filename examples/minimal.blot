@@ -6,4 +6,4 @@
 
 open import "blot:prelude"
 
-export 42
+return 42

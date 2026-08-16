@@ -8,4 +8,4 @@ let consume = fn !value => value + 1
 let !token = 41
 let view = &token
 
-export { .view = view; .consumed = consume (!token); }
+return { .view = view; .consumed = consume (!token); }

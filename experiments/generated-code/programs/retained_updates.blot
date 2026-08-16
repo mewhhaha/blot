@@ -13,4 +13,4 @@ const retained_go = rec (fn (remaining, values, observed) =>
 sig retained_updates = Int -> Int
 const retained_updates = fn count => retained_go (count, @array.empty, 0)
 
-export { .retained_updates = retained_updates; }
+return { .retained_updates = retained_updates; }

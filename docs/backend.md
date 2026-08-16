@@ -215,9 +215,10 @@ the element was already pinned, so `map` and `filter` did not compile. Asking
 for the constructor was the right move over building monomorphization to route
 around its absence — gpufuck keeps Core polymorphic on measured grounds.
 
-An import is _inlined_: the internal module closure maps an input record to an
-export record, both known at compile time, so importing one is lowering its body
-as a block. The import boundary exists for authority, not for code generation.
+An import is _inlined_: the internal module closure maps an input record to a
+returned record, both known at compile time, so importing one is lowering its
+body as a block. The import boundary exists for authority, not for code
+generation.
 
 `just wasm` discovers every accepted catalog program and compares all three
 executions on the staged runtime result rather than on a selected scalar. A
@@ -444,7 +445,7 @@ const Point = { .x = Int; .y = Int; }
 sig project = Point -> Int
 let project = fn point => point.x
 
-export { .project = project; }
+return { .project = project; }
 ```
 
 That signature is not an annotation the function body needs; it is the
