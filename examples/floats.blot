@@ -11,7 +11,7 @@
 // meaning there. So a float literal inhabits `F64` and the narrowing machinery
 // never has to answer a question about reals.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 // --- arithmetic -------------------------------------------------------------
 //

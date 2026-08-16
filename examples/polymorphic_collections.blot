@@ -2,7 +2,7 @@
 // Equality-dependent collections are created explicitly, so no hidden
 // typeclass lookup chooses how keys or values compare.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig map_lengths =
   Mappable (List.of Str, List.of Int, Str, Int) -> List.of Str -> List.of Int

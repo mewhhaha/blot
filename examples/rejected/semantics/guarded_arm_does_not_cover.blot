@@ -6,7 +6,7 @@
 // The message names `#Some` for that reason: the arms that decide coverage are
 // the unguarded ones, and among those the constructor is missing.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let describe = fn option => case option of
   #Some n if n > 0 => "positive"

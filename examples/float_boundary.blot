@@ -2,7 +2,7 @@
 // layouts. They cross the module boundary without integer coercion; F32x4 is
 // still an internal register value and must be reduced or projected first.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig ratio = F64
 let ratio = Float.div 22.0 7.0

@@ -56,7 +56,7 @@ immutable binding, `for` lowers to a fold, branches produce values, and effects
 are explicit in `<-`. Nothing mutates an earlier value.
 
 Compose at the larger scale. Functions take values and return values; modules
-take capability records and return export records:
+execute in source order from an optional input to one returned value:
 
 ```blot
 let prepare = fn values =>
@@ -90,7 +90,7 @@ Nothing is implicitly in scope. Most application modules start by opening the
 prelude:
 
 ```blot
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Limit = 100
 
@@ -103,27 +103,28 @@ let clamp = fn value =>
 return { .clamp = clamp; }
 ```
 
-Treat the final record as the module's public surface. Keep support values above
-it and export only what another module should depend on.
+Treat the returned record as the module's public surface. Keep support values
+above it and return only what another module should depend on.
 
 When a small module benefits from an explicit namespace, keep the prelude behind
 a name instead:
 
 ```blot
-const prelude = @import "blot:prelude" ()
+const prelude = import "blot:prelude"
 
 let answer = prelude.Num.add 20 22
 
 return { .answer = answer; }
 ```
 
-An imported module is a function. Apply it to the capabilities or configuration
-it needs, then use its returned record:
+An import is a module instance. Supply capabilities or configuration with
+`with`, then use its returned value:
 
 ```blot
-const counters = @import "./counter.blot"
-
-let Counter = counters { .initial = 0; .limit = 100; }
+let Counter = import "./counter.blot" with {
+  .initial = 0;
+  .limit = 100;
+}
 
 return { .run = Counter.run; }
 ```
@@ -135,7 +136,7 @@ scope. Keep a record behind its qualified name until a region actually benefits
 from treating its fields as local vocabulary:
 
 ```blot
-const prelude = @import "blot:prelude" ()
+const prelude = import "blot:prelude"
 
 let calculate = fn values =>
   open prelude
@@ -173,7 +174,7 @@ it. For narrower dependencies, prefer a local `open`. If only two or three
 fields are wanted, destructure them instead of opening everything:
 
 ```blot
-const { .source = input; .value; } = exports
+const { .source = input; .value; } = library
 ```
 
 Treat an `open` like entering a vocabulary scope, not like copying a record.
@@ -187,7 +188,7 @@ descriptions, derived layouts, and configuration included from disk normally
 belong here:
 
 ```blot
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const UserId = seal ("UserId", I64)
 const Message = #Ready | #Failed Str
@@ -693,7 +694,7 @@ operators {
   infixl 20 (>>>) = Pipeline.then;
 }
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Pipeline = {
   .then = fn left => fn right => fn input => right (left input);
@@ -881,7 +882,7 @@ const Squares = comptime build_table 16
 Use `@include` with an explicit parser for non-Blot source:
 
 ```blot
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Config = @include "./config.json" as_const_json
 ```

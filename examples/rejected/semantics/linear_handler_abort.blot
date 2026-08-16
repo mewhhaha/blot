@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Ask = @effect { .ask = Unit -> Unit; }
 let consume = fn !value => @int.add value 1

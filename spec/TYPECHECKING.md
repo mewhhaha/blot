@@ -437,11 +437,11 @@ derivation the same unknown label is rejected immediately. Thus generic
 structural source can be checked before unrolling without admitting a runtime
 operation over heterogeneous record keys.
 
-`M(v)` is invariant under aliasing and re-export. This yields the coherence
-property
+`M(v)` is invariant under aliasing and return through another module. This
+yields the coherence property
 
 ```txt
-VType_m(f a) = VType_m((reexport f) a)
+VType_m(f a) = VType_m((alias_through_module f) a)
 ```
 
 for the same evaluated argument. The per-compilation origin table may refer to
@@ -464,10 +464,10 @@ rho_m contains only deterministic compile-time values
 fingerprint(deps_m) = fingerprint(dependencies on disk)
 ```
 
-The module parameter is deliberately absent from `Sigma_m`. It is not a property
-of the source module: every application supplies another value. The parameter
+The module input is deliberately absent from `Sigma_m`. It is not a property of
+the source module: every import occurrence supplies another value. The input
 environment is therefore the outermost member of `Delta(v)` and is bridged at
-the importing call. This gives the application law
+the importing expression. This gives the instantiation law
 
 ```txt
 VType(C_m[r_1] a) and VType(C_m[r_2] a)
@@ -742,7 +742,7 @@ transitive dependency are unchanged.
 Ownership and safety results are cached at the same revision boundary only for
 nullary modules. Ownership is a function of the AST. Safety additionally reads
 the checked value environment; the nullary restriction and reverse-dependency
-invalidation ensure that environment denotes the same module application.
+invalidation ensure that environment denotes the same module instance.
 Parameterised analyses remain per-check because their values may depend on the
 caller's argument.
 
@@ -758,12 +758,12 @@ check_root(..., m, ...) may reuse settled_check(m)
 The cache miss checks `m` with a private `Staging`, settles every local fact
 read, and only then publishes the result. Because `m` is a leaf there is no
 contextual dependency result to copy into another compilation; because it is
-nullary no caller argument can settle its module parameter. The module result
-may still contain inference variables, but it is retained only as a read-only
-scheme template: the ordinary `@import` rule wraps the module function at level
-`-1` and instantiates it, so importer constraints land on fresh copies. The
-lexical specialization interface is stricter: it must close because selected
-source closures reconstruct their captured typing scope from that interface.
+nullary no caller input can settle its module input. The module result may still
+contain inference variables, but it is retained only as a read-only scheme
+template: import instantiation wraps the internal module closure at level `-1`
+and instantiates it, so importer constraints land on fresh copies. The lexical
+specialization interface is stricter: it must close because selected source
+closures reconstruct their captured typing scope from that interface.
 
 On a hit the importing compilation installs the closed specialization interface
 but derives new call-site specializations and their fact sinks in its own

@@ -1,4 +1,4 @@
-open @import "../../../src/prelude/prelude.blot" ()
+open import "../../../src/prelude/prelude.blot"
 
 // A nested dynamic choice over three lambdas with mutually different capture
 // products. The first captures two runtime values, the second one, and the

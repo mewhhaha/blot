@@ -2,7 +2,7 @@
 // then appends its own. `frames` is linear, so every append hands the backing
 // Store to the next recursive step instead of rebuilding the whole prefix.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let nodes =
   [

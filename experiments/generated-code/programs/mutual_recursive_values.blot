@@ -1,4 +1,4 @@
-open @import "../../../src/prelude/prelude.blot" ()
+open import "../../../src/prelude/prelude.blot"
 
 let build_even = rec (fn count =>
   if count == 0:

@@ -326,7 +326,7 @@ Deno.test("typed Core preserves host effect order", async () => {
   const path = `${directory}/effects.blot`;
   await Deno.writeTextFile(
     path,
-    `open @import "blot:prelude" ()
+    `open import "blot:prelude"
 const Console = @effect.host { .write = Str -> Unit; }
 _ <- Console.write "compiled"
 _ <- Console.write "linked"
@@ -380,7 +380,7 @@ Deno.test("typed Core simulates generated one-shot handlers", async () => {
     const second = BigInt(seed % 100);
     seed = next(seed);
     const offset = BigInt(seed % 100);
-    const source = `open @import "blot:prelude" ()
+    const source = `open import "blot:prelude"
 const Shift = @effect { .by = Int -> Int; }
 let shifting =
   { .by = fn (value, ?resume) =>

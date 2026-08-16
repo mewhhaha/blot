@@ -887,6 +887,31 @@ mod tests {
     }
 
     #[test]
+    fn effectful_top_level_is_not_replayed_for_multiple_runtime_fields() {
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                "main.blot".to_owned(),
+                source(
+                    "module with init\n\nvalue <- init.read ()\nreturn { .first = value; .second = value; }\n",
+                ),
+            )
+            .expect("source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("source should configure");
+
+        let prepared = session.prepare_runtime_hir("main.blot");
+        assert_eq!(prepared["ok"], false, "{}", prepared);
+        assert_eq!(
+            prepared["diagnostic"]["code"], "BLOT_TARGET_REFUSAL",
+            "{}",
+            prepared["diagnostic"]
+        );
+        assert_ne!(prepared["diagnostic"]["span"]["end"], 0);
+    }
+
+    #[test]
     fn declaration_evaluations_follow_the_unchanged_ast_prefix() {
         let path = "main.blot";
         let mut session = CompilerSession::default();
@@ -941,7 +966,7 @@ mod tests {
         session
             .add_source(
                 root_path.to_owned(),
-                source("const dependency = @import \"dep\" ()\u{e000}return dependency\u{e000}"),
+                source("const dependency = import \"dep\"\u{e000}return dependency\u{e000}"),
             )
             .expect("root source should load");
         session

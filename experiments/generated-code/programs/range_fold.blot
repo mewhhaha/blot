@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig fold_go = (Int, Int) -> Int
 const fold_go = rec (fn (remaining, total) =>

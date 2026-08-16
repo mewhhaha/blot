@@ -9,7 +9,7 @@
 // chosen: rename the local, or put the `let` above the first `:=`, where it
 // shadows for the whole block and nothing escapes under that name at all.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let total = 0
 for n in Iter.range (0, 3):

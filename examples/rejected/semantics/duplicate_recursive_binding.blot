@@ -4,7 +4,7 @@
 // guess. Any declaration between them ends the group and restores the ordinary
 // shadowing rule.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let step = rec (fn n =>
   if n == 0:

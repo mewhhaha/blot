@@ -5,7 +5,7 @@
 // This is the rule that keeps a guard from reopening exhaustiveness: the arms
 // that decide coverage are the unguarded ones, and here there are none.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let sign = fn n => case n of
   m if m > 0 => "positive"

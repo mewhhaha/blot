@@ -1,7 +1,7 @@
 // Operators are prelude functions. `+` is `Num.add`, dispatched by the fixity
 // table; nothing about it is built into the compiler.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let sum = 20 + 22
 let nested = 1 + 2 * 3 - 4

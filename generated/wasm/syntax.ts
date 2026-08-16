@@ -125,6 +125,7 @@ export type AnyNamedTokenKind = NamedTokenKind extends never
 
 export type LiteralKind =
   | "module"
+  | "with"
   | "operators"
   | "{"
   | "}"
@@ -154,6 +155,7 @@ export type LiteralKind =
   | "#"
   | "."
   | "rec"
+  | "import"
   | "if"
   | "else"
   | "case"
@@ -261,6 +263,7 @@ export type RuleName =
   | "field_name"
   | "keyword"
   | "primary_expression"
+  | "import_expression"
   | "effect_row"
   | "effect_row_part"
   | "effect_row_tail"
@@ -550,6 +553,13 @@ export interface KeywordCursor extends RuleCursorBase<"keyword"> {
 export interface PrimaryExpressionCursor extends RuleCursorBase<"primary_expression"> {
 }
 
+export interface ImportExpressionCursor extends RuleCursorBase<"import_expression"> {
+  field(name: "input"): readonly [TokenCursor<"literal", "with">, ValueCursor] | null;
+  field(name: "specifier"): TokenCursor<"named", "TEXT">;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
 export interface EffectRowCursor extends RuleCursorBase<"effect_row"> {
   field(name: "first"): EffectRowTailCursor | ExpressionCursor;
   field(name: "rest"): ReadonlyArray<EffectRowPartCursor>;
@@ -771,6 +781,7 @@ export type AnyRuleCursor =
   | FieldNameCursor
   | KeywordCursor
   | PrimaryExpressionCursor
+  | ImportExpressionCursor
   | EffectRowCursor
   | EffectRowPartCursor
   | EffectRowTailCursor

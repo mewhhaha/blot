@@ -13,7 +13,7 @@ const scratch = await Deno.makeTempDir();
 // Every snippet opens the prelude, because every module does: it has no
 // privilege, and a fixture that skipped it would be testing a language where
 // `+` is unbound.
-const PRELUDE = `open @import "blot:prelude" ()
+const PRELUDE = `open import "blot:prelude"
 `;
 
 async function analyze(source: string) {
@@ -990,7 +990,7 @@ return @int.add x (f 2)
 // has no last read to act on, and the fact says so rather than naming one.
 Deno.test("a binding a closure and a sibling both read has no last read", async () => {
   const { own } = await analyze(
-    `open @import "blot:prelude" ()
+    `open import "blot:prelude"
 let !cells = [7, 2, 3]
 let peek = rec (fn n => case Array.get ((&cells), n) of
   #Some value => value
@@ -1012,7 +1012,7 @@ return @int.add first (peek 0)
 // linear proof is about — so this one keeps a last read the backend can spend.
 Deno.test("a binding read once inside a group keeps its last read", async () => {
   const { own } = await analyze(
-    `open @import "blot:prelude" ()
+    `open import "blot:prelude"
 let !cells = [7, 2, 3]
 let start = rec (fn n => case Array.get (bump n, 0) of
   #Some value => value

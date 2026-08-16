@@ -1,10 +1,10 @@
 // Module loading.
 //
-// A module is a function from an input record to an export record. Importing
-// one grants it nothing: it sees only the record its caller hands it, and the
-// entry module's record is the entire authority the program has.
+// A module is an ordered computation from an input value to a returned value.
+// Importing one grants it nothing: it sees only the value its importer supplies,
+// and the entry module's input is the entire authority the program has.
 //
-// Resolution happens before evaluation, so `@import` never touches the disk
+// Resolution happens before evaluation, so `import` never touches the disk
 // while a program is running and the evaluator can stay synchronous.
 
 import { readFile } from "node:fs/promises";
@@ -415,7 +415,7 @@ async function loadSourceRevision(
   }
 
   // Nothing is in scope that the module did not ask for. The prelude is an
-  // ordinary module with no privilege: `open @import "blot:prelude" ()` is
+  // ordinary module with no privilege: `open import "blot:prelude"` is
   // what puts `Num.add` where the default fixity for `+` can find it, and a
   // module that does not open it does not have `+`.
   const env: Env = childEnv(null);

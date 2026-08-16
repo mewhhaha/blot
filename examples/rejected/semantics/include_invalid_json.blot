@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const invalid = @include "../../assets/invalid-json.txt" as_json
 

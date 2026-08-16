@@ -39,7 +39,7 @@ console.log(JSON.stringify(
 ));
 
 function program(count: number, wrapper: boolean): string {
-  let source = `open @import "blot:prelude" ()\n`;
+  let source = `open import "blot:prelude"\n`;
   if (wrapper) source += `const count = fn values => Array.length values\n`;
   for (let index = 0; index < count; index += 1) {
     let length = "@array.len values";

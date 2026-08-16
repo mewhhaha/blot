@@ -35,7 +35,7 @@ host wrapper itself.
 produce:
 
 ```blot
-open @import "blot:prelude" ()
+open import "blot:prelude"
 return iterate (Iter.range (1, 4), 1, fn (product, n) => product * n)
 ```
 

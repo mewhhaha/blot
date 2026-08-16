@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { Compiler } from "../compiler.ts";
+import { Compiler, CompilerTargetRefusal } from "../compiler.ts";
 import { runArtifact } from "./run.ts";
 
 interface ManifestType {
@@ -289,14 +289,14 @@ test("module grants keep Unit return typing through canonical text imports", asy
   }
 });
 
-test("module grants preserve dynamic non-Unit host results", async () => {
+test("a module may directly return an effectful computation", async () => {
   const directory = await mkdtemp(join(tmpdir(), "blot-node-host-result-"));
   const path = join(directory, "host-result.blot");
   const compiler = await Compiler.create();
   try {
     await writeFile(
       path,
-      'module init\n\nopen @import "blot:prelude" ()\n\nvalue <- init.read ()\nreturn value + 1\n',
+      'module with init\n\nopen import "blot:prelude"\n\nreturn init.read () + 1\n',
     );
     const artifact = await compiler.compile(path);
     const manifest = decodeManifest(artifact.manifestBytes);
@@ -334,6 +334,45 @@ test("module grants preserve dynamic non-Unit host results", async () => {
   }
 });
 
+test("effectful top-level work is never replayed across runtime fields", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-node-module-instance-"));
+  const path = join(directory, "effectful-fields.blot");
+  const compiler = await Compiler.create();
+  try {
+    await writeFile(
+      path,
+      "module with init\n\nvalue <- init.read ()\nreturn { .first = value; .second = value; }\n",
+    );
+    await assert.rejects(
+      compiler.compile(path),
+      (error: unknown) => {
+        assert(error instanceof CompilerTargetRefusal);
+        assert.match(error.message, /cannot be replayed/);
+        return true;
+      },
+    );
+  } finally {
+    compiler.destroy();
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("handled top-level effects do not trigger the host replay refusal", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(
+      resolve("examples/composed_handlers.blot"),
+    );
+    const manifest = decodeManifest(artifact.manifestBytes);
+    assert.deepEqual(
+      manifest.exports.map((exported) => exported.sourceName),
+      ["named", "discarded"],
+    );
+  } finally {
+    compiler.destroy();
+  }
+});
+
 test("dynamic signed i64 to f64 conversion matches WebAssembly edge rounding", async () => {
   const directory = await mkdtemp(join(tmpdir(), "blot-node-i64-f64-"));
   const path = join(directory, "i64-f64.blot");
@@ -341,7 +380,7 @@ test("dynamic signed i64 to f64 conversion matches WebAssembly edge rounding", a
   try {
     await writeFile(
       path,
-      'module init\n\nopen @import "blot:prelude" ()\n\nvalue <- init.read ()\n<- init.observe (Float.of_int value)\nreturn ()\n',
+      'module with init\n\nopen import "blot:prelude"\n\nvalue <- init.read ()\n<- init.observe (Float.of_int value)\nreturn ()\n',
     );
     const artifact = await compiler.compile(path);
     const manifest = decodeManifest(artifact.manifestBytes);

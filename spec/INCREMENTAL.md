@@ -116,27 +116,27 @@ second module evaluation only under the `checked-environment` premise in
 
 The Node resident checker currently uses a deliberately narrower full-check
 boundary. A dependency may retain its complete locally settled check only when
-it is a **leaf**, takes no module parameter, publishes a closed specialization
-interface, and that interface carries no generative effect brand. The first
-check runs against an isolated staging sink and settles before publication; a
-later importer reinstalls only the closed interface into its own staging sink.
-The retained module result is a read-only scheme template: the ordinary
-`@import` rule freshens it before importer constraints are added. Therefore
-caller-specific fact reads and mutable inference instances do not cross the
-cache boundary. A new leaf revision misses because loader identity changes.
-Closed interfaces with generative brands may be used by the compilation that
-created them but are not retained across compilations; unclosed and
+it is a **leaf**, takes no explicit module input, publishes a closed
+specialization interface, and that interface carries no generative effect brand.
+The first check runs against an isolated staging sink and settles before
+publication; a later importer reinstalls only the closed interface into its own
+staging sink. The retained module result is a read-only scheme template: the
+ordinary import instantiation freshens it before importer constraints are added.
+Therefore caller-specific fact reads and mutable inference instances do not
+cross the cache boundary. A new leaf revision misses because loader identity
+changes. Closed interfaces with generative brands may be used by the compilation
+that created them but are not retained across compilations; unclosed and
 parameterized leaves take the ordinary per-compilation path.
 
 A changed module may retain successful declaration-value evaluations only for
 its maximal unchanged top-level declaration prefix. Equality includes the module
-parameter and fixities plus every reachable expression, pattern, declaration,
-and source span in that prefix. The resolved dependency and include mappings
-must also be unchanged. A change to any preceding declaration invalidates the
-suffix because its values form the later declarations' environment; a dependency
-change invalidates the importer through the ordinary reverse-dependency closure.
-Reuse removes deterministic evaluation only: every declaration in the new
-revision is still inferred and checked.
+input pattern and fixities plus every reachable expression, pattern,
+declaration, and source span in that prefix. The resolved dependency and include
+mappings must also be unchanged. A change to any preceding declaration
+invalidates the suffix because its values form the later declarations'
+environment; a dependency change invalidates the importer through the ordinary
+reverse-dependency closure. Reuse removes deterministic evaluation only: every
+declaration in the new revision is still inferred and checked.
 
 Declaration liveness is derived from a lowered module and may be cached by
 module path plus the enclosing block's expression identity. Replacing that

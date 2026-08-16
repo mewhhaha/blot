@@ -8,7 +8,7 @@
 //
 // `examples/matching.blot` is the same rule with one column.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 // The join that motivates the form: two options, one arm for the case where
 // both are present.

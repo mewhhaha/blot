@@ -10,7 +10,7 @@
 // comptime evaluator does the same arithmetic one lane at a time and must agree
 // with the register.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 // There is no f32 literal and no vector literal. `Float32.of_int` narrows and
 // `Vec4.of` gathers, which keeps the grammar at one float token and makes both

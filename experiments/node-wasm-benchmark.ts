@@ -527,12 +527,12 @@ function editedComment(source: string, revision: number): string {
 }
 
 function editedModule(source: string, revision: number): string {
-  const returnStart = source.lastIndexOf("\nreturn ");
-  if (returnStart < 0) {
-    throw new Error("benchmark source has no top-level return declaration");
+  const exportStart = source.lastIndexOf("\nreturn ");
+  if (exportStart < 0) {
+    throw new Error("benchmark source has no runtime result");
   }
   const insertion = `\nlet benchmark_revision = ${revision}`;
-  return source.slice(0, returnStart) + insertion + source.slice(returnStart);
+  return source.slice(0, exportStart) + insertion + source.slice(exportStart);
 }
 
 function temporarySourcePath(path: string, label: string): string {

@@ -1,4 +1,4 @@
-open @import "../../../src/prelude/prelude.blot" ()
+open import "../../../src/prelude/prelude.blot"
 
 let build = rec (fn n =>
   if n == 0:

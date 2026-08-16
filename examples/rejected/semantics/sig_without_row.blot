@@ -7,7 +7,7 @@
 // and the binding takes its signature as its type, so the effect would pass
 // the check here and then be missing from what every caller is told.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Console = @effect {
   .write = Str -> Unit;

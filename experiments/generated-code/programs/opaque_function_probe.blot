@@ -1,4 +1,4 @@
-open @import "../../../src/prelude/prelude.blot" ()
+open import "../../../src/prelude/prelude.blot"
 
 sig run = (Int, Int) -> Int
 let run = fn (flag, value) =>

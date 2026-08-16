@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig retained_go = (Int, [Int], Int) -> Int
 const retained_go = rec (fn (remaining, values, observed) =>

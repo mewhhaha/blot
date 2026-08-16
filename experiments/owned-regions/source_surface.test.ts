@@ -19,7 +19,7 @@ async function expectDiagnostic(source: string, code: string): Promise<void> {
 Deno.test("Region split and join preserve one fresh root", async () => {
   const checked = await checkSource(
     path,
-    `open @import "blot:prelude" ()
+    `open import "blot:prelude"
 let values = [3, 1, 2]
 let whole = @region.claim values
 let rejoined = case @region.split (!whole) 1 of
@@ -34,7 +34,7 @@ return @region.freeze (!rejoined)
 Deno.test("Region claim is copy-safe for a shared source array", async () => {
   const checked = await checkSource(
     path,
-    `open @import "blot:prelude" ()
+    `open import "blot:prelude"
 let values = [3, 1, 2]
 let region = @region.claim values
 let shared_first = case Array.get (values, 0) of
@@ -52,7 +52,7 @@ return shared_first * 10 + frozen_first
 
 Deno.test("Region join rejects reversed siblings", async () => {
   await expectDiagnostic(
-    `open @import "blot:prelude" ()
+    `open import "blot:prelude"
 let values = [3, 1, 2]
 let whole = @region.claim values
 let rejoined = case @region.split (!whole) 1 of
@@ -70,7 +70,7 @@ Deno.test("Region evaluator mutates only its private Store", async () => {
   try {
     await Deno.writeTextFile(
       file,
-      `open @import "blot:prelude" ()
+      `open import "blot:prelude"
 let values = [3, 1, 2]
 let region = @region.claim values
 let changed = case @region.swap (!region) 0 2 of

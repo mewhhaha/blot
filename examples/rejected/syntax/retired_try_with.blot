@@ -1,0 +1,8 @@
+// `with` belongs to explicit module inputs, so the retired handler form is not
+// reinterpreted as an application. Handler composition uses `|>`.
+
+let program = fn () => 1
+let handler = {}
+let value = try program with
+  @handle (Effect, handler)
+return value

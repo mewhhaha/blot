@@ -15,7 +15,7 @@ async function chain(depth: number, leafSource: string) {
     const path = join(directory, `module-${index}.blot`);
     await writeFile(
       path,
-      `const dependency = @import "./module-${index - 1}.blot" ()\n` +
+      `const dependency = import "./module-${index - 1}.blot"\n` +
         `return { .answer = dependency.answer; }\n`,
     );
     paths.push(path);
@@ -29,19 +29,19 @@ test("failed incremental checks do not publish partial snapshots", async () => {
   const root = join(directory, "root.blot");
   await writeFile(
     leaf,
-    `module input\nlet hidden = input.base\nreturn { .answer = 42; }\n`,
+    `module with input\nlet hidden = input.base\nreturn { .answer = 42; }\n`,
   );
   await writeFile(
     root,
-    `const leaf = @import "./leaf.blot"\n` +
-      `return (leaf { .base = 1; }).answer\n`,
+    `const leaf = import "./leaf.blot" with { .base = 1; }\n` +
+      `return leaf.answer\n`,
   );
 
   const session = new SealedCheckSession();
   assert.equal((await session.check(root)).type, "42");
   await writeFile(
     leaf,
-    `module input\nlet hidden = input.name\nreturn { .answer = 42; }\n`,
+    `module with input\nlet hidden = input.name\nreturn { .answer = 42; }\n`,
   );
 
   for (let attempt = 0; attempt < 2; attempt += 1) {

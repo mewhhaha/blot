@@ -53,7 +53,7 @@ Deno.test("language formatting returns one whole-document edit", async () => {
 Deno.test("value hover shows its inferred signature, compact definition, and documentation", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "hover-value.blot");
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 
 /// Adds two integers without changing either input.
 sig add = Int -> Int -> Int
@@ -92,7 +92,7 @@ return answer
 Deno.test("token hover documents keywords and resolved operators", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "hover-token.blot");
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 let total = 20 + 22
 let negative = -total
 let count = Array.length [negative]
@@ -123,9 +123,15 @@ return count
       field.contents.value,
       "sig Array.length = ['a] -> Int",
     );
-    const keyword = await service.hover(uri, { line: 4, character: 1 });
-    assert(keyword !== null);
-    assertStringIncludes(keyword.contents.value, "nearest module");
+    const imported = await service.hover(uri, { line: 0, character: 7 });
+    assert(imported !== null);
+    assertStringIncludes(imported.contents.value, "Instantiates a module once");
+    const returned = await service.hover(uri, { line: 4, character: 1 });
+    assert(returned !== null);
+    assertStringIncludes(
+      returned.contents.value,
+      "result of the nearest module",
+    );
   } finally {
     await service.destroy();
   }
@@ -134,7 +140,7 @@ return count
 Deno.test("shape and attached member hover keeps the selected member", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "hover-member.blot");
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 const Point = Int <+ {
   .fields = 42;
   .new = fn value => value + 0;
@@ -211,7 +217,7 @@ return 2
 Deno.test("a direct array access action is published only after compiler proof", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "proved-lookup.blot");
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 return case Array.get ([1], 0) of
   #Some value => value
   #None => 0
@@ -292,7 +298,7 @@ return run
 Deno.test("a terminal Option match offers a compiler-checked guard action", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "option-guard.blot");
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 sig unwrap = Option Unit -> Unit
 let unwrap = fn option =>
   return case option of

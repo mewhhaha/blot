@@ -1,5 +1,5 @@
 // A familiar field path is not a relational proof; the closure body must verify.
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let Array = { .length = fn _ => 10; }
 

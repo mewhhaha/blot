@@ -17,7 +17,7 @@ Deno.test("refreshing loaded modules replaces an edited dependency and its impor
   );
   await Deno.writeTextFile(
     entryPath,
-    `return (@import "./dependency.blot") ()
+    `return import "./dependency.blot"
 `,
   );
 
@@ -63,7 +63,7 @@ return message
   );
   await Deno.writeTextFile(
     entryPath,
-    `return (@import "./dependency.blot") ()
+    `return import "./dependency.blot"
 `,
   );
 

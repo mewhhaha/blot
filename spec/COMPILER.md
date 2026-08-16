@@ -345,11 +345,26 @@ toolchain process. Its known-gap file is an inventory, not permission to weaken
 a judgment. CI requires that inventory to change explicitly, and the strict mode
 requires the inventory to be empty.
 
-Staging evaluates a module result as one computation before selecting a named
-export. Consequently, host requests made while constructing the module result
-are replayed in the same order for every runtime export, matching the Rust/Wasm
-implementation. Export selection may remove pure representation work only when
-that removal cannot change requests, traps, returns, or divergence.
+Staging evaluates one module instance as one ordered computation before
+selecting any named field from its returned value. A written import occurrence
+is one instance: aliasing its value does not re-evaluate it, while a second
+written occurrence is distinct. Export selection may duplicate or remove only
+work proved pure. It may not replay requests, traps, returns, or divergence for
+each runtime field.
+
+`return` initially lowers as a tail computation. Checking records its effect row
+separately from effects performed by preceding top-level declarations. An empty
+settled result row certifies that the tail has no observable requests, so Core
+construction and staging may normalize it to an ordinary returned value. This is
+a checked fact, not syntax reconstruction; a non-empty result row stays an
+ordered computation.
+
+The current Wasm boundary exposes separate functions for fields of a returned
+record and has no shared module-initialization state. A root whose top-level
+computation is effectful may therefore expose at most one runtime field. More
+than one is a target refusal after successful checking, not a source diagnostic.
+Pure roots may expose several fields because selecting them cannot change
+observations.
 
 ## 9. Complete responsibility inventory
 
@@ -367,7 +382,7 @@ public artifact, or an explicit compiler command.
 | read and validate package manifests                                   | confined source and built targets       |
 | prefer a valid built capsule and fall back to declared source         | the same lowered module graph           |
 | read source and included files                                        | exact bytes in the compilation revision |
-| resolve `@import` and literal `@include` edges                        | a closed dependency graph               |
+| resolve literal `import` and `@include` edges                         | a closed dependency graph               |
 | reject cycles and invalid include paths                               | source-oriented diagnostics             |
 | retain package-owned relative edges and consumer-owned external edges | relocatable reusable libraries          |
 | hash, compress, decode, and validate module capsules                  | a portable lowered AST graph            |
@@ -393,7 +408,7 @@ public artifact, or an explicit compiler command.
 | Responsibility                                                                    | Required result                               |
 | --------------------------------------------------------------------------------- | --------------------------------------------- |
 | construct lexical scopes, `open` frames, recursive groups, and shadowing          | resolved ordinary bindings                    |
-| evaluate module functions and compile-time declarations                           | static values and generative identities       |
+| instantiate modules and evaluate compile-time declarations                        | static values and generative identities       |
 | implement primitive compile-time behavior                                         | the specified value language                  |
 | infer literal, function, record, variant, array, effect, and quantified types     | settled source types                          |
 | solve algebraic-subtyping bounds and speculative union choices                    | accepted constraints without leaked mutations |

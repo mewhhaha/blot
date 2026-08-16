@@ -39,12 +39,17 @@ export interface StagedModule {
 }
 
 export function stageModule(
-  module: Module,
+  sourceModule: Module,
   values: Env,
   imports: Imports,
+  resultEffects: string,
   inferredShapes: ReadonlyMap<Expr, Shape> = new Map(),
   recordAdaptations: ReadonlyMap<Expr, RecordAdaptation> = new Map(),
 ): StagedModule {
+  let module = sourceModule;
+  if (module.resultEffects === "ambient" && resultEffects === "") {
+    module = { ...module, resultEffects: "pure" };
+  }
   const stagingValues = childEnv(values);
   const stagedDeclarations = new Set<Decl>();
   let allDeclarationsStaged = true;

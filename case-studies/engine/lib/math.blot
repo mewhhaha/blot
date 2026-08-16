@@ -21,7 +21,7 @@
 // turn of sines reaches WebAssembly as data and the polynomial that produced it
 // is not in the artifact.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const PI = 3.141592653589793
 const TAU = 6.283185307179586

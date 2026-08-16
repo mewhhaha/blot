@@ -39,8 +39,7 @@ test(
     const library = join(directory, "library.blot");
     const root = join(directory, "root.blot");
     const source = (x: number, other: string, value: number): string =>
-      `const library = @import "./library.blot"\n` +
-      `const api = library ()\n` +
+      `const api = import "./library.blot"\n` +
       `return api.project { .x = ${x}; .${other} = ${value}; }\n`;
     const compiler = await Compiler.create();
     try {
@@ -76,19 +75,19 @@ test(
     try {
       await writeFile(
         library,
-        "module input\nlet hidden = input.base\nreturn { .answer = 42; }\n",
+        "module with input\nlet hidden = input.base\nreturn { .answer = 42; }\n",
       );
       await writeFile(
         root,
-        'const library = @import "./library.blot"\n' +
-          "return (library { .base = 1; }).answer\n",
+        'const library = import "./library.blot" with { .base = 1; }\n' +
+          "return library.answer\n",
       );
       assert.equal((await compiler.check(root)).type, "42");
 
       await writeFile(
         root,
-        'const library = @import "./library.blot"\n' +
-          "return (library { .name = 1; }).answer\n",
+        'const library = import "./library.blot" with { .name = 1; }\n' +
+          "return library.answer\n",
       );
       await assert.rejects(
         compiler.check(root),

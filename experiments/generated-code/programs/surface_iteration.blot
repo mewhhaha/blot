@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig sum_to = Int -> Int
 const sum_to = fn count =>

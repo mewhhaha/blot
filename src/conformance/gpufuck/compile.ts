@@ -551,6 +551,7 @@ async function prepare(path: string) {
     loaded.module,
     checked.values,
     imports,
+    checked.resultEffects,
     checked.shapes,
     checked.recordAdaptations,
   );
@@ -726,6 +727,7 @@ async function prepareResidualFrontend(path: string): Promise<{
     loaded.module,
     checked.values,
     imports,
+    checked.resultEffects,
     checked.shapes,
     checked.recordAdaptations,
   );
@@ -789,7 +791,7 @@ function residualizeUnitHostModule(
     }
     if (!match(parameter, shapeOf([...grants]), environment)) {
       throw new TypeError(
-        `${prepared.loaded.path}: symbolic grants do not match the module parameter`,
+        `${prepared.loaded.path}: symbolic grants do not match the module input`,
       );
     }
   }

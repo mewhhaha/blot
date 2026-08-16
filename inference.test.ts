@@ -15,7 +15,7 @@ const scratch = await Deno.makeTempDir();
 // Every snippet opens the prelude, because every module does: it has no
 // privilege, and a fixture that skipped it would be testing a language where
 // `+` is unbound.
-const PRELUDE = `open @import "blot:prelude" ()
+const PRELUDE = `open import "blot:prelude"
 `;
 
 async function typeOf(source: string): Promise<string> {
@@ -180,7 +180,7 @@ return same
 
 check(
   "float arithmetic stays in the one float type",
-  `open @import "blot:prelude" ()
+  `open import "blot:prelude"
 return Float.add 1.5 2.5
 `,
   "F64",
@@ -188,7 +188,7 @@ return Float.add 1.5 2.5
 
 check(
   "a float has no equality, only an ordering that refuses NaN",
-  `open @import "blot:prelude" ()
+  `open import "blot:prelude"
 return { .same = is_equal (Float.cmp 0.5 0.5); .nan = Float.is_nan 1.0; }
 `,
   "{ .same = (#True | #False); .nan = #True | #False; }",
@@ -196,7 +196,7 @@ return { .same = is_equal (Float.cmp 0.5 0.5); .nan = Float.is_nan 1.0; }
 
 check(
   "a four-lane vector is an opaque type, not a range",
-  `open @import "blot:prelude" ()
+  `open import "blot:prelude"
 return Vec4.splat (Float32.of_int 1)
 `,
   "F32x4",
@@ -204,7 +204,7 @@ return Vec4.splat (Float32.of_int 1)
 
 check(
   "a lane read leaves the vector for the scalar type",
-  `open @import "blot:prelude" ()
+  `open import "blot:prelude"
 return Vec4.x (Vec4.splat (Float32.of_int 1))
 `,
   "F32",
@@ -233,7 +233,7 @@ rejects(
 
 rejects(
   "literal arms cannot cover a vector",
-  `open @import "blot:prelude" ()
+  `open import "blot:prelude"
 sig f = F32x4 -> Int
 let f = fn v => case v of
   1 => 1
@@ -244,7 +244,7 @@ return f (Vec4.splat (Float32.of_int 1))
 
 check(
   "single precision is its own type",
-  `open @import "blot:prelude" ()
+  `open import "blot:prelude"
 return Float32.mul (Float32.of_int 2) (Float32.of_float 1.5)
 `,
   "F32",
@@ -252,7 +252,7 @@ return Float32.mul (Float32.of_int 2) (Float32.of_float 1.5)
 
 rejects(
   "the two float precisions do not mix",
-  `open @import "blot:prelude" ()
+  `open import "blot:prelude"
 return Float.add 1.5 (Float32.of_int 1)
 `,
   "BLOT_TYPE_ERROR",
@@ -260,7 +260,7 @@ return Float.add 1.5 (Float32.of_int 1)
 
 check(
   "crossing between the numeric types is explicit and exact",
-  `open @import "blot:prelude" ()
+  `open import "blot:prelude"
 return { .up = Float.of_int 7; .down = Float.truncate 3.75; }
 `,
   "{ .up = F64; .down = Int; }",
@@ -268,7 +268,7 @@ return { .up = Float.of_int 7; .down = Float.truncate 3.75; }
 
 rejects(
   "a float case is never exhaustive on its own",
-  `open @import "blot:prelude" ()
+  `open import "blot:prelude"
 sig pick = F64 -> Int
 let pick = fn x => case x of
   1.5 => 1
@@ -279,7 +279,7 @@ return pick 1.5
 
 rejects(
   "the two numeric types do not mix",
-  `open @import "blot:prelude" ()
+  `open import "blot:prelude"
 return Float.add 1.5 2
 `,
   "BLOT_TYPE_ERROR",

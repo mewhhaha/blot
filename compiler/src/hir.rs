@@ -5868,12 +5868,19 @@ pub fn elaborate(
     path: &str,
     checked: CheckedModule,
 ) -> Result<RuntimeModule, Diagnostic> {
-    let result_is_shape = context.modules.borrow().get(path).is_some_and(|loaded| {
-        matches!(
-            loaded.module.arena.expressions[loaded.module.result.0 as usize],
-            crate::ast::Expression::Shape { .. }
+    let (result_is_shape, result_span) = {
+        let modules = context.modules.borrow();
+        let loaded = modules
+            .get(path)
+            .ok_or_else(|| hir_error("Runtime HIR elaboration lost its root module."))?;
+        (
+            matches!(
+                loaded.module.arena.expressions[loaded.module.result.0 as usize],
+                crate::ast::Expression::Shape { .. }
+            ),
+            loaded.module.arena.expression_span(loaded.module.result),
         )
-    });
+    };
     let argument = module_argument(&checked.parameter)?;
     let computation = evaluate_checked_module(
         context.clone(),
@@ -5894,6 +5901,17 @@ pub fn elaborate(
         Err(error) => return Err(error),
     };
     let staged = staged_exports(value, checked.result, result_is_shape)?;
+    let runtime_export_count = staged
+        .iter()
+        .filter(|exported| exported.runtime.is_some())
+        .count();
+    if !host_calls.is_empty() && runtime_export_count > 1 {
+        return Err(Diagnostic::new(
+            "BLOT_TARGET_REFUSAL",
+            "An effectful module top level cannot be replayed across multiple runtime fields; return one runtime value or move the effect into a returned function.",
+            result_span,
+        ));
+    }
     if staged.iter().all(|exported| exported.runtime.is_none()) {
         return Err(Diagnostic::new(
             "BLOT_UNSUPPORTED_LOWERING",
@@ -6158,7 +6176,7 @@ fn module_argument(parameter: &Option<Type>) -> Result<Value, Diagnostic> {
     };
     let Type::Record(fields) = parameter else {
         return Err(hir_error(
-            "The module parameter must be a record of capabilities.",
+            "The module input must be a record of capabilities.",
         ));
     };
     let mut operations = OrderedFields::default();

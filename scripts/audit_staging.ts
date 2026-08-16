@@ -20,6 +20,7 @@ for await (const entry of Deno.readDir(root)) {
     loaded.module,
     checked.values,
     imports,
+    checked.resultEffects,
     checked.shapes,
   );
   results.push({

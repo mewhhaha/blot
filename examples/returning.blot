@@ -1,7 +1,7 @@
 // `return` exits the nearest module or explicit block, including from a
 // statement branch or across a loop. A nested block catches its own return.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let describe = fn value =>
   if value < 0:

@@ -1,7 +1,7 @@
 // Direct array access requires a proof that every possible index is in bounds.
 // Use `Array.get` when an index may be outside instead.
 
-open @import "../../../src/prelude/prelude.blot" ()
+open import "../../../src/prelude/prelude.blot"
 
 sig at = [Int] -> Int -> Int
 let at = fn values => fn index => @array.get values index

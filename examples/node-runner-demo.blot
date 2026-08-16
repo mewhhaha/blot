@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let double = fn value => value * 2
 let start = 20 + 1

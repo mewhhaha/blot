@@ -90,6 +90,8 @@ export interface CheckResult {
   readonly module: Loaded["module"];
   readonly type: string;
   readonly effects: string;
+  /** Settled effects of the returned tail alone. */
+  readonly resultEffects: string;
   /** Inferred module result retained for specialization and boundary lowering. */
   readonly moduleType: SimpleType;
   /** Inferred module row retained for the emitted ABI manifest. */
@@ -286,7 +288,7 @@ function checkLoaded(
     unsealableLeafChecks.add(loaded);
   }
 
-  // Nothing is seeded. The prelude is reached through `@import` like any other
+  // Nothing is seeded. The prelude is reached through `import` like any other
   // module, so its exports arrive as a dependency's type and `assemble` folds
   // its facts in the way it folds any other's — there is no branch here that
   // knows what a prelude is.
@@ -431,14 +433,20 @@ function assemble(
     ...below.map((dependency) => dependency.opens),
     checked.opens,
   ]);
+  let coreModule = loaded.module;
+  const resultEffects = showRow(checked.resultEffects);
+  if (coreModule.resultEffects === "ambient" && resultEffects === "") {
+    coreModule = { ...coreModule, resultEffects: "pure" };
+  }
   const result: CheckResult = {
     module: loaded.module,
     type: show(checked.type),
     effects: file.effects,
+    resultEffects,
     moduleType: checked.type,
     moduleEffects: checked.effects,
     core: elaborateModule(
-      loaded.module,
+      coreModule,
       expressionTypes,
       checked.type,
       comptimeValues,
@@ -500,7 +508,7 @@ function assemble(
   return result;
 }
 
-/** Each literal `@import` in one module, paired with what it resolved to. */
+/** Each literal import occurrence in one module, paired with what it resolved to. */
 function importSites(
   loaded: Loaded,
   dependencies: ReadonlyMap<string, CheckResult>,

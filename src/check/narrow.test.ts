@@ -24,7 +24,7 @@ import { show } from "./print.ts";
 const scratch = await Deno.makeTempDir();
 
 /** The operators this file interrogates, as one module's compile-time values. */
-const FIXTURE = `open @import "blot:prelude" ()
+const FIXTURE = `open import "blot:prelude"
 
 const Sneaky = { .right = 0; }
 

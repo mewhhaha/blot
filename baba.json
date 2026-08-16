@@ -251,6 +251,12 @@
         }
       },
       {
+        "rule": "import_expression",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
         "rule": "effect_row",
         "boundary": {
           "kind": "separated",

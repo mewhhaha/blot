@@ -13,12 +13,12 @@ test("dependency changes still propagate through unchanged intermediaries", asyn
   await writeFile(leaf, "return { .answer = 42; }\n");
   await writeFile(
     middle,
-    `const dependency = @import "./leaf.blot" ()\n` +
+    `const dependency = import "./leaf.blot"\n` +
       `return { .answer = 7; }\n`,
   );
   await writeFile(
     root,
-    `const middle = @import "./middle.blot" ()\nreturn middle.answer\n`,
+    `const middle = import "./middle.blot"\nreturn middle.answer\n`,
   );
 
   const session = new SealedCheckSession();
@@ -42,15 +42,15 @@ test("shared dependency diamonds are collected once per module", async () => {
     const right = join(directory, `right-${level}.blot`);
     if (previous === null) {
       const source =
-        `const dependency = @import "./leaf.blot" ()\nreturn dependency\n`;
+        `const dependency = import "./leaf.blot"\nreturn dependency\n`;
       await writeFile(left, source);
       await writeFile(right, source);
     } else {
       const [previousLeft, previousRight] = previous;
       const leftName = previousLeft.split("/").at(-1)!;
       const rightName = previousRight.split("/").at(-1)!;
-      const source = `const left = @import "./${leftName}" ()\n` +
-        `const right = @import "./${rightName}" ()\n` +
+      const source = `const left = import "./${leftName}"\n` +
+        `const right = import "./${rightName}"\n` +
         `return { .answer = left.answer; .other = right.answer; }\n`;
       await writeFile(left, source);
       await writeFile(right, source);
@@ -63,8 +63,8 @@ test("shared dependency diamonds are collected once per module", async () => {
   const [left, right] = previous!;
   await writeFile(
     root,
-    `const left = @import "./${left.split("/").at(-1)!}" ()\n` +
-      `const right = @import "./${right.split("/").at(-1)!}" ()\n` +
+    `const left = import "./${left.split("/").at(-1)!}"\n` +
+      `const right = import "./${right.split("/").at(-1)!}"\n` +
       `return { .answer = left.answer; .other = right.answer; }\n`,
   );
   paths.push(root);

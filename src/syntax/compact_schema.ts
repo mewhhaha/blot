@@ -88,6 +88,7 @@ export const compactRuleNames = [
   "qualified_name_part",
   "effect_row_part",
   "effect_row_tail",
+  "import_expression",
 ] as const;
 
 // Stable field identifiers. Retired names remain here so compiler snapshots do
@@ -153,6 +154,8 @@ export const compactFieldNames = [
   "target",
   "value",
   "phase",
+  "input",
+  "specifier",
 ] as const;
 
 // Baba numbers live fields densely in grammar order. Keep this list exactly in
@@ -178,6 +181,7 @@ export const currentCompactFieldNames = [
   "guard",
   "head",
   "header",
+  "input",
   "kind",
   "line",
   "members",
@@ -197,6 +201,7 @@ export const currentCompactFieldNames = [
   "right",
   "root",
   "source",
+  "specifier",
   "spread",
   "statements",
   "suffixes",

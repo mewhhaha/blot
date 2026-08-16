@@ -22,7 +22,7 @@ async function chain(
     const path = join(directory, `module-${index}.blot`);
     await writeFile(
       path,
-      `const dependency = @import "./module-${index - 1}.blot" ()\n` +
+      `const dependency = import "./module-${index - 1}.blot"\n` +
         `return { .answer = dependency.answer; }\n`,
     );
     paths.push(path);
@@ -68,20 +68,20 @@ test("a live public change propagates through every importer", async () => {
   assert.equal(changed.cacheHit, false);
 });
 
-test("a dead declaration that constrains the module parameter propagates", async () => {
+test("a dead declaration that constrains the module input propagates", async () => {
   const directory = await mkdtemp(join(tmpdir(), "blot-parameter-boundary-"));
   const leaf = join(directory, "leaf.blot");
   const root = join(directory, "root.blot");
   await writeFile(
     leaf,
-    `module input\n` +
+    `module with input\n` +
       `let hidden = input.base\n` +
       `return { .answer = 42; }\n`,
   );
   await writeFile(
     root,
-    `const leaf = @import "./leaf.blot"\n` +
-      `return (leaf { .base = 1; }).answer\n`,
+    `const leaf = import "./leaf.blot" with { .base = 1; }\n` +
+      `return leaf.answer\n`,
   );
 
   const session = new SealedCheckSession();
@@ -90,7 +90,7 @@ test("a dead declaration that constrains the module parameter propagates", async
 
   await writeFile(
     leaf,
-    `module input\n` +
+    `module with input\n` +
       `let hidden = input.name\n` +
       `return { .answer = 42; }\n`,
   );
@@ -107,7 +107,7 @@ test("type-only sealing is unsound for compile-time callable exports", async () 
   const writeLeaf = async (increment: number): Promise<void> => {
     await writeFile(
       leaf,
-      `open @import "blot:prelude" ()\n` +
+      `open import "blot:prelude"\n` +
         `sig bump = Int -> Int\n` +
         `const bump = fn x => @int.add x ${increment}\n` +
         `return { .bump = bump; }\n`,
@@ -116,8 +116,8 @@ test("type-only sealing is unsound for compile-time callable exports", async () 
   await writeLeaf(1);
   await writeFile(
     root,
-    `open @import "blot:prelude" ()\n` +
-      `const leaf = @import "./leaf.blot" ()\n` +
+    `open import "blot:prelude"\n` +
+      `const leaf = import "./leaf.blot"\n` +
       `const result = leaf.bump 41\n` +
       `return result\n`,
   );
@@ -146,7 +146,7 @@ test("observable sealing propagates a compile-time behavior change", async () =>
   const writeLeaf = async (increment: number): Promise<void> => {
     await writeFile(
       leaf,
-      `open @import "blot:prelude" ()\n` +
+      `open import "blot:prelude"\n` +
         `sig bump = Int -> Int\n` +
         `const bump = fn x => @int.add x ${increment}\n` +
         `return { .bump = bump; }\n`,
@@ -155,8 +155,8 @@ test("observable sealing propagates a compile-time behavior change", async () =>
   await writeLeaf(1);
   await writeFile(
     root,
-    `open @import "blot:prelude" ()\n` +
-      `const leaf = @import "./leaf.blot" ()\n` +
+    `open import "blot:prelude"\n` +
+      `const leaf = import "./leaf.blot"\n` +
       `const result = leaf.bump 41\n` +
       `return result\n`,
   );
@@ -176,14 +176,14 @@ test("a relational summary change invalidates its importing proof", async () => 
   const root = join(directory, "root.blot");
   await writeFile(
     leaf,
-    `open @import "blot:prelude" ()\n` +
+    `open import "blot:prelude"\n` +
       `const count = fn values => Array.length values\n` +
       `return { .count = count; }\n`,
   );
   await writeFile(
     root,
-    `open @import "blot:prelude" ()\n` +
-      `const leaf = @import "./leaf.blot" ()\n` +
+    `open import "blot:prelude"\n` +
+      `const leaf = import "./leaf.blot"\n` +
       `let at = fn values => fn index => case index >= 0 && index < leaf.count values of\n` +
       `  #True => @array.get values index\n` +
       `  #False => 0\n` +

@@ -396,7 +396,7 @@ export function* evaluateCoreModule(
   if (!match(parameter, argument, scope)) {
     fail(
       "BLOT_ARGUMENT_MISMATCH",
-      `${show(argument)} does not match this module parameter.`,
+      `${show(argument)} does not match this module input.`,
       parameter.span,
     );
   }
@@ -1421,7 +1421,7 @@ export function match(pattern: Pattern, value: Value, scope: Env): boolean {
 
 // --- modules ----------------------------------------------------------------
 
-/** A module is a function from its input record to its export record. */
+/** A module is internally a function from its input to its returned value. */
 export function moduleClosure(
   module: Module,
   env: Env,

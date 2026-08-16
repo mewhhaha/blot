@@ -2,7 +2,7 @@
 // wrap a binding's value, while their names and metadata remain available to
 // tools such as `blot test`.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const multiply = fn factor => tag (
     "multiply",

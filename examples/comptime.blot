@@ -4,7 +4,7 @@
 // a macro, an attribute, or a plugin — it is code you can read, step through,
 // and call from anywhere.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let folded = compdo:
   return 20 * 2 + 1

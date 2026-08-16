@@ -10,7 +10,7 @@
 // `@array.get` is the direct path and requires that proof. When an index is not
 // proved, `Array.get` is total and returns `#Some value | #None`.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig at = [Int] -> Int -> Int
 let at = fn xs => fn n =>

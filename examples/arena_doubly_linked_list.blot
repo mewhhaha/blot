@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const node = fn (value, previous, next) => {
     .value = value;

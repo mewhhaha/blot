@@ -74,30 +74,26 @@ export function lowerModule(root: Rule, source: string): Module {
     patternHead: false,
   };
 
-  const declarations = fieldList(root, "declarations")
+  let statements = fieldList(root, "declarations")
     .map((cursor) => unwrap(cursor));
-  const last = declarations.at(-1);
-  if (last === undefined || asRule(last, "declaration").name !== "result") {
-    fail(
-      "BLOT_MISSING_RESULT",
-      "A module ends with `return expr`.",
-      root.span,
-    );
-  }
-  const statements = declarations.slice(0, -1);
-  const resultRule = asRule(last, "result");
-  let result = lowerValue(
-    asRule(field(resultRule, "value"), "value"),
-    context,
-  );
+  let result: Expr = { tag: "unit", span: root.span };
   let resultEffects: Module["resultEffects"] = "pure";
+  const last = statements.at(-1);
+  if (last !== undefined) {
+    const terminalReturn = lowerTerminalReturn(last, context);
+    if (terminalReturn !== null) {
+      result = terminalReturn;
+      resultEffects = "ambient";
+      statements = statements.slice(0, -1);
+    }
+  }
   let loweredDeclarations: readonly Decl[];
   if (statementsNeedControlLowering(statements)) {
     result = {
       tag: "block",
       declarations: [],
       result,
-      resultEffects: "pure",
+      resultEffects,
       span: result.span,
     };
     result = resolveControlSequence(statements, result, context, root.span);
@@ -2268,6 +2264,13 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
       return { tag: "text", value: decodeText(cursor.text, span), span };
     }
     if (cursor.kind === "INTRINSIC") {
+      if (cursor.text === "@import") {
+        fail(
+          "BLOT_RETIRED_IMPORT",
+          '`@import` is retired; write `import "path"` or `import "path" with value`.',
+          span,
+        );
+      }
       return { tag: "intrinsic", name: cursor.text, span };
     }
     fail(
@@ -2278,6 +2281,36 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
   }
 
   const rule = cursor;
+  if (rule.name === "import_expression") {
+    const specifierToken = tokenOf(required(rule, "specifier"));
+    const specifier: Expr = {
+      tag: "text",
+      value: decodeText(specifierToken.text, specifierToken.span),
+      span: specifierToken.span,
+    };
+    const loaded: Expr = {
+      tag: "apply",
+      fn: { tag: "intrinsic", name: "@import", span: rule.span },
+      arg: specifier,
+      span: { start: rule.span.start, end: specifier.span.end },
+    };
+    const inputField = rule.field("input");
+    let input: Expr = { tag: "unit", span: rule.span };
+    if (Array.isArray(inputField)) {
+      const inputCursor = inputField[1];
+      expect(
+        inputCursor !== null && inputCursor !== undefined,
+        "import input has no value",
+      );
+      input = lowerValue(asRule(inputCursor, "import input"), context);
+    }
+    return {
+      tag: "apply",
+      fn: loaded,
+      arg: input,
+      span: rule.span,
+    };
+  }
   if (rule.name === "constructor_expression") {
     return {
       tag: "tag",

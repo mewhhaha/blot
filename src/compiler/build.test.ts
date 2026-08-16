@@ -99,14 +99,13 @@ Deno.test("Blot compiler artifact reuse misses after a dependency edit", async (
   const root = `${directory}/root.blot`;
   await Deno.writeTextFile(
     dependency,
-    `module capabilities
+    `module with capabilities
 return { .run = capabilities.base; }
 `,
   );
   await Deno.writeTextFile(
     root,
-    `const dependency = @import "./dependency.blot"
-let application = dependency { .base = 41; }
+    `let application = import "./dependency.blot" with { .base = 41; }
 return application.run
 `,
   );
@@ -121,7 +120,7 @@ return application.run
 
   await Deno.writeTextFile(
     dependency,
-    `module capabilities
+    `module with capabilities
 return { .run = 42; }
 `,
   );

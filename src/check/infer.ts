@@ -1234,7 +1234,7 @@ function inferUnrecorded(
         const shape = shapeOf(target, context.staging.instances);
         if (shape !== null) context.shapes.set(expr, shape);
       });
-      // A projection off the module parameter is a granted capability. Read
+      // A projection off the module input is a granted capability. Read
       // after checking, because the signature comes from how the program
       // *uses* it and at the projection nothing has used it yet.
       if (
@@ -1562,7 +1562,7 @@ function inferSpecial(
     return freshVar(level);
   }
 
-  // A module is a function from its input record to its export record, and it
+  // A module is internally a function from its input to its returned value, and it
   // is checked once and shared. Typing the import is what lets a caller see
   // the module's exports instead of an opaque value.
   if (callee.name === "@import" && head.args.length >= 1) {
@@ -3233,6 +3233,22 @@ function inferDeclarations(
       declarationContext = { ...context, phase: "comptime" };
     }
 
+    // Import syntax instantiates immediately, and a `const` can evaluate that
+    // instance all the way to its returned value. The evaluated value still
+    // cannot replace the ordinary application judgment: that judgment is what
+    // checks the explicit input against the dependency's inferred demand.
+    if (type !== null && instantiatedImport(declaration.value)) {
+      const inferred = inferPure(
+        declaration.value,
+        declarationContext,
+        level,
+        "A `const` import",
+      );
+      located(declaration.value.span, () => {
+        constrain(type as SimpleType, inferred);
+      });
+    }
+
     const group = groups.get(declaration);
     if (type === null && group !== undefined) {
       // Typed once, at the first member: the group's names have to be in scope
@@ -4404,6 +4420,12 @@ function inferPure(
   return inferred;
 }
 
+function instantiatedImport(expr: Expr): boolean {
+  const head = spine(expr);
+  return head !== null && head.callee.tag === "intrinsic" &&
+    head.callee.name === "@import" && head.args.length >= 2;
+}
+
 function requirePure(
   row: SimpleType,
   span: Span,
@@ -4516,6 +4538,8 @@ export interface Checked {
    */
   readonly parameter: SimpleType | null;
   readonly effects: SimpleType;
+  /** Effects performed by the returned tail, excluding preceding declarations. */
+  readonly resultEffects: SimpleType;
   /** The existing inference result for each expression; backends must not re-infer it. */
   readonly expressionTypes: ReadonlyMap<Expr, SimpleType>;
   /** Independently consumable evidence for every admitted direct array access. */
@@ -4694,6 +4718,7 @@ export function checkModule(
 
   inferDeclarations(module.declarations, context, level, row);
   let result: SimpleType;
+  let resultEffects = effects([]);
   if (module.resultEffects === "pure") {
     result = inferPure(
       module.result,
@@ -4702,7 +4727,9 @@ export function checkModule(
       "The module result",
     );
   } else {
-    result = infer(module.result, context, level, row);
+    resultEffects = freshVar(level);
+    result = infer(module.result, context, level, resultEffects);
+    located(module.result.span, () => constrain(resultEffects, row));
   }
   for (const [cancellation, identity] of cancelledContinuations) {
     if (continuationBindings.has(identity)) continue;
@@ -4724,6 +4751,7 @@ export function checkModule(
     type: result,
     parameter,
     effects: row,
+    resultEffects,
     expressionTypes,
     arrayProofs,
     opens,

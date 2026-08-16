@@ -30,11 +30,11 @@
 // recompiling. The camera comes from the host too — which is what lets a code
 // reload keep your viewpoint, since the viewpoint was never in here.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
-const E = @import "./lib/ecs.blot" ()
-const M = @import "./lib/math.blot" ()
-const R = @import "./lib/render.blot" ()
+const E = import "./lib/ecs.blot"
+const M = import "./lib/math.blot"
+const R = import "./lib/render.blot"
 
 const Store = E.Store
 

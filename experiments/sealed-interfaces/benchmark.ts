@@ -72,7 +72,7 @@ async function makeChain(depth: number, hidden: number): Promise<Fixture> {
     root = join(directory, `module-${index}.blot`);
     await writeFile(
       root,
-      `const dependency = @import "./module-${index - 1}.blot" ()\n` +
+      `const dependency = import "./module-${index - 1}.blot"\n` +
         `return { .answer = dependency.answer; }\n`,
     );
   }

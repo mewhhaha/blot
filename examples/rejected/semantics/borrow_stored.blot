@@ -2,7 +2,7 @@
 // Storing it would require a lifetime in the value's type, which Blot does not
 // have.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let consume = fn !value => value + 1
 let !token = 41

@@ -3,6 +3,7 @@ import type { Imports } from "../comptime/eval.ts";
 import { type Loaded, loadProgram } from "./frontend.ts";
 import type { BlotRuntimeModule } from "../runtime/hir.ts";
 import { stageModule } from "../stage.ts";
+import { CompilerTargetRefusal } from "./backend.ts";
 import { exportResidualRuntimeHir } from "./lower/runtime_hir.ts";
 
 const hirByLoadedRevision = new WeakMap<Loaded, BlotRuntimeModule>();
@@ -32,8 +33,18 @@ export async function lowerRuntimeHir(
     loaded.module,
     checked.values,
     imports,
+    checked.resultEffects,
     checked.shapes,
     checked.recordAdaptations,
+  );
+  const runtimeExports = staged.exports.filter((exported) =>
+    exported.phase === "runtime"
+  );
+  // A staged value is already independent of runtime initialization. An
+  // unresolved value combined with a host capability is the Node-side witness
+  // for the host calls the Rust evaluator records while preparing the root.
+  const residualTopLevel = runtimeExports.some((exported) =>
+    exported.value === undefined
   );
   const hir = freezeSnapshot(exportResidualRuntimeHir(
     loaded.path,
@@ -42,6 +53,14 @@ export async function lowerRuntimeHir(
     "blot:default",
     staged.module,
   ));
+  if (
+    residualTopLevel && hir.capabilities.length > 0 &&
+    runtimeExports.length > 1
+  ) {
+    throw new CompilerTargetRefusal(
+      "an effectful module top level cannot be replayed across multiple runtime fields; return one runtime value or move the effect into a returned function",
+    );
+  }
   hirByLoadedRevision.set(loaded, hir);
   return hir;
 }

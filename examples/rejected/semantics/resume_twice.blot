@@ -2,7 +2,7 @@
 // it `?resume` and the second call becomes a static error instead — compare
 // `affine_resumed_twice.blot`. Both reject; only one does so before running.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const Choice = @effect { .pick = Unit -> I32; }
 const twice = { .pick = fn (_, resume) =>

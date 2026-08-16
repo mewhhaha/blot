@@ -4,7 +4,7 @@ import { checkFile } from "./check/mod.ts";
 import { testFile } from "./test.ts";
 
 const scratch = await Deno.makeTempDir();
-const PRELUDE = `open @import "blot:prelude" ()
+const PRELUDE = `open import "blot:prelude"
 `;
 
 async function sourceFile(source: string): Promise<string> {
@@ -83,13 +83,13 @@ Deno.test("a test file cannot require a module argument", async () => {
   const path = `${scratch}/${crypto.randomUUID()}.blot`;
   await Deno.writeTextFile(
     path,
-    "module init\n" + PRELUDE +
+    "module with init\n" + PRELUDE +
       `@[test] let needs_host = fn () => ()
 return ()
 `,
   );
   const error = await assertRejects(() => testFile(path), BlotError);
-  assertStringIncludes(error.message, "cannot declare a module parameter");
+  assertStringIncludes(error.message, "cannot declare a module input");
 });
 
 Deno.test("a test file cannot perform ambient initialization effects", async () => {

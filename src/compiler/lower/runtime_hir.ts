@@ -279,6 +279,7 @@ class ResidualHirBuilder {
     const environment = this.environment(null, this.#checked.values);
     this.bindModuleParameter(environment);
     let resultExpression: ResidualExpression;
+    let forceResult = false;
     let projectResult = false;
     if ("declarations" in computation) {
       const sourceResult = computation.result;
@@ -290,12 +291,17 @@ class ResidualHirBuilder {
       );
       this.declarations(scheduled.steps, environment);
       resultExpression = scheduledSourceResultExpression(scheduled.result);
+      forceResult = scheduled.result.tag === "tail";
     } else {
       this.coreDeclarations(computation.steps, environment);
       resultExpression = coreResultExpression(computation.result);
+      forceResult = computation.result.tag === "tail";
       projectResult = namedExport;
     }
     let residual = this.evaluate(resultExpression, environment);
+    if (forceResult) {
+      residual = this.forceEffectValue(residual, resultExpression.span);
+    }
     if (projectResult) {
       residual = this.project(residual, sourceName, resultExpression.span);
     }
@@ -543,10 +549,14 @@ class ResidualHirBuilder {
           { readonly tag: "block" }
         >;
         this.coreDeclarations(coreBlock.computation.steps, scope);
-        return this.evaluate(
+        let result = this.evaluate(
           coreResultExpression(coreBlock.computation.result),
           scope,
         );
+        if (coreBlock.computation.result.tag === "tail") {
+          result = this.forceEffectValue(result, expr.span);
+        }
+        return result;
       }
       const sourceBlock = expr as Extract<Expr, { readonly tag: "block" }>;
       const scheduled = scheduleSourceComputation(
@@ -555,10 +565,14 @@ class ResidualHirBuilder {
         sourceBlock.resultEffects,
       );
       this.declarations(scheduled.steps, scope);
-      return this.evaluate(
+      let result = this.evaluate(
         scheduledSourceResultExpression(scheduled.result),
         scope,
       );
+      if (scheduled.result.tag === "tail") {
+        result = this.forceEffectValue(result, expr.span);
+      }
+      return result;
     }
     if (expr.tag === "if") return this.conditional(expr, environment);
     if (expr.tag === "case") return this.caseExpression(expr, environment);

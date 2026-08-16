@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 sig construct_go = (Int, [Int]) -> Int
 const construct_go = rec (fn (remaining, values) =>

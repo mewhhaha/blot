@@ -215,9 +215,10 @@ the element was already pinned, so `map` and `filter` did not compile. Asking
 for the constructor was the right move over building monomorphization to route
 around its absence — gpufuck keeps Core polymorphic on measured grounds.
 
-An import is _inlined_: a module is a function from a record to a record, both
-known at compile time, so importing one is lowering its body as a block. The
-import boundary exists for authority, not for code generation.
+An import is _inlined_: the internal module closure maps an input record to a
+returned record, both known at compile time, so importing one is lowering its
+body as a block. The import boundary exists for authority, not for code
+generation.
 
 `just wasm` discovers every accepted catalog program and compares all three
 executions on the staged runtime result rather than on a selected scalar. A
@@ -271,23 +272,23 @@ The same evidence follows a specialized parameter into a tuple `case`. A shape
 pattern in one tuple column destructures the concrete element nominal supplied
 at that call rather than the narrower record named by the pattern.
 
-A projecting function reached across `@import` used to be a third. It is not one
+A projecting function reached across an import used to be a third. It is not one
 now: the reads are held until every module has been checked and settled once, so
 a projection inside a dependency is answered by the record an importer built.
 `examples/widened.blot` and `examples/lib/camera.blot` are the catalog entry,
 and two differently shaped calls into one imported projection now lower as
 separate specializations.
 
-## The module parameter is the module's imports
+## The module input is the program's authority
 
-The entry module's parameter is the program's whole authority — no ambient
+The entry module's input is the program's whole authority — no ambient
 filesystem, no ambient clock, nothing to import for more. At this boundary that
 authority _is_ the module's imports:
 
 ```blot
-module init;
+module with init
 …
-const _ = init.print message;     // imports { Init }
+<- init.print message     // imports { Init }
 ```
 
 `init` has no runtime representation of its own. Each field the program reaches
@@ -296,9 +297,8 @@ it, and nothing is passed in. A program that never asked for `print` cannot
 reach it.
 
 An operation's result may be unconstrained — nothing observes what `print`
-returns — and `()` is what that means at the boundary. An unconstrained
-_parameter_ is still refused: the host cannot be handed something no type
-determines.
+returns — and `()` is what that means at the boundary. An unconstrained _input_
+is still refused: the host cannot be handed something no type determines.
 
 Core carries text without measuring or rendering it, so gpufuck emits
 module-local Wasm implementations of `@text.len`, `@text.of_int`, and

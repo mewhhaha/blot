@@ -80,18 +80,18 @@ and the frame clock is this game's loop. It does _not_ declare `Canvas` or
 effect's identity is its declaration site. A library that draws must own what it
 draws through — two modules that each wrote `@effect.host` for a canvas would be
 two capabilities and two host imports, and a capability cannot be passed in as a
-module argument because a compile-time value has no runtime representation to
-pass. So importing `lib/render.blot` _is_ how this program acquires the
-authority to draw, and its inferred type says so:
+module input because a compile-time value has no runtime representation to pass.
+So importing `lib/render.blot` _is_ how this program acquires the authority to
+draw, and its inferred type says so:
 
 ```text
 case-studies/engine/main.blot: (Int | 0) ~ { Assets, Canvas, Host, View }
 ```
 
-The same reason keeps `Canvas` out of the renderer's exports: a module's
-returned record is a runtime value and an effect cannot be a field of one. The
-renderer exports a `frame` instead, which clears, reads the camera, hands the
-application two brushes, and presents.
+The same reason keeps `Canvas` out of the renderer's returned API: the record is
+a runtime value and an effect cannot be a field of one. The renderer returns a
+`frame` instead, which clears, reads the camera, hands the application two
+brushes, and presents.
 
 A camera is one record inside `lib/render.blot` and a different field subset at
 each of the four places that reads one, and those shapes agree because inference

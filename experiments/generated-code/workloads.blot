@@ -1,4 +1,4 @@
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 const scalar_mix = fn input =>
   let state = (input * 48271 + 1) % 2147483647

@@ -19,20 +19,20 @@ in a benchmark months later.
 
 | counter                     |    blot | note                                               |
 | --------------------------- | ------: | -------------------------------------------------- |
-| `lexerStates`               |     113 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`               |     122 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |      22 | worst-case island candidates allocated per token   |
-| `islandCount`               |      66 | one island for every grammar rule                  |
-| `islandStates`              |     385 |                                                    |
-| `islandTransitions`         |     394 |                                                    |
+| `islandCount`               |      67 | one island for every grammar rule                  |
+| `islandStates`              |     395 |                                                    |
+| `islandTransitions`         |     403 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 559,020 | immutable device table                             |
-| `packedBytes`               | 439,213 | version-3 runtime section                          |
+| `denseTransitionBytes`      | 587,760 | immutable device table                             |
+| `packedBytes`               | 459,807 | version-3 runtime section                          |
 | `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |       6 | islands admitted to parallel long-region execution |
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
-and edge arrays directly. Declaring all 66 rules as islands is what preserves
+and edge arrays directly. Declaring all 67 rules as islands is what preserves
 the full CST shape needed by source lowering.
 
 Removing element syntax while adding `compdo:` and effect-row tails moves the
@@ -41,8 +41,19 @@ current plan from 117 to 113 lexer states, from 81 to 67 islands, and from 30 to
 bytes and the packed plan from 593,683 to 450,224 bytes. The root loop and 33
 contraction rounds are unchanged; parallel long-region admission moves from 9 to
 7 islands because the retired element regions no longer exist. These are the
-current counters above; the element measurements later in this document remain
-historical records of the retired syntax.
+historical counters immediately before later module-syntax changes; the element
+measurements later in this document remain historical records of the retired
+syntax.
+
+Replacing exposed module functions with `module with input` and immediate
+`import "path" [with value]` adds one retained island, ten island states, nine
+island transitions, nine lexer states, 28,740 dense-transition bytes, and 20,594
+packed bytes. The maximum candidate multiplicity, contraction rounds, scratch
+bounds, root loop, and parallel long-region admission do not change. Treating a
+module as the same return-or-unit computation as `do` avoids a separate export
+island; compared with that discarded design it saves one island, seven island
+states, ten transitions, five lexer states, 20,064 dense-transition bytes, and
+14,811 packed bytes.
 
 Replacing the retired `#(name)` pin rule with the qualifier-shaped `^name`
 spelling removes one island, seven island states, seven island transitions,
@@ -251,6 +262,9 @@ island transitions, 14,568 dense-transition bytes, and 9,984 packed bytes, and
 lowered the summary scratch factor from 25 to 23. Island count, candidate
 multiplicity, contraction rounds, the root loop, and parallel long-region
 admission are unchanged.
+
+`with` is now reserved again solely for an explicit module input. This does not
+restore `try ... with`: that retired form remains absent.
 
 `fn` is the largest reduction the grammar has taken. Before it a lambda was
 `postfix_expression "=>" expression`, sharing its opening tokens with an

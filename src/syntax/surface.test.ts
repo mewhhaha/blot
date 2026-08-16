@@ -179,7 +179,7 @@ return transformer
 );
 
 Deno.test("handler pipelines become nested handled computations", async () => {
-  const source = `open @import "blot:prelude" ()
+  const source = `open import "blot:prelude"
 const First = @effect { .read = Unit -> Int; }
 const Second = @effect { .write = Int -> Unit; }
 let first_handler = { .read = fn ((), ?resume) => resume 1; }
@@ -248,10 +248,8 @@ return value
 });
 
 Deno.test("try-with is absent from the production grammar", async () => {
-  // `try` and `with` are ordinary identifiers, so the retired spelling
-  // parses as the application `try program with (@handle ...)` — the
-  // indented line is a layout continuation, not a handler suite — and is
-  // left to fail at check because nothing binds `try`.
+  // `with` belongs to module inputs, so the retired handler spelling is
+  // rejected by the syntax contract rather than reinterpreted as application.
   const source = `let program = fn () => 1
 let handler = {}
 let value = try program with
@@ -259,7 +257,7 @@ let value = try program with
 return value
 `;
   const parsed = await parse(source);
-  assert(parsed.ok);
+  assert(!parsed.ok);
 });
 
 function handledArguments(expression: Expr): readonly Expr[] | null {

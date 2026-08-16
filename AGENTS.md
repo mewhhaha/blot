@@ -69,7 +69,7 @@ Core model. Its embedded Rust/Wasm emitter owns final binary planning and
 emission.
 
 **Nothing is implicitly in scope.** The prelude is an ordinary module reached
-through `@import` and spread with `open`; it gets no seeding, no privileged
+through `import` and spread with `open`; it gets no seeding, no privileged
 scope, and no exemption from its own type system. A default fixity names a
 binding by string, so `+` works only because something opened `Num` — do not
 reintroduce an implicit scope to make that line disappear.

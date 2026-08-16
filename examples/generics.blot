@@ -6,7 +6,7 @@
 // `if a is i32 and b is i32 then … else compiler error` shape, and it needs no
 // type-level sublanguage to write.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 // --- constrained on the type ------------------------------------------------
 //

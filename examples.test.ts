@@ -33,13 +33,11 @@ const REJECTIONS: Record<
 > = {
   "does_not_satisfy": { code: "BLOT_DOES_NOT_SATISFY", stage: "check" },
   "misplaced_rec": { code: "BLOT_MISPLACED_REC", stage: "run" },
-  "missing_result": { code: "BLOT_MISSING_RESULT", stage: "check" },
   "out_of_range": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "resume_twice": {
     code: "BLOT_HANDLER_RESUME_NOT_AFFINE",
     stage: "check",
   },
-  "try_with": { code: "BLOT_UNBOUND", stage: "check" },
   "unknown_operator": { code: "BLOT_UNKNOWN_OPERATOR", stage: "check" },
   "unhandled_effect": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },
   "effect_in_let": { code: "BLOT_UNSEQUENCED_EFFECT", stage: "check" },

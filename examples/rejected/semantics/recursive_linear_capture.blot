@@ -3,7 +3,7 @@
 // in ownership-tail position. Wrapping the call in addition means work follows
 // it, so no finite call-count certificate can justify the transfer.
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 let consume = fn !value => @int.add value 1
 let !token = 41

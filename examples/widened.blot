@@ -10,11 +10,11 @@
 // rather than as each one finishes: the answer for a projection in one file is
 // decided by a call site in another.
 
-module init
+module with init
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
-const camera = @import "./lib/camera.blot" ()
+const camera = import "./lib/camera.blot"
 
 // The capability is opaque at compile time, so the record survives to the
 // backend instead of being folded away before it can be lowered.

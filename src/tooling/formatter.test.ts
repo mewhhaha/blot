@@ -334,14 +334,14 @@ Deno.test("formatting closes an operator section outside its declarations", asyn
   infix 30 (!=) = Eq.ne;
   }
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 return 1 != 2
 `,
     `operators {
   infix 30 (!=) = Eq.ne;
 }
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 return 1 != 2
 `,
   );
@@ -449,15 +449,15 @@ Deno.test("formatting the accepted corpus is idempotent", async () => {
   }
 });
 
-Deno.test("formatting refuses source the compiler cannot parse", async () => {
+Deno.test("formatting accepts a module that falls through to unit", async () => {
   const formatted = await formatSource(`let value = 1
 `);
-  if (formatted.ok) throw new Error("invalid source formatted successfully");
-  assertEquals(formatted.diagnostics[0]?.code, "BLOT_MISSING_RESULT");
+  if (!formatted.ok) throw new Error("valid source did not format");
+  assertEquals(formatted.source, "let value = 1\n");
 });
 
 Deno.test("formatting removes only precedence-redundant parentheses", async () => {
-  const source = `let imported = (@import "module") ()
+  const source = `let imported = import "module"
 let atom = (1)
 let left = (apply 1) 2
 let right = apply (apply 1)
@@ -469,7 +469,7 @@ return (imported, atom, left, right, grouped)
   if (!formatted.ok) throw new Error("valid source did not format");
   assertEquals(
     formatted.source,
-    `let imported = @import "module" ()
+    `let imported = import "module"
 let atom = 1
 let left = apply 1 2
 let right = apply (apply 1)

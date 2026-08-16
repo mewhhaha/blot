@@ -157,7 +157,7 @@ export interface Facts {
   readonly patternShapes: ReadonlyMap<Pattern, Shape>;
   /** Equality domains for pins, recorded by inference rather than re-derived. */
   readonly pinnedPatterns: ReadonlyMap<Pattern, PinnedDomain>;
-  /** Signatures of the capabilities granted through the module parameter. */
+  /** Signatures of the capabilities granted through the module input. */
   readonly grants: ReadonlyMap<Expr, GrantSignature>;
 }
 
@@ -554,7 +554,7 @@ interface Scope {
    * closure, not a primitive, and nothing would resolve it otherwise.
    */
   readonly values: ValueEnv;
-  /** The module parameter's name, whose fields are granted capabilities. */
+  /** The module input's name, whose fields are granted capabilities. */
   granted?: string;
   /**
    * The compile-time value being hoisted into a top-level definition, when
@@ -1263,7 +1263,7 @@ export function lowerModule(
   } else if (module.parameter !== null) {
     fail(
       "BLOT_UNSUPPORTED_LOWERING",
-      "A module parameter must be a single name to be granted as capabilities.",
+      "A module input must be a single name to be granted as capabilities.",
       module.span,
     );
   }
@@ -1927,7 +1927,7 @@ function schemaOf(
   );
 }
 
-/** The capability a module parameter's field names. */
+/** The capability a module input's field names. */
 const GRANT_CAPABILITY = "Init";
 
 function grantOperation(
@@ -2882,7 +2882,7 @@ function lower(
     }
 
     case "field": {
-      // A field of the module parameter is a granted capability: an import,
+      // A field of the module input is a granted capability: a host import,
       // declared from the signature inference found for it.
       if (
         expr.target.tag === "var" && expr.target.name === grantedName(scope)
@@ -6187,9 +6187,9 @@ function lowerHandle(
 /**
  * An imported module, inlined.
  *
- * A module is a function from its input record to its export record, resolved
- * while compiling. Its body is ordinary blot, so lowering it is lowering a
- * block — the import boundary exists for authority, not for code generation.
+ * Surface `import` is already an internal module-closure application here. Its
+ * body is ordinary blot, so lowering it is lowering a block — the import
+ * boundary exists for authority and instance order, not code generation.
  */
 function lowerImport(
   spine: { callee: Expr; args: Expr[] },
@@ -6199,7 +6199,7 @@ function lowerImport(
 ): SurfaceExpression {
   const specifier = spine.args[0];
   if (specifier.tag !== "text") {
-    return unsupported("an `@import` whose path is not a literal", span);
+    return unsupported("an import whose path is not a literal", span);
   }
   const dependency = lowering.facts.modules.get(specifier);
   if (dependency === undefined) {
@@ -6207,7 +6207,7 @@ function lowerImport(
   }
   if (spine.args.length === 1) {
     return unsupported(
-      `\`@import "${specifier.value}"\` used without calling it — a module is a function, and its exports are what calling it produces`,
+      `an internal import of \`${specifier.value}\` without its instance input`,
       span,
     );
   }

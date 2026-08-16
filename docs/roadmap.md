@@ -41,7 +41,7 @@ record rather than as the tree:
 - M2's spans print. Every diagnostic carries `file:line:col:`, and ranges are
   named rather than called "an integer". One error per run and `blot fmt` are
   still open.
-- M3 is done, including M3c: a projecting function reached across `@import`
+- M3 is done, including M3c: a projecting function reached across an import
   lowers, because the held reads settle once for the whole program rather than
   once per module. `examples/widened.blot` is the catalog entry. Direct
   parameter destructuring and tuple-contained shape patterns now also use each
@@ -95,11 +95,11 @@ constant-folds every `let` it can before lowering, and the corpus was almost
 entirely foldable.
 
 ```blot
-open @import "blot:prelude" ();
+open import "blot:prelude"
 const Source = @effect.host { .value = Unit -> Int; };
 let get_x = fn v => v.x;
 n <- Source.value ();
-return get_x { .x = n; .y = 0; };
+return get_x { .x = n; .y = 0; }
 ```
 
 It compiled to `F2102: expected Shape0['a], received Shape2[I64, I64]` and now
@@ -630,8 +630,8 @@ diagnostics carry no expectation. Every syntax mistake reports
 `Unexpected token
 ";"`, including the omitted `else` on an expression `if` — the
 language's most emphatic rule. A missing comma between `case` arms reports
-`BLOT_BAD_BINDER`. A missing `;` after `let x = 1` reports `BLOT_MISSING_RESULT`
-at 1:1 for an error on line 2, and the claim is false. Surfacing baba's
+`BLOT_BAD_BINDER`. A missing `;` after `let x = 1` reports a root parse error at
+1:1 for an error on line 2, and the claim is false. Surfacing Baba's
 admissible-token set at the failure state is the real fix and a baba question; a
 table of recovery patterns keyed on (failing rule, unexpected token) needs no
 baba change.
@@ -809,8 +809,8 @@ on a branch is the beginning of one.
 declaration forms; no type namespace. If a feature seems to need one it belongs
 in the comptime evaluator.
 
-**No implicit prelude scope.** `open @import "blot:prelude" ();` stays on the
-first line of every program. A default fixity naming a binding by string is the
+**No implicit prelude scope.** `open import "blot:prelude"` stays on the first
+line of every program. A default fixity naming a binding by string is the
 mechanism, and it is not going to be hidden.
 
 **No equi-recursive types in the lattice.**

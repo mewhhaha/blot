@@ -1,8 +1,8 @@
 // A module with a parameter. It has no authority beyond the record it is given.
 
-module capabilities
+module with capabilities
 
-open @import "blot:prelude" ()
+open import "blot:prelude"
 
 return {
   .run = capabilities.base + capabilities.bonus;

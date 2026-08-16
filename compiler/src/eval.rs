@@ -278,7 +278,7 @@ pub fn evaluate_module(
     {
         return Computation::error(Diagnostic::new(
             "BLOT_ARGUMENT_MISMATCH",
-            format!("{} does not match this module parameter.", show(&argument)),
+            format!("{} does not match this module input.", show(&argument)),
             loaded.module.span,
         ));
     }
