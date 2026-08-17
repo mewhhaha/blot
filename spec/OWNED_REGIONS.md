@@ -107,6 +107,12 @@ resource contents.
 A new proof-producing collection can reuse the ownership integration after it
 supplies its own checked region algebra.
 
+`spec/PARTITIONED_CAPABILITIES.md` defines that reusable algebra, its
+conservation and coherence laws, the family-adapter trust boundary, and the
+conditions under which lists, trees, maps, tensors, arenas, or graphs can use
+it. This file instantiates the algebra for array intervals; it does not make
+integer indexing or Store layout part of the generic ownership concept.
+
 ## 2. Array interval algebra
 
 For a Store `S` of extent `n`, an interval is:
