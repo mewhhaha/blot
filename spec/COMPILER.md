@@ -554,10 +554,9 @@ the same transfers from the source AST before accepting that residual program.
 The reusable ownership fact is the family-tagged partitioned capability defined
 in `spec/PARTITIONED_CAPABILITIES.md`, not an array or Slice operation. Array
 intervals are the first registered family. Generic ownership code owns family
-identity, root identity, conservation, witness lifecycle, and coherence;
-family adapters own addressing, footprint composition, runtime representation,
-and destructive lowering. No source value may register a family or assert its
-laws.
+identity, root identity, conservation, witness lifecycle, and coherence; family
+adapters own addressing, footprint composition, runtime representation, and
+destructive lowering. No source value may register a family or assert its laws.
 
 ### 11.2 Logical proofs need not be material trees
 

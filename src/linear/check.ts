@@ -43,6 +43,8 @@ import { freeNames, liveDeclarations } from "../syntax/live.ts";
 import { recursiveGroups } from "../syntax/ast.ts";
 import type { Diagnostic } from "../diagnostic.ts";
 import type { FunctionContract, Produced } from "./produced.ts";
+import type { PartitionAlgebra, PartitionWitness } from "./partition.ts";
+import { combinePartition, reassociatePartition } from "./partition.ts";
 import {
   analysisBinding,
   borrowed,
@@ -2264,9 +2266,14 @@ function joinRegionAuthorities(
   analysis: Analysis,
 ): Produced {
   if (witness.tag === "region-witness") {
-    if (
-      !sameProduced(witness.left, left) || !sameProduced(witness.right, right)
-    ) {
+    const combined = combinePartition(
+      REGION_PARTITIONS,
+      ARRAY_INTERVAL_FAMILY,
+      regionPartitionWitness(witness),
+      left,
+      right,
+    );
+    if (!combined.ok) {
       analysis.report(
         "BLOT_REGION_JOIN_UNPROVED",
         "Region join requires the witness minted with these two parts.",
@@ -2274,7 +2281,7 @@ function joinRegionAuthorities(
       );
       return NONE;
     }
-    return witness.parent;
+    return combined.value;
   }
   if (symbolicAuthority(witness)) {
     return { tag: "pending-join", witness, left, right };
@@ -2295,59 +2302,34 @@ function reassociateRegionWitnesses(
   analysis: Analysis,
 ): Produced {
   if (outer.tag === "region-witness" && inner.tag === "region-witness") {
-    if (direction === "left") {
-      if (!sameProduced(outer.right, inner.parent)) {
-        analysis.report(
-          "BLOT_REGION_REASSOCIATE_UNPROVED",
-          "Left reassociation requires the witness that split the outer witness's right child.",
-          span,
-        );
-        return NONE;
+    const reassociated = reassociatePartition(
+      REGION_PARTITIONS,
+      direction,
+      regionPartitionWitness(outer),
+      regionPartitionWitness(inner),
+    );
+    if (!reassociated.ok) {
+      let message =
+        "Region witness reassociation requires two related split witnesses.";
+      if (reassociated.error === "inner-parent-mismatch") {
+        if (direction === "left") {
+          message =
+            "Left reassociation requires the witness that split the outer witness's right child.";
+        } else {
+          message =
+            "Right reassociation requires the witness that split the outer witness's left child.";
+        }
       }
-      const joinedLeft = combineAdjacentRegions(outer.left, inner.left);
-      return {
-        tag: "sequence",
-        elements: [
-          {
-            tag: "region-witness",
-            left: joinedLeft,
-            right: inner.right,
-            parent: outer.parent,
-          },
-          {
-            tag: "region-witness",
-            left: outer.left,
-            right: inner.left,
-            parent: joinedLeft,
-          },
-        ],
-      };
-    }
-    if (!sameProduced(outer.left, inner.parent)) {
       analysis.report(
         "BLOT_REGION_REASSOCIATE_UNPROVED",
-        "Right reassociation requires the witness that split the outer witness's left child.",
+        message,
         span,
       );
       return NONE;
     }
-    const joinedRight = combineAdjacentRegions(inner.right, outer.right);
     return {
       tag: "sequence",
-      elements: [
-        {
-          tag: "region-witness",
-          left: inner.left,
-          right: joinedRight,
-          parent: outer.parent,
-        },
-        {
-          tag: "region-witness",
-          left: inner.right,
-          right: outer.right,
-          parent: joinedRight,
-        },
-      ],
+      elements: reassociated.value.map(producedRegionWitness),
     };
   }
   if (symbolicAuthority(outer) || symbolicAuthority(inner)) {
@@ -2377,6 +2359,36 @@ function reassociateRegionWitnesses(
     span,
   );
   return NONE;
+}
+
+const ARRAY_INTERVAL_FAMILY = "array-interval";
+
+const REGION_PARTITIONS: PartitionAlgebra<string, Produced> = {
+  sameFamily: (left, right) => left === right,
+  samePart: sameProduced,
+  compose: (_family, left, right) => combineAdjacentRegions(left, right),
+};
+
+function regionPartitionWitness(
+  witness: Extract<Produced, { readonly tag: "region-witness" }>,
+): PartitionWitness<string, Produced> {
+  return {
+    family: ARRAY_INTERVAL_FAMILY,
+    parent: witness.parent,
+    left: witness.left,
+    right: witness.right,
+  };
+}
+
+function producedRegionWitness(
+  witness: PartitionWitness<string, Produced>,
+): Produced {
+  return {
+    tag: "region-witness",
+    parent: witness.parent,
+    left: witness.left,
+    right: witness.right,
+  };
 }
 
 function combineAdjacentRegions(left: Produced, right: Produced): Produced {

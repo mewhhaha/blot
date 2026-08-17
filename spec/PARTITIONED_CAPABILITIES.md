@@ -14,8 +14,8 @@ general one:
 > transformed locally, and recombined only with the proof produced by that
 > factorization.
 
-The generic layer answers whether authority and owned members are conserved.
-It does not know how an integer indexes an array, how a key selects a map entry,
+The generic layer answers whether authority and owned members are conserved. It
+does not know how an integer indexes an array, how a key selects a map entry,
 how a path reaches a tree node, or how any of those structures are represented
 at runtime. Those decisions belong to a family adapter.
 
@@ -116,9 +116,9 @@ Whenever either side is defined, both bracketings describe the same footprint:
 ```
 
 The proof objects are not definitionally equal: they are different trees.
-Witness reassociation is the explicit coherence operation relating the trees.
-It consumes the old witnesses and creates the rotated witnesses without
-touching runtime state.
+Witness reassociation is the explicit coherence operation relating the trees. It
+consumes the old witnesses and creates the rotated witnesses without touching
+runtime state.
 
 ### 2.6 Deterministic focus
 
@@ -128,9 +128,9 @@ An address resolves to at most one authorized position:
 focus_F(p, a) = x and focus_F(p, a) = y implies x = y
 ```
 
-If `p * q` is defined, a successful focus belongs to exactly one non-empty
-side. This prevents a structure adapter from using one address to spend two
-member obligations.
+If `p * q` is defined, a successful focus belongs to exactly one non-empty side.
+This prevents a structure adapter from using one address to spend two member
+obligations.
 
 ### 2.7 Frame locality
 
@@ -169,8 +169,8 @@ Cap(F,r,p,E_l * E_r)
 
 Matching by footprint alone is insufficient. Two equal extents created by
 different resource roots or different factorization events are not the same
-permission. The certificate therefore retains produced-value lineage as well
-as the family equations.
+permission. The certificate therefore retains produced-value lineage as well as
+the family equations.
 
 No operation may fabricate `Part`. It is minted only after the family adapter
 validates an exact cover, or by a coherence rewrite over already valid
@@ -178,16 +178,16 @@ witnesses.
 
 ## 4. Conservation law
 
-Let `Omega(x)` be the multiset of affine and linear ownership obligations
-inside analysis value `x`. Every accepted capability operation preserves the
-multiset across its consumed inputs and every possible result:
+Let `Omega(x)` be the multiset of affine and linear ownership obligations inside
+analysis value `x`. Every accepted capability operation preserves the multiset
+across its consumed inputs and every possible result:
 
 ```text
 Omega(inputs consumed by an outcome) = Omega(values returned by that outcome)
 ```
 
-This law is path-sensitive. Alternative success and failure outcomes are
-checked separately; their obligations are not added together.
+This law is path-sensitive. Alternative success and failure outcomes are checked
+separately; their obligations are not added together.
 
 ### 4.1 Acquisition and release
 
@@ -222,9 +222,9 @@ exchange_F(!Cap(F,r,p,E), a, !N)
    | #NotFound(!N, !Cap(F,r,p,E))
 ```
 
-Both outcomes return every incoming obligation exactly once. The failure
-outcome performs no runtime mutation. A discarding write is merely the special
-case where the family proves the displaced member unrestricted.
+Both outcomes return every incoming obligation exactly once. The failure outcome
+performs no runtime mutation. A discarding write is merely the special case
+where the family proves the displaced member unrestricted.
 
 ### 4.4 Permutation and structure transforms
 
@@ -255,8 +255,8 @@ J3 : Part(F,r,ab,a,b)
 
 where `ab = a * b`. Right reassociation is the inverse. The generic proof needs
 only family equality, exact parent-child identity, and family composition. It
-does not need to know whether footprints are intervals, key sets, list
-segments, or tree contexts.
+does not need to know whether footprints are intervals, key sets, list segments,
+or tree contexts.
 
 Coherence is proof-only:
 
@@ -270,18 +270,18 @@ remain linear values so normalization cannot resurrect a consumed proof.
 
 ## 6. Generic operations versus family adapters
 
-| Concern | Generic capability core | Family adapter |
-| --- | --- | --- |
-| exclusive use across branches and calls | yes | no |
-| family/root identity | yes | supplies identities |
-| exact-cover witness lifecycle | yes | validates factorization |
-| ownership conservation | yes | maps positions to member payloads |
-| witness reassociation | yes | supplies partial composition |
-| address meaning | no | index, key, path, handle, coordinate |
-| bounds/membership proof | no | family-specific |
-| runtime representation | no | Store, links, buckets, nodes, pages |
-| destructive lowering | authorizes one occurrence | emits the operation |
-| acquisition/release cost | checks transfer safety | chooses copy/reuse/materialization |
+| Concern                                 | Generic capability core   | Family adapter                       |
+| --------------------------------------- | ------------------------- | ------------------------------------ |
+| exclusive use across branches and calls | yes                       | no                                   |
+| family/root identity                    | yes                       | supplies identities                  |
+| exact-cover witness lifecycle           | yes                       | validates factorization              |
+| ownership conservation                  | yes                       | maps positions to member payloads    |
+| witness reassociation                   | yes                       | supplies partial composition         |
+| address meaning                         | no                        | index, key, path, handle, coordinate |
+| bounds/membership proof                 | no                        | family-specific                      |
+| runtime representation                  | no                        | Store, links, buckets, nodes, pages  |
+| destructive lowering                    | authorizes one occurrence | emits the operation                  |
+| acquisition/release cost                | checks transfer safety    | chooses copy/reuse/materialization   |
 
 The division prevents two opposite mistakes:
 
@@ -306,8 +306,8 @@ or grapheme clusters and keep that choice stable.
 
 Rectangular tiles compose along one matching face. Axis and shape are part of
 the footprint, so equal numeric bounds on different axes do not mix. General
-tilings require a partition tree because arbitrary rectangle union is not
-always rectangular.
+tilings require a partition tree because arbitrary rectangle union is not always
+rectangular.
 
 ```text
 Foot = (shape, axis ranges)
@@ -324,9 +324,9 @@ Foot = segment(start,end)
 Address = cursor or bounded traversal
 ```
 
-Zero-copy partition additionally requires exclusive links. A persistent list
-may implement the same source operation by copying its spine; the ownership
-algebra does not promise a particular representation.
+Zero-copy partition additionally requires exclusive links. A persistent list may
+implement the same source operation by copying its spine; the ownership algebra
+does not promise a particular representation.
 
 ### 7.4 Trees
 
@@ -432,6 +432,21 @@ The public `Slice` type and API need not change. This is a compiler fact
 refactoring that makes the existing proof honest about what is universal and
 what belongs to arrays.
 
+### 9.1 First extraction
+
+This PR extracts exact witness combination and proof-tree reassociation into
+`src/linear/partition.ts` and `compiler/src/partition.rs`. Those modules are
+parameterized by family and footprint and contain no Slice, Store, interval, or
+index operation. The existing Region ownership fact is the array-interval
+adapter that supplies produced-value equality and composition.
+
+The law tests instantiate the same core with both ordered intervals and disjoint
+map key sets. The map model is evidence about the abstraction, not a new source
+feature or runtime implementation. Adding the second production family still
+requires family-tagged serialized `Produced` values, its adapter, the full
+registration suite below, and Node/Rust parity. This PR deliberately does not
+generalize the trusted registry into a source extension mechanism.
+
 ## 10. Registration requirements
 
 A future production family is accepted only after Node and Rust independently
@@ -453,4 +468,3 @@ test all of the following:
 Passing only examples is insufficient. Each adapter requires law tests over a
 generated or exhaustively bounded footprint domain plus end-to-end catalog
 programs.
-

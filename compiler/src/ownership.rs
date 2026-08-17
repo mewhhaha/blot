@@ -10,6 +10,10 @@ use crate::ast::{
 };
 use crate::diagnostic::Diagnostic;
 use crate::eval::Context;
+use crate::partition::{
+    Direction as PartitionDirection, PartitionError, PartitionWitness, combine_partition,
+    reassociate_partition,
+};
 use crate::value::{Environment as ValueEnvironment, Value, lookup};
 
 type BindingRef = Rc<RefCell<Binding>>;
@@ -2058,15 +2062,22 @@ fn join_region(
                     right: Box::new(right),
                 };
             }
-            if *witness_left != left || *witness_right != right {
+            let proof = PartitionWitness {
+                family: ARRAY_INTERVAL_FAMILY,
+                parent: (*parent).clone(),
+                left: (*witness_left).clone(),
+                right: (*witness_right).clone(),
+            };
+            let combined = combine_partition(&ARRAY_INTERVAL_FAMILY, &proof, &left, &right);
+            let Ok(parent) = combined else {
                 analysis.report(
                     "BLOT_REGION_JOIN_UNPROVED",
                     "Region join requires the witness minted with these two parts.",
                     span,
                 );
                 return Produced::None;
-            }
-            *parent
+            };
+            parent
         }
         Produced::Parameter { .. } => Produced::PendingJoin {
             witness: Box::new(witness),
@@ -2083,6 +2094,8 @@ fn join_region(
         }
     }
 }
+
+const ARRAY_INTERVAL_FAMILY: &str = "array-interval";
 
 fn combine_adjacent_regions(left: Produced, right: Produced) -> Produced {
     match (left, right) {
@@ -2131,49 +2144,53 @@ fn reassociate_region(
         },
     ) = (outer.clone(), inner.clone())
     {
-        if direction == 0 {
-            if outer_right != inner_parent {
-                analysis.report(
-                    "BLOT_REGION_REASSOCIATE_UNPROVED",
-                    "Left reassociation requires the witness that split the outer right child.",
-                    span,
-                );
+        let partition_direction = if direction == 0 {
+            PartitionDirection::Left
+        } else {
+            PartitionDirection::Right
+        };
+        let outer_proof = PartitionWitness {
+            family: ARRAY_INTERVAL_FAMILY,
+            parent: (*outer_parent).clone(),
+            left: (*outer_left).clone(),
+            right: (*outer_right).clone(),
+        };
+        let inner_proof = PartitionWitness {
+            family: ARRAY_INTERVAL_FAMILY,
+            parent: (*inner_parent).clone(),
+            left: (*inner_left).clone(),
+            right: (*inner_right).clone(),
+        };
+        let reassociated = reassociate_partition(
+            partition_direction,
+            &outer_proof,
+            &inner_proof,
+            |_family, left, right| Some(combine_adjacent_regions(left.clone(), right.clone())),
+        );
+        let (new_outer, new_inner) = match reassociated {
+            Ok(proofs) => proofs,
+            Err(error) => {
+                let mut message =
+                    "Region witness reassociation requires two related split witnesses.";
+                if error == PartitionError::InnerParentMismatch {
+                    if direction == 0 {
+                        message = "Left reassociation requires the witness that split the outer right child.";
+                    } else {
+                        message = "Right reassociation requires the witness that split the outer left child.";
+                    }
+                }
+                analysis.report("BLOT_REGION_REASSOCIATE_UNPROVED", message, span);
                 return Produced::None;
             }
-            let joined = combine_adjacent_regions((*outer_left).clone(), (*inner_left).clone());
-            return Produced::Sequence(vec![
-                Produced::RegionWitness {
-                    left: Box::new(joined.clone()),
-                    right: inner_right,
-                    parent: outer_parent,
-                },
-                Produced::RegionWitness {
-                    left: outer_left,
-                    right: inner_left,
-                    parent: Box::new(joined),
-                },
-            ]);
-        }
-        if outer_left != inner_parent {
-            analysis.report(
-                "BLOT_REGION_REASSOCIATE_UNPROVED",
-                "Right reassociation requires the witness that split the outer left child.",
-                span,
-            );
-            return Produced::None;
-        }
-        let joined = combine_adjacent_regions((*inner_right).clone(), (*outer_right).clone());
+        };
+        let produced_witness = |proof: PartitionWitness<&str, Produced>| Produced::RegionWitness {
+            left: Box::new(proof.left),
+            right: Box::new(proof.right),
+            parent: Box::new(proof.parent),
+        };
         return Produced::Sequence(vec![
-            Produced::RegionWitness {
-                left: inner_left,
-                right: Box::new(joined.clone()),
-                parent: outer_parent,
-            },
-            Produced::RegionWitness {
-                left: inner_right,
-                right: outer_right,
-                parent: Box::new(joined),
-            },
+            produced_witness(new_outer),
+            produced_witness(new_inner),
         ]);
     }
     if symbolic_authority(&outer) || symbolic_authority(&inner) {
