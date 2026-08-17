@@ -324,6 +324,15 @@ sig slice_set =
 const slice_set =
   fn (!region, index, value) => @region.set (!region) index value
 
+sig slice_replace =
+  @forall (fn T =>
+    return (@region.type T, @type.int, T) ->
+        (#Replaced (T, @region.type T) |
+         #ReplaceOutOfBounds (T, @region.type T))
+  )
+const slice_replace =
+  fn (!region, index, !value) => @region.replace (!region) index (!value)
+
 sig slice_swap =
   @forall (fn T =>
     return
@@ -353,6 +362,15 @@ sig slice_join =
 const slice_join =
   fn (!rejoin, !left, !right) => @region.join (!rejoin) (!left) (!right)
 
+sig slice_reassociate_left =
+  (@region.rejoin, @region.rejoin) -> (@region.rejoin, @region.rejoin)
+const slice_reassociate_left =
+  fn (!outer, !inner) => @region.reassociate_left (!outer) (!inner)
+sig slice_reassociate_right =
+  (@region.rejoin, @region.rejoin) -> (@region.rejoin, @region.rejoin)
+const slice_reassociate_right =
+  fn (!outer, !inner) => @region.reassociate_right (!outer) (!inner)
+
 sig slice_freeze = @forall (fn T => @region.type T -> [T])
 const slice_freeze = fn !region => @region.freeze (!region)
 
@@ -363,9 +381,12 @@ const Slice =
     .length = slice_length;
     .get = slice_get;
     .set = slice_set;
+    .replace = slice_replace;
     .swap = slice_swap;
     .split = slice_split;
     .join = slice_join;
+    .reassociate_left = slice_reassociate_left;
+    .reassociate_right = slice_reassociate_right;
     .freeze = slice_freeze;
   }
 

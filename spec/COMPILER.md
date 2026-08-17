@@ -544,6 +544,20 @@ This does not merge ownership into the type lattice or weaken certificate
 replay. It replaces identity-keyed transport with a typed residual node. Facts
 needed only to justify that node are consumed while constructing it.
 
+Region element ownership follows this law. The source checker carries
+`Region(authority, elements)` and validates consuming replacement and witness
+reassociation. Runtime HIR receives only the Store/bounds product and the
+authorized read/write occurrence; element trees and rejoin witnesses are proof
+facts and are erased. The Rust certificate checker independently reconstructs
+the same transfers from the source AST before accepting that residual program.
+
+The reusable ownership fact is the family-tagged partitioned capability defined
+in `spec/PARTITIONED_CAPABILITIES.md`, not an array or Slice operation. Array
+intervals are the first registered family. Generic ownership code owns family
+identity, root identity, conservation, witness lifecycle, and coherence; family
+adapters own addressing, footprint composition, runtime representation, and
+destructive lowering. No source value may register a family or assert its laws.
+
 ### 11.2 Logical proofs need not be material trees
 
 Coverage, refinement, and ownership remain distinct judgments because their

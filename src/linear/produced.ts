@@ -49,6 +49,12 @@ export type Produced =
     readonly tag: "choice";
     readonly cases: ReadonlyMap<string, Produced>;
   }
+  /** A Region's interval permission and its hidden positional obligations. */
+  | {
+    readonly tag: "region";
+    readonly authority: Produced;
+    readonly elements: Produced;
+  }
   /**
    * The recombination witness a split mints: which two part authorities
    * rejoin into which parent. Pairing is by produced-value identity, so the
@@ -74,7 +80,14 @@ export type Produced =
    * A freeze whose region is still a symbolic parameter. The full-root proof
    * defers to the call site, where substitution makes it concrete.
    */
-  | { readonly tag: "pending-freeze"; readonly region: Produced };
+  | { readonly tag: "pending-freeze"; readonly region: Produced }
+  | {
+    readonly tag: "pending-reassociate";
+    readonly direction: "left" | "right";
+    readonly part: 0 | 1;
+    readonly outer: Produced;
+    readonly inner: Produced;
+  };
 
 export const NONE: Produced = { tag: "none" };
 
@@ -172,9 +185,14 @@ export function structuralLineage(
       }
       return;
     }
+    if (value.tag === "region") {
+      visit(value.authority, targetPath);
+      visit(value.elements, targetPath);
+      return;
+    }
     if (
       value.tag === "region-witness" || value.tag === "pending-join" ||
-      value.tag === "pending-freeze"
+      value.tag === "pending-freeze" || value.tag === "pending-reassociate"
     ) return;
     for (const [name, payload] of value.cases) {
       visit(payload, [...targetPath, { tag: "case", name }]);
@@ -232,7 +250,14 @@ export function obligation(produced: Produced): "none" | "affine" | "linear" {
   // the deferred full-root proof remains.
   if (produced.tag === "region-witness") return "linear";
   if (produced.tag === "pending-join") return "linear";
+  if (produced.tag === "pending-reassociate") return "linear";
   if (produced.tag === "pending-freeze") return "none";
+  if (produced.tag === "region") {
+    return obligation({
+      tag: "many",
+      values: [produced.authority, produced.elements],
+    });
+  }
   if (produced.tag === "closure") return obligation(produced.captures);
   if (produced.tag === "variant") return obligation(produced.payload);
   if (produced.tag === "choice") {
@@ -256,8 +281,12 @@ export function containsBorrow(produced: Produced): boolean {
   if (produced.tag === "none" || produced.tag === "leaf") return false;
   if (
     produced.tag === "region-witness" || produced.tag === "pending-join" ||
-    produced.tag === "pending-freeze"
+    produced.tag === "pending-freeze" || produced.tag === "pending-reassociate"
   ) return false;
+  if (produced.tag === "region") {
+    return containsBorrow(produced.authority) ||
+      containsBorrow(produced.elements);
+  }
   if (produced.tag === "closure") {
     return containsBorrow(produced.captures) || containsBorrow(produced.result);
   }
@@ -348,6 +377,19 @@ export function joinAlternatives(values: readonly Produced[]): Produced {
       }
       return { tag: "shape", fields };
     }
+  }
+  if (values.every((value) => value.tag === "region")) {
+    const regions = values.map((value) => {
+      if (value.tag !== "region") throw new Error("expected a region");
+      return value;
+    });
+    return {
+      tag: "region",
+      authority: joinAlternatives(
+        regions.map((region) => region.authority),
+      ),
+      elements: joinAlternatives(regions.map((region) => region.elements)),
+    };
   }
   if (values.every((value) => value.tag === "variant")) {
     return {
@@ -558,6 +600,13 @@ export function renameParameter(
       ),
     };
   }
+  if (produced.tag === "region") {
+    return {
+      tag: "region",
+      authority: renameParameter(produced.authority, from, to),
+      elements: renameParameter(produced.elements, from, to),
+    };
+  }
   if (produced.tag === "region-witness") {
     return {
       tag: "region-witness",
@@ -578,6 +627,15 @@ export function renameParameter(
     return {
       tag: "pending-freeze",
       region: renameParameter(produced.region, from, to),
+    };
+  }
+  if (produced.tag === "pending-reassociate") {
+    return {
+      tag: "pending-reassociate",
+      direction: produced.direction,
+      part: produced.part,
+      outer: renameParameter(produced.outer, from, to),
+      inner: renameParameter(produced.inner, from, to),
     };
   }
   return {
@@ -1019,8 +1077,14 @@ export function ownershipLeaves(
   if (produced.tag === "leaf") return [produced];
   if (
     produced.tag === "region-witness" || produced.tag === "pending-join" ||
-    produced.tag === "pending-freeze"
+    produced.tag === "pending-freeze" || produced.tag === "pending-reassociate"
   ) return [];
+  if (produced.tag === "region") {
+    return [
+      ...ownershipLeaves(produced.authority),
+      ...ownershipLeaves(produced.elements),
+    ];
+  }
   if (produced.tag === "closure") {
     return [
       ...ownershipLeaves(produced.captures),
@@ -1119,6 +1183,17 @@ export function substituteParameter(
       ),
     };
   }
+  if (produced.tag === "region") {
+    return {
+      tag: "region",
+      authority: substituteParameter(
+        produced.authority,
+        parameter,
+        argument,
+      ),
+      elements: substituteParameter(produced.elements, parameter, argument),
+    };
+  }
   if (produced.tag === "region-witness") {
     return {
       tag: "region-witness",
@@ -1139,6 +1214,15 @@ export function substituteParameter(
     return {
       tag: "pending-freeze",
       region: substituteParameter(produced.region, parameter, argument),
+    };
+  }
+  if (produced.tag === "pending-reassociate") {
+    return {
+      tag: "pending-reassociate",
+      direction: produced.direction,
+      part: produced.part,
+      outer: substituteParameter(produced.outer, parameter, argument),
+      inner: substituteParameter(produced.inner, parameter, argument),
     };
   }
   return {
@@ -1356,8 +1440,18 @@ export function sameProduced(left: Produced, right: Produced): boolean {
         sameProduced(value, right.elements[index])
       );
   }
+  if (left.tag === "many" && right.tag === "many") {
+    return left.values.length === right.values.length &&
+      left.values.every((value, index) =>
+        sameProduced(value, right.values[index])
+      );
+  }
   if (left.tag === "variant" && right.tag === "variant") {
     return sameProduced(left.payload, right.payload);
+  }
+  if (left.tag === "region" && right.tag === "region") {
+    return sameProduced(left.authority, right.authority) &&
+      sameProduced(left.elements, right.elements);
   }
   if (left.tag === "region-witness" && right.tag === "region-witness") {
     return sameProduced(left.left, right.left) &&
@@ -1371,6 +1465,15 @@ export function sameProduced(left: Produced, right: Produced): boolean {
   }
   if (left.tag === "pending-freeze" && right.tag === "pending-freeze") {
     return sameProduced(left.region, right.region);
+  }
+  if (
+    left.tag === "pending-reassociate" &&
+    right.tag === "pending-reassociate"
+  ) {
+    return left.direction === right.direction &&
+      left.part === right.part &&
+      sameProduced(left.outer, right.outer) &&
+      sameProduced(left.inner, right.inner);
   }
   return false;
 }

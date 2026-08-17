@@ -10,6 +10,10 @@ use crate::ast::{
 };
 use crate::diagnostic::Diagnostic;
 use crate::eval::Context;
+use crate::partition::{
+    Direction as PartitionDirection, PartitionError, PartitionWitness, combine_partition,
+    reassociate_partition,
+};
 use crate::value::{Environment as ValueEnvironment, Value, lookup};
 
 type BindingRef = Rc<RefCell<Binding>>;
@@ -38,6 +42,7 @@ pub(crate) enum Produced {
         qualifier: Qualifier,
         root: Option<PatternId>,
         splits: Vec<(Span, u8)>,
+        elements: Box<Produced>,
     },
     /// The recombination witness a split mints: which two part authorities
     /// rejoin into which parent. Pairing is by produced-value identity, so the
@@ -58,6 +63,12 @@ pub(crate) enum Produced {
     /// proof defers to the call site, where substitution makes it concrete.
     PendingFreeze {
         region: Box<Produced>,
+    },
+    PendingReassociate {
+        direction: u8,
+        part: u8,
+        outer: Box<Produced>,
+        inner: Box<Produced>,
     },
 }
 
@@ -154,7 +165,12 @@ fn validate_produced(module: &Module, produced: &Produced) -> Result<(), String>
             }
             Ok(())
         }
-        Produced::Region { root, splits, .. } => {
+        Produced::Region {
+            root,
+            splits,
+            elements,
+            ..
+        } => {
             if let Some(root) = root {
                 validate_pattern(*root)?;
             }
@@ -169,7 +185,7 @@ fn validate_produced(module: &Module, produced: &Produced) -> Result<(), String>
                     return Err("ownership contract contains an invalid split part".to_owned());
                 }
             }
-            Ok(())
+            validate_produced(module, elements)
         }
         Produced::RegionWitness {
             left,
@@ -188,6 +204,10 @@ fn validate_produced(module: &Module, produced: &Produced) -> Result<(), String>
             validate_produced(module, witness)?;
             validate_produced(module, left)?;
             validate_produced(module, right)
+        }
+        Produced::PendingReassociate { outer, inner, .. } => {
+            validate_produced(module, outer)?;
+            validate_produced(module, inner)
         }
     }
 }
@@ -1071,25 +1091,11 @@ fn walk_apply(
         }
         if name == "@region.claim" && arguments.len() == 1 {
             let source = walk(arguments[0], scope, analysis, Use::Project);
-            // A linear array binding is claimable: the claim consumes the
-            // whole array, which is what proves its Store reusable. Only
-            // elements that carry their own obligations are refused, because
-            // the acquisition copy would duplicate them.
-            let owned_elements = match &source {
-                Produced::Leaf(_) | Produced::Parameter { .. } => false,
-                produced => obligation(produced) != Obligation::None,
-            };
-            if owned_elements {
-                analysis.report(
-                    "BLOT_REGION_OWNED_ELEMENT",
-                    "The first Region implementation copies its input, so arrays containing owned elements cannot be claimed yet.",
-                    analysis.module.arena.expression_span(arguments[0]),
-                );
-            }
             return Produced::Region {
                 qualifier: Qualifier::Linear,
                 root: None,
                 splits: Vec::new(),
+                elements: Box::new(source),
             };
         }
         if name == "@region.length" && arguments.len() == 1 {
@@ -1097,18 +1103,41 @@ fn walk_apply(
             return Produced::None;
         }
         if name == "@region.get" && arguments.len() == 2 {
-            walk(arguments[0], scope, analysis, Use::Borrow);
+            let region = walk(arguments[0], scope, analysis, Use::Borrow);
+            let inspected = match &region {
+                Produced::Borrow(value) => value.as_ref(),
+                value => value,
+            };
+            if let Produced::Region { elements, .. } = inspected
+                && obligation(elements) != Obligation::None
+            {
+                analysis.report(
+                    "BLOT_REGION_OWNED_ELEMENT_READ",
+                    "Borrowed Region.get cannot copy an owned element. Use Region.replace.",
+                    span,
+                );
+            }
             walk(arguments[1], scope, analysis, Use::Move);
             return Produced::None;
         }
         if name == "@region.set" && arguments.len() == 3 {
-            let region = region_authority(walk(arguments[0], scope, analysis, Use::Move));
+            // A polymorphic prelude wrapper carries its Region as a symbolic
+            // parameter until a concrete call substitutes the caller's
+            // authority. Do not synthesize owned element lineage here: set is
+            // precisely the unrestricted-element operation, and doing so
+            // would falsely classify every generic Region as owned.
+            let region = walk(arguments[0], scope, analysis, Use::Move);
             walk(arguments[1], scope, analysis, Use::Move);
             let replacement = walk(arguments[2], scope, analysis, Use::Move);
-            if obligation(&replacement) != Obligation::None {
+            let owned_contents = matches!(
+                &region,
+                Produced::Region { elements, .. }
+                    if obligation(elements) != Obligation::None
+            );
+            if owned_contents || obligation(&replacement) != Obligation::None {
                 analysis.report(
                     "BLOT_REGION_OWNED_ELEMENT",
-                    "Region replacement cannot move an owned element in the first implementation.",
+                    "Region.set may discard an owned element. Use Region.replace.",
                     analysis.module.arena.expression_span(arguments[2]),
                 );
             }
@@ -1120,6 +1149,41 @@ fn walk_apply(
                 (
                     "SetOutOfBounds".to_owned(),
                     Produced::Variant(Box::new(region)),
+                ),
+            ]));
+        }
+        if name == "@region.replace" && arguments.len() == 3 {
+            let region = region_authority(walk(arguments[0], scope, analysis, Use::Move));
+            walk(arguments[1], scope, analysis, Use::Move);
+            let replacement = walk(arguments[2], scope, analysis, Use::Move);
+            let (displaced, successor) = match &region {
+                Produced::Region {
+                    qualifier,
+                    root,
+                    splits,
+                    elements,
+                } => {
+                    let (displaced, remainder) = ownership_parts(elements, span);
+                    (
+                        displaced,
+                        Produced::Region {
+                            qualifier: *qualifier,
+                            root: *root,
+                            splits: splits.clone(),
+                            elements: Box::new(combine(remainder, replacement.clone())),
+                        },
+                    )
+                }
+                _ => (Produced::None, region.clone()),
+            };
+            return Produced::Choice(BTreeMap::from([
+                (
+                    "Replaced".to_owned(),
+                    Produced::Variant(Box::new(Produced::Sequence(vec![displaced, successor]))),
+                ),
+                (
+                    "ReplaceOutOfBounds".to_owned(),
+                    Produced::Variant(Box::new(Produced::Sequence(vec![replacement, region]))),
                 ),
             ]));
         }
@@ -1141,12 +1205,13 @@ fn walk_apply(
         if name == "@region.split" && arguments.len() == 2 {
             let region = region_authority(walk(arguments[0], scope, analysis, Use::Move));
             walk(arguments[1], scope, analysis, Use::Move);
-            let (qualifier, root, splits) = match region.clone() {
+            let (qualifier, root, splits, elements) = match region.clone() {
                 Produced::Region {
                     qualifier,
                     root,
                     splits,
-                } => (qualifier, root, splits),
+                    elements,
+                } => (qualifier, root, splits, elements),
                 _ => {
                     analysis.report(
                         "BLOT_REGION_SPLIT_NOT_OWNED",
@@ -1160,15 +1225,18 @@ fn walk_apply(
             left_splits.push((span, 0));
             let mut right_splits = splits;
             right_splits.push((span, 1));
+            let (left_elements, right_elements) = ownership_parts(&elements, span);
             let left = Produced::Region {
                 qualifier,
                 root,
                 splits: left_splits,
+                elements: Box::new(left_elements),
             };
             let right = Produced::Region {
                 qualifier,
                 root,
                 splits: right_splits,
+                elements: Box::new(right_elements),
             };
             // The witness is the recombination proof as a value: it records
             // which two part authorities rejoin into which parent.
@@ -1194,6 +1262,14 @@ fn walk_apply(
             let right = walk(arguments[2], scope, analysis, Use::Move);
             return join_region(witness, left, right, span, analysis);
         }
+        if (name == "@region.reassociate_left" || name == "@region.reassociate_right")
+            && arguments.len() == 2
+        {
+            let outer = walk(arguments[0], scope, analysis, Use::Move);
+            let inner = walk(arguments[1], scope, analysis, Use::Move);
+            let direction = u8::from(name == "@region.reassociate_right");
+            return reassociate_region(direction, outer, inner, span, analysis);
+        }
         if name == "@region.freeze" && arguments.len() == 1 {
             let region = walk(arguments[0], scope, analysis, Use::Move);
             // A symbolic authority defers the full-root proof to the call
@@ -1204,7 +1280,9 @@ fn walk_apply(
                 };
             }
             match region {
-                Produced::Region { splits, .. } if splits.is_empty() => {}
+                Produced::Region {
+                    splits, elements, ..
+                } if splits.is_empty() => return *elements,
                 _ => analysis.report(
                     "BLOT_REGION_PARTIAL_FREEZE",
                     "Only a complete root Region authority can be frozen. Rejoin every split first.",
@@ -1484,30 +1562,55 @@ fn substitute_parameter_source(
         Produced::PendingFreeze { region } => Produced::PendingFreeze {
             region: Box::new(substitute_parameter_source(*region, source, argument)),
         },
+        Produced::PendingReassociate {
+            direction,
+            part,
+            outer,
+            inner,
+        } => Produced::PendingReassociate {
+            direction,
+            part,
+            outer: Box::new(substitute_parameter_source(*outer, source, argument)),
+            inner: Box::new(substitute_parameter_source(*inner, source, argument)),
+        },
         Produced::Region {
             qualifier,
             root,
             splits,
+            elements,
         } => {
+            let element_passthrough = matches!(
+                elements.as_ref(),
+                Produced::Parameter { source: found, .. } if *found == source
+            );
+            let substituted_elements = substitute_parameter_source(*elements, source, argument);
             if root != Some(source) {
                 return Produced::Region {
                     qualifier,
                     root,
                     splits,
+                    elements: Box::new(substituted_elements),
                 };
             }
             match argument {
                 Produced::Region {
                     root: argument_root,
                     splits: argument_splits,
+                    elements: argument_elements,
                     ..
                 } => {
                     let mut composed = argument_splits.clone();
                     composed.extend(splits);
+                    let transferred_elements = if element_passthrough {
+                        argument_elements.clone()
+                    } else {
+                        Box::new(substituted_elements)
+                    };
                     Produced::Region {
                         qualifier,
                         root: *argument_root,
                         splits: composed,
+                        elements: transferred_elements,
                     }
                 }
                 Produced::Parameter {
@@ -1517,11 +1620,13 @@ fn substitute_parameter_source(
                     qualifier,
                     root: Some(*argument_source),
                     splits,
+                    elements: Box::new(substituted_elements),
                 },
                 _ => Produced::Region {
                     qualifier,
                     root,
                     splits,
+                    elements: Box::new(substituted_elements),
                 },
             }
         }
@@ -1813,6 +1918,7 @@ fn obligation(produced: &Produced) -> Obligation {
         Produced::RegionWitness { .. } => Obligation::Linear,
         // A pending join still carries its live part authorities.
         Produced::PendingJoin { .. } => Obligation::Linear,
+        Produced::PendingReassociate { .. } => Obligation::Linear,
         // A pending freeze already consumed its authority; only the deferred
         // full-root proof remains, discharged where substitution lands.
         Produced::PendingFreeze { .. } => Obligation::None,
@@ -1838,7 +1944,8 @@ fn contains_borrow(produced: &Produced) -> bool {
         | Produced::Region { .. }
         | Produced::RegionWitness { .. }
         | Produced::PendingJoin { .. }
-        | Produced::PendingFreeze { .. } => false,
+        | Produced::PendingFreeze { .. }
+        | Produced::PendingReassociate { .. } => false,
         Produced::Closure {
             captures, result, ..
         } => contains_borrow(captures) || contains_borrow(result),
@@ -1879,6 +1986,21 @@ fn join(values: impl IntoIterator<Item = Produced>) -> Produced {
     values.into_iter().fold(Produced::None, combine)
 }
 
+fn ownership_parts(source: &Produced, span: Span) -> (Produced, Produced) {
+    let qualifier = match obligation(source) {
+        Obligation::Linear => Qualifier::Linear,
+        Obligation::Affine => Qualifier::Affine,
+        Obligation::None => return (Produced::None, Produced::None),
+    };
+    let part = |index| Produced::Region {
+        qualifier,
+        root: None,
+        splits: vec![(span, index)],
+        elements: Box::new(Produced::None),
+    };
+    (part(0), part(1))
+}
+
 fn choice_for_pattern(target: &Produced, pattern: PatternId, module: &Module) -> Produced {
     let Produced::Choice(cases) = target else {
         return target.clone();
@@ -1895,6 +2017,7 @@ fn region_authority(produced: Produced) -> Produced {
             qualifier,
             root: Some(source),
             splits: Vec::new(),
+            elements: Box::new(Produced::Parameter { qualifier, source }),
         },
         produced => produced,
     }
@@ -1906,7 +2029,10 @@ fn region_authority(produced: Produced) -> Produced {
 fn symbolic_authority(produced: &Produced) -> bool {
     matches!(
         produced,
-        Produced::Parameter { .. } | Produced::PendingJoin { .. } | Produced::PendingFreeze { .. }
+        Produced::Parameter { .. }
+            | Produced::PendingJoin { .. }
+            | Produced::PendingFreeze { .. }
+            | Produced::PendingReassociate { .. }
     )
 }
 
@@ -1936,15 +2062,22 @@ fn join_region(
                     right: Box::new(right),
                 };
             }
-            if *witness_left != left || *witness_right != right {
+            let proof = PartitionWitness {
+                family: ARRAY_INTERVAL_FAMILY,
+                parent: (*parent).clone(),
+                left: (*witness_left).clone(),
+                right: (*witness_right).clone(),
+            };
+            let combined = combine_partition(&ARRAY_INTERVAL_FAMILY, &proof, &left, &right);
+            let Ok(parent) = combined else {
                 analysis.report(
                     "BLOT_REGION_JOIN_UNPROVED",
                     "Region join requires the witness minted with these two parts.",
                     span,
                 );
                 return Produced::None;
-            }
-            *parent
+            };
+            parent
         }
         Produced::Parameter { .. } => Produced::PendingJoin {
             witness: Box::new(witness),
@@ -1960,6 +2093,128 @@ fn join_region(
             Produced::None
         }
     }
+}
+
+const ARRAY_INTERVAL_FAMILY: &str = "array-interval";
+
+fn combine_adjacent_regions(left: Produced, right: Produced) -> Produced {
+    match (left, right) {
+        (
+            Produced::Region {
+                qualifier,
+                root,
+                mut splits,
+                elements,
+            },
+            Produced::Region {
+                splits: right_splits,
+                elements: right_elements,
+                ..
+            },
+        ) => {
+            splits.extend(right_splits);
+            Produced::Region {
+                qualifier,
+                root,
+                splits,
+                elements: Box::new(combine(*elements, *right_elements)),
+            }
+        }
+        (left, right) => combine(left, right),
+    }
+}
+
+fn reassociate_region(
+    direction: u8,
+    outer: Produced,
+    inner: Produced,
+    span: Span,
+    analysis: &mut Analysis,
+) -> Produced {
+    if let (
+        Produced::RegionWitness {
+            left: outer_left,
+            right: outer_right,
+            parent: outer_parent,
+        },
+        Produced::RegionWitness {
+            left: inner_left,
+            right: inner_right,
+            parent: inner_parent,
+        },
+    ) = (outer.clone(), inner.clone())
+    {
+        let partition_direction = if direction == 0 {
+            PartitionDirection::Left
+        } else {
+            PartitionDirection::Right
+        };
+        let outer_proof = PartitionWitness {
+            family: ARRAY_INTERVAL_FAMILY,
+            parent: (*outer_parent).clone(),
+            left: (*outer_left).clone(),
+            right: (*outer_right).clone(),
+        };
+        let inner_proof = PartitionWitness {
+            family: ARRAY_INTERVAL_FAMILY,
+            parent: (*inner_parent).clone(),
+            left: (*inner_left).clone(),
+            right: (*inner_right).clone(),
+        };
+        let reassociated = reassociate_partition(
+            partition_direction,
+            &outer_proof,
+            &inner_proof,
+            |_family, left, right| Some(combine_adjacent_regions(left.clone(), right.clone())),
+        );
+        let (new_outer, new_inner) = match reassociated {
+            Ok(proofs) => proofs,
+            Err(error) => {
+                let mut message =
+                    "Region witness reassociation requires two related split witnesses.";
+                if error == PartitionError::InnerParentMismatch {
+                    if direction == 0 {
+                        message = "Left reassociation requires the witness that split the outer right child.";
+                    } else {
+                        message = "Right reassociation requires the witness that split the outer left child.";
+                    }
+                }
+                analysis.report("BLOT_REGION_REASSOCIATE_UNPROVED", message, span);
+                return Produced::None;
+            }
+        };
+        let produced_witness = |proof: PartitionWitness<&str, Produced>| Produced::RegionWitness {
+            left: Box::new(proof.left),
+            right: Box::new(proof.right),
+            parent: Box::new(proof.parent),
+        };
+        return Produced::Sequence(vec![
+            produced_witness(new_outer),
+            produced_witness(new_inner),
+        ]);
+    }
+    if symbolic_authority(&outer) || symbolic_authority(&inner) {
+        return Produced::Sequence(vec![
+            Produced::PendingReassociate {
+                direction,
+                part: 0,
+                outer: Box::new(outer.clone()),
+                inner: Box::new(inner.clone()),
+            },
+            Produced::PendingReassociate {
+                direction,
+                part: 1,
+                outer: Box::new(outer),
+                inner: Box::new(inner),
+            },
+        ]);
+    }
+    analysis.report(
+        "BLOT_REGION_REASSOCIATE_UNPROVED",
+        "Region witness reassociation requires two related split witnesses.",
+        span,
+    );
+    Produced::None
 }
 
 /// Discharges pending join and freeze proofs whose components became
@@ -1980,7 +2235,11 @@ fn resolve_pending(produced: Produced, span: Span, analysis: &mut Analysis) -> P
         Produced::PendingFreeze { region } => {
             let region = resolve_pending(*region, span, analysis);
             match region {
-                Produced::Region { ref splits, .. } if splits.is_empty() => Produced::None,
+                Produced::Region {
+                    ref splits,
+                    ref elements,
+                    ..
+                } if splits.is_empty() => *elements.clone(),
                 region if symbolic_authority(&region) => Produced::PendingFreeze {
                     region: Box::new(region),
                 },
@@ -1992,6 +2251,21 @@ fn resolve_pending(produced: Produced, span: Span, analysis: &mut Analysis) -> P
                     );
                     Produced::None
                 }
+            }
+        }
+        Produced::PendingReassociate {
+            direction,
+            part,
+            outer,
+            inner,
+        } => {
+            let outer = resolve_pending(*outer, span, analysis);
+            let inner = resolve_pending(*inner, span, analysis);
+            match reassociate_region(direction, outer, inner, span, analysis) {
+                Produced::Sequence(values) => {
+                    values.get(part as usize).cloned().unwrap_or(Produced::None)
+                }
+                produced => produced,
             }
         }
         Produced::RegionWitness {
@@ -2042,6 +2316,17 @@ fn resolve_pending(produced: Produced, span: Span, analysis: &mut Analysis) -> P
                 .map(|(name, value)| (name, resolve_pending(value, span, analysis)))
                 .collect(),
         ),
+        Produced::Region {
+            qualifier,
+            root,
+            splits,
+            elements,
+        } => Produced::Region {
+            qualifier,
+            root,
+            splits,
+            elements: Box::new(resolve_pending(*elements, span, analysis)),
+        },
         produced => produced,
     }
 }

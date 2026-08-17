@@ -43,6 +43,8 @@ import { freeNames, liveDeclarations } from "../syntax/live.ts";
 import { recursiveGroups } from "../syntax/ast.ts";
 import type { Diagnostic } from "../diagnostic.ts";
 import type { FunctionContract, Produced } from "./produced.ts";
+import type { PartitionAlgebra, PartitionWitness } from "./partition.ts";
+import { combinePartition, reassociatePartition } from "./partition.ts";
 import {
   analysisBinding,
   borrowed,
@@ -177,7 +179,11 @@ export type OwnershipTargetPathSegment =
   | { readonly tag: "member"; readonly index: number };
 
 export interface OwnershipExtraction {
-  readonly operation: "@array.take" | "@array.split" | "@region.split";
+  readonly operation:
+    | "@array.take"
+    | "@array.split"
+    | "@region.split"
+    | "@region.replace";
   readonly part: number;
   readonly span: Span;
 }
@@ -404,6 +410,21 @@ function declareProduced(
           ...owned,
           source: pattern,
           origins: [{ source: pattern, path: [], extractions: [] }],
+        };
+      }
+      if (
+        owned.tag === "region" && owned.authority.tag === "leaf" &&
+        owned.authority.source === null &&
+        owned.authority.origins.length === 0
+      ) {
+        owned = {
+          tag: "region",
+          authority: {
+            ...owned.authority,
+            source: pattern,
+            origins: [{ source: pattern, path: [], extractions: [] }],
+          },
+          elements: owned.elements,
         };
       }
       const lineage = structuralLineage(pattern, owned);
@@ -1423,29 +1444,19 @@ function walk(
             analysis,
             "project",
           );
-          // A linear array binding is claimable: the claim consumes the whole
-          // array, which is what proves its Store reusable. Only elements that
-          // carry their own obligations are refused, because the acquisition
-          // copy would duplicate them.
-          let ownedElements = obligation(source) !== "none";
-          if (source.tag === "leaf") ownedElements = false;
-          if (ownedElements) {
-            analysis.report(
-              "BLOT_REGION_OWNED_ELEMENT",
-              "The first Region implementation copies its input, so arrays containing owned elements cannot be claimed yet. Consume or unpack those elements first.",
-              ownershipArguments[0].span,
-            );
-          }
-          // `claim` semantically creates a fresh private Store. The declaration
-          // receiving this leaf roots it at that new binding; no source-array
-          // identity is reused unless a later Store-provenance optimization
-          // proves that stealing the allocation is observationally equivalent.
+          // Claim mints a fresh interval authority and transfers the consumed
+          // array's hidden element tree into it. Copying the Store does not copy
+          // ownership: the source value is unavailable after this operation.
           return {
-            tag: "leaf",
-            qualifier: "linear",
-            source: null,
-            path: [],
-            origins: [],
+            tag: "region",
+            authority: {
+              tag: "leaf",
+              qualifier: "linear",
+              source: null,
+              path: [],
+              origins: [],
+            },
+            elements: source,
           };
         }
         if (name === "@region.length" && ownershipArguments.length === 1) {
@@ -1453,7 +1464,26 @@ function walk(
           return NONE;
         }
         if (name === "@region.get" && ownershipArguments.length === 2) {
-          walk(ownershipArguments[0], scope, analysis, "borrow");
+          const region = walk(
+            ownershipArguments[0],
+            scope,
+            analysis,
+            "borrow",
+          );
+          let borrowedRegion = region;
+          if (borrowedRegion.tag === "borrow") {
+            borrowedRegion = borrowedRegion.value;
+          }
+          if (
+            borrowedRegion.tag === "region" &&
+            obligation(borrowedRegion.elements) !== "none"
+          ) {
+            analysis.report(
+              "BLOT_REGION_OWNED_ELEMENT_READ",
+              "Borrowed Region.get cannot copy an owned element. Use Region.replace to transfer it out while installing a replacement.",
+              expr.span,
+            );
+          }
           walk(ownershipArguments[1], scope, analysis, "move");
           return NONE;
         }
@@ -1466,10 +1496,12 @@ function walk(
             analysis,
             "move",
           );
-          if (obligation(replacement) !== "none") {
+          const ownedContents = region.tag === "region" &&
+            obligation(region.elements) !== "none";
+          if (ownedContents || obligation(replacement) !== "none") {
             analysis.report(
               "BLOT_REGION_OWNED_ELEMENT",
-              "Region replacement cannot move an owned element in the first implementation.",
+              "Region.set may discard an owned element. Use Region.replace to transfer the displaced value.",
               ownershipArguments[2].span,
             );
           }
@@ -1481,10 +1513,66 @@ function walk(
             ]),
           };
         }
-        if (name === "@region.swap" && ownershipArguments.length === 3) {
+        if (name === "@region.replace" && ownershipArguments.length === 3) {
           const region = walk(ownershipArguments[0], scope, analysis, "move");
           walk(ownershipArguments[1], scope, analysis, "move");
+          const replacement = walk(
+            ownershipArguments[2],
+            scope,
+            analysis,
+            "move",
+          );
+          let displaced = NONE;
+          let successor = region;
+          if (region.tag === "region") {
+            const updated = replaceRegionElements(
+              region.elements,
+              ownershipArguments[1],
+              replacement,
+              expr.span,
+            );
+            displaced = updated.displaced;
+            successor = {
+              tag: "region",
+              authority: region.authority,
+              elements: updated.elements,
+            };
+          } else if (!symbolicAuthority(region)) {
+            analysis.report(
+              "BLOT_REGION_REPLACE_NOT_OWNED",
+              "Region.replace requires an owned Region authority.",
+              ownershipArguments[0].span,
+            );
+          }
+          return {
+            tag: "choice",
+            cases: new Map([
+              ["Replaced", {
+                tag: "sequence",
+                elements: [displaced, successor],
+              }],
+              ["ReplaceOutOfBounds", {
+                tag: "sequence",
+                elements: [replacement, region],
+              }],
+            ]),
+          };
+        }
+        if (name === "@region.swap" && ownershipArguments.length === 3) {
+          let region = walk(ownershipArguments[0], scope, analysis, "move");
+          walk(ownershipArguments[1], scope, analysis, "move");
           walk(ownershipArguments[2], scope, analysis, "move");
+          if (region.tag === "region") {
+            region = {
+              tag: "region",
+              authority: region.authority,
+              elements: swapRegionElements(
+                region.elements,
+                ownershipArguments[1],
+                ownershipArguments[2],
+              ),
+            };
+          }
           return {
             tag: "choice",
             cases: new Map([
@@ -1503,12 +1591,38 @@ function walk(
               ownershipArguments[0].span,
             );
           }
-          const parts = extractionParts(
-            region,
+          let authority = region;
+          let elements = NONE;
+          if (region.tag === "region") {
+            authority = region.authority;
+            elements = region.elements;
+          }
+          const authorityParts = extractionParts(
+            authority,
             "@region.split",
             2,
             expr.span,
           );
+          const elementParts = splitRegionElements(
+            elements,
+            ownershipArguments[1],
+            expr.span,
+          );
+          let parts: readonly Produced[] = authorityParts;
+          if (region.tag === "region") {
+            parts = [
+              {
+                tag: "region",
+                authority: authorityParts[0],
+                elements: elementParts[0],
+              },
+              {
+                tag: "region",
+                authority: authorityParts[1],
+                elements: elementParts[1],
+              },
+            ];
+          }
           // The witness is the recombination proof as a value: it records
           // which two part authorities rejoin into which parent.
           const witness: Produced = {
@@ -1540,6 +1654,23 @@ function walk(
             analysis,
           );
         }
+        if (
+          (name === "@region.reassociate_left" ||
+            name === "@region.reassociate_right") &&
+          ownershipArguments.length === 2
+        ) {
+          const outer = walk(ownershipArguments[0], scope, analysis, "move");
+          const inner = walk(ownershipArguments[1], scope, analysis, "move");
+          let direction: "left" | "right" = "left";
+          if (name === "@region.reassociate_right") direction = "right";
+          return reassociateRegionWitnesses(
+            direction,
+            outer,
+            inner,
+            expr.span,
+            analysis,
+          );
+        }
         if (name === "@region.freeze" && ownershipArguments.length === 1) {
           const region = walk(ownershipArguments[0], scope, analysis, "move");
           // A symbolic authority defers the full-root proof to the call
@@ -1548,6 +1679,7 @@ function walk(
             return { tag: "pending-freeze", region };
           }
           fullRegionFreeze(region, ownershipArguments[0].span, analysis);
+          if (region.tag === "region") return region.elements;
           return NONE;
         }
         if (
@@ -2011,18 +2143,92 @@ function installRecursiveCapture(
   });
 }
 
+function splitRegionElements(
+  elements: Produced,
+  at: Expr,
+  span: Span,
+): readonly [Produced, Produced] {
+  if (elements.tag === "sequence" && at.tag === "int") {
+    const position = Number(at.value);
+    if (
+      Number.isSafeInteger(position) && position >= 0 &&
+      position <= elements.elements.length
+    ) {
+      return [
+        { tag: "sequence", elements: elements.elements.slice(0, position) },
+        { tag: "sequence", elements: elements.elements.slice(position) },
+      ];
+    }
+  }
+  const parts = extractionParts(elements, "@region.split", 2, span);
+  return [parts[0], parts[1]];
+}
+
+function replaceRegionElements(
+  elements: Produced,
+  index: Expr,
+  replacement: Produced,
+  span: Span,
+): { readonly displaced: Produced; readonly elements: Produced } {
+  if (elements.tag === "sequence" && index.tag === "int") {
+    const position = Number(index.value);
+    const displaced = elements.elements[position];
+    if (displaced !== undefined) {
+      const updated = [...elements.elements];
+      updated[position] = replacement;
+      return {
+        displaced,
+        elements: { tag: "sequence", elements: updated },
+      };
+    }
+  }
+  const parts = extractionParts(elements, "@region.replace", 2, span);
+  return {
+    displaced: parts[0],
+    elements: combine(parts[1], replacement),
+  };
+}
+
+function swapRegionElements(
+  elements: Produced,
+  left: Expr,
+  right: Expr,
+): Produced {
+  if (
+    elements.tag !== "sequence" || left.tag !== "int" || right.tag !== "int"
+  ) return elements;
+  const leftIndex = Number(left.value);
+  const rightIndex = Number(right.value);
+  if (
+    !Number.isSafeInteger(leftIndex) || !Number.isSafeInteger(rightIndex) ||
+    leftIndex < 0 || rightIndex < 0 ||
+    leftIndex >= elements.elements.length ||
+    rightIndex >= elements.elements.length
+  ) return elements;
+  const updated = [...elements.elements];
+  const held = updated[leftIndex];
+  updated[leftIndex] = updated[rightIndex];
+  updated[rightIndex] = held;
+  return { tag: "sequence", elements: updated };
+}
+
 /**
  * Whether a produced value may still become concrete through parameter
  * substitution at a call site.
  */
 function symbolicAuthority(produced: Produced): boolean {
   if (produced.tag === "leaf") return produced.parameter === true;
+  if (produced.tag === "region") {
+    return symbolicAuthority(produced.authority);
+  }
   if (produced.tag === "region-witness") {
     return symbolicAuthority(produced.left) ||
       symbolicAuthority(produced.right) ||
       symbolicAuthority(produced.parent);
   }
-  return produced.tag === "pending-join" || produced.tag === "pending-freeze";
+  return produced.tag === "pending-join" ||
+    produced.tag === "pending-freeze" ||
+    produced.tag === "pending-reassociate";
 }
 
 /** The full-root proof `@region.freeze` demands of a concrete authority. */
@@ -2031,7 +2237,9 @@ function fullRegionFreeze(
   span: Span,
   analysis: Analysis,
 ): void {
-  const leaves = ownershipLeaves(region);
+  let authority = region;
+  if (region.tag === "region") authority = region.authority;
+  const leaves = ownershipLeaves(authority);
   const full = leaves.length === 1 && leaves[0].origins.length === 1 &&
     leaves[0].origins[0].extractions.length === 0;
   if (!full) {
@@ -2058,9 +2266,14 @@ function joinRegionAuthorities(
   analysis: Analysis,
 ): Produced {
   if (witness.tag === "region-witness") {
-    if (
-      !sameProduced(witness.left, left) || !sameProduced(witness.right, right)
-    ) {
+    const combined = combinePartition(
+      REGION_PARTITIONS,
+      ARRAY_INTERVAL_FAMILY,
+      regionPartitionWitness(witness),
+      left,
+      right,
+    );
+    if (!combined.ok) {
       analysis.report(
         "BLOT_REGION_JOIN_UNPROVED",
         "Region join requires the witness minted with these two parts.",
@@ -2068,7 +2281,7 @@ function joinRegionAuthorities(
       );
       return NONE;
     }
-    return witness.parent;
+    return combined.value;
   }
   if (symbolicAuthority(witness)) {
     return { tag: "pending-join", witness, left, right };
@@ -2079,6 +2292,114 @@ function joinRegionAuthorities(
     span,
   );
   return NONE;
+}
+
+function reassociateRegionWitnesses(
+  direction: "left" | "right",
+  outer: Produced,
+  inner: Produced,
+  span: Span,
+  analysis: Analysis,
+): Produced {
+  if (outer.tag === "region-witness" && inner.tag === "region-witness") {
+    const reassociated = reassociatePartition(
+      REGION_PARTITIONS,
+      direction,
+      regionPartitionWitness(outer),
+      regionPartitionWitness(inner),
+    );
+    if (!reassociated.ok) {
+      let message =
+        "Region witness reassociation requires two related split witnesses.";
+      if (reassociated.error === "inner-parent-mismatch") {
+        if (direction === "left") {
+          message =
+            "Left reassociation requires the witness that split the outer witness's right child.";
+        } else {
+          message =
+            "Right reassociation requires the witness that split the outer witness's left child.";
+        }
+      }
+      analysis.report(
+        "BLOT_REGION_REASSOCIATE_UNPROVED",
+        message,
+        span,
+      );
+      return NONE;
+    }
+    return {
+      tag: "sequence",
+      elements: reassociated.value.map(producedRegionWitness),
+    };
+  }
+  if (symbolicAuthority(outer) || symbolicAuthority(inner)) {
+    return {
+      tag: "sequence",
+      elements: [
+        {
+          tag: "pending-reassociate",
+          direction,
+          part: 0,
+          outer,
+          inner,
+        },
+        {
+          tag: "pending-reassociate",
+          direction,
+          part: 1,
+          outer,
+          inner,
+        },
+      ],
+    };
+  }
+  analysis.report(
+    "BLOT_REGION_REASSOCIATE_UNPROVED",
+    "Region witness reassociation requires two related split witnesses.",
+    span,
+  );
+  return NONE;
+}
+
+const ARRAY_INTERVAL_FAMILY = "array-interval";
+
+const REGION_PARTITIONS: PartitionAlgebra<string, Produced> = {
+  sameFamily: (left, right) => left === right,
+  samePart: sameProduced,
+  compose: (_family, left, right) => combineAdjacentRegions(left, right),
+};
+
+function regionPartitionWitness(
+  witness: Extract<Produced, { readonly tag: "region-witness" }>,
+): PartitionWitness<string, Produced> {
+  return {
+    family: ARRAY_INTERVAL_FAMILY,
+    parent: witness.parent,
+    left: witness.left,
+    right: witness.right,
+  };
+}
+
+function producedRegionWitness(
+  witness: PartitionWitness<string, Produced>,
+): Produced {
+  return {
+    tag: "region-witness",
+    parent: witness.parent,
+    left: witness.left,
+    right: witness.right,
+  };
+}
+
+function combineAdjacentRegions(left: Produced, right: Produced): Produced {
+  if (left.tag === "region" && right.tag === "region") {
+    return {
+      tag: "region",
+      authority: combine(left.authority, right.authority),
+      elements: combine(left.elements, right.elements),
+    };
+  }
+  return combine(left, right);
 }
 
 /**
@@ -2106,8 +2427,26 @@ function resolvePending(
         return { tag: "pending-freeze", region };
       }
       fullRegionFreeze(region, span, analysis);
+      if (region.tag === "region") return region.elements;
       return NONE;
     }
+    case "pending-reassociate": {
+      const resolved = reassociateRegionWitnesses(
+        produced.direction,
+        resolvePending(produced.outer, span, analysis),
+        resolvePending(produced.inner, span, analysis),
+        span,
+        analysis,
+      );
+      if (resolved.tag !== "sequence") return resolved;
+      return resolved.elements[produced.part];
+    }
+    case "region":
+      return {
+        tag: "region",
+        authority: resolvePending(produced.authority, span, analysis),
+        elements: resolvePending(produced.elements, span, analysis),
+      };
     case "region-witness":
       return {
         tag: "region-witness",

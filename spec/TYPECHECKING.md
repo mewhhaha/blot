@@ -668,6 +668,17 @@ authority rather than duplicating it:
   ownership transactions. Ownership leaves also retain their source binding and
   path. Certificate schema 2 publishes that lineage and independently requires
   both `take` outputs or all three `split` outputs at one extraction identity.
+- A region ownership value is `Region(authority, elements)`: the first component
+  is the opaque interval permission and the second is a hidden positional
+  ownership tree transferred from the consumed input array. Region split and
+  replacement add extraction identities to that tree; join and freeze restore
+  it. `get` and discarding `set` require an unrestricted element tree, while
+  consuming `replace` returns the displaced tree position on success and both
+  inputs on failure. This analysis representation is absent from simple types.
+- Rejoin witnesses form binary proof trees. `reassociate_left` accepts witnesses
+  for `A * BC -> ABC` and `B * C -> BC`; `reassociate_right` is its inverse. The
+  checker mints the rotated witnesses only after exact parent-child identity
+  succeeds, and certificate replay validates the same relation.
 - A written effect-row tail elaborates to one signature-local row variable. The
   same `..e` identity is reused at each occurrence in that `sig`, and lowering
   refuses a tail with fewer than two occurrences before ordinary inference. Open

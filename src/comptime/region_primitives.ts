@@ -44,6 +44,21 @@ function relativeIndex(
   return region.start + relative;
 }
 
+function rejoinOf(
+  value: Value,
+  span: Span,
+  operation: string,
+): Extract<Value, { tag: "region-rejoin" }> {
+  if (value.tag !== "region-rejoin") {
+    fail(
+      "BLOT_TYPE",
+      `${operation} expects a rejoin witness, found ${show(value)}.`,
+      span,
+    );
+  }
+  return value;
+}
+
 const entries: readonly (readonly [string, Primitive])[] = [
   [
     "@region.type",
@@ -128,6 +143,35 @@ const entries: readonly (readonly [string, Primitive])[] = [
         }
         region.store.cells[absolute] = replacement;
         return { tag: "tag", name: "Updated", payload: region };
+      },
+    },
+  ],
+  [
+    "@region.replace",
+    {
+      arity: 3,
+      run: ([value, index, replacement], span) => {
+        const region = regionOf(value, span, "@region.replace");
+        const absolute = relativeIndex(
+          region,
+          index,
+          span,
+          "@region.replace",
+        );
+        if (absolute === null) {
+          return {
+            tag: "tag",
+            name: "ReplaceOutOfBounds",
+            payload: tupleOf([replacement, region]),
+          };
+        }
+        const displaced = region.store.cells[absolute];
+        region.store.cells[absolute] = replacement;
+        return {
+          tag: "tag",
+          name: "Replaced",
+          payload: tupleOf([displaced, region]),
+        };
       },
     },
   ],
@@ -238,6 +282,92 @@ const entries: readonly (readonly [string, Primitive])[] = [
           start: left.start,
           end: right.end,
         };
+      },
+    },
+  ],
+  [
+    "@region.reassociate_left",
+    {
+      arity: 2,
+      run: ([outerValue, innerValue], span) => {
+        const outer = rejoinOf(
+          outerValue,
+          span,
+          "@region.reassociate_left",
+        );
+        const inner = rejoinOf(
+          innerValue,
+          span,
+          "@region.reassociate_left",
+        );
+        const nested = outer.store === inner.store &&
+          outer.middle === inner.start && outer.end === inner.end;
+        if (!nested) {
+          fail(
+            "BLOT_REGION_REASSOCIATE_UNPROVED",
+            "Left reassociation requires the witness that split the outer witness's right child.",
+            span,
+          );
+        }
+        return tupleOf([
+          {
+            tag: "region-rejoin",
+            store: outer.store,
+            start: outer.start,
+            middle: inner.middle,
+            end: outer.end,
+          },
+          {
+            tag: "region-rejoin",
+            store: outer.store,
+            start: outer.start,
+            middle: outer.middle,
+            end: inner.middle,
+          },
+        ]);
+      },
+    },
+  ],
+  [
+    "@region.reassociate_right",
+    {
+      arity: 2,
+      run: ([outerValue, innerValue], span) => {
+        const outer = rejoinOf(
+          outerValue,
+          span,
+          "@region.reassociate_right",
+        );
+        const inner = rejoinOf(
+          innerValue,
+          span,
+          "@region.reassociate_right",
+        );
+        const nested = outer.store === inner.store &&
+          outer.start === inner.start && outer.middle === inner.end;
+        if (!nested) {
+          fail(
+            "BLOT_REGION_REASSOCIATE_UNPROVED",
+            "Right reassociation requires the witness that split the outer witness's left child.",
+            span,
+          );
+        }
+        return tupleOf([
+          {
+            tag: "region-rejoin",
+            store: outer.store,
+            start: outer.start,
+            middle: inner.middle,
+            end: outer.end,
+          },
+          {
+            tag: "region-rejoin",
+            store: outer.store,
+            start: inner.middle,
+            middle: outer.middle,
+            end: outer.end,
+          },
+        ]);
       },
     },
   ],

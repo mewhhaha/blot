@@ -9,6 +9,7 @@ mod hir;
 mod layout;
 mod lower;
 mod ownership;
+mod partition;
 mod primitives;
 mod rebinding;
 mod recognise;
