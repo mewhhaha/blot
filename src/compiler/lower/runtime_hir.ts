@@ -30,6 +30,7 @@ import {
 } from "../../core/computation.ts";
 import type { Decl, Expr, Module, Pattern, Span } from "../../syntax/ast.ts";
 import { liveDeclarations } from "../../syntax/live.ts";
+import { recursiveCallsAreOwnershipTail } from "../../linear/check.ts";
 import type { StagedExport } from "../../stage.ts";
 
 interface SourceComputationSchedule {
@@ -103,6 +104,8 @@ type ResidualValue =
     readonly type: TypeId;
     readonly meaning?:
       | "ordering"
+      | "fresh-store"
+      | "reusable-store"
       | { readonly kind: "scalar-ordering"; readonly right: ValueId }
       | {
         readonly kind: "sum";
@@ -230,6 +233,12 @@ export function exportResidualRuntimeHir(
   };
 }
 
+interface ResidualRegion {
+  readonly store: Extract<ResidualValue, { readonly kind: "dynamic" }>;
+  readonly start: Extract<ResidualValue, { readonly kind: "dynamic" }>;
+  readonly end: Extract<ResidualValue, { readonly kind: "dynamic" }>;
+}
+
 class ResidualHirBuilder {
   readonly types: BlotRuntimeType[] = [];
   readonly signatures: {
@@ -251,6 +260,7 @@ class ResidualHirBuilder {
   readonly #source: string;
   readonly #typeByName = new Map<string, TypeId>();
   #currentBlock = 0;
+  #dynamicBranchDepth = 0;
   #nextValue = 0;
   #residualOrigin: Span | null = null;
 
@@ -742,6 +752,16 @@ class ResidualHirBuilder {
     if (fn.kind === "static") {
       const value = fn.value;
       if (value.tag === "closure" || value.tag === "core-closure") {
+        if (
+          value.self !== null &&
+          this.shouldLowerTailRecursion(value.body, value.self)
+        ) {
+          const residual = this.residualizeStatic(fn);
+          if (residual.kind !== "closure") {
+            throw new Error("recursive source closure did not residualize");
+          }
+          return this.apply(residual, argument, span, expectedArgumentType);
+        }
         const scope = this.environment(null, value.env);
         if (value.self !== null) scope.names.set(value.self, fn);
         this.bind(value.parameter, argument, scope, span);
@@ -782,7 +802,10 @@ class ResidualHirBuilder {
       throw this.outside(span, `application of static ${value.tag}`);
     }
     if (fn.kind === "closure") {
-      if (fn.self === "go$") {
+      if (
+        fn.self !== null &&
+        this.shouldLowerTailRecursion(fn.body, fn.self)
+      ) {
         return this.lowerTailRecursiveLoop(
           fn,
           argument,
@@ -817,6 +840,18 @@ class ResidualHirBuilder {
     }
     const applied = [...fn.applied, argument];
     if (applied.length < fn.arity) return { ...fn, applied };
+    if (fn.name === "@panic") {
+      const message = this.staticValue(applied[0]);
+      if (message === undefined || message.tag !== "text") {
+        throw this.outside(span, "dynamic panic message");
+      }
+      this.terminate({
+        kind: "trap",
+        message: `BLOT_PANIC: ${message.value}`,
+        span: this.span(span),
+      });
+      return { kind: "never" };
+    }
     const staticArguments = applied.map((value) => this.staticValue(value));
     if (staticArguments.every((value) => value !== undefined)) {
       return {
@@ -869,6 +904,66 @@ class ResidualHirBuilder {
     if (fn.name === "@type.open") return applied[0];
     if (fn.name === "@linear.own" || fn.name === "@linear.borrow") {
       return applied[0];
+    }
+    if (fn.name === "@region.claim") {
+      const original = applied[0];
+      let store = this.store(original, span, fn.name);
+      if (
+        original.kind !== "array" &&
+        !(original.kind === "dynamic" &&
+          original.meaning === "reusable-store")
+      ) {
+        store = this.privateStoreCopy(store, span);
+      }
+      const length = this.storeLength(store, span);
+      const zero = this.constant(0n, this.type("signed-integer-64"), span);
+      return this.makeRegion(store, zero, length, span);
+    }
+    if (fn.name === "@region.length") {
+      const { start, end } = this.region(applied[0], span, fn.name);
+      return this.operation(
+        "scalar",
+        this.type("signed-integer-64"),
+        [end.value, start.value],
+        span,
+        undefined,
+        "subtract",
+      );
+    }
+    if (fn.name === "@region.get") {
+      const region = this.region(applied[0], span, fn.name);
+      const index = this.integer(applied[1], span, fn.name);
+      return this.regionGet(region, index, span);
+    }
+    if (fn.name === "@region.set") {
+      const region = this.region(applied[0], span, fn.name);
+      const storeType = this.types[region.store.type];
+      if (storeType.kind !== "store") {
+        throw this.outside(span, "Region Store projection lost its Store type");
+      }
+      const index = this.integer(applied[1], span, fn.name);
+      const value = this.materialize(applied[2], storeType.elementType, span);
+      return this.regionSet(region, index, value, span);
+    }
+    if (fn.name === "@region.swap") {
+      const region = this.region(applied[0], span, fn.name);
+      const left = this.integer(applied[1], span, fn.name);
+      const right = this.integer(applied[2], span, fn.name);
+      return this.regionSwap(region, left, right, span);
+    }
+    if (fn.name === "@region.split") {
+      const region = this.region(applied[0], span, fn.name);
+      const offset = this.integer(applied[1], span, fn.name);
+      return this.regionSplit(region, offset, span);
+    }
+    if (fn.name === "@region.join") {
+      this.dynamic(applied[0]);
+      const left = this.region(applied[1], span, fn.name);
+      const right = this.region(applied[2], span, fn.name);
+      return this.makeRegion(left.store, left.start, right.end, span);
+    }
+    if (fn.name === "@region.freeze") {
+      return this.region(applied[0], span, fn.name).store;
     }
     if (fn.name === "@array.len") {
       const store = this.store(applied[0], span, fn.name);
@@ -927,7 +1022,12 @@ class ResidualHirBuilder {
         update: "persistent",
         span: this.span(span),
       });
-      return { kind: "dynamic", value: result, type: store.type };
+      return {
+        kind: "dynamic",
+        value: result,
+        type: store.type,
+        meaning: "fresh-store",
+      };
     }
     if (fn.name === "@array.push") {
       if (applied[0].kind === "empty-store") {
@@ -1203,7 +1303,10 @@ class ResidualHirBuilder {
     });
     this.#currentBlock = header.id;
     const scope = this.environment(fn.environment, null);
-    scope.names.set("go$", {
+    if (fn.self === null) {
+      throw new Error("tail-recursive closure lost its self name");
+    }
+    scope.names.set(fn.self, {
       kind: "tail-loop",
       block: header.id,
       parameterType,
@@ -1215,6 +1318,36 @@ class ResidualHirBuilder {
       span,
     );
     return this.evaluate(fn.body, scope);
+  }
+
+  private shouldLowerTailRecursion(
+    body: ResidualExpression,
+    self: string,
+  ): boolean {
+    const names = new Set([self]);
+    if (
+      recursiveCallsAreOwnershipTail(
+        sourceExpression(body),
+        names,
+        true,
+        false,
+      )
+    ) return true;
+    if (this.#dynamicBranchDepth === 0) return false;
+    return recursiveCallsAreOwnershipTail(
+      sourceExpression(body),
+      names,
+      true,
+    );
+  }
+
+  private withDynamicBranch<T>(run: () => T): T {
+    this.#dynamicBranchDepth += 1;
+    try {
+      return run();
+    } finally {
+      this.#dynamicBranchDepth -= 1;
+    }
   }
 
   private conditional(
@@ -1269,17 +1402,14 @@ class ResidualHirBuilder {
     };
 
     this.#currentBlock = consequence.id;
-    const consequentValue = this.evaluate(
-      branch.consequence,
-      environment,
+    const consequentValue = this.withDynamicBranch(() =>
+      this.evaluate(branch.consequence, environment)
     );
     const consequenceEnd = this.#currentBlock;
 
     this.#currentBlock = alternate.id;
-    const alternateValue = this.conditionalBranch(
-      expr,
-      index + 1,
-      environment,
+    const alternateValue = this.withDynamicBranch(() =>
+      this.conditionalBranch(expr, index + 1, environment)
     );
     const alternateEnd = this.#currentBlock;
 
@@ -1455,9 +1585,13 @@ class ResidualHirBuilder {
       }
       throw this.outside(expr.span, "non-exhaustive Boolean case");
     };
-    const consequent = evaluateArm("True", trueBlock);
+    const consequent = this.withDynamicBranch(() =>
+      evaluateArm("True", trueBlock)
+    );
     const consequenceEnd = this.#currentBlock;
-    const alternate = evaluateArm("False", falseBlock);
+    const alternate = this.withDynamicBranch(() =>
+      evaluateArm("False", falseBlock)
+    );
     const alternateEnd = this.#currentBlock;
     return this.finishBranchJoin(
       consequent.value,
@@ -1512,14 +1646,15 @@ class ResidualHirBuilder {
       };
 
       this.#currentBlock = consequence.id;
-      const consequenceValue = this.evaluate(
-        arm.body,
-        this.environment(environment, null),
+      const consequenceValue = this.withDynamicBranch(() =>
+        this.evaluate(arm.body, this.environment(environment, null))
       );
       const consequenceEnd = this.#currentBlock;
 
       this.#currentBlock = alternate.id;
-      const alternateValue = evaluateArm(index + 1);
+      const alternateValue = this.withDynamicBranch(() =>
+        evaluateArm(index + 1)
+      );
       const alternateEnd = this.#currentBlock;
       return this.finishBranchJoin(
         consequenceValue,
@@ -1676,9 +1811,13 @@ class ResidualHirBuilder {
       }
       return this.evaluate(arm.body, scope);
     };
-    const consequentValue = evaluateArm(0, consequence);
+    const consequentValue = this.withDynamicBranch(() =>
+      evaluateArm(0, consequence)
+    );
     const consequenceEnd = this.#currentBlock;
-    const alternateValue = evaluateArm(1, alternate);
+    const alternateValue = this.withDynamicBranch(() =>
+      evaluateArm(1, alternate)
+    );
     const alternateEnd = this.#currentBlock;
     return this.finishBranchJoin(
       consequentValue,
@@ -2359,7 +2498,15 @@ class ResidualHirBuilder {
   ): boolean {
     if (pattern.tag === "wildcard") return true;
     if (pattern.tag === "name") {
-      environment.names.set(pattern.name, value);
+      let bound = value;
+      if (value.kind === "dynamic" && value.meaning === "fresh-store") {
+        if (pattern.qualifier === "linear") {
+          bound = { ...value, meaning: "reusable-store" };
+        } else {
+          bound = { kind: "dynamic", value: value.value, type: value.type };
+        }
+      }
+      environment.names.set(pattern.name, bound);
       return true;
     }
     if (pattern.tag === "tuple" && value.kind === "tuple") {
@@ -2509,6 +2656,43 @@ class ResidualHirBuilder {
       const span = { start: 0, end: 0 };
       const type = this.typeForResidualValue(value, span);
       return this.materialize(value, type, span);
+    }
+    if (staticValue.tag === "region-array") {
+      const span = { start: 0, end: 0 };
+      const first = staticValue.store.cells[0];
+      if (first === undefined) {
+        throw this.outside(span, "empty residual Region representation");
+      }
+      const elementType = this.typeForResidualValue(
+        { kind: "static", value: first },
+        span,
+      );
+      const store = this.materialize(
+        {
+          kind: "array",
+          elements: staticValue.store.cells.map((cell) => ({
+            kind: "static",
+            value: cell,
+          })),
+          elementType,
+        },
+        this.storeType(elementType),
+        span,
+      );
+      const start = this.constant(
+        BigInt(staticValue.start),
+        this.type("signed-integer-64"),
+        span,
+      );
+      const end = this.constant(
+        BigInt(staticValue.end),
+        this.type("signed-integer-64"),
+        span,
+      );
+      return this.makeRegion(store, start, end, span);
+    }
+    if (staticValue.tag === "region-rejoin") {
+      return this.constant(null, this.type("unit"), { start: 0, end: 0 });
     }
     if (staticValue.tag === "sealed") {
       return this.dynamic({ kind: "static", value: staticValue.inner });
@@ -2871,10 +3055,15 @@ class ResidualHirBuilder {
       }
       return this.productTypeFromRuntimeFields(fields);
     }
-    if (type.tag === "array" || type.tag === "region") {
+    if (type.tag === "array") {
       const elementType = this.typeForSimpleType(type.element, span, seen);
       if (elementType === null) return null;
       return this.storeType(elementType);
+    }
+    if (type.tag === "region") {
+      const elementType = this.typeForSimpleType(type.element, span, seen);
+      if (elementType === null) return null;
+      return this.regionType(this.storeType(elementType));
     }
     if (type.tag === "variant") {
       if (type.open) return null;
@@ -3848,6 +4037,469 @@ class ResidualHirBuilder {
     this.#typeByName.set(key, type);
     this.types.push({ kind: "store", elementType });
     return type;
+  }
+
+  private regionType(storeType: TypeId): TypeId {
+    if (this.types[storeType].kind !== "store") {
+      throw new Error("a Region requires a Store runtime type");
+    }
+    const key = `region:${storeType}`;
+    const existing = this.#typeByName.get(key);
+    if (existing !== undefined) return existing;
+    const integer = this.type("signed-integer-64");
+    const type = this.types.length;
+    this.#typeByName.set(key, type);
+    this.types.push({
+      kind: "product",
+      name: `$region:${storeType}`,
+      fields: [
+        { name: "end", type: integer },
+        { name: "start", type: integer },
+        { name: "store", type: storeType },
+      ],
+    });
+    return type;
+  }
+
+  private makeRegion(
+    store: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    start: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    end: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    span: Span,
+  ): Extract<ResidualValue, { readonly kind: "dynamic" }> {
+    const value: ResidualValue = {
+      kind: "shape",
+      fields: new Map([
+        ["end", end],
+        ["start", start],
+        ["store", store],
+      ]),
+    };
+    return this.materialize(value, this.regionType(store.type), span);
+  }
+
+  private region(
+    value: ResidualValue,
+    span: Span,
+    primitive: string,
+  ): ResidualRegion {
+    if (value.kind === "module-argument") {
+      return this.unsupported(
+        span,
+        "live Region at the Blot Core Wasm ABI 1 boundary",
+      );
+    }
+    const dynamic = this.dynamic(value);
+    const type = this.types[dynamic.type];
+    if (type.kind !== "product" || !type.name.startsWith("$region:")) {
+      throw this.outside(span, `${primitive} over a non-Region`);
+    }
+    const store = this.dynamic(this.project(dynamic, "store", span));
+    const start = this.integer(
+      this.project(dynamic, "start", span),
+      span,
+      primitive,
+    );
+    const end = this.integer(
+      this.project(dynamic, "end", span),
+      span,
+      primitive,
+    );
+    return { store, start, end };
+  }
+
+  private storeLength(
+    store: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    span: Span,
+  ): Extract<ResidualValue, { readonly kind: "dynamic" }> {
+    const result = this.nextValue();
+    this.current().operations.push({
+      kind: "store.length",
+      result,
+      type: this.type("signed-integer-64"),
+      operands: [store.value],
+      ownership: "plain",
+      span: this.span(span),
+    });
+    return {
+      kind: "dynamic",
+      value: result,
+      type: this.type("signed-integer-64"),
+    };
+  }
+
+  private storeRead(
+    store: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    index: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    span: Span,
+  ): Extract<ResidualValue, { readonly kind: "dynamic" }> {
+    const storeType = this.types[store.type];
+    if (storeType.kind !== "store") {
+      throw this.outside(span, "Region read over a non-Store");
+    }
+    const result = this.nextValue();
+    this.current().operations.push({
+      kind: "store.read",
+      result,
+      type: storeType.elementType,
+      operands: [store.value, index.value],
+      ownership: this.ownership(storeType.elementType),
+      span: this.span(span),
+    });
+    return { kind: "dynamic", value: result, type: storeType.elementType };
+  }
+
+  private storeWrite(
+    store: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    index: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    value: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    update: "owned-reuse" | "persistent",
+    span: Span,
+  ): Extract<ResidualValue, { readonly kind: "dynamic" }> {
+    const result = this.nextValue();
+    this.current().operations.push({
+      kind: "store.write",
+      result,
+      type: store.type,
+      operands: [store.value, index.value, value.value],
+      ownership: "owned",
+      update,
+      span: this.span(span),
+    });
+    return { kind: "dynamic", value: result, type: store.type };
+  }
+
+  private branchValue(
+    condition: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    consequent: () => ResidualValue,
+    alternate: () => ResidualValue,
+    span: Span,
+  ): ResidualValue {
+    if (this.types[condition.type].kind !== "boolean") {
+      throw this.outside(span, "non-Boolean Region condition");
+    }
+    const source = this.current();
+    const consequence = this.block();
+    const alternative = this.block();
+    source.terminator = {
+      kind: "conditional",
+      condition: condition.value,
+      consequent: consequence.id,
+      consequentArguments: [],
+      alternate: alternative.id,
+      alternateArguments: [],
+      span: this.span(span),
+    };
+    this.#currentBlock = consequence.id;
+    const consequentValue = this.withDynamicBranch(consequent);
+    const consequenceEnd = this.#currentBlock;
+    this.#currentBlock = alternative.id;
+    const alternateValue = this.withDynamicBranch(alternate);
+    const alternateEnd = this.#currentBlock;
+    return this.finishBranchJoin(
+      consequentValue,
+      alternateValue,
+      consequenceEnd,
+      alternateEnd,
+      span,
+      span,
+      span,
+    );
+  }
+
+  private privateStoreCopy(
+    store: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    span: Span,
+  ): Extract<ResidualValue, { readonly kind: "dynamic" }> {
+    const length = this.storeLength(store, span);
+    const zero = this.constant(0n, this.type("signed-integer-64"), span);
+    const empty = this.operation(
+      "scalar",
+      this.type("boolean"),
+      [length.value, zero.value],
+      span,
+      undefined,
+      "equal",
+    );
+    return this.dynamic(this.branchValue(
+      empty,
+      () => store,
+      () => {
+        const first = this.storeRead(store, zero, span);
+        return this.storeWrite(store, zero, first, "persistent", span);
+      },
+      span,
+    ));
+  }
+
+  private regionIndexInBounds(
+    region: ResidualRegion,
+    index: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    span: Span,
+  ): Extract<ResidualValue, { readonly kind: "dynamic" }> {
+    const integer = this.type("signed-integer-64");
+    const zero = this.constant(0n, integer, span);
+    const negative = this.operation(
+      "scalar",
+      this.type("boolean"),
+      [index.value, zero.value],
+      span,
+      undefined,
+      "less-than",
+    );
+    return this.dynamic(this.branchValue(
+      negative,
+      () => this.constant(false, this.type("boolean"), span),
+      () => {
+        const length = this.operation(
+          "scalar",
+          integer,
+          [region.end.value, region.start.value],
+          span,
+          undefined,
+          "subtract",
+        );
+        return this.operation(
+          "scalar",
+          this.type("boolean"),
+          [index.value, length.value],
+          span,
+          undefined,
+          "less-than",
+        );
+      },
+      span,
+    ));
+  }
+
+  private booleanAnd(
+    left: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    right: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    span: Span,
+  ): Extract<ResidualValue, { readonly kind: "dynamic" }> {
+    return this.dynamic(this.branchValue(
+      left,
+      () => right,
+      () => this.constant(false, this.type("boolean"), span),
+      span,
+    ));
+  }
+
+  private absoluteRegionIndex(
+    region: ResidualRegion,
+    index: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    span: Span,
+  ): Extract<ResidualValue, { readonly kind: "dynamic" }> {
+    return this.operation(
+      "scalar",
+      this.type("signed-integer-64"),
+      [region.start.value, index.value],
+      span,
+      undefined,
+      "add",
+    );
+  }
+
+  private regionGet(
+    region: ResidualRegion,
+    index: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    span: Span,
+  ): ResidualValue {
+    const inBounds = this.regionIndexInBounds(region, index, span);
+    return this.branchValue(
+      inBounds,
+      () => ({
+        kind: "tag",
+        name: "Some",
+        payload: this.storeRead(
+          region.store,
+          this.absoluteRegionIndex(region, index, span),
+          span,
+        ),
+      }),
+      () => ({
+        kind: "tag",
+        name: "None",
+        payload: { kind: "static", value: { tag: "unit" } },
+      }),
+      span,
+    );
+  }
+
+  private regionSet(
+    region: ResidualRegion,
+    index: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    value: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    span: Span,
+  ): ResidualValue {
+    const inBounds = this.regionIndexInBounds(region, index, span);
+    return this.branchValue(
+      inBounds,
+      () => {
+        const store = this.storeWrite(
+          region.store,
+          this.absoluteRegionIndex(region, index, span),
+          value,
+          "owned-reuse",
+          span,
+        );
+        return {
+          kind: "tag",
+          name: "Updated",
+          payload: this.makeRegion(store, region.start, region.end, span),
+        };
+      },
+      () => ({
+        kind: "tag",
+        name: "SetOutOfBounds",
+        payload: this.makeRegion(
+          region.store,
+          region.start,
+          region.end,
+          span,
+        ),
+      }),
+      span,
+    );
+  }
+
+  private regionSwap(
+    region: ResidualRegion,
+    left: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    right: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    span: Span,
+  ): ResidualValue {
+    const leftOk = this.regionIndexInBounds(region, left, span);
+    const rightOk = this.regionIndexInBounds(region, right, span);
+    const inBounds = this.booleanAnd(leftOk, rightOk, span);
+    return this.branchValue(
+      inBounds,
+      () => {
+        const leftIndex = this.absoluteRegionIndex(region, left, span);
+        const rightIndex = this.absoluteRegionIndex(region, right, span);
+        const leftValue = this.storeRead(region.store, leftIndex, span);
+        const rightValue = this.storeRead(region.store, rightIndex, span);
+        const first = this.storeWrite(
+          region.store,
+          leftIndex,
+          rightValue,
+          "owned-reuse",
+          span,
+        );
+        const second = this.storeWrite(
+          first,
+          rightIndex,
+          leftValue,
+          "owned-reuse",
+          span,
+        );
+        return {
+          kind: "tag",
+          name: "Updated",
+          payload: this.makeRegion(second, region.start, region.end, span),
+        };
+      },
+      () => ({
+        kind: "tag",
+        name: "SwapOutOfBounds",
+        payload: this.makeRegion(
+          region.store,
+          region.start,
+          region.end,
+          span,
+        ),
+      }),
+      span,
+    );
+  }
+
+  private regionSplit(
+    region: ResidualRegion,
+    offset: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    span: Span,
+  ): ResidualValue {
+    const integer = this.type("signed-integer-64");
+    const failure = (): ResidualValue => ({
+      kind: "tag",
+      name: "SplitOutOfBounds",
+      payload: this.makeRegion(
+        region.store,
+        region.start,
+        region.end,
+        span,
+      ),
+    });
+    const zero = this.constant(0n, integer, span);
+    const negative = this.operation(
+      "scalar",
+      this.type("boolean"),
+      [offset.value, zero.value],
+      span,
+      undefined,
+      "less-than",
+    );
+    return this.branchValue(
+      negative,
+      failure,
+      () => {
+        const length = this.operation(
+          "scalar",
+          integer,
+          [region.end.value, region.start.value],
+          span,
+          undefined,
+          "subtract",
+        );
+        const tooHigh = this.operation(
+          "scalar",
+          this.type("boolean"),
+          [length.value, offset.value],
+          span,
+          undefined,
+          "less-than",
+        );
+        return this.branchValue(
+          tooHigh,
+          failure,
+          () => {
+            const middle = this.operation(
+              "scalar",
+              integer,
+              [region.start.value, offset.value],
+              span,
+              undefined,
+              "add",
+            );
+            const left = this.makeRegion(
+              region.store,
+              region.start,
+              middle,
+              span,
+            );
+            const right = this.makeRegion(
+              region.store,
+              middle,
+              region.end,
+              span,
+            );
+            return {
+              kind: "tag",
+              name: "Split",
+              payload: {
+                kind: "tuple",
+                elements: [
+                  left,
+                  right,
+                  { kind: "static", value: { tag: "unit" } },
+                ],
+              },
+            };
+          },
+          span,
+        );
+      },
+      span,
+    );
   }
 
   private sealedType(name: string, representationType: TypeId): TypeId {

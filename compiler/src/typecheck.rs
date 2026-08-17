@@ -537,6 +537,7 @@ pub struct CheckedModule {
     pub evaluated: Option<ValueEnvironment>,
     pub closure_signatures: Vec<(ExpressionId, Type)>,
     pub recursive_closures: Vec<ExpressionId>,
+    pub ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
 }
 
 #[derive(Clone)]
@@ -548,9 +549,10 @@ pub struct CachedModuleInterface {
     evaluated: Option<ValueEnvironment>,
     closure_signatures: Vec<(ExpressionId, FlatTypeId)>,
     recursive_closures: Vec<ExpressionId>,
+    ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
 }
 
-pub const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 4;
+pub const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 5;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct CheckedModuleCertificate {
@@ -561,6 +563,7 @@ pub struct CheckedModuleCertificate {
     parameter: Option<FlatTypeId>,
     closure_signatures: Vec<(ExpressionId, FlatTypeId)>,
     recursive_closures: Vec<ExpressionId>,
+    ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -640,6 +643,7 @@ impl CachedModuleInterface {
             evaluated: checked.evaluated.clone(),
             closure_signatures,
             recursive_closures: checked.recursive_closures.clone(),
+            ownership_contracts: checked.ownership_contracts.clone(),
         })
     }
 
@@ -652,6 +656,7 @@ impl CachedModuleInterface {
             parameter: self.parameter,
             closure_signatures: self.closure_signatures.clone(),
             recursive_closures: self.recursive_closures.clone(),
+            ownership_contracts: self.ownership_contracts.clone(),
         }
     }
 
@@ -667,6 +672,7 @@ impl CachedModuleInterface {
             evaluated: None,
             closure_signatures: certificate.closure_signatures,
             recursive_closures: certificate.recursive_closures,
+            ownership_contracts: certificate.ownership_contracts,
         })
     }
 }
@@ -706,6 +712,21 @@ impl CheckedModuleCertificate {
             if !recursive_bodies.insert(*body) {
                 return Err(format!(
                     "checked-module certificate repeats recursive closure expression {}",
+                    body.0
+                ));
+            }
+        }
+        let mut ownership_bodies = HashSet::new();
+        for (body, _) in &self.ownership_contracts {
+            if !closure_bodies.contains(body) {
+                return Err(format!(
+                    "checked-module certificate has an ownership contract for unknown closure expression {}",
+                    body.0
+                ));
+            }
+            if !ownership_bodies.insert(*body) {
+                return Err(format!(
+                    "checked-module certificate repeats ownership contract for closure expression {}",
                     body.0
                 ));
             }
@@ -795,6 +816,7 @@ fn validate_certificate_type(
 #[derive(Clone)]
 pub struct CachedModuleAnalyses {
     ownership: Result<(), Diagnostic>,
+    ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
     safety: Result<(), Diagnostic>,
 }
 
@@ -939,6 +961,15 @@ impl Checker {
                 "cannot install checked-module certificate for unknown module {path}"
             ));
         }
+        let module = self
+            .context
+            .modules
+            .borrow()
+            .get(path)
+            .expect("checked module presence was tested")
+            .module
+            .clone();
+        crate::ownership::validate_contracts(&module, &certificate.ownership_contracts)?;
         let interface = CachedModuleInterface::from_certificate(certificate)?;
         self.module_interfaces
             .borrow_mut()
@@ -967,6 +998,10 @@ impl Checker {
         self.incomplete_evaluations
             .borrow_mut()
             .retain(|path| !paths.contains(path));
+        self.context
+            .ownership_contracts
+            .borrow_mut()
+            .retain(|(path, _), _| !paths.contains(path));
     }
 
     pub fn check_json(&self, path: &str) -> serde_json::Value {
@@ -1137,6 +1172,12 @@ impl Checker {
                 .iter()
                 .map(|body| (path.to_owned(), *body)),
         );
+        self.context.ownership_contracts.borrow_mut().extend(
+            analyses
+                .ownership_contracts
+                .iter()
+                .map(|(body, contract)| ((path.to_owned(), *body), contract.clone())),
+        );
         let checked = CheckedModule {
             result: self.settle(inferred.type_, true),
             effects,
@@ -1144,6 +1185,7 @@ impl Checker {
             evaluated: (!self.incomplete_evaluations.borrow().contains(path)).then_some(values),
             closure_signatures,
             recursive_closures,
+            ownership_contracts: analyses.ownership_contracts,
         };
         self.cache_module_result(path, &loaded.module, &checked);
         Ok(checked)
@@ -1158,11 +1200,10 @@ impl Checker {
         if let Some(cached) = self.module_analyses.borrow().get(path) {
             return cached.clone();
         }
+        let ownership = crate::ownership::check(module, &self.context, values);
         let analyses = CachedModuleAnalyses {
-            ownership: crate::ownership::check(module)
-                .into_iter()
-                .next()
-                .map_or(Ok(()), Err),
+            ownership: ownership.diagnostics.into_iter().next().map_or(Ok(()), Err),
+            ownership_contracts: ownership.contracts,
             safety: crate::safety::check(module, &self.context, values)
                 .into_iter()
                 .next()
@@ -1223,6 +1264,12 @@ impl Checker {
                 .iter()
                 .map(|body| (path.to_owned(), *body)),
         );
+        self.context.ownership_contracts.borrow_mut().extend(
+            cached
+                .ownership_contracts
+                .iter()
+                .map(|(body, contract)| ((path.to_owned(), *body), contract.clone())),
+        );
         CheckedModule {
             result: self.inflate_interface_type(&cached.types, cached.result, &mut rigids),
             effects: self.inflate_interface_type(&cached.types, cached.effects, &mut rigids),
@@ -1232,6 +1279,7 @@ impl Checker {
             evaluated: cached.evaluated,
             closure_signatures,
             recursive_closures: cached.recursive_closures,
+            ownership_contracts: cached.ownership_contracts,
         }
     }
 
@@ -7600,6 +7648,7 @@ mod tests {
             evaluated: None,
             closure_signatures: Vec::new(),
             recursive_closures: Vec::new(),
+            ownership_contracts: Vec::new(),
         };
         let cached = CachedModuleInterface::from_checked(&checked)
             .expect("a quantified closed interface is cacheable");
@@ -7636,6 +7685,7 @@ mod tests {
             evaluated: None,
             closure_signatures: Vec::new(),
             recursive_closures: Vec::new(),
+            ownership_contracts: Vec::new(),
         };
 
         assert!(CachedModuleInterface::from_checked(&checked).is_none());
@@ -7650,6 +7700,7 @@ mod tests {
             evaluated: None,
             closure_signatures: vec![(ExpressionId(7), Type::Unit)],
             recursive_closures: vec![ExpressionId(8)],
+            ownership_contracts: Vec::new(),
         };
         let cached =
             CachedModuleInterface::from_checked(&checked).expect("a closed interface is cacheable");
@@ -7660,6 +7711,31 @@ mod tests {
                 .validate()
                 .is_err_and(|error| error.contains("unknown closure expression 8"))
         );
+    }
+
+    #[test]
+    fn ownership_contract_certificate_rejects_an_unknown_body() {
+        let checked = CheckedModule {
+            result: Type::Unit,
+            effects: Type::Effects(BTreeSet::new()),
+            parameter: None,
+            evaluated: None,
+            closure_signatures: vec![(ExpressionId(7), Type::Unit)],
+            recursive_closures: Vec::new(),
+            ownership_contracts: vec![(
+                ExpressionId(8),
+                crate::ownership::OwnershipContract {
+                    parameter: PatternId(0),
+                    result: crate::ownership::Produced::None,
+                },
+            )],
+        };
+        let cached =
+            CachedModuleInterface::from_checked(&checked).expect("a closed interface is cacheable");
+
+        assert!(cached.certificate().validate().is_err_and(|error| {
+            error.contains("ownership contract for unknown closure expression 8")
+        }));
     }
 
     #[test]

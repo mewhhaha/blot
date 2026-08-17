@@ -1,6 +1,8 @@
-open import "blot:prelude"
+// In-place quicksort over one private Store. The worklist is persistent and
+// small; every element rearrangement consumes and returns the same full Region
+// authority, so sorting performs no element-Store copy after acquisition.
 
-const Source = @effect.host { .value = Int -> Int; }
+open import "blot:prelude"
 
 sig keep_swap = (Slice.of Int, Int, Int) -> Slice.of Int
 let keep_swap = fn (!region, left, right) =>
@@ -49,19 +51,10 @@ let sort_work =
         return sort_work (!updated, pending, cursor + 1)
   )
 
-dynamic <- Source.value 0
-let region = Slice.claim [dynamic, 4, 7, 3, 8, 2, 6, 1, 5]
-let length = Slice.length (&region)
-let sorted_region = sort_work (!region, [(0, length)], 0)
-let sorted = Slice.freeze (!sorted_region)
+sig quicksort = [Int] -> [Int]
+let quicksort = fn values =>
+  let region = Slice.claim values
+  let length = Slice.length (&region)
+  return Slice.freeze (sort_work (!region, [(0, length)], 0))
 
-let first = case Array.get (sorted, 0) of
-  #Some value => value
-  #None => 0
-let middle = case Array.get (sorted, 4) of
-  #Some value => value
-  #None => 0
-let last = case Array.get (sorted, 8) of
-  #Some value => value
-  #None => 0
-return first * 100 + middle * 10 + last
+return quicksort [4, 7, 3, 8, 2, 6, 1, 5]

@@ -125,6 +125,10 @@ const REJECTIONS: Record<
     code: "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
     stage: "check",
   },
+  "region_name_not_trusted": {
+    code: "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
+    stage: "check",
+  },
   "linear_handler_abort": {
     code: "BLOT_LINEAR_HANDLER_MAY_ABORT",
     stage: "check",

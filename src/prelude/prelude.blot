@@ -307,7 +307,7 @@ const Array =
   }
 
 sig slice_claim = @forall (fn T => [T] -> @region.type T)
-const slice_claim = fn values => @region.claim values
+const slice_claim = fn !values => @region.claim (!values)
 
 sig slice_length = @forall (fn T => @region.type T -> @type.int)
 const slice_length = fn &region => @region.length (&region)

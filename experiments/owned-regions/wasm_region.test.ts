@@ -7,6 +7,11 @@ import {
 import { fromFileUrl, join } from "@std/path";
 import { BlotError } from "../../src/diagnostic.ts";
 import { Compiler } from "../../src/compiler/session.ts";
+import {
+  coreRuntimeImportModule,
+  createRuntimeHeap,
+  createRuntimeImports,
+} from "@mewhhaha/gpupaper/runtime";
 import type {
   BlotRuntimeModule,
   BlotRuntimeOperation,
@@ -52,7 +57,15 @@ async function instantiateDefault(
   imports: WebAssembly.Imports = {},
 ): Promise<() => unknown> {
   const module = await WebAssembly.compile(wasm as BufferSource);
-  const instance = await WebAssembly.instantiate(module, imports);
+  const runtimeImports = createRuntimeImports(createRuntimeHeap([]));
+  const suppliedRuntime = imports[coreRuntimeImportModule];
+  if (typeof suppliedRuntime === "object" && suppliedRuntime !== null) {
+    Object.assign(runtimeImports, suppliedRuntime);
+  }
+  const instance = await WebAssembly.instantiate(module, {
+    ...imports,
+    [coreRuntimeImportModule]: runtimeImports,
+  });
   const run = instance.exports["blot:default"];
   if (typeof run !== "function") {
     throw new Error("compiled module omitted the default export");
@@ -77,15 +90,20 @@ Deno.test("owned Slice quicksort executes through Rust Core Wasm without recursi
       ),
       "quicksort mutation must not copy a Store after Slice acquisition",
     );
+    const elementStore = storeWrites[0].type;
     assertEquals(
-      operations.filter((operation) => operation.kind === "store.empty").length,
+      operations.filter((operation) =>
+        operation.kind === "store.empty" && operation.type === elementStore
+      ).length,
       1,
-      "only the source array allocation may create an empty Store",
+      "the element Store must be acquired once",
     );
     assertEquals(
-      operations.filter((operation) => operation.kind === "store.grow").length,
+      operations.filter((operation) =>
+        operation.kind === "store.grow" && operation.type === elementStore
+      ).length,
       9,
-      "only the nine source elements may grow a Store",
+      "only the nine source elements may grow the element Store",
     );
     assertEquals(
       operations.filter((operation) => operation.kind === "store.new").length,
@@ -101,7 +119,7 @@ Deno.test("owned Slice quicksort executes through Rust Core Wasm without recursi
         },
       },
     });
-    assertEquals(run(), 123456789n);
+    assertEquals(run(), 159n);
   });
 });
 
@@ -273,14 +291,11 @@ return Slice.freeze (!restored)
 });
 
 Deno.test("live Slice capabilities are refused at Core Wasm ABI 1", async () => {
-  const source = `open import "blot:prelude"
-sig length = (@region.type Int) -> Int
-let length = fn !region =>
-  let size = Slice.length (&region)
-  let frozen = Slice.freeze (!region)
-  let _ = Array.length (&frozen)
-  return size
-return length
+  const source = `module with !region
+open import "blot:prelude"
+let size = Slice.length (&region)
+let frozen = Slice.freeze (!region)
+return size + Array.length (&frozen)
 `;
 
   const error = await assertRejects(

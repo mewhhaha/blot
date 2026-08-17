@@ -1,9 +1,8 @@
 # Partitioned ownership regions
 
-Status: experimental design. This file is deliberately ahead of `LANGUAGE.md`.
-The executable probes live in `experiments/owned-regions/`. Nothing here is a
-supported source-language rule until the checker, Runtime HIR, evaluator, Wasm,
-and preservation gates agree.
+Status: implementation contract. The source rules are normative in
+`LANGUAGE.md`; this file owns the proof argument, compiler boundaries, and
+production gates behind them.
 
 The motivating program is quicksort over one Store. Partitioning should
 rearrange one backing allocation, split permission to mutate it into disjoint
@@ -191,9 +190,8 @@ existing consuming-array lineage and is deliberately outside the first patch.
 
 ## 4. Trusted intrinsic boundary
 
-Names are provisional. Application code should eventually call prelude wrappers;
-`@region.*` is the small trusted boundary recognized by ownership and Runtime
-HIR.
+Application code calls ordinary prelude or user-defined wrappers. `@region.*` is
+the small trusted boundary recognized by ownership and Runtime HIR.
 
 ### `@region.claim`
 
@@ -314,7 +312,7 @@ A prelude wrapper can keep application code ordinary:
 
 ```blot
 const Slice = {
-  .claim = fn values => @region.claim values;
+  .claim = fn !values => @region.claim (!values);
   .length = fn &slice => @region.length (&slice);
   .split = fn (!slice, index) => @region.split (slice, index);
   .join = fn (!rejoin, !left, !right) => @region.join (rejoin, left, right);
@@ -335,15 +333,38 @@ compiler-private and refused by ABI 1.
 
 These wrappers certify as ordinary source: a region proof over an abstract
 parameter defers to the call site, where substitution makes the caller's
-authority concrete (section 13). No compiler trust attaches to the prelude. The
-checkers still recognize unshadowed `Slice.*` calls by name — that is the
-remaining bridge over ownership summaries not yet crossing module interfaces,
-and section 13 records it as the last scaffolding to delete.
+authority concrete (section 13). No compiler trust attaches to the prelude and
+no source binding name is recognized by the ownership checker.
+
+### 5.1 Module ownership summaries
+
+Every checked source closure publishes a type-independent ownership contract:
+
+```text
+OwnershipContract = <parameter-pattern, produced-result>
+ClosureIdentity   = <defining-module, body-expression>
+```
+
+The parameter pattern and produced result refer to nodes in the defining
+module's checked AST. An application resolves its callee through the ordinary
+compile-time value environment. If that value is a source closure, its stable
+closure identity selects the contract and the caller substitutes its concrete
+argument authority through the defining module's parameter pattern. Thus an
+imported wrapper has exactly the same ownership meaning as the same wrapper
+written locally.
+
+The resident Node checker retains these immutable contracts with the checked
+module interface. The Rust production compiler serializes them in the checked
+module certificate beside closure signatures and validates every expression,
+pattern, span, and region derivation reference against the exact AST installed
+for that certificate. A contract never crosses a source revision independently
+of that AST. Unknown or host-supplied callees publish no contract and retain the
+ordinary conservative call rule.
 
 ## 6. Static certificate shape
 
-The production proof should reuse the current ownership certificate rather than
-record a flat authority program.
+The production proof reuses the current ownership certificate rather than
+recording a flat authority program.
 
 Conceptually, each region-carrying ownership leaf gains region lineage:
 
@@ -484,43 +505,37 @@ may change; source-visible values do not.
 
 ## 10. Quicksort
 
-The executable experiment uses Lomuto partitioning with `swap`. Its intended
-Blot shape is:
+The executable catalog entry uses Lomuto partitioning with `swap`, carrying one
+complete root and a persistent worklist of `(low, high)` ranges:
 
-```blot
-let quicksort =
-  rec (fn !slice =>
-    if Slice.length (&slice) <= 1:
+```text
+let sort_work =
+  rec (fn (!slice, work, cursor) =>
+    if cursor >= Array.length work:
       return slice
-
-    let (slice, pivot) = partition slice
-
-    if let #Split (left, rest) = Slice.split (slice, pivot) else:
-      @panic "proved split failed"
-
-    if let #Split (middle, right) = Slice.split (rest, 1) else:
-      @panic "proved pivot split failed"
-
-    let left = quicksort left
-    let right = quicksort right
-
-    let slice = Slice.join (left, middle)
-    return Slice.join (slice, right)
+    let (low, high) = work[cursor]
+    let (slice, pivot) = partition (!slice, low, high)
+    let pending = work ++ [(low, pivot), (pivot + 1, high)]
+    return sort_work (!slice, pending, cursor + 1)
   )
 ```
 
-The element Store is never copied during partition, split, recursive sorting, or
-join. The only possible O(n) copy is acquisition of a private Store, and Store
-provenance can eliminate that copy.
+The real source uses total indexed operations rather than the schematic `[]` and
+`++`. The element Store is never copied during partition or recursive sorting.
+The only possible O(n) element copy is acquisition of a private Store, and Store
+provenance eliminates that copy for an explicitly owned fresh input. The range
+worklist remains an ordinary persistent array and its allocations are reported
+separately by the benchmark.
 
 ```text
 shared/unknown input: one O(n) acquisition copy + in-place quicksort
 proved unique input: zero acquisition copy + in-place quicksort
 ```
 
-The recursive calls own disjoint regions. A sequential backend calls them in
-order; a future parallel backend could use the same separation proof without
-changing source semantics.
+`split`/`join` supports a recursive program whose calls own disjoint regions;
+the focused witness tests establish that algebra independently. The first
+catalog implementation deliberately keeps one root live, avoiding a deep tree of
+witnesses while exercising the same destructive partition operations.
 
 ## 11. Why this is not general mutable references
 
@@ -576,7 +591,7 @@ program requires a borrow to escape the current lexical boundary.
 
 ## 12. Production gates
 
-Before moving any of this into `LANGUAGE.md`, require:
+The first region family is production-complete. Its gates are:
 
 - Store-provenance tests proving zero-copy claim is denied when an older
   persistent alias could observe the Store;
@@ -589,15 +604,18 @@ Before moving any of this into `LANGUAGE.md`, require:
 - failure-conservation tests on every total operation;
 - evaluator/Runtime-HIR/Wasm agreement;
 - ABI refusal for live slice values;
-- an in-place quicksort corpus entry whose recursive split/join path allocates
-  no element Stores after acquisition; and
+- an in-place quicksort corpus entry that allocates no element Stores after
+  acquisition, with split/join conservation covered independently; and
 - a benchmark separating acquisition-copy cost from partition/sort cost.
 
-Until those gates pass, `@region.*` remains an experimental trusted boundary,
-not part of Blot's implemented language. Section 13 is part of those gates: the
-name-keyed wrapper recognition and the prelude ownership exemption are
-scaffolding of the current draft, and stabilization replaces them rather than
-canonizing them.
+The accepted/rejected catalog, dynamic Wasm tests, certificate validation,
+cross-module wrapper example, and `pnpm benchmark:owned-regions` provide that
+evidence. The catalog quicksort carries one complete root through a
+tail-recursive range worklist; it exercises the same partition writes without
+manufacturing a deep tree of live witnesses. Split, failed split, sibling
+isolation, exact rejoin, reversed-part rejection, partial-freeze rejection,
+shared-input copy, owned-input reuse, and ABI refusal remain separate focused
+contracts.
 
 ## 13. Recombination witnesses
 
@@ -612,17 +630,15 @@ prelude's own principle that nothing in it is built into the compiler:
 - argument interpretation changes when the callee is spelled `Slice`, to unpack
   the wrappers' tuple calling convention.
 
-Each was the same missing abstraction. The ownership summary of a function
-cannot express a relation between two of its arguments — "these are the sibling
+Each was the same missing abstraction. The ownership summary of a function did
+not express a relation between two of its arguments — "these are the sibling
 halves of one split" — so the relation was patched in by name. A relational
-contract language would express it, but there is a smaller design, now
-implemented: make the relation a value. The trusted mode is deleted; a region
-proof over an abstract parameter defers as a pending obligation carried in the
-function's summary and is discharged at the call site, after parameter
-substitution makes the caller's authorities concrete. The name recognition and
-tuple unpacking remain only as the bridge over ownership summaries not yet
-crossing module interfaces; serializing function ownership summaries into module
-interfaces deletes them too.
+contract language could express it, but there is a smaller design: make the
+relation a value. The trusted mode is deleted; a region proof over an abstract
+parameter defers as a pending obligation carried in the function's summary and
+is discharged at the call site, after parameter substitution makes the caller's
+authorities concrete. Ownership contracts now cross module interfaces, so the
+name recognition and tuple reinterpretation are deleted from both checkers.
 
 ### The witness
 
@@ -656,12 +672,11 @@ first argument's produced value is the witness whose recorded parts are exactly
 the other two arguments. Where the analysis cannot trace a witness, it rejects —
 the same conservatism as the current lineage proof.
 
-What changes is composition. The current proof dies at a function boundary:
-lineage is visible only at the split's own call site, which is why the checker
-must recognize wrappers by spelling. A witness travels through bindings, tuples,
-case arms, and calls by the ordinary parameter-substitution machinery that
-already threads concrete authorities into function results. A user function that
-receives a witness and two parts and joins them certifies with no new rules:
+What changes is composition. A witness travels through bindings, tuples, case
+arms, calls, and imported closure contracts by the ordinary parameter-
+substitution machinery that already threads concrete authorities into function
+results. A user function that receives a witness and two parts and joins them
+certifies with no new rules:
 
 ```blot
 let rejoin_sorted = fn (!rejoin, !left, !right) =>
@@ -709,19 +724,14 @@ each body forwards values whose proofs travel with them.
 Deleted in this revision, from both checkers:
 
 - the trusted-prelude ownership mode and every path by which the prelude was
-  identified.
-
-Remaining scaffolding, deletable once function ownership summaries are
-serialized into module interfaces:
-
+  identified;
 - the name-keyed recognition of `Slice.*`; and
 - the `Slice`-specific tuple-argument reinterpretation.
 
-Within one module the replaceability test already holds: a user wrapper over
-split, join, or freeze — any name, any shape — certifies with no new rules,
-because the deferred proof discharges where the caller's concrete authorities
-substitute in. Across modules, `Slice` is still the one spelling the checkers
-bridge by name.
+The replaceability test holds across modules: a user wrapper over split, join,
+or freeze — any name, any record shape — certifies with no new rules because the
+imported closure contract carries the deferred proof to the caller's concrete
+authorities.
 
 ### Family generality
 

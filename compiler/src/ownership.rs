@@ -2,17 +2,21 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ast::{
     Declaration, DeclarationId, DeclarationKind, Expression, ExpressionId, Module, Pattern,
     PatternId, Qualifier, ShapeMember, Span,
 };
 use crate::diagnostic::Diagnostic;
+use crate::eval::Context;
+use crate::value::{Environment as ValueEnvironment, Value, lookup};
 
 type BindingRef = Rc<RefCell<Binding>>;
 type ScopeRef = Rc<RefCell<Scope>>;
 
-#[derive(Clone, PartialEq)]
-enum Produced {
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
+pub(crate) enum Produced {
     None,
     Borrow(Box<Produced>),
     Leaf(Qualifier),
@@ -57,12 +61,144 @@ enum Produced {
     },
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+pub(crate) struct OwnershipContract {
+    pub(crate) parameter: PatternId,
+    pub(crate) result: Produced,
+}
+
+pub(crate) struct OwnershipCheck {
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) contracts: Vec<(ExpressionId, OwnershipContract)>,
+}
+
+pub(crate) fn validate_contracts(
+    module: &Module,
+    contracts: &[(ExpressionId, OwnershipContract)],
+) -> Result<(), String> {
+    let mut bodies = HashSet::new();
+    for (body, contract) in contracts {
+        if body.0 as usize >= module.arena.expressions.len() {
+            return Err(format!(
+                "ownership contract references missing closure body {}",
+                body.0
+            ));
+        }
+        if contract.parameter.0 as usize >= module.arena.patterns.len() {
+            return Err(format!(
+                "ownership contract for body {} references missing parameter {}",
+                body.0, contract.parameter.0
+            ));
+        }
+        if !bodies.insert(*body) {
+            return Err(format!(
+                "ownership contract repeats closure body {}",
+                body.0
+            ));
+        }
+        let defining_lambda = module.arena.expressions.iter().any(|expression| {
+            matches!(
+                expression,
+                Expression::Lambda {
+                    parameter,
+                    body: lambda_body,
+                    ..
+                } if parameter == &contract.parameter && lambda_body == body
+            )
+        });
+        if !defining_lambda {
+            return Err(format!(
+                "ownership contract for body {} does not match lambda parameter {}",
+                body.0, contract.parameter.0
+            ));
+        }
+        validate_produced(module, &contract.result)?;
+    }
+    Ok(())
+}
+
+fn validate_produced(module: &Module, produced: &Produced) -> Result<(), String> {
+    let validate_pattern = |pattern: PatternId| {
+        if pattern.0 as usize >= module.arena.patterns.len() {
+            return Err(format!(
+                "ownership contract references missing pattern {}",
+                pattern.0
+            ));
+        }
+        Ok(())
+    };
+    match produced {
+        Produced::None | Produced::Leaf(_) => Ok(()),
+        Produced::Borrow(value)
+        | Produced::Variant(value)
+        | Produced::PendingFreeze { region: value } => validate_produced(module, value),
+        Produced::Parameter { source, .. } => validate_pattern(*source),
+        Produced::Closure {
+            captures,
+            parameter,
+            result,
+        } => {
+            validate_pattern(*parameter)?;
+            validate_produced(module, captures)?;
+            validate_produced(module, result)
+        }
+        Produced::Many(values) | Produced::Sequence(values) => {
+            for value in values {
+                validate_produced(module, value)?;
+            }
+            Ok(())
+        }
+        Produced::Shape(fields) | Produced::Choice(fields) => {
+            for value in fields.values() {
+                validate_produced(module, value)?;
+            }
+            Ok(())
+        }
+        Produced::Region { root, splits, .. } => {
+            if let Some(root) = root {
+                validate_pattern(*root)?;
+            }
+            for (span, part) in splits {
+                if span.start < module.span.start
+                    || span.start > span.end
+                    || span.end > module.span.end
+                {
+                    return Err("ownership contract contains an invalid split span".to_owned());
+                }
+                if *part > 1 {
+                    return Err("ownership contract contains an invalid split part".to_owned());
+                }
+            }
+            Ok(())
+        }
+        Produced::RegionWitness {
+            left,
+            right,
+            parent,
+        } => {
+            validate_produced(module, left)?;
+            validate_produced(module, right)?;
+            validate_produced(module, parent)
+        }
+        Produced::PendingJoin {
+            witness,
+            left,
+            right,
+        } => {
+            validate_produced(module, witness)?;
+            validate_produced(module, left)?;
+            validate_produced(module, right)
+        }
+    }
+}
+
 struct Binding {
     pattern: PatternId,
     name: String,
     qualifier: Qualifier,
     owned: Produced,
     parameter: Option<PatternId>,
+    contract_module: Option<Rc<Module>>,
     result: Produced,
     value: Option<ExpressionId>,
     moved: Option<Span>,
@@ -93,15 +229,25 @@ enum Obligation {
 
 struct Analysis<'a> {
     module: &'a Module,
+    context: &'a Context,
+    values: &'a ValueEnvironment,
     diagnostics: Vec<Diagnostic>,
     function_results: HashMap<ExpressionId, Produced>,
+    contracts: HashMap<ExpressionId, OwnershipContract>,
 }
 
-pub fn check(module: &Module) -> Vec<Diagnostic> {
+pub(crate) fn check(
+    module: &Module,
+    context: &Context,
+    values: &ValueEnvironment,
+) -> OwnershipCheck {
     let mut analysis = Analysis {
         module,
+        context,
+        values,
         diagnostics: Vec::new(),
         function_results: HashMap::new(),
+        contracts: HashMap::new(),
     };
     let scope = child_scope(None, false);
     if let Some(parameter) = module.parameter {
@@ -124,7 +270,12 @@ pub fn check(module: &Module) -> Vec<Diagnostic> {
         );
     }
     close_scope(&scope, &mut analysis);
-    analysis.diagnostics
+    let mut contracts = analysis.contracts.into_iter().collect::<Vec<_>>();
+    contracts.sort_by_key(|(body, _)| body.0);
+    OwnershipCheck {
+        diagnostics: analysis.diagnostics,
+        contracts,
+    }
 }
 
 impl Analysis<'_> {
@@ -147,6 +298,25 @@ impl Analysis<'_> {
             current = borrowed.parent.clone();
         }
         None
+    }
+
+    fn callee_value(&self, expression: ExpressionId) -> Option<Value> {
+        match &self.module.arena.expressions[expression.0 as usize] {
+            Expression::Var { name, .. } => lookup(self.values, name),
+            Expression::Field { target, name, .. } => {
+                let target = self.callee_value(*target)?;
+                match target {
+                    Value::Shape(fields) => fields.get(name).cloned(),
+                    Value::Extended { members, .. } => members.get(name).cloned(),
+                    Value::Sealed { inner, .. } => match *inner {
+                        Value::Shape(fields) => fields.get(name).cloned(),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 }
 
@@ -185,6 +355,7 @@ fn declare(pattern: PatternId, produced: Produced, scope: &ScopeRef, analysis: &
                     qualifier,
                     owned,
                     parameter: None,
+                    contract_module: None,
                     result: Produced::None,
                     value: None,
                     moved: None,
@@ -320,6 +491,7 @@ fn install_capture(scope: &ScopeRef, source: &BindingRef, qualifier: Qualifier) 
             qualifier,
             owned: source.owned.clone(),
             parameter: source.parameter,
+            contract_module: source.contract_module.clone(),
             result: source.result.clone(),
             value: source.value,
             moved: None,
@@ -402,9 +574,11 @@ fn walk_declaration(declaration_id: DeclarationId, scope: &ScopeRef, analysis: &
             if let Pattern::Name { name, .. } = &analysis.module.arena.patterns[pattern.0 as usize]
                 && let Some(binding) = scope.borrow().bindings.get(name).cloned()
             {
-                let (parameter, result) = function_contract(value, &produced, scope, analysis);
+                let (parameter, result, contract_module) =
+                    function_contract(value, &produced, scope, analysis);
                 let mut binding = binding.borrow_mut();
                 binding.parameter = parameter;
+                binding.contract_module = contract_module;
                 binding.result = result;
                 binding.value = Some(value);
             }
@@ -466,6 +640,7 @@ fn walk_recursive_group(declarations: &[DeclarationId], scope: &ScopeRef, analys
                 qualifier: *qualifier,
                 owned: written_obligation(*qualifier),
                 parameter,
+                contract_module: None,
                 result: Produced::None,
                 value: Some(*value),
                 moved: None,
@@ -536,11 +711,13 @@ fn walk_recursive_group(declarations: &[DeclarationId], scope: &ScopeRef, analys
             if let Pattern::Name { name, .. } = &analysis.module.arena.patterns[pattern.0 as usize]
                 && let Some(binding) = scope.borrow().bindings.get(name).cloned()
             {
-                let (parameter, result) = function_contract(value, &produced, scope, analysis);
+                let (parameter, result, contract_module) =
+                    function_contract(value, &produced, scope, analysis);
                 let mut binding = binding.borrow_mut();
                 binding.qualifier = inherited(binding.qualifier, &produced);
                 binding.owned = produced;
                 binding.parameter = parameter;
+                binding.contract_module = contract_module;
                 binding.result = result;
             }
         }
@@ -619,6 +796,13 @@ fn walk(
                 );
             }
             analysis.function_results.insert(expression, result.clone());
+            analysis.contracts.insert(
+                body,
+                OwnershipContract {
+                    parameter,
+                    result: result.clone(),
+                },
+            );
             close_scope(&inner, analysis);
             let captures = inner.borrow().captures.clone();
             let borrowed_captures = inner.borrow().borrowed_captures.clone();
@@ -821,69 +1005,6 @@ fn remove_owned_path(produced: &Produced, path: &[String]) -> Option<(Produced, 
     Some((selected, Produced::Shape(remaining)))
 }
 
-fn ownership_primitive_name<'a>(
-    analysis: &'a Analysis<'_>,
-    scope: &ScopeRef,
-    callee: ExpressionId,
-) -> Option<&'a str> {
-    match &analysis.module.arena.expressions[callee.0 as usize] {
-        Expression::Intrinsic { name, .. } => Some(name.as_str()),
-        Expression::Field { target, name, .. }
-            if analysis.lookup(scope, "Slice").is_none()
-                && matches!(
-                    &analysis.module.arena.expressions[target.0 as usize],
-                    Expression::Var { name: namespace, .. } if namespace == "Slice"
-                ) =>
-        {
-            match name.as_str() {
-                "claim" => Some("@region.claim"),
-                "length" => Some("@region.length"),
-                "get" => Some("@region.get"),
-                "set" => Some("@region.set"),
-                "swap" => Some("@region.swap"),
-                "split" => Some("@region.split"),
-                "join" => Some("@region.join"),
-                "freeze" => Some("@region.freeze"),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-fn ownership_primitive_arguments(
-    analysis: &Analysis<'_>,
-    callee: ExpressionId,
-    arguments: &[ExpressionId],
-    name: Option<&str>,
-) -> Vec<ExpressionId> {
-    let Some(name) = name else {
-        return arguments.to_vec();
-    };
-    let Expression::Field { target, .. } = &analysis.module.arena.expressions[callee.0 as usize]
-    else {
-        return arguments.to_vec();
-    };
-    if !matches!(
-        &analysis.module.arena.expressions[target.0 as usize],
-        Expression::Var { name, .. } if name == "Slice"
-    ) {
-        return arguments.to_vec();
-    }
-    let arity = match name {
-        "@region.get" | "@region.split" => 2,
-        "@region.set" | "@region.swap" | "@region.join" => 3,
-        _ => 1,
-    };
-    if arity == 1 || arguments.len() != 1 {
-        return arguments.to_vec();
-    }
-    match &analysis.module.arena.expressions[arguments[0].0 as usize] {
-        Expression::Tuple { elements, .. } if elements.len() == arity => elements.clone(),
-        _ => arguments.to_vec(),
-    }
-}
-
 fn walk_apply(
     expression: ExpressionId,
     function: ExpressionId,
@@ -909,11 +1030,11 @@ fn walk_apply(
         return Produced::Variant(Box::new(walk(argument, scope, analysis, Use::Move)));
     }
     let (callee, arguments) = application_spine(expression, analysis.module);
-    let ownership_primitive = ownership_primitive_name(analysis, scope, callee);
-    let ownership_arguments =
-        ownership_primitive_arguments(analysis, callee, &arguments, ownership_primitive);
-    if let Some(name) = ownership_primitive {
-        let arguments = &ownership_arguments;
+    if let Expression::Intrinsic { name, .. } =
+        &analysis.module.arena.expressions[callee.0 as usize]
+    {
+        let name = name.as_str();
+        let arguments = &arguments;
         let handle_arguments = if name == "@handle" && arguments.len() == 1 {
             match &analysis.module.arena.expressions[arguments[0].0 as usize] {
                 Expression::Tuple { elements, .. }
@@ -1133,9 +1254,11 @@ fn walk_apply(
 
     let callee = walk(function, scope, analysis, Use::Project);
     let argument_value = walk(argument, scope, analysis, Use::Move);
-    let (parameter, result) = function_contract(function, &callee, scope, analysis);
+    let (parameter, result, defining_module) =
+        function_contract(function, &callee, scope, analysis);
+    let contract_module = defining_module.as_deref().unwrap_or(analysis.module);
     if contains_borrow(&argument_value)
-        && !parameter_accepts_borrow(parameter, &argument_value, analysis.module)
+        && !parameter_accepts_borrow(parameter, &argument_value, contract_module)
         && !trusted_borrow_operation(function, analysis.module)
     {
         analysis.report(
@@ -1145,7 +1268,7 @@ fn walk_apply(
         );
     }
     if obligation(&argument_value) != Obligation::None
-        && !parameter_accepts_ownership(parameter, &argument_value, analysis.module)
+        && !parameter_accepts_ownership(parameter, &argument_value, contract_module)
         && !trusted_scalar_operation(function, analysis.module)
     {
         analysis.report(
@@ -1154,7 +1277,7 @@ fn walk_apply(
             analysis.module.arena.expression_span(argument),
         );
     }
-    let result = substitute_parameters(result, parameter, &argument_value, analysis.module);
+    let result = substitute_parameters(result, parameter, &argument_value, contract_module);
     resolve_pending(result, span, analysis)
 }
 
@@ -1163,12 +1286,12 @@ fn function_contract(
     produced: &Produced,
     scope: &ScopeRef,
     analysis: &Analysis,
-) -> (Option<PatternId>, Produced) {
+) -> (Option<PatternId>, Produced, Option<Rc<Module>>) {
     if let Produced::Closure {
         parameter, result, ..
     } = produced
     {
-        return (Some(*parameter), (**result).clone());
+        return (Some(*parameter), (**result).clone(), None);
     }
     match analysis.module.arena.expressions[expression.0 as usize] {
         Expression::Lambda { parameter, .. } => (
@@ -1178,6 +1301,7 @@ fn function_contract(
                 .get(&expression)
                 .cloned()
                 .unwrap_or(Produced::None),
+            None,
         ),
         Expression::Rec { lambda, .. } => {
             match analysis.module.arena.expressions[lambda.0 as usize] {
@@ -1188,19 +1312,58 @@ fn function_contract(
                         .get(&lambda)
                         .cloned()
                         .unwrap_or(Produced::None),
+                    None,
                 ),
-                _ => (None, Produced::None),
+                _ => (None, Produced::None, None),
             }
         }
-        Expression::Var { ref name, .. } => analysis
-            .lookup(scope, name)
-            .map(|(binding, _)| {
+        Expression::Var { ref name, .. } => {
+            let local = analysis.lookup(scope, name).map(|(binding, _)| {
                 let binding = binding.borrow();
-                (binding.parameter, binding.result.clone())
-            })
-            .unwrap_or((None, Produced::None)),
-        _ => (None, Produced::None),
+                (
+                    binding.parameter,
+                    binding.result.clone(),
+                    binding.contract_module.clone(),
+                )
+            });
+            if matches!(local, Some((Some(_), _, _))) {
+                return local.expect("matched local ownership contract");
+            }
+            imported_function_contract(expression, analysis)
+                .or(local)
+                .unwrap_or((None, Produced::None, None))
+        }
+        _ => {
+            imported_function_contract(expression, analysis).unwrap_or((None, Produced::None, None))
+        }
     }
+}
+
+fn imported_function_contract(
+    expression: ExpressionId,
+    analysis: &Analysis,
+) -> Option<(Option<PatternId>, Produced, Option<Rc<Module>>)> {
+    let Value::Closure { module, body, .. } = analysis.callee_value(expression)? else {
+        return None;
+    };
+    let contract = analysis
+        .context
+        .ownership_contracts
+        .borrow()
+        .get(&(module.as_ref().clone(), body))
+        .cloned()?;
+    let defining_module = analysis
+        .context
+        .modules
+        .borrow()
+        .get(module.as_str())?
+        .module
+        .clone();
+    Some((
+        Some(contract.parameter),
+        contract.result,
+        Some(defining_module),
+    ))
 }
 
 fn substitute_parameters(

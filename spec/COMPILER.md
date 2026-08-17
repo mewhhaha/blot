@@ -205,12 +205,18 @@ may instantiate only a summary derived from the compile-time closure value or a
 trusted primitive contract; a binding path or source name is not a safety
 premise. The current summary certificate is unary array length plus a literal
 affine offset and is erased after the direct-operation proof is constructed.
-Ownership owns path consumption, extraction lineage, and reuse permission.
-Ownership certificate schema 2 identifies every lineage source by module-local
-binding identity and requires a complete dynamic extraction partition. Staging
-owns compile-time values and residualization decisions. Specialization owns
-concrete representations. A later pass verifies and consumes these facts; it
-does not infer them again.
+Ownership owns path consumption, extraction lineage, reuse permission, and
+closure ownership contracts. A contract is keyed by defining module revision and
+lambda-body identity and contains a parameter-pattern identity plus a closed
+produced-result tree. The compiler-distributed module certificate serializes it
+beside the closure signature and validates every expression, pattern, span, and
+region derivation reference against the installed AST before an importer may
+substitute an argument through it. Ownership certificate schema 2 identifies
+every lineage source by module-local binding identity and requires a complete
+dynamic extraction partition. Neither certificate recognizes a source binding
+name. Staging owns compile-time values and residualization decisions.
+Specialization owns concrete representations. A later pass verifies and consumes
+these facts; it does not infer them again.
 
 An identity is valid only within its source revision. Serializing a fact
 requires a closed certificate whose premises name stable serialized identities.
