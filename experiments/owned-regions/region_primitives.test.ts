@@ -14,8 +14,10 @@ function run(name: string, arguments_: readonly Value[]): Value {
 
 function split(value: Value, at: bigint): readonly Value[] {
   const result = run("@region.split", [value, { tag: "int", value: at }]);
-  if (result.tag !== "tag" || result.name !== "Split" ||
-    result.payload === null) {
+  if (
+    result.tag !== "tag" || result.name !== "Split" ||
+    result.payload === null
+  ) {
     throw new Error("expected a successful Region split");
   }
   const tuple = asTuple(result.payload, 3);
@@ -51,8 +53,10 @@ Deno.test("Region replace failure returns both unchanged inputs", () => {
     { tag: "int", value: 9n },
     { tag: "int", value: 2n },
   ]);
-  if (result.tag !== "tag" || result.name !== "ReplaceOutOfBounds" ||
-    result.payload === null) {
+  if (
+    result.tag !== "tag" || result.name !== "ReplaceOutOfBounds" ||
+    result.payload === null
+  ) {
     throw new Error("expected replacement failure");
   }
   const payload = asTuple(result.payload, 2);

@@ -752,8 +752,8 @@ lineage of every element inside it.
 
 ### 14.1 Consuming acquisition and freeze
 
-`@region.claim` keeps its copy-safe behavior for unrestricted elements. When
-the input array carries affine or linear elements, claim is accepted only as a
+`@region.claim` keeps its copy-safe behavior for unrestricted elements. When the
+input array carries affine or linear elements, claim is accepted only as a
 proved consumption of the complete array. The operation moves its positional
 ownership lineage into the new full-region value:
 
@@ -773,8 +773,8 @@ Freeze consumes the sole full-region authority and reconstructs an ordinary
 array carrying the same obligations in their final positions. Claim followed by
 freeze is therefore ownership-neutral even when the representation changes.
 
-Borrowed `get` remains unavailable for an owned element because it would copy
-an obligation. Reading such an element requires a consuming transfer operation;
+Borrowed `get` remains unavailable for an owned element because it would copy an
+obligation. Reading such an element requires a consuming transfer operation;
 this revision introduces replacement, not a hole-bearing region, so it does not
 add `take`.
 
@@ -833,8 +833,8 @@ J₁ = (store, a, b, d)    J₂ = (store, b, c, d)
 J₄ = (store, a, c, d)    J₃ = (store, a, b, c)
 ```
 
-Both operations are involutive as a pair: applying one and then the other to
-the returned outer/inner pair recovers witnesses for the original proof tree.
+Both operations are involutive as a pair: applying one and then the other to the
+returned outer/inner pair recovers witnesses for the original proof tree.
 
 The operations are compiler-private proof rewrites exposed through ordinary
 `Slice` wrappers. Witnesses remain opaque, linear, element-free, and erased
@@ -858,8 +858,8 @@ This revision is complete only when both Node and Rust implementations agree on:
   witnesses;
 - Runtime-HIR validation, ABI refusal for live regions and witnesses, and zero
   runtime code for proof reassociation;
-- accepted and rejected catalog examples exercising nested partitions with
-  owned elements; and
+- accepted and rejected catalog examples exercising nested partitions with owned
+  elements; and
 - strict Node/Rust parity with the generated prelude snapshot and compiler
   specifications updated in the same change.
 
@@ -882,10 +882,10 @@ freeze(Region(root, E))                     = Array(E)
 
 For a statically known position, `Eₗ`, `Eᵣ`, and `E[i := N]` preserve exact
 positions. For a dynamic position the certificate records one extraction
-identity shared by the selected and residual obligations; independent
-validation requires both outputs, so the abstraction may forget a position but
-cannot duplicate or drop its owner. Swap merely permutes positions and never
-changes the multiset of obligations.
+identity shared by the selected and residual obligations; independent validation
+requires both outputs, so the abstraction may forget a position but cannot
+duplicate or drop its owner. Swap merely permutes positions and never changes
+the multiset of obligations.
 
 The non-consuming `get` and discarding `set` remain valid only when the hidden
 element tree is unrestricted. The checker defers that condition for a symbolic
@@ -901,7 +901,7 @@ obligation exactly once.
   join construct only fixed-size private region products; reassociation is
   proof-only and emits no Runtime-HIR or Wasm operation.
 - `claim` is `O(1)` when the consumed array Store is certified reusable and
-  otherwise `O(n)` for the required private Store copy. Owned elements never
-  add a second copy.
+  otherwise `O(n)` for the required private Store copy. Owned elements never add
+  a second copy.
 - `freeze` is `O(1)` for a complete root because it exposes the private Store as
   an immutable array; it performs no element walk.

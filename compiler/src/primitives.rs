@@ -136,18 +136,54 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@branch.likely"
         | "@branch.unlikely"
         | "@panic" => 1,
-        "@type.range" | "@type.union" | "@type.intersect" | "@type.diff" | "@type.arrow"
-        | "@type.performs" | "@type.seal" | "@satisfies" | "@shape.get" | "@shape.remove"
-        | "@shape.has" | "@array.get" | "@array.push" | "@array.take" | "@array.split"
-        | "@region.get" | "@region.split" | "@region.reassociate_left"
-        | "@region.reassociate_right" | "@int.add" | "@int.sub" | "@int.mul" | "@int.div"
-        | "@int.rem" | "@int.cmp" | "@text.concat" | "@text.cmp" | "@text.contains"
-        | "@json.parse" | "@float.add" | "@float.sub" | "@float.mul" | "@float.div"
-        | "@float.rem" | "@float.cmp" | "@f32.add" | "@f32.sub" | "@f32.mul" | "@f32.div"
-        | "@f32.cmp" | "@f32x4.add" | "@f32x4.sub" | "@f32x4.mul" | "@f32x4.div" | "@f32x4.eq"
+        "@type.range"
+        | "@type.union"
+        | "@type.intersect"
+        | "@type.diff"
+        | "@type.arrow"
+        | "@type.performs"
+        | "@type.seal"
+        | "@satisfies"
+        | "@shape.get"
+        | "@shape.remove"
+        | "@shape.has"
+        | "@array.get"
+        | "@array.push"
+        | "@array.take"
+        | "@array.split"
+        | "@region.get"
+        | "@region.split"
+        | "@region.reassociate_left"
+        | "@region.reassociate_right"
+        | "@int.add"
+        | "@int.sub"
+        | "@int.mul"
+        | "@int.div"
+        | "@int.rem"
+        | "@int.cmp"
+        | "@text.concat"
+        | "@text.cmp"
+        | "@text.contains"
+        | "@json.parse"
+        | "@float.add"
+        | "@float.sub"
+        | "@float.mul"
+        | "@float.div"
+        | "@float.rem"
+        | "@float.cmp"
+        | "@f32.add"
+        | "@f32.sub"
+        | "@f32.mul"
+        | "@f32.div"
+        | "@f32.cmp"
+        | "@f32x4.add"
+        | "@f32x4.sub"
+        | "@f32x4.mul"
+        | "@f32x4.div"
+        | "@f32x4.eq"
         | "@f32x4.less" => 2,
-        "@type.attach" | "@shape.set" | "@array.set" | "@region.set" | "@region.replace" | "@region.swap"
-        | "@region.join" | "@f32x4.select" => 3,
+        "@type.attach" | "@shape.set" | "@array.set" | "@region.set" | "@region.replace"
+        | "@region.swap" | "@region.join" | "@f32x4.select" => 3,
         "@f32x4.of" => 4,
         "@f32x4.shuffle" => 6,
         _ => return None,
@@ -415,10 +451,7 @@ pub fn run_primitive(
             );
             Ok(Value::Tag {
                 name: "Replaced".to_owned(),
-                payload: Some(Box::new(tuple(vec![
-                    displaced,
-                    arguments[0].clone(),
-                ]))),
+                payload: Some(Box::new(tuple(vec![displaced, arguments[0].clone()]))),
             })
         }
         "@region.swap" => {

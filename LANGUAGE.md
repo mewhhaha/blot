@@ -1983,9 +1983,8 @@ only its `@region.*` bodies are primitive:
 - `Slice.set ((!slice), index, value)` and `Slice.swap ((!slice), left, right)`
   consume and return the same authority;
 - `Slice.replace ((!slice), index, (!value))` consumes both inputs and returns
-  either `#Replaced (!old, !slice)` or
-  `#ReplaceOutOfBounds (!value, !slice)`, so replacement never drops an owned
-  element;
+  either `#Replaced (!old, !slice)` or `#ReplaceOutOfBounds (!value, !slice)`,
+  so replacement never drops an owned element;
 - `Slice.split ((!slice), offset)` consumes the parent and returns either
   `#Split (!left, !right, !rejoin)` or `#SplitOutOfBounds !original`;
 - `Slice.join ((!rejoin), (!left), (!right))` consumes the exact sibling
@@ -2016,12 +2015,12 @@ Regions and rejoin witnesses are compiler-private values. Blot Core Wasm ABI 1
 has no encoding for either and refuses a live one at a public boundary. Internal
 Runtime HIR lowers a Region to private Store-plus-bounds data, erases the
 witness after checking, uses persistent acquisition for shared inputs, and may
-emit owned Store writes only for authority proven unique by ownership.
-The ownership analysis separately carries the region's positional element
+emit owned Store writes only for authority proven unique by ownership. The
+ownership analysis separately carries the region's positional element
 obligations. Claim transfers them from the consumed array, split and swap
 partition or permute them, replace exchanges exactly one obligation, join
-restores the parent tree, and freeze returns them with the resulting array.
-This hidden accounting does not alter `Slice.of T` or make ownership a type.
+restores the parent tree, and freeze returns them with the resulting array. This
+hidden accounting does not alter `Slice.of T` or make ownership a type.
 
 Replacement is constant-time: one bounds check, one Store read, and one Store
 write. Split and join copy no elements. Witness reassociation is erased and

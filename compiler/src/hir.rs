@@ -822,14 +822,18 @@ impl ResidualTrace {
                 let (_, _, right_end) = self.lower_region(&arguments[2], span)?;
                 self.make_region(left_store, left_start, right_end, span)?
             }
-            "@region.reassociate_left" | "@region.reassociate_right"
-                if arguments.len() == 2 =>
-            {
+            "@region.reassociate_left" | "@region.reassociate_right" if arguments.len() == 2 => {
                 self.lower_value(&arguments[0], span)?;
                 self.lower_value(&arguments[1], span)?;
                 let pair_type = self.insert_product_type(vec![
-                    RuntimeField { name: "0".to_owned(), type_id: 0 },
-                    RuntimeField { name: "1".to_owned(), type_id: 0 },
+                    RuntimeField {
+                        name: "0".to_owned(),
+                        type_id: 0,
+                    },
+                    RuntimeField {
+                        name: "1".to_owned(),
+                        type_id: 0,
+                    },
                 ]);
                 let first = self.constant(WireConstant::Unit, 0, span);
                 let second = self.constant(WireConstant::Unit, 0, span);
@@ -4339,8 +4343,14 @@ impl ResidualTrace {
         };
         let region_type = self.region_type(store.type_id)?;
         let payload_type = self.insert_product_type(vec![
-            RuntimeField { name: "0".to_owned(), type_id: element_type },
-            RuntimeField { name: "1".to_owned(), type_id: region_type },
+            RuntimeField {
+                name: "0".to_owned(),
+                type_id: element_type,
+            },
+            RuntimeField {
+                name: "1".to_owned(),
+                type_id: region_type,
+            },
         ]);
         let cases = vec!["Replaced".to_owned(), "ReplaceOutOfBounds".to_owned()];
         let sum_type = self.sum_type(&cases, &[payload_type, payload_type]);
@@ -4370,8 +4380,7 @@ impl ResidualTrace {
             span,
             Some("owned-reuse"),
         );
-        let updated_region =
-            self.make_region(updated_store, start.clone(), end.clone(), span)?;
+        let updated_region = self.make_region(updated_store, start.clone(), end.clone(), span)?;
         let success_payload = self.operation(
             "product.make",
             payload_type,
@@ -4396,14 +4405,8 @@ impl ResidualTrace {
             self.operation_with_case("sum.make", sum_type, vec![failure_payload.id], span, 1);
         let failure_end = self.current_block;
 
-        let mut result = self.join_runtime_values(
-            &branches,
-            success_end,
-            success,
-            failure_end,
-            failure,
-            span,
-        );
+        let mut result =
+            self.join_runtime_values(&branches, success_end, success, failure_end, failure, span);
         result.meaning = RuntimeMeaning::Sum { cases };
         Ok(result)
     }

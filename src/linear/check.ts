@@ -2148,8 +2148,10 @@ function splitRegionElements(
 ): readonly [Produced, Produced] {
   if (elements.tag === "sequence" && at.tag === "int") {
     const position = Number(at.value);
-    if (Number.isSafeInteger(position) && position >= 0 &&
-      position <= elements.elements.length) {
+    if (
+      Number.isSafeInteger(position) && position >= 0 &&
+      position <= elements.elements.length
+    ) {
       return [
         { tag: "sequence", elements: elements.elements.slice(0, position) },
         { tag: "sequence", elements: elements.elements.slice(position) },

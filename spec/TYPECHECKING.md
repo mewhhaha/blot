@@ -676,8 +676,8 @@ authority rather than duplicating it:
   consuming `replace` returns the displaced tree position on success and both
   inputs on failure. This analysis representation is absent from simple types.
 - Rejoin witnesses form binary proof trees. `reassociate_left` accepts witnesses
-  for `A * BC -> ABC` and `B * C -> BC`; `reassociate_right` is its inverse.
-  The checker mints the rotated witnesses only after exact parent-child identity
+  for `A * BC -> ABC` and `B * C -> BC`; `reassociate_right` is its inverse. The
+  checker mints the rotated witnesses only after exact parent-child identity
   succeeds, and certificate replay validates the same relation.
 - A written effect-row tail elaborates to one signature-local row variable. The
   same `..e` identity is reused at each occurrence in that `sig`, and lowering

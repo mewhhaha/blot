@@ -1117,7 +1117,12 @@ fn walk_apply(
             return Produced::None;
         }
         if name == "@region.set" && arguments.len() == 3 {
-            let region = region_authority(walk(arguments[0], scope, analysis, Use::Move));
+            // A polymorphic prelude wrapper carries its Region as a symbolic
+            // parameter until a concrete call substitutes the caller's
+            // authority. Do not synthesize owned element lineage here: set is
+            // precisely the unrestricted-element operation, and doing so
+            // would falsely classify every generic Region as owned.
+            let region = walk(arguments[0], scope, analysis, Use::Move);
             walk(arguments[1], scope, analysis, Use::Move);
             let replacement = walk(arguments[2], scope, analysis, Use::Move);
             let owned_contents = matches!(
@@ -1574,8 +1579,7 @@ fn substitute_parameter_source(
                 elements.as_ref(),
                 Produced::Parameter { source: found, .. } if *found == source
             );
-            let substituted_elements =
-                substitute_parameter_source(*elements, source, argument);
+            let substituted_elements = substitute_parameter_source(*elements, source, argument);
             if root != Some(source) {
                 return Produced::Region {
                     qualifier,
@@ -2241,10 +2245,9 @@ fn resolve_pending(produced: Produced, span: Span, analysis: &mut Analysis) -> P
             let outer = resolve_pending(*outer, span, analysis);
             let inner = resolve_pending(*inner, span, analysis);
             match reassociate_region(direction, outer, inner, span, analysis) {
-                Produced::Sequence(values) => values
-                    .get(part as usize)
-                    .cloned()
-                    .unwrap_or(Produced::None),
+                Produced::Sequence(values) => {
+                    values.get(part as usize).cloned().unwrap_or(Produced::None)
+                }
                 produced => produced,
             }
         }

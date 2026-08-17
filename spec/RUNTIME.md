@@ -153,9 +153,9 @@ and live witnesses are private layouts and are refused at ABI 1.
 
 `replace` performs the same relative bounds proof as `set`, reads the displaced
 slot, writes the replacement only on the success edge, and returns both the old
-value and unchanged region product. Its failure edge returns the replacement
-and unchanged region without a write. The ownership certificate, not Runtime
-HIR, carries positional element obligations. Witness reassociation is validated
+value and unchanged region product. Its failure edge returns the replacement and
+unchanged region without a write. The ownership certificate, not Runtime HIR,
+carries positional element obligations. Witness reassociation is validated
 before Runtime HIR and is erased completely: it performs no Store access,
 allocation, or emitted instruction.
 
