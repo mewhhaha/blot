@@ -740,3 +740,110 @@ partition operation returns pieces plus a recombination witness, and its combine
 operation consumes them. Matrix tiles, tree partitions, and arena chunks can
 implement the same shape without either checker learning anything per family
 beyond the family's own partition/combine laws.
+
+## 14. Owned elements and composable witnesses
+
+The next region-family revision extends the production contract in three coupled
+directions: a region may carry element obligations, replacement transfers those
+obligations without copying or dropping them, and nested partition witnesses may
+be reassociated without re-splitting the Store. These are one feature because
+each operation must preserve both the interval authority and the ownership
+lineage of every element inside it.
+
+### 14.1 Consuming acquisition and freeze
+
+`@region.claim` keeps its copy-safe behavior for unrestricted elements. When
+the input array carries affine or linear elements, claim is accepted only as a
+proved consumption of the complete array. The operation moves its positional
+ownership lineage into the new full-region value:
+
+```text
+!Array(root, [o0, ..., on]) -> Slice(store, [0,n), [o0, ..., on])
+```
+
+No fallback copy is permitted for an owned element. A proved uniquely reusable
+Store may still avoid the acquisition copy; otherwise the Store allocation is
+copied while the element values and their obligations are transferred exactly
+once. The source array is unavailable after either path.
+
+Split partitions the positional lineage at the same boundary as the interval.
+Join requires the witness's exact sibling regions and concatenates their
+lineage. Swap permutes two lineage positions with the corresponding Store slots.
+Freeze consumes the sole full-region authority and reconstructs an ordinary
+array carrying the same obligations in their final positions. Claim followed by
+freeze is therefore ownership-neutral even when the representation changes.
+
+Borrowed `get` remains unavailable for an owned element because it would copy
+an obligation. Reading such an element requires a consuming transfer operation;
+this revision introduces replacement, not a hole-bearing region, so it does not
+add `take`.
+
+### 14.2 Consuming replacement
+
+The existing `@region.set` remains the unrestricted-element operation and
+continues to return only the successor slice. Owned replacement uses a distinct
+primitive so no accepted program changes result shape:
+
+```text
+@region.replace (!slice, index, !new)
+  -> #Replaced (!old, !slice)
+   | #ReplaceOutOfBounds (!new, !slice)
+```
+
+On success, the old positional obligation is transferred to `old`, the new
+obligation occupies that exact position, and the returned slice keeps the same
+root and interval. On failure, both incoming obligations are returned unchanged
+and no Store write or ownership transition occurs. Unrestricted values use the
+same result shape, which keeps wrappers parametric over element ownership.
+
+`Slice.replace` is an ordinary prelude wrapper over the primitive. Its imported
+ownership contract must express both the removed element and the successor
+slice; no name-based privilege is permitted. Runtime HIR binds the destructive
+write to the checked replacement occurrence, and the Rust certificate validates
+the positional transfer against the exact source AST.
+
+### 14.3 Witness reassociation
+
+A split witness proves one binary partition. Nested partitions form a proof
+tree. Reassociation changes only that proof tree; it never changes the Store,
+the live intervals, or their order.
+
+For an outer witness `J₁ : A * BC -> ABC` and an inner witness
+`J₂ : B * C -> BC`, left reassociation consumes both and produces:
+
+```text
+reassociate_left (!J₁, !J₂)
+  -> (J₃ : A * B -> AB, J₄ : AB * C -> ABC)
+```
+
+The inverse operation consumes `J₃` and `J₄` and reproduces witnesses for
+`A * BC` and `B * C`. The symmetric form handles an inner partition of the
+outer witness's left child. Each rewrite is accepted only when root identity,
+ordered boundaries, and parent-child identities match exactly.
+
+The operations are compiler-private proof rewrites exposed through ordinary
+`Slice` wrappers. Witnesses remain opaque, linear, element-free, and erased
+before runtime emission. Reassociation must therefore emit no Store operation
+and allocate no runtime value. Failure is a source diagnostic when the concrete
+lineage disproves the relation; an invalid certified rewrite after checking is
+an invariant failure.
+
+### 14.4 Production gates
+
+This revision is complete only when both Node and Rust implementations agree on:
+
+- consuming claim and freeze for arrays containing affine and linear elements;
+- rejection of any claim path that would duplicate an owned element;
+- split, swap, join, and freeze preserving positional element obligations;
+- successful replacement returning the old obligation exactly once;
+- out-of-bounds replacement returning both inputs and performing no write;
+- cross-module wrappers carrying the full replacement contract;
+- left and right witness reassociation plus their inverses;
+- rejection of mismatched roots, boundaries, siblings, and already-consumed
+  witnesses;
+- Runtime-HIR validation, ABI refusal for live regions and witnesses, and zero
+  runtime code for proof reassociation;
+- accepted and rejected catalog examples exercising nested partitions with
+  owned elements; and
+- strict Node/Rust parity with the generated prelude snapshot and compiler
+  specifications updated in the same change.
