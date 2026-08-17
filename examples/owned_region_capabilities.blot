@@ -1,0 +1,36 @@
+// Owned region element transfer and composable split witnesses.
+
+open import "blot:prelude"
+
+let consume = fn !value => value
+let !old_token = 40
+let !new_token = 2
+let owned_values = [fn () => consume (!old_token)]
+let owned = Slice.claim owned_values
+let settle = fn (!old, !region) =>
+  let frozen = Slice.freeze (!region)
+  let [current] = frozen
+  return old () + current ()
+let replaced =
+  case Slice.replace ((!owned), 0, fn () => consume (!new_token)) of
+    #Replaced (!old, !updated) => settle ((!old), (!updated))
+    #ReplaceOutOfBounds (!replacement, !original) =>
+      return settle ((!replacement), (!original))
+
+let whole = Slice.claim [1, 2, 3]
+let rotated = case Slice.split ((!whole), 1) of
+  #Split (!a, !bc, !outer) =>
+    return case Slice.split ((!bc), 1) of
+      #Split (!b, !c, !inner) =>
+        let (outer_left, inner_left) =
+          Slice.reassociate_left ((!outer), (!inner))
+        let (outer_right, inner_right) =
+          Slice.reassociate_right ((!outer_left), (!inner_left))
+        let bc = Slice.join ((!inner_right), (!b), (!c))
+        return Slice.join ((!outer_right), (!a), (!bc))
+      #SplitOutOfBounds !bc_original =>
+        return Slice.join ((!outer), (!a), (!bc_original))
+  #SplitOutOfBounds !original => original
+
+let values = Slice.freeze (!rotated)
+return replaced + Array.length (&values)

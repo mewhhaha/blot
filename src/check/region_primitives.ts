@@ -87,6 +87,20 @@ export const REGION_PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map([
     }),
   ],
   [
+    "@region.replace",
+    poly((fresh) => {
+      const element = fresh();
+      const region: SimpleType = { tag: "region", element };
+      return curried(
+        [region, INT, element],
+        variant([
+          ["Replaced", tupleType([element, region])],
+          ["ReplaceOutOfBounds", tupleType([element, region])],
+        ]),
+      );
+    }),
+  ],
+  [
     "@region.swap",
     poly((fresh) => {
       const element = fresh();
@@ -120,6 +134,14 @@ export const REGION_PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map([
       const region: SimpleType = { tag: "region", element: fresh() };
       return curried([REJOIN, region, region], region);
     }),
+  ],
+  [
+    "@region.reassociate_left",
+    mono(curried([REJOIN, REJOIN], tupleType([REJOIN, REJOIN]))),
+  ],
+  [
+    "@region.reassociate_right",
+    mono(curried([REJOIN, REJOIN], tupleType([REJOIN, REJOIN]))),
   ],
   [
     "@region.freeze",

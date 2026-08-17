@@ -139,13 +139,14 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         "@type.range" | "@type.union" | "@type.intersect" | "@type.diff" | "@type.arrow"
         | "@type.performs" | "@type.seal" | "@satisfies" | "@shape.get" | "@shape.remove"
         | "@shape.has" | "@array.get" | "@array.push" | "@array.take" | "@array.split"
-        | "@region.get" | "@region.split" | "@int.add" | "@int.sub" | "@int.mul" | "@int.div"
+        | "@region.get" | "@region.split" | "@region.reassociate_left"
+        | "@region.reassociate_right" | "@int.add" | "@int.sub" | "@int.mul" | "@int.div"
         | "@int.rem" | "@int.cmp" | "@text.concat" | "@text.cmp" | "@text.contains"
         | "@json.parse" | "@float.add" | "@float.sub" | "@float.mul" | "@float.div"
         | "@float.rem" | "@float.cmp" | "@f32.add" | "@f32.sub" | "@f32.mul" | "@f32.div"
         | "@f32.cmp" | "@f32x4.add" | "@f32x4.sub" | "@f32x4.mul" | "@f32x4.div" | "@f32x4.eq"
         | "@f32x4.less" => 2,
-        "@type.attach" | "@shape.set" | "@array.set" | "@region.set" | "@region.swap"
+        "@type.attach" | "@shape.set" | "@array.set" | "@region.set" | "@region.replace" | "@region.swap"
         | "@region.join" | "@f32x4.select" => 3,
         "@f32x4.of" => 4,
         "@f32x4.shuffle" => 6,
@@ -397,6 +398,29 @@ pub fn run_primitive(
                 payload: Some(Box::new(arguments[0].clone())),
             })
         }
+        "@region.replace" => {
+            let (store, start, end) = region(&arguments[0], span, name)?;
+            let Some(relative) = region_index(&arguments[1], end - start, span, name)? else {
+                return Ok(Value::Tag {
+                    name: "ReplaceOutOfBounds".to_owned(),
+                    payload: Some(Box::new(tuple(vec![
+                        arguments[2].clone(),
+                        arguments[0].clone(),
+                    ]))),
+                });
+            };
+            let displaced = std::mem::replace(
+                &mut store.borrow_mut()[start + relative],
+                arguments[2].clone(),
+            );
+            Ok(Value::Tag {
+                name: "Replaced".to_owned(),
+                payload: Some(Box::new(tuple(vec![
+                    displaced,
+                    arguments[0].clone(),
+                ]))),
+            })
+        }
         "@region.swap" => {
             let (store, start, end) = region(&arguments[0], span, name)?;
             let length = end - start;
@@ -475,6 +499,70 @@ pub fn run_primitive(
                 start: left_start,
                 end: right_end,
             })
+        }
+        "@region.reassociate_left" | "@region.reassociate_right" => {
+            let Value::RegionRejoin {
+                store: outer_store,
+                start: outer_start,
+                middle: outer_middle,
+                end: outer_end,
+            } = &arguments[0]
+            else {
+                return Err(type_error(name, "a rejoin witness", &arguments[0], span));
+            };
+            let Value::RegionRejoin {
+                store: inner_store,
+                start: inner_start,
+                middle: inner_middle,
+                end: inner_end,
+            } = &arguments[1]
+            else {
+                return Err(type_error(name, "a rejoin witness", &arguments[1], span));
+            };
+            let left = name == "@region.reassociate_left";
+            let nested = std::rc::Rc::ptr_eq(outer_store, inner_store)
+                && if left {
+                    *outer_middle == *inner_start && *outer_end == *inner_end
+                } else {
+                    *outer_start == *inner_start && *outer_middle == *inner_end
+                };
+            if !nested {
+                return Err(Diagnostic::new(
+                    "BLOT_REGION_REASSOCIATE_UNPROVED",
+                    "Region witness reassociation requires an exact nested split proof.",
+                    span,
+                ));
+            }
+            if left {
+                return Ok(tuple(vec![
+                    Value::RegionRejoin {
+                        store: outer_store.clone(),
+                        start: *outer_start,
+                        middle: *inner_middle,
+                        end: *outer_end,
+                    },
+                    Value::RegionRejoin {
+                        store: outer_store.clone(),
+                        start: *outer_start,
+                        middle: *outer_middle,
+                        end: *inner_middle,
+                    },
+                ]));
+            }
+            Ok(tuple(vec![
+                Value::RegionRejoin {
+                    store: outer_store.clone(),
+                    start: *outer_start,
+                    middle: *inner_middle,
+                    end: *outer_end,
+                },
+                Value::RegionRejoin {
+                    store: outer_store.clone(),
+                    start: *inner_middle,
+                    middle: *outer_middle,
+                    end: *outer_end,
+                },
+            ]))
         }
         "@region.freeze" => {
             let (store, start, end) = region(&arguments[0], span, name)?;

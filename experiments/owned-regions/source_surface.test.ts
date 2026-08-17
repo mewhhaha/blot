@@ -92,3 +92,75 @@ return @region.freeze (!changed)
     await Deno.remove(directory, { recursive: true });
   }
 });
+
+Deno.test("Region replacement returns the displaced value and successor", async () => {
+  const directory = await Deno.makeTempDir();
+  const file = join(directory, "root.blot");
+  try {
+    await Deno.writeTextFile(
+      file,
+      `open import "blot:prelude"
+let region = Slice.claim [10, 20, 30]
+let result = case Slice.replace ((!region), 1, 7) of
+  #Replaced (old, !updated) =>
+    let frozen = Slice.freeze (!updated)
+    let current = case Array.get (frozen, 1) of
+      #Some value => value
+      #None => 0
+    return old * 10 + current
+  #ReplaceOutOfBounds (_, !original) =>
+    let frozen = Slice.freeze (!original)
+    return Array.length (&frozen)
+return result
+`,
+    );
+    const result = await evaluateFile(file, { write() {} });
+    assertEquals(result, { tag: "int", value: 207n });
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("Region claim, replace, and freeze conserve owned elements", async () => {
+  const checked = await checkSource(
+    path,
+    `open import "blot:prelude"
+let consume = fn !value => value
+let !old_token = 40
+let !new_token = 2
+let region = Slice.claim [fn () => consume (!old_token)]
+let settle = fn (!old, !updated) =>
+  let [current] = Slice.freeze (!updated)
+  return (old ()) + (current ())
+return case Slice.replace ((!region), 0, (fn () => consume (!new_token))) of
+  #Replaced (!old, !updated) => settle ((!old), (!updated))
+  #ReplaceOutOfBounds (!replacement, !original) =>
+    return settle ((!replacement), (!original))
+`,
+  );
+  assertEquals(checked.type, "Int");
+});
+
+Deno.test("nested Region witnesses reassociate in both directions", async () => {
+  const checked = await checkSource(
+    path,
+    `open import "blot:prelude"
+let whole = Slice.claim [1, 2, 3]
+let restored = case Slice.split ((!whole), 1) of
+  #Split (!a, !bc, !outer) =>
+    return case Slice.split ((!bc), 1) of
+      #Split (!b, !c, !inner) =>
+        let (outer_left, inner_left) =
+          Slice.reassociate_left ((!outer), (!inner))
+        let (outer_right, inner_right) =
+          Slice.reassociate_right ((!outer_left), (!inner_left))
+        let bc = Slice.join ((!inner_right), (!b), (!c))
+        return Slice.join ((!outer_right), (!a), (!bc))
+      #SplitOutOfBounds !bc_original =>
+        return Slice.join ((!outer), (!a), (!bc_original))
+  #SplitOutOfBounds !original => original
+return Slice.freeze (!restored)
+`,
+  );
+  assertEquals(checked.type, "[(1 | 2 | 3)]");
+});

@@ -1982,10 +1982,17 @@ only its `@region.*` bodies are primitive:
 - `Slice.length (&slice)` and `Slice.get ((&slice), index)` borrow authority;
 - `Slice.set ((!slice), index, value)` and `Slice.swap ((!slice), left, right)`
   consume and return the same authority;
+- `Slice.replace ((!slice), index, (!value))` consumes both inputs and returns
+  either `#Replaced (!old, !slice)` or
+  `#ReplaceOutOfBounds (!value, !slice)`, so replacement never drops an owned
+  element;
 - `Slice.split ((!slice), offset)` consumes the parent and returns either
   `#Split (!left, !right, !rejoin)` or `#SplitOutOfBounds !original`;
 - `Slice.join ((!rejoin), (!left), (!right))` consumes the exact sibling
   authorities and their witness and returns their parent; and
+- `Slice.reassociate_left ((!outer), (!inner))` and
+  `Slice.reassociate_right ((!outer), (!inner))` rotate a nested split proof
+  tree while preserving its Store, ordered boundaries, and root; and
 - `Slice.freeze (!slice)` consumes a complete root authority and returns an
   immutable array.
 
@@ -2010,6 +2017,16 @@ has no encoding for either and refuses a live one at a public boundary. Internal
 Runtime HIR lowers a Region to private Store-plus-bounds data, erases the
 witness after checking, uses persistent acquisition for shared inputs, and may
 emit owned Store writes only for authority proven unique by ownership.
+The ownership analysis separately carries the region's positional element
+obligations. Claim transfers them from the consumed array, split and swap
+partition or permute them, replace exchanges exactly one obligation, join
+restores the parent tree, and freeze returns them with the resulting array.
+This hidden accounting does not alter `Slice.of T` or make ownership a type.
+
+Replacement is constant-time: one bounds check, one Store read, and one Store
+write. Split and join copy no elements. Witness reassociation is erased and
+emits no runtime operation. Claim is constant-time only when Store reuse is
+certified; its persistent fallback remains linear in the input length.
 
 ## 12. Effects and handlers
 

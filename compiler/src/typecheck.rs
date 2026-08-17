@@ -5317,6 +5317,24 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
                 },
             )
         }
+        "@region.replace" => {
+            let element = checker.fresh();
+            let region = Type::Region(Box::new(element.clone()));
+            let payload = Type::Record(vec![
+                ("0".to_owned(), element.clone()),
+                ("1".to_owned(), region.clone()),
+            ]);
+            curried(
+                vec![region, int.clone(), element],
+                Type::Variant {
+                    cases: vec![
+                        ("Replaced".to_owned(), payload.clone()),
+                        ("ReplaceOutOfBounds".to_owned(), payload),
+                    ],
+                    open: false,
+                },
+            )
+        }
         "@region.swap" => {
             let region = Type::Region(Box::new(checker.fresh()));
             curried(
@@ -5359,6 +5377,16 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
                     region.clone(),
                 ],
                 region,
+            )
+        }
+        "@region.reassociate_left" | "@region.reassociate_right" => {
+            let witness = Type::Opaque("Rejoin".to_owned());
+            curried(
+                vec![witness.clone(), witness.clone()],
+                Type::Record(vec![
+                    ("0".to_owned(), witness.clone()),
+                    ("1".to_owned(), witness),
+                ]),
             )
         }
         "@region.freeze" => {

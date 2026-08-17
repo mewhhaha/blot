@@ -793,6 +793,15 @@ impl ResidualTrace {
                 let value = self.lower_store_element(&arguments[2], element_type, span)?;
                 self.region_set(store, start, end, index, value, span)?
             }
+            "@region.replace" if arguments.len() == 3 => {
+                let (store, start, end) = self.lower_region(&arguments[0], span)?;
+                let RuntimeType::Store { element_type } = self.types[store.type_id] else {
+                    return Err(hir_error("Region Store projection lost its Store type."));
+                };
+                let index = self.lower_as(Some(&arguments[1]), "signed-integer-64", span)?;
+                let value = self.lower_store_element(&arguments[2], element_type, span)?;
+                self.region_replace(store, start, end, index, value, span)?
+            }
             "@region.swap" if arguments.len() == 3 => {
                 let (store, start, end) = self.lower_region(&arguments[0], span)?;
                 let left = self.lower_as(Some(&arguments[1]), "signed-integer-64", span)?;
@@ -812,6 +821,25 @@ impl ResidualTrace {
                 let (left_store, left_start, _) = self.lower_region(&arguments[1], span)?;
                 let (_, _, right_end) = self.lower_region(&arguments[2], span)?;
                 self.make_region(left_store, left_start, right_end, span)?
+            }
+            "@region.reassociate_left" | "@region.reassociate_right"
+                if arguments.len() == 2 =>
+            {
+                self.lower_value(&arguments[0], span)?;
+                self.lower_value(&arguments[1], span)?;
+                let pair_type = self.insert_product_type(vec![
+                    RuntimeField { name: "0".to_owned(), type_id: 0 },
+                    RuntimeField { name: "1".to_owned(), type_id: 0 },
+                ]);
+                let first = self.constant(WireConstant::Unit, 0, span);
+                let second = self.constant(WireConstant::Unit, 0, span);
+                self.operation(
+                    "product.make",
+                    pair_type,
+                    vec![first.id, second.id],
+                    span,
+                    None,
+                )
             }
             "@region.freeze" if arguments.len() == 1 => {
                 let (store, _, _) = self.lower_region(&arguments[0], span)?;
@@ -4293,6 +4321,89 @@ impl ResidualTrace {
 
         let mut result =
             self.join_runtime_values(&branches, updated_end, updated, failed_end, failed, span);
+        result.meaning = RuntimeMeaning::Sum { cases };
+        Ok(result)
+    }
+
+    fn region_replace(
+        &mut self,
+        store: RuntimeValue,
+        start: RuntimeValue,
+        end: RuntimeValue,
+        index: RuntimeValue,
+        value: RuntimeValue,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        let RuntimeType::Store { element_type } = self.types[store.type_id] else {
+            return Err(hir_error("Region Store projection lost its Store type."));
+        };
+        let region_type = self.region_type(store.type_id)?;
+        let payload_type = self.insert_product_type(vec![
+            RuntimeField { name: "0".to_owned(), type_id: element_type },
+            RuntimeField { name: "1".to_owned(), type_id: region_type },
+        ]);
+        let cases = vec!["Replaced".to_owned(), "ReplaceOutOfBounds".to_owned()];
+        let sum_type = self.sum_type(&cases, &[payload_type, payload_type]);
+        let in_bounds = self.region_index_in_bounds(&index, &start, &end, span)?;
+        let branches = self.begin_conditional(&in_bounds, span)?;
+
+        self.current_block = branches.consequent;
+        let integer = self.region_integer_type();
+        let absolute = self.operation(
+            "scalar",
+            integer,
+            vec![start.id, index.id],
+            span,
+            Some("add"),
+        );
+        let displaced = self.operation(
+            "store.read",
+            element_type,
+            vec![store.id, absolute.id],
+            span,
+            None,
+        );
+        let updated_store = self.array_operation(
+            "store.write",
+            store.type_id,
+            vec![store.id, absolute.id, value.id],
+            span,
+            Some("owned-reuse"),
+        );
+        let updated_region =
+            self.make_region(updated_store, start.clone(), end.clone(), span)?;
+        let success_payload = self.operation(
+            "product.make",
+            payload_type,
+            vec![displaced.id, updated_region.id],
+            span,
+            None,
+        );
+        let success =
+            self.operation_with_case("sum.make", sum_type, vec![success_payload.id], span, 0);
+        let success_end = self.current_block;
+
+        self.current_block = branches.alternate;
+        let original = self.make_region(store, start, end, span)?;
+        let failure_payload = self.operation(
+            "product.make",
+            payload_type,
+            vec![value.id, original.id],
+            span,
+            None,
+        );
+        let failure =
+            self.operation_with_case("sum.make", sum_type, vec![failure_payload.id], span, 1);
+        let failure_end = self.current_block;
+
+        let mut result = self.join_runtime_values(
+            &branches,
+            success_end,
+            success,
+            failure_end,
+            failure,
+            span,
+        );
         result.meaning = RuntimeMeaning::Sum { cases };
         Ok(result)
     }

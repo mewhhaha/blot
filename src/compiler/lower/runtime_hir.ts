@@ -945,6 +945,16 @@ class ResidualHirBuilder {
       const value = this.materialize(applied[2], storeType.elementType, span);
       return this.regionSet(region, index, value, span);
     }
+    if (fn.name === "@region.replace") {
+      const region = this.region(applied[0], span, fn.name);
+      const storeType = this.types[region.store.type];
+      if (storeType.kind !== "store") {
+        throw this.outside(span, "Region Store projection lost its Store type");
+      }
+      const index = this.integer(applied[1], span, fn.name);
+      const value = this.materialize(applied[2], storeType.elementType, span);
+      return this.regionReplace(region, index, value, span);
+    }
     if (fn.name === "@region.swap") {
       const region = this.region(applied[0], span, fn.name);
       const left = this.integer(applied[1], span, fn.name);
@@ -961,6 +971,18 @@ class ResidualHirBuilder {
       const left = this.region(applied[1], span, fn.name);
       const right = this.region(applied[2], span, fn.name);
       return this.makeRegion(left.store, left.start, right.end, span);
+    }
+    if (
+      fn.name === "@region.reassociate_left" ||
+      fn.name === "@region.reassociate_right"
+    ) {
+      return {
+        kind: "tuple",
+        elements: [
+          { kind: "static", value: { tag: "unit" } },
+          { kind: "static", value: { tag: "unit" } },
+        ],
+      };
     }
     if (fn.name === "@region.freeze") {
       return this.region(applied[0], span, fn.name).store;
@@ -4408,6 +4430,52 @@ class ResidualHirBuilder {
           region.end,
           span,
         ),
+      }),
+      span,
+    );
+  }
+
+  private regionReplace(
+    region: ResidualRegion,
+    index: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    value: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    span: Span,
+  ): ResidualValue {
+    const inBounds = this.regionIndexInBounds(region, index, span);
+    return this.branchValue(
+      inBounds,
+      () => {
+        const absolute = this.absoluteRegionIndex(region, index, span);
+        const displaced = this.storeRead(region.store, absolute, span);
+        const store = this.storeWrite(
+          region.store,
+          absolute,
+          value,
+          "owned-reuse",
+          span,
+        );
+        return {
+          kind: "tag",
+          name: "Replaced",
+          payload: {
+            kind: "tuple",
+            elements: [
+              displaced,
+              this.makeRegion(store, region.start, region.end, span),
+            ],
+          },
+        };
+      },
+      () => ({
+        kind: "tag",
+        name: "ReplaceOutOfBounds",
+        payload: {
+          kind: "tuple",
+          elements: [
+            value,
+            this.makeRegion(region.store, region.start, region.end, span),
+          ],
+        },
       }),
       span,
     );

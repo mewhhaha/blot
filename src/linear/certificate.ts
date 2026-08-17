@@ -160,6 +160,7 @@ function extractionPartCount(
   if (operation === "@array.take") return 2;
   if (operation === "@array.split") return 3;
   if (operation === "@region.split") return 2;
+  if (operation === "@region.replace") return 2;
   return null;
 }
 

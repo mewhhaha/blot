@@ -812,14 +812,29 @@ For an outer witness `J₁ : A * BC -> ABC` and an inner witness
 `J₂ : B * C -> BC`, left reassociation consumes both and produces:
 
 ```text
-reassociate_left (!J₁, !J₂)
-  -> (J₃ : A * B -> AB, J₄ : AB * C -> ABC)
+@region.reassociate_left (!J₁, !J₂)
+  -> (J₄ : AB * C -> ABC, J₃ : A * B -> AB)
 ```
 
-The inverse operation consumes `J₃` and `J₄` and reproduces witnesses for
-`A * BC` and `B * C`. The symmetric form handles an inner partition of the
-outer witness's left child. Each rewrite is accepted only when root identity,
-ordered boundaries, and parent-child identities match exactly.
+Its inverse keeps the outer witness first:
+
+```text
+@region.reassociate_right (!J₄, !J₃)
+  -> (J₁ : A * BC -> ABC, J₂ : B * C -> BC)
+```
+
+Thus `reassociate_left` rotates a right-nested proof tree left and
+`reassociate_right` rotates a left-nested tree right. Each rewrite is accepted
+only when root identity, ordered boundaries, and parent-child identities match
+exactly. For concrete witnesses the equations are:
+
+```text
+J₁ = (store, a, b, d)    J₂ = (store, b, c, d)
+J₄ = (store, a, c, d)    J₃ = (store, a, b, c)
+```
+
+Both operations are involutive as a pair: applying one and then the other to
+the returned outer/inner pair recovers witnesses for the original proof tree.
 
 The operations are compiler-private proof rewrites exposed through ordinary
 `Slice` wrappers. Witnesses remain opaque, linear, element-free, and erased
@@ -847,3 +862,46 @@ This revision is complete only when both Node and Rust implementations agree on:
   owned elements; and
 - strict Node/Rust parity with the generated prelude snapshot and compiler
   specifications updated in the same change.
+
+### 14.5 Ownership representation and conservation
+
+The ownership analysis represents a region as `Region(authority, elements)`.
+`authority` is the single linear interval permission; `elements` is a hidden
+positional ownership tree. This is an analysis value only. It neither adds a
+source-visible field nor changes `Region T` in the type lattice.
+
+The conservation equations are:
+
+```text
+claim(Array(E))                             = Region(root, E)
+split(Region(P, E), k)                      = Region(L, Eₗ), Region(R, Eᵣ), J
+join(J, Region(L, Eₗ), Region(R, Eᵣ)) = Region(P, E)
+replace(Region(P, E), i, N)                 = E[i], Region(P, E[i := N])
+freeze(Region(root, E))                     = Array(E)
+```
+
+For a statically known position, `Eₗ`, `Eᵣ`, and `E[i := N]` preserve exact
+positions. For a dynamic position the certificate records one extraction
+identity shared by the selected and residual obligations; independent
+validation requires both outputs, so the abstraction may forget a position but
+cannot duplicate or drop its owner. Swap merely permutes positions and never
+changes the multiset of obligations.
+
+The non-consuming `get` and discarding `set` remain valid only when the hidden
+element tree is unrestricted. The checker defers that condition for a symbolic
+region parameter and replays it after caller substitution. `replace` is the
+ownership-general write because both success and failure return every incoming
+obligation exactly once.
+
+### 14.6 Cost model
+
+- `replace` performs one bounds check, one Store read, and one Store write: time
+  `O(1)` and allocation `O(1)` in the same sense as `set`.
+- `split`, `join`, and both reassociation operations copy no elements. Split and
+  join construct only fixed-size private region products; reassociation is
+  proof-only and emits no Runtime-HIR or Wasm operation.
+- `claim` is `O(1)` when the consumed array Store is certified reusable and
+  otherwise `O(n)` for the required private Store copy. Owned elements never
+  add a second copy.
+- `freeze` is `O(1)` for a complete root because it exposes the private Store as
+  an immutable array; it performs no element walk.
