@@ -572,6 +572,14 @@ type environment `Gamma`:
 Gamma; Phi |- e : A ! epsilon
 ```
 
+An experimental source convenience also permits a pure unary integer predicate
+to *construct* an ordinary range or finite union type at compile time. This is
+not another component of `Phi`: the predicate is normalized before inference,
+and the lattice receives only the canonical type it already supports. `Phi`
+continues to own relationships between particular runtime identities, while a
+predicate-defined `Natural` is merely another spelling of an integer set. See
+[`PREDICATE_REFINEMENTS.md`](PREDICATE_REFINEMENTS.md).
+
 `Phi` contains propositions over immutable value identities:
 
 ```text

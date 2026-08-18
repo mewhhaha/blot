@@ -1723,7 +1723,43 @@ Type checking evaluates compile-time code because signatures and type
 constructors are ordinary values. A compile-time value is bridged into the
 inference lattice only when it denotes a type.
 
-### 10.1 Display notation
+### 10.1 Predicate-defined integer types
+
+`refine (base, predicate)` constructs an integer type from an ordinary pure
+compile-time function:
+
+```blot
+const Natural = refine (Int, fn value => value >= 0)
+const Byte = refine (Int, fn value => value >= 0 && value <= 255)
+const NonZero = refine (Int, fn value => value != 0)
+```
+
+The first argument must be an integer type. The predicate may compare its one
+parameter with compile-time integer witnesses using recognized `<`, `<=`, `==`,
+`!=`, `>=`, and `>` functions, and combine those comparisons with recognized
+boolean conjunction, disjunction, and negation. Recognition follows the
+compile-time function value rather than the source spelling. A shadowed operator
+therefore contributes no proof unless its value independently satisfies the
+same factorization and truth-table checks.
+
+The parameter may be observed only through those comparisons. An effect,
+recursion, a run-time capture, an opaque call, or any other observation is
+`BLOT_REFINEMENT_PREDICATE`. An empty result is `BLOT_EMPTY_REFINEMENT` because
+the source type-value domain has no bottom value.
+
+The compiler normalizes the predicate exactly to existing integer ranges and
+ground unions, intersects that result with `base`, and then forgets the
+predicate. No refinement object reaches inference, Runtime HIR, WebAssembly, or
+the ABI. Branch comparison facts can prove that an `Int` inhabits such a type in
+exactly the same way they prove an explicitly written range.
+
+This operation does not turn value relationships into ordinary types. Facts
+such as `i < length(values)` remain in the refinement context described in
+§8.5, and ownership remains a separate flow judgment. The formal boundary and
+erasure obligation are specified in
+[`spec/PREDICATE_REFINEMENTS.md`](spec/PREDICATE_REFINEMENTS.md).
+
+### 10.2 Display notation
 
 Compiler output uses notation that is not additional source syntax:
 
@@ -1751,7 +1787,7 @@ An effect row is the one piece of this notation that is also source:
 the rest of the row inside a `sig` (§12.4). The checker prints inferred open
 rows with the same `..e` notation.
 
-### 10.2 Type-value primitives
+### 10.3 Type-value primitives
 
 The primitive type values are `@type.int`, `@type.float`, `@type.float32`,
 `@type.f32x4`, `@type.text`, `@type.unit`, and `@type.unbounded`.
@@ -1767,6 +1803,7 @@ The type algebra includes:
 - reflection;
 - type-of;
 - union construction from an array; and
+- pure integer predicate refinement; and
 - explicit predicative `@forall`.
 
 An attached namespace is transparent to type checking. This is how the prelude
@@ -1816,7 +1853,7 @@ to bind each intermediate record before using it.
 A sealed type is nominal and invariant. Its identity is its name together with
 its carrier.
 
-### 10.3 Deliberate inference limits
+### 10.4 Deliberate inference limits
 
 The implemented checker does not currently prove:
 
@@ -1828,7 +1865,7 @@ The implemented checker does not currently prove:
 - the result of `@shape.get`, `@shape.set`, or `@shape.remove` whose field name
   is a runtime value (§13.3);
 - anything about a namespace member call whose arguments are not compile-time
-  values (§10.2);
+  values (§10.3);
 - the fields a spread carries through from an operand whose own fields are not
   known where the spread is written (§6); or
 - impredicative instantiation.
@@ -2280,7 +2317,7 @@ a row. A second `~` fills the next arrow outwards, so
 { Outer }` reads back as itself; a `~` on a chain
 whose arrows all carry rows is an error.
 
-Reflection (§10.2) describes an arrow's `.domain`, `.codomain`, and `.effects`,
+Reflection (§10.3) describes an arrow's `.domain`, `.codomain`, and `.effects`,
 but an effect itself reflects as `#Opaque` — nothing in Blot takes one apart.
 Open row tails remain type-checking evidence and do not add a runtime value,
 Runtime-HIR representation, or ABI field.

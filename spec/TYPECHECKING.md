@@ -18,6 +18,11 @@ Ownership, linearity, exhaustiveness, and refinement facts are separate
 analyses. They may consume inferred types, but they do not add constructors to
 the type lattice.
 
+Predicate-defined integer types do not change this algebra. As specified in
+[`PREDICATE_REFINEMENTS.md`](PREDICATE_REFINEMENTS.md), compile-time evaluation
+normalizes an accepted pure predicate to existing ranges and finite ground
+unions before bridging. Biunification never receives a predicate constructor.
+
 ## 1. Type algebra
 
 Let labels range over interned field, constructor, and effect names. Let scalar

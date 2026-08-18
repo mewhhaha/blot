@@ -440,6 +440,7 @@ public artifact, or an explicit compiler command.
 | solve positive recursive representation equations by their least fixed point                  | a finite graph with private recursive roots |
 | preserve compiler-local control envelopes while erasing their payload wrappers                | one runtime sum for statement control       |
 | erase scalar refinements without changing their concrete layout                               | equal layouts for refined and open facts    |
+| normalize pure integer type predicates before bridging and erase their source functions       | canonical range/union types and no residual predicate |
 | erase first-class effect values at explicit sequencing boundaries                             | one checked nullary call                    |
 | closure-convert runtime free variables into explicit function parameters                      | lexically minimal residual environments     |
 | defunctionalize the finite function set a dynamic branch joins                                | one private choice table per join           |

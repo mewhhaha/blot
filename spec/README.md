@@ -9,6 +9,7 @@ that implements it.
 | [`PAPER.md`](PAPER.md)               | Coherent target model and research direction for the language          |
 | [`COMPILER.md`](COMPILER.md)         | Compiler-wide judgments, pass contracts, and theorem dependencies      |
 | [`TYPECHECKING.md`](TYPECHECKING.md) | Declarative subtyping, inference, staging facts, and solver invariants |
+| [`PREDICATE_REFINEMENTS.md`](PREDICATE_REFINEMENTS.md) | Experimental pure predicates normalized into canonical types |
 | [`FRONTEND.md`](FRONTEND.md)         | Source, compact-CST, fixity, and surface-elaboration contracts         |
 | [`STAGING.md`](STAGING.md)           | Compile-time evaluation, specialization, and representation closure    |
 | [`SAFETY.md`](SAFETY.md)             | Coverage, relational proofs, and ownership certificates                |
