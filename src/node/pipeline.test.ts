@@ -440,7 +440,7 @@ test("dynamic signed i64 to f64 conversion matches WebAssembly edge rounding", a
   }
 });
 
-test("agent-style recursion lowers to a dynamic back-edge and compiles", async () => {
+test("agent-style recursion remains dynamic runtime control flow and compiles", async () => {
   const compiler = await Compiler.create();
   try {
     const path = resolve("case-studies/agent/main.blot");
@@ -448,15 +448,24 @@ test("agent-style recursion lowers to a dynamic back-edge and compiles", async (
     const function_ = hir.functions[0];
     assert.notEqual(function_, undefined);
     if (function_ === undefined) throw new Error("agent HIR has no function");
-    const hasConditional = function_.blocks.some((block) =>
+    const blocks = hir.functions.flatMap((candidate) => candidate.blocks);
+    const hasConditional = blocks.some((block) =>
       block.terminator.kind === "conditional"
     );
-    const hasBackEdge = function_.blocks.some((block) => {
+    const hasBackEdge = blocks.some((block) => {
       if (block.terminator.kind !== "branch") return false;
       return block.terminator.target <= block.id;
     });
+    const hasDirectRecursion = hir.functions.some((candidate) =>
+      candidate.blocks.some((block) =>
+        block.operations.some((operation) =>
+          operation.kind === "call.direct" &&
+          operation.function === candidate.id
+        )
+      )
+    );
     assert.equal(hasConditional, true);
-    assert.equal(hasBackEdge, true);
+    assert.equal(hasBackEdge || hasDirectRecursion, true);
 
     const artifact = await compiler.compile(path);
     const exported = requiredRuntimeExport(

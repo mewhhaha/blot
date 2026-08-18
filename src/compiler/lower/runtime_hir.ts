@@ -20,6 +20,7 @@ import {
   type Value,
 } from "../../comptime/value.ts";
 import type { CheckResult } from "../../check/mod.ts";
+import { show as showType } from "../../check/print.ts";
 import type { SimpleType } from "../../check/type.ts";
 import { fail } from "../../diagnostic.ts";
 import {
@@ -28,8 +29,15 @@ import {
   coreResultExpression,
   type CoreStep,
 } from "../../core/computation.ts";
-import type { Decl, Expr, Module, Pattern, Span } from "../../syntax/ast.ts";
-import { liveDeclarations } from "../../syntax/live.ts";
+import {
+  type Decl,
+  type Expr,
+  type Module,
+  type Pattern,
+  patternNames,
+  type Span,
+} from "../../syntax/ast.ts";
+import { freeNames, liveDeclarations } from "../../syntax/live.ts";
 import { recursiveCallsAreOwnershipTail } from "../../linear/check.ts";
 import type { StagedExport } from "../../stage.ts";
 
@@ -134,6 +142,7 @@ type ResidualValue =
     readonly body: ResidualExpression;
     readonly environment: ResidualEnvironment;
     readonly self: string | null;
+    readonly signature?: SimpleType;
   }
   | {
     readonly kind: "primitive";
@@ -155,12 +164,20 @@ type ResidualValue =
     readonly block: number;
     readonly parameterType: TypeId;
   }
+  | {
+    readonly kind: "direct-function";
+    readonly captures: readonly Extract<ResidualValue, { kind: "dynamic" }>[];
+    readonly function: number;
+    readonly parameterType: TypeId;
+    readonly resultType: TypeId;
+  }
   | { readonly kind: "never" };
 
 type ResidualEnvironment = {
   readonly names: Map<string, ResidualValue>;
   readonly parent: ResidualEnvironment | null;
   readonly staticParent: StaticEnv | null;
+  readonly typeSubstitutions: Map<string, TypeId>;
 };
 
 type MutableBlock = {
@@ -180,7 +197,6 @@ export function exportResidualRuntimeHir(
   const builder = new ResidualHirBuilder(source, checked);
   let residualModule: CoreComputation | Module = checked.core;
   if (stagedModule !== undefined) residualModule = stagedModule;
-  const functions: BlotRuntimeFunction[] = [];
   const runtimeFunctions = new Map<string, BlotRuntimeFunction>();
   for (const exported of stagedExports) {
     if (exported.phase !== "runtime") continue;
@@ -189,11 +205,9 @@ export function exportResidualRuntimeHir(
     const function_ = builder.build(
       residualModule,
       exportedWasmName,
-      functions.length,
       exported.sourceName,
       exported.named,
     );
-    functions.push(function_);
     runtimeFunctions.set(exported.sourceName, function_);
   }
 
@@ -227,7 +241,7 @@ export function exportResidualRuntimeHir(
     source,
     types: builder.types,
     signatures: builder.signatures,
-    functions,
+    functions: builder.functions,
     capabilities: builder.capabilities(),
     exports,
   };
@@ -241,19 +255,20 @@ interface ResidualRegion {
 
 class ResidualHirBuilder {
   readonly types: BlotRuntimeType[] = [];
+  readonly functions: BlotRuntimeFunction[] = [];
   readonly signatures: {
     readonly parameters: readonly number[];
     readonly result: number;
     readonly effects: readonly string[];
   }[] = [];
-  readonly #blocks: MutableBlock[] = [];
+  #blocks: MutableBlock[] = [];
   readonly #capabilityOperations = new Map<
     string,
     Map<string, { readonly signature: number; readonly key: string }>
   >();
   readonly #checked: CheckResult;
-  readonly #functionCapabilities = new Set<string>();
-  readonly #sourceHandlers: {
+  #functionCapabilities = new Set<string>();
+  #sourceHandlers: {
     readonly effect: number;
     readonly handler: ResidualValue;
   }[] = [];
@@ -276,13 +291,13 @@ class ResidualHirBuilder {
   build(
     computation: CoreComputation | Module,
     wasmName: string,
-    functionId: number,
     sourceName: string,
     namedExport: boolean,
   ): BlotRuntimeFunction {
-    this.#blocks.length = 0;
-    this.#sourceHandlers.length = 0;
-    this.#functionCapabilities.clear();
+    const functionId = this.reserveFunction();
+    this.#blocks = [];
+    this.#sourceHandlers = [];
+    this.#functionCapabilities = new Set();
     this.#currentBlock = 0;
     this.#nextValue = 0;
     this.block();
@@ -334,7 +349,7 @@ class ResidualHirBuilder {
     const effects = [...this.#functionCapabilities].sort();
     const signature = this.signatures.length;
     this.signatures.push({ parameters: [], result: result.type, effects });
-    return {
+    const function_: BlotRuntimeFunction = {
       id: functionId,
       name: wasmName,
       signature,
@@ -354,6 +369,8 @@ class ResidualHirBuilder {
       }),
       span: this.span(resultExpression.span),
     };
+    this.functions[functionId] = function_;
+    return function_;
   }
 
   capabilities() {
@@ -402,6 +419,26 @@ class ResidualHirBuilder {
     }
     if (expr.tag === "intrinsic") {
       if (expr.name === "@array.empty") {
+        const checked = this.#checked.expressionTypes.get(
+          sourceExpression(expr),
+        );
+        if (checked !== undefined) {
+          const type = this.typeForSimpleType(
+            checked,
+            expr.span,
+            new Set(),
+            environment.typeSubstitutions,
+          );
+          if (type !== null) {
+            const runtimeType = this.types[type];
+            if (runtimeType.kind === "store") {
+              return {
+                kind: "empty-store",
+                elementType: runtimeType.elementType,
+              };
+            }
+          }
+        }
         return { kind: "empty-store" };
       }
       const primitive = PRIMITIVES.get(expr.name);
@@ -436,6 +473,7 @@ class ResidualHirBuilder {
         argument,
         expr.span,
         this.#checked.expressionTypes.get(sourceExpression(expr.arg)),
+        this.#checked.expressionTypes.get(sourceExpression(expr)),
       );
     }
     if (expr.tag === "intrinsic-apply") {
@@ -491,6 +529,7 @@ class ResidualHirBuilder {
         body: expr.body,
         environment,
         self: null,
+        signature: this.#checked.expressionTypes.get(sourceExpression(expr)),
       };
     }
     if (expr.tag === "array") {
@@ -745,6 +784,7 @@ class ResidualHirBuilder {
     argument: ResidualValue,
     span: Span,
     expectedArgumentType?: SimpleType,
+    expectedResultType?: SimpleType,
   ): ResidualValue {
     if (fn.kind === "never" || argument.kind === "never") {
       return { kind: "never" };
@@ -813,10 +853,48 @@ class ResidualHirBuilder {
           expectedArgumentType,
         );
       }
+      if (
+        fn.self !== null &&
+        !this.recursionBecomesTailInBranch(fn.body, fn.self)
+      ) {
+        return this.lowerDirectRecursiveFunction(
+          fn,
+          argument,
+          span,
+          expectedResultType,
+        );
+      }
       const scope = this.environment(fn.environment, null);
+      this.recordRuntimeTypeSubstitutions(
+        fn.signature,
+        argument,
+        scope.typeSubstitutions,
+        span,
+      );
       if (fn.self !== null) scope.names.set(fn.self, fn);
       this.bind(fn.parameter, argument, scope, span);
       return this.evaluate(fn.body, scope);
+    }
+    if (fn.kind === "direct-function") {
+      const dynamicArgument = this.materialize(
+        argument,
+        fn.parameterType,
+        span,
+      );
+      const result = this.nextValue();
+      this.current().operations.push({
+        kind: "call.direct",
+        result,
+        type: fn.resultType,
+        operands: [
+          ...fn.captures.map((capture) => capture.value),
+          dynamicArgument.value,
+        ],
+        ownership: this.ownership(fn.resultType),
+        function: fn.function,
+        span: this.span(span),
+      });
+      return { kind: "dynamic", value: result, type: fn.resultType };
     }
     if (fn.kind === "host-operation") {
       return this.hostGrantCall(fn, argument, span);
@@ -986,6 +1064,16 @@ class ResidualHirBuilder {
     }
     if (fn.name === "@region.freeze") {
       return this.region(applied[0], span, fn.name).store;
+    }
+    if (fn.name === "@array.take") {
+      const store = this.store(applied[0], span, fn.name);
+      const index = this.integer(applied[1], span, fn.name);
+      return this.arrayTake(store, index, span);
+    }
+    if (fn.name === "@array.split") {
+      const store = this.store(applied[0], span, fn.name);
+      const index = this.integer(applied[1], span, fn.name);
+      return this.arraySplit(store, index, span);
     }
     if (fn.name === "@array.len") {
       const store = this.store(applied[0], span, fn.name);
@@ -1296,12 +1384,42 @@ class ResidualHirBuilder {
     span: Span,
     expectedArgumentType?: SimpleType,
   ): ResidualValue {
+    const substitutions = new Map(fn.environment.typeSubstitutions);
+    this.recordRuntimeTypeSubstitutions(
+      fn.signature,
+      argument,
+      substitutions,
+      span,
+    );
+    if (this.valueHasUntypedStore(argument)) {
+      const scope = this.environment(fn.environment, null);
+      for (const [key, type] of substitutions) {
+        scope.typeSubstitutions.set(key, type);
+      }
+      if (fn.self === null) {
+        throw new Error("tail-recursive closure lost its self name");
+      }
+      scope.names.set(fn.self, fn);
+      this.bind(fn.parameter, argument, scope, span);
+      return this.evaluate(fn.body, scope);
+    }
     let parameterType: TypeId | null = null;
     if (expectedArgumentType !== undefined) {
       parameterType = this.typeForSimpleType(
         expectedArgumentType,
         span,
         new Set(),
+        substitutions,
+      );
+    }
+    let functionType = fn.signature;
+    while (functionType?.tag === "forall") functionType = functionType.body;
+    if (parameterType === null && functionType?.tag === "fun") {
+      parameterType = this.typeForSimpleType(
+        functionType.param,
+        span,
+        new Set(),
+        substitutions,
       );
     }
     if (parameterType === null) {
@@ -1325,6 +1443,9 @@ class ResidualHirBuilder {
     });
     this.#currentBlock = header.id;
     const scope = this.environment(fn.environment, null);
+    for (const [key, type] of substitutions) {
+      scope.typeSubstitutions.set(key, type);
+    }
     if (fn.self === null) {
       throw new Error("tail-recursive closure lost its self name");
     }
@@ -1340,6 +1461,237 @@ class ResidualHirBuilder {
       span,
     );
     return this.evaluate(fn.body, scope);
+  }
+
+  private lowerDirectRecursiveFunction(
+    fn: Extract<ResidualValue, { readonly kind: "closure" }>,
+    argument: ResidualValue,
+    span: Span,
+    expectedResultType?: SimpleType,
+  ): ResidualValue {
+    if (fn.self === null) {
+      throw new Error("direct-recursive closure lost its self name");
+    }
+    let signature = fn.signature;
+    while (signature?.tag === "forall") signature = signature.body;
+    if (signature?.tag !== "fun") {
+      throw this.outside(span, "recursive function without a settled signature");
+    }
+    const substitutions = new Map(fn.environment.typeSubstitutions);
+    this.recordRuntimeType(
+      signature.param,
+      argument,
+      substitutions,
+      span,
+    );
+    let parameterType = this.typeForSimpleType(
+      signature.param,
+      span,
+      new Set(),
+      substitutions,
+    );
+    if (parameterType === null) {
+      parameterType = this.typeForResidualValue(argument, span);
+    }
+    let resultType = this.typeForSimpleType(
+      signature.result,
+      span,
+      new Set(),
+      substitutions,
+    );
+    if (resultType === null && expectedResultType !== undefined) {
+      resultType = this.typeForSimpleType(
+        expectedResultType,
+        span,
+        new Set(),
+        substitutions,
+      );
+    }
+    if (resultType === null) {
+      throw this.outside(
+        span,
+        `recursive function with an unsettled runtime signature ${showType(signature)}`,
+      );
+    }
+
+    const functionId = this.reserveFunction();
+    const captures = this.directFunctionCaptures(fn, span);
+    const signatureId = this.signatures.length;
+    this.signatures.push({
+      parameters: [
+        ...captures.map((capture) => capture.value.type),
+        parameterType,
+      ],
+      result: resultType,
+      effects: [],
+    });
+    const direct: ResidualValue = {
+      kind: "direct-function",
+      captures: captures.map((capture) => capture.value),
+      function: functionId,
+      parameterType,
+      resultType,
+    };
+    const caller = {
+      blocks: this.#blocks,
+      currentBlock: this.#currentBlock,
+      dynamicBranchDepth: this.#dynamicBranchDepth,
+      functionCapabilities: this.#functionCapabilities,
+      nextValue: this.#nextValue,
+      residualOrigin: this.#residualOrigin,
+      sourceHandlers: this.#sourceHandlers,
+    };
+    let effects: string[] = [];
+    try {
+      this.#blocks = [];
+      this.#currentBlock = 0;
+      this.#dynamicBranchDepth = 0;
+      this.#functionCapabilities = new Set();
+      this.#nextValue = 0;
+      this.#residualOrigin = span;
+      this.#sourceHandlers = [];
+      const entry = this.block();
+      const scope = this.environment(fn.environment, null);
+      const functionCaptureValues: Extract<
+        ResidualValue,
+        { readonly kind: "dynamic" }
+      >[] = [];
+      for (const capture of captures) {
+        const value = this.nextValue();
+        entry.parameters.push({
+          value,
+          type: capture.value.type,
+          ownership: this.ownership(capture.value.type),
+          span: this.span(span),
+        });
+        const functionCapture: Extract<
+          ResidualValue,
+          { readonly kind: "dynamic" }
+        > = {
+          kind: "dynamic",
+          value,
+          type: capture.value.type,
+        };
+        functionCaptureValues.push(functionCapture);
+        scope.names.set(capture.name, functionCapture);
+      }
+      const parameter = this.nextValue();
+      entry.parameters.push({
+        value: parameter,
+        type: parameterType,
+        ownership: this.ownership(parameterType),
+        span: this.span(span),
+      });
+      for (const [key, type] of substitutions) {
+        scope.typeSubstitutions.set(key, type);
+      }
+      scope.names.set(fn.self, {
+        ...direct,
+        captures: functionCaptureValues,
+      });
+      this.bind(
+        fn.parameter,
+        { kind: "dynamic", value: parameter, type: parameterType },
+        scope,
+        span,
+      );
+      const residual = this.evaluate(fn.body, scope);
+      const result = this.materialize(residual, resultType, fn.body.span);
+      this.terminate({
+        kind: "return",
+        value: result.value,
+        span: this.span(fn.body.span),
+      });
+      effects = [...this.#functionCapabilities].sort();
+      const blocks = this.#blocks.map((block) => {
+        if (block.terminator === undefined) {
+          throw new Error(
+            `${this.#source}: residual block ${block.id} has no terminator`,
+          );
+        }
+        return {
+          id: block.id,
+          parameters: block.parameters,
+          operations: block.operations,
+          terminator: block.terminator,
+        };
+      });
+      this.signatures[signatureId] = {
+        parameters: [
+          ...captures.map((capture) => capture.value.type),
+          parameterType,
+        ],
+        result: resultType,
+        effects,
+      };
+      this.functions[functionId] = {
+        id: functionId,
+        name: `blot:recursive:${functionId}`,
+        signature: signatureId,
+        entryBlock: entry.id,
+        blocks,
+        span: this.span(fn.body.span),
+      };
+    } finally {
+      this.#blocks = caller.blocks;
+      this.#currentBlock = caller.currentBlock;
+      this.#dynamicBranchDepth = caller.dynamicBranchDepth;
+      this.#functionCapabilities = caller.functionCapabilities;
+      this.#nextValue = caller.nextValue;
+      this.#residualOrigin = caller.residualOrigin;
+      this.#sourceHandlers = caller.sourceHandlers;
+    }
+    for (const effect of effects) this.#functionCapabilities.add(effect);
+    return this.apply(direct, argument, span);
+  }
+
+  private directFunctionCaptures(
+    fn: Extract<ResidualValue, { readonly kind: "closure" }>,
+    span: Span,
+  ): readonly {
+    readonly name: string;
+    readonly value: Extract<ResidualValue, { readonly kind: "dynamic" }>;
+  }[] {
+    const names = new Set(freeNames(sourceExpression(fn.body)));
+    for (const name of patternNames(fn.parameter)) names.delete(name);
+    if (fn.self !== null) names.delete(fn.self);
+    const captures: {
+      readonly name: string;
+      readonly value: Extract<ResidualValue, { readonly kind: "dynamic" }>;
+    }[] = [];
+    for (const name of [...names].sort()) {
+      const found = this.lookup(fn.environment, name);
+      if (found === undefined) continue;
+      const value = this.residualizeStatic(found, fn.environment);
+      if (this.staticValue(value) !== undefined) continue;
+      if (
+        value.kind === "closure" || value.kind === "primitive" ||
+        value.kind === "host-operation" || value.kind === "module-argument"
+      ) continue;
+      if (!this.valueContainsDynamic(value)) continue;
+      const type = this.typeForResidualValue(value, span);
+      captures.push({
+        name,
+        value: this.materialize(value, type, span),
+      });
+    }
+    return captures;
+  }
+
+  private valueContainsDynamic(value: ResidualValue): boolean {
+    if (value.kind === "dynamic") return true;
+    if (value.kind === "array" || value.kind === "tuple") {
+      return value.elements.some((element) =>
+        this.valueContainsDynamic(element)
+      );
+    }
+    if (value.kind === "shape") {
+      return [...value.fields.values()].some((field) =>
+        this.valueContainsDynamic(field)
+      );
+    }
+    if (value.kind === "tag") return this.valueContainsDynamic(value.payload);
+    return false;
   }
 
   private shouldLowerTailRecursion(
@@ -1359,6 +1711,18 @@ class ResidualHirBuilder {
     return recursiveCallsAreOwnershipTail(
       sourceExpression(body),
       names,
+      true,
+    );
+  }
+
+  private recursionBecomesTailInBranch(
+    body: ResidualExpression,
+    self: string,
+  ): boolean {
+    if (this.#dynamicBranchDepth !== 0) return false;
+    return recursiveCallsAreOwnershipTail(
+      sourceExpression(body),
+      new Set([self]),
       true,
     );
   }
@@ -1482,6 +1846,17 @@ class ResidualHirBuilder {
       target.meaning.kind === "sum"
     ) {
       return this.sumCase(expr, target, target.meaning, environment);
+    }
+    if (target.kind === "dynamic") {
+      const targetType = this.types[target.type];
+      if (targetType.kind === "sum") {
+        return this.sumCase(expr, target, {
+          kind: "sum",
+          cases: targetType.cases.map((case_) => case_.name),
+          payloadTypes: targetType.cases.map((case_) => case_.payloadType),
+          wrappedPayloads: targetType.cases.map(() => false),
+        }, environment);
+      }
     }
     if (
       target.kind === "dynamic" &&
@@ -1924,7 +2299,7 @@ class ResidualHirBuilder {
     readonly meaning?: Extract<ResidualValue, { kind: "dynamic" }>["meaning"];
   } {
     if (
-      consequent.kind === "empty-store" && alternate.kind === "dynamic" &&
+      this.isEmptyStoreValue(consequent) && alternate.kind === "dynamic" &&
       this.types[alternate.type].kind === "store"
     ) {
       const selected = this.types[alternate.type];
@@ -1933,13 +2308,13 @@ class ResidualHirBuilder {
       }
       this.#currentBlock = consequenceEnd;
       return {
-        consequent: this.emptyStore(selected.elementType, span),
+        consequent: this.materialize(consequent, alternate.type, span),
         alternate,
         type: alternate.type,
       };
     }
     if (
-      consequent.kind === "dynamic" && alternate.kind === "empty-store" &&
+      consequent.kind === "dynamic" && this.isEmptyStoreValue(alternate) &&
       this.types[consequent.type].kind === "store"
     ) {
       const selected = this.types[consequent.type];
@@ -1949,7 +2324,7 @@ class ResidualHirBuilder {
       this.#currentBlock = alternateEnd;
       return {
         consequent,
-        alternate: this.emptyStore(selected.elementType, span),
+        alternate: this.materialize(alternate, consequent.type, span),
         type: consequent.type,
       };
     }
@@ -2132,7 +2507,7 @@ class ResidualHirBuilder {
       };
     }
     if (consequent.kind === "shape" && alternate.kind === "shape") {
-      const type = this.typeForResidualValue(consequent, span);
+      const type = this.commonBranchType(consequent, alternate, span);
       this.#currentBlock = consequenceEnd;
       const consequentValue = this.materialize(consequent, type, span);
       this.#currentBlock = alternateEnd;
@@ -2160,6 +2535,52 @@ class ResidualHirBuilder {
     };
   }
 
+  private commonBranchType(
+    left: ResidualValue,
+    right: ResidualValue,
+    span: Span,
+  ): TypeId {
+    if (this.isEmptyStoreValue(left)) {
+      const rightType = this.typeForResidualValue(right, span);
+      if (this.types[rightType].kind === "store") return rightType;
+    }
+    if (this.isEmptyStoreValue(right)) {
+      const leftType = this.typeForResidualValue(left, span);
+      if (this.types[leftType].kind === "store") return leftType;
+    }
+    if (
+      left.kind === "tuple" && right.kind === "tuple" &&
+      left.elements.length === right.elements.length
+    ) {
+      return this.productTypeFromRuntimeFields(new Map(
+        left.elements.map((element, index) => [
+          String(index),
+          this.commonBranchType(element, right.elements[index], span),
+        ]),
+      ));
+    }
+    if (left.kind === "shape" && right.kind === "shape") {
+      const fields = new Map<string, TypeId>();
+      for (const [name, leftField] of left.fields) {
+        const rightField = right.fields.get(name);
+        if (rightField === undefined) {
+          throw this.outside(span, "conditional record fields disagree");
+        }
+        fields.set(name, this.commonBranchType(leftField, rightField, span));
+      }
+      if (fields.size !== right.fields.size) {
+        throw this.outside(span, "conditional record fields disagree");
+      }
+      return this.productTypeFromRuntimeFields(fields);
+    }
+    const leftType = this.typeForResidualValue(left, span);
+    const rightType = this.typeForResidualValue(right, span);
+    if (leftType !== rightType) {
+      throw this.outside(span, "conditional branches with different types");
+    }
+    return leftType;
+  }
+
   private residualTag(
     value: ResidualValue,
   ): Extract<ResidualValue, { readonly kind: "tag" }> | null {
@@ -2178,6 +2599,15 @@ class ResidualHirBuilder {
         value: known.payload ?? { tag: "unit" },
       },
     };
+  }
+
+  private isEmptyStoreValue(value: ResidualValue): boolean {
+    if (value.kind === "empty-store") return true;
+    if (value.kind === "array") return value.elements.length === 0;
+    if (value.kind === "static" && value.value.tag === "array") {
+      return value.value.elements.length === 0;
+    }
+    return false;
   }
 
   private materializeTag(
@@ -2968,6 +3398,18 @@ class ResidualHirBuilder {
       }
       return this.storeType(elementType);
     }
+    if (staticValue.tag === "region-array") {
+      const first = staticValue.store.cells[0];
+      if (first === undefined) {
+        throw this.outside(span, "empty residual Region representation");
+      }
+      const elementType = this.typeForResidualValue(
+        { kind: "static", value: first },
+        span,
+      );
+      return this.regionType(this.storeType(elementType));
+    }
+    if (staticValue.tag === "region-rejoin") return this.type("unit");
     if (staticValue.tag === "shape") {
       const fields = new Map<string, TypeId>();
       for (const [name, field] of staticValue.fields) {
@@ -3056,6 +3498,7 @@ class ResidualHirBuilder {
     type: SimpleType,
     span: Span,
     seen: Set<number>,
+    substitutions: ReadonlyMap<string, TypeId> = new Map(),
   ): TypeId | null {
     if (type.tag === "unit") return this.type("unit");
     if (type.tag === "range") {
@@ -3071,6 +3514,7 @@ class ResidualHirBuilder {
           field,
           span,
           new Set(seen),
+          substitutions,
         );
         if (fieldType === null) return null;
         fields.set(name, fieldType);
@@ -3078,12 +3522,22 @@ class ResidualHirBuilder {
       return this.productTypeFromRuntimeFields(fields);
     }
     if (type.tag === "array") {
-      const elementType = this.typeForSimpleType(type.element, span, seen);
+      const elementType = this.typeForSimpleType(
+        type.element,
+        span,
+        seen,
+        substitutions,
+      );
       if (elementType === null) return null;
       return this.storeType(elementType);
     }
     if (type.tag === "region") {
-      const elementType = this.typeForSimpleType(type.element, span, seen);
+      const elementType = this.typeForSimpleType(
+        type.element,
+        span,
+        seen,
+        substitutions,
+      );
       if (elementType === null) return null;
       return this.regionType(this.storeType(elementType));
     }
@@ -3099,14 +3553,23 @@ class ResidualHirBuilder {
       }
       const payloadTypes: TypeId[] = [];
       for (const payload of type.cases.values()) {
-        const payloadType = this.typeForSimpleType(payload, span, seen);
+        const payloadType = this.typeForSimpleType(
+          payload,
+          span,
+          seen,
+          substitutions,
+        );
         if (payloadType === null) return null;
         payloadTypes.push(payloadType);
       }
       return this.sumType(cases, payloadTypes);
     }
     if (type.tag === "forall") {
-      return this.typeForSimpleType(type.body, span, seen);
+      return this.typeForSimpleType(type.body, span, seen, substitutions);
+    }
+    if (type.tag === "var" || type.tag === "rigid") {
+      const substituted = substitutions.get(this.typeVariableKey(type));
+      if (substituted !== undefined) return substituted;
     }
     if (type.tag === "var") {
       if (seen.has(type.id)) return null;
@@ -3117,6 +3580,7 @@ class ResidualHirBuilder {
           bound,
           span,
           new Set(seen),
+          substitutions,
         );
         if (representation !== null) representations.add(representation);
       }
@@ -3130,6 +3594,7 @@ class ResidualHirBuilder {
           member,
           span,
           new Set(seen),
+          substitutions,
         );
         if (representation !== null) representations.add(representation);
       }
@@ -3141,6 +3606,164 @@ class ResidualHirBuilder {
       if (simd !== undefined) return simd;
     }
     return null;
+  }
+
+  private recordRuntimeTypeSubstitutions(
+    signature: SimpleType | undefined,
+    argument: ResidualValue,
+    substitutions: Map<string, TypeId>,
+    span: Span,
+  ): void {
+    if (signature === undefined) return;
+    let functionType = signature;
+    while (functionType.tag === "forall") functionType = functionType.body;
+    if (functionType.tag !== "fun") return;
+    this.recordRuntimeType(
+      functionType.param,
+      argument,
+      substitutions,
+      span,
+    );
+  }
+
+  private recordRuntimeType(
+    type: SimpleType,
+    value: ResidualValue,
+    substitutions: Map<string, TypeId>,
+    span: Span,
+  ): void {
+    if (type.tag === "forall") {
+      this.recordRuntimeType(type.body, value, substitutions, span);
+      return;
+    }
+    if (type.tag === "var" || type.tag === "rigid") {
+      if (this.valueHasUntypedStore(value)) {
+        if (type.tag === "var") {
+          for (const bound of [...type.lower, ...type.upper]) {
+            this.recordRuntimeType(bound, value, substitutions, span);
+          }
+        }
+        return;
+      }
+      if (
+        value.kind === "closure" || value.kind === "primitive" ||
+        value.kind === "host-operation" || value.kind === "module-argument" ||
+        value.kind === "tail-loop" || value.kind === "direct-function" ||
+        value.kind === "never"
+      ) return;
+      const runtimeType = this.typeForResidualValue(value, span);
+      substitutions.set(this.typeVariableKey(type), runtimeType);
+      return;
+    }
+    if (type.tag === "array") {
+      let storeType: TypeId | undefined;
+      if (value.kind === "dynamic") storeType = value.type;
+      if (value.kind === "array" && value.elementType !== undefined) {
+        storeType = this.storeType(value.elementType);
+      }
+      if (value.kind === "empty-store" && value.elementType !== undefined) {
+        storeType = this.storeType(value.elementType);
+      }
+      if (storeType === undefined) return;
+      const runtimeType = this.types[storeType];
+      if (runtimeType.kind !== "store") return;
+      this.recordRuntimeTypeId(
+        type.element,
+        runtimeType.elementType,
+        substitutions,
+      );
+      return;
+    }
+    if (type.tag !== "record") return;
+    if (value.kind === "tuple") {
+      for (const [name, fieldType] of type.fields) {
+        const index = Number(name);
+        const field = value.elements[index];
+        if (field !== undefined) {
+          this.recordRuntimeType(fieldType, field, substitutions, span);
+        }
+      }
+      return;
+    }
+    if (value.kind === "shape") {
+      for (const [name, fieldType] of type.fields) {
+        const field = value.fields.get(name);
+        if (field !== undefined) {
+          this.recordRuntimeType(fieldType, field, substitutions, span);
+        }
+      }
+      return;
+    }
+    if (value.kind !== "dynamic") return;
+    const runtimeType = this.types[value.type];
+    if (runtimeType.kind !== "product") return;
+    for (const [name, fieldType] of type.fields) {
+      const field = runtimeType.fields.find((candidate) =>
+        candidate.name === name
+      );
+      if (field !== undefined) {
+        this.recordRuntimeTypeId(fieldType, field.type, substitutions);
+      }
+    }
+  }
+
+  private valueHasUntypedStore(value: ResidualValue): boolean {
+    if (value.kind === "empty-store") return value.elementType === undefined;
+    if (value.kind === "array" || value.kind === "tuple") {
+      return value.elements.some((element) =>
+        this.valueHasUntypedStore(element)
+      );
+    }
+    if (value.kind === "shape") {
+      return [...value.fields.values()].some((field) =>
+        this.valueHasUntypedStore(field)
+      );
+    }
+    if (value.kind === "tag") return this.valueHasUntypedStore(value.payload);
+    return false;
+  }
+
+  private recordRuntimeTypeId(
+    type: SimpleType,
+    runtimeType: TypeId,
+    substitutions: Map<string, TypeId>,
+  ): void {
+    if (type.tag === "forall") {
+      this.recordRuntimeTypeId(type.body, runtimeType, substitutions);
+      return;
+    }
+    if (type.tag === "var" || type.tag === "rigid") {
+      substitutions.set(this.typeVariableKey(type), runtimeType);
+      return;
+    }
+    if (type.tag === "array") {
+      const representation = this.types[runtimeType];
+      if (representation.kind === "store") {
+        this.recordRuntimeTypeId(
+          type.element,
+          representation.elementType,
+          substitutions,
+        );
+      }
+      return;
+    }
+    if (type.tag !== "record") return;
+    const representation = this.types[runtimeType];
+    if (representation.kind !== "product") return;
+    for (const [name, fieldType] of type.fields) {
+      const field = representation.fields.find((candidate) =>
+        candidate.name === name
+      );
+      if (field !== undefined) {
+        this.recordRuntimeTypeId(fieldType, field.type, substitutions);
+      }
+    }
+  }
+
+  private typeVariableKey(
+    type: Extract<SimpleType, { readonly tag: "var" | "rigid" }>,
+  ): string {
+    return `${type.tag}:${type.id}`;
   }
 
   private variantCasesForSimpleType(
@@ -3901,12 +4524,17 @@ class ResidualHirBuilder {
     if (value.kind !== "static") return value;
     const known = value.value;
     if (known.tag === "closure" || known.tag === "core-closure") {
+      let signature: SimpleType | undefined;
+      if (known.tag === "closure" && known.source !== undefined) {
+        signature = this.#checked.expressionTypes.get(known.source);
+      }
       return {
         kind: "closure",
         parameter: known.parameter,
         body: known.body,
         environment: this.environment(environment, known.env),
         self: known.self,
+        signature,
       };
     }
     if (known.tag === "array") {
@@ -3955,6 +4583,11 @@ class ResidualHirBuilder {
     expression: Expr,
     span: Span,
   ): ResidualValue {
+    if (value.kind === "closure") {
+      const checked = this.#checked.expressionTypes.get(expression);
+      if (checked !== undefined) return { ...value, signature: checked };
+      return value;
+    }
     if (
       value.kind !== "array" && value.kind !== "empty-store"
     ) return value;
@@ -4189,6 +4822,245 @@ class ResidualHirBuilder {
       span: this.span(span),
     });
     return { kind: "dynamic", value: result, type: store.type };
+  }
+
+  private arrayIndexInBounds(
+    store: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    index: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    span: Span,
+  ): Extract<ResidualValue, { readonly kind: "dynamic" }> {
+    const integer = this.type("signed-integer-64");
+    const zero = this.constant(0n, integer, span);
+    const negative = this.operation(
+      "scalar",
+      this.type("boolean"),
+      [index.value, zero.value],
+      span,
+      undefined,
+      "less-than",
+    );
+    return this.dynamic(this.branchValue(
+      negative,
+      () => this.constant(false, this.type("boolean"), span),
+      () => {
+        const length = this.storeLength(store, span);
+        return this.operation(
+          "scalar",
+          this.type("boolean"),
+          [index.value, length.value],
+          span,
+          undefined,
+          "less-than",
+        );
+      },
+      span,
+    ));
+  }
+
+  private appendStoreRange(
+    sourceStore: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    start: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    end: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    initial: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    span: Span,
+  ): Extract<ResidualValue, { readonly kind: "dynamic" }> {
+    const storeType = this.types[sourceStore.type];
+    if (storeType.kind !== "store" || initial.type !== sourceStore.type) {
+      throw this.outside(span, "Store range copy with mismatched stores");
+    }
+    const source = this.current();
+    const header = this.block();
+    source.terminator = {
+      kind: "branch",
+      target: header.id,
+      arguments: [start.value, initial.value],
+      span: this.span(span),
+    };
+    const cursor = this.nextValue();
+    const output = this.nextValue();
+    header.parameters.push({
+      value: cursor,
+      type: this.type("signed-integer-64"),
+      ownership: "plain",
+      span: this.span(span),
+    }, {
+      value: output,
+      type: sourceStore.type,
+      ownership: "owned",
+      span: this.span(span),
+    });
+    this.#currentBlock = header.id;
+    const hasNext = this.operation(
+      "scalar",
+      this.type("boolean"),
+      [cursor, end.value],
+      span,
+      undefined,
+      "less-than",
+    );
+    const body = this.block();
+    const done = this.block();
+    header.terminator = {
+      kind: "conditional",
+      condition: hasNext.value,
+      consequent: body.id,
+      consequentArguments: [],
+      alternate: done.id,
+      alternateArguments: [output],
+      span: this.span(span),
+    };
+    this.#currentBlock = body.id;
+    const element = this.storeRead(
+      sourceStore,
+      { kind: "dynamic", value: cursor, type: this.type("signed-integer-64") },
+      span,
+    );
+    const outputValue: Extract<ResidualValue, { readonly kind: "dynamic" }> = {
+      kind: "dynamic",
+      value: output,
+      type: sourceStore.type,
+    };
+    const outputLength = this.storeLength(outputValue, span);
+    const one = this.constant(1n, this.type("signed-integer-64"), span);
+    const grownLength = this.operation(
+      "scalar",
+      this.type("signed-integer-64"),
+      [outputLength.value, one.value],
+      span,
+      undefined,
+      "add",
+    );
+    const grown = this.nextValue();
+    this.current().operations.push({
+      kind: "store.grow",
+      result: grown,
+      type: sourceStore.type,
+      operands: [output, grownLength.value, element.value],
+      ownership: "owned",
+      update: "persistent",
+      span: this.span(span),
+    });
+    const next = this.operation(
+      "scalar",
+      this.type("signed-integer-64"),
+      [cursor, one.value],
+      span,
+      undefined,
+      "add",
+    );
+    this.terminate({
+      kind: "branch",
+      target: header.id,
+      arguments: [next.value, grown],
+      span: this.span(span),
+    });
+    this.#currentBlock = done.id;
+    const result = this.nextValue();
+    done.parameters.push({
+      value: result,
+      type: sourceStore.type,
+      ownership: "owned",
+      span: this.span(span),
+    });
+    return { kind: "dynamic", value: result, type: sourceStore.type };
+  }
+
+  private arrayTake(
+    store: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    index: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    span: Span,
+  ): ResidualValue {
+    const inBounds = this.arrayIndexInBounds(store, index, span);
+    return this.branchValue(
+      inBounds,
+      () => {
+        const storeType = this.types[store.type];
+        if (storeType.kind !== "store") {
+          throw this.outside(span, "@array.take over a non-Store");
+        }
+        const selected = this.storeRead(store, index, span);
+        const zero = this.constant(0n, this.type("signed-integer-64"), span);
+        const empty = this.emptyStore(storeType.elementType, span);
+        const before = this.appendStoreRange(store, zero, index, empty, span);
+        const one = this.constant(1n, this.type("signed-integer-64"), span);
+        const afterStart = this.operation(
+          "scalar",
+          this.type("signed-integer-64"),
+          [index.value, one.value],
+          span,
+          undefined,
+          "add",
+        );
+        const length = this.storeLength(store, span);
+        const remainder = this.appendStoreRange(
+          store,
+          afterStart,
+          length,
+          before,
+          span,
+        );
+        return {
+          kind: "tag",
+          name: "Taken",
+          payload: { kind: "tuple", elements: [selected, remainder] },
+        };
+      },
+      () => ({ kind: "tag", name: "TakeOutOfBounds", payload: store }),
+      span,
+    );
+  }
+
+  private arraySplit(
+    store: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    index: Extract<ResidualValue, { readonly kind: "dynamic" }>,
+    span: Span,
+  ): ResidualValue {
+    const inBounds = this.arrayIndexInBounds(store, index, span);
+    return this.branchValue(
+      inBounds,
+      () => {
+        const storeType = this.types[store.type];
+        if (storeType.kind !== "store") {
+          throw this.outside(span, "@array.split over a non-Store");
+        }
+        const selected = this.storeRead(store, index, span);
+        const zero = this.constant(0n, this.type("signed-integer-64"), span);
+        const before = this.appendStoreRange(
+          store,
+          zero,
+          index,
+          this.emptyStore(storeType.elementType, span),
+          span,
+        );
+        const one = this.constant(1n, this.type("signed-integer-64"), span);
+        const afterStart = this.operation(
+          "scalar",
+          this.type("signed-integer-64"),
+          [index.value, one.value],
+          span,
+          undefined,
+          "add",
+        );
+        const length = this.storeLength(store, span);
+        const after = this.appendStoreRange(
+          store,
+          afterStart,
+          length,
+          this.emptyStore(storeType.elementType, span),
+          span,
+        );
+        return {
+          kind: "tag",
+          name: "Split",
+          payload: {
+            kind: "tuple",
+            elements: [before, selected, after],
+          },
+        };
+      },
+      () => ({ kind: "tag", name: "SplitOutOfBounds", payload: store }),
+      span,
+    );
   }
 
   private branchValue(
@@ -4716,7 +5588,13 @@ class ResidualHirBuilder {
     parent: ResidualEnvironment | null,
     staticParent: StaticEnv | null,
   ): ResidualEnvironment {
-    return { names: new Map(), parent, staticParent };
+    const typeSubstitutions = new Map<string, TypeId>();
+    if (parent !== null) {
+      for (const [name, type] of parent.typeSubstitutions) {
+        typeSubstitutions.set(name, type);
+      }
+    }
+    return { names: new Map(), parent, staticParent, typeSubstitutions };
   }
 
   private bindModuleParameter(environment: ResidualEnvironment): void {
@@ -4771,6 +5649,12 @@ class ResidualHirBuilder {
     };
     this.#blocks.push(block);
     return block;
+  }
+
+  private reserveFunction(): number {
+    const functionId = this.functions.length;
+    this.functions.push(undefined as unknown as BlotRuntimeFunction);
+    return functionId;
   }
 
   private current(): MutableBlock {
