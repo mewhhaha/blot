@@ -356,8 +356,8 @@ may shadow an existing binding. A block, lambda, conditional branch, and case
 arm introduces a nested scope.
 
 A declaration sees the declarations above it and not the ones below it. The one
-exception is a recursive group (section 6.5): a run of adjacent `rec` bindings,
-whose names are all in scope in all of their bodies.
+exception is a recursive group (section 6.5): a run of adjacent `let rec` or
+`const rec` bindings, whose names are all in scope in all of their bodies.
 
 A name that is read before the block binds it is a scope error,
 `BLOT_FORWARD_REFERENCE`, reported at the read. It is distinct from an unbound
@@ -395,6 +395,9 @@ dedent visible.
 let pattern = value
 const pattern = value
 
+let rec name = fn parameter => body
+const rec name = fn parameter => body
+
 let descriptive_pattern =
   value
 ```
@@ -412,6 +415,11 @@ and binds the pattern's names.
 `const` evaluates its value at compile time even when the surrounding program is
 running. A `const` must be computable without runtime input. Compile-time
 closures may later be specialized into runtime code when called.
+
+`rec` is a binding modifier, not an expression operator. It appears immediately
+after `let` or `const`, and the binding must name exactly one function. The old
+expression-shaped spelling `let name = rec (fn ... )` is not accepted. Section
+6.5 defines recursive groups and their lowering.
 
 A `const` takes its type from the value it evaluated to, not from the expression
 that produced it. When that value is a function, its type is the type of the
@@ -524,9 +532,9 @@ phase and contributes its ordinary effects; a `const` transform runs at compile
 time. Tags are not admitted on `sig` because a signature binds no value.
 
 Tags lower to ordinary descriptor bindings, function application, and a block. A
-tagged `rec` is first bound directly under its source name inside that block,
-then transformed, so recursion gains no second evaluator, typing, ownership, or
-backend rule.
+tagged `let rec` or `const rec` is first bound directly under its source name
+inside that block, then transformed, so recursion gains no second evaluator,
+typing, ownership, or backend rule.
 
 Resolved tag names and metadata are available to compiler tools but are not part
 of the runtime value or the Wasm ABI. `blot test` selects the semantic name
@@ -983,45 +991,50 @@ where its result is short.
 
 ### 6.5 Recursion
 
-`rec` is a prefix form that is valid only as the value of a binding to one name:
+`rec` marks a `let` or `const` binding whose single name is visible inside its
+function body:
 
 ```blot
-const factorial = rec (fn n => if n < 2:
+const rec factorial = fn n => if n < 2:
   return 1
 else:
   return n * factorial (n - 1)
-)
 ```
 
-The bound name is visible inside the lambda body. `rec` applied outside such a
-binding, applied to a non-lambda, or bound through a compound pattern is an
-error.
+The modifier is syntactically unavailable outside a binding. A recursive
+binding of a non-lambda or through a compound pattern is an error. Making
+recursion a binding property reflects its scope: the name is introduced early;
+the anonymous function is otherwise an ordinary lambda value.
 
-A run of adjacent `rec` bindings of the same kind is one **recursive group**,
-and every name the run binds is in scope in every member's body:
+The former `name = rec (fn ... )` spelling is a hard syntax error. There is no
+compatibility alias and the formatter does not rewrite legacy source, so a
+parser success always identifies recursive declarations from their binding
+header.
+
+A run of adjacent `let rec` or `const rec` bindings of the same kind is one
+**recursive group**, and every name the run binds is in scope in every member's
+body:
 
 ```blot
-let is_even = rec (fn n => if n == 0:
+let rec is_even = fn n => if n == 0:
   return True
 else:
   return is_odd (n - 1)
-)
-let is_odd = rec (fn n => if n == 0:
+let rec is_odd = fn n => if n == 0:
   return False
 else:
   return is_even (n - 1)
-)
 ```
 
 A group of one is ordinary self-recursion, so this states the existing rule for
 a run rather than adding a second rule beside it. Membership is adjacency, not
-participation: a `rec` binding that calls nobody is still a member of the run it
-sits in.
+participation: a binding marked `rec` that calls nobody is still a member of the
+run it sits in.
 
-A run ends at any declaration that is not a `rec` binding of a lambda to one
-name, and at a change of kind. A `let` run and a `const` run are therefore
-separate groups, because a `const` may not capture a `let` (section 4.1) and the
-members of a group are bound together.
+A run ends at any declaration that is not a `let rec` or `const rec` binding of
+a lambda to one name, and at a change of kind. A `let rec` run and a `const rec`
+run are therefore separate groups, because a `const` may not capture a `let`
+(section 4.1) and the members of a group are bound together.
 
 A `sig` neither joins a run nor ends one. A signature must be immediately
 followed by the binding it constrains, so a `sig` written inside a run is one
@@ -1035,8 +1048,8 @@ The names entering scope together fixes the rest of the rule:
 
 - A member must be a function. Every name in the group is in scope from the
   first member onward, but none holds a value until all of them are bound. A
-  function body can wait for that and a value cannot, so `rec` applied to a
-  non-lambda is refused.
+  function body can wait for that and a value cannot, so a recursive non-lambda
+  binding is refused.
 - A name may not be bound twice in one group. A repeated `let` shadows an
   earlier binding, and in a group there is no earlier one to shadow. Another
   declaration between the two ends the group and restores ordinary shadowing.
@@ -1532,9 +1545,9 @@ the branch failing to cover a set the condition would have shrunk.
   `Ord.max` are refused, as is any equality written with two comparisons rather
   than one. Refusal here is a limitation, not a judgement: the function is fine,
   the checker just cannot say what it computes.
-- **A body containing `open` or `rec`.** Both bind names that appear in no node
-  of the body, so the occurrence count that licenses the whole argument cannot
-  see them.
+- **A body containing `open` or a recursive binding.** Both bind names that
+  appear in no node of the body, so the occurrence count that licenses the whole
+  argument cannot see them.
 - **Text.** A text range cannot have a value cut out of its interior: range
   bounds are inclusive and text order is dense, so splitting `Str` at `"m"`
   would give `.."m" | "m"..` and readmit the value it was asked to remove.
@@ -1924,11 +1937,10 @@ the next invocation; a base branch must consume a linear capture exactly once
 under the ordinary branch rules:
 
 ```blot
-let go = rec (fn n => if n < 1:
+let rec go = fn n => if n < 1:
   return consume (!token)
 else:
   return go (n - 1)
-)
 return go 3
 ```
 

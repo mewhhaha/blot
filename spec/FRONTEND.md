@@ -126,6 +126,28 @@ pattern. During that reclassification, `^name` becomes a pinned pattern before
 ordinary operator fixity is folded; this contextual interpretation does not
 change the token identity or introduce a second parser path.
 
+Recursion is declared in a binding header:
+
+```text
+let rec f = fn p => body
+        |
+        +-- elaborates to Binding(f, Rec(Lambda(p, body)))
+```
+
+The modifier is admitted only after `let` or `const`; `rec` is not an expression
+prefix. Consequently `f = rec (fn p => body)` fails parsing rather than reaching
+elaboration. The translation deliberately retains the existing `Rec` AST so
+scope construction, recursive-group typing, ownership transfer, evaluation,
+specialization, and Runtime HIR receive the same representation as before. A
+surface binding modifier therefore does not add a downstream declaration kind
+or runtime operation.
+
+Adjacent recursive bindings of one declaration kind elaborate to adjacent
+bindings whose values have `Rec` roots. Group discovery remains an AST property
+and signatures neither join nor interrupt a group. A declaration tag wraps the
+already-recursive raw binding before applying its transforms, preserving the
+existing rule that the transformed outer binding is not itself a group member.
+
 Write `surface(s) ⇓ a` for elaboration and `~` for observational equivalence in
 the source semantics. Every translation has the obligation
 
