@@ -924,3 +924,87 @@ obligation exactly once.
   a second copy.
 - `freeze` is `O(1)` for a complete root because it exposes the private Store as
   an immutable array; it performs no element walk.
+
+## 15. Pure consuming transforms over one Store
+
+`Slice` is the source-level way to request destructive implementation without
+making mutation observable. A transforming operation consumes the only
+authority for an interval and returns its successor:
+
+```text
+transform : (!Slice A, arguments...) -> Slice A
+```
+
+The old slice is unavailable after the call. Reads through aliases are
+impossible because `claim` established a private Store root, and writes through
+other authorities are impossible because the region proof requires their
+intervals to be disjoint. The compiler may therefore update the Store in place,
+while the source meaning remains the persistent equation:
+
+```text
+freeze(transform(claim(xs), args))
+  == persistent_transform(xs, args)
+```
+
+Allocation identity is absent from the language, so copying and verified reuse
+are observationally equivalent implementations of that equation. This is the
+same principle already used by `Slice.set`, `Slice.replace`, and `Slice.swap`;
+it is not a separate effect system or a mutable-reference escape hatch.
+
+### 15.1 In-place partition
+
+Classification is the first higher-level consuming transform:
+
+```text
+Slice.partition (!slice, belongs_left)
+  -> (!slice, boundary)
+
+Slice.partition_range (!slice, start, end, belongs_left)
+  -> #Partitioned (!slice, boundary)
+   | #PartitionOutOfBounds (!slice, start)
+```
+
+For a successful range partition over `[start,end)`, the returned boundary
+`mid` satisfies:
+
+```text
+start <= mid <= end
+forall i in [start,mid): belongs_left(result[i]) == #True
+forall i in [mid,end):   belongs_left(result[i]) == #False
+multiset(result[start:end]) == multiset(input[start:end])
+result[0:start] == input[0:start]
+result[end:n] == input[end:n]
+```
+
+The predicate is evaluated exactly once per element. The first implementation
+uses swaps, is deliberately unstable, takes `O(end-start)` time, and needs
+`O(1)` element storage. It allocates no element Store after `claim`; the same
+private Store and interval authority flow into the result. `Slice.partition` is
+the total whole-interval specialization and therefore needs no failure variant.
+
+`partition_range` validates `0 <= start <= end <= length` before the first
+predicate call or swap. Failure returns the unchanged authority and the supplied
+start boundary. Both constructors carry the same `(authority, boundary)` shape,
+so conservation is structural across the result. A total consuming operation
+may never lose its unique input on the failure path. The whole-slice form
+constructs its own valid range and therefore needs no result variant.
+
+The operation is derived in ordinary prelude source from `length`, `get`, and
+`swap`; no new intrinsic or compiler privilege is introduced. Its element read
+means this first form applies to copyable elements. A future variant for owned
+elements must make the predicate's borrow and every element movement explicit
+rather than copying an obligation out of the Store.
+
+### 15.2 Relation to array monoids and split witnesses
+
+`Array.partition` remains the stable, persistent value operation. It creates two
+independent arrays, and `left <> right` is ordinary monoid append. Neither
+operation carries uniqueness or sibling provenance, so neither licenses
+destructive reuse.
+
+`Slice.partition` instead rearranges one authority and returns an integer
+boundary. Callers that need independently recursive pieces may split at that
+boundary and later join the exact siblings with the returned rejoin witness.
+The boundary classifies positions; the witness proves ownership. Keeping those
+roles separate prevents a general `<>` from becoming a hidden, unsound memory
+operation.

@@ -1994,6 +1994,11 @@ only its `@region.*` bodies are primitive:
 - `Slice.length (&slice)` and `Slice.get ((&slice), index)` borrow authority;
 - `Slice.set ((!slice), index, value)` and `Slice.swap ((!slice), left, right)`
   consume and return the same authority;
+- `Slice.partition ((!slice), belongs_left)` consumes one authority, classifies
+  its complete interval in place, and returns `(!slice, boundary)`;
+- `Slice.partition_range ((!slice), start, end, belongs_left)` does the same for
+  a checked subrange and returns either `#Partitioned (!slice, boundary)` or
+  `#PartitionOutOfBounds (!slice, start)`;
 - `Slice.replace ((!slice), index, (!value))` consumes both inputs and returns
   either `#Replaced (!old, !slice)` or `#ReplaceOutOfBounds (!value, !slice)`,
   so replacement never drops an owned element;
@@ -2038,6 +2043,21 @@ Replacement is constant-time: one bounds check, one Store read, and one Store
 write. Split and join copy no elements. Witness reassociation is erased and
 emits no runtime operation. Claim is constant-time only when Store reuse is
 certified; its persistent fallback remains linear in the input length.
+
+Partition is a pure consuming update. A successful partition preserves the
+multiset of elements in the selected interval, places every predicate-true
+element before the returned boundary and every predicate-false element after
+it, and leaves positions outside the selected interval unchanged. The predicate
+is called once per selected element. The operation is unstable, linear in the
+selected length, uses constant auxiliary element storage, and allocates no
+element Store. Range validation precedes predicate evaluation; an invalid range
+returns the unchanged authority and supplied start boundary. The whole-slice
+form cannot be out of bounds.
+
+These source operations are ordinary prelude compositions of `length`, `get`,
+and `swap`. They introduce no intrinsic and no observable mutation. Their
+meaning is the persistent result of the same permutation; Store reuse is an
+implementation permission justified by the consumed authority.
 
 ### 11.4 Owned ordered text maps
 
