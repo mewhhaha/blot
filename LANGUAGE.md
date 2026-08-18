@@ -2463,7 +2463,10 @@ preserving every element. `take` returns `#Taken (value, remainder)` or
 `#TakeOutOfBounds xs`. `split` returns `#Split (before, value, after)` or
 `#SplitOutOfBounds xs`. The successful arrays preserve source order; either
 failure returns the original array. These are the extraction operations for an
-array whose elements carry ownership obligations.
+array whose elements carry ownership obligations. Their meaning is identical
+for staged and runtime arrays: making the array or index host-dynamic changes
+when decomposition runs, not which programs the compiler accepts or which
+result it produces.
 
 `Array.uncons xs` is the index-free decomposition used by structural array
 algorithms. It consumes `xs` and returns `#None` exactly when it is empty;

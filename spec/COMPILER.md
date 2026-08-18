@@ -512,9 +512,13 @@ and instantiated through the standard `WebAssembly` API.
 Residual structured values use the settled checked boundary type, not only the
 constructor or element observed during staging. This keeps empty Store values,
 closed variants, records, and sealed values layout-stable. A staged self-tail
-call may become an explicit Runtime-HIR loop back-edge; a non-tail or escaping
-closure still requires the ordinary closure representation. Canonical adapters
-currently admit direct scalar results and the existing structured ABI policy.
+call may become an explicit Runtime-HIR loop back-edge; a settled first-order
+non-tail recursive binding becomes a Runtime-HIR function and `call.direct`.
+An escaping closure still requires the ordinary closure representation.
+Dynamic `@array.take` and `@array.split` residualize through the same Store and
+control-flow vocabulary as prelude folds; they do not add collection-specific
+target operations. Canonical adapters currently admit direct scalar results and
+the existing structured ABI policy.
 Unsupported target policy is a `TargetRefusal`; a failure after validated
 Runtime HIR is an `InvariantFailure`. Neither is a source diagnostic, and
 neither receives a fabricated source span.

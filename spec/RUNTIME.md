@@ -103,6 +103,10 @@ function signature and to every direct call. Function identity includes the
 argument representation, capture representations, and specialized source
 signature. A recursive body is residualized when either its argument or one of
 those captures is dynamic; wholly static recursion may still be evaluated.
+Tail position is not an admission requirement. It permits the later back-edge
+rewrite, while a non-tail self-call remains `call.direct`. Development and
+production lowering must agree on the specialized argument, result, capture,
+and effect representations before either form reaches Runtime-HIR validation.
 
 A dynamic branch whose arms produce functions has no single closure to convert,
 so the join defunctionalizes them. Every reachable arm normalizes to one
@@ -139,6 +143,25 @@ Staged non-empty arrays become ordinary Store construction. Store memory uses
 the canonical scalar layout internally as well as at adapters, so reads and
 writes preserve `i64`, `f32`, and `f64` element representations rather than
 reinterpreting an unconstrained element as `Unit`.
+
+Persistent array decomposition is a residual operation, not a staging-only
+convenience. When the array or index is dynamic, `@array.take` and
+`@array.split` lower to ordinary Runtime-HIR control flow over `store.length`,
+`store.read`, `store.empty`, and persistent `store.grow`. The failure edge
+returns the original Store. The success edge reads the selected element once
+and copies every retained element once, in source order, into one remainder
+Store for `take` or the two contiguous result Stores for `split`. The source
+ownership certificate has already partitioned element obligations; Runtime HIR
+preserves that result shape but carries no second ownership calculus.
+
+No `uncons`, partition, or quicksort operation is admitted at this boundary.
+`Array.uncons` remains the index-zero prelude view over `@array.take`, and
+`Array.partition` remains an ordinary fold. Type-directed residualization must
+therefore retain the settled element representation of polymorphic empty Stores
+and closed constructor joins even when their first runtime inhabitant is
+produced only inside a recursive call. A well-typed first-order collection
+program may not be made compilable by replacing its dynamic input with a staged
+constant.
 
 A residual Region is one compiler-private product of a Store, inclusive start,
 and exclusive end. `claim` reuses only a fresh Store whose binding ownership
@@ -214,6 +237,15 @@ parameters unchanged. Predecessors then target the forwarded block directly,
 preserving arguments, branch choice, effects, traps, and source evaluation
 order. This administrative simplification does not authorize folding a source
 computation or discarding an ownership edge.
+
+The executable acceptance boundary for persistent decomposition includes:
+
+- host-dynamic successful and failing `Array.take` and `Array.split` calls;
+- a host-dynamic `Array.uncons` / `Array.partition` / `<>` quicksort whose full
+  output agrees in the evaluator and emitted Wasm;
+- Runtime-HIR inspection proving the sort remains ordinary Store/control-flow
+  code rather than a collection-specific operation; and
+- Node development and Rust production acceptance parity for the same source.
 
 ## 6. Runtime theorem obligations
 
