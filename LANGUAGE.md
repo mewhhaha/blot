@@ -2027,6 +2027,51 @@ write. Split and join copy no elements. Witness reassociation is erased and
 emits no runtime operation. Claim is constant-time only when Store reuse is
 certified; its persistent fallback remains linear in the input length.
 
+### 11.4 Owned ordered text maps
+
+`OrderedTextMap` is an ordinary prelude adapter over `Slice`, not a second
+compiler primitive family. `OrderedTextMap.entry V` is an attached structural
+type stored as the tuple `(Str, V)`; `OrderedTextMap.of V` is the region type
+whose elements have that entry type.
+
+An input is valid when every adjacent key pair is strictly increasing under
+`Text.cmp`. This implies unique keys and makes every physical Slice interval a
+contiguous key range. `OrderedTextMap.validate (&entries)` checks the invariant
+without acquiring authority. `OrderedTextMap.claim entries` performs the same
+check, traps with `BLOT_PANIC` when it fails, and otherwise acquires the full
+region. The input parameter is persistent, so shared inputs retain Slice's
+copy-safe acquisition semantics.
+
+The public operations are:
+
+- `length (&map)` borrows and returns the entry count;
+- `lower_bound ((&map), key)` returns the first relative position whose key is
+  greater than or equal to `key`;
+- `get ((&map), key)` performs binary search and returns an `Option`;
+- `replace ((!map), key, value)` returns either `#MapReplaced (previous, !map)`
+  or `#MapMissing (value, !map)`;
+- `split_before ((!map), key)` lower-bounds the key and delegates to
+  `Slice.split`, returning its `#Split` or `#SplitOutOfBounds` result;
+- `join`, `reassociate_left`, and `reassociate_right` preserve the exact Slice
+  witness rules; and
+- `freeze !map` requires a complete root and returns the ordered entry array.
+
+No operation inserts, removes, reorders, or replaces a key. Successful
+replacement writes the stored entry key together with the new value, preserving
+strict ordering. Values carrying affine or linear obligations are not admitted
+by this first adapter: validation and binary search must inspect an entry to
+read its key, and a borrowed entry read cannot copy an owned value.
+
+The public type is structural. Passing an independently claimed, unsorted
+`Slice` of the same entry type to these functions deliberately violates their
+sorted-input precondition; it does not create or enlarge region authority.
+`claim` is the checked construction path.
+
+Validation is linear. Lookup, replacement focus, and `split_before` use
+logarithmic binary search; replacement then performs one constant-time owned
+Store write. Split, join, witness reassociation, and freeze add no element Store
+copy after acquisition.
+
 ## 12. Effects and handlers
 
 An effect is a compile-time value built from a shape of operation types:
@@ -2370,6 +2415,8 @@ Starting from `empty`, these operations keep keys unique. A manually built
 association array with duplicate keys has defined first-match behavior; `put` or
 `remove` affects only that visible entry. `Dict` is `Map.with` text equality, so
 `Dict.of V` remains the concise type constructor for `(Str, V)` maps.
+`OrderedTextMap` is the distinct owned, strictly ordered API described in §11.4;
+it does not change `Map` or `Dict` representation or iteration order.
 
 #### Safe indexed access
 

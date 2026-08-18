@@ -1623,13 +1623,14 @@ function walk(
               },
             ];
           }
-          // The witness is the recombination proof as a value: it records
-          // which two part authorities rejoin into which parent.
+          // The witness is element-free: it records only which two interval
+          // authorities rejoin into which parent. Live element obligations
+          // remain on the returned Regions.
           const witness: Produced = {
             tag: "region-witness",
-            left: parts[0],
-            right: parts[1],
-            parent: region,
+            left: authorityParts[0],
+            right: authorityParts[1],
+            parent: authority,
           };
           return {
             tag: "choice",
@@ -2266,12 +2267,14 @@ function joinRegionAuthorities(
   analysis: Analysis,
 ): Produced {
   if (witness.tag === "region-witness") {
+    const leftAuthority = regionAuthority(left);
+    const rightAuthority = regionAuthority(right);
     const combined = combinePartition(
       REGION_PARTITIONS,
       ARRAY_INTERVAL_FAMILY,
       regionPartitionWitness(witness),
-      left,
-      right,
+      leftAuthority,
+      rightAuthority,
     );
     if (!combined.ok) {
       analysis.report(
@@ -2280,6 +2283,13 @@ function joinRegionAuthorities(
         span,
       );
       return NONE;
+    }
+    if (left.tag === "region" && right.tag === "region") {
+      return {
+        tag: "region",
+        authority: combined.value,
+        elements: combineRegionElements(left.elements, right.elements),
+      };
     }
     return combined.value;
   }
@@ -2396,7 +2406,22 @@ function combineAdjacentRegions(left: Produced, right: Produced): Produced {
     return {
       tag: "region",
       authority: combine(left.authority, right.authority),
-      elements: combine(left.elements, right.elements),
+      elements: combineRegionElements(left.elements, right.elements),
+    };
+  }
+  return combine(left, right);
+}
+
+function regionAuthority(produced: Produced): Produced {
+  if (produced.tag === "region") return produced.authority;
+  return produced;
+}
+
+function combineRegionElements(left: Produced, right: Produced): Produced {
+  if (left.tag === "sequence" && right.tag === "sequence") {
+    return {
+      tag: "sequence",
+      elements: [...left.elements, ...right.elements],
     };
   }
   return combine(left, right);

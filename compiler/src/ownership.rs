@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
@@ -44,9 +44,10 @@ pub(crate) enum Produced {
         splits: Vec<(Span, u8)>,
         elements: Box<Produced>,
     },
-    /// The recombination witness a split mints: which two part authorities
-    /// rejoin into which parent. Pairing is by produced-value identity, so the
-    /// proof travels through bindings and calls like any linear value.
+    /// The element-free recombination witness a split mints: which two
+    /// interval authorities rejoin into which parent. It travels through
+    /// bindings and calls like any linear value while current element
+    /// obligations stay on the Regions.
     RegionWitness {
         left: Box<Produced>,
         right: Box<Produced>,
@@ -921,7 +922,7 @@ fn walk(
                 outcomes.push(snapshot(scope));
             }
             agree(&outcomes, &before, span, analysis);
-            join(produced)
+            join_alternatives(produced)
         }
         Expression::Case { target, arms, span } => {
             let target = walk(target, scope, analysis, Use::Project);
@@ -945,7 +946,7 @@ fn walk(
                 outcomes.push(snapshot(scope));
             }
             agree(&outcomes, &before, span, analysis);
-            join(produced)
+            join_alternatives(produced)
         }
         Expression::Block {
             declarations,
@@ -1239,11 +1240,13 @@ fn walk_apply(
                 elements: Box::new(right_elements),
             };
             // The witness is the recombination proof as a value: it records
-            // which two part authorities rejoin into which parent.
+            // which two element-free part authorities rejoin into which
+            // element-free parent. Live element obligations travel with the
+            // regions and are recombined when the witness is consumed.
             let witness = Produced::RegionWitness {
-                left: Box::new(left.clone()),
-                right: Box::new(right.clone()),
-                parent: Box::new(region.clone()),
+                left: Box::new(region_proof_part(&left).expect("split produced a left Region")),
+                right: Box::new(region_proof_part(&right).expect("split produced a right Region")),
+                parent: Box::new(region_proof_part(&region).expect("split consumed a Region")),
             };
             return Produced::Choice(BTreeMap::from([
                 (
@@ -1579,17 +1582,12 @@ fn substitute_parameter_source(
             splits,
             elements,
         } => {
-            let element_passthrough = matches!(
-                elements.as_ref(),
-                Produced::Parameter { source: found, .. } if *found == source
-            );
-            let substituted_elements = substitute_parameter_source(*elements, source, argument);
             if root != Some(source) {
                 return Produced::Region {
                     qualifier,
                     root,
                     splits,
-                    elements: Box::new(substituted_elements),
+                    elements: Box::new(substitute_parameter_source(*elements, source, argument)),
                 };
             }
             match argument {
@@ -1601,11 +1599,11 @@ fn substitute_parameter_source(
                 } => {
                     let mut composed = argument_splits.clone();
                     composed.extend(splits);
-                    let transferred_elements = if element_passthrough {
-                        argument_elements.clone()
-                    } else {
-                        Box::new(substituted_elements)
-                    };
+                    let transferred_elements = Box::new(substitute_element_source(
+                        *elements,
+                        source,
+                        argument_elements,
+                    ));
                     Produced::Region {
                         qualifier,
                         root: *argument_root,
@@ -1620,16 +1618,172 @@ fn substitute_parameter_source(
                     qualifier,
                     root: Some(*argument_source),
                     splits,
-                    elements: Box::new(substituted_elements),
+                    elements: Box::new(substitute_parameter_source(*elements, source, argument)),
                 },
                 _ => Produced::Region {
                     qualifier,
                     root,
                     splits,
-                    elements: Box::new(substituted_elements),
+                    elements: Box::new(substitute_parameter_source(*elements, source, argument)),
                 },
             }
         }
+    }
+}
+
+fn substitute_element_source(
+    produced: Produced,
+    source: PatternId,
+    argument_elements: &Produced,
+) -> Produced {
+    match produced {
+        Produced::None => Produced::None,
+        Produced::Borrow(value) => Produced::Borrow(Box::new(substitute_element_source(
+            *value,
+            source,
+            argument_elements,
+        ))),
+        Produced::Leaf(qualifier) => Produced::Leaf(qualifier),
+        Produced::Parameter {
+            qualifier,
+            source: found,
+        } => {
+            if found == source {
+                argument_elements.clone()
+            } else {
+                Produced::Parameter {
+                    qualifier,
+                    source: found,
+                }
+            }
+        }
+        Produced::Closure {
+            captures,
+            parameter,
+            result,
+        } => Produced::Closure {
+            captures: Box::new(substitute_element_source(
+                *captures,
+                source,
+                argument_elements,
+            )),
+            parameter,
+            result: Box::new(substitute_element_source(
+                *result,
+                source,
+                argument_elements,
+            )),
+        },
+        Produced::Many(values) => join(
+            values
+                .into_iter()
+                .map(|value| substitute_element_source(value, source, argument_elements)),
+        ),
+        Produced::Sequence(values) => Produced::Sequence(
+            values
+                .into_iter()
+                .map(|value| substitute_element_source(value, source, argument_elements))
+                .collect(),
+        ),
+        Produced::Shape(fields) => Produced::Shape(
+            fields
+                .into_iter()
+                .map(|(name, value)| {
+                    (
+                        name,
+                        substitute_element_source(value, source, argument_elements),
+                    )
+                })
+                .collect(),
+        ),
+        Produced::Variant(payload) => Produced::Variant(Box::new(substitute_element_source(
+            *payload,
+            source,
+            argument_elements,
+        ))),
+        Produced::Choice(cases) => Produced::Choice(
+            cases
+                .into_iter()
+                .map(|(name, value)| {
+                    (
+                        name,
+                        substitute_element_source(value, source, argument_elements),
+                    )
+                })
+                .collect(),
+        ),
+        Produced::Region {
+            qualifier: _,
+            root: Some(found),
+            splits,
+            ..
+        } if found == source => {
+            let mut selected = argument_elements.clone();
+            for (span, part) in splits {
+                let (left, right) = ownership_parts(&selected, span);
+                selected = if part == 0 { left } else { right };
+            }
+            selected
+        }
+        Produced::Region {
+            qualifier,
+            root,
+            splits,
+            elements,
+        } => Produced::Region {
+            qualifier,
+            root,
+            splits,
+            elements: Box::new(substitute_element_source(
+                *elements,
+                source,
+                argument_elements,
+            )),
+        },
+        Produced::RegionWitness {
+            left,
+            right,
+            parent,
+        } => Produced::RegionWitness {
+            left: Box::new(substitute_element_source(*left, source, argument_elements)),
+            right: Box::new(substitute_element_source(*right, source, argument_elements)),
+            parent: Box::new(substitute_element_source(
+                *parent,
+                source,
+                argument_elements,
+            )),
+        },
+        Produced::PendingJoin {
+            witness,
+            left,
+            right,
+        } => Produced::PendingJoin {
+            witness: Box::new(substitute_element_source(
+                *witness,
+                source,
+                argument_elements,
+            )),
+            left: Box::new(substitute_element_source(*left, source, argument_elements)),
+            right: Box::new(substitute_element_source(*right, source, argument_elements)),
+        },
+        Produced::PendingFreeze { region } => Produced::PendingFreeze {
+            region: Box::new(substitute_element_source(
+                *region,
+                source,
+                argument_elements,
+            )),
+        },
+        Produced::PendingReassociate {
+            direction,
+            part,
+            outer,
+            inner,
+        } => Produced::PendingReassociate {
+            direction,
+            part,
+            outer: Box::new(substitute_element_source(*outer, source, argument_elements)),
+            inner: Box::new(substitute_element_source(*inner, source, argument_elements)),
+        },
     }
 }
 
@@ -1986,17 +2140,166 @@ fn join(values: impl IntoIterator<Item = Produced>) -> Produced {
     values.into_iter().fold(Produced::None, combine)
 }
 
+fn join_alternatives(values: Vec<Produced>) -> Produced {
+    if values.is_empty() || values.iter().all(|value| *value == Produced::None) {
+        return Produced::None;
+    }
+    let first = values[0].clone();
+    if values.iter().all(|value| value == &first) {
+        return first;
+    }
+    if values
+        .iter()
+        .all(|value| matches!(value, Produced::Sequence(_)))
+    {
+        let length = match &values[0] {
+            Produced::Sequence(elements) => elements.len(),
+            _ => unreachable!(),
+        };
+        if values
+            .iter()
+            .all(|value| matches!(value, Produced::Sequence(elements) if elements.len() == length))
+        {
+            return Produced::Sequence(
+                (0..length)
+                    .map(|index| {
+                        join_alternatives(
+                            values
+                                .iter()
+                                .map(|value| match value {
+                                    Produced::Sequence(elements) => elements[index].clone(),
+                                    _ => unreachable!(),
+                                })
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+            );
+        }
+    }
+    if values
+        .iter()
+        .all(|value| matches!(value, Produced::Shape(_)))
+    {
+        let names = match &values[0] {
+            Produced::Shape(fields) => fields.keys().cloned().collect::<Vec<_>>(),
+            _ => unreachable!(),
+        };
+        if values.iter().all(|value| {
+            matches!(value, Produced::Shape(fields)
+                if fields.len() == names.len()
+                    && names.iter().all(|name| fields.contains_key(name)))
+        }) {
+            return Produced::Shape(
+                names
+                    .into_iter()
+                    .map(|name| {
+                        let alternatives = values
+                            .iter()
+                            .map(|value| match value {
+                                Produced::Shape(fields) => fields[&name].clone(),
+                                _ => unreachable!(),
+                            })
+                            .collect();
+                        (name, join_alternatives(alternatives))
+                    })
+                    .collect(),
+            );
+        }
+    }
+    if values
+        .iter()
+        .all(|value| matches!(value, Produced::Region { .. }))
+    {
+        let authority = region_proof_part(&values[0]);
+        if authority.is_some()
+            && values
+                .iter()
+                .all(|value| region_proof_part(value) == authority)
+        {
+            let Produced::Region {
+                qualifier,
+                root,
+                splits,
+                ..
+            } = &values[0]
+            else {
+                unreachable!();
+            };
+            let elements = values
+                .iter()
+                .map(|value| match value {
+                    Produced::Region { elements, .. } => (**elements).clone(),
+                    _ => unreachable!(),
+                })
+                .collect();
+            return Produced::Region {
+                qualifier: *qualifier,
+                root: *root,
+                splits: splits.clone(),
+                elements: Box::new(join_alternatives(elements)),
+            };
+        }
+    }
+    if values
+        .iter()
+        .all(|value| matches!(value, Produced::Variant(_)))
+    {
+        return Produced::Variant(Box::new(join_alternatives(
+            values
+                .into_iter()
+                .map(|value| match value {
+                    Produced::Variant(payload) => *payload,
+                    _ => unreachable!(),
+                })
+                .collect(),
+        )));
+    }
+    if values
+        .iter()
+        .all(|value| matches!(value, Produced::Choice(_)))
+    {
+        let names = values
+            .iter()
+            .flat_map(|value| match value {
+                Produced::Choice(cases) => cases.keys().cloned().collect::<Vec<_>>(),
+                _ => unreachable!(),
+            })
+            .collect::<BTreeSet<_>>();
+        return Produced::Choice(
+            names
+                .into_iter()
+                .map(|name| {
+                    let alternatives = values
+                        .iter()
+                        .filter_map(|value| match value {
+                            Produced::Choice(cases) => cases.get(&name).cloned(),
+                            _ => unreachable!(),
+                        })
+                        .collect();
+                    (name, join_alternatives(alternatives))
+                })
+                .collect(),
+        );
+    }
+    join(values)
+}
+
 fn ownership_parts(source: &Produced, span: Span) -> (Produced, Produced) {
     let qualifier = match obligation(source) {
         Obligation::Linear => Qualifier::Linear,
         Obligation::Affine => Qualifier::Affine,
         Obligation::None => return (Produced::None, Produced::None),
     };
+    let root = match source {
+        Produced::Parameter { source, .. } => Some(*source),
+        _ => None,
+    };
     let part = |index| Produced::Region {
         qualifier,
-        root: None,
+        root,
         splits: vec![(span, index)],
-        elements: Box::new(Produced::None),
+        elements: Box::new(source.clone()),
     };
     (part(0), part(1))
 }
@@ -2062,14 +2365,9 @@ fn join_region(
                     right: Box::new(right),
                 };
             }
-            let proof = PartitionWitness {
-                family: ARRAY_INTERVAL_FAMILY,
-                parent: (*parent).clone(),
-                left: (*witness_left).clone(),
-                right: (*witness_right).clone(),
-            };
-            let combined = combine_partition(&ARRAY_INTERVAL_FAMILY, &proof, &left, &right);
-            let Ok(parent) = combined else {
+            let Some(parent) =
+                join_concrete_regions(&witness_left, &witness_right, &parent, &left, &right)
+            else {
                 analysis.report(
                     "BLOT_REGION_JOIN_UNPROVED",
                     "Region join requires the witness minted with these two parts.",
@@ -2097,6 +2395,145 @@ fn join_region(
 
 const ARRAY_INTERVAL_FAMILY: &str = "array-interval";
 
+fn region_proof_part(produced: &Produced) -> Option<Produced> {
+    let Produced::Region {
+        qualifier,
+        root,
+        splits,
+        ..
+    } = produced
+    else {
+        return None;
+    };
+    Some(Produced::Region {
+        qualifier: *qualifier,
+        root: *root,
+        splits: splits.clone(),
+        elements: Box::new(Produced::None),
+    })
+}
+
+fn combine_region_elements(left: Produced, right: Produced) -> Produced {
+    match (left, right) {
+        (Produced::Sequence(mut left), Produced::Sequence(right)) => {
+            left.extend(right);
+            Produced::Sequence(left)
+        }
+        (left, right) => combine(left, right),
+    }
+}
+
+fn join_concrete_regions(
+    witness_left: &Produced,
+    witness_right: &Produced,
+    witness_parent: &Produced,
+    left: &Produced,
+    right: &Produced,
+) -> Option<Produced> {
+    let proof = PartitionWitness {
+        family: ARRAY_INTERVAL_FAMILY,
+        parent: region_proof_part(witness_parent)?,
+        left: region_proof_part(witness_left)?,
+        right: region_proof_part(witness_right)?,
+    };
+    let left_authority = region_proof_part(left)?;
+    let right_authority = region_proof_part(right)?;
+    let parent = combine_partition(
+        &ARRAY_INTERVAL_FAMILY,
+        &proof,
+        &left_authority,
+        &right_authority,
+    )
+    .ok()?;
+    let Produced::Region {
+        qualifier,
+        root,
+        splits,
+        ..
+    } = parent
+    else {
+        return None;
+    };
+    let (
+        Produced::Region { elements: left, .. },
+        Produced::Region {
+            elements: right, ..
+        },
+    ) = (left, right)
+    else {
+        return None;
+    };
+    Some(Produced::Region {
+        qualifier,
+        root,
+        splits,
+        elements: Box::new(combine_region_elements((**left).clone(), (**right).clone())),
+    })
+}
+
+#[cfg(test)]
+mod region_join_tests {
+    use super::*;
+
+    fn region(splits: Vec<(Span, u8)>, elements: Produced) -> Produced {
+        Produced::Region {
+            qualifier: Qualifier::Linear,
+            root: Some(PatternId(7)),
+            splits,
+            elements: Box::new(elements),
+        }
+    }
+
+    #[test]
+    fn join_matches_authority_and_keeps_live_child_elements() {
+        let split = Span { start: 10, end: 20 };
+        let parent = region(Vec::new(), Produced::Leaf(Qualifier::Affine));
+        let witness_left = region(vec![(split, 0)], Produced::Leaf(Qualifier::Affine));
+        let witness_right = region(vec![(split, 1)], Produced::Leaf(Qualifier::Affine));
+        let left = region(
+            vec![(split, 0)],
+            Produced::Sequence(vec![Produced::Leaf(Qualifier::Linear)]),
+        );
+        let right = region(
+            vec![(split, 1)],
+            Produced::Sequence(vec![Produced::Leaf(Qualifier::Affine)]),
+        );
+
+        let joined = join_concrete_regions(&witness_left, &witness_right, &parent, &left, &right)
+            .expect("matching sibling authorities should join");
+        let Produced::Region {
+            splits, elements, ..
+        } = joined
+        else {
+            panic!("join should return a Region");
+        };
+        assert!(splits.is_empty());
+        assert!(
+            *elements
+                == Produced::Sequence(vec![
+                    Produced::Leaf(Qualifier::Linear),
+                    Produced::Leaf(Qualifier::Affine),
+                ])
+        );
+    }
+
+    #[test]
+    fn control_flow_keeps_one_equal_region_authority() {
+        let first = region(Vec::new(), Produced::Leaf(Qualifier::Linear));
+        let second = region(Vec::new(), Produced::Leaf(Qualifier::Affine));
+
+        let joined = join_alternatives(vec![first, second]);
+        let Produced::Region {
+            splits, elements, ..
+        } = joined
+        else {
+            panic!("alternative regions should retain one authority");
+        };
+        assert!(splits.is_empty());
+        assert!(matches!(*elements, Produced::Many(_)));
+    }
+}
+
 fn combine_adjacent_regions(left: Produced, right: Produced) -> Produced {
     match (left, right) {
         (
@@ -2117,7 +2554,7 @@ fn combine_adjacent_regions(left: Produced, right: Produced) -> Produced {
                 qualifier,
                 root,
                 splits,
-                elements: Box::new(combine(*elements, *right_elements)),
+                elements: Box::new(combine_region_elements(*elements, *right_elements)),
             }
         }
         (left, right) => combine(left, right),
