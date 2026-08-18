@@ -10,6 +10,7 @@ mod layout;
 mod lower;
 mod ownership;
 mod partition;
+mod predicate_refinement;
 mod primitives;
 mod rebinding;
 mod recognise;

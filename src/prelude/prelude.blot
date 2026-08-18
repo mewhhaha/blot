@@ -1240,6 +1240,7 @@ const sort_by = fn (values, before) =>
 // no type-level sublanguage for them to live in.
 
 const range = fn (low, high) => @type.range low high
+const refine = fn (base, predicate) => @type.refine base predicate
 const arrow = fn (domain, codomain) => @type.arrow domain codomain
 const type_of = fn value => @type.of value
 const seal = fn (name, value) => @type.seal name value
@@ -1913,6 +1914,7 @@ const Type =
   {
     ...Type;
     .range = range;
+    .refine = refine;
     .arrow = arrow;
     .of = type_of;
     .seal = seal;
@@ -2013,6 +2015,7 @@ return {
   .every = every;
   .text_eq = text_eq;
   .range = range;
+  .refine = refine;
   .bit_width = bit_width;
   .struct = struct;
   .reorder = reorder;

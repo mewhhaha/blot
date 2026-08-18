@@ -51,6 +51,11 @@ pub fn junction(context: &Rc<Context>, value: &Value) -> Option<Junction> {
     }
 }
 
+pub fn negation(context: &Rc<Context>, value: &Value) -> bool {
+    probe_bool_unary(context, value, true) == Some(false)
+        && probe_bool_unary(context, value, false) == Some(true)
+}
+
 fn factored(context: &Rc<Context>, value: &Value) -> bool {
     let Value::Closure {
         module,
@@ -309,6 +314,19 @@ fn probe_bool(context: &Rc<Context>, value: &Value, left: bool, right: bool) -> 
         context.clone(),
         partial,
         boolean_value(right),
+        nowhere(),
+        runtime,
+    ))
+    .ok()?;
+    boolean(answer)
+}
+
+fn probe_bool_unary(context: &Rc<Context>, value: &Value, argument: bool) -> Option<bool> {
+    let runtime = probe_runtime(value);
+    let answer = run(apply(
+        context.clone(),
+        value.clone(),
+        boolean_value(argument),
         nowhere(),
         runtime,
     ))

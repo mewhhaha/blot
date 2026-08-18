@@ -142,6 +142,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@type.diff"
         | "@type.arrow"
         | "@type.performs"
+        | "@type.refine"
         | "@type.seal"
         | "@satisfies"
         | "@shape.get"

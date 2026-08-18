@@ -422,6 +422,7 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   // to allow. Precision comes from bridging the computed value at the `sig`,
   // not from constraining the operands here.
   ["@type.range", poly((fresh) => curried([fresh(), fresh()], TYPE))],
+  ["@type.refine", poly((fresh) => curried([fresh(), fresh()], TYPE))],
   ["@type.union", poly((fresh) => curried([fresh(), fresh()], TYPE))],
   ["@type.intersect", poly((fresh) => curried([fresh(), fresh()], TYPE))],
   ["@type.diff", poly((fresh) => curried([fresh(), fresh()], TYPE))],

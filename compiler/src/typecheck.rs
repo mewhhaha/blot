@@ -5426,7 +5426,7 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             Type::Opaque("Type".to_owned())
         }
         "@type.unit" => Type::Unit,
-        "@type.range" | "@type.union" | "@type.intersect" | "@type.diff" | "@type.arrow"
+        "@type.range" | "@type.refine" | "@type.union" | "@type.intersect" | "@type.diff" | "@type.arrow"
         | "@type.performs" => curried(
             vec![checker.fresh(), checker.fresh()],
             Type::Opaque("Type".to_owned()),

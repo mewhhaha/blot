@@ -445,6 +445,34 @@ function probeBool(
   }
 }
 
+const negations = new WeakMap<Value, { readonly result: boolean }>();
+
+/** Whether a unary boolean function computes exact logical negation. */
+export function negation(value: Value): boolean {
+  const cached = negations.get(value);
+  if (cached !== undefined) return cached.result;
+  const whenTrue = probeUnaryBool(value, true);
+  const whenFalse = probeUnaryBool(value, false);
+  const result = whenTrue === false && whenFalse === true;
+  negations.set(value, { result });
+  return result;
+}
+
+function probeUnaryBool(value: Value, input: boolean): boolean | null {
+  let argument: Value = { tag: "tag", name: "False", payload: null };
+  if (input) argument = { tag: "tag", name: "True", payload: null };
+  try {
+    const runtime = evaluationRuntime(new Map(), "comptime", PROBE_FUEL);
+    const answer = run(apply(value, argument, NOWHERE, runtime));
+    if (answer.tag !== "tag" || answer.payload !== null) return null;
+    if (answer.name === "True") return true;
+    if (answer.name === "False") return false;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function probe(value: Value, left: bigint, right: bigint): boolean | null {
   try {
     const runtime = evaluationRuntime(new Map(), "comptime", PROBE_FUEL);

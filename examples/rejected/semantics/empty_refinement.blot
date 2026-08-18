@@ -1,0 +1,6 @@
+open import "blot:prelude"
+
+const Small = range (0, 10)
+const Impossible = refine (Small, fn value => value > 10)
+
+return Impossible

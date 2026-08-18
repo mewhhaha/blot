@@ -31,6 +31,11 @@ const REJECTIONS: Record<
   string,
   { code: string; stage: "check" | "run" | "build" }
 > = {
+  "unsupported_refinement_predicate": {
+    code: "BLOT_REFINEMENT_PREDICATE",
+    stage: "check",
+  },
+  "empty_refinement": { code: "BLOT_EMPTY_REFINEMENT", stage: "check" },
   "does_not_satisfy": { code: "BLOT_DOES_NOT_SATISFY", stage: "check" },
   "out_of_range": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "resume_twice": {

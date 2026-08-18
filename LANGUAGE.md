@@ -2670,6 +2670,7 @@ The prelude supplies the two predicates that would otherwise be written inline:
 | `@type.f32x4_mask` | four comparison lanes, an opaque type             |
 | `@type.unit`       | unit type/value                                   |
 | `@type.range`      | inclusive range                                   |
+| `@type.refine`     | normalize a pure integer predicate into a type    |
 | `@type.union`      | flattened duplicate-free union                    |
 | `@type.intersect`  | intersection of union members                     |
 | `@type.diff`       | difference of union members                       |
