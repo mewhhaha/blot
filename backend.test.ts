@@ -1136,11 +1136,10 @@ Deno.test("a recursive group member does not own a store its sibling reads", asy
 `,
       `let !cells = [7, 2, 3]
 `,
-      "let peek = rec (fn n => case Array.get ((&cells), n) of",
+      "let rec peek = fn n => case Array.get ((&cells), n) of",
       "  #Some value => value",
       "  #None => 0",
-      ")",
-      `let write = rec (fn n => @array.set cells 0 n)
+      `let rec write = fn n => @array.set cells 0 n
 `,
       "return @int.add (case Array.get (write 1, 0) of",
       "  #Some value => value",
@@ -1158,21 +1157,19 @@ Deno.test("a recursive group member does not own a store its sibling reads", asy
 for (
   const [order, members] of [
     ["a sibling declared before it", [
-      `let start = rec (fn n => case Array.get (bump n, 0) of
+      `let rec start = fn n => case Array.get (bump n, 0) of
   #Some value => value
   #None => 0
-)
 `,
-      `let bump = rec (fn n => @array.set cells 0 n)
+      `let rec bump = fn n => @array.set cells 0 n
 `,
     ]],
     ["a sibling declared after it", [
-      `let bump = rec (fn n => @array.set cells 0 n)
+      `let rec bump = fn n => @array.set cells 0 n
 `,
-      `let start = rec (fn n => case Array.get (bump n, 0) of
+      `let rec start = fn n => case Array.get (bump n, 0) of
   #Some value => value
   #None => 0
-)
 `,
     ]],
   ] as const
@@ -2023,14 +2020,12 @@ Deno.test("a `let` recursive group reaches WebAssembly", async () => {
   await Deno.writeTextFile(
     path,
     `open import "blot:prelude"
-let is_even = rec (fn n => case n == 0 of
+let rec is_even = fn n => case n == 0 of
   #True => 1
   #False => is_odd (n - 1)
-)
-let is_odd = rec (fn n => case n == 0 of
+let rec is_odd = fn n => case n == 0 of
   #True => 0
   #False => is_even (n - 1)
-)
 return is_even 11
 `,
   );
@@ -2051,11 +2046,10 @@ Deno.test("a recursive group's members keep what they captured", async () => {
     path,
     `open import "blot:prelude"
 let total = fn step =>
-  let down = rec (fn n => case n < step of
+  let rec down = fn n => case n < step of
     #True => 0
     #False => n + up (n - step)
-  )
-  let up = rec (fn n => down n)
+  let rec up = fn n => down n
   return up 10
 return total 3
 `,
@@ -2076,14 +2070,12 @@ Deno.test("a `const` recursive group reaches WebAssembly", async () => {
   await Deno.writeTextFile(
     path,
     `open import "blot:prelude"
-const even = rec (fn n => case n == 0 of
+const rec even = fn n => case n == 0 of
   #True => 1
   #False => odd (n - 1)
-)
-const odd = rec (fn n => case n == 0 of
+const rec odd = fn n => case n == 0 of
   #True => 0
   #False => even (n - 1)
-)
 let counted = fn n => even n
 return counted 12
 `,

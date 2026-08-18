@@ -25,13 +25,12 @@ const Count = I32
 // Lowering keeps `rec` directly bound under its source name before applying
 // transforms, so tagging does not create a second recursion rule.
 @[tag ("identity", (), identity)]
-const factorial =
-  rec (fn n =>
+const rec factorial =
+  fn n =>
     if n == 0:
       return 1
     else:
       return n * factorial (n - 1)
-  )
 
 // A test is an ordinary identity transform whose descriptor name is `test`.
 // Normal evaluation leaves this function alone; `blot test` discovers it.

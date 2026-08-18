@@ -16,15 +16,14 @@ let (nodes, five) = Arena.insert (?nodes, leaf 5)
 let (nodes, six) = Arena.insert (?nodes, branch (6, four, five))
 let (nodes, root) = Arena.insert (?nodes, branch (7, three, six))
 
-let total =
-  rec (fn (&tree, address) =>
+let rec total =
+  fn (&tree, address) =>
     if address == 0:
       return 0
     else:
       return case Arena.get ((&tree), address) of
         #Some node => node.value + total ((&tree), node.left) + total ((&tree), node.right)
         #None => 0
-  )
 
 return {
   .root = root;

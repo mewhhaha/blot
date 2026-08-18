@@ -247,8 +247,8 @@ const Continuation =
 // Structural recursion, which is all a surface loop becomes before inference.
 // Rebindings form the accumulator; `for` does not introduce assignment.
 const fold = fn (values, state, step) =>
-  let go =
-    rec (fn (index, current) =>
+  let rec go =
+    fn (index, current) =>
       result <- case array_get (values, index) of
         #Some value =>
           next <- step (current, value)
@@ -257,7 +257,6 @@ const fold = fn (values, state, step) =>
 
         #None => current
       return result
-    )
   result <- go (0, state)
   return result
 
@@ -437,8 +436,8 @@ const every = fn (values, holds) =>
   )
 
 const upto = fn (low, high) =>
-  let build =
-    rec (fn (index, state) =>
+  let rec build =
+    fn (index, state) =>
       if is_less (@int.cmp index high):
         return build (
           @int.add index 1,
@@ -446,7 +445,6 @@ const upto = fn (low, high) =>
         )
       else:
         return state
-    )
   return build (low, Array.empty)
 
 // --- floats -----------------------------------------------------------------
@@ -785,11 +783,10 @@ const iter_items = fn values => {
 // Draining one. `for` is this loop with the accumulator inferred from the names
 // its body rebinds; written out, it is the same fold.
 const iterate = fn (iterator, initial, visit) =>
-  let go =
-    rec (fn (state, carried) => case iterator.step state of
+  let rec go =
+    fn (state, carried) => case iterator.step state of
       #None => carried
       #Some pair => go (pair.1, visit (carried, pair.0))
-    )
   return go (iterator.state, initial)
 
 const collect = fn iterator =>
@@ -834,8 +831,8 @@ const list_uncons = fn list =>
       #Some node => #Cons (node.0, (nodes, node.1))
       #None => #Nil
 
-const list_fold_nodes =
-  rec (fn (&nodes, address, state, visit) =>
+const rec list_fold_nodes =
+  fn (&nodes, address, state, visit) =>
     if is_less (@int.cmp address 0):
       return state
     else:
@@ -847,7 +844,6 @@ const list_fold_nodes =
           visit
         )
         #None => state
-  )
 
 const list_fold = fn (list, state, visit) =>
   let (nodes, head) = list
@@ -928,14 +924,13 @@ const List =
 const map_type = fn (key, value) => [(key, value)]
 
 const map_get = fn (equal, entries, key) =>
-  let find =
-    rec (fn index => case array_get (entries, index) of
+  let rec find =
+    fn index => case array_get (entries, index) of
       #Some entry => case equal entry.0 key of
         #True => Some entry.1
         #False => find (@int.add index 1)
 
       #None => None
-    )
   return find 0
 
 const map_put = fn (equal, entries, key, value) =>
@@ -1153,13 +1148,12 @@ const attach = fn target => fn members =>
 // The GPU frontend requires every integer literal to fit the signed 32-bit
 // domain, so wider bounds are computed rather than spelled. Compile time is the
 // same language, so this costs nothing at runtime.
-const pow2 =
-  rec (fn n =>
+const rec pow2 =
+  fn n =>
     if is_less (@int.cmp n 1):
       return 1
     else:
       return 2 * pow2 (@int.sub n 1)
-  )
 
 // The arithmetic domains. Integer operations return signed-i64 `Int` without
 // proving a narrower storage width, so a `sig` narrowing to `I32` is a real
@@ -1317,12 +1311,11 @@ const same_domain = fn (left, right) => case left of
     #F64 => False
     #F32 => False
 
-const admits_omission =
-  rec (fn type => case reflect type of
+const rec admits_omission =
+  fn type => case reflect type of
     #Unit => True
     #Union members => any (members, admits_omission)
     _ => False
-  )
 
 // Does every value of `narrow` inhabit `wide`?
 //
@@ -1331,8 +1324,8 @@ const admits_omission =
 // checker's answer is about inferred types with variables in them, and this one
 // is about ground compile-time values, which is the only thing a program can
 // hold and ask about.
-const refines =
-  rec (fn (narrow, wide) => case reflect wide of
+const rec refines =
+  fn (narrow, wide) => case reflect wide of
     #Unbounded => True
     #Union options => any (options, fn option => refines (narrow, option))
     #Range r => case reflect narrow of
@@ -1407,7 +1400,6 @@ const refines =
       _ => False
 
     #Opaque => False
-  )
 
 // --- asking about a type ----------------------------------------------------
 //
@@ -1636,8 +1628,8 @@ sig ordered_text_map_is_strict =
   @forall (fn V =>
     return ([ordered_text_map_entry_type V], Int, Int) -> Bool
   )
-const ordered_text_map_is_strict =
-  rec (fn (&entries, index, length) =>
+const rec ordered_text_map_is_strict =
+  fn (&entries, index, length) =>
     if index >= length:
       return True
     else:
@@ -1655,7 +1647,6 @@ const ordered_text_map_is_strict =
         )
       else:
         return False
-  )
 
 sig ordered_text_map_claim =
   @forall (fn V =>
@@ -1684,8 +1675,8 @@ sig ordered_text_map_lower_bound_from =
       Int
     ) -> Int
   )
-const ordered_text_map_lower_bound_from =
-  rec (fn (&entries, key, low, high) =>
+const rec ordered_text_map_lower_bound_from =
+  fn (&entries, key, low, high) =>
     if low >= high:
       return low
     else:
@@ -1707,7 +1698,6 @@ const ordered_text_map_lower_bound_from =
           low,
           middle
         )
-  )
 
 sig ordered_text_map_lower_bound =
   @forall (fn V =>

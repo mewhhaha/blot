@@ -163,7 +163,7 @@ let keep_swap = fn (values, left, right) =>
     #None => first
 
 sig partition = ([Int], Int, Int, Int, Int, Int) -> ([Int], Int)
-let partition = rec (fn (values, pivot, low, scan, boundary, limit) =>
+let rec partition = fn (values, pivot, low, scan, boundary, limit) =>
   if scan >= limit:
     return (values, boundary)
   else:
@@ -174,10 +174,9 @@ let partition = rec (fn (values, pivot, low, scan, boundary, limit) =>
       return partition (keep_swap (values, scan, boundary), pivot, low, scan + 1, boundary + 1, limit)
     else:
       return partition (values, pivot, low, scan + 1, boundary, limit)
-)
 
 sig sort_work = ([Int], [(Int, Int)], Int) -> [Int]
-let sort_work = rec (fn (values, work, cursor) =>
+let rec sort_work = fn (values, work, cursor) =>
   let count = Array.length work
   if count <= cursor:
     return values
@@ -196,7 +195,6 @@ let sort_work = rec (fn (values, work, cursor) =>
       let updated = keep_swap (partitioned, boundary, last)
       let pending = @array.push (@array.push work (low, boundary)) (boundary + 1, high)
       return sort_work (updated, pending, cursor + 1)
-)
 
 dynamic <- Source.value 0
 let values = [dynamic, ${values.slice(1).join(", ")}]

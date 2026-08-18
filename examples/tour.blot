@@ -32,13 +32,12 @@ let apply_twice = fn f => fn x => f (f x)
 let distance = fn (from, to) => Num.abs (to - from)
 
 // `rec` makes the binding's own name visible inside the lambda.
-const factorial =
-  rec (fn n =>
+const rec factorial =
+  fn n =>
     if n < 2:
       return 1
     else:
       return n * factorial (n - 1)
-  )
 
 // --- matching ---------------------------------------------------------------
 

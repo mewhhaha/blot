@@ -515,15 +515,14 @@ The executable catalog entry uses Lomuto partitioning with `swap`, carrying one
 complete root and a persistent worklist of `(low, high)` ranges:
 
 ```text
-let sort_work =
-  rec (fn (!slice, work, cursor) =>
+let rec sort_work =
+  fn (!slice, work, cursor) =>
     if cursor >= Array.length work:
       return slice
     let (low, high) = work[cursor]
     let (slice, pivot) = partition (!slice, low, high)
     let pending = work ++ [(low, pivot), (pivot + 1, high)]
     return sort_work (!slice, pending, cursor + 1)
-  )
 ```
 
 The real source uses total indexed operations rather than the schematic `[]` and

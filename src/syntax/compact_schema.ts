@@ -156,6 +156,7 @@ export const compactFieldNames = [
   "phase",
   "input",
   "specifier",
+  "recursive",
 ] as const;
 
 // Baba numbers live fields densely in grammar order. Keep this list exactly in
@@ -197,6 +198,7 @@ export const currentCompactFieldNames = [
   "precedence",
   "prefixes",
   "qualifier",
+  "recursive",
   "rest",
   "right",
   "root",

@@ -48,19 +48,18 @@ It is not recursion by itself. The same fold written at module scope keeps its
 bound:
 
 ```blot
-let go =
-  rec (fn (n, carried) => case n == 0 of
+let rec go =
+  fn (n, carried) => case n == 0 of
     #True => carried
     #False => go (n - 1, carried + n)
-  )
 return go (3, 0)          -- Int
 ```
 
-What differs is that the prelude's `go` is a `rec` inside a function, closing
-over that function's parameters, with the accumulator flowing through a `visit`
-callback. Find which of those three loses the edge before changing the lattice —
-a union that prints one member per bound will make the answer visible now that
-the printer no longer repeats them.
+What differs is that the prelude's `go` is a recursive binding inside a
+function, closing over that function's parameters, with the accumulator flowing
+through a `visit` callback. Find which of those three loses the edge before
+changing the lattice — a union that prints one member per bound will make the
+answer visible now that the printer no longer repeats them.
 
 Because `⊥` describes a value that cannot exist, an inferred `⊥` for a value
 that does is worth more than a presentation fix: anything that consumes these

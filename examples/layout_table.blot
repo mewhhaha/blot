@@ -11,8 +11,8 @@ let nodes =
     { .parent = 1; .offset = 5; .width = 10; }
   ]
 
-let layout =
-  rec (fn (index, !frames) =>
+let rec layout =
+  fn (index, !frames) =>
     if index < 0 || index >= @array.len nodes:
       return frames
     else:
@@ -30,7 +30,6 @@ let layout =
         }
       return layout (index + 1, @array.push frames frame)
 
-  )
 
 let frames = layout (0, [])
 return case Array.get (frames, 2) of

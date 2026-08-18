@@ -61,13 +61,12 @@ const add = adding Int
 // group is still typed with its group; this is for one that arrived as a value,
 // selected here by a compile-time conditional.
 const counting = fn T =>
-  const down =
-    rec (fn n =>
+  const rec down =
+    fn n =>
       if n <= 0:
         return 0
       else:
         return 1 + down (n - 1)
-    )
   if refines (T, Int):
     return down
   else:

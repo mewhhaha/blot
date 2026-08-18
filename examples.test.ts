@@ -32,7 +32,6 @@ const REJECTIONS: Record<
   { code: string; stage: "check" | "run" | "build" }
 > = {
   "does_not_satisfy": { code: "BLOT_DOES_NOT_SATISFY", stage: "check" },
-  "misplaced_rec": { code: "BLOT_MISPLACED_REC", stage: "run" },
   "out_of_range": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "resume_twice": {
     code: "BLOT_HANDLER_RESUME_NOT_AFFINE",
@@ -180,7 +179,7 @@ const REJECTIONS: Record<
   "forward_reference": { code: "BLOT_FORWARD_REFERENCE", stage: "check" },
   // Mutual visibility belongs to a group of functions. A member that is not
   // one would have to read a name the group has not given a value to yet, so
-  // `rec` refuses it where it stands.
+  // the recursive-binding rule refuses it where it stands.
   "recursive_value": { code: "BLOT_TYPE_ERROR", stage: "check" },
   // Two members of one group cannot shadow each other: they enter scope
   // together, so neither is "the earlier one".

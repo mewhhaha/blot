@@ -6,7 +6,7 @@
 // the other is, so no ordering of the two declarations puts both names in
 // scope — which is what a recursive group is for.
 //
-// The two are one group because they are adjacent `rec` bindings of the same
+// The two are one group because they are adjacent `let rec` bindings of the same
 // kind. Their `sig`s sit between them and separate nothing: a signature has to
 // be followed by the binding it constrains, so a `sig` inside a run belongs to
 // a member of that run.
@@ -30,25 +30,23 @@ let token = fn source => fn at =>
 // Each walker returns the value it read and the position after it, so the
 // caller knows where its next child begins.
 sig walk = [Int] -> Int -> (Int, Int)
-let walk =
-  rec (fn source => fn at =>
+let rec walk =
+  fn source => fn at =>
     let head = token source at
     if head < 2:
       return combine source (at + 1) head
     else:
       return (head - 2, at + 1)
-  )
 
 sig combine = [Int] -> Int -> Int -> (Int, Int)
-let combine =
-  rec (fn source => fn at => fn operator =>
+let rec combine =
+  fn source => fn at => fn operator =>
     let (left, after_left) = walk source at
     let (right, after_right) = walk source after_left
     if operator == 0:
       return (left + right, after_right)
     else:
       return (left * right, after_right)
-  )
 
 let (value, consumed) = walk program 0
 

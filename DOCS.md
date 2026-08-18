@@ -850,13 +850,12 @@ sentinel, and make the arena affine so appends may reuse its scratch storage:
 
 ```blot
 sig build = (Int, [(Int, Int)], Int) -> ([(Int, Int)], Int)
-let build = rec (fn (remaining, ?nodes, head) =>
+let rec build = fn (remaining, ?nodes, head) =>
   if remaining == 0:
     return (nodes, head)
   else:
     let (nodes, next) = Arena.insert (?nodes, (remaining, head))
     return build (remaining - 1, nodes, next)
-)
 
 let nodes = Arena.singleton (0, 0)
 let (nodes, head) = build (count, nodes, 0)

@@ -166,8 +166,8 @@ spend of `token`, and each is counted whether `hold` is written above `start` or
 below:
 
 ```blot
-let start = rec (fn n => hold n)
-let hold = rec (fn n => consume (!token))
+let rec start = fn n => hold n
+let rec hold = fn n => consume (!token)
 ```
 
 An ordinary declaration is walked before its name exists, which is right for a
@@ -189,11 +189,10 @@ against them.
 group.** Its own body is inside its own group, so this reaches plain recursion:
 
 ```blot
-let go = rec (fn n => if n < 1:
+let rec go = fn n => if n < 1:
   return consume (!token)
 else:
   return go (n - 1)
-)
 return go 3
 ```
 

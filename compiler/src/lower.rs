@@ -477,6 +477,16 @@ fn lower_declaration(
             }
             let mut value = lower_value(cst, value_cursor, context, arena)
                 .map_err(|error| format!("while lowering its value: {error}"))?;
+            if let Some(recursive) = cst.field(rule, "recursive")? {
+                let value_span = arena.expression_span(value);
+                value = arena.expression(Expression::Rec {
+                    lambda: value,
+                    span: Span {
+                        start: cst.span(recursive)?.start,
+                        end: value_span.end,
+                    },
+                });
+            }
             if kind == DeclarationKind::Sig && !row_tails.is_empty() {
                 value = quantify_effect_row_tails(value, &row_tails, span, arena);
             }
@@ -2470,13 +2480,6 @@ fn lower_operand(
         {
             let value = -value.clone();
             result = arena.expression(Expression::Int { value, span });
-            continue;
-        }
-        if text == "rec" {
-            result = arena.expression(Expression::Rec {
-                lambda: result,
-                span,
-            });
             continue;
         }
         if text == "^" && context.pattern_head {

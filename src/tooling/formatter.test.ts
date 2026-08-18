@@ -456,6 +456,20 @@ Deno.test("formatting accepts a module that falls through to unit", async () => 
   assertEquals(formatted.source, "let value = 1\n");
 });
 
+Deno.test("formatting keeps rec on the binding header", async () => {
+  const source = `let rec factorial = fn n => factorial n
+return factorial
+`;
+  const formatted = await formatSource(source);
+  if (!formatted.ok) throw new Error("recursive binding did not format");
+  assertEquals(
+    formatted.source,
+    `let rec factorial = fn n => factorial n
+return factorial
+`,
+  );
+});
+
 Deno.test("formatting removes only precedence-redundant parentheses", async () => {
   const source = `let imported = import "module"
 let atom = (1)

@@ -1,0 +1,7 @@
+// Recursion belongs to the binding header. The former expression-prefix form
+// is a hard syntax error and receives no compatibility rewrite.
+
+open import "blot:prelude"
+
+let factorial = rec (fn n => n)
+return factorial 1

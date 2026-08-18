@@ -718,12 +718,11 @@ member named by a sibling that the block had not reached yet contributed no use
 at all.
 
     let !once = 42;
-    let user = rec (fn n => holder n + holder n);
-    let holder = rec (fn n => if n == 0:
+    let rec user = fn n => holder n + holder n;
+    let rec holder = fn n => if n == 0:
       return once
     else:
       return user (n - 1)
-    )
 
 reported `holder` is never consumed, for a value it consumes twice. The
 rejection was right by accident and the reason was wrong, which is the shape
@@ -881,11 +880,12 @@ shape is now refused with `BLOT_SPREAD_MAY_OVERWRITE`
 refuses more, so no principal type moved and no assertion in `inference.test.ts`
 changed.
 
-**No mutual recursion without a grammar decision.** `rec` binds one name;
-`const is_even = rec (...); const is_odd = rec (...)` dies on `BLOT_UNBOUND`.
-The minimum is a diagnostic that distinguishes "not in scope" from "not in scope
-_yet_" and names the limit. `rec` over a group is a grammar change and therefore
-a GPU-profile question; price it separately, and remember that AGENTS.md treats
+**Mutual recursion required a grammar decision.** Before recursive groups, each
+recursive declaration prebound only one name, so two functions that called each
+other died on `BLOT_UNBOUND`. The minimum was a diagnostic that distinguished
+"not in scope" from "not in scope _yet_" and named the limit. Prebinding a group
+was a grammar change and therefore a GPU-profile question; price it separately,
+and remember that AGENTS.md treats
 a profile conflict as a design signal, not a metadata override.
 
 **No impredicative instantiation.** `@forall` is explicit and predicative and

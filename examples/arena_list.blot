@@ -12,11 +12,10 @@ open import "blot:prelude"
 const IntList = List.of Int
 
 sig sum_matching = IntList -> Int
-const sum_matching =
-  rec (fn list => case List.uncons list of
+const rec sum_matching =
+  fn list => case List.uncons list of
     #Nil => 0
     #Cons (value, tail) => value + sum_matching tail
-  )
 
 const Primes = 2 :: 3 :: 5 :: 7 :: List.empty
 const Doubled = List.map (Primes, fn value => value * 2)

@@ -25,8 +25,8 @@ return (inner value, value)
 });
 
 Deno.test("definition lookup sees every member of a recursive group", async () => {
-  const source = `let even = rec (fn n => odd n)
-let odd = rec (fn n => even n)
+  const source = `let rec even = fn n => odd n
+let rec odd = fn n => even n
 return even
 `;
   const parsed = await parse(source);

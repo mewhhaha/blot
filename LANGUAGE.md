@@ -1042,7 +1042,7 @@ member's own signature.
 
 A tagged binding (section 4.2) is not a member and ends a run. A tag replaces
 the binding's value with the transform applied to it, so what the binding holds
-is no longer a `rec`.
+is no longer a recursive root.
 
 The names entering scope together fixes the rest of the rule:
 

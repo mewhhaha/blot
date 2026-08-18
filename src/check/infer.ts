@@ -1107,7 +1107,7 @@ function inferUnrecorded(
         if (context.forward.has(expr.name)) {
           fail(
             "BLOT_FORWARD_REFERENCE",
-            `\`${expr.name}\` is bound further down, so it is not in scope here. Declarations are evaluated in order: move the binding above this one, or — if the two call each other — write both as \`rec\` bindings of functions with nothing between them.`,
+            `\`${expr.name}\` is bound further down, so it is not in scope here. Declarations are evaluated in order: move the binding above this one, or — if the two call each other — give both matching \`let rec\` or \`const rec\` headers with nothing between them.`,
             expr.span,
           );
         }
@@ -1290,7 +1290,7 @@ function inferUnrecorded(
         // function would have to read one of them before it exists.
         fail(
           "BLOT_TYPE_ERROR",
-          "`rec` applies to a lambda: a recursive binding is a function, because its group's names are in scope before any of them has a value.",
+          "A recursive binding must bind a lambda: its group's names are in scope before any of them has a value.",
           expr.span,
         );
       }

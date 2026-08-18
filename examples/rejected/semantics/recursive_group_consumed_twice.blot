@@ -7,6 +7,6 @@ open import "blot:prelude"
 
 let consume = fn !value => @int.add value 1
 let !token = 41
-let start = rec (fn n => hold n)
-let hold = rec (fn n => consume (!token))
+let rec start = fn n => hold n
+let rec hold = fn n => consume (!token)
 return @int.add (start 1) (hold 2)

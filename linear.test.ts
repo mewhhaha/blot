@@ -837,8 +837,8 @@ accepts(
   "a member's linearity reaches a sibling the block has not reached yet",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-let start = rec (fn n => hold n)
-let hold = rec (fn n => consume (!token))
+let rec start = fn n => hold n
+let rec hold = fn n => consume (!token)
 return start 1
 `,
 );
@@ -847,8 +847,8 @@ rejects(
   "a member that spends a sibling twice is counted twice",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-let user = rec (fn n => @int.add (hold n) (hold n))
-let hold = rec (fn n => consume (!token))
+let rec user = fn n => @int.add (hold n) (hold n)
+let rec hold = fn n => consume (!token)
 return user 1
 `,
   "BLOT_LINEAR_CONSUMED_TWICE",
@@ -861,8 +861,8 @@ rejects(
   "a use elsewhere no longer balances a member the block spent",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-let start = rec (fn n => hold n)
-let hold = rec (fn n => consume (!token))
+let rec start = fn n => hold n
+let rec hold = fn n => consume (!token)
 return @int.add (start 1) (hold 2)
 `,
   "BLOT_LINEAR_CONSUMED_TWICE",
@@ -875,10 +875,9 @@ accepts(
   "an ownership-tail recursive function transfers its linear capture",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-let go = rec (fn n => case n < 1 of
+let rec go = fn n => case n < 1 of
   #True => consume (!token)
   #False => go (@int.sub n 1)
-)
 return go 3
 `,
 );
@@ -887,11 +886,10 @@ accepts(
   "mutual ownership-tail recursion shares one captured obligation",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-let even = rec (fn n => case n < 1 of
+let rec even = fn n => case n < 1 of
   #True => consume (!token)
   #False => odd (@int.sub n 1)
-)
-let odd = rec (fn n => even (@int.sub n 1))
+let rec odd = fn n => even (@int.sub n 1)
 return even 4
 `,
 );
@@ -900,10 +898,9 @@ rejects(
   "a recursive call nested inside another operation has no ownership proof",
   `let consume = fn !value => @int.add value 1
 let !token = 41
-let go = rec (fn n => case n < 1 of
+let rec go = fn n => case n < 1 of
   #True => consume (!token)
   #False => @int.add (go (@int.sub n 1)) 0
-)
 return go 3
 `,
   "BLOT_RECURSIVE_OWNERSHIP_UNPROVED",
@@ -914,14 +911,12 @@ return go 3
 // the group is walked once.
 Deno.test("a group with no linear member owes and proves nothing", async () => {
   const { own } = await analyze(
-    `let even = rec (fn n => case n < 1 of
+    `let rec even = fn n => case n < 1 of
   #True => 1
   #False => odd (@int.sub n 1)
-)
-let odd = rec (fn n => case n < 1 of
+let rec odd = fn n => case n < 1 of
   #True => 0
   #False => even (@int.sub n 1)
-)
 return @int.add (even 4) (odd 3)
 `,
   );
@@ -992,11 +987,10 @@ Deno.test("a binding a closure and a sibling both read has no last read", async 
   const { own } = await analyze(
     `open import "blot:prelude"
 let !cells = [7, 2, 3]
-let peek = rec (fn n => case Array.get ((&cells), n) of
+let rec peek = fn n => case Array.get ((&cells), n) of
   #Some value => value
   #None => 0
-)
-let write = rec (fn n => @array.set cells 0 n)
+let rec write = fn n => @array.set cells 0 n
 let [first, _, _] = write 1
 return @int.add first (peek 0)
 `,
@@ -1014,11 +1008,10 @@ Deno.test("a binding read once inside a group keeps its last read", async () => 
   const { own } = await analyze(
     `open import "blot:prelude"
 let !cells = [7, 2, 3]
-let start = rec (fn n => case Array.get (bump n, 0) of
+let rec start = fn n => case Array.get (bump n, 0) of
   #Some value => value
   #None => 0
-)
-let bump = rec (fn n => @array.set cells 0 n)
+let rec bump = fn n => @array.set cells 0 n
 return start 4
 `,
   );

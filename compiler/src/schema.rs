@@ -154,6 +154,7 @@ pub(crate) const FIELD_NAMES: &[&str] = &[
     "phase",
     "input",
     "specifier",
+    "recursive",
 ];
 
 pub(crate) const NAMED_TOKEN_KINDS: &[&str] = &[
