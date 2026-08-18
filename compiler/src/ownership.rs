@@ -1294,6 +1294,55 @@ fn walk_apply(
             }
             return Produced::None;
         }
+        if (name == "@array.take" || name == "@array.split") && arguments.len() == 2 {
+            let array = walk(arguments[0], scope, analysis, Use::Move);
+            walk(arguments[1], scope, analysis, Use::Move);
+            if name == "@array.take" {
+                if let Produced::Sequence(elements) = &array
+                    && let Expression::Int { value, .. } =
+                        &analysis.module.arena.expressions[arguments[1].0 as usize]
+                    && let Some(position) = num_traits::ToPrimitive::to_usize(value)
+                    && let Some(selected) = elements.get(position)
+                {
+                    let remainder = elements
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| *index != position)
+                        .map(|(_, value)| value.clone())
+                        .collect();
+                    return Produced::Sequence(vec![
+                        selected.clone(),
+                        Produced::Sequence(remainder),
+                    ]);
+                }
+                let qualifier = match obligation(&array) {
+                    Obligation::Linear => Qualifier::Linear,
+                    Obligation::Affine => Qualifier::Affine,
+                    Obligation::None => return Produced::Sequence(vec![Produced::None; 2]),
+                };
+                return Produced::Sequence(vec![Produced::Leaf(qualifier); 2]);
+            }
+            if let Produced::Sequence(elements) = &array
+                && let Expression::Int { value, .. } =
+                    &analysis.module.arena.expressions[arguments[1].0 as usize]
+                && let Some(position) = num_traits::ToPrimitive::to_usize(value)
+                && let Some(selected) = elements.get(position)
+            {
+                let before = elements[..position].to_vec();
+                let after = elements[position + 1..].to_vec();
+                return Produced::Sequence(vec![
+                    Produced::Sequence(before),
+                    selected.clone(),
+                    Produced::Sequence(after),
+                ]);
+            }
+            let qualifier = match obligation(&array) {
+                Obligation::Linear => Qualifier::Linear,
+                Obligation::Affine => Qualifier::Affine,
+                Obligation::None => return Produced::Sequence(vec![Produced::None; 3]),
+            };
+            return Produced::Sequence(vec![Produced::Leaf(qualifier); 3]);
+        }
         if name == "@array.get" && arguments.len() == 2 {
             let array = walk(arguments[0], scope, analysis, Use::Project);
             walk(arguments[1], scope, analysis, Use::Move);

@@ -83,6 +83,8 @@ const REJECTIONS: Record<
   // number.
   "index_at_or_past_length": { code: "BLOT_OUT_OF_BOUNDS", stage: "check" },
   "unproven_index": { code: "BLOT_UNPROVEN_INDEX", stage: "check" },
+  "array_split_outside": { code: "BLOT_OUT_OF_BOUNDS", stage: "check" },
+  "unproven_array_take": { code: "BLOT_UNPROVEN_INDEX", stage: "check" },
   "partial_direct_array_access": {
     code: "BLOT_ARRAY_ACCESS_NOT_DIRECT",
     stage: "check",

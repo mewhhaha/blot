@@ -1,0 +1,9 @@
+// Consuming extraction requires the same call-site bounds proof as a direct
+// read. An arbitrary Int cannot be used without a refining guard.
+
+open import "blot:prelude"
+
+sig remove = [Int] -> Int -> (Int, [Int])
+let remove = fn values => fn index => @array.take values index
+
+return remove

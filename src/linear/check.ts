@@ -1689,7 +1689,6 @@ function walk(
         ) {
           const array = walk(ownershipArguments[0], scope, analysis, "move");
           walk(ownershipArguments[1], scope, analysis, "move");
-          const failure = array;
           if (name === "@array.take") {
             let selected = extractionParts(
               array,
@@ -1714,13 +1713,7 @@ function walk(
                 ];
               }
             }
-            return {
-              tag: "choice",
-              cases: new Map([
-                ["Taken", { tag: "sequence", elements: selected }],
-                ["TakeOutOfBounds", failure],
-              ]),
-            };
+            return { tag: "sequence", elements: selected };
           }
           const separated = extractionParts(
             array,
@@ -1728,13 +1721,7 @@ function walk(
             3,
             expr.span,
           );
-          return {
-            tag: "choice",
-            cases: new Map([
-              ["Split", { tag: "sequence", elements: separated }],
-              ["SplitOutOfBounds", failure],
-            ]),
-          };
+          return { tag: "sequence", elements: separated };
         }
         if (name === "@array.get" && ownershipArguments.length === 2) {
           const array = walk(ownershipArguments[0], scope, analysis, "project");

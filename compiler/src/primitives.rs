@@ -1786,10 +1786,7 @@ fn take(arguments: Vec<Value>, span: Span) -> Result<Value, Diagnostic> {
     let values = array(&arguments[0], span, "@array.take")?;
     let index = index(&arguments[1], span, "@array.take")?;
     let Some(value) = values.get(index).cloned() else {
-        return Ok(Value::Tag {
-            name: "TakeOutOfBounds".to_owned(),
-            payload: Some(Box::new(arguments[0].clone())),
-        });
+        return Err(out_of_bounds(index, values.len(), span));
     };
     let remaining = values
         .iter()
@@ -1797,29 +1794,20 @@ fn take(arguments: Vec<Value>, span: Span) -> Result<Value, Diagnostic> {
         .filter(|(candidate, _)| *candidate != index)
         .map(|(_, value)| value.clone())
         .collect();
-    Ok(Value::Tag {
-        name: "Taken".to_owned(),
-        payload: Some(Box::new(tuple(vec![value, Value::Array(remaining)]))),
-    })
+    Ok(tuple(vec![value, Value::Array(remaining)]))
 }
 
 fn split(arguments: Vec<Value>, span: Span) -> Result<Value, Diagnostic> {
     let values = array(&arguments[0], span, "@array.split")?;
     let index = index(&arguments[1], span, "@array.split")?;
     let Some(value) = values.get(index).cloned() else {
-        return Ok(Value::Tag {
-            name: "SplitOutOfBounds".to_owned(),
-            payload: Some(Box::new(arguments[0].clone())),
-        });
+        return Err(out_of_bounds(index, values.len(), span));
     };
-    Ok(Value::Tag {
-        name: "Split".to_owned(),
-        payload: Some(Box::new(tuple(vec![
-            Value::Array(values[..index].to_vec()),
-            value,
-            Value::Array(values[index + 1..].to_vec()),
-        ]))),
-    })
+    Ok(tuple(vec![
+        Value::Array(values[..index].to_vec()),
+        value,
+        Value::Array(values[index + 1..].to_vec()),
+    ]))
 }
 
 fn parse_json(arguments: Vec<Value>, span: Span, phase: Phase) -> Result<Value, Diagnostic> {

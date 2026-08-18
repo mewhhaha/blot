@@ -442,23 +442,19 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
       const elements = arrayElements(array, span, "@array.take");
       const position = Number(intOf(index, span, "@array.take"));
       if (position < 0 || position >= elements.length) {
-        return {
-          tag: "tag",
-          name: "TakeOutOfBounds",
-          payload: array,
-        };
+        fail(
+          "BLOT_OUT_OF_BOUNDS",
+          `Index ${position} is outside an array of ${elements.length}.`,
+          span,
+        );
       }
-      return {
-        tag: "tag",
-        name: "Taken",
-        payload: tupleOf([
-          elements[position],
-          {
-            tag: "array",
-            elements: elements.filter((_, candidate) => candidate !== position),
-          },
-        ]),
-      };
+      return tupleOf([
+        elements[position],
+        {
+          tag: "array",
+          elements: elements.filter((_, candidate) => candidate !== position),
+        },
+      ]);
     },
   }],
   ["@array.split", {
@@ -467,21 +463,17 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
       const elements = arrayElements(array, span, "@array.split");
       const position = Number(intOf(index, span, "@array.split"));
       if (position < 0 || position >= elements.length) {
-        return {
-          tag: "tag",
-          name: "SplitOutOfBounds",
-          payload: array,
-        };
+        fail(
+          "BLOT_OUT_OF_BOUNDS",
+          `Index ${position} is outside an array of ${elements.length}.`,
+          span,
+        );
       }
-      return {
-        tag: "tag",
-        name: "Split",
-        payload: tupleOf([
-          { tag: "array", elements: elements.slice(0, position) },
-          elements[position],
-          { tag: "array", elements: elements.slice(position + 1) },
-        ]),
-      };
+      return tupleOf([
+        { tag: "array", elements: elements.slice(0, position) },
+        elements[position],
+        { tag: "array", elements: elements.slice(position + 1) },
+      ]);
     },
   }],
 

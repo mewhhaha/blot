@@ -1132,10 +1132,13 @@ function inferUnrecorded(
           expr.span,
         );
       }
-      if (expr.name === "@array.get" || expr.name === "@array.set") {
+      if (
+        expr.name === "@array.get" || expr.name === "@array.set" ||
+        expr.name === "@array.take" || expr.name === "@array.split"
+      ) {
         fail(
           "BLOT_ARRAY_ACCESS_NOT_DIRECT",
-          `\`${expr.name}\` must be fully applied at its use site so the checker can attach a bounds proof. Use the total prelude operation when the index is not proved there.`,
+          `\`${expr.name}\` must be fully applied at its use site so the checker can attach a bounds proof.`,
           expr.span,
         );
       }
@@ -1595,7 +1598,8 @@ function inferSpecial(
   // Direct indexed access is the proof-carrying path. Total access lives in
   // prelude source and reaches this primitive only inside its successful guard.
   if (
-    (callee.name === "@array.get" || callee.name === "@array.set") &&
+    (callee.name === "@array.get" || callee.name === "@array.set" ||
+      callee.name === "@array.take" || callee.name === "@array.split") &&
     head.args.length >= 2
   ) {
     const proof = requireProvenIndex(
@@ -1620,6 +1624,12 @@ function inferSpecial(
       const valueType = infer(head.args[2], context, level, row);
       located(expr.span, () => constrain(valueType, element));
       return result;
+    }
+    if (callee.name === "@array.take" && head.args.length === 2) {
+      return tupleType([element, result]);
+    }
+    if (callee.name === "@array.split" && head.args.length === 2) {
+      return tupleType([result, element, result]);
     }
   }
 

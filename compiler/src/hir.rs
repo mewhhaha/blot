@@ -852,6 +852,16 @@ impl ResidualTrace {
                     ..store
                 }
             }
+            "@array.take" if arguments.len() == 2 => {
+                let store = self.lower_value(&arguments[0], span)?;
+                let index = self.lower_as(arguments.get(1), "signed-integer-64", span)?;
+                self.array_take(store, index, span)?
+            }
+            "@array.split" if arguments.len() == 2 => {
+                let store = self.lower_value(&arguments[0], span)?;
+                let index = self.lower_as(arguments.get(1), "signed-integer-64", span)?;
+                self.array_split(store, index, span)?
+            }
             "@array.len" => {
                 let store = self.lower_value(&arguments[0], span)?;
                 if !matches!(self.types[store.type_id], RuntimeType::Store { .. }) {
@@ -4028,6 +4038,212 @@ impl ResidualTrace {
             "product.make",
             type_id,
             vec![end.id, start.id, store.id],
+            span,
+            None,
+        ))
+    }
+
+    fn append_store_range(
+        &mut self,
+        source_store: &RuntimeValue,
+        start: &RuntimeValue,
+        end: &RuntimeValue,
+        initial: &RuntimeValue,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        let RuntimeType::Store { element_type } = self.types[source_store.type_id] else {
+            return Err(hir_error("Store range copy source is not a Store."));
+        };
+        if initial.type_id != source_store.type_id {
+            return Err(hir_error("Store range copy received mismatched Stores."));
+        }
+        let integer = self.region_integer_type();
+        let source = self.current_block;
+        let header = self.block();
+        self.blocks[source].terminator = Some(RuntimeTerminator::Branch {
+            target: header,
+            arguments: vec![start.id, initial.id],
+            span: self.span(span),
+        });
+        let cursor = self.next_value();
+        let output = self.next_value();
+        let cursor_span = self.span(span);
+        let output_span = self.span(span);
+        self.blocks[header].parameters.push(RuntimeBlockParameter {
+            value: cursor,
+            type_id: integer,
+            ownership: "plain",
+            span: cursor_span,
+        });
+        self.blocks[header].parameters.push(RuntimeBlockParameter {
+            value: output,
+            type_id: source_store.type_id,
+            ownership: "owned",
+            span: output_span,
+        });
+        self.current_block = header;
+        let has_next = self.operation(
+            "scalar",
+            1,
+            vec![cursor, end.id],
+            span,
+            Some("less-than"),
+        );
+        let body = self.block();
+        let done = self.block();
+        self.blocks[header].terminator = Some(RuntimeTerminator::Conditional {
+            condition: has_next.id,
+            consequent: body,
+            consequent_arguments: Vec::new(),
+            alternate: done,
+            alternate_arguments: vec![output],
+            span: self.span(span),
+        });
+        self.current_block = body;
+        let element = self.operation(
+            "store.read",
+            element_type,
+            vec![source_store.id, cursor],
+            span,
+            None,
+        );
+        let grown = self.array_operation(
+            "store.grow",
+            source_store.type_id,
+            vec![output, element.id],
+            span,
+            Some("persistent"),
+        );
+        let one = self.constant(WireConstant::SignedInteger64("1".to_owned()), integer, span);
+        let next = self.operation(
+            "scalar",
+            integer,
+            vec![cursor, one.id],
+            span,
+            Some("add"),
+        );
+        self.blocks[body].terminator = Some(RuntimeTerminator::Branch {
+            target: header,
+            arguments: vec![next.id, grown.id],
+            span: self.span(span),
+        });
+        let result = self.next_value();
+        let result_span = self.span(span);
+        self.blocks[done].parameters.push(RuntimeBlockParameter {
+            value: result,
+            type_id: source_store.type_id,
+            ownership: "owned",
+            span: result_span,
+        });
+        self.current_block = done;
+        Ok(RuntimeValue {
+            id: result,
+            type_id: source_store.type_id,
+            meaning: RuntimeMeaning::Plain,
+        })
+    }
+
+    fn array_take(
+        &mut self,
+        store: RuntimeValue,
+        index: RuntimeValue,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        let RuntimeType::Store { element_type } = self.types[store.type_id] else {
+            return Err(hir_error("Dynamic array take received a non-array value."));
+        };
+        let pair_type = self.insert_product_type(vec![
+            RuntimeField {
+                name: "0".to_owned(),
+                type_id: element_type,
+            },
+            RuntimeField {
+                name: "1".to_owned(),
+                type_id: store.type_id,
+            },
+        ]);
+        let selected = self.operation(
+            "store.read",
+            element_type,
+            vec![store.id, index.id],
+            span,
+            None,
+        );
+        let integer = self.region_integer_type();
+        let zero = self.constant(WireConstant::SignedInteger64("0".to_owned()), integer, span);
+        let empty = self.array_operation("store.empty", store.type_id, Vec::new(), span, None);
+        let before = self.append_store_range(&store, &zero, &index, &empty, span)?;
+        let one = self.constant(WireConstant::SignedInteger64("1".to_owned()), integer, span);
+        let after_start = self.operation(
+            "scalar",
+            integer,
+            vec![index.id, one.id],
+            span,
+            Some("add"),
+        );
+        let length = self.operation("store.length", integer, vec![store.id], span, None);
+        let remainder = self.append_store_range(&store, &after_start, &length, &before, span)?;
+        Ok(self.operation(
+            "product.make",
+            pair_type,
+            vec![selected.id, remainder.id],
+            span,
+            None,
+        ))
+    }
+
+    fn array_split(
+        &mut self,
+        store: RuntimeValue,
+        index: RuntimeValue,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        let RuntimeType::Store { element_type } = self.types[store.type_id] else {
+            return Err(hir_error("Dynamic array split received a non-array value."));
+        };
+        let payload_type = self.insert_product_type(vec![
+            RuntimeField {
+                name: "0".to_owned(),
+                type_id: store.type_id,
+            },
+            RuntimeField {
+                name: "1".to_owned(),
+                type_id: element_type,
+            },
+            RuntimeField {
+                name: "2".to_owned(),
+                type_id: store.type_id,
+            },
+        ]);
+        let selected = self.operation(
+            "store.read",
+            element_type,
+            vec![store.id, index.id],
+            span,
+            None,
+        );
+        let integer = self.region_integer_type();
+        let zero = self.constant(WireConstant::SignedInteger64("0".to_owned()), integer, span);
+        let before_empty =
+            self.array_operation("store.empty", store.type_id, Vec::new(), span, None);
+        let before = self.append_store_range(&store, &zero, &index, &before_empty, span)?;
+        let one = self.constant(WireConstant::SignedInteger64("1".to_owned()), integer, span);
+        let after_start = self.operation(
+            "scalar",
+            integer,
+            vec![index.id, one.id],
+            span,
+            Some("add"),
+        );
+        let length = self.operation("store.length", integer, vec![store.id], span, None);
+        let after_empty =
+            self.array_operation("store.empty", store.type_id, Vec::new(), span, None);
+        let after =
+            self.append_store_range(&store, &after_start, &length, &after_empty, span)?;
+        Ok(self.operation(
+            "product.make",
+            payload_type,
+            vec![before.id, selected.id, after.id],
             span,
             None,
         ))
@@ -7334,6 +7550,43 @@ mod tests {
         };
         assert_eq!(*target, 3);
         assert_eq!(trace.current_block, 3);
+    }
+
+    #[test]
+    fn dynamic_array_decomposition_uses_generic_store_control_flow() {
+        let mut trace = ResidualTrace::new("array-decomposition-test.blot");
+        let span = crate::ast::Span { start: 3, end: 7 };
+        let integer = trace.region_integer_type();
+        let store_type = trace.insert_type(
+            "test-integer-store",
+            RuntimeType::Store {
+                element_type: integer,
+            },
+        );
+        let store = trace.array_operation("store.empty", store_type, Vec::new(), span, None);
+        let index = trace.constant(
+            WireConstant::SignedInteger64("0".to_owned()),
+            integer,
+            span,
+        );
+        let taken = trace
+            .array_take(store.clone(), index.clone(), span)
+            .expect("dynamic take should lower");
+        let split = trace
+            .array_split(store, index, span)
+            .expect("dynamic split should lower");
+
+        assert!(matches!(taken.meaning, RuntimeMeaning::Plain));
+        assert!(matches!(split.meaning, RuntimeMeaning::Plain));
+        let kinds = trace
+            .blocks
+            .iter()
+            .flat_map(|block| block.operations.iter().map(|operation| operation.kind))
+            .collect::<Vec<_>>();
+        assert!(kinds.contains(&"store.length"));
+        assert!(kinds.contains(&"store.read"));
+        assert!(kinds.contains(&"store.grow"));
+        assert!(!kinds.iter().any(|kind| kind.contains("take") || kind.contains("split")));
     }
 
     #[test]

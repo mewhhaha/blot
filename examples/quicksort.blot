@@ -1,26 +1,22 @@
-// Deliberately persistent, allocation-heavy quicksort: the direct comparison
-// with the owned-region experiment. The bound length is both an affine fact
-// about `values` and the subject narrowed by the branch. Its untaken side proves
-// that literal index zero is in bounds, so the pivot read carries no runtime
-// bounds decision.
+// Deliberately persistent, allocation-heavy quicksort: the direct readability
+// comparison with the owned-region experiment. `uncons` states the structural
+// recursion, `partition` classifies in one stable pass, and the array monoid
+// operator exposes the join algebra. Left association performs joins from left
+// to right without first building the entire right-hand concatenation.
+
+operators {
+  infixl 55 (<>) = Array.append;
+}
 
 open import "blot:prelude"
 
 sig quicksort = [Int] -> [Int]
 let rec quicksort =
-  fn values =>
-    let length = Array.length values
-    if length < 2:
-      return values
-    else:
-      let pivot = @array.get values 0
-      let rest = case Array.take (values, 0) of
-        #Taken (_, remainder) => remainder
-        #TakeOutOfBounds original => original
-      let smaller = Array.filter (rest, fn value => value <= pivot)
-      let larger = Array.filter (rest, fn value => value > pivot)
-      let left = quicksort smaller
-      let right = quicksort larger
-      return Array.append left (Array.append [pivot] right)
+  fn values => case Array.uncons values of
+    #None => []
+    #Some (pivot, rest) =>
+      let (smaller, larger) =
+        partition (rest, fn value => value <= pivot)
+      return quicksort smaller <> [pivot] <> quicksort larger
 
 return quicksort [4, 7, 3, 8, 2, 6, 1, 5]

@@ -492,12 +492,9 @@ accepts(
 let !left = 40
 let !right = 41
 let values = [fn () => consume (!left), fn () => consume (!right)]
-return case @array.take values 1 of
-  #Taken (selected, remainder) => case remainder of
-    [other] => @int.add (selected ()) (other ())
-
-  #TakeOutOfBounds original => case original of
-    [first, second] => @int.add (first ()) (second ())
+let (selected, remainder) = @array.take values 1
+return case remainder of
+  [other] => @int.add (selected ()) (other ())
 `,
 );
 
@@ -506,34 +503,49 @@ accepts(
   `let consume = fn !value => @int.add value 1
 let !token = 41
 let values = [fn () => consume (!token)]
-let index = case 1 < 2 of
-  #True => 0
-  #False => 1
-return case @array.take values index of
-  #Taken (selected, remainder) =>
-    return case remainder of
-      _ => selected ()
-
-  #TakeOutOfBounds original =>
-    return case original of
-      _ => 0
+sig choose = Int -> Int
+let choose = fn index => index
+let index = choose 0
+if index >= 0 && index < @array.len (&values):
+  let (selected, remainder) = @array.take values index
+  return case remainder of
+    _ => selected ()
+else:
+  return case values of
+    [selected] => selected ()
 `,
+);
+
+rejects(
+  "Array.uncons leaves owned extraction to direct array take",
+  `let consume = fn !value => @int.add value 1
+let !left = 40
+let !right = 41
+let values = [fn () => consume (!left), fn () => consume (!right)]
+return case Array.uncons values of
+  #Some (selected, remainder) => case remainder of
+    [other] => @int.add (selected ()) (other ())
+
+  #None => 0
+`,
+  "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
 );
 
 accepts(
   "array split makes every dynamic partition component explicit",
   `${CONSUME}let !token = 41
 let values = [fn () => consume (!token)]
-let index = case 1 < 2 of
-  #True => 0
-  #False => 1
-return case @array.split values index of
-  #Split (before, selected, after) =>
-    return case before of
-      _ => case after of
-        _ => selected ()
-  #SplitOutOfBounds original => case original of
-    _ => 0
+sig choose = Int -> Int
+let choose = fn index => index
+let index = choose 0
+if index >= 0 && index < @array.len (&values):
+  let (before, selected, after) = @array.split values index
+  return case before of
+    _ => case after of
+      _ => selected ()
+else:
+  return case values of
+    [selected] => selected ()
 `,
 );
 
@@ -541,16 +553,17 @@ Deno.test("array split publishes every dynamic partition lineage", async () => {
   const { checked, path } = await analyze(
     `${CONSUME}let !token = 41
 let values = [fn () => consume (!token)]
-let index = case 1 < 2 of
-  #True => 0
-  #False => 1
-return case @array.split values index of
-  #Split (before, selected, after) =>
-    return case before of
-      _ => case after of
-        _ => selected ()
-  #SplitOutOfBounds original => case original of
-    _ => 0
+sig choose = Int -> Int
+let choose = fn index => index
+let index = choose 0
+if index >= 0 && index < @array.len (&values):
+  let (before, selected, after) = @array.split values index
+  return case before of
+    _ => case after of
+      _ => selected ()
+else:
+  return case values of
+    [selected] => selected ()
 `,
   );
   const local = checked.ownershipCertificate.entries.filter((entry) =>

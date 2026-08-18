@@ -209,12 +209,13 @@ shapes, as `recursive_linear_capture.blot` and
 
 ## What is not proven
 
-**Owned arrays use consuming random access.** Ordinary array reads still reject
-an owned element because they would copy its obligation. `@array.take` instead
-returns `#Taken (selected, remainder)` or `#TakeOutOfBounds original`, while
-`@array.split` returns `#Split (before, selected, after)` or
-`#SplitOutOfBounds original`. Every result path therefore exposes the selected
-obligation and every remainder obligation without copying or discarding one.
+**Owned arrays use proof-refined consuming random access.** Ordinary array reads
+still reject an owned element because they would copy its obligation. A direct
+`@array.take` returns `(selected, remainder)`, while `@array.split` returns
+`(before, selected, after)`, only when the call-site refinement context proves
+the index in bounds. The proof removes failure from the result type, and the
+tuple exposes the selected obligation and every remainder obligation without
+copying or discarding one.
 
 **Reuse requires the stronger proof.** The pass records both traversal-order
 last uses and the linear bindings proved consumed exactly once on every path.

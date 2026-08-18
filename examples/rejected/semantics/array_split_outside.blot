@@ -1,0 +1,7 @@
+// A statically impossible extraction is rejected rather than represented by a
+// failure constructor at run time.
+
+open import "blot:prelude"
+
+let values = [1, 2, 3]
+return @array.split values 9

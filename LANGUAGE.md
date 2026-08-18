@@ -1994,6 +1994,11 @@ only its `@region.*` bodies are primitive:
 - `Slice.length (&slice)` and `Slice.get ((&slice), index)` borrow authority;
 - `Slice.set ((!slice), index, value)` and `Slice.swap ((!slice), left, right)`
   consume and return the same authority;
+- `Slice.partition ((!slice), belongs_left)` consumes one authority, classifies
+  its complete interval in place, and returns `(!slice, boundary)`;
+- `Slice.partition_range ((!slice), start, end, belongs_left)` does the same for
+  a checked subrange and returns either `#Partitioned (!slice, boundary)` or
+  `#PartitionOutOfBounds (!slice, start)`;
 - `Slice.replace ((!slice), index, (!value))` consumes both inputs and returns
   either `#Replaced (!old, !slice)` or `#ReplaceOutOfBounds (!value, !slice)`,
   so replacement never drops an owned element;
@@ -2038,6 +2043,21 @@ Replacement is constant-time: one bounds check, one Store read, and one Store
 write. Split and join copy no elements. Witness reassociation is erased and
 emits no runtime operation. Claim is constant-time only when Store reuse is
 certified; its persistent fallback remains linear in the input length.
+
+Partition is a pure consuming update. A successful partition preserves the
+multiset of elements in the selected interval, places every predicate-true
+element before the returned boundary and every predicate-false element after
+it, and leaves positions outside the selected interval unchanged. The predicate
+is called once per selected element. The operation is unstable, linear in the
+selected length, uses constant auxiliary element storage, and allocates no
+element Store. Range validation precedes predicate evaluation; an invalid range
+returns the unchanged authority and supplied start boundary. The whole-slice
+form cannot be out of bounds.
+
+These source operations are ordinary prelude compositions of `length`, `get`,
+and `swap`. They introduce no intrinsic and no observable mutation. Their
+meaning is the persistent result of the same permutation; Store reuse is an
+implementation permission justified by the consumed authority.
 
 ### 11.4 Owned ordered text maps
 
@@ -2365,8 +2385,8 @@ signed 64-bit range trap.
 | `@array.set`           | proof-required immutable indexed replacement        |
 | `@array.push`          | immutable append                                    |
 | `@array.indexed`       | iterator yielding an index proof and selected value |
-| `@array.take`          | consuming extraction with the ordered remainder     |
-| `@array.split`         | consuming prefix, selected value, and suffix        |
+| `@array.take`          | proof-required consuming value and remainder         |
+| `@array.split`         | proof-required consuming prefix, value, and suffix  |
 | `@continuation.cancel` | consume a handler continuation without resuming it  |
 | `@shape.empty`         | empty shape                                         |
 | `@shape.get`           | get a field named by text                           |
@@ -2438,20 +2458,64 @@ There are two indexed APIs, chosen explicitly.
 return `#Some result` when `index` is in bounds and `#None` otherwise. Their
 guard is ordinary prelude source.
 
-`Array.take (xs, index)` and `Array.split (xs, index)` consume the input while
-preserving every element. `take` returns `#Taken (value, remainder)` or
-`#TakeOutOfBounds xs`. `split` returns `#Split (before, value, after)` or
-`#SplitOutOfBounds xs`. The successful arrays preserve source order; either
-failure returns the original array. These are the extraction operations for an
-array whose elements carry ownership obligations.
+`@array.take xs index` and `@array.split xs index` consume the input while
+preserving every element. They are proof-required direct operations:
+
+```text
+@array.take  : ([A], refined Int) -> (A, [A])
+@array.split : ([A], refined Int) -> ([A], A, [A])
+```
+
+Here `refined Int` is not a second integer representation or a dependent
+runtime type. It means the call-site refinement context proves
+`0 <= index < Array.length xs` for the same immutable array identity. `take`
+returns the selected value and an ordered remainder. `split` returns the
+ordered prefix, selected value, and ordered suffix. No result constructor or
+failure payload remains because an unproved call is rejected before execution.
+The operations must be saturated at their source site and cannot be hidden
+behind an alias or ordinary prelude closure, just like direct `@array.get` and
+`@array.set`.
+
+These are the extraction operations for an array whose elements carry
+ownership obligations. Their meaning is identical for staged and runtime
+arrays: making the array or index host-dynamic changes when decomposition runs,
+not which programs the compiler accepts or which tuple it produces.
+
+`Array.uncons xs` is the index-free total decomposition used by structural
+array algorithms. It consumes `xs` and returns `#None` exactly when it is
+empty; otherwise it establishes `0 < Array.length xs` and returns
+`#Some (first, remainder)` through direct `@array.take xs 0`. The remainder
+preserves the order of every element after `first`. Its ordinary parameter
+admits arrays whose elements have no ownership obligation. Owned extraction
+uses a proved direct `@array.take` or `@array.split` call so every obligation is
+returned without copying.
+
+`Array.partition (xs, belongs_left)` classifies an array in one stable pass. It
+calls `belongs_left` exactly once for each element and returns `(left, right)`;
+`left` contains the elements for which the predicate returned `#True`, `right`
+contains the rest, and relative order is preserved within both outputs. This is
+a value-level collection operation, distinct from the partition witnesses of
+owned regions: it produces two independent arrays rather than two authorities
+over one backing Store.
+
+With the current contiguous Store representation, `uncons` takes linear time
+and allocates the remainder, while `partition` takes linear time and allocates
+two output Stores containing a total of `Array.length xs` elements. Stable
+partition cannot generally reuse the input Store as either output without
+moving the other class or retaining a view. `Array.append left right` visits
+`right` and produces one contiguous result; the generic monoid operation does
+not itself promise that either input allocation is reused. Append neither
+aliases both inputs nor restores a Store previously separated by `partition`.
+Zero-copy split/rejoin is the separate `Slice`/region operation and carries its
+proof explicitly.
 
 `Array.get` and `Array.length` bind their array parameter with `&`: observing an
 array does not consume it. An explicitly borrowed array must be passed in that
 position directly; the borrow cannot be retained by an intervening binding.
 
-`@array.get xs index` and `@array.set xs index value` are the direct path. The
-checker accepts them only when every value of `index` is inside
-`0..@array.len xs - 1`. An index known to be outside reports
+`@array.get xs index`, `@array.set xs index value`, `@array.take xs index`, and
+`@array.split xs index` are the direct path. The checker accepts them only when
+every value of `index` is inside `0..@array.len xs - 1`. An index known to be outside reports
 `BLOT_OUT_OF_BOUNDS`; an index with no sufficient proof reports
 `BLOT_UNPROVEN_INDEX` and points to the total API:
 
@@ -2463,6 +2527,10 @@ return @array.get xs 99   // BLOT_OUT_OF_BOUNDS: Index 99 is outside an array of
 The proof belongs to the saturated primitive call. These primitives cannot be
 aliased or partially applied: doing so would separate the eventual index from
 the site that must carry its certificate and is `BLOT_ARRAY_ACCESS_NOT_DIRECT`.
+`get` and `set` have total `Array.get` and `Array.set` wrappers. Consuming
+`take` and `split` deliberately do not: replacing their proof with an empty
+fallback would either discard an owned element or encode an optional element as
+an unconstrained array.
 
 ```blot
 sig at = [Int] -> Int -> Int
@@ -2478,11 +2546,11 @@ same immutable array value. The primitive records an erasable `array-index`
 certificate containing normalized literal-or-identity terms and the affine
 assumptions used to prove the interval. The certificate contains no inference
 type, and a separate difference-constraint checker must replay it before
-lowering may emit the Store read. After replay, the direct Runtime-HIR emitter
-omits a second bounds decision: an invalid index must have been refused by the
-checker, while the total prelude operation reaches the read only through its
-ordinary successful guard. Gpufuck's range pass applies the same erasure to the
-certified residual comparison.
+lowering may emit the Store access or decomposition. After replay, the direct
+Runtime-HIR emitter omits a second bounds decision: an invalid index must have
+been refused by the checker, while a total prelude read or write reaches the
+direct primitive only through its ordinary successful guard. Gpufuck's range
+pass applies the same erasure to the certified residual comparison.
 
 `@array.indexed xs` is the proof-producing traversal path (§9.2). Its `.step`
 performs one bounds decision to decide whether another element exists. A
@@ -2633,8 +2701,8 @@ record currently exports:
 - structural interfaces: `Empty`, `Length`, `Semigroup`, `Monoid`, `Mappable`,
   `Foldable`, `Filterable`, and `Iterable`;
 - text: `Text`, `text_eq`;
-- arrays: `Array`, `fold`, `each`, `map`, `filter`, `sum`, `upto`, `any`,
-  `every`, and `sort_by`;
+- arrays: `Array`, `fold`, `each`, `map`, `filter`, `partition`, `sum`, `upto`,
+  `any`, `every`, and `sort_by`;
 - collections: `List`, `Map`, `Set`, and the text-keyed `Dict` specialization;
 - iterators: `ever`, `Iter`, `iterate`, and `collect`;
 - variants: `Option`, `None`, `Some`, `unwrap_or`, `Result`, `Ok`, `Error`;
@@ -2666,7 +2734,17 @@ borrowed `length`, and safe `get` over the same array representation. Ownership
 remains a separate flow property rather than part of the structural interface
 type. The default `<>` remains the concrete text operation `Text.append`. A
 module that wants the same spelling for arrays declares `Array.append` as its
-operator target.
+operator target. Left association also matches the source operation's
+left-to-right accumulation and avoids building the whole right-hand join before
+the left-hand one begins:
+
+```blot
+operators {
+  infixl 55 (<>) = Array.append;
+}
+
+let joined = left <> middle <> right
+```
 
 Collection interfaces are structural too:
 

@@ -8,21 +8,6 @@ let keep_swap = fn (!region, left, right) =>
     #Updated !updated => updated
     #SwapOutOfBounds !original => original
 
-sig partition = (Slice.of Int, Int, Int, Int, Int, Int) -> (Slice.of Int, Int)
-let rec partition =
-  fn (!region, pivot, low, scan, boundary, limit) =>
-    if scan >= limit:
-      return (!region, boundary)
-    else:
-      let current = case Slice.get ((&region), scan) of
-        #Some value => value
-        #None => @panic "partition index escaped its Region"
-      if current <= pivot:
-        let updated = keep_swap ((!region), scan, boundary)
-        return partition (!updated, pivot, low, scan + 1, boundary + 1, limit)
-      else:
-        return partition (!region, pivot, low, scan + 1, boundary, limit)
-
 sig sort_work = (Slice.of Int, [(Int, Int)], Int) -> Slice.of Int
 let rec sort_work =
   fn (!region, work, cursor) =>
@@ -40,8 +25,14 @@ let rec sort_work =
         let pivot = case Slice.get ((&region), last) of
           #Some value => value
           #None => @panic "pivot index escaped its Region"
-        let (partitioned, boundary) =
-          partition (!region, pivot, low, low, low, last)
+        let (!partitioned, boundary) = case Slice.partition_range (
+          (!region),
+          low,
+          last,
+          fn value => value <= pivot
+        ) of
+          #Partitioned (!updated, middle) => (updated, middle)
+          #PartitionOutOfBounds (!original, fallback) => (original, fallback)
         let updated = keep_swap ((!partitioned), boundary, last)
         let pending =
           @array.push (@array.push work (low, boundary)) (boundary + 1, high)

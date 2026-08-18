@@ -181,6 +181,139 @@ return first * 10 + last
   });
 });
 
+Deno.test("dynamic refined array take and split return plain tuples", async () => {
+  const cases = [
+    {
+      call: "@array.take values at",
+      result: `let (selected, remainder) = decomposed
+  return selected * 100 + Array.length remainder`,
+      success: 2_002n,
+    },
+    {
+      call: "@array.split values at",
+      result: `let (before, selected, suffix) = decomposed
+  return Array.length before * 100 + selected * 10 + Array.length suffix`,
+      success: 301n,
+    },
+  ];
+  for (const case_ of cases) {
+    const source = `open import "blot:prelude"
+const Source = @effect.host { .value = Int -> Int; .index = Int -> Int; }
+value <- Source.value 0
+at <- Source.index 0
+let values = [value, 20, 30]
+if at >= 0 && at < Array.length values:
+  let decomposed = ${case_.call}
+  ${case_.result}
+else:
+  return Array.length values
+`;
+
+    await withSource(source, async (compiler, path) => {
+      const hir = await compiler.prepare(path);
+      const operationKinds = new Set(
+        allOperations(hir).map((operation) => operation.kind),
+      );
+      assert(operationKinds.has("store.length"));
+      assert(operationKinds.has("store.read"));
+      assert(operationKinds.has("store.grow"));
+      const artifact = await compiler.compile(path);
+      for (const [index, expected] of [[1n, case_.success], [-1n, 3n]]) {
+        const run = await instantiateDefault(artifact.wasm, {
+          "blot:host/Source": {
+            value: (_: bigint) => 9n,
+            index: (_: bigint) => index,
+          },
+        });
+        assertEquals(run(), expected);
+      }
+    });
+  }
+});
+
+Deno.test("structural quicksort residualizes direct recursion without collection opcodes", async () => {
+  const source = `operators {
+  infixl 55 (<>) = Array.append;
+}
+
+open import "blot:prelude"
+const Source = @effect.host { .value = Int -> Int; }
+
+sig quicksort = [Int] -> [Int]
+let rec quicksort = fn values => case Array.uncons values of
+  #None => []
+  #Some (pivot, rest) =>
+    let (smaller, larger) =
+      Array.partition (rest, fn value => value <= pivot)
+    return quicksort smaller <> [pivot] <> quicksort larger
+
+sig ordered_checksum = ([Int], Int, Int) -> Int
+let rec ordered_checksum = fn (values, index, total) =>
+  if index >= Array.length values:
+    return total
+  else:
+    let value = case Array.get (values, index) of
+      #Some item => item
+      #None => 0
+    return ordered_checksum (values, index + 1, total + (index + 1) * value)
+
+dynamic <- Source.value 0
+let sorted = quicksort [dynamic, 7, 3, 8, 2, 6, 1, 5]
+return ordered_checksum (sorted, 0, 0)
+`;
+
+  await withSource(source, async (compiler, path) => {
+    const hir = await compiler.prepare(path);
+    assert(
+      allOperations(hir).some((operation) =>
+        operation.kind === "call.direct"
+      ),
+      "non-tail structural recursion must remain a direct Runtime-HIR call",
+    );
+    assert(
+      allOperations(hir).every((operation) =>
+        !operation.kind.includes("quicksort") &&
+        !operation.kind.includes("partition") &&
+        !operation.kind.includes("uncons")
+      ),
+      "collection algorithms must be expressed through generic Runtime-HIR operations",
+    );
+    const artifact = await compiler.compile(path);
+    const run = await instantiateDefault(artifact.wasm, {
+      "blot:host/Source": { value: (_: bigint) => 4n },
+    });
+    assertEquals(run(), 204n);
+  });
+});
+
+Deno.test("direct recursive functions close over dynamic values", async () => {
+  const source = `open import "blot:prelude"
+const Source = @effect.host { .value = Int -> Int; }
+offset <- Source.value 0
+sig add_depth = Int -> Int
+let rec add_depth = fn depth =>
+  if depth <= 0:
+    return offset
+  else:
+    return 1 + add_depth (depth - 1)
+return add_depth 3
+`;
+
+  await withSource(source, async (compiler, path) => {
+    const hir = await compiler.prepare(path);
+    const recursive = hir.functions.find((fn) =>
+      fn.name.startsWith("blot:recursive:")
+    );
+    assert(recursive !== undefined);
+    assertEquals(hir.signatures[recursive.signature].parameters.length, 2);
+    const artifact = await compiler.compile(path);
+    const run = await instantiateDefault(artifact.wasm, {
+      "blot:host/Source": { value: (_: bigint) => 9n },
+    });
+    assertEquals(run(), 12n);
+  });
+});
+
 Deno.test("Slice claim copies shared Stores but reuses proven private Stores", async () => {
   const source = (owned: boolean) =>
     `open import "blot:prelude"
