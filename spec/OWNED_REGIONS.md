@@ -893,6 +893,20 @@ requires both outputs, so the abstraction may forget a position but cannot
 duplicate or drop its owner. Swap merely permutes positions and never changes
 the multiset of obligations.
 
+The witness records only the interval equation `L * R = P`; it never snapshots
+`Eₗ`, `Eᵣ`, or `E`. Join therefore matches the witness against the two live
+child authorities and reconstructs the parent with the children's current
+element trees in left-to-right order. In particular, a successful replacement
+inside either child cannot invalidate the interval proof, and join must not
+restore the stale element tree that existed when split minted the witness. When
+control-flow alternatives return the same interval authority, the checker
+likewise keeps one authority and joins only their alternative element trees. It
+must not combine mutually exclusive results into two simultaneous authorities.
+For a generic region parameter, element partitions remain rooted in that
+parameter until call-site substitution. Substitution replays the partition over
+the caller's actual element tree; an unrestricted tree therefore yields no
+synthetic obligation, while an owned tree retains the same extraction identity.
+
 The non-consuming `get` and discarding `set` remain valid only when the hidden
 element tree is unrestricted. The checker defers that condition for a symbolic
 region parameter and replays it after caller substitution. `replace` is the

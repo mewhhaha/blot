@@ -19,6 +19,7 @@
 // declarations that use it; the complete namespace is assembled after its
 // remaining operations have been defined.
 
+
 const Type =
   {
     .union = fn left => fn right => @type.union left right;
@@ -1617,6 +1618,194 @@ const packed = fn shape =>
     );
   }
 
+
+// --- owned ordered text maps -----------------------------------------------
+//
+// A sorted text-keyed map is an ordinary collection adapter over Slice. The
+// entry product is a real Type value built by struct; its storage is still the
+// two-slot tuple accepted by the persistent Map representation.
+const ordered_text_map_entry_type =
+  fn value =>
+    let entry = struct { .key = Str; .value = value; }
+    return @type.attach entry "ordered_text_map_entry" ()
+
+const ordered_text_map_type =
+  fn value => @region.type (ordered_text_map_entry_type value)
+
+sig ordered_text_map_is_strict =
+  @forall (fn V =>
+    return ([ordered_text_map_entry_type V], Int, Int) -> Bool
+  )
+const ordered_text_map_is_strict =
+  rec (fn (&entries, index, length) =>
+    if index >= length:
+      return True
+    else:
+      let previous = case array_get ((&entries), index - 1) of
+        #Some entry => entry
+        #None => @panic "ordered-map validation escaped its input"
+      let current = case array_get ((&entries), index) of
+        #Some entry => entry
+        #None => @panic "ordered-map validation escaped its input"
+      if is_less (@text.cmp previous.0 current.0):
+        return ordered_text_map_is_strict (
+          (&entries),
+          index + 1,
+          length
+        )
+      else:
+        return False
+  )
+
+sig ordered_text_map_claim =
+  @forall (fn V =>
+    return [ordered_text_map_entry_type V] ->
+      @region.type (ordered_text_map_entry_type V)
+  )
+const ordered_text_map_claim = fn entries =>
+  let length = @array.len (&entries)
+  if ordered_text_map_is_strict ((&entries), 1, length):
+    return @region.claim entries
+  else:
+    return @panic "OrderedTextMap.claim requires strictly increasing keys"
+
+sig ordered_text_map_validate =
+  @forall (fn V => [ordered_text_map_entry_type V] -> Bool)
+const ordered_text_map_validate = fn &entries =>
+  let length = @array.len (&entries)
+  return ordered_text_map_is_strict ((&entries), 1, length)
+
+sig ordered_text_map_lower_bound_from =
+  @forall (fn V =>
+    return (
+      @region.type (ordered_text_map_entry_type V),
+      Str,
+      Int,
+      Int
+    ) -> Int
+  )
+const ordered_text_map_lower_bound_from =
+  rec (fn (&entries, key, low, high) =>
+    if low >= high:
+      return low
+    else:
+      let middle = low + (high - low) / 2
+      let entry = case @region.get (&entries) middle of
+        #Some found => found
+        #None => @panic "ordered-map search escaped its key range"
+      if is_less (@text.cmp entry.0 key):
+        return ordered_text_map_lower_bound_from (
+          (&entries),
+          key,
+          middle + 1,
+          high
+        )
+      else:
+        return ordered_text_map_lower_bound_from (
+          (&entries),
+          key,
+          low,
+          middle
+        )
+  )
+
+sig ordered_text_map_lower_bound =
+  @forall (fn V =>
+    return (
+      @region.type (ordered_text_map_entry_type V),
+      Str
+    ) -> Int
+  )
+const ordered_text_map_lower_bound = fn (&entries, key) =>
+  let length = @region.length (&entries)
+  return ordered_text_map_lower_bound_from (
+    (&entries),
+    key,
+    0,
+    length
+  )
+
+sig ordered_text_map_get =
+  @forall (fn V =>
+    return (
+      @region.type (ordered_text_map_entry_type V),
+      Str
+    ) -> (#Some V | #None)
+  )
+const ordered_text_map_get = fn (&entries, key) =>
+  let index = ordered_text_map_lower_bound ((&entries), key)
+  return case @region.get (&entries) index of
+    #Some entry =>
+      if text_eq (entry.0, key):
+        return #Some entry.1
+      else:
+        return #None
+    #None => #None
+
+sig ordered_text_map_replace =
+  @forall (fn V =>
+    return (
+      @region.type (ordered_text_map_entry_type V),
+      Str,
+      V
+    ) -> (
+      #MapReplaced (V, @region.type (ordered_text_map_entry_type V)) |
+      #MapMissing (V, @region.type (ordered_text_map_entry_type V))
+    )
+  )
+const ordered_text_map_replace = fn (!entries, key, replacement) =>
+  let index = ordered_text_map_lower_bound ((&entries), key)
+  return case @region.get (&entries) index of
+    #Some entry =>
+      if text_eq (entry.0, key):
+        return case @region.set (!entries) index (entry.0, replacement) of
+          #Updated !updated => #MapReplaced (entry.1, updated)
+          #SetOutOfBounds !original => #MapMissing (replacement, original)
+      else:
+        return #MapMissing (replacement, entries)
+    #None => #MapMissing (replacement, entries)
+
+sig ordered_text_map_split_before =
+  @forall (fn V =>
+    return (
+      @region.type (ordered_text_map_entry_type V),
+      Str
+    ) -> (#Split (
+        @region.type (ordered_text_map_entry_type V),
+        @region.type (ordered_text_map_entry_type V),
+        @region.rejoin
+      ) | #SplitOutOfBounds (
+        @region.type (ordered_text_map_entry_type V)
+      ))
+  )
+const ordered_text_map_split_before = fn (!entries, key) =>
+  let index = ordered_text_map_lower_bound ((&entries), key)
+  return @region.split (!entries) index
+
+sig ordered_text_map_freeze =
+  @forall (fn V =>
+    return @region.type (ordered_text_map_entry_type V) ->
+      [ordered_text_map_entry_type V]
+  )
+const ordered_text_map_freeze = fn !entries => @region.freeze (!entries)
+
+const OrderedTextMap =
+  {
+    .entry = ordered_text_map_entry_type;
+    .of = ordered_text_map_type;
+    .validate = ordered_text_map_validate;
+    .claim = ordered_text_map_claim;
+    .length = slice_length;
+    .lower_bound = ordered_text_map_lower_bound;
+    .get = ordered_text_map_get;
+    .replace = ordered_text_map_replace;
+    .split_before = ordered_text_map_split_before;
+    .join = slice_join;
+    .reassociate_left = slice_reassociate_left;
+    .reassociate_right = slice_reassociate_right;
+    .freeze = ordered_text_map_freeze;
+  }
+
 const Type =
   {
     ...Type;
@@ -1690,6 +1879,7 @@ return {
   .Map = Map;
   .Set = Set;
   .Dict = Dict;
+  .OrderedTextMap = OrderedTextMap;
 
   .Option = Option;
   .None = None;

@@ -141,6 +141,34 @@ return case Slice.replace ((!region), 0, (fn () => consume (!new_token))) of
   assertEquals(checked.type, "Int");
 });
 
+Deno.test("Region join preserves replacement inside a split child", async () => {
+  const checked = await checkSource(
+    path,
+    `open import "blot:prelude"
+let consume = fn !value => value
+let !old_token = 40
+let !new_token = 2
+let whole = Slice.claim [fn () => consume (!old_token), fn () => 1]
+let restored = case Slice.split ((!whole), 1) of
+  #Split (!left, !right, !rejoin) =>
+    return case Slice.replace ((!left), 0, (fn () => consume (!new_token))) of
+      #Replaced (!old, !updated) =>
+        let joined = Slice.join ((!rejoin), (!updated), (!right))
+        let [current, tail] = Slice.freeze (!joined)
+        return (old ()) + (current ()) + (tail ())
+      #ReplaceOutOfBounds (!replacement, !original) =>
+        let joined = Slice.join ((!rejoin), (!original), (!right))
+        let [current, tail] = Slice.freeze (!joined)
+        return (replacement ()) + (current ()) + (tail ())
+  #SplitOutOfBounds !original =>
+    let [first, second] = Slice.freeze (!original)
+    return (first ()) + (second ()) + consume (!new_token)
+return restored
+`,
+  );
+  assertEquals(checked.type, "Int");
+});
+
 Deno.test("nested Region witnesses reassociate in both directions", async () => {
   const checked = await checkSource(
     path,

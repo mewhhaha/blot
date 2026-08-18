@@ -56,9 +56,10 @@ export type Produced =
     readonly elements: Produced;
   }
   /**
-   * The recombination witness a split mints: which two part authorities
-   * rejoin into which parent. Pairing is by produced-value identity, so the
-   * proof travels through bindings and calls like any linear value.
+   * The element-free recombination witness a split mints: which two interval
+   * authorities rejoin into which parent. It travels through bindings and
+   * calls like any linear value while current element obligations stay on the
+   * Regions.
    */
   | {
     readonly tag: "region-witness";

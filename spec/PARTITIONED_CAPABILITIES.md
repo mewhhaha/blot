@@ -358,12 +358,12 @@ Hash buckets are a runtime detail and must not be the logical footprint if
 rehashing can move them. A range-partitioned ordered map may instead use key
 ranges, with explicit treatment of boundary keys.
 
-`OWNED_ORDERED_MAPS.md` specifies the first production collection adapter
-along that second route. Strictly ordered immutable text keys refine existing
-array intervals into contiguous key ranges, so the adapter reuses the
-`array-interval` compiler family. It is evidence that one proof family can
-support more than one public data-structure API; it is not yet the
-non-contiguous `map-key-set` family modeled by the law tests.
+`OWNED_ORDERED_MAPS.md` specifies the first production collection adapter along
+that second route. Strictly ordered immutable text keys refine existing array
+intervals into contiguous key ranges, so the adapter reuses the `array-interval`
+compiler family. It is evidence that one proof family can support more than one
+public data-structure API; it is not yet the non-contiguous `map-key-set` family
+modeled by the law tests.
 
 ### 7.6 Arenas and allocators
 

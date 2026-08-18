@@ -5,17 +5,26 @@ open import "blot:prelude"
 let consume = fn !value => value
 let !old_token = 40
 let !new_token = 2
-let owned_values = [fn () => consume (!old_token)]
+let owned_values = [fn () => consume (!old_token), fn () => 1]
 let owned = Slice.claim owned_values
-let settle = fn (!old, !region) =>
-  let frozen = Slice.freeze (!region)
-  let [current] = frozen
-  return old () + current ()
-let replaced =
-  case Slice.replace ((!owned), 0, fn () => consume (!new_token)) of
-    #Replaced (!old, !updated) => settle ((!old), (!updated))
-    #ReplaceOutOfBounds (!replacement, !original) =>
-      return settle ((!replacement), (!original))
+let replaced = case Slice.split ((!owned), 1) of
+  #Split (!left, !right, !rejoin) =>
+    return case Slice.replace (
+      (!left),
+      0,
+      fn () => consume (!new_token)
+    ) of
+      #Replaced (!old, !updated) =>
+        let joined = Slice.join ((!rejoin), (!updated), (!right))
+        let [current, tail] = Slice.freeze (!joined)
+        return old () + current () + tail ()
+      #ReplaceOutOfBounds (!replacement, !original) =>
+        let joined = Slice.join ((!rejoin), (!original), (!right))
+        let [current, tail] = Slice.freeze (!joined)
+        return replacement () + current () + tail ()
+  #SplitOutOfBounds !original =>
+    let [first, second] = Slice.freeze (!original)
+    return first () + second () + consume (!new_token)
 
 let whole = Slice.claim [1, 2, 3]
 let rotated = case Slice.split ((!whole), 1) of

@@ -1,0 +1,10 @@
+// OrderedTextMap reads complete entries while validating and searching. Until
+// Blot has field borrows, that cannot copy a value carrying an obligation.
+
+open import "blot:prelude"
+
+let consume = fn !value => value
+let !token = 1
+let entries =
+  OrderedTextMap.claim [("a", fn () => consume (!token))]
+return OrderedTextMap.freeze (!entries)
