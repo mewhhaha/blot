@@ -520,6 +520,21 @@ return case @array.take values index of
 `,
 );
 
+rejects(
+  "Array.uncons leaves owned extraction to Array.take",
+  `let consume = fn !value => @int.add value 1
+let !left = 40
+let !right = 41
+let values = [fn () => consume (!left), fn () => consume (!right)]
+return case Array.uncons values of
+  #Some (selected, remainder) => case remainder of
+    [other] => @int.add (selected ()) (other ())
+
+  #None => 0
+`,
+  "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
+);
+
 accepts(
   "array split makes every dynamic partition component explicit",
   `${CONSUME}let !token = 41

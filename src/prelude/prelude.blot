@@ -282,6 +282,18 @@ const array_filter = fn (values, keep) => fold (
     #False => state
 )
 
+const array_partition = fn (values, belongs_left) => fold (
+  values,
+  (@array.empty, @array.empty),
+  fn ((left, right), value) => case belongs_left value of
+    #True => (@array.push left value, right)
+    #False => (left, @array.push right value)
+)
+
+const array_uncons = fn values => case @array.take values 0 of
+  #Taken pair => #Some pair
+  #TakeOutOfBounds _ => #None
+
 const array_items = fn values => {
   .state = 0;
   .step = fn index => case array_get (values, index) of
@@ -297,6 +309,8 @@ const Array =
     .fold = fold;
     .map = array_map;
     .filter = array_filter;
+    .partition = array_partition;
+    .uncons = array_uncons;
     .items = array_items;
     .length = fn &values => @array.len (&values);
     .get = array_get;
@@ -413,6 +427,8 @@ const each = fn (values, visit) =>
 const map = array_map
 
 const filter = array_filter
+
+const partition = array_partition
 
 const sum = fn values =>
   return fold (
@@ -1859,6 +1875,7 @@ return {
   .each = each;
   .map = map;
   .filter = filter;
+  .partition = partition;
   .sum = sum;
   .upto = upto;
   .ever = ever;

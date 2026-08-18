@@ -16,9 +16,24 @@ let split_lengths = case split of
     Array.length after
   )
   #SplitOutOfBounds _ => (0, 0, 0)
+let head = case Array.uncons [10, 20, 30] of
+  #Some (value, remainder) => (value, Array.length remainder)
+  #None => (0, 0)
+let empty_head = case Array.uncons [] of
+  #Some _ => False
+  #None => True
+let (even, odd) =
+  Array.partition (
+  [1, 2, 3, 4, 5, 6],
+  fn value => value % 2 == 0
+)
 
 return {
   .taken_value = taken_value;
   .missed_length = missed_length;
   .split_lengths = split_lengths;
+  .head = head;
+  .empty_head = empty_head;
+  .even = even;
+  .odd = odd;
 }

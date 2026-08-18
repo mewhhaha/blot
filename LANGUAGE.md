@@ -2448,9 +2448,10 @@ array whose elements carry ownership obligations.
 `Array.uncons xs` is the index-free decomposition used by structural array
 algorithms. It consumes `xs` and returns `#None` exactly when it is empty;
 otherwise it returns `#Some (first, remainder)`. The remainder preserves the
-order of every element after `first`. Unlike `take`, an empty result need not
-return the source because the failed decomposition proves that the consumed
-array contains no element obligation.
+order of every element after `first`. Its ordinary parameter admits arrays
+whose elements have no ownership obligation. An owned element needs the
+failure arm to return its source explicitly, so such code continues to use
+`Array.take` rather than hiding that obligation behind `#None`.
 
 `Array.partition (xs, belongs_left)` classifies an array in one stable pass. It
 calls `belongs_left` exactly once for each element and returns `(left, right)`;
@@ -2465,10 +2466,11 @@ and allocates the remainder, while `partition` takes linear time and allocates
 two output Stores containing a total of `Array.length xs` elements. Stable
 partition cannot generally reuse the input Store as either output without
 moving the other class or retaining a view. `Array.append left right` visits
-`right`; when ownership proves that `left` is consumed, its Store growth may
-reuse the left allocation, but append neither aliases both inputs nor restores
-a Store previously separated by `partition`. Zero-copy split/rejoin is the
-separate `Slice`/region operation and carries its proof explicitly.
+`right` and produces one contiguous result; the generic monoid operation does
+not itself promise that either input allocation is reused. Append neither
+aliases both inputs nor restores a Store previously separated by `partition`.
+Zero-copy split/rejoin is the separate `Slice`/region operation and carries its
+proof explicitly.
 
 `Array.get` and `Array.length` bind their array parameter with `&`: observing an
 array does not consume it. An explicitly borrowed array must be passed in that
@@ -2691,8 +2693,9 @@ borrowed `length`, and safe `get` over the same array representation. Ownership
 remains a separate flow property rather than part of the structural interface
 type. The default `<>` remains the concrete text operation `Text.append`. A
 module that wants the same spelling for arrays declares `Array.append` as its
-operator target. Because `Array.append` grows its left operand, left association
-lets a chain reuse one proven-unique accumulator:
+operator target. Left association also matches the source operation's
+left-to-right accumulation and avoids building the whole right-hand join before
+the left-hand one begins:
 
 ```blot
 operators {

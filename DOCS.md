@@ -762,6 +762,28 @@ The same rule applies to collection operations. Prefer `Array.empty`,
 implementing the abstraction, when ownership-specific behavior is the subject,
 or when no prelude operation can express the capability.
 
+Decompose and classify ordinary arrays with the public operations:
+
+```blot
+operators {
+  infixl 55 (<>) = Array.append;
+}
+
+let result = case Array.uncons values of
+  #None => []
+  #Some (first, rest) =>
+    let (small, large) = partition (rest, fn value => value <= first)
+    return small <> [first] <> large
+```
+
+`partition` is one stable pass, while two filters visit and test every element
+twice. These ordinary arrays are independent contiguous values: `<>` names the
+array monoid but does not make partition and append a zero-copy split/rejoin.
+Use `Slice.split` and `Slice.join` when the algorithm must retain one owned
+backing Store and carry the recombination proof explicitly. `Array.uncons`
+likewise serves ordinary value arrays; use `Array.take` when an out-of-bounds
+arm must return an array containing owned elements.
+
 ## Treat types as compile-time values
 
 There is no separate type namespace or declaration form:
