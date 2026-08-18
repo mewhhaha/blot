@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { join } from "@std/path";
 import { checkSource } from "../../src/check/mod.ts";
+import { show } from "../../src/comptime/value.ts";
 import { BlotError } from "../../src/diagnostic.ts";
 import { evaluateFile } from "../../src/run.ts";
 
@@ -116,6 +117,52 @@ return result
     );
     const result = await evaluateFile(file, { write() {} });
     assertEquals(result, { tag: "int", value: 207n });
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("Slice partition is a pure consuming in-place transform", async () => {
+  const directory = await Deno.makeTempDir();
+  const file = join(directory, "root.blot");
+  try {
+    await Deno.writeTextFile(
+      file,
+      `open import "blot:prelude"
+let region = Slice.claim [5, 2, 4, 1, 3]
+let (!partitioned, boundary) =
+  Slice.partition ((!region), fn value => value <= 3)
+return (Slice.freeze (!partitioned), boundary)
+`,
+    );
+    const result = await evaluateFile(file, { write() {} });
+    assertEquals(show(result), "([2, 1, 3, 5, 4], 3)");
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("Slice partition range conserves authority on bounds failure", async () => {
+  const directory = await Deno.makeTempDir();
+  const file = join(directory, "root.blot");
+  try {
+    await Deno.writeTextFile(
+      file,
+      `open import "blot:prelude"
+let region = Slice.claim [1, 2, 3]
+let result = case Slice.partition_range (
+  (!region),
+  2,
+  4,
+  fn value => value <= 2
+) of
+  #Partitioned (!updated, boundary) => (Slice.freeze (!updated), boundary)
+  #PartitionOutOfBounds (!original, start) => (Slice.freeze (!original), start)
+return result
+`,
+    );
+    const result = await evaluateFile(file, { write() {} });
+    assertEquals(show(result), "([1, 2, 3], 2)");
   } finally {
     await Deno.remove(directory, { recursive: true });
   }
