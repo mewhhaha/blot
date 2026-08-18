@@ -24,10 +24,12 @@ interface Counters {
 interface Measurement extends Counters {
   readonly algorithm: "persistent" | "owned-region";
   readonly compileMs: number;
-  readonly elementPersistentWrites: number;
   readonly medianUs: number;
   readonly size: number;
   readonly wasmBytes: number;
+  readonly writeImport: "none" | "owned" | "persistent" | "both";
+  readonly writeOwnedSites: number;
+  readonly writePersistentSites: number;
 }
 
 const directory = await mkdtemp(join(tmpdir(), "blot-owned-regions-"));
@@ -77,7 +79,9 @@ try {
     "persistent write": measurement.writePersistent,
     "owned grow": measurement.growOwned,
     "owned write": measurement.writeOwned,
-    "element persistent write sites": measurement.elementPersistentWrites,
+    "write import": measurement.writeImport,
+    "persistent write sites": measurement.writePersistentSites,
+    "owned write sites": measurement.writeOwnedSites,
   })));
 } finally {
   compiler.destroy();
@@ -118,27 +122,61 @@ async function measure(
     trial.run();
     times.push((performance.now() - before) * 1_000);
   }
-  let elementPersistentWrites = 0;
   const operations = hir.functions.flatMap((fn) =>
     fn.blocks.flatMap((block) => block.operations)
   );
-  const ownedWrite = operations.find((operation) =>
+  const writeOwnedSites = operations.filter((operation) =>
     operation.kind === "store.write" && operation.update === "owned-reuse"
+  ).length;
+  const writePersistentSites = operations.filter((operation) =>
+    operation.kind === "store.write" && operation.update === "persistent"
+  ).length;
+  const module = await WebAssembly.compile(artifact.wasm as BufferSource);
+  const importedNames = new Set(
+    WebAssembly.Module.imports(module).map((entry) => entry.name),
   );
-  if (ownedWrite !== undefined) {
-    elementPersistentWrites = operations.filter((operation) =>
-      operation.kind === "store.write" &&
-      operation.type === ownedWrite.type &&
-      operation.update === "persistent"
-    ).length;
+  const importsOwnedWrite = importedNames.has("store_write_owned");
+  const importsPersistentWrite = importedNames.has("store_write_persistent");
+  const writeImport = importsOwnedWrite && importsPersistentWrite
+    ? "both"
+    : importsOwnedWrite
+    ? "owned"
+    : importsPersistentWrite
+    ? "persistent"
+    : "none";
+  if (
+    algorithm === "persistent" &&
+    (counted.counters.writePersistent === 0 ||
+      counted.counters.writeOwned !== 0 ||
+      writePersistentSites === 0 ||
+      writeOwnedSites !== 0 ||
+      writeImport !== "persistent")
+  ) {
+    throw new Error(
+      "persistent path did not lower exclusively to persistent writes",
+    );
+  }
+  if (
+    algorithm === "owned-region" &&
+    (counted.counters.writeOwned === 0 ||
+      counted.counters.writePersistent !== 0 ||
+      writeOwnedSites === 0 ||
+      writePersistentSites !== 0 ||
+      writeImport !== "owned")
+  ) {
+    throw new Error(
+      "owned path did not lower exclusively to owned writes",
+    );
   }
   return {
     algorithm,
     compileMs,
-    elementPersistentWrites,
     medianUs: median(times),
     size,
     wasmBytes: artifact.wasm.byteLength,
+    writeImport,
+    writeOwnedSites,
+    writePersistentSites,
     ...counted.counters,
   };
 }
@@ -199,7 +237,7 @@ let rec sort_work = fn (values, work, cursor) =>
 dynamic <- Source.value 0
 let values = [dynamic, ${values.slice(1).join(", ")}]
 let sorted = sort_work (values, [(0, Array.length values)], 0)
-${checksumSource(values.length)}
+${checksumSource()}
 `;
 }
 
@@ -209,22 +247,22 @@ let region = Slice.claim [dynamic, ${values.slice(1).join(", ")}]
 let length = Slice.length (&region)
 let sorted_region = sort_work (!region, [(0, length)], 0)
 let sorted = Slice.freeze (!sorted_region)
-${checksumSource(values.length)}
+${checksumSource()}
 `;
 }
 
-function checksumSource(size: number): string {
-  const middle = Math.floor(size / 2);
-  return `let first = case Array.get (sorted, 0) of
-  #Some value => value
-  #None => 0
-let middle = case Array.get (sorted, ${middle}) of
-  #Some value => value
-  #None => 0
-let last = case Array.get (sorted, ${size - 1}) of
-  #Some value => value
-  #None => 0
-return first * 1000000 + middle * 1000 + last`;
+function checksumSource(): string {
+  return `sig ordered_checksum = ([Int], Int, Int) -> Int
+let rec ordered_checksum = fn (values, index, total) =>
+  if index >= Array.length values:
+    return total
+  else:
+    let value = case Array.get (values, index) of
+      #Some item => item
+      #None => 0
+    return ordered_checksum (values, index + 1, total + (index + 1) * value)
+
+return ordered_checksum (sorted, 0, 0)`;
 }
 
 async function instantiate(
@@ -292,10 +330,10 @@ function shuffledRange(size: number): number[] {
 }
 
 function checksum(values: readonly number[]): bigint {
-  const middle = Math.floor(values.length / 2);
-  const last = values[values.length - 1];
-  if (last === undefined) throw new Error("benchmark input is empty");
-  return BigInt(values[0] * 1_000_000 + values[middle] * 1_000 + last);
+  return BigInt(values.reduce(
+    (total, value, index) => total + (index + 1) * value,
+    0,
+  ));
 }
 
 function median(values: readonly number[]): number {
