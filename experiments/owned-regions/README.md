@@ -1,15 +1,17 @@
 # Owned-region benchmark
 
-`pnpm benchmark:owned-regions` compares the same iterative quicksort control
-flow in two representations:
+`pnpm benchmark:owned-regions` compares three quicksort formulations:
 
 | lane | element update | question |
 | --- | --- | --- |
+| `structural-persistent` | `uncons`, stable `partition`, and `<>` | What does the simplest Haskell-shaped program cost? |
 | `persistent` | `Array.set` swaps | What do persistent element updates cost? |
 | `owned-region` | `Slice.partition_range` | What changes when unique authority permits in-place writes? |
 
-Both lanes have equivalent partitioning and persistent range-worklist structure,
-so their comparison isolates persistent Store copies from owned Store writes.
+The last two lanes have equivalent iterative control flow and persistent
+range-worklist structure, so their comparison isolates persistent Store copies
+from owned Store writes. The structural lane deliberately changes the algorithm
+and is a readability-versus-cost comparison, not part of that isolation claim.
 
 Both lanes sort the same deterministic shuffled permutation. Its first element is
 host-supplied so staging cannot precompute the result. The benchmark checks a
@@ -23,7 +25,16 @@ warmup.
 Let `C(n)` be quicksort's comparisons and `W(n)` its element writes. Both lanes
 retain average `O(n log n)` and worst-case `O(n^2)` comparison work.
 
-The persistent-update lane performs `W(n)` logical Store writes. The gpupaper
+The structural lane has the familiar recurrence
+`T(n) = T(k) + T(n-k-1) + decomposition + partition + joins`. With contiguous
+Stores, `uncons` copies its remainder. Stable partition and `<>` grow persistent
+Stores; the JavaScript runtime copies the existing backing Store at each growth.
+That makes balanced recursive levels approximately `O(n^2)` in element-copy
+work and the maximally unbalanced case `O(n^3)`. This is the price of the
+shortest pure formulation under the current representation, not a semantic
+requirement of `uncons`, partition, recursion, or the monoid operator.
+
+The iterative persistent-update lane performs `W(n)` logical Store writes. The gpupaper
 runtime implements each persistent write by copying the entire backing Store, so
 the element-copy term is `O(n W(n))`: average `O(n^2 log n)` and worst-case
 `O(n^3)` for this representation.
@@ -36,9 +47,12 @@ worklist, whose growth calls are reported rather than hidden.
 
 ## What the measurements establish
 
-- Store import call counts classify the dynamic writes and growth operations.
-- HIR write-site counts verify that the compiled paths selected persistent or
-  owned Store updates before Wasm emission.
+- Store import call counts classify dynamic writes and growth operations.
+- HIR mutation-site counts verify that structural quicksort uses only
+  persistent growth, iterative persistent quicksort uses persistent writes,
+  and the owned element path uses only owned writes.
+- The structural lane additionally asserts a residual `call.direct` and the
+  absence of quicksort, partition, uncons, take, or split Runtime-HIR opcodes.
 - Wasm byte size compares the emitted artifacts for these exact programs.
 - Timings are a local end-to-end regression signal, not a portable native-code
   performance claim. This benchmark uses the JavaScript gpupaper Store runtime;
@@ -52,31 +66,28 @@ runtime.
 
 Measured 2026-08-18 on Node 24.19.0 and Linux x86-64:
 
-| n | persistent median | owned median | speedup | writes in each lane | persistent Wasm | owned Wasm | Wasm reduction |
-| --: | --: | --: | --: | --: | --: | --: | --: |
-| 16 | 233.08 us | 140.08 us | 1.66x | 46 | 11,018 B | 8,255 B | 25.1% |
-| 32 | 525.98 us | 304.61 us | 1.73x | 176 | 11,998 B | 8,763 B | 27.0% |
-| 64 | 823.96 us | 575.46 us | 1.43x | 396 | 13,922 B | 9,754 B | 29.9% |
-| 128 | 1,871.05 us | 1,115.82 us | 1.68x | 832 | 18,017 B | 11,802 B | 34.5% |
+| n | structural median | iterative persistent | owned median | structural Wasm | persistent Wasm | owned Wasm |
+| --: | --: | --: | --: | --: | --: | --: |
+| 16 | 179.14 us | 191.46 us | 144.34 us | 7,003 B | 11,018 B | 8,255 B |
+| 32 | 386.97 us | 575.65 us | 536.55 us | 7,456 B | 11,998 B | 8,763 B |
+| 64 | 968.85 us | 1,104.96 us | 597.59 us | 8,436 B | 13,922 B | 9,754 B |
+| 128 | 2,001.58 us | 1,883.76 us | 1,203.71 us | 10,484 B | 18,017 B | 11,802 B |
 
-For every size, the persistent artifact imported only
-`store_write_persistent` and the owned artifact imported only
-`store_write_owned`. The HIR contained four sites of the corresponding kind in
-each artifact. At runtime, the write counts matched exactly while the owned lane
-executed zero persistent writes. Two repeat runs preserved those structural
-results; local timing ratios varied, as expected for short fresh-instance runs.
+For every size, structural quicksort imported only `store_grow_persistent` and
+executed no Store writes; the iterative persistent artifact imported only
+`store_write_persistent`; and the owned artifact imported only
+`store_write_owned` for element mutation. At `n = 128`, the structural lane
+created 898 Stores and made 3,152 persistent growth calls, while the iterative
+lanes made 832 element writes. The owned lane made all 832 as `owned-reuse` and
+zero as persistent writes. Repeat runs preserved those structural results;
+local timing order between the two persistent formulations varied, as expected
+for short fresh-instance runs, while the owned lane remained fastest here.
 
 ## Functional readability baseline
 
-`examples/quicksort.blot` remains the deliberately allocation-heavy surface
-comparison using `Array.uncons`, stable `Array.partition`, recursion, and `<>`.
-It is not included as a runtime timing lane yet. Making its input host-dynamic
-currently reaches dynamic `@array.take` through `Array.uncons`, and the checked
-Runtime-HIR compiler rejects that primitive before Wasm emission. A staged,
-constant-input artifact would only measure returning a precomputed result and
-would be misleading.
-
-Once dynamic extraction and the recursive functional path are admitted by
-Runtime HIR, that formulation should become a third end-to-end lane. It will be
-a readability-versus-cost comparison, not an ownership-isolation comparison,
-because it also changes control flow and allocation structure.
+`examples/quicksort.blot` is now the executable source for the third lane:
+`Array.uncons` decomposes one element, `Array.partition` performs the stable
+classification, `<>` is ordinary array-monoid append, and non-tail recursion
+becomes a residual `call.direct`. Dynamic `@array.take` and `@array.split`
+compile to generic Store length/read/grow operations and control flow in both
+compiler implementations. No collection-algorithm opcode crosses Runtime HIR.

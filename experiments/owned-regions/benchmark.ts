@@ -22,11 +22,14 @@ interface Counters {
 }
 
 interface Measurement extends Counters {
-  readonly algorithm: "persistent" | "owned-region";
+  readonly algorithm: "structural-persistent" | "persistent" | "owned-region";
   readonly compileMs: number;
   readonly medianUs: number;
   readonly size: number;
   readonly wasmBytes: number;
+  readonly growImport: "none" | "owned" | "persistent" | "both";
+  readonly growOwnedSites: number;
+  readonly growPersistentSites: number;
   readonly writeImport: "none" | "owned" | "persistent" | "both";
   readonly writeOwnedSites: number;
   readonly writePersistentSites: number;
@@ -49,6 +52,15 @@ try {
   const measurements: Measurement[] = [];
   for (const size of sizes) {
     const values = shuffledRange(size);
+    measurements.push(
+      await measure(
+        compiler,
+        directory,
+        "structural-persistent",
+        size,
+        structuralPersistentSource(values),
+      ),
+    );
     measurements.push(
       await measure(
         compiler,
@@ -79,7 +91,10 @@ try {
     "persistent write": measurement.writePersistent,
     "owned grow": measurement.growOwned,
     "owned write": measurement.writeOwned,
+    "grow import": measurement.growImport,
     "write import": measurement.writeImport,
+    "persistent grow sites": measurement.growPersistentSites,
+    "owned grow sites": measurement.growOwnedSites,
     "persistent write sites": measurement.writePersistentSites,
     "owned write sites": measurement.writeOwnedSites,
   })));
@@ -131,19 +146,28 @@ async function measure(
   const writePersistentSites = operations.filter((operation) =>
     operation.kind === "store.write" && operation.update === "persistent"
   ).length;
+  const growOwnedSites = operations.filter((operation) =>
+    operation.kind === "store.grow" && operation.update === "owned-reuse"
+  ).length;
+  const growPersistentSites = operations.filter((operation) =>
+    operation.kind === "store.grow" && operation.update === "persistent"
+  ).length;
   const module = await WebAssembly.compile(artifact.wasm as BufferSource);
   const importedNames = new Set(
     WebAssembly.Module.imports(module).map((entry) => entry.name),
   );
   const importsOwnedWrite = importedNames.has("store_write_owned");
   const importsPersistentWrite = importedNames.has("store_write_persistent");
-  const writeImport = importsOwnedWrite && importsPersistentWrite
-    ? "both"
-    : importsOwnedWrite
-    ? "owned"
-    : importsPersistentWrite
-    ? "persistent"
-    : "none";
+  const importsOwnedGrow = importedNames.has("store_grow_owned");
+  const importsPersistentGrow = importedNames.has("store_grow_persistent");
+  const growImport = classifyUpdateImport(
+    importsOwnedGrow,
+    importsPersistentGrow,
+  );
+  const writeImport = classifyWriteImport(
+    importsOwnedWrite,
+    importsPersistentWrite,
+  );
   if (
     algorithm === "persistent" &&
     (counted.counters.writePersistent === 0 ||
@@ -154,6 +178,28 @@ async function measure(
   ) {
     throw new Error(
       "persistent path did not lower exclusively to persistent writes",
+    );
+  }
+  if (
+    algorithm === "structural-persistent" &&
+    (counted.counters.growPersistent === 0 ||
+      counted.counters.growOwned !== 0 ||
+      counted.counters.writeOwned !== 0 ||
+      growPersistentSites === 0 ||
+      growOwnedSites !== 0 ||
+      writeOwnedSites !== 0 ||
+      growImport !== "persistent" ||
+      !operations.some((operation) => operation.kind === "call.direct") ||
+      operations.some((operation) =>
+        operation.kind.includes("quicksort") ||
+        operation.kind.includes("partition") ||
+        operation.kind.includes("uncons") ||
+        operation.kind.includes("take") ||
+        operation.kind.includes("split")
+      ))
+  ) {
+    throw new Error(
+      "structural persistent path did not lower exclusively to persistent growth",
     );
   }
   if (
@@ -174,11 +220,57 @@ async function measure(
     medianUs: median(times),
     size,
     wasmBytes: artifact.wasm.byteLength,
+    growImport,
+    growOwnedSites,
+    growPersistentSites,
     writeImport,
     writeOwnedSites,
     writePersistentSites,
     ...counted.counters,
   };
+}
+
+function classifyUpdateImport(
+  owned: boolean,
+  persistent: boolean,
+): Measurement["growImport"] {
+  if (owned && persistent) return "both";
+  if (owned) return "owned";
+  if (persistent) return "persistent";
+  return "none";
+}
+
+function classifyWriteImport(
+  owned: boolean,
+  persistent: boolean,
+): Measurement["writeImport"] {
+  if (owned && persistent) return "both";
+  if (owned) return "owned";
+  if (persistent) return "persistent";
+  return "none";
+}
+
+function structuralPersistentSource(values: readonly number[]): string {
+  return `operators {
+  infixl 55 (<>) = Array.append;
+}
+
+open import "blot:prelude"
+const Source = @effect.host { .value = Int -> Int; }
+
+sig quicksort = [Int] -> [Int]
+let rec quicksort = fn values => case Array.uncons values of
+  #None => []
+  #Some (pivot, rest) =>
+    let (smaller, larger) =
+      Array.partition (rest, fn value => value <= pivot)
+    return quicksort smaller <> [pivot] <> quicksort larger
+
+dynamic <- Source.value 0
+let values = [dynamic, ${values.slice(1).join(", ")}]
+let sorted = quicksort values
+${checksumSource()}
+`;
 }
 
 function persistentSource(values: readonly number[]): string {
