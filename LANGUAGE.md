@@ -2445,6 +2445,31 @@ preserving every element. `take` returns `#Taken (value, remainder)` or
 failure returns the original array. These are the extraction operations for an
 array whose elements carry ownership obligations.
 
+`Array.uncons xs` is the index-free decomposition used by structural array
+algorithms. It consumes `xs` and returns `#None` exactly when it is empty;
+otherwise it returns `#Some (first, remainder)`. The remainder preserves the
+order of every element after `first`. Unlike `take`, an empty result need not
+return the source because the failed decomposition proves that the consumed
+array contains no element obligation.
+
+`Array.partition (xs, belongs_left)` classifies an array in one stable pass. It
+calls `belongs_left` exactly once for each element and returns `(left, right)`;
+`left` contains the elements for which the predicate returned `#True`, `right`
+contains the rest, and relative order is preserved within both outputs. This is
+a value-level collection operation, distinct from the partition witnesses of
+owned regions: it produces two independent arrays rather than two authorities
+over one backing Store.
+
+With the current contiguous Store representation, `uncons` takes linear time
+and allocates the remainder, while `partition` takes linear time and allocates
+two output Stores containing a total of `Array.length xs` elements. Stable
+partition cannot generally reuse the input Store as either output without
+moving the other class or retaining a view. `Array.append left right` visits
+`right`; when ownership proves that `left` is consumed, its Store growth may
+reuse the left allocation, but append neither aliases both inputs nor restores
+a Store previously separated by `partition`. Zero-copy split/rejoin is the
+separate `Slice`/region operation and carries its proof explicitly.
+
 `Array.get` and `Array.length` bind their array parameter with `&`: observing an
 array does not consume it. An explicitly borrowed array must be passed in that
 position directly; the borrow cannot be retained by an intervening binding.
@@ -2633,8 +2658,8 @@ record currently exports:
 - structural interfaces: `Empty`, `Length`, `Semigroup`, `Monoid`, `Mappable`,
   `Foldable`, `Filterable`, and `Iterable`;
 - text: `Text`, `text_eq`;
-- arrays: `Array`, `fold`, `each`, `map`, `filter`, `sum`, `upto`, `any`,
-  `every`, and `sort_by`;
+- arrays: `Array`, `fold`, `each`, `map`, `filter`, `partition`, `sum`, `upto`,
+  `any`, `every`, and `sort_by`;
 - collections: `List`, `Map`, `Set`, and the text-keyed `Dict` specialization;
 - iterators: `ever`, `Iter`, `iterate`, and `collect`;
 - variants: `Option`, `None`, `Some`, `unwrap_or`, `Result`, `Ok`, `Error`;
@@ -2666,7 +2691,16 @@ borrowed `length`, and safe `get` over the same array representation. Ownership
 remains a separate flow property rather than part of the structural interface
 type. The default `<>` remains the concrete text operation `Text.append`. A
 module that wants the same spelling for arrays declares `Array.append` as its
-operator target.
+operator target. Because `Array.append` grows its left operand, left association
+lets a chain reuse one proven-unique accumulator:
+
+```blot
+operators {
+  infixl 55 (<>) = Array.append;
+}
+
+let joined = left <> middle <> right
+```
 
 Collection interfaces are structural too:
 
