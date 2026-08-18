@@ -2385,8 +2385,8 @@ signed 64-bit range trap.
 | `@array.set`           | proof-required immutable indexed replacement        |
 | `@array.push`          | immutable append                                    |
 | `@array.indexed`       | iterator yielding an index proof and selected value |
-| `@array.take`          | consuming extraction with the ordered remainder     |
-| `@array.split`         | consuming prefix, selected value, and suffix        |
+| `@array.take`          | proof-required consuming value and remainder         |
+| `@array.split`         | proof-required consuming prefix, value, and suffix  |
 | `@continuation.cancel` | consume a handler continuation without resuming it  |
 | `@shape.empty`         | empty shape                                         |
 | `@shape.get`           | get a field named by text                           |
@@ -2458,23 +2458,37 @@ There are two indexed APIs, chosen explicitly.
 return `#Some result` when `index` is in bounds and `#None` otherwise. Their
 guard is ordinary prelude source.
 
-`Array.take (xs, index)` and `Array.split (xs, index)` consume the input while
-preserving every element. `take` returns `#Taken (value, remainder)` or
-`#TakeOutOfBounds xs`. `split` returns `#Split (before, value, after)` or
-`#SplitOutOfBounds xs`. The successful arrays preserve source order; either
-failure returns the original array. These are the extraction operations for an
-array whose elements carry ownership obligations. Their meaning is identical
-for staged and runtime arrays: making the array or index host-dynamic changes
-when decomposition runs, not which programs the compiler accepts or which
-result it produces.
+`@array.take xs index` and `@array.split xs index` consume the input while
+preserving every element. They are proof-required direct operations:
 
-`Array.uncons xs` is the index-free decomposition used by structural array
-algorithms. It consumes `xs` and returns `#None` exactly when it is empty;
-otherwise it returns `#Some (first, remainder)`. The remainder preserves the
-order of every element after `first`. Its ordinary parameter admits arrays
-whose elements have no ownership obligation. An owned element needs the
-failure arm to return its source explicitly, so such code continues to use
-`Array.take` rather than hiding that obligation behind `#None`.
+```text
+@array.take  : ([A], refined Int) -> (A, [A])
+@array.split : ([A], refined Int) -> ([A], A, [A])
+```
+
+Here `refined Int` is not a second integer representation or a dependent
+runtime type. It means the call-site refinement context proves
+`0 <= index < Array.length xs` for the same immutable array identity. `take`
+returns the selected value and an ordered remainder. `split` returns the
+ordered prefix, selected value, and ordered suffix. No result constructor or
+failure payload remains because an unproved call is rejected before execution.
+The operations must be saturated at their source site and cannot be hidden
+behind an alias or ordinary prelude closure, just like direct `@array.get` and
+`@array.set`.
+
+These are the extraction operations for an array whose elements carry
+ownership obligations. Their meaning is identical for staged and runtime
+arrays: making the array or index host-dynamic changes when decomposition runs,
+not which programs the compiler accepts or which tuple it produces.
+
+`Array.uncons xs` is the index-free total decomposition used by structural
+array algorithms. It consumes `xs` and returns `#None` exactly when it is
+empty; otherwise it establishes `0 < Array.length xs` and returns
+`#Some (first, remainder)` through direct `@array.take xs 0`. The remainder
+preserves the order of every element after `first`. Its ordinary parameter
+admits arrays whose elements have no ownership obligation. Owned extraction
+uses a proved direct `@array.take` or `@array.split` call so every obligation is
+returned without copying.
 
 `Array.partition (xs, belongs_left)` classifies an array in one stable pass. It
 calls `belongs_left` exactly once for each element and returns `(left, right)`;
@@ -2499,9 +2513,9 @@ proof explicitly.
 array does not consume it. An explicitly borrowed array must be passed in that
 position directly; the borrow cannot be retained by an intervening binding.
 
-`@array.get xs index` and `@array.set xs index value` are the direct path. The
-checker accepts them only when every value of `index` is inside
-`0..@array.len xs - 1`. An index known to be outside reports
+`@array.get xs index`, `@array.set xs index value`, `@array.take xs index`, and
+`@array.split xs index` are the direct path. The checker accepts them only when
+every value of `index` is inside `0..@array.len xs - 1`. An index known to be outside reports
 `BLOT_OUT_OF_BOUNDS`; an index with no sufficient proof reports
 `BLOT_UNPROVEN_INDEX` and points to the total API:
 
@@ -2513,6 +2527,10 @@ return @array.get xs 99   // BLOT_OUT_OF_BOUNDS: Index 99 is outside an array of
 The proof belongs to the saturated primitive call. These primitives cannot be
 aliased or partially applied: doing so would separate the eventual index from
 the site that must carry its certificate and is `BLOT_ARRAY_ACCESS_NOT_DIRECT`.
+`get` and `set` have total `Array.get` and `Array.set` wrappers. Consuming
+`take` and `split` deliberately do not: replacing their proof with an empty
+fallback would either discard an owned element or encode an optional element as
+an unconstrained array.
 
 ```blot
 sig at = [Int] -> Int -> Int
@@ -2528,11 +2546,11 @@ same immutable array value. The primitive records an erasable `array-index`
 certificate containing normalized literal-or-identity terms and the affine
 assumptions used to prove the interval. The certificate contains no inference
 type, and a separate difference-constraint checker must replay it before
-lowering may emit the Store read. After replay, the direct Runtime-HIR emitter
-omits a second bounds decision: an invalid index must have been refused by the
-checker, while the total prelude operation reaches the read only through its
-ordinary successful guard. Gpufuck's range pass applies the same erasure to the
-certified residual comparison.
+lowering may emit the Store access or decomposition. After replay, the direct
+Runtime-HIR emitter omits a second bounds decision: an invalid index must have
+been refused by the checker, while a total prelude read or write reaches the
+direct primitive only through its ordinary successful guard. Gpufuck's range
+pass applies the same erasure to the certified residual comparison.
 
 `@array.indexed xs` is the proof-producing traversal path (§9.2). Its `.step`
 performs one bounds decision to decide whether another element exists. A

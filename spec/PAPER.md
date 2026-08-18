@@ -645,13 +645,15 @@ Phi entails 0 <= i < length(identity(a))
 Gamma; Phi |- get_proved(a, i) : A
 ```
 
-and analogously for `set_proved`. A direct source primitive is accepted only
-when the premise holds. It must be saturated at that source site: aliasing or
-partial application would separate the eventual index from the proof premise and
-is rejected. Lowering may emit an unchecked Store access because the proof is
-part of typed core. If the target has no unchecked operation, lowering may
-retain a defensive check, but the optimizer should not need to rediscover the
-source proof from machine-level comparison operators.
+and analogously for `set_proved`, `take_proved`, and `split_proved`. The latter
+two return `(A, [A])` and `([A], A, [A])` respectively; failure constructors do
+not inhabit their types. A direct source primitive is accepted only when the
+premise holds. It must be saturated at that source site: aliasing or partial
+application would separate the eventual index from the proof premise and is
+rejected. Lowering may emit an unchecked Store access because the proof is part
+of typed core. If the target has no unchecked operation, lowering may retain a
+defensive check, but the optimizer should not need to rediscover the source
+proof from machine-level comparison operators.
 
 This yields a simple check-count rule:
 
@@ -1151,7 +1153,8 @@ terminating path leaving its scope.
 
 ### 14.5 Bounds safety
 
-Every `get_proved` and `set_proved` step has an index within its array. Every
+Every `get_proved`, `set_proved`, `take_proved`, and `split_proved` step has an
+index within its array. Every
 other source array access uses the total `Option` operation. Consequently, an
 accepted program cannot reach an array-bounds trap through source operations.
 Defensive target checks may remain but are unreachable for proved operations.

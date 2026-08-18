@@ -145,17 +145,20 @@ writes preserve `i64`, `f32`, and `f64` element representations rather than
 reinterpreting an unconstrained element as `Unit`.
 
 Persistent array decomposition is a residual operation, not a staging-only
-convenience. When the array or index is dynamic, `@array.take` and
-`@array.split` lower to ordinary Runtime-HIR control flow over `store.length`,
-`store.read`, `store.empty`, and persistent `store.grow`. The failure edge
-returns the original Store. The success edge reads the selected element once
-and copies every retained element once, in source order, into one remainder
-Store for `take` or the two contiguous result Stores for `split`. The source
-ownership certificate has already partitioned element obligations; Runtime HIR
-preserves that result shape but carries no second ownership calculus.
+convenience. `@array.take` and `@array.split` are saturated direct operations
+whose array-index certificate proves `0 <= index < length(array)` before
+Runtime HIR. When the array or index is dynamic, they lower to ordinary
+Runtime-HIR control flow over `store.length`, `store.read`, `store.empty`, and
+persistent `store.grow`, but no bounds-failure edge or result tag remains. The
+selected element is read once and every retained element is copied once, in
+source order, into one remainder Store for `take` or the two contiguous result
+Stores for `split`. The source ownership certificate has already partitioned
+element obligations; Runtime HIR preserves that tuple shape but carries no
+second ownership or refinement calculus.
 
 No `uncons`, partition, or quicksort operation is admitted at this boundary.
-`Array.uncons` remains the index-zero prelude view over `@array.take`, and
+`Array.uncons` remains the total prelude branch that proves index zero before
+calling `@array.take`, and
 `Array.partition` remains an ordinary fold. Type-directed residualization must
 therefore retain the settled element representation of polymorphic empty Stores
 and closed constructor joins even when their first runtime inhabitant is
@@ -240,7 +243,8 @@ computation or discarding an ownership edge.
 
 The executable acceptance boundary for persistent decomposition includes:
 
-- host-dynamic successful and failing `Array.take` and `Array.split` calls;
+- host-dynamic, proof-refined `@array.take` and `@array.split` calls with plain
+  tuple results, plus rejection of unproved and statically out-of-bounds calls;
 - a host-dynamic `Array.uncons` / `Array.partition` / `<>` quicksort whose full
   output agrees in the evaluator and emitted Wasm;
 - Runtime-HIR inspection proving the sort remains ordinary Store/control-flow

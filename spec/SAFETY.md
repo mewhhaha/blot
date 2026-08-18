@@ -76,11 +76,11 @@ immutable whether or not the target reuses storage.
 
 Ownership certificate schema 2 also publishes structural lineage. Each owning
 destination path names its earlier binding identity and source path. Dynamic
-`@array.take` lineage contains exactly the selected and remainder parts;
-`@array.split` contains exactly the prefix, selected, and suffix parts. The
-independent verifier rejects an unknown source identity, malformed path,
-duplicate lineage, invalid part, or incomplete partition. A failed extraction
-returns the unchanged source lineage and therefore does not mint a partition.
+proof-refined `@array.take` lineage contains exactly the selected and remainder
+parts; `@array.split` contains exactly the prefix, selected, and suffix parts.
+The independent verifier rejects an unknown source identity, malformed path,
+duplicate lineage, invalid part, or incomplete partition. Bounds failure is not
+an ownership path: an unproved extraction is rejected before lineage is minted.
 
 ## 5. Certificate discipline
 

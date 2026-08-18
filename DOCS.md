@@ -781,8 +781,10 @@ twice. These ordinary arrays are independent contiguous values: `<>` names the
 array monoid but does not make partition and append a zero-copy split/rejoin.
 Use `Slice.split` and `Slice.join` when the algorithm must retain one owned
 backing Store and carry the recombination proof explicitly. `Array.uncons`
-likewise serves ordinary value arrays; use `Array.take` when an out-of-bounds
-arm must return an array containing owned elements.
+likewise serves ordinary value arrays. For an array containing owned elements,
+prove `0 <= index < Array.length values` and use direct `@array.take` or
+`@array.split`; their tuple result conserves every obligation without a failure
+constructor.
 
 When the result may be reordered and one backing Store should be reused, enter
 a private consuming phase with `Slice`:
