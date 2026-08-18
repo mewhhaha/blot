@@ -143,7 +143,7 @@ export type Expr =
     readonly resultEffects: "pure" | "ambient";
     readonly span: Span;
   }
-  /** `rec f` binds `rec` inside `f`'s body to `f` itself. */
+  /** Internal root emitted for a `let rec` or `const rec` binding. */
   | { readonly tag: "rec"; readonly lambda: Expr; readonly span: Span }
   | { readonly tag: "comptime"; readonly body: Expr; readonly span: Span };
 
@@ -197,7 +197,7 @@ export interface Module {
   readonly span: Span;
 }
 
-/** One member of a recursive group: a `rec` binding of a lambda to one name. */
+/** One member of a recursive group: a recursive lambda bound to one name. */
 export interface RecursiveMember {
   readonly declaration: Decl & { readonly tag: "binding" };
   readonly name: string;
@@ -210,11 +210,11 @@ export interface RecursiveMember {
  * each. Members of one group share the returned array, so a caller recognises
  * the first by identity.
  *
- * A group is a run of adjacent `rec` bindings of the same kind. Three passes
- * need the same answer — the checker puts the names in scope, the evaluator
- * lets their closures share one environment, and the backend emits one Core
- * `let-rec-group` — and a rule each derived for itself would be three rules
- * free to disagree about which declarations belong together.
+ * A group is a run of adjacent recursive bindings of the same kind. Three
+ * passes need the same answer — the checker puts the names in scope, the
+ * evaluator lets their closures share one environment, and the backend emits
+ * one Core `let-rec-group` — and a rule each derived for itself would be three
+ * rules free to disagree about which declarations belong together.
  *
  * A `sig` neither joins a run nor ends one. It constrains the binding that has
  * to follow it immediately, so a `sig` between two members is one member's own
@@ -259,9 +259,10 @@ export function recursiveGroups(
 function recursiveMember(declaration: Decl): RecursiveMember | null {
   if (declaration.tag !== "binding") return null;
   if (declaration.kind === "sig") return null;
-  // A `rec` that is not a lambda, or is bound through a compound pattern, is
-  // an error every pass already reports where it stands. Leaving it out of the
-  // group keeps that report rather than replacing it with a grouping message.
+  // A recursive value that is not a lambda, or is bound through a compound
+  // pattern, is an error every pass already reports where it stands. Leaving
+  // it out of the group keeps that report rather than replacing it with a
+  // grouping message.
   if (declaration.value.tag !== "rec") return null;
   if (declaration.value.lambda.tag !== "lambda") return null;
   if (declaration.pattern.tag !== "name") return null;

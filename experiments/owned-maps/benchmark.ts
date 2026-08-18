@@ -137,14 +137,13 @@ function persistentSource(size: number): string {
 const Source = @effect.host { .value = Int -> Int; }
 
 sig update_all = (Map.of (Str, Int), Int, Int) -> Map.of (Str, Int)
-let update_all = rec (fn (entries, index, base) =>
+let rec update_all = fn (entries, index, base) =>
   return case Array.get (entries, index) of
     #None => entries
     #Some entry =>
       return case Array.set (entries, index, (entry.0, base + index)) of
         #Some updated => update_all (updated, index + 1, base)
         #None => entries
-)
 
 dynamic <- Source.value 0
 let entries = [${entries(size, "dynamic")}]
@@ -166,7 +165,7 @@ let replace_keep = fn (!entries, key, value) =>
 
 sig update_all =
   (OrderedTextMap.of Int, [Str], Int, Int) -> OrderedTextMap.of Int
-let update_all = rec (fn (!entries, keys, index, base) =>
+let rec update_all = fn (!entries, keys, index, base) =>
   let count = Array.length keys
   if count <= index:
     return entries
@@ -176,7 +175,6 @@ let update_all = rec (fn (!entries, keys, index, base) =>
       #None => @panic "owned-map benchmark key escaped its input"
     let (updated, previous) = replace_keep ((!entries), key, base + index)
     return update_all (!updated, keys, index + 1, base)
-)
 
 dynamic <- Source.value 0
 let entries = OrderedTextMap.claim [${entries(size, "dynamic")}]

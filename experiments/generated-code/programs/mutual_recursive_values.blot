@@ -1,26 +1,22 @@
 open import "../../../src/prelude/prelude.blot"
 
-let build_even = rec (fn count =>
+let rec build_even = fn count =>
   if count == 0:
     return #Done
   else:
     return #Even (count, build_odd (count - 1))
-)
-let build_odd = rec (fn count =>
+let rec build_odd = fn count =>
   if count == 0:
     return #Done
   else:
     return #Odd (count, build_even (count - 1))
-)
 
-let total_even = rec (fn values => case values of
+let rec total_even = fn values => case values of
   #Done => 0
   #Even node => node.0 + total_odd node.1
-)
-let total_odd = rec (fn values => case values of
+let rec total_odd = fn values => case values of
   #Done => 0
   #Odd node => node.0 + total_even node.1
-)
 
 sig mutual_recursive_values = Int -> Int
 let mutual_recursive_values = fn count => total_even (build_even count)

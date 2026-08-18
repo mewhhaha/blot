@@ -96,7 +96,7 @@ statement =
 
 binding = (
   tags:declaration_tag*
-  kind:("let" | "const" | "sig")
+  (kind:("let" | "const") recursive:"rec"? | kind:"sig")
   pattern:binding_pattern
   "="
   value:(value | indented_value)
@@ -336,7 +336,7 @@ operand = (
 // `...` is deliberately absent: spreading is only meaningful in array and
 // shape positions, and having it in both places made the two readings of
 // `[...x]` ambiguous.
-prefix_operator = (OPERATOR | QUESTION | "rec") ;
+prefix_operator = (OPERATOR | QUESTION) ;
 
 // Unary application by juxtaposition: `f x y` is `(f x) y`. This matches
 // gpufuck's unary Core exactly, so lowering needs no currying pass.

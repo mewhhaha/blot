@@ -261,7 +261,7 @@ export function* evaluate(expr: Expr, env: Env, runtime: Runtime): Eval {
       // recursion rather than through a reserved self-reference.
       fail(
         "BLOT_MISPLACED_REC",
-        "`rec` marks a named binding, as in `const go = rec (fn x => ... go ... );`.",
+        "`rec` marks a named binding, as in `const rec go = fn x => ... go ...;`.",
         expr.span,
       );
       break;
@@ -487,7 +487,7 @@ function* runCoreSteps(
       ) {
         fail(
           "BLOT_MISPLACED_REC",
-          "`rec` marks a binding to one lambda name.",
+          "A recursive binding must bind one lambda name.",
           definition.span,
         );
       }
@@ -811,7 +811,7 @@ function* evaluateCoreExpression(
     case "rec":
       fail(
         "BLOT_MISPLACED_REC",
-        "`rec` marks a named binding.",
+        "`rec` marks a `let rec` or `const rec` binding.",
         expression.span,
       );
       break;
@@ -951,13 +951,13 @@ export function* bind(
   if (pattern.tag !== "name") {
     fail(
       "BLOT_MISPLACED_REC",
-      "`rec` marks a binding to a single name.",
+      "`rec` marks a `let rec` or `const rec` binding to a single name.",
       value.span,
     );
   }
   const inner = yield* evaluate(value.lambda, scope, runtime);
   if (inner.tag !== "closure") {
-    fail("BLOT_TYPE", "`rec` applies to a lambda.", value.span);
+    fail("BLOT_TYPE", "A recursive binding must bind a lambda.", value.span);
   }
   return { ...inner, self: pattern.name };
 }

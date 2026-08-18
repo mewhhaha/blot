@@ -643,7 +643,7 @@ pub fn evaluate_expression(
         }
         Expression::Rec { .. } => Computation::error(Diagnostic::new(
             "BLOT_MISPLACED_REC",
-            "`rec` marks a named binding.",
+            "`rec` marks a `let rec` or `const rec` binding.",
             span,
         )),
         Expression::Comptime { body, .. } => {
@@ -1770,7 +1770,7 @@ pub(crate) fn evaluate_binding(
     let Pattern::Name { name, .. } = &loaded_module.arena.patterns[pattern.0 as usize] else {
         return Computation::error(Diagnostic::new(
             "BLOT_MISPLACED_REC",
-            "`rec` marks a binding to a single name.",
+            "`rec` marks a `let rec` or `const rec` binding to a single name.",
             span,
         ));
     };
@@ -1789,7 +1789,7 @@ pub(crate) fn evaluate_binding(
         else {
             return Computation::error(Diagnostic::new(
                 "BLOT_TYPE",
-                "`rec` applies to a lambda.",
+                "A recursive binding must bind a lambda.",
                 span,
             ));
         };

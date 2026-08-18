@@ -7,8 +7,8 @@
 open import "blot:prelude"
 
 sig quicksort = [Int] -> [Int]
-let quicksort =
-  rec (fn values =>
+let rec quicksort =
+  fn values =>
     let length = Array.length values
     if length < 2:
       return values
@@ -22,6 +22,5 @@ let quicksort =
       let left = quicksort smaller
       let right = quicksort larger
       return Array.append left (Array.append [pivot] right)
-  )
 
 return quicksort [4, 7, 3, 8, 2, 6, 1, 5]

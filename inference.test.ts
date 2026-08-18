@@ -2562,40 +2562,35 @@ return @int.add (reflected 1) 1
 
 // --- recursive groups --------------------------------------------------------
 //
-// A run of adjacent `rec` bindings of one kind is one group, and every name in
-// the run is in scope in every member. Nothing else changes: a `let` still
+// A run of adjacent `let rec` bindings of one kind is one group, and every name
+// in the run is in scope in every member. Nothing else changes: a `let` still
 // shadows the binding above it, which is exactly why the run has to be marked
 // rather than the whole block being mutually visible.
 
 check(
-  "two `rec` bindings in a run see each other",
-  `let is_even = rec (fn n => case n == 0 of
+  "two `let rec` bindings in a run see each other",
+  `let rec is_even = fn n => case n == 0 of
   #True => True
   #False => is_odd (n - 1)
-)
-let is_odd = rec (fn n => case n == 0 of
+let rec is_odd = fn n => case n == 0 of
   #True => False
   #False => is_even (n - 1)
-)
 return is_even 10
 `,
   "(#True | #False)",
 );
 
 check(
-  "three `rec` bindings in a cycle see each other",
-  `let a = rec (fn n => case n == 0 of
+  "three `let rec` bindings in a cycle see each other",
+  `let rec a = fn n => case n == 0 of
   #True => 0
   #False => b (n - 1)
-)
-let b = rec (fn n => case n == 0 of
+let rec b = fn n => case n == 0 of
   #True => 1
   #False => c (n - 1)
-)
-let c = rec (fn n => case n == 0 of
+let rec c = fn n => case n == 0 of
   #True => 2
   #False => a (n - 1)
-)
 return a 7
 `,
   "(0 | 1 | 2)",
@@ -2605,15 +2600,13 @@ return a 7
 // as one, so a member calling nobody is still typed with the rest.
 check(
   "a group member that is not recursive at all is still a member",
-  `let ping = rec (fn n => case n == 0 of
+  `let rec ping = fn n => case n == 0 of
   #True => 0
   #False => pong (n - 1)
-)
-let pong = rec (fn n => case n == 0 of
+let rec pong = fn n => case n == 0 of
   #True => 1
   #False => ping (n - 1)
-)
-let plain = rec (fn n => n + 1)
+let rec plain = fn n => n + 1
 return plain (ping 5)
 `,
   "Int",
@@ -2622,14 +2615,12 @@ return plain (ping 5)
 check(
   "a group inside a nested block sees itself",
   `return do:
-  let up = rec (fn n => case n == 0 of
+  let rec up = fn n => case n == 0 of
     #True => 0
     #False => down (n - 1)
-  )
-  let down = rec (fn n => case n == 0 of
+  let rec down = fn n => case n == 0 of
     #True => 1
     #False => up (n - 1)
-  )
   return up 9
 `,
   "(0 | 1)",
@@ -2638,14 +2629,12 @@ check(
 check(
   "a group inside a lambda body sees itself",
   `let outer = fn start =>
-  let up = rec (fn n => case n == 0 of
+  let rec up = fn n => case n == 0 of
     #True => 0
     #False => down (n - 1)
-  )
-  let down = rec (fn n => case n == 0 of
+  let rec down = fn n => case n == 0 of
     #True => 1
     #False => up (n - 1)
-  )
   return up start
 return outer 9
 `,
@@ -2657,15 +2646,13 @@ return outer 9
 check(
   "a member's `sig` does not break the run",
   `sig ping = Int -> Int
-let ping = rec (fn n => case n == 0 of
+let rec ping = fn n => case n == 0 of
   #True => 0
   #False => pong (n - 1)
-)
 sig pong = Int -> Int
-let pong = rec (fn n => case n == 0 of
+let rec pong = fn n => case n == 0 of
   #True => 1
   #False => ping (n - 1)
-)
 return ping 4
 `,
   "Int",
@@ -2673,14 +2660,12 @@ return ping 4
 
 check(
   "a `const` run is a group too",
-  `const even = rec (fn n => case n == 0 of
+  `const rec even = fn n => case n == 0 of
   #True => True
   #False => odd (n - 1)
-)
-const odd = rec (fn n => case n == 0 of
+const rec odd = fn n => case n == 0 of
   #True => False
   #False => even (n - 1)
-)
 return even 12
 `,
   "(#True | #False)",
@@ -2699,10 +2684,10 @@ return value
 );
 
 rejects(
-  "a declaration between two `rec` bindings ends the run",
-  `let a = rec (fn n => b n)
+  "a declaration between two `let rec` bindings ends the run",
+  `let rec a = fn n => b n
 let gap = 1
-let b = rec (fn n => n + gap)
+let rec b = fn n => n + gap
 return a 1
 `,
   "`b` is bound further down",
@@ -2728,53 +2713,49 @@ return total
 
 rejects(
   "a group member that is not a function is refused",
-  `let total = rec (later 1)
-let later = rec (fn n => n + 1)
+  `let rec total = later 1
+let rec later = fn n => n + 1
 return total
 `,
-  "`rec` applies to a lambda",
+  "A recursive binding must bind a lambda",
 );
 
 rejects(
   "one name cannot be bound twice in one group",
-  `let step = rec (fn n => step n)
-let step = rec (fn n => n + 1)
+  `let rec step = fn n => step n
+let rec step = fn n => n + 1
 return step 3
 `,
   "bound twice in one recursive group",
 );
 
-// Two `rec` bindings of different kinds are two groups, not one. A `const` and
+// Two recursive bindings of different kinds are two groups, not one. A `const` and
 // a `let` in one knot would be a compile-time closure capturing a runtime one,
 // which is the capture rule's whole subject.
 rejects(
   "a `const` and a `let` do not share a group",
-  `const up = rec (fn n => case n == 0 of
+  `const rec up = fn n => case n == 0 of
   #True => 0
   #False => down (n - 1)
-)
-let down = rec (fn n => case n == 0 of
+let rec down = fn n => case n == 0 of
   #True => 1
   #False => up (n - 1)
-)
 return up 4
 `,
   "`down` is bound further down",
 );
 
 // A tag replaces the binding's value with the transform applied to it, so a
-// tagged binding holds no `rec` to group and ends the run it sits in.
+// tagged binding holds no recursive root to group and ends the run it sits in.
 rejects(
   "a tagged binding is not a group member",
   `@[derive(identity)]
-let up = rec (fn n => case n == 0 of
+let rec up = fn n => case n == 0 of
   #True => 0
   #False => down (n - 1)
-)
-let down = rec (fn n => case n == 0 of
+let rec down = fn n => case n == 0 of
   #True => 1
   #False => up (n - 1)
-)
 return up 5
 `,
   "`down` is bound further down",

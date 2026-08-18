@@ -23,10 +23,10 @@ in a benchmark months later.
 | `maxCandidateMultiplicity`  |      22 | worst-case island candidates allocated per token   |
 | `islandCount`               |      67 | one island for every grammar rule                  |
 | `islandStates`              |     395 |                                                    |
-| `islandTransitions`         |     403 |                                                    |
+| `islandTransitions`         |     405 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
 | `denseTransitionBytes`      | 587,760 | immutable device table                             |
-| `packedBytes`               | 459,807 | version-3 runtime section                          |
+| `packedBytes`               | 459,954 | version-3 runtime section                          |
 | `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |       6 | islands admitted to parallel long-region execution |
 
@@ -70,6 +70,13 @@ contraction rounds, scratch factors, the root loop, and parallel long-region
 admission are unchanged. `do_block` is retained as its own island and lowers to
 the existing block AST. Removing the old parenthesized-suite inference happens
 in layout elaboration before parsing and therefore changes no parser counter.
+
+Moving `rec` from a prefix expression to the `let` and `const` binding headers
+adds two island transitions and 147 packed bytes. Lexer states, island count,
+island states, dense transitions, candidate multiplicity, contraction rounds,
+scratch bounds, the root loop, and parallel long-region admission are
+unchanged. The surface modifier lowers to the existing recursive-expression
+AST, so this grammar cost does not extend into evaluation or compilation.
 
 ## Historical strict-profile measurements
 

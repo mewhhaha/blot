@@ -139,6 +139,7 @@ export type LiteralKind =
   | ";"
   | "let"
   | "const"
+  | "rec"
   | "sig"
   | "@"
   | "["
@@ -154,7 +155,6 @@ export type LiteralKind =
   | ","
   | "#"
   | "."
-  | "rec"
   | "import"
   | "if"
   | "else"
@@ -366,6 +366,7 @@ export interface StatementCursor extends RuleCursorBase<"statement"> {
 export interface BindingCursor extends RuleCursorBase<"binding"> {
   field(name: "kind"): TokenCursor<"literal", "const"> | TokenCursor<"literal", "let"> | TokenCursor<"literal", "sig">;
   field(name: "pattern"): BindingPatternCursor;
+  field(name: "recursive"): TokenCursor<"literal", "rec"> | null | null;
   field(name: "tags"): ReadonlyArray<DeclarationTagCursor>;
   field(name: "value"): IndentedValueCursor | ValueCursor;
   field(name: string): CursorFieldValue | undefined;

@@ -599,6 +599,14 @@ function compactDeclaration(declaration: Decl, source: string): string {
   if (declaration.value.tag !== "lambda" && declaration.value.tag !== "rec") {
     return source.slice(declaration.span.start, declaration.span.end).trim();
   }
+  if (declaration.value.tag === "rec") {
+    const before = source.slice(
+      declaration.span.start,
+      declaration.value.lambda.span.start,
+    );
+    return `${before}${compactFunction(declaration.value.lambda, source)}`
+      .trim();
+  }
   const before = source.slice(
     declaration.span.start,
     declaration.value.span.start,
@@ -608,7 +616,7 @@ function compactDeclaration(declaration: Decl, source: string): string {
 
 function compactFunction(expression: Expr, source: string): string {
   if (expression.tag === "rec") {
-    return `rec (${compactFunction(expression.lambda, source)})`;
+    return compactFunction(expression.lambda, source);
   }
   if (expression.tag !== "lambda") {
     return source.slice(expression.span.start, expression.span.end);

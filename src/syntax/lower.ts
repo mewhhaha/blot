@@ -1520,6 +1520,15 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       }
     }
     let value = lowerValue(asRule(valueCursor, "value"), context);
+    const recursive = field(rule, "recursive");
+    if (recursive !== null) {
+      const marker = tokenOf(recursive);
+      value = {
+        tag: "rec",
+        lambda: value,
+        span: { start: marker.span.start, end: value.span.end },
+      };
+    }
     if (kind === "sig" && rowTails.length > 0) {
       value = quantifyEffectRowTails(value, rowTails, rule.span);
     }
@@ -2182,10 +2191,6 @@ function lowerOperand(rule: Rule, context: Context): Expr {
     // so writing `-1` does not require the prelude to be in scope.
     if (prefix.text === "-" && result.tag === "int") {
       result = { tag: "int", value: -result.value, span };
-      continue;
-    }
-    if (prefix.text === "rec") {
-      result = { tag: "rec", lambda: result, span };
       continue;
     }
     if (prefix.text === "^" && context.patternHead) {

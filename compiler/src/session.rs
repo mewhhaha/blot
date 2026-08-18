@@ -797,7 +797,7 @@ mod tests {
     #[test]
     fn binary_module_snapshot_restores_interface_and_value() {
         const MODULE_PATH: &str = "snapshot:library";
-        const MODULE_SOURCE: &str = "let increment = rec (fn value => @int.add value 1)\n\u{e000}return { .answer = increment 42; }\u{e000}\n";
+        const MODULE_SOURCE: &str = "let rec increment = fn value => @int.add value 1\n\u{e000}return { .answer = increment 42; }\u{e000}\n";
         let mut builder = CompilerSession::default();
         builder
             .add_source(MODULE_PATH.to_owned(), source(MODULE_SOURCE))
@@ -1225,10 +1225,10 @@ mod tests {
 
     /// A tail call is not a transfer. This body hands the recursion a value it
     /// computed by spending the capture, so the next entry spends it again.
-    const SPENDS_EACH_ITERATION: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const consume = fn !value => @int.add value 1\n\u{e000}let !token = 41\n\u{e000}let go =\n  \u{e000}\u{e001}rec (fn (n, carried) => case positive n of\n    \u{e000}\u{e001}#True => go (@int.sub n 1, @int.add carried (consume (!token)))\n    \u{e000}#False => carried\n  \u{e000}\u{e002})\n\u{e000}\u{e002}\u{e000}return go (3, 0)\u{e000}\n";
+    const SPENDS_EACH_ITERATION: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const consume = fn !value => @int.add value 1\n\u{e000}let !token = 41\n\u{e000}let rec go =\n  \u{e000}\u{e001}fn (n, carried) => case positive n of\n    \u{e000}\u{e001}#True => go (@int.sub n 1, @int.add carried (consume (!token)))\n    \u{e000}#False => carried\n  \u{e000}\u{e002}\n\u{e000}\u{e002}\u{e000}return go (3, 0)\u{e000}\n";
 
     /// The same recursion spending the capture only where it stops.
-    const SPENDS_WHERE_IT_ENDS: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const consume = fn !value => @int.add value 1\n\u{e000}let !token = 41\n\u{e000}let go =\n  \u{e000}\u{e001}rec (fn (n, carried) => case positive n of\n    \u{e000}\u{e001}#True => go (@int.sub n 1, carried)\n    \u{e000}#False => @int.add carried (consume (!token))\n  \u{e000}\u{e002})\n\u{e000}\u{e002}\u{e000}return go (3, 0)\u{e000}\n";
+    const SPENDS_WHERE_IT_ENDS: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const consume = fn !value => @int.add value 1\n\u{e000}let !token = 41\n\u{e000}let rec go =\n  \u{e000}\u{e001}fn (n, carried) => case positive n of\n    \u{e000}\u{e001}#True => go (@int.sub n 1, carried)\n    \u{e000}#False => @int.add carried (consume (!token))\n  \u{e000}\u{e002}\n\u{e000}\u{e002}\u{e000}return go (3, 0)\u{e000}\n";
 
     #[test]
     fn a_capture_spent_on_a_recursing_path_is_refused() {
