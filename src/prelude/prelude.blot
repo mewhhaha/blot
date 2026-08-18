@@ -290,9 +290,16 @@ const array_partition = fn (values, belongs_left) => fold (
     #False => (left, @array.push right value)
 )
 
-const array_uncons = fn values => case @array.take values 0 of
-  #Taken pair => #Some pair
-  #TakeOutOfBounds _ => #None
+const array_uncons_at = fn (values, index) =>
+  if index >= 0:
+    if index < @array.len values:
+      return #Some (@array.take values index)
+    else:
+      return #None
+  else:
+    return #None
+
+const array_uncons = fn values => array_uncons_at (values, 0)
 
 const array_items = fn values => {
   .state = 0;
@@ -316,8 +323,6 @@ const Array =
     .get = array_get;
     .set = array_set;
     .push = fn (values, value) => @array.push values value;
-    .take = fn (values, index) => @array.take values index;
-    .split = fn (values, index) => @array.split values index;
   }
 
 sig slice_claim = @forall (fn T => [T] -> @region.type T)

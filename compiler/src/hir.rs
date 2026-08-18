@@ -4043,21 +4043,6 @@ impl ResidualTrace {
         ))
     }
 
-    fn array_index_in_bounds(
-        &mut self,
-        store: &RuntimeValue,
-        index: &RuntimeValue,
-        span: crate::ast::Span,
-    ) -> Result<RuntimeValue, Diagnostic> {
-        if !matches!(self.types[store.type_id], RuntimeType::Store { .. }) {
-            return Err(hir_error("Array bounds check source is not a Store."));
-        }
-        let integer = self.region_integer_type();
-        let length = self.operation("store.length", integer, vec![store.id], span, None);
-        let zero = self.constant(WireConstant::SignedInteger64("0".to_owned()), integer, span);
-        self.region_index_in_bounds(index, &zero, &length, span)
-    }
-
     fn append_store_range(
         &mut self,
         source_store: &RuntimeValue,
@@ -4177,12 +4162,6 @@ impl ResidualTrace {
                 type_id: store.type_id,
             },
         ]);
-        let cases = vec!["Taken".to_owned(), "TakeOutOfBounds".to_owned()];
-        let sum_type = self.sum_type(&cases, &[pair_type, store.type_id]);
-        let in_bounds = self.array_index_in_bounds(&store, &index, span)?;
-        let branches = self.begin_conditional(&in_bounds, span)?;
-
-        self.current_block = branches.consequent;
         let selected = self.operation(
             "store.read",
             element_type,
@@ -4204,29 +4183,13 @@ impl ResidualTrace {
         );
         let length = self.operation("store.length", integer, vec![store.id], span, None);
         let remainder = self.append_store_range(&store, &after_start, &length, &before, span)?;
-        let pair = self.operation(
+        Ok(self.operation(
             "product.make",
             pair_type,
             vec![selected.id, remainder.id],
             span,
             None,
-        );
-        let success = self.operation_with_case("sum.make", sum_type, vec![pair.id], span, 0);
-        let success_end = self.current_block;
-
-        self.current_block = branches.alternate;
-        let failure = self.operation_with_case("sum.make", sum_type, vec![store.id], span, 1);
-        let failure_end = self.current_block;
-        let mut result = self.join_runtime_values(
-            &branches,
-            success_end,
-            success,
-            failure_end,
-            failure,
-            span,
-        );
-        result.meaning = RuntimeMeaning::Sum { cases };
-        Ok(result)
+        ))
     }
 
     fn array_split(
@@ -4252,12 +4215,6 @@ impl ResidualTrace {
                 type_id: store.type_id,
             },
         ]);
-        let cases = vec!["Split".to_owned(), "SplitOutOfBounds".to_owned()];
-        let sum_type = self.sum_type(&cases, &[payload_type, store.type_id]);
-        let in_bounds = self.array_index_in_bounds(&store, &index, span)?;
-        let branches = self.begin_conditional(&in_bounds, span)?;
-
-        self.current_block = branches.consequent;
         let selected = self.operation(
             "store.read",
             element_type,
@@ -4283,29 +4240,13 @@ impl ResidualTrace {
             self.array_operation("store.empty", store.type_id, Vec::new(), span, None);
         let after =
             self.append_store_range(&store, &after_start, &length, &after_empty, span)?;
-        let payload = self.operation(
+        Ok(self.operation(
             "product.make",
             payload_type,
             vec![before.id, selected.id, after.id],
             span,
             None,
-        );
-        let success = self.operation_with_case("sum.make", sum_type, vec![payload.id], span, 0);
-        let success_end = self.current_block;
-
-        self.current_block = branches.alternate;
-        let failure = self.operation_with_case("sum.make", sum_type, vec![store.id], span, 1);
-        let failure_end = self.current_block;
-        let mut result = self.join_runtime_values(
-            &branches,
-            success_end,
-            success,
-            failure_end,
-            failure,
-            span,
-        );
-        result.meaning = RuntimeMeaning::Sum { cases };
-        Ok(result)
+        ))
     }
 
     fn lower_region(
@@ -7635,8 +7576,8 @@ mod tests {
             .array_split(store, index, span)
             .expect("dynamic split should lower");
 
-        assert!(matches!(taken.meaning, RuntimeMeaning::Sum { .. }));
-        assert!(matches!(split.meaning, RuntimeMeaning::Sum { .. }));
+        assert!(matches!(taken.meaning, RuntimeMeaning::Plain));
+        assert!(matches!(split.meaning, RuntimeMeaning::Plain));
         let kinds = trace
             .blocks
             .iter()

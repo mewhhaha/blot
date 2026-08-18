@@ -181,20 +181,18 @@ return first * 10 + last
   });
 });
 
-Deno.test("dynamic Array take and split conserve values on success and failure", async () => {
+Deno.test("dynamic refined array take and split return plain tuples", async () => {
   const cases = [
     {
-      call: "Array.take (values, at)",
-      arms: `#Taken (selected, remainder) => selected * 100 + Array.length remainder
-  #TakeOutOfBounds original => Array.length original`,
+      call: "@array.take values at",
+      result: `let (selected, remainder) = decomposed
+  return selected * 100 + Array.length remainder`,
       success: 2_002n,
     },
     {
       call: "@array.split values at",
-      arms: `#Split (before, selected, suffix) => (
-    Array.length before * 100 + selected * 10 + Array.length suffix
-  )
-  #SplitOutOfBounds original => Array.length original`,
+      result: `let (before, selected, suffix) = decomposed
+  return Array.length before * 100 + selected * 10 + Array.length suffix`,
       success: 301n,
     },
   ];
@@ -204,9 +202,11 @@ const Source = @effect.host { .value = Int -> Int; .index = Int -> Int; }
 value <- Source.value 0
 at <- Source.index 0
 let values = [value, 20, 30]
-let result = ${case_.call}
-return case result of
-  ${case_.arms}
+if at >= 0 && at < Array.length values:
+  let decomposed = ${case_.call}
+  ${case_.result}
+else:
+  return Array.length values
 `;
 
     await withSource(source, async (compiler, path) => {

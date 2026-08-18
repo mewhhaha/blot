@@ -4824,39 +4824,6 @@ class ResidualHirBuilder {
     return { kind: "dynamic", value: result, type: store.type };
   }
 
-  private arrayIndexInBounds(
-    store: Extract<ResidualValue, { readonly kind: "dynamic" }>,
-    index: Extract<ResidualValue, { readonly kind: "dynamic" }>,
-    span: Span,
-  ): Extract<ResidualValue, { readonly kind: "dynamic" }> {
-    const integer = this.type("signed-integer-64");
-    const zero = this.constant(0n, integer, span);
-    const negative = this.operation(
-      "scalar",
-      this.type("boolean"),
-      [index.value, zero.value],
-      span,
-      undefined,
-      "less-than",
-    );
-    return this.dynamic(this.branchValue(
-      negative,
-      () => this.constant(false, this.type("boolean"), span),
-      () => {
-        const length = this.storeLength(store, span);
-        return this.operation(
-          "scalar",
-          this.type("boolean"),
-          [index.value, length.value],
-          span,
-          undefined,
-          "less-than",
-        );
-      },
-      span,
-    ));
-  }
-
   private appendStoreRange(
     sourceStore: Extract<ResidualValue, { readonly kind: "dynamic" }>,
     start: Extract<ResidualValue, { readonly kind: "dynamic" }>,
@@ -4970,44 +4937,32 @@ class ResidualHirBuilder {
     index: Extract<ResidualValue, { readonly kind: "dynamic" }>,
     span: Span,
   ): ResidualValue {
-    const inBounds = this.arrayIndexInBounds(store, index, span);
-    return this.branchValue(
-      inBounds,
-      () => {
-        const storeType = this.types[store.type];
-        if (storeType.kind !== "store") {
-          throw this.outside(span, "@array.take over a non-Store");
-        }
-        const selected = this.storeRead(store, index, span);
-        const zero = this.constant(0n, this.type("signed-integer-64"), span);
-        const empty = this.emptyStore(storeType.elementType, span);
-        const before = this.appendStoreRange(store, zero, index, empty, span);
-        const one = this.constant(1n, this.type("signed-integer-64"), span);
-        const afterStart = this.operation(
-          "scalar",
-          this.type("signed-integer-64"),
-          [index.value, one.value],
-          span,
-          undefined,
-          "add",
-        );
-        const length = this.storeLength(store, span);
-        const remainder = this.appendStoreRange(
-          store,
-          afterStart,
-          length,
-          before,
-          span,
-        );
-        return {
-          kind: "tag",
-          name: "Taken",
-          payload: { kind: "tuple", elements: [selected, remainder] },
-        };
-      },
-      () => ({ kind: "tag", name: "TakeOutOfBounds", payload: store }),
+    const storeType = this.types[store.type];
+    if (storeType.kind !== "store") {
+      throw this.outside(span, "@array.take over a non-Store");
+    }
+    const selected = this.storeRead(store, index, span);
+    const zero = this.constant(0n, this.type("signed-integer-64"), span);
+    const empty = this.emptyStore(storeType.elementType, span);
+    const before = this.appendStoreRange(store, zero, index, empty, span);
+    const one = this.constant(1n, this.type("signed-integer-64"), span);
+    const afterStart = this.operation(
+      "scalar",
+      this.type("signed-integer-64"),
+      [index.value, one.value],
+      span,
+      undefined,
+      "add",
+    );
+    const length = this.storeLength(store, span);
+    const remainder = this.appendStoreRange(
+      store,
+      afterStart,
+      length,
+      before,
       span,
     );
+    return { kind: "tuple", elements: [selected, remainder] };
   }
 
   private arraySplit(
@@ -5015,52 +4970,37 @@ class ResidualHirBuilder {
     index: Extract<ResidualValue, { readonly kind: "dynamic" }>,
     span: Span,
   ): ResidualValue {
-    const inBounds = this.arrayIndexInBounds(store, index, span);
-    return this.branchValue(
-      inBounds,
-      () => {
-        const storeType = this.types[store.type];
-        if (storeType.kind !== "store") {
-          throw this.outside(span, "@array.split over a non-Store");
-        }
-        const selected = this.storeRead(store, index, span);
-        const zero = this.constant(0n, this.type("signed-integer-64"), span);
-        const before = this.appendStoreRange(
-          store,
-          zero,
-          index,
-          this.emptyStore(storeType.elementType, span),
-          span,
-        );
-        const one = this.constant(1n, this.type("signed-integer-64"), span);
-        const afterStart = this.operation(
-          "scalar",
-          this.type("signed-integer-64"),
-          [index.value, one.value],
-          span,
-          undefined,
-          "add",
-        );
-        const length = this.storeLength(store, span);
-        const after = this.appendStoreRange(
-          store,
-          afterStart,
-          length,
-          this.emptyStore(storeType.elementType, span),
-          span,
-        );
-        return {
-          kind: "tag",
-          name: "Split",
-          payload: {
-            kind: "tuple",
-            elements: [before, selected, after],
-          },
-        };
-      },
-      () => ({ kind: "tag", name: "SplitOutOfBounds", payload: store }),
+    const storeType = this.types[store.type];
+    if (storeType.kind !== "store") {
+      throw this.outside(span, "@array.split over a non-Store");
+    }
+    const selected = this.storeRead(store, index, span);
+    const zero = this.constant(0n, this.type("signed-integer-64"), span);
+    const before = this.appendStoreRange(
+      store,
+      zero,
+      index,
+      this.emptyStore(storeType.elementType, span),
       span,
     );
+    const one = this.constant(1n, this.type("signed-integer-64"), span);
+    const afterStart = this.operation(
+      "scalar",
+      this.type("signed-integer-64"),
+      [index.value, one.value],
+      span,
+      undefined,
+      "add",
+    );
+    const length = this.storeLength(store, span);
+    const after = this.appendStoreRange(
+      store,
+      afterStart,
+      length,
+      this.emptyStore(storeType.elementType, span),
+      span,
+    );
+    return { kind: "tuple", elements: [before, selected, after] };
   }
 
   private branchValue(

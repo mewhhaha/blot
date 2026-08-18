@@ -290,11 +290,15 @@ impl Analysis<'_> {
         let node = self.module.arena.expressions[expression.0 as usize].clone();
         match node {
             Expression::Intrinsic { name, span }
-                if !applied && matches!(name.as_str(), "@array.get" | "@array.set") =>
+                if !applied
+                    && matches!(
+                        name.as_str(),
+                        "@array.get" | "@array.set" | "@array.take" | "@array.split"
+                    ) =>
             {
                 return Err(Diagnostic::new(
                     "BLOT_ARRAY_ACCESS_NOT_DIRECT",
-                    "Direct array access must be fully applied where it is proved safe.",
+                    "Proof-required array access must be fully applied where it is proved safe.",
                     span,
                 ));
             }
@@ -306,9 +310,12 @@ impl Analysis<'_> {
                 let (callee, arguments) = application_spine(expression, self.module);
                 if let Expression::Intrinsic { name, .. } =
                     &self.module.arena.expressions[callee.0 as usize]
-                    && matches!(name.as_str(), "@array.get" | "@array.set")
+                    && matches!(
+                        name.as_str(),
+                        "@array.get" | "@array.set" | "@array.take" | "@array.split"
+                    )
                 {
-                    let arity = if name == "@array.get" { 2 } else { 3 };
+                    let arity = if name == "@array.set" { 3 } else { 2 };
                     if arguments.len() != arity {
                         return Err(Diagnostic::new(
                             "BLOT_ARRAY_ACCESS_NOT_DIRECT",

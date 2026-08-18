@@ -40,16 +40,14 @@ async function runDefault(
 Deno.test("Runtime HIR lowers dynamic array decomposition through generic Store control flow", async () => {
   const operations = [
     {
-      call: "Array.take (values, at)",
-      arms: `#Taken (selected, remainder) => selected + Array.length remainder
-  #TakeOutOfBounds original => Array.length original`,
+      call: "@array.take values at",
+      result: `let (selected, remainder) = decomposed
+  return selected + Array.length remainder`,
     },
     {
       call: "@array.split values at",
-      arms: `#Split (before, selected, suffix) => (
-    Array.length before + selected + Array.length suffix
-  )
-  #SplitOutOfBounds original => Array.length original`,
+      result: `let (before, selected, suffix) = decomposed
+  return Array.length before + selected + Array.length suffix`,
     },
   ];
   for (const operation of operations) {
@@ -58,9 +56,11 @@ const Source = @effect.host { .value = Int -> Int; .index = Int -> Int; }
 value <- Source.value 0
 at <- Source.index 0
 let values = [value, 20, 30]
-let result = ${operation.call}
-return case result of
-  ${operation.arms}
+if at >= 0 && at < Array.length values:
+  let decomposed = ${operation.call}
+  ${operation.result}
+else:
+  return -1
 `;
     await withSource(source, async (compiler, path) => {
       const hir = await compiler.prepare(path);

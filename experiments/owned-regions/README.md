@@ -68,10 +68,10 @@ Measured 2026-08-18 on Node 24.19.0 and Linux x86-64:
 
 | n | structural median | iterative persistent | owned median | structural Wasm | persistent Wasm | owned Wasm |
 | --: | --: | --: | --: | --: | --: | --: |
-| 16 | 179.14 us | 191.46 us | 144.34 us | 7,003 B | 11,018 B | 8,255 B |
-| 32 | 386.97 us | 575.65 us | 536.55 us | 7,456 B | 11,998 B | 8,763 B |
-| 64 | 968.85 us | 1,104.96 us | 597.59 us | 8,436 B | 13,922 B | 9,754 B |
-| 128 | 2,001.58 us | 1,883.76 us | 1,203.71 us | 10,484 B | 18,017 B | 11,802 B |
+| 16 | 179.14 us | 191.46 us | 144.34 us | 6,752 B | 11,018 B | 8,255 B |
+| 32 | 386.97 us | 575.65 us | 536.55 us | 7,205 B | 11,998 B | 8,763 B |
+| 64 | 968.85 us | 1,104.96 us | 597.59 us | 8,185 B | 13,922 B | 9,754 B |
+| 128 | 2,001.58 us | 1,883.76 us | 1,203.71 us | 10,233 B | 18,017 B | 11,802 B |
 
 For every size, structural quicksort imported only `store_grow_persistent` and
 executed no Store writes; the iterative persistent artifact imported only
@@ -82,12 +82,15 @@ lanes made 832 element writes. The owned lane made all 832 as `owned-reuse` and
 zero as persistent writes. Repeat runs preserved those structural results;
 local timing order between the two persistent formulations varied, as expected
 for short fresh-instance runs, while the owned lane remained fastest here.
+Erasing the impossible bounds-failure branch and sum payload reduced every
+structural artifact by 251 bytes without changing Store-operation counts.
 
 ## Functional readability baseline
 
 `examples/quicksort.blot` is now the executable source for the third lane:
 `Array.uncons` decomposes one element, `Array.partition` performs the stable
 classification, `<>` is ordinary array-monoid append, and non-tail recursion
-becomes a residual `call.direct`. Dynamic `@array.take` and `@array.split`
-compile to generic Store length/read/grow operations and control flow in both
-compiler implementations. No collection-algorithm opcode crosses Runtime HIR.
+becomes a residual `call.direct`. Proof-refined dynamic `@array.take` and
+`@array.split` return plain tuples and compile to generic Store
+length/read/grow operations and control flow in both compiler implementations.
+No collection-algorithm opcode crosses Runtime HIR.

@@ -5487,19 +5487,10 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             let array = Type::Array(Box::new(element.clone()));
             curried(
                 vec![array.clone(), int],
-                Type::Variant {
-                    cases: vec![
-                        (
-                            "Taken".to_owned(),
-                            Type::Record(vec![
-                                ("0".to_owned(), element),
-                                ("1".to_owned(), array.clone()),
-                            ]),
-                        ),
-                        ("TakeOutOfBounds".to_owned(), array),
-                    ],
-                    open: false,
-                },
+                Type::Record(vec![
+                    ("0".to_owned(), element),
+                    ("1".to_owned(), array),
+                ]),
             )
         }
         "@array.split" => {
@@ -5507,20 +5498,11 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             let array = Type::Array(Box::new(element.clone()));
             curried(
                 vec![array.clone(), int],
-                Type::Variant {
-                    cases: vec![
-                        (
-                            "Split".to_owned(),
-                            Type::Record(vec![
-                                ("0".to_owned(), array.clone()),
-                                ("1".to_owned(), element),
-                                ("2".to_owned(), array.clone()),
-                            ]),
-                        ),
-                        ("SplitOutOfBounds".to_owned(), array),
-                    ],
-                    open: false,
-                },
+                Type::Record(vec![
+                    ("0".to_owned(), array.clone()),
+                    ("1".to_owned(), element),
+                    ("2".to_owned(), array),
+                ]),
             )
         }
         "@array.indexed" => {

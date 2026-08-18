@@ -5399,6 +5399,12 @@ function lowerApply(
       );
     }
     if (spine.callee.name === "@array.take" && spine.args.length === 2) {
+      const proof = lowering.facts.arrayProofs.get(expr);
+      if (proof === undefined || !verifiesArrayIndexProof(proof)) {
+        throw new Error(
+          "checked direct array take omitted or invalidated its bounds proof",
+        );
+      }
       return lowerArrayTake(
         spine.args[0],
         spine.args[1],
@@ -5408,6 +5414,12 @@ function lowerApply(
       );
     }
     if (spine.callee.name === "@array.split" && spine.args.length === 2) {
+      const proof = lowering.facts.arrayProofs.get(expr);
+      if (proof === undefined || !verifiesArrayIndexProof(proof)) {
+        throw new Error(
+          "checked direct array split omitted or invalidated its bounds proof",
+        );
+      }
       return lowerArraySplit(
         spine.args[0],
         spine.args[1],
@@ -5579,53 +5591,22 @@ function lowerArrayTake(
   const source = lowering.fresh("source");
   const wideIndex = lowering.fresh("index");
   const narrowIndex = lowering.fresh("index32");
-  const result = lowering.sum([
-    { name: "Taken", payload: true },
-    { name: "TakeOutOfBounds", payload: true },
-  ]);
-  const failure = at.apply(
-    at.name(constructorName(result, "TakeOutOfBounds")),
-    at.name(source),
-  );
   const pair = lowering.nominal(["0", "1"]);
   const selected = at.storeRead(at.name(source), at.name(narrowIndex));
   const remainder = copyWithoutIndex(source, narrowIndex, lowering, at);
-  const success = at.apply(
-    at.name(constructorName(result, "Taken")),
-    at.apply(at.name(pair.name), selected, remainder),
-  );
-  const length = at.convert(
-    NumericConversion.SignedInteger32ToSignedInteger64,
-    at.storeLength(at.name(source)),
-  );
-  const inBounds = at.if(
-    at.binary(
-      BinaryOperator.LessSignedInteger64,
+  const taken = at.apply(at.name(pair.name), selected, remainder);
+  const refined = surface.let(
+    narrowIndex,
+    at.convert(
+      NumericConversion.SignedInteger64ToSignedInteger32,
       at.name(wideIndex),
-      at.signedInteger64(0n),
     ),
-    failure,
-    at.if(
-      at.binary(
-        BinaryOperator.LessSignedInteger64,
-        at.name(wideIndex),
-        length,
-      ),
-      surface.let(
-        narrowIndex,
-        at.convert(
-          NumericConversion.SignedInteger64ToSignedInteger32,
-          at.name(wideIndex),
-        ),
-        success,
-      ),
-      failure,
-    ),
+    taken,
   );
   return surface.let(
     source,
     lower(array, scope, lowering),
-    surface.let(wideIndex, lower(index, scope, lowering), inBounds),
+    surface.let(wideIndex, lower(index, scope, lowering), refined),
   );
 }
 
@@ -5639,64 +5620,19 @@ function lowerArraySplit(
   const source = lowering.fresh("source");
   const wideIndex = lowering.fresh("index");
   const narrowIndex = lowering.fresh("index32");
-  const result = lowering.sum([
-    { name: "Split", payload: true },
-    { name: "SplitOutOfBounds", payload: true },
-  ]);
-  const failure = at.apply(
-    at.name(constructorName(result, "SplitOutOfBounds")),
-    at.name(source),
-  );
   const parts = copyAroundIndex(source, narrowIndex, lowering, at);
-  const triple = lowering.nominal(["0", "1", "2"]);
-  const binders = [
-    lowering.fresh("before"),
-    lowering.fresh("selected"),
-    lowering.fresh("after"),
-  ];
-  const payload = at.apply(
-    at.name(triple.name),
-    at.name(binders[0]),
-    at.name(binders[1]),
-    at.name(binders[2]),
-  );
-  const built = at.case(parts, [{
-    constructor: triple.name,
-    binders,
-    body: at.apply(at.name(constructorName(result, "Split")), payload),
-  }]);
-  const length = at.convert(
-    NumericConversion.SignedInteger32ToSignedInteger64,
-    at.storeLength(at.name(source)),
-  );
-  const inBounds = at.if(
-    at.binary(
-      BinaryOperator.LessSignedInteger64,
+  const refined = surface.let(
+    narrowIndex,
+    at.convert(
+      NumericConversion.SignedInteger64ToSignedInteger32,
       at.name(wideIndex),
-      at.signedInteger64(0n),
     ),
-    failure,
-    at.if(
-      at.binary(
-        BinaryOperator.LessSignedInteger64,
-        at.name(wideIndex),
-        length,
-      ),
-      surface.let(
-        narrowIndex,
-        at.convert(
-          NumericConversion.SignedInteger64ToSignedInteger32,
-          at.name(wideIndex),
-        ),
-        built,
-      ),
-      failure,
-    ),
+    parts,
   );
   return surface.let(
     source,
     lower(array, scope, lowering),
-    surface.let(wideIndex, lower(index, scope, lowering), inBounds),
+    surface.let(wideIndex, lower(index, scope, lowering), refined),
   );
 }
 

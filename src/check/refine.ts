@@ -780,7 +780,7 @@ export function requireProvenIndex(
   if (length === null) {
     fail(
       "BLOT_UNPROVEN_INDEX",
-      "Direct array access needs an index proved against this array's length. Use `Array.get` or `Array.set` when the index may be out of bounds.",
+      "Direct array access needs an index proved against this array's length. Guard the call with `0 <= index` and `index < Array.length values`.",
       expr.span,
     );
   }
@@ -819,7 +819,7 @@ export function requireProvenIndex(
   if (indices === null) {
     fail(
       "BLOT_UNPROVEN_INDEX",
-      "Direct array access needs an index proved against this array's length. Use `Array.get` or `Array.set` when the index may be out of bounds.",
+      "Direct array access needs an index proved against this array's length. Guard the call with `0 <= index` and `index < Array.length values`.",
       expr.span,
     );
   }
@@ -860,7 +860,7 @@ export function requireProvenIndex(
     "BLOT_UNPROVEN_INDEX",
     `Index ${showType(indices)} is not proved below ${
       showRefinementTerm(length, array)
-    }. Use \`Array.get\` or \`Array.set\` when the index may be out of bounds.`,
+    }. Guard the call with \`0 <= index\` and \`index < Array.length values\`.`,
     expr.span,
   );
 }

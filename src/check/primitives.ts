@@ -365,13 +365,7 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
     poly((fresh) => {
       const element = fresh();
       const array: SimpleType = { tag: "array", element };
-      return curried(
-        [array, INT],
-        variant([
-          ["Taken", tupleType([element, array])],
-          ["TakeOutOfBounds", array],
-        ]),
-      );
+      return curried([array, INT], tupleType([element, array]));
     }),
   ],
   [
@@ -379,13 +373,7 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
     poly((fresh) => {
       const element = fresh();
       const array: SimpleType = { tag: "array", element };
-      return curried(
-        [array, INT],
-        variant([
-          ["Split", tupleType([array, element, array])],
-          ["SplitOutOfBounds", array],
-        ]),
-      );
+      return curried([array, INT], tupleType([array, element, array]));
     }),
   ],
   [

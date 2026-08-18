@@ -51,3 +51,57 @@ Deno.test("a same-named unverified wrapper proves no length fact", async () => {
     "BLOT_UNPROVEN_INDEX",
   );
 });
+
+Deno.test("refined consuming extraction returns plain tuples", async () => {
+  const checked = await checkSource(
+    "/tmp/refined-array-extraction.blot",
+    PRELUDE + `sig take_at = [Int] -> Int -> (Int, [Int])
+let take_at = fn values => fn index =>
+  if index >= 0 && index < Array.length values:
+    return @array.take values index
+  else:
+    return @panic "take index out of bounds"
+
+sig split_at = [Int] -> Int -> ([Int], Int, [Int])
+let split_at = fn values => fn index =>
+  if index >= 0 && index < Array.length values:
+    return @array.split values index
+  else:
+    return @panic "split index out of bounds"
+
+return (take_at, split_at)
+`,
+  );
+  assertEquals(
+    checked.type,
+    "([Int] -> Int -> (Int, [Int]), [Int] -> Int -> ([Int], Int, [Int]))",
+  );
+});
+
+Deno.test("unproved consuming extraction is rejected", async () => {
+  await assertRejects(
+    () =>
+      checkSource(
+        "/tmp/unproved-array-take.blot",
+        PRELUDE + `sig take_at = [Int] -> Int -> (Int, [Int])
+let take_at = fn values => fn index => @array.take values index
+return take_at
+`,
+      ),
+    BlotError,
+    "BLOT_UNPROVEN_INDEX",
+  );
+});
+
+Deno.test("statically out-of-bounds consuming extraction is rejected", async () => {
+  await assertRejects(
+    () =>
+      checkSource(
+        "/tmp/out-of-bounds-array-split.blot",
+        PRELUDE + `return @array.split [1, 2, 3] 9
+`,
+      ),
+    BlotError,
+    "BLOT_OUT_OF_BOUNDS",
+  );
+});
