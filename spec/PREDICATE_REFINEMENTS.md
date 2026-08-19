@@ -260,7 +260,8 @@ erase(e checked with U) = erase(e checked with the equivalent canonical range)
 
 For integer refinements, both layouts are signed `i64`. A program that differs
 only by spelling a canonical range as an equivalent predicate must produce
-identical Runtime HIR operations and equivalent WebAssembly. The benchmark records:
+identical Runtime HIR operations and equivalent WebAssembly. The benchmark
+records:
 
 1. cold and warm checking time for predicate and canonical-range spellings;
 2. emitted Wasm byte length and SHA-256;
@@ -297,18 +298,18 @@ this contract.
 
 ## 8. Implemented behavior map
 
-| Requirement | Implemented mechanism | Regression evidence |
-| --- | --- | --- |
-| Unknown carriers | fresh Simple-sub variables and call-site freshening | `inference.test.ts` |
-| Integer inhabitants | exact predicate-to-range normalization | `predicate_refinements.blot` |
-| Arrays | homogeneous canonical constraints from operations and calls | `collections.blot` |
-| Trait-like behavior | record width/depth subtyping and direct projections | `type_predicates.blot` |
-| Higher-order functions | arrow intersections and shared row variables | `inference.test.ts` |
-| Effects | inferred open rows, handlers, and reflected closed rows | `effects.blot` |
-| Layout | attached namespaces preserved by refinement | `layout_table.blot`, `predicate_refinements.blot` |
-| Fact passing | verified affine summaries replayed across functions/modules | `relational_summaries.blot`, `refinement_types_on_crack.blot` |
-| Ownership | separate affine `Omega` analysis | `owned_region_capabilities.blot` |
-| End-to-end composition | all layers in one checked and evaluated program | `refinement_types_on_crack.blot` |
+| Requirement            | Implemented mechanism                                       | Regression evidence                                           |
+| ---------------------- | ----------------------------------------------------------- | ------------------------------------------------------------- |
+| Unknown carriers       | fresh Simple-sub variables and call-site freshening         | `inference.test.ts`                                           |
+| Integer inhabitants    | exact predicate-to-range normalization                      | `predicate_refinements.blot`                                  |
+| Arrays                 | homogeneous canonical constraints from operations and calls | `collections.blot`                                            |
+| Trait-like behavior    | record width/depth subtyping and direct projections         | `type_predicates.blot`                                        |
+| Higher-order functions | arrow intersections and shared row variables                | `inference.test.ts`                                           |
+| Effects                | inferred open rows, handlers, and reflected closed rows     | `effects.blot`                                                |
+| Layout                 | attached namespaces preserved by refinement                 | `layout_table.blot`, `predicate_refinements.blot`             |
+| Fact passing           | verified affine summaries replayed across functions/modules | `relational_summaries.blot`, `refinement_types_on_crack.blot` |
+| Ownership              | separate affine `Omega` analysis                            | `owned_region_capabilities.blot`                              |
+| End-to-end composition | all layers in one checked and evaluated program             | `refinement_types_on_crack.blot`                              |
 
 The integrated example imports a body-verified length wrapper, uses the
 published summary to authorize a direct array read, propagates a callback effect
