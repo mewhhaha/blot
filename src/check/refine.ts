@@ -25,7 +25,11 @@ import type {
   RefinementVariable,
 } from "../core/refinement.ts";
 import type { SimpleType, Typing } from "./type.ts";
-import { relationalSummary } from "./relational.ts";
+import {
+  relationshipSummary,
+  type RelationshipTransform,
+  relationalSummary,
+} from "./relational.ts";
 import {
   childTypeEnv,
   type Context,
@@ -34,6 +38,7 @@ import {
   lookupComptime,
   lookupIntegerValue,
   lookupRelation,
+  lookupRelationshipFunction,
   lookupType,
   primitiveName,
   projectedBinding,
@@ -671,17 +676,55 @@ export function recordExpressionRelation(expr: Expr, context: Context): void {
   if (expr.tag === "field") {
     const target = expressionRelation(expr.target, context);
     if (target === null) return;
-    if (target.tag === "tuple" && /^\d+$/.test(expr.name)) {
-      const element = target.elements[Number(expr.name)];
-      if (element !== undefined && element !== null) {
-        context.expressionRelations.set(expr, element);
+    const projected = projectRelation(target, expr.name);
+    if (projected !== null) {
+      context.expressionRelations.set(expr, projected);
+    }
+    return;
+  }
+  if (expr.tag === "tuple") {
+    const elements = expr.elements.map((element) =>
+      expressionRelation(element, context)
+    );
+    if (elements.some((element) => element !== null)) {
+      context.expressionRelations.set(expr, { tag: "tuple", elements });
+    }
+    return;
+  }
+  if (expr.tag === "shape") {
+    const fields = new Map<string, RelationalValue | null>();
+    for (const member of expr.members) {
+      const relation = expressionRelation(member.value, context);
+      if (member.tag === "field") {
+        fields.set(member.name, relation);
+        continue;
       }
+      if (relation?.tag !== "record") {
+        // An opaque spread may overwrite any earlier field. Forgetting is the
+        // only sound structural transform until its field set is known.
+        fields.clear();
+        continue;
+      }
+      for (const [name, value] of relation.fields) fields.set(name, value);
+    }
+    if ([...fields.values()].some((field) => field !== null)) {
+      context.expressionRelations.set(expr, { tag: "record", fields });
     }
     return;
   }
   if (expr.tag !== "apply") return;
   const application = spine(expr);
   if (application === null) return;
+  if (application.callee.tag === "tag" && application.args.length === 1) {
+    const payload = expressionRelation(application.args[0], context);
+    if (payload !== null) {
+      context.expressionRelations.set(expr, {
+        tag: "variant",
+        cases: new Map([[application.callee.name, payload]]),
+      });
+    }
+    return;
+  }
   const primitive = primitiveName(application.callee, context);
   if (primitive === "@array.indexed" && application.args.length === 1) {
     const length = arrayLength(application.args[0], context.types);
@@ -696,33 +739,57 @@ export function recordExpressionRelation(expr: Expr, context: Context): void {
   if (
     application.callee.tag !== "field" ||
     application.callee.name !== "step" || application.args.length !== 1
-  ) return;
+  ) {
+    const callee = relationshipValue(application.callee, context.types);
+    if (callee === null) return;
+    const summary = relationshipSummary(callee);
+    if (summary === null || summary.arity !== application.args.length) return;
+    const relation = instantiateRelationship(
+      summary.result,
+      application.args.map((argument) =>
+        expressionRelation(argument, context)
+      ),
+    );
+    if (relation !== null) context.expressionRelations.set(expr, relation);
+    return;
+  }
   const iterator = expressionRelation(
     application.callee.target,
     context,
   );
-  if (iterator?.tag !== "indexed-iterator") return;
-  const index = refinementExpression(application.args[0], context.types);
-  if (index === null) return;
-  context.expressionRelations.set(expr, {
-    tag: "variant",
-    cases: new Map([
-      ["None", null],
-      ["Some", {
-        tag: "tuple",
-        elements: [
-          {
-            tag: "tuple",
-            elements: [
-              { tag: "index", value: index, length: iterator.length },
-              null,
-            ],
-          },
-          null,
-        ],
-      }],
-    ]),
-  });
+  if (iterator?.tag === "indexed-iterator") {
+    const index = refinementExpression(application.args[0], context.types);
+    if (index === null) return;
+    context.expressionRelations.set(expr, {
+      tag: "variant",
+      cases: new Map([
+        ["None", null],
+        ["Some", {
+          tag: "tuple",
+          elements: [
+            {
+              tag: "tuple",
+              elements: [
+                { tag: "index", value: index, length: iterator.length },
+                null,
+              ],
+            },
+            null,
+          ],
+        }],
+      ]),
+    });
+    return;
+  }
+  const callee = relationshipValue(application.callee, context.types);
+  if (callee === null) return;
+  const summary = relationshipSummary(callee);
+  if (summary === null || summary.arity !== application.args.length) return;
+  const relation = instantiateRelationship(
+    summary.result,
+    application.args.map((argument) => expressionRelation(argument, context)),
+  );
+  if (relation !== null) context.expressionRelations.set(expr, relation);
 }
 
 export function expressionRelation(
@@ -734,10 +801,72 @@ export function expressionRelation(
   if (expr.tag === "var") return lookupRelation(context.types, expr.name);
   if (expr.tag !== "field") return null;
   const target = expressionRelation(expr.target, context);
-  if (target?.tag !== "tuple" || !/^\d+$/.test(expr.name)) return null;
-  const element = target.elements[Number(expr.name)];
-  if (element === undefined) return null;
-  return element;
+  if (target === null) return null;
+  return projectRelation(target, expr.name);
+}
+
+function projectRelation(
+  relation: RelationalValue,
+  field: string,
+): RelationalValue | null {
+  if (relation.tag === "tuple" && /^\d+$/.test(field)) {
+    return relation.elements[Number(field)] ?? null;
+  }
+  if (relation.tag === "record") return relation.fields.get(field) ?? null;
+  return null;
+}
+
+function relationshipValue(expr: Expr, scope: TypeEnv): Value | null {
+  const path = namePath(expr);
+  if (path === null) return null;
+  let value = lookupComptime(scope, path[0]);
+  if (value === null) value = lookupRelationshipFunction(scope, path[0]);
+  for (const name of path.slice(1)) {
+    if (value === null) return null;
+    let found: Value | undefined;
+    if (value.tag === "shape") found = value.fields.get(name);
+    if (value.tag === "extended") found = value.members.get(name);
+    if (found === undefined) return null;
+    value = found;
+  }
+  return value;
+}
+
+function instantiateRelationship(
+  transform: RelationshipTransform,
+  arguments_: readonly (RelationalValue | null)[],
+): RelationalValue | null {
+  if (transform.tag === "parameter") {
+    return arguments_[transform.parameter] ?? null;
+  }
+  if (transform.tag === "project") {
+    const target = instantiateRelationship(transform.target, arguments_);
+    if (target === null) return null;
+    return projectRelation(target, transform.field);
+  }
+  if (transform.tag === "payload") {
+    const target = instantiateRelationship(transform.target, arguments_);
+    if (target?.tag !== "variant") return null;
+    return target.cases.get(transform.constructor) ?? null;
+  }
+  if (transform.tag === "tuple") {
+    const elements = transform.elements.map((element) =>
+      element === null ? null : instantiateRelationship(element, arguments_)
+    );
+    if (elements.every((element) => element === null)) return null;
+    return { tag: "tuple", elements };
+  }
+  const source = transform.tag === "record" ? transform.fields : transform.cases;
+  const values = new Map<string, RelationalValue | null>();
+  for (const [name, value] of source) {
+    values.set(
+      name,
+      value === null ? null : instantiateRelationship(value, arguments_),
+    );
+  }
+  if ([...values.values()].every((value) => value === null)) return null;
+  if (transform.tag === "record") return { tag: "record", fields: values };
+  return { tag: "variant", cases: values };
 }
 
 export function bindPatternRelation(
@@ -786,6 +915,16 @@ export function bindPatternRelation(
       let elementRelation = relation.elements[index];
       if (elementRelation === undefined) elementRelation = null;
       bindPatternRelation(element, elementRelation, scope);
+    }
+    return;
+  }
+  if (pattern.tag === "shape" && relation.tag === "record") {
+    for (const field of pattern.fields) {
+      bindPatternRelation(
+        field.pattern,
+        relation.fields.get(field.name) ?? null,
+        scope,
+      );
     }
     return;
   }

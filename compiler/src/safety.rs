@@ -9,7 +9,7 @@ use crate::ast::{
 use crate::diagnostic::Diagnostic;
 use crate::eval::Context;
 use crate::recognise::{self, Junction, Ordering};
-use crate::relational::{Measure, Summaries};
+use crate::relational::{Measure, RelationshipTransform, Summaries};
 use crate::value::{Environment, Value, lookup};
 
 type Identity = u32;
@@ -25,6 +25,7 @@ enum Relation {
     IndexedIterator(Term),
     Index(Term),
     Tuple(Vec<Option<Relation>>),
+    Record(BTreeMap<String, Option<Relation>>),
     Choice(BTreeMap<String, Option<Relation>>),
 }
 
@@ -44,6 +45,7 @@ enum Node {
 #[derive(Clone, Default)]
 struct Scope {
     identities: HashMap<String, Identity>,
+    projections: HashMap<(Identity, String), Identity>,
     affines: HashMap<String, Term>,
     lengths: HashMap<String, Term>,
     relations: HashMap<String, Relation>,
@@ -161,6 +163,15 @@ impl Analysis<'_> {
                     self.bind_relation(*pattern, relations.get(index).cloned().flatten(), scope);
                 }
             }
+            (Pattern::Shape { fields, .. }, Relation::Record(mut relations)) => {
+                for field in fields {
+                    self.bind_relation(
+                        field.pattern,
+                        relations.remove(&field.name).flatten(),
+                        scope,
+                    );
+                }
+            }
             (
                 Pattern::Constructor {
                     name,
@@ -209,7 +220,23 @@ impl Analysis<'_> {
                     let affine = self.term(value, scope);
                     let length = self.array_length(value, scope);
                     let relation = self.relation(value, scope);
+                    let alias = self.aliased_identity(value, scope);
                     self.bind_pattern(pattern, scope);
+                    match &self.module.arena.patterns[pattern.0 as usize] {
+                        Pattern::Name { name, .. } => {
+                            let root = scope
+                                .identities
+                                .get(name)
+                                .copied()
+                                .expect("a bound name has an identity");
+                            self.record_expression_projection_aliases(value, root, scope);
+                        }
+                        _ => {
+                            if let Some(root) = alias {
+                                self.bind_pattern_projection_identities(pattern, root, scope);
+                            }
+                        }
+                    }
                     if scope.top_level {
                         self.trust_pattern(pattern, scope);
                     }
@@ -617,6 +644,17 @@ impl Analysis<'_> {
                         offset: BigInt::from(0),
                     })
             }),
+            Expression::Field { target, name, .. } => {
+                let parent = existing_identity(self.module, *target, scope)?;
+                scope
+                    .projections
+                    .get(&(parent, name.clone()))
+                    .copied()
+                    .map(|identity| Term::Variable {
+                        identity,
+                        offset: BigInt::from(0),
+                    })
+            }
             Expression::Apply { .. } => {
                 let (callee, arguments) = application_spine(expression, self.module);
                 let Expression::Intrinsic { name, .. } =
@@ -679,14 +717,45 @@ impl Analysis<'_> {
         match &self.module.arena.expressions[expression.0 as usize] {
             Expression::Var { name, .. } => scope.relations.get(name).cloned(),
             Expression::Field { target, name, .. } => {
-                let Relation::Tuple(elements) = self.relation(*target, scope)? else {
-                    return None;
-                };
-                let index = name.parse::<usize>().ok()?;
-                elements.get(index).cloned().flatten()
+                project_relation(self.relation(*target, scope)?, name)
+            }
+            Expression::Tuple { elements, .. } => {
+                let elements = elements
+                    .iter()
+                    .map(|element| self.relation(*element, scope))
+                    .collect::<Vec<_>>();
+                elements.iter().any(Option::is_some).then_some(Relation::Tuple(elements))
+            }
+            Expression::Shape { members, .. } => {
+                let mut fields = BTreeMap::new();
+                for member in members {
+                    match member {
+                        ShapeMember::Field { name, value } => {
+                            fields.insert(name.clone(), self.relation(*value, scope));
+                        }
+                        ShapeMember::Spread { value } => {
+                            let Some(Relation::Record(spread)) = self.relation(*value, scope) else {
+                                fields.clear();
+                                continue;
+                            };
+                            fields.extend(spread);
+                        }
+                    }
+                }
+                fields.values().any(Option::is_some).then_some(Relation::Record(fields))
             }
             Expression::Apply { .. } => {
                 let (callee, arguments) = application_spine(expression, self.module);
+                if let Expression::Tag { name, .. } =
+                    &self.module.arena.expressions[callee.0 as usize]
+                    && arguments.len() == 1
+                    && let Some(payload) = self.relation(arguments[0], scope)
+                {
+                    return Some(Relation::Choice(BTreeMap::from([(
+                        name.clone(),
+                        Some(payload),
+                    )])));
+                }
                 if let Expression::Field { target, name, .. } =
                     &self.module.arena.expressions[callee.0 as usize]
                 {
@@ -712,10 +781,235 @@ impl Analysis<'_> {
                         return Some(Relation::Choice(choices));
                     }
                 }
-                None
+                let callee = self.callee_value(callee, scope)?;
+                let summary = self.summaries.derive_relationship(&callee, self.context)?;
+                if summary.arity != arguments.len() {
+                    return None;
+                }
+                let arguments = arguments
+                    .iter()
+                    .map(|argument| self.relation(*argument, scope))
+                    .collect::<Vec<_>>();
+                instantiate_relationship(summary.result, &arguments)
             }
             _ => None,
         }
+    }
+
+    fn projected_identity(
+        &mut self,
+        parent: Identity,
+        field: &str,
+        scope: &mut Scope,
+    ) -> Identity {
+        let key = (parent, field.to_owned());
+        if let Some(identity) = scope.projections.get(&key) {
+            return *identity;
+        }
+        let identity = self.identity();
+        scope.projections.insert(key, identity);
+        identity
+    }
+
+    fn aliased_identity(
+        &mut self,
+        expression: ExpressionId,
+        scope: &mut Scope,
+    ) -> Option<Identity> {
+        match &self.module.arena.expressions[expression.0 as usize] {
+            Expression::Var { name, .. } => scope.identities.get(name).copied(),
+            Expression::Field { target, name, .. } => {
+                let target = *target;
+                let name = name.clone();
+                let parent = self.aliased_identity(target, scope)?;
+                Some(self.projected_identity(parent, &name, scope))
+            }
+            Expression::Apply { .. } => {
+                let (callee, arguments) = application_spine(expression, self.module);
+                if let Expression::Intrinsic { name, .. } =
+                    &self.module.arena.expressions[callee.0 as usize]
+                    && matches!(
+                        name.as_str(),
+                        "@linear.borrow" | "@linear.own" | "@linear.maybe"
+                    )
+                    && arguments.len() == 1
+                {
+                    return self.aliased_identity(arguments[0], scope);
+                }
+                let callee = self.callee_value(callee, scope)?;
+                let summary = self.summaries.derive_relationship(&callee, self.context)?;
+                if summary.arity != arguments.len() {
+                    return None;
+                }
+                self.alias_from_transform(&summary.result, &arguments, scope)
+            }
+            _ => None,
+        }
+    }
+
+    fn alias_from_transform(
+        &mut self,
+        transform: &RelationshipTransform,
+        arguments: &[ExpressionId],
+        scope: &mut Scope,
+    ) -> Option<Identity> {
+        match transform {
+            RelationshipTransform::Parameter(parameter) => {
+                self.aliased_identity(*arguments.get(*parameter)?, scope)
+            }
+            RelationshipTransform::Project { target, field } => {
+                let parent = self.alias_from_transform(target, arguments, scope)?;
+                Some(self.projected_identity(parent, field, scope))
+            }
+            RelationshipTransform::Payload {
+                target,
+                constructor,
+            } => {
+                let parent = self.alias_from_transform(target, arguments, scope)?;
+                Some(self.projected_identity(parent, &format!("#{constructor}"), scope))
+            }
+            _ => None,
+        }
+    }
+
+    fn record_transform_projection_aliases(
+        &mut self,
+        transform: &RelationshipTransform,
+        root: Identity,
+        arguments: &[ExpressionId],
+        scope: &mut Scope,
+    ) {
+        let entries = match transform {
+            RelationshipTransform::Tuple(elements) => elements
+                .iter()
+                .enumerate()
+                .map(|(index, value)| (index.to_string(), value))
+                .collect::<Vec<_>>(),
+            RelationshipTransform::Record(fields) => fields
+                .iter()
+                .map(|(name, value)| (name.clone(), value))
+                .collect::<Vec<_>>(),
+            _ => return,
+        };
+        for (field, value) in entries {
+            let Some(value) = value else {
+                continue;
+            };
+            if let Some(alias) = self.alias_from_transform(value, arguments, scope) {
+                scope.projections.insert((root, field), alias);
+                continue;
+            }
+            let projected = self.projected_identity(root, &field, scope);
+            self.record_transform_projection_aliases(
+                value,
+                projected,
+                arguments,
+                scope,
+            );
+        }
+    }
+
+    fn record_expression_projection_aliases(
+        &mut self,
+        expression: ExpressionId,
+        root: Identity,
+        scope: &mut Scope,
+    ) {
+        match self.module.arena.expressions[expression.0 as usize].clone() {
+            Expression::Tuple { elements, .. } => {
+                for (index, element) in elements.into_iter().enumerate() {
+                    let field = index.to_string();
+                    if let Some(alias) = self.aliased_identity(element, scope) {
+                        scope.projections.insert((root, field), alias);
+                    } else {
+                        let projected = self.projected_identity(root, &field, scope);
+                        self.record_expression_projection_aliases(element, projected, scope);
+                    }
+                }
+            }
+            Expression::Shape { members, .. } => {
+                for member in members {
+                    let ShapeMember::Field { name, value } = member else {
+                        continue;
+                    };
+                    if let Some(alias) = self.aliased_identity(value, scope) {
+                        scope.projections.insert((root, name), alias);
+                    } else {
+                        let projected = self.projected_identity(root, &name, scope);
+                        self.record_expression_projection_aliases(value, projected, scope);
+                    }
+                }
+            }
+            Expression::Apply { .. } => {
+                let (callee, arguments) = application_spine(expression, self.module);
+                let Some(callee) = self.callee_value(callee, scope) else {
+                    return;
+                };
+                let Some(summary) = self.summaries.derive_relationship(&callee, self.context) else {
+                    return;
+                };
+                if summary.arity != arguments.len() {
+                    return;
+                }
+                self.record_transform_projection_aliases(
+                    &summary.result,
+                    root,
+                    &arguments,
+                    scope,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn bind_pattern_projection_identities(
+        &mut self,
+        pattern: PatternId,
+        parent: Identity,
+        scope: &mut Scope,
+    ) {
+        match self.module.arena.patterns[pattern.0 as usize].clone() {
+            Pattern::Name { name, .. } => {
+                scope.identities.insert(name, parent);
+            }
+            Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => {
+                for (index, element) in elements.into_iter().enumerate() {
+                    let projected = self.projected_identity(parent, &index.to_string(), scope);
+                    self.bind_pattern_projection_identities(element, projected, scope);
+                }
+            }
+            Pattern::Shape { fields, .. } => {
+                for field in fields {
+                    let projected = self.projected_identity(parent, &field.name, scope);
+                    self.bind_pattern_projection_identities(field.pattern, projected, scope);
+                }
+            }
+            Pattern::Constructor {
+                name,
+                payload: Some(payload),
+                ..
+            } => {
+                let projected =
+                    self.projected_identity(parent, &format!("#{name}"), scope);
+                self.bind_pattern_projection_identities(payload, projected, scope);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn existing_identity(
+    module: &Module,
+    expression: ExpressionId,
+    scope: &Scope,
+) -> Option<Identity> {
+    match &module.arena.expressions[expression.0 as usize] {
+        Expression::Var { name, .. } => scope.identities.get(name).copied(),
+        Expression::Field { target, name, .. } => {
+            let parent = existing_identity(module, *target, scope)?;
+            scope.projections.get(&(parent, name.clone())).copied()
+        }
+        _ => None,
     }
 }
 
@@ -871,10 +1165,77 @@ fn relation_references(relation: &Relation, identity: Identity) -> bool {
             .iter()
             .flatten()
             .any(|relation| relation_references(relation, identity)),
+        Relation::Record(fields) => fields
+            .values()
+            .flatten()
+            .any(|relation| relation_references(relation, identity)),
         Relation::Choice(cases) => cases
             .values()
             .flatten()
             .any(|relation| relation_references(relation, identity)),
+    }
+}
+
+fn project_relation(relation: Relation, field: &str) -> Option<Relation> {
+    match relation {
+        Relation::Tuple(elements) => {
+            let index = field.parse::<usize>().ok()?;
+            elements.get(index).cloned().flatten()
+        }
+        Relation::Record(mut fields) => fields.remove(field).flatten(),
+        _ => None,
+    }
+}
+
+fn instantiate_relationship(
+    transform: RelationshipTransform,
+    arguments: &[Option<Relation>],
+) -> Option<Relation> {
+    match transform {
+        RelationshipTransform::Parameter(parameter) => arguments.get(parameter).cloned().flatten(),
+        RelationshipTransform::Project { target, field } => {
+            project_relation(instantiate_relationship(*target, arguments)?, &field)
+        }
+        RelationshipTransform::Payload {
+            target,
+            constructor,
+        } => {
+            let Relation::Choice(mut choices) = instantiate_relationship(*target, arguments)? else {
+                return None;
+            };
+            choices.remove(&constructor).flatten()
+        }
+        RelationshipTransform::Tuple(elements) => {
+            let elements = elements
+                .into_iter()
+                .map(|element| element.and_then(|value| instantiate_relationship(value, arguments)))
+                .collect::<Vec<_>>();
+            elements.iter().any(Option::is_some).then_some(Relation::Tuple(elements))
+        }
+        RelationshipTransform::Record(fields) => {
+            let fields = fields
+                .into_iter()
+                .map(|(name, value)| {
+                    (
+                        name,
+                        value.and_then(|value| instantiate_relationship(value, arguments)),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            fields.values().any(Option::is_some).then_some(Relation::Record(fields))
+        }
+        RelationshipTransform::Choice(cases) => {
+            let cases = cases
+                .into_iter()
+                .map(|(name, value)| {
+                    (
+                        name,
+                        value.and_then(|value| instantiate_relationship(value, arguments)),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            cases.values().any(Option::is_some).then_some(Relation::Choice(cases))
+        }
     }
 }
 
