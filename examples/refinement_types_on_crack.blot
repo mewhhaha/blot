@@ -23,10 +23,11 @@ const Renderable = { .render = Unit -> Str; }
 let render = fn value =>
   let renderable = @satisfies value Renderable
   return renderable.render ()
-let rendered = render {
-  .render = fn () => "painted";
-  .debug = True;
-}
+let rendered =
+  render {
+    .render = fn () => "painted";
+    .debug = True;
+  }
 
 // The callback's open effect row flows through `apply` and is then discharged
 // by an ordinary handler value.
@@ -39,23 +40,25 @@ let add_tick = fn value =>
   tick <- Tick.next ()
   return value + tick
 
-let ticking = {
-  .next = fn ((), ?resume) =>
-    result <- resume 2
-    return result
-  ;
-  .return = fn value => value;
-}
+let ticking =
+  {
+    .next = fn ((), ?resume) =>
+      result <- resume 2
+      return result
+    ;
+    .return = fn value => value;
+  }
 
 let apply_tick = fn () =>
   result <- apply add_tick 40
   return result
 
-let effect_result = @handle (
-  Tick,
-  apply_tick,
-  ticking
-)
+let effect_result =
+  @handle (
+    Tick,
+    apply_tick,
+    ticking
+  )
 
 // Inhabitant predicates normalize to the ordinary integer range lattice.
 // Refining I32 keeps its attached namespace, including layout evidence.
@@ -69,9 +72,10 @@ let keep_natural = fn value => value
 // summary contributes `index < length(values)` to Phi, authorizing the direct
 // array read without putting a length in `[Int]` or trusting an annotation.
 sig at = [Int] -> Int -> Int
-let at = fn values => fn index => case index >= 0 && index < Contracts.count values of
-  #True => @array.get values index
-  #False => 0
+let at =
+  fn values => fn index => case index >= 0 && index < Contracts.count values of
+    #True => @array.get values index
+    #False => 0
 
 // Omega stays affine while participating in the same call-site decision.
 let consume = fn !value => value + 0

@@ -100,11 +100,12 @@ export function closedTypeFingerprint(type: SimpleType): string {
   const entries = (
     fields: ReadonlyMap<string, SimpleType>,
     visit: (member: SimpleType) => string,
-  ): string => [...fields]
-    .map(([name, member]) => [name, visit(member)] as const)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, member]) => `${JSON.stringify(name)}:${member}`)
-    .join(",");
+  ): string =>
+    [...fields]
+      .map(([name, member]) => [name, visit(member)] as const)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, member]) => `${JSON.stringify(name)}:${member}`)
+      .join(",");
   const visit = (current: SimpleType): string => {
     switch (current.tag) {
       case "var":
@@ -125,13 +126,17 @@ export function closedTypeFingerprint(type: SimpleType): string {
         return `all${current.variables.length}(${body})`;
       }
       case "range":
-        return `range(${current.domain},${bound(current.low)},${bound(current.high)})`;
+        return `range(${current.domain},${bound(current.low)},${
+          bound(current.high)
+        })`;
       case "unit":
       case "top":
       case "bottom":
         return current.tag;
       case "fun":
-        return `fun(${current.deferred === true ? 1 : 0},${visit(current.param)},${visit(current.effects)},${visit(current.result)})`;
+        return `fun(${current.deferred === true ? 1 : 0},${
+          visit(current.param)
+        },${visit(current.effects)},${visit(current.result)})`;
       case "record":
         return `record{${entries(current.fields, visit)}}`;
       case "array":
@@ -139,11 +144,21 @@ export function closedTypeFingerprint(type: SimpleType): string {
       case "region":
         return `region(${visit(current.element)})`;
       case "variant":
-        return `variant(${current.open ? 1 : 0}){${entries(current.cases, visit)}}`;
+        return `variant(${current.open ? 1 : 0}){${
+          entries(current.cases, visit)
+        }}`;
       case "effects":
-        return `effects{${[...current.labels].sort().map((label) => JSON.stringify(label)).join(",")}}`;
+        return `effects{${
+          [...current.labels].sort().map((label) => JSON.stringify(label)).join(
+            ",",
+          )
+        }}`;
       case "open-effects":
-        return `open-effects{${[...current.labels].sort().map((label) => JSON.stringify(label)).join(",")};${visit(current.tail)}}`;
+        return `open-effects{${
+          [...current.labels].sort().map((label) => JSON.stringify(label)).join(
+            ",",
+          )
+        };${visit(current.tail)}}`;
       case "union":
         return `union{${current.members.map(visit).sort().join(",")}}`;
       case "opaque":

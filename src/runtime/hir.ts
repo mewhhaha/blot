@@ -93,6 +93,10 @@ export type BlotRuntimeOperation =
         | "greater-than-or-equal";
     }
     | {
+      readonly kind: "scalar.unary";
+      readonly operator: "negate" | "square-root";
+    }
+    | {
       readonly kind: "convert";
       readonly conversion: string;
     }
@@ -400,7 +404,9 @@ export function runtimeLayoutWitness(
         const representation = visit(type.representationType);
         witness = {
           ...representation,
-          fingerprint: `sealed(${JSON.stringify(type.name)},${representation.fingerprint})`,
+          fingerprint: `sealed(${
+            JSON.stringify(type.name)
+          },${representation.fingerprint})`,
         };
         break;
       }
@@ -419,7 +425,9 @@ export function runtimeLayoutWitness(
         }
         const size = alignTo(offset, alignment);
         witness = {
-          fingerprint: `product(${JSON.stringify(type.name)}){${fields.join(",")}}`,
+          fingerprint: `product(${JSON.stringify(type.name)}){${
+            fields.join(",")
+          }}`,
           size,
           alignment,
           stride: alignTo(size, alignment),
@@ -443,7 +451,11 @@ export function runtimeLayoutWitness(
         const payloadOffset = alignTo(4, payloadAlignment);
         const size = alignTo(payloadOffset + payloadSize, alignment);
         witness = {
-          fingerprint: `sum(${JSON.stringify(type.name)}){${payloads.map(({ name, layout }) => `${JSON.stringify(name)}:${layout.fingerprint}`).join(",")}}`,
+          fingerprint: `sum(${JSON.stringify(type.name)}){${
+            payloads.map(({ name, layout }) =>
+              `${JSON.stringify(name)}:${layout.fingerprint}`
+            ).join(",")
+          }}`,
           size,
           alignment,
           stride: alignTo(size, alignment),

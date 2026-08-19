@@ -2,9 +2,9 @@ import { assertEquals } from "@std/assert";
 import type { PartitionAlgebra, PartitionWitness } from "./partition.ts";
 import { combinePartition, reassociatePartition } from "./partition.ts";
 import {
-  type RectangleFootprint,
   RECTANGLE_PARTITIONS,
   rectangleContains,
+  type RectangleFootprint,
 } from "./rectangle.ts";
 
 interface Interval {

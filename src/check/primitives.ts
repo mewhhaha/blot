@@ -292,9 +292,11 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ["@f32.mul", mono(curried([FLOAT32, FLOAT32], FLOAT32))],
   ["@f32.div", mono(curried([FLOAT32, FLOAT32], FLOAT32))],
   ["@f32.neg", mono(curried([FLOAT32], FLOAT32))],
+  ["@f32.sqrt", mono(curried([FLOAT32], FLOAT32))],
   ["@f32.cmp", mono(curried([FLOAT32, FLOAT32], ORDERING))],
   ["@f32.is_nan", mono(curried([FLOAT32], BOOL))],
   ["@f32.of_float", mono(curried([FLOAT], FLOAT32))],
+  ["@f32.of_int", mono(curried([INT], FLOAT32))],
   ["@float.of_f32", mono(curried([FLOAT32], FLOAT))],
 
   // --- four lanes ---

@@ -1,10 +1,8 @@
 // Asking a question about a type.
 //
-// `@satisfies` checks that a compile-time value inhabits a type. This asks
-// something different: does the type of an expression have a property — an
-// `.x` field, a shape, whatever a predicate can decide. The two are separate
-// primitives because they take different arguments and answer different
-// questions, and one of them cannot be written over the other.
+// `@satisfies` either constrains a value with a canonical type or asks whether
+// its inferred type has a property — an `.x` field, a shape, whatever a
+// predicate can decide. Both forms pass the value through unchanged.
 //
 // The predicate is an ordinary compile-time function from a type to a `Bool`,
 // so `reflect` and `refines` are all it needs and the prelude adds no
@@ -25,12 +23,11 @@ let reading = { .value = 12; .label = "depth"; }
 
 // `Has` asks for a subset of fields. The value passes through unchanged, so it
 // reads as an assertion on the way to using it.
-let checked = @type.satisfies (reading, Has { .value = Int; })
+let checked = @satisfies reading (Has { .value = Int; })
 
 // A predicate written inline can ask anything the comptime evaluator can.
 let counted =
-  @type.satisfies (
-    reading,
+  @satisfies reading (
     fn t => case reflect t of
       #Shape fields => @array.len (@shape.names fields) == 2
       _ => False
@@ -38,7 +35,7 @@ let counted =
 
 // `Is` is exact rather than a subset.
 const Reading = { .value = 12; .label = "depth"; }
-let exact = @type.satisfies (reading, Is Reading)
+let exact = @satisfies reading (Is Reading)
 
 // `examples/rejected/semantics/does_not_satisfy.blot` is the program whose
 // predicate answers `#False`, and it is refused while compiling rather than

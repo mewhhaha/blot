@@ -630,7 +630,7 @@ const Float32 =
     .cmp = fn left => fn right => @f32.cmp left right;
     .is_nan = fn value => @f32.is_nan value;
     .of_float = fn value => @f32.of_float value;
-    .of_int = fn value => @f32.of_float (@float.of_int value);
+    .of_int = fn value => @f32.of_int value;
     .widen = fn value => @float.of_f32 value;
     .truncate = fn value => @int.of_float (@float.of_f32 value);
     .abs = fn value =>
@@ -640,15 +640,13 @@ const Float32 =
         return value
     ;
 
-    // Core has no f32 remainder and no f32 square root, so both are computed in
-    // double precision and narrowed once at the end. Rounding after every step
-    // instead would be slower and no more accurate — the intermediates are exact
-    // in an f64 either way.
+    // Core has no f32 remainder, so it is computed in double precision and
+    // narrowed once at the end. Square root is a direct scalar operation.
     .rem = fn left => fn right =>
       return @f32.of_float
         (@float.rem (@float.of_f32 left) (@float.of_f32 right))
     ;
-    .sqrt = fn value => @f32.of_float (Float.sqrt (@float.of_f32 value));
+    .sqrt = fn value => @f32.sqrt value;
   }
 
 // --- four lanes -------------------------------------------------------------
@@ -928,12 +926,13 @@ const iter_affine = fn (values, start, stop, stride) => {
 const iter_slice =
   fn (values, start, stop) => iter_affine (values, start, stop, 1)
 
-const iter_reverse = fn values => iter_affine (
-  values,
-  @int.sub (Array.length values) 1,
-  -1,
-  -1
-)
+const iter_reverse = fn values =>
+  return iter_affine (
+    values,
+    @int.sub (Array.length values) 1,
+    -1,
+    -1
+  )
 
 // Draining one. `for` is this loop with the accumulator inferred from the names
 // its body rebinds; written out, it is the same fold.
@@ -1574,7 +1573,7 @@ const rec refines =
 
 // --- asking about a type ----------------------------------------------------
 //
-// `@type.satisfies` hands a predicate the type of an expression, and a
+// Predicate-form `@satisfies` hands a predicate the type of an expression, and a
 // predicate is an ordinary function from a type value to a `Bool`. These are
 // the two that would otherwise be written inline every time; anything more
 // specific is `fn t => case reflect t of …`, which needs no help from here.

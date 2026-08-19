@@ -457,6 +457,15 @@ function lowerOperation(
       operator: binaryOperator(operation.operator),
     };
   }
+  if (operation.kind === "scalar.unary") {
+    return {
+      ...base,
+      kind: "primitive",
+      primitiveId: operation.operator === "square-root"
+        ? PrimitiveId.f32SquareRoot
+        : PrimitiveId.negate,
+    };
+  }
   if (operation.kind === "convert") {
     return {
       ...base,

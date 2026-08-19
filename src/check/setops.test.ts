@@ -7,8 +7,8 @@
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import {
-  difference,
   closedTypeFingerprint,
+  difference,
   intersect,
   normalizeClosedUnion,
   UNSUPPORTED_SET_OP,

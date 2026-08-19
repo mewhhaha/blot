@@ -1740,7 +1740,25 @@ impl Checker {
                 };
                 self.phase.set(previous_phase);
                 self.level.set(self.level.get() - 1);
-                let mut inferred = inferred?;
+                let mut inferred = match inferred {
+                    Ok(inferred) => inferred,
+                    Err(inference_error) if kind == DeclarationKind::Const => {
+                        match self.evaluate_binding(
+                            path,
+                            module,
+                            pattern,
+                            value,
+                            values,
+                            Phase::Comptime,
+                        ) {
+                            Err(evaluation_error) if evaluation_error.code != "BLOT_UNBOUND" => {
+                                return Err(evaluation_error);
+                            }
+                            _ => return Err(inference_error),
+                        }
+                    }
+                    Err(error) => return Err(error),
+                };
                 if kind == DeclarationKind::Effect
                     && let Some((suspended_effects, result)) =
                         self.effect_value_signature(&inferred.type_)
@@ -5261,10 +5279,11 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         "@f32.add" | "@f32.sub" | "@f32.mul" | "@f32.div" => {
             curried(vec![f32_.clone(), f32_.clone()], f32_)
         }
-        "@f32.neg" => curried(vec![f32_.clone()], f32_),
+        "@f32.neg" | "@f32.sqrt" => curried(vec![f32_.clone()], f32_),
         "@f32.cmp" => curried(vec![f32_.clone(), f32_], ordering),
         "@f32.is_nan" => curried(vec![f32_], bool_.clone()),
         "@f32.of_float" => curried(vec![float], f32_),
+        "@f32.of_int" => curried(vec![int], f32_),
         "@float.of_f32" => curried(vec![f32_], float),
         "@f32x4.of" => curried(vec![float32_type(); 4], vector),
         "@f32x4.splat" => curried(vec![float32_type()], vector),
@@ -5446,10 +5465,7 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             Type::Opaque("Type".to_owned()),
         ),
         "@type.equal" => curried(vec![checker.fresh(), checker.fresh()], bool_),
-        "@type.probe" => curried(
-            vec![checker.fresh()],
-            Type::Opaque("Type".to_owned()),
-        ),
+        "@type.probe" => curried(vec![checker.fresh()], Type::Opaque("Type".to_owned())),
         "@type.of" | "@type.reflect" | "@type.members" | "@type.union_of" => {
             curried(vec![checker.fresh()], checker.fresh())
         }
@@ -6989,7 +7005,11 @@ fn closed_type_key(type_: &Type) -> String {
                 format!("all{}({body})", variables.len())
             }
             Type::Range { domain, low, high } => {
-                format!("range({domain:?},{},{})", scalar(low.as_ref()), scalar(high.as_ref()))
+                format!(
+                    "range({domain:?},{},{})",
+                    scalar(low.as_ref()),
+                    scalar(high.as_ref())
+                )
             }
             Type::Unit => "unit".to_owned(),
             Type::Function {
@@ -7009,11 +7029,22 @@ fn closed_type_key(type_: &Type) -> String {
                 format!("variant({open}){}", fields("", cases, binders))
             }
             Type::Effects(labels) => {
-                format!("effects{{{}}}", labels.iter().map(|label| format!("{label:?}")).collect::<Vec<_>>().join(","))
+                format!(
+                    "effects{{{}}}",
+                    labels
+                        .iter()
+                        .map(|label| format!("{label:?}"))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
             }
             Type::OpenEffects { labels, tail } => format!(
                 "open-effects{{{};{}}}",
-                labels.iter().map(|label| format!("{label:?}")).collect::<Vec<_>>().join(","),
+                labels
+                    .iter()
+                    .map(|label| format!("{label:?}"))
+                    .collect::<Vec<_>>()
+                    .join(","),
                 visit(tail, binders)
             ),
             Type::Union(members) => {
@@ -7038,9 +7069,7 @@ fn union_types(types: Vec<Type>) -> Type {
         match type_ {
             Type::Bottom => true,
             Type::Top => false,
-            Type::Union(nested) => nested
-                .into_iter()
-                .all(|member| append(members, member)),
+            Type::Union(nested) => nested.into_iter().all(|member| append(members, member)),
             type_ => {
                 let key = closed_type_key(&type_);
                 if !members.iter().any(|(existing, _)| existing == &key) {
@@ -7052,10 +7081,7 @@ fn union_types(types: Vec<Type>) -> Type {
     }
 
     let mut members = Vec::new();
-    if !types
-        .into_iter()
-        .all(|type_| append(&mut members, type_))
-    {
+    if !types.into_iter().all(|type_| append(&mut members, type_)) {
         return Type::Top;
     }
     members.sort_by(|(left, _), (right, _)| left.cmp(right));
@@ -8377,5 +8403,4 @@ mod tests {
             ])),
         );
     }
-
 }

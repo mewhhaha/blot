@@ -74,6 +74,7 @@ check:
   deno check .
   deno fmt --check
   deno lint
+  deno task check:generated
   rustfmt --edition 2024 --check experiments/generated-code/counterpart.rs
   cargo fmt --manifest-path compiler/Cargo.toml --check
   cargo clippy --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown -- -D warnings

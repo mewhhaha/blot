@@ -207,18 +207,20 @@ Small non-allocating Blot artifacts pay roughly a 1.1 KB ABI/runtime shell.
 Rust's allocator makes its Store counterparts much larger, while its scalar
 artifacts remain substantially smaller.
 
-## Remaining capability probe
+## Current capability probe
 
 Residual recursion, captured runtime bounds, direct calls, explicitly signed
 first-order exports, host-driven module loops, surface `for` over `Iter.range`,
-and indexed recursive data now compile through the Rust production path. The
-capability probe names one remaining lowering gap: a direct recursive algebraic
-value such as `#Nil | #Cons (Int, List)` checks and evaluates, but Runtime HIR
-does not yet close its recursive representation. `SUGGESTION.md` records the
-fixed-point representation proposed for that case. The engine case study also
-reaches ABI planning; it is then refused for its declared `F32x4` host boundary,
-which is the specified ABI 1 SIMD restriction rather than a residual-lowering
-gap.
+indexed recursive data, and direct recursive algebraic representations now
+compile through the Rust production path. The recursive-representation refusal
+recorded by the historical report has been closed and is no longer a current
+lowering gap. The engine case study still reaches ABI planning and is refused
+for its declared `F32x4` host boundary, which is the specified ABI 1 SIMD
+restriction rather than a residual-lowering gap.
+
+This status paragraph does not refresh the historical timings or artifact sizes
+above. Use `TASKS.md` for current architectural work and rerun the benchmark
+before making a new performance claim.
 
 The complete machine-readable report includes source and artifact hashes,
 artifact sizes and boundary-relative marginal sizes, flags, calibrated

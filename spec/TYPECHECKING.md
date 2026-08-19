@@ -81,10 +81,10 @@ performed.
 A type is **ground** when it contains no inference variable or `forall`. Source
 union values bridge only to ground unions. At that boundary, nested unions are
 flattened, duplicate members and `bottom` are removed, `top` absorbs, and zero
-members becomes `bottom`. The same normalizer receives exact ground
-intersection and difference results. Inference may compute joins containing
-variables internally; those joins are not admissible as the right-hand
-disjunction rule described below.
+members becomes `bottom`. The same normalizer receives exact ground intersection
+and difference results. Inference may compute joins containing variables
+internally; those joins are not admissible as the right-hand disjunction rule
+described below.
 
 ## 2. Declarative subtyping
 
@@ -386,13 +386,13 @@ summary(f) = result = measure(parameter_i) + k
 
 where `i` selects any curried parameter and `k` is a compile-time integer. A
 summary is derived from the closure value by structurally checking its body
-against `@array.len` or `@region.length`, transparent linearity wrappers,
-affine literal shifts, or another already derived summary. The closure
-environment resolves callees; source spelling never does. At application, the
-selected argument's immutable value identity replaces `parameter_i` and the
-resulting term enters `Phi`. The serialized fingerprint includes a schema
-version, measure, parameter index, and offset. Cycles and bodies outside this
-fragment derive no fact.
+against `@array.len` or `@region.length`, transparent linearity wrappers, affine
+literal shifts, or another already derived summary. The closure environment
+resolves callees; source spelling never does. At application, the selected
+argument's immutable value identity replaces `parameter_i` and the resulting
+term enters `Phi`. The serialized fingerprint includes a schema version,
+measure, parameter index, and offset. Cycles and bodies outside this fragment
+derive no fact.
 
 A runtime name bound to one of these terms receives an affine equality between
 its binding identity and the retained term. When that name is compared with a
@@ -400,9 +400,9 @@ compile-time integer, it is the comparison subject even though the same name can
 also serve as a stable witness elsewhere. Branch constraints attach to the
 binding identity, and shortest-path entailment transports them through the
 equality to the measured array or region length. Thus the untaken branch of
-`length < 2`, after `let length = @array.len xs`, proves literal index zero below
-`length(xs)`. Two retained non-literal terms remain witnesses with no subject
-and are not compared by this decidable fragment.
+`length < 2`, after `let length = @array.len xs`, proves literal index zero
+below `length(xs)`. Two retained non-literal terms remain witnesses with no
+subject and are not compared by this decidable fragment.
 
 Typestate and effects compose without another type constructor. A state machine
 is represented by ordinary closed variants in `Gamma`; a transition has an

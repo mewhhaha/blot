@@ -11,8 +11,8 @@ proofs over particular run-time values.
 The contract makes most type declarations ordinary compile-time values or pure
 predicates while retaining the existing representation, inference, effect,
 ownership, layout, and compilation guarantees. The supported model is complete
-at the canonicalization boundary defined below: open variables receive
-canonical constraints, closed types admit composable source predicates, and
+at the canonicalization boundary defined below: open variables receive canonical
+constraints, closed types admit composable source predicates, and
 safety-sensitive relations require finite replayable evidence.
 
 ## 1. Thesis
@@ -21,8 +21,8 @@ Every unannotated value begins as a fresh inference variable. A lambda therefore
 starts schematically as `'a -> 'b`, and its body and call sites accumulate lower
 and upper constraints until the compiler has enough information to settle a
 representation. `Int`, arrays, records, variants, arrows, and effect rows are
-the canonical constraints that refine those unknowns; they are not eager
-nominal classifications.
+the canonical constraints that refine those unknowns; they are not eager nominal
+classifications.
 
 ```blot
 let identity = fn value => value
@@ -130,8 +130,8 @@ This is a normalization boundary rather than a union injected into the type
 lattice. The checker first evaluates the requirement. If `bridge(requirement)`
 produces a canonical type, that type constrains the subject's still-open
 inference variable. Otherwise the checker reifies the subject's settled type,
-applies the requirement as a compile-time predicate, and accepts only
-`#True` or `#False`. The assertion then erases.
+applies the requirement as a compile-time predicate, and accepts only `#True` or
+`#False`. The assertion then erases.
 
 A `sig` uses this same requirement classifier and subtype judgment. It accepts
 only the canonical branch because an adjacent lambda may need bidirectional
@@ -213,11 +213,11 @@ The minimal closed-type observations are:
 @type.probe forall             eliminate one binder with a kind-correct witness
 ```
 
-`@type.reflect` reports an outer quantified type as `#Forall`, but never
-exposes the binder's internal identity or an open body. Source inspects it by
-applying `@type.instantiate` to a chosen type value. A kind-polymorphic
-traversal uses `@type.probe`, which chooses `Unit` for an ordinary type
-binder and the empty row for an effect-row binder.
+`@type.reflect` reports an outer quantified type as `#Forall`, but never exposes
+the binder's internal identity or an open body. Source inspects it by applying
+`@type.instantiate` to a chosen type value. A kind-polymorphic traversal uses
+`@type.probe`, which chooses `Unit` for an ordinary type binder and the empty
+row for an effect-row binder.
 
 ```blot
 const rec is_function = fn type => case reflect type of
@@ -258,8 +258,8 @@ let at = fn values => fn index =>
 
 Ownership remains `Omega`. Applying a requirement is an identity: it neither
 copies nor consumes the carrier, so an owned value still has exactly the same
-affine obligations before and after refinement. These three domains compose at
-a call site without being collapsed into one unsound lattice.
+affine obligations before and after refinement. These three domains compose at a
+call site without being collapsed into one unsound lattice.
 
 ## 3. Elaboration and normalization
 
@@ -297,11 +297,11 @@ bottom type value.
 
 Inhabitant-predicate inversion accepts integer bases. This is the complete
 supported inversion boundary: the existing integer lattice has discrete
-inclusive bounds and exact difference. Arrays, records, arrows, variants,
-effect rows, and seals already constrain unknowns directly as canonical type
-values, so they do not require closure inversion. Text has no successor
-operation, floats contain NaN and do not have singleton types, and accepting an
-arbitrary closure for either would turn subtyping into program equivalence.
+inclusive bounds and exact difference. Arrays, records, arrows, variants, effect
+rows, and seals already constrain unknowns directly as canonical type values, so
+they do not require closure inversion. Text has no successor operation, floats
+contain NaN and do not have singleton types, and accepting an arbitrary closure
+for either would turn subtyping into program equivalence.
 
 ## 4. Flow-sensitive facts
 
@@ -368,8 +368,8 @@ compile-time growth.
 
 ## 7. Deliberate rejection boundaries
 
-The following are rejection boundaries of the supported language,
-not incomplete implementations:
+The following are rejection boundaries of the supported language, not incomplete
+implementations:
 
 - no unchecked `assume`;
 - no implicit run-time validation or coercion;
@@ -404,6 +404,6 @@ this contract.
 
 The integrated example imports a body-verified length wrapper, uses the
 published summary to authorize a direct array read, propagates a callback effect
-through a higher-order function, invokes a structural method, preserves an
-`I32` layout namespace through scalar refinement, and consumes an affine value.
-Every predicate and certificate erases before Runtime HIR.
+through a higher-order function, invokes a structural method, preserves an `I32`
+layout namespace through scalar refinement, and consumes an affine value. Every
+predicate and certificate erases before Runtime HIR.

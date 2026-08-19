@@ -187,7 +187,8 @@ Deno.test("relationship evidence survives records and destructuring", async () =
 Deno.test("checked helpers structurally transport relationship packages", async () => {
   const checked = await checkSource(
     "/tmp/relationship-helper.blot",
-    PRELUDE + `let carry = fn input => { .values = input.0; .payload = input.1; }
+    PRELUDE +
+      `let carry = fn input => { .values = input.0; .payload = input.1; }
 ` + INDEX_PACKAGE_BODY.replace("CARRY", "carry"),
   );
   assertEquals(checked.type, "(0 | 10 | 20 | 30)");
@@ -197,7 +198,8 @@ Deno.test("relationship package transforms cross module values", async () => {
   const directory = await Deno.makeTempDir();
   await Deno.writeTextFile(
     `${directory}/packages.blot`,
-    PRELUDE + `let carry = fn input => { .values = input.0; .payload = input.1; }
+    PRELUDE +
+      `let carry = fn input => { .values = input.0; .payload = input.1; }
 return { .carry = carry; }
 `,
   );

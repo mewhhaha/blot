@@ -189,7 +189,12 @@ function transformExpression(
 ): RelationshipTransform | null {
   if (expression.tag === "var") return bindings.get(expression.name) ?? null;
   if (expression.tag === "field") {
-    const target = transformExpression(expression.target, bindings, env, active);
+    const target = transformExpression(
+      expression.target,
+      bindings,
+      env,
+      active,
+    );
     if (target === null) return null;
     return { tag: "project", target, field: expression.name };
   }
@@ -244,7 +249,12 @@ function transformExpression(
     return commonTransform(branches);
   }
   if (expression.tag === "case") {
-    const target = transformExpression(expression.target, bindings, env, active);
+    const target = transformExpression(
+      expression.target,
+      bindings,
+      env,
+      active,
+    );
     const branches = expression.arms.map((arm) => {
       const nested = new Map(bindings);
       bindTransformPattern(arm.pattern, target, nested);
@@ -319,13 +329,11 @@ function bindTransformPattern(
   if (pattern.tag === "constructor" && pattern.payload !== null) {
     bindTransformPattern(
       pattern.payload,
-      relation === null
-        ? null
-        : {
-          tag: "payload",
-          target: relation,
-          constructor: pattern.name,
-        },
+      relation === null ? null : {
+        tag: "payload",
+        target: relation,
+        constructor: pattern.name,
+      },
       bindings,
     );
   }
@@ -355,7 +363,9 @@ function substituteTransform(
     if (elements.every((element) => element === null)) return null;
     return { tag: "tuple", elements };
   }
-  const values = transform.tag === "record" ? transform.fields : transform.cases;
+  const values = transform.tag === "record"
+    ? transform.fields
+    : transform.cases;
   const mapped = new Map<string, RelationshipTransform | null>();
   for (const [name, value] of values) {
     mapped.set(
@@ -403,7 +413,9 @@ function canonicalTransform(transform: RelationshipTransform): unknown {
       ),
     ];
   }
-  const values = transform.tag === "record" ? transform.fields : transform.cases;
+  const values = transform.tag === "record"
+    ? transform.fields
+    : transform.cases;
   return [
     transform.tag,
     [...values.entries()].sort(([left], [right]) => left.localeCompare(right))
@@ -466,9 +478,7 @@ function resultMeasure(
       expression.body,
       [
         ...parameters,
-        expression.parameter.tag === "name"
-          ? expression.parameter.name
-          : null,
+        expression.parameter.tag === "name" ? expression.parameter.name : null,
       ],
       env,
       active,

@@ -59,7 +59,7 @@ import {
   type ResidualHostCall,
   type ResidualRuntimeExport,
 } from "./gpupaper_hir.ts";
-import { exportResidualRuntimeHir } from "./gpupaper_residual.ts";
+import { exportResidualRuntimeHir } from "../../compiler/lower/runtime_hir.ts";
 import type { BlotRuntimeModule } from "../../runtime/hir.ts";
 import type { Expr } from "../../syntax/ast.ts";
 

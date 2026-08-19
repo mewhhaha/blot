@@ -338,27 +338,12 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     },
   }],
 
-  // Canonical requirements remain checkable from values. A callable
-  // requirement was already applied to the subject's reified type by the
-  // checker, which is the only layer that owns that inferred type, so it erases
-  // here as the same identity operation.
+  // The checker owns the `subject satisfies requirement` judgment, including
+  // predicate requirements over inferred types. Evaluation only preserves the
+  // checked subject; rechecking here would discard inference evidence.
   ["@satisfies", {
     arity: 2,
-    run: ([value, requirement], span) => {
-      if (
-        requirement.tag === "closure" ||
-        requirement.tag === "core-closure" ||
-        requirement.tag === "primitive"
-      ) return value;
-      if (!inhabits(value, requirement)) {
-        fail(
-          "BLOT_DOES_NOT_SATISFY",
-          `${show(value)} does not inhabit ${show(requirement)}.`,
-          span,
-        );
-      }
-      return value;
-    },
+    run: ([value]) => value,
   }],
 
   // --- shapes ---
@@ -831,6 +816,10 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     arity: 1,
     run: ([value], s) => float32(-float32Of(value, s, "@f32.neg")),
   }],
+  ["@f32.sqrt", {
+    arity: 1,
+    run: ([value], s) => float32(Math.sqrt(float32Of(value, s, "@f32.sqrt"))),
+  }],
   ["@f32.is_nan", {
     arity: 1,
     run: ([value], s) => bool(Number.isNaN(float32Of(value, s, "@f32.is_nan"))),
@@ -857,6 +846,10 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
   ["@f32.of_float", {
     arity: 1,
     run: ([value], s) => float32(floatOf(value, s, "@f32.of_float")),
+  }],
+  ["@f32.of_int", {
+    arity: 1,
+    run: ([value], s) => float32(Number(intOf(value, s, "@f32.of_int"))),
   }],
   // Widening, and exact — every f32 is an f64.
   ["@float.of_f32", {
@@ -1042,4 +1035,4 @@ export function makeEffect(
   return { tag: "effect", id: brands += 1, name, operations, host };
 }
 
-export { asTuple };
+export { asTuple } from "./value.ts";
