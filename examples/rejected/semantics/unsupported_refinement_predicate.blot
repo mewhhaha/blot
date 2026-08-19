@@ -1,0 +1,7 @@
+open import "blot:prelude"
+
+// Sampling this function would be unsound. The accepted fragment requires the
+// parameter to occur directly in recognized comparisons.
+const Shifted = refine (Int, fn value => @int.add value 1 > 0)
+
+return Shifted

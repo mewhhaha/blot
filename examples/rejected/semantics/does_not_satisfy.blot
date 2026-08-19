@@ -11,4 +11,5 @@ const Source = @effect.host { .read = Unit -> Int; }
 
 reading <- { .value = Source.read (); }
 
-return @type.satisfies (reading, Has { .missing = Int; })
+const has_missing = fn type => refines (type, { .missing = Int; })
+return @satisfies reading has_missing

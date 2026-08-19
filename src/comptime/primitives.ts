@@ -10,8 +10,8 @@
 
 import { fail } from "../diagnostic.ts";
 import {
-  asTuple,
   bool,
+  equal,
   F32X4_MASK_NAME,
   F32X4_NAME,
   I16X8_MASK_NAME,
@@ -22,6 +22,7 @@ import {
   I8X16_NAME,
   registerEffectExtension,
   show,
+  substituteTypeVariable,
   tupleOf,
   UNIT,
   type Value,
@@ -219,6 +220,71 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     },
   }],
   ["@type.reflect", { arity: 1, run: ([value]) => reflect(value) }],
+  ["@type.equal", {
+    arity: 2,
+    run: ([left, right]) => bool(equal(left, right)),
+  }],
+  ["@type.instantiate", {
+    arity: 2,
+    run: ([quantified, argument], span) => {
+      if (quantified.tag !== "forall") {
+        fail(
+          "BLOT_TYPE_INSTANTIATE",
+          `@type.instantiate needs an outer quantified type, found ${
+            show(quantified)
+          }.`,
+          span,
+        );
+      }
+      const instantiated = substituteTypeVariable(
+        quantified.body,
+        quantified.variable,
+        argument,
+      );
+      if (instantiated === null) {
+        fail(
+          "BLOT_TYPE_INSTANTIATE",
+          `${show(argument)} cannot instantiate an effect-row variable.`,
+          span,
+        );
+      }
+      return instantiated;
+    },
+  }],
+  ["@type.probe", {
+    arity: 1,
+    run: ([quantified], span) => {
+      if (quantified.tag !== "forall") {
+        fail(
+          "BLOT_TYPE_INSTANTIATE",
+          `@type.probe needs an outer quantified type, found ${
+            show(quantified)
+          }.`,
+          span,
+        );
+      }
+      // Unit is the closed witness for an ordinary type binder. If substitution
+      // refuses it, the binder occurs in an effect-row tail, whose closed neutral
+      // witness is the empty row. No binder identity or open body reaches source.
+      const probed = substituteTypeVariable(
+        quantified.body,
+        quantified.variable,
+        UNIT,
+      ) ?? substituteTypeVariable(
+        quantified.body,
+        quantified.variable,
+        { tag: "array", elements: [] },
+      );
+      if (probed === null) {
+        fail(
+          "BLOT_TYPE_INSTANTIATE",
+          "The quantified type has no kind-correct closed probe.",
+          span,
+        );
+      }
+      return probed;
+    },
+  }],
   // Attaching a member to a type value. This is what lets `struct` hand back
   // the storage type itself with its constructor and accessors reachable on
   // it, rather than a record beside the type. A duplicate is refused, so a
@@ -272,31 +338,22 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     },
   }],
 
-  // Checked entirely by the checker, which is the only place the subject's
-  // type exists. By the time the evaluator sees this the question has been
-  // answered, so the value passes through — the same shape `@satisfies` has,
-  // for the same reason.
-  ["@type.satisfies", {
-    arity: 1,
-    run: ([pair], span) => {
-      const parts = asTuple(pair, 2);
-      if (parts === null) {
-        fail(
-          "BLOT_TYPE",
-          "@type.satisfies takes a value and a predicate as one tuple.",
-          span,
-        );
-      }
-      return parts[0];
-    },
-  }],
+  // Canonical requirements remain checkable from values. A callable
+  // requirement was already applied to the subject's reified type by the
+  // checker, which is the only layer that owns that inferred type, so it erases
+  // here as the same identity operation.
   ["@satisfies", {
     arity: 2,
-    run: ([value, type], span) => {
-      if (!inhabits(value, type)) {
+    run: ([value, requirement], span) => {
+      if (
+        requirement.tag === "closure" ||
+        requirement.tag === "core-closure" ||
+        requirement.tag === "primitive"
+      ) return value;
+      if (!inhabits(value, requirement)) {
         fail(
           "BLOT_DOES_NOT_SATISFY",
-          `${show(value)} does not inhabit ${show(type)}.`,
+          `${show(value)} does not inhabit ${show(requirement)}.`,
           span,
         );
       }

@@ -572,6 +572,14 @@ type environment `Gamma`:
 Gamma; Phi |- e : A ! epsilon
 ```
 
+An experimental source convenience also permits a pure unary integer predicate
+to _construct_ an ordinary range or finite union type at compile time. This is
+not another component of `Phi`: the predicate is normalized before inference,
+and the lattice receives only the canonical type it already supports. `Phi`
+continues to own relationships between particular runtime identities, while a
+predicate-defined `Natural` is merely another spelling of an integer set. See
+[`PREDICATE_REFINEMENTS.md`](PREDICATE_REFINEMENTS.md).
+
 `Phi` contains propositions over immutable value identities:
 
 ```text
@@ -1154,10 +1162,10 @@ terminating path leaving its scope.
 ### 14.5 Bounds safety
 
 Every `get_proved`, `set_proved`, `take_proved`, and `split_proved` step has an
-index within its array. Every
-other source array access uses the total `Option` operation. Consequently, an
-accepted program cannot reach an array-bounds trap through source operations.
-Defensive target checks may remain but are unreachable for proved operations.
+index within its array. Every other source array access uses the total `Option`
+operation. Consequently, an accepted program cannot reach an array-bounds trap
+through source operations. Defensive target checks may remain but are
+unreachable for proved operations.
 
 ### 14.6 Compilation agreement
 

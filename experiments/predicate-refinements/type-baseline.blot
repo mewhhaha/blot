@@ -1,0 +1,5 @@
+open import "blot:prelude"
+
+let reading = { .value = 120; .label = "depth"; }
+
+return reading.value

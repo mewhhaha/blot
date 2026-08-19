@@ -27,10 +27,13 @@ This separation preserves Blot's existing constraints:
 - proof-only values disappear before Runtime HIR and the public ABI; and
 - Node and Rust independently validate the same certificate.
 
-The first implementation registers only the array-interval family. A family
-registry is a compiler trust boundary, not a source extension point. Arbitrary
-source code cannot claim that two footprints are disjoint or manufacture a
-partition witness.
+The destructive Runtime-HIR registry exposes the array-interval family, reused
+by `Slice` and the ordered-text-map adapter. The proof kernel additionally has
+Node/Rust law adapters for finite key sets and rectangular tensor tiles. Those
+adapters prove the generic algebra without pretending a tensor or hash-map
+runtime representation exists. A family registry is a compiler trust boundary,
+not a source extension point: arbitrary source code cannot claim that two
+footprints are disjoint or manufacture a partition witness.
 
 ## 2. Family model
 
@@ -304,15 +307,21 @@ or grapheme clusters and keep that choice stable.
 
 ### 7.2 Matrices and tensors
 
-Rectangular tiles compose along one matching face. Axis and shape are part of
-the footprint, so equal numeric bounds on different axes do not mix. General
-tilings require a partition tree because arbitrary rectangle union is not always
-rectangular.
+Rectangular tiles compose along one complete matching face. Root and both axis
+ranges are part of the footprint, so equal numeric bounds in different tensors
+never mix. General tilings require a partition tree because an L-shaped union is
+not rectangular.
 
 ```text
-Foot = (shape, axis ranges)
-Address = coordinate tuple
+Foot = (root, [x0,x1), [y0,y1))
+Address = (x,y)
 ```
+
+`src/linear/rectangle.ts` and `compiler/src/partition.rs` implement this partial
+composition and containment model independently. Their tests cover horizontal
+and vertical faces, foreign roots, containment, and refusal of L-shaped unions.
+This is a trusted proof adapter; destructive tensor lowering still requires a
+row-major Store/stride adapter and the registration suite in section 10.
 
 ### 7.3 Linked sequences
 
@@ -447,12 +456,13 @@ parameterized by family and footprint and contain no Slice, Store, interval, or
 index operation. The existing Region ownership fact is the array-interval
 adapter that supplies produced-value equality and composition.
 
-The law tests instantiate the same core with both ordered intervals and disjoint
-map key sets. The map model is evidence about the abstraction, not a new source
-feature or runtime implementation. Adding the second production family still
-requires family-tagged serialized `Produced` values, its adapter, the full
-registration suite below, and Node/Rust parity. This PR deliberately does not
-generalize the trusted registry into a source extension mechanism.
+The law tests instantiate the same core with ordered intervals, disjoint map key
+sets, and rectangular tensor tiles. The key-set and rectangle models are
+evidence about the abstraction, not unsupported source operations or invented
+runtime layouts. Promoting either to a destructive Runtime-HIR family still
+requires family-tagged serialized `Produced` values, a representation adapter,
+and the remaining end-to-end registration items below. The trusted registry is
+intentionally not a source extension mechanism.
 
 ## 10. Registration requirements
 

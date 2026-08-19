@@ -795,6 +795,14 @@ Arrays are ordered homogeneous collections:
 [first, second, ...rest]
 ```
 
+`[A]` means `Array A`: every position has the same element constraint `A`.
+It is not a tuple, a fixed-length vector, a list of alternatives, or an array
+whose length appears in its type. In an inferred type, `['a]` binds one
+homogeneous element variable; each polymorphic call freshens it. In a type-value
+expression, `[Int, Str]` computes `[Int | Str]`. The empty type-value array
+is `[bottom]`, while an ordinary runtime `[]` begins with a fresh element
+variable and receives its element constraint from use.
+
 An array spread must evaluate to an array. Arrays are immutable; `@array.set`
 and `@array.push` return new arrays.
 
@@ -1001,10 +1009,10 @@ else:
   return n * factorial (n - 1)
 ```
 
-The modifier is syntactically unavailable outside a binding. A recursive
-binding of a non-lambda or through a compound pattern is an error. Making
-recursion a binding property reflects its scope: the name is introduced early;
-the anonymous function is otherwise an ordinary lambda value.
+The modifier is syntactically unavailable outside a binding. A recursive binding
+of a non-lambda or through a compound pattern is an error. Making recursion a
+binding property reflects its scope: the name is introduced early; the anonymous
+function is otherwise an ordinary lambda value.
 
 The former `name = rec (fn ... )` spelling is a hard syntax error. There is no
 compatibility alias and the formatter does not rewrite legacy source, so a
@@ -1457,8 +1465,9 @@ can name without running the program, and there are two of them.
 The first is a single compile-time integer — an integer literal, or a name whose
 `const` value is one. `if 0 < n` reads the same as `if n > 0`.
 
-The second is the length of an array a name in scope holds, written directly as
-`@array.len xs` or through a verified unary wrapper such as `Array.length xs`.
+The second is the length of an array or owned region a name in scope holds,
+written directly as `@array.len xs` / `@region.length region`, or through a
+verified wrapper such as `Array.length xs` or `Slice.length (&region)`.
 Inference records that value relationship in the refinement context rather than
 in the integer's type:
 
@@ -1480,11 +1489,12 @@ no length (§13.3), and neither does the integer type. These propositions live
 only in `Phi`, the refinement context consumed by proof-required operations.
 
 A wrapper contributes this fact only when its compile-time closure value is
-structurally verified to return `@array.len` of its parameter, optionally with a
-literal affine offset or through another verified wrapper. The spelling
-`Array.length` is not privileged: aliases keep the verified summary, while a
-shadowed function with that name proves nothing. The summary is erased and does
-not change the function's ordinary arrow type.
+structurally verified to return the array or region length of one of its curried
+parameters, optionally with a literal affine offset or through another verified
+wrapper. For example, `fn _ => fn xs => Array.length xs - 1` summarizes the
+second parameter. The spelling `Array.length` is not privileged: aliases keep
+the verified summary, while a shadowed function with that name proves nothing.
+The summary is erased and does not change the function's ordinary arrow type.
 
 A length is keyed to the immutable array value a binding denotes. blot has no
 assignment and arrays are immutable, so that identity denotes one length for its
@@ -1723,7 +1733,120 @@ Type checking evaluates compile-time code because signatures and type
 constructors are ordinary values. A compile-time value is bridged into the
 inference lattice only when it denotes a type.
 
-### 10.1 Display notation
+### 10.1 Unknown-first constraint solving
+
+Inference starts with unknowns, not guessed concrete types. An unannotated
+function initially has the schematic shape `'a -> 'b`; using its parameter or
+return value adds constraints to those variables. A call freshens quantified
+variables, relates arguments to parameters, relates the result to its use site,
+and only then settles enough of the graph to choose a representation.
+
+```blot
+// Before its body is checked: 'a -> 'b
+// The field projection adds: 'a <: { .name = 'n; }, result = 'n.
+let name_of = fn value => value.name
+
+// Calling it supplies the remaining facts.
+let ada = name_of { .name = "Ada"; .age = 36; }
+```
+
+`Int`, `[Element]`, records, variants, arrows, and effect rows are canonical
+constraints over such unknowns. They are not privileged declaration forms and
+they do not require an eager nominal choice. In particular, `[a]` means one
+homogeneous persistent array whose elements all satisfy `a`; it says nothing
+about length, ownership, or physical stride. An omitted or inferred `a` remains
+an unknown until uses constrain it, array length lives in `Phi`, ownership lives
+in `Omega`, and a concrete Store layout is selected only after settling:
+
+```blot
+let count = fn values => Array.length values // ['a] -> Int
+let apply = fn (function, value) => function value
+// apply : ('a -> 'b, 'a) -> 'b, with the callback's effect row preserved
+```
+
+A `sig` is a constraint program written with ordinary compile-time type values.
+Each use instantiates its `@forall` binders freshly. Structural records provide
+trait-like behavior by width subtyping, while effect rows describe callable
+behavior separately from parameter and result representation:
+
+```blot
+const Named = { .name = Str; }
+
+sig label = @forall (fn T => Named -> T -> Str)
+let label = fn named => fn _ => named.name
+
+const Console = @effect { .write = Str -> Unit; }
+sig map_logged =
+  (Int -> Int ~ { ..e }) ->
+  Int -> Int ~ { Console, ..e }
+```
+
+Layout and proof facts remain explicit layers. `I32` is the ordinary integer
+range with a `.bit_width` namespace member; refining it narrows inhabitants
+while preserving that layout metadata. Branches and recognized boolean
+predicates add duplicable `Phi` facts such as `0 <= i < Array.length xs`;
+ownership stays in the separate affine `Omega` judgment. Typestate needs no new
+lattice constructor: closed/open states are ordinary variants in `Gamma`, a
+transition arrow names its effects, and `Omega` consumes the old state exactly
+once. Unary facts may cross a function boundary as canonical refined
+parameter/result types, while identity-dependent relations travel through
+recognized predicates and direct proof-producing operations rather than being
+hidden in a representation type.
+
+This is the sense in which types are constraints over unknowns: the solver never
+places an arbitrary source closure in its graph. Predicate declarations must
+normalize to the same finite range, array, record, variant, arrow/effect-row, or
+nominal constraints the solver already understands, and all predicate machinery
+erases before Runtime HIR and layout selection.
+
+### 10.2 Predicate-defined integer types
+
+`refine (base, predicate)` constructs an integer type from an ordinary pure
+compile-time function:
+
+```blot
+const Natural = refine (Int, fn value => value >= 0)
+const Byte = refine (Int, fn value => value >= 0 && value <= 255)
+const NonZero = refine (Int, fn value => value != 0)
+```
+
+The first argument must be an integer type. The predicate may compare its one
+parameter with compile-time integer witnesses using any function that factors
+through `@int.cmp`. The compiler records the subset of `#Less`, `#Equal`, and
+`#Greater` for which that function answers true; all eight subsets are valid, so
+`<`, `!=`, and the other prelude operators are conventions rather than a closed
+compiler enumeration. Boolean conjunction, disjunction, and negation are
+recognized by their complete truth tables in the same way. A shadowed operator
+therefore contributes no proof unless its value independently satisfies the
+factorization and truth-table checks.
+
+```blot
+const separated = fn left => fn right => case @int.cmp left right of
+  #Less => True
+  #Equal => False
+  #Greater => True
+
+const NonZero = refine (Int, fn value => separated value 0)
+```
+
+The parameter may be observed only through those comparisons. An effect,
+recursion, a run-time capture, an opaque call, or any other observation is
+`BLOT_REFINEMENT_PREDICATE`. An empty result is `BLOT_EMPTY_REFINEMENT` because
+the source type-value domain has no bottom value.
+
+The compiler normalizes the predicate exactly to existing integer ranges and
+ground unions, intersects that result with `base`, and then forgets the
+predicate. No refinement object reaches inference, Runtime HIR, WebAssembly, or
+the ABI. Branch comparison facts can prove that an `Int` inhabits such a type in
+exactly the same way they prove an explicitly written range.
+
+This operation does not turn value relationships into ordinary types. Facts such
+as `i < length(values)` remain in the refinement context described in §8.5, and
+ownership remains a separate flow judgment. The formal boundary and erasure
+obligation are specified in
+[`spec/PREDICATE_REFINEMENTS.md`](spec/PREDICATE_REFINEMENTS.md).
+
+### 10.3 Display notation
 
 Compiler output uses notation that is not additional source syntax:
 
@@ -1751,23 +1874,33 @@ An effect row is the one piece of this notation that is also source:
 the rest of the row inside a `sig` (§12.4). The checker prints inferred open
 rows with the same `..e` notation.
 
-### 10.2 Type-value primitives
+### 10.4 Type-value primitives
 
 The primitive type values are `@type.int`, `@type.float`, `@type.float32`,
 `@type.f32x4`, `@type.text`, `@type.unit`, and `@type.unbounded`.
 
-The type algebra includes:
+The type algebra has two deliberately different normalization layers:
 
-- inclusive ranges;
-- union, intersection, and difference;
-- function arrows, and the effect row an arrow performs;
-- structural shapes and arrays;
-- nominal sealing and opening;
-- namespace attachment;
-- reflection;
-- type-of;
-- union construction from an array; and
-- explicit predicative `@forall`.
+- open inference uses Simple-sub bounds, structural records and arrays,
+  variants, arrows, and effect rows; a join of open values is several lower
+  bounds rather than an arbitrary Boolean formula;
+- closed type values use exact set normalization: unions are flattened,
+  `bottom` is removed, `top` absorbs, duplicates disappear, and members are
+  ordered by an alpha-aware structural fingerprint rather than printer output;
+  supported ground intersections/differences are computed to ranges, closed
+  variants, unit, or `bottom`.
+
+This is the useful part of Boolean-algebraic subtyping without putting arbitrary
+intersection and negation into the mutable inference graph. There is no
+intersection or complement type constructor in open inference. A closed
+operation that the representable algebra cannot answer exactly is rejected
+rather than approximated.
+
+The closed type-value surface includes inclusive ranges; union, supported exact
+intersection and difference; function arrows and effect rows; structural shapes
+and arrays; nominal sealing and opening; namespace attachment; reflection;
+type-of; union construction from an array; pure integer predicate refinement;
+and explicit predicative `@forall`.
 
 An attached namespace is transparent to type checking. This is how the prelude
 `struct` returns one value that is both a storage type and a namespace
@@ -1790,24 +1923,34 @@ The result has `.order`, `.bit_size`, `.byte_size`, `.trailing_bits`, `.fields`,
 and `.bit_offset`. Each field reports `.name`, `.bit_offset`, `.bit_width`, and
 an unshifted `.mask`; the example occupies 18 meaningful bits and three bytes,
 with six unused bits at the end. `packed` is ordinary prelude source over
-reflection and `layout`. It describes storage and does not change the positional
-tuple returned by `struct`, the runtime representation of an integer, or the
-Core Wasm ABI.
+reflection and `layout`. It describes a requested source layout and does not by
+itself change the positional tuple returned by `struct`, the runtime
+representation of an integer, or the Core Wasm ABI.
+
+Physical reuse is guarded independently. Runtime HIR derives a closed layout
+witness `(fingerprint, size, alignment, stride)` for every settled type. Direct
+inline recursion is rejected; recursion must cross an indirect or Store
+boundary. An operation marked `owned-reuse` is valid only when ownership proves
+the old Store unobservable and the source/result layout fingerprints agree.
+Thus source layout descriptions, logical refinements, and allocator evidence
+remain coherent without pretending they are the same type fact.
 
 A namespace member is a compile-time value, and projecting one is typed by that
 value rather than by the field rule. A member that is itself a type projects to
-that type. A member that is a function has no arrow to read off it and projects
-to `⊤`. Calling one is typed by evaluating the whole application at compile
-time, and the value produced is the result type. The arguments must therefore be
-values the checker can compute: a literal, a `const`, or a binding whose value
-it already computed to type an earlier member call. A call it cannot evaluate
-has result type `⊤`, so nothing can be done with the result and no `sig` is
-satisfied by it.
+that type. A member function with no recoverable arrow projects to an inference
+variable marked as available only after specialization. Calling one is typed by
+evaluating the whole application at compile time, and the value produced is the
+result type. The arguments must therefore be values the checker can compute: a
+literal, a `const`, or a binding whose value it already computed to type an
+earlier member call. If this pass cannot evaluate the call, the marked variable
+may flow until a concrete specialization revisits it, but it cannot authorize a
+runtime operation or prove an arbitrary `sig`. This is not `⊤`: semantic
+`top` admits every value, while unavailable evidence admits no conclusion.
 
 The same application rule specializes a callable field of an ordinary record
 whose value is known at compile time. Unlike an attached namespace, that record
 also has an ordinary structural type. Consequently an unevaluable call falls
-back to its inferred arrow rather than becoming `⊤`. This remains true when the
+back to its inferred arrow rather than to a staged-only result. This remains true when the
 record is reached through a namespace member: `World.Position.insert entity`
 types `Position` as the attached record and `insert` as its ordinary callable
 field. Compile-time projection follows the whole chain; it does not force games
@@ -1816,7 +1959,7 @@ to bind each intermediate record before using it.
 A sealed type is nominal and invariant. Its identity is its name together with
 its carrier.
 
-### 10.3 Deliberate inference limits
+### 10.5 Deliberate inference limits
 
 The implemented checker does not currently prove:
 
@@ -1828,13 +1971,18 @@ The implemented checker does not currently prove:
 - the result of `@shape.get`, `@shape.set`, or `@shape.remove` whose field name
   is a runtime value (§13.3);
 - anything about a namespace member call whose arguments are not compile-time
-  values (§10.2);
+  values (§10.4);
 - the fields a spread carries through from an operand whose own fields are not
   known where the spread is written (§6); or
-- impredicative instantiation.
+- impredicative instantiation; or
+- a first-class recursive type value such as
+  `const Json = #Null | #Array [Json]`.
 
-Rank-N types are explicit and predicative through `@forall`. Higher-kinded
-abstraction is compile-time function application rather than a kind system.
+The constraint graph may itself be cyclic: recursive functions and recursive
+flows are checked by revisiting ordered constraints at most once. That internal
+graph recursion is not an equi-recursive source type constructor. Rank-N types
+are explicit and predicative through `@forall`. Higher-kinded abstraction is
+compile-time function application rather than a kind system.
 
 There is no record row variable, and there is not going to be one; the reasoning
 is in `docs/roadmap.md`. The lattice has width subtyping, which says what a
@@ -2046,9 +2194,9 @@ certified; its persistent fallback remains linear in the input length.
 
 Partition is a pure consuming update. A successful partition preserves the
 multiset of elements in the selected interval, places every predicate-true
-element before the returned boundary and every predicate-false element after
-it, and leaves positions outside the selected interval unchanged. The predicate
-is called once per selected element. The operation is unstable, linear in the
+element before the returned boundary and every predicate-false element after it,
+and leaves positions outside the selected interval unchanged. The predicate is
+called once per selected element. The operation is unstable, linear in the
 selected length, uses constant auxiliary element storage, and allocates no
 element Store. Range validation precedes predicate evaluation; an invalid range
 returns the unchanged authority and supplied start boundary. The whole-slice
@@ -2280,7 +2428,7 @@ a row. A second `~` fills the next arrow outwards, so
 { Outer }` reads back as itself; a `~` on a chain
 whose arrows all carry rows is an error.
 
-Reflection (§10.2) describes an arrow's `.domain`, `.codomain`, and `.effects`,
+Reflection (§10.4) describes an arrow's `.domain`, `.codomain`, and `.effects`,
 but an effect itself reflects as `#Opaque` — nothing in Blot takes one apart.
 Open row tails remain type-checking evidence and do not add a runtime value,
 Runtime-HIR representation, or ABI field.
@@ -2304,8 +2452,7 @@ Everything not listed here belongs in source, normally the prelude.
 | `@effect.host`    | create a fresh host effect                                    |
 | `@handle`         | discharge one effect from a nullary computation               |
 | `@forall`         | evaluate a type function with a fresh rigid variable          |
-| `@satisfies`      | return a value after proving it inhabits a type               |
-| `@type.satisfies` | return a value after proving its _type_ satisfies a predicate |
+| `@satisfies`      | refine an open value by a type, or prove its closed type with a predicate |
 | `@fail`           | refuse compile-time evaluation with a diagnostic              |
 | `@panic`          | trap with a text message                                      |
 
@@ -2385,7 +2532,7 @@ signed 64-bit range trap.
 | `@array.set`           | proof-required immutable indexed replacement        |
 | `@array.push`          | immutable append                                    |
 | `@array.indexed`       | iterator yielding an index proof and selected value |
-| `@array.take`          | proof-required consuming value and remainder         |
+| `@array.take`          | proof-required consuming value and remainder        |
 | `@array.split`         | proof-required consuming prefix, value, and suffix  |
 | `@continuation.cancel` | consume a handler continuation without resuming it  |
 | `@shape.empty`         | empty shape                                         |
@@ -2466,28 +2613,28 @@ preserving every element. They are proof-required direct operations:
 @array.split : ([A], refined Int) -> ([A], A, [A])
 ```
 
-Here `refined Int` is not a second integer representation or a dependent
-runtime type. It means the call-site refinement context proves
+Here `refined Int` is not a second integer representation or a dependent runtime
+type. It means the call-site refinement context proves
 `0 <= index < Array.length xs` for the same immutable array identity. `take`
-returns the selected value and an ordered remainder. `split` returns the
-ordered prefix, selected value, and ordered suffix. No result constructor or
-failure payload remains because an unproved call is rejected before execution.
-The operations must be saturated at their source site and cannot be hidden
-behind an alias or ordinary prelude closure, just like direct `@array.get` and
+returns the selected value and an ordered remainder. `split` returns the ordered
+prefix, selected value, and ordered suffix. No result constructor or failure
+payload remains because an unproved call is rejected before execution. The
+operations must be saturated at their source site and cannot be hidden behind an
+alias or ordinary prelude closure, just like direct `@array.get` and
 `@array.set`.
 
-These are the extraction operations for an array whose elements carry
-ownership obligations. Their meaning is identical for staged and runtime
-arrays: making the array or index host-dynamic changes when decomposition runs,
-not which programs the compiler accepts or which tuple it produces.
+These are the extraction operations for an array whose elements carry ownership
+obligations. Their meaning is identical for staged and runtime arrays: making
+the array or index host-dynamic changes when decomposition runs, not which
+programs the compiler accepts or which tuple it produces.
 
-`Array.uncons xs` is the index-free total decomposition used by structural
-array algorithms. It consumes `xs` and returns `#None` exactly when it is
-empty; otherwise it establishes `0 < Array.length xs` and returns
+`Array.uncons xs` is the index-free total decomposition used by structural array
+algorithms. It consumes `xs` and returns `#None` exactly when it is empty;
+otherwise it establishes `0 < Array.length xs` and returns
 `#Some (first, remainder)` through direct `@array.take xs 0`. The remainder
 preserves the order of every element after `first`. Its ordinary parameter
-admits arrays whose elements have no ownership obligation. Owned extraction
-uses a proved direct `@array.take` or `@array.split` call so every obligation is
+admits arrays whose elements have no ownership obligation. Owned extraction uses
+a proved direct `@array.take` or `@array.split` call so every obligation is
 returned without copying.
 
 `Array.partition (xs, belongs_left)` classifies an array in one stable pass. It
@@ -2498,16 +2645,15 @@ a value-level collection operation, distinct from the partition witnesses of
 owned regions: it produces two independent arrays rather than two authorities
 over one backing Store.
 
-With the current contiguous Store representation, `uncons` takes linear time
-and allocates the remainder, while `partition` takes linear time and allocates
-two output Stores containing a total of `Array.length xs` elements. Stable
-partition cannot generally reuse the input Store as either output without
-moving the other class or retaining a view. `Array.append left right` visits
-`right` and produces one contiguous result; the generic monoid operation does
-not itself promise that either input allocation is reused. Append neither
-aliases both inputs nor restores a Store previously separated by `partition`.
-Zero-copy split/rejoin is the separate `Slice`/region operation and carries its
-proof explicitly.
+With the current contiguous Store representation, `uncons` takes linear time and
+allocates the remainder, while `partition` takes linear time and allocates two
+output Stores containing a total of `Array.length xs` elements. Stable partition
+cannot generally reuse the input Store as either output without moving the other
+class or retaining a view. `Array.append left right` visits `right` and produces
+one contiguous result; the generic monoid operation does not itself promise that
+either input allocation is reused. Append neither aliases both inputs nor
+restores a Store previously separated by `partition`. Zero-copy split/rejoin is
+the separate `Slice`/region operation and carries its proof explicitly.
 
 `Array.get` and `Array.length` bind their array parameter with `&`: observing an
 array does not consume it. An explicitly borrowed array must be passed in that
@@ -2515,8 +2661,8 @@ position directly; the borrow cannot be retained by an intervening binding.
 
 `@array.get xs index`, `@array.set xs index value`, `@array.take xs index`, and
 `@array.split xs index` are the direct path. The checker accepts them only when
-every value of `index` is inside `0..@array.len xs - 1`. An index known to be outside reports
-`BLOT_OUT_OF_BOUNDS`; an index with no sufficient proof reports
+every value of `index` is inside `0..@array.len xs - 1`. An index known to be
+outside reports `BLOT_OUT_OF_BOUNDS`; an index with no sufficient proof reports
 `BLOT_UNPROVEN_INDEX` and points to the total API:
 
 ```blot
@@ -2585,67 +2731,99 @@ for (index, value) in Iter.indexed xs:
   <- visit (index, value)
 ```
 
-### 13.3.1 Asking about a type
+### 13.3.1 Applying a requirement
 
-`@satisfies (value, type)` proves that a compile-time _value_ inhabits a type.
-`@type.satisfies (value, predicate)` asks a different question: whether the
-_type_ of an expression satisfies a compile-time predicate.
+The checker has one judgment, `subject satisfies requirement`. Both a `sig`
+and `@satisfies` use it; `sig` additionally drives bidirectional checking of
+a following lambda and therefore requires the canonical type form.
+
+`@satisfies value requirement` is the expression form. It returns `value`
+unchanged and accepts either form of requirement:
+
+1. A canonical type value constrains the subject's open inferred type.
+2. A compile-time predicate receives the subject's closed, reifiable inferred
+   type and must answer `#True` or `#False`.
 
 ```blot
-reading <- { .value = Source.read (); .label = "depth"; }
-let checked = @type.satisfies (reading, Has { .value = Int; })
+// Canonical requirements refine unknowns and grant the operations they name.
+let name_of = fn value =>
+  let named = @satisfies value { .name = Str; }
+  return named.name
+
+let int_store = fn values => @satisfies values [Int]
+
+const Console = @effect { .write = Str -> Unit; }
+let command = fn callback =>
+  @satisfies callback (Str -> Unit ~ { Console })
+
+// Predicates compose over a closed inferred type.
+const is_shape = fn type => case reflect type of
+  #Shape _ => True
+  _ => False
+const has_name = fn type => refines (type, { .name = Str; })
+const named_shape = fn type => is_shape type && has_name type
+
+let person = { .name = "Ada"; .age = 36; }
+let checked = @satisfies person named_shape
+
+// Requirements can themselves be staged and specialized.
+const require = fn requirement => fn value => @satisfies value requirement
+let also_checked = require { .name = Str; } person
 ```
 
-The predicate is an ordinary compile-time function from a type value to a
-`Bool`, so it may ask anything `reflect` and `refines` can answer. The value
-passes through unchanged; this asserts, it does not coerce. A predicate that
-answers `#False` is `BLOT_DOES_NOT_SATISFY` while compiling.
+The distinction is semantic, not syntactic sugar. Canonical values—integer
+ranges, arrays, records, variants, arrows and their effect rows, seals, and
+attached layout namespaces—normalize through the existing type bridge and add
+ordinary lattice constraints. They may therefore refine a fresh variable.
+Predicates are arbitrary pure source composition over `reflect`, `refines`,
+`type_equal`, and quantifier elimination, but they only inspect a type that
+has already settled. They may reject it; they cannot grant a field, choose a
+layout, insert an effect, or add an opaque closure to the solver.
 
-It takes its two arguments as one tuple rather than curried, for the reason
-`@handle` does: the checker has to see the whole call to type it, and a
-partially applied one would be a closure whose parameter is not a compile-time
-value.
+A false predicate is `BLOT_DOES_NOT_SATISFY`. An open subject given to a
+predicate is `BLOT_TYPE_NOT_REIFIABLE`; use the canonical record, array, arrow,
+or scalar type value as the requirement when the purpose is to constrain that
+subject. A requirement unavailable until generic specialization is deferred and
+checked when the concrete call supplies it.
 
-`@type.of` cannot stand in for this. It answers the type of a _value_, so it
-evaluates one — on an expression whose value only exists at run time that is an
-unhandled effect rather than a type. The type of such an expression lives only
-in the lattice, and reaching it is the whole reason this primitive exists.
+`@type.of` is different: it evaluates a compile-time value and returns that
+value's type. `@satisfies` can inspect the inferred type of an ordinary runtime
+expression without evaluating the expression itself.
 
-The type must have a compile-time reading. An inference variable with no single
-lower bound, an effect row, and an open variant do not, and each is
-`BLOT_TYPE_NOT_REIFIABLE` naming the type rather than a silently permissive
-answer.
-
-The prelude supplies the two predicates that would otherwise be written inline:
-`Is` for an exact type and `Has` for a subset of fields. Both are one line over
-`refines` and neither is machinery.
+The prelude keeps `Is expected` and `Has shape` as ordinary one-line compatibility
+predicates over `type_equal` and `refines`. They add no type-system mechanism;
+new code can spell the underlying question directly, as the examples above do.
 
 ### 13.4 Type values
 
-| primitive          | meaning                                           |
-| ------------------ | ------------------------------------------------- |
-| `@type.unbounded`  | open range bound                                  |
-| `@type.int`        | signed 64-bit runtime integer domain              |
-| `@type.text`       | unbounded text domain                             |
-| `@type.float`      | the double domain, which has no bounds            |
-| `@type.float32`    | the single-precision domain                       |
-| `@type.f32x4`      | four single-precision lanes, an opaque type       |
-| `@type.f32x4_mask` | four comparison lanes, an opaque type             |
-| `@type.unit`       | unit type/value                                   |
-| `@type.range`      | inclusive range                                   |
-| `@type.union`      | flattened duplicate-free union                    |
-| `@type.intersect`  | intersection of union members                     |
-| `@type.diff`       | difference of union members                       |
-| `@type.arrow`      | function type value                               |
-| `@type.defer`      | mark a parameter type as deferred                 |
-| `@type.performs`   | attach an effect row to a function type           |
-| `@type.of`         | structural singleton type of a compile-time value |
-| `@type.seal`       | nominally seal a carrier under a text name        |
-| `@type.open`       | recover a sealed carrier                          |
-| `@type.attach`     | attach one namespace member to a type value       |
-| `@type.members`    | recover attached namespace members                |
-| `@type.reflect`    | inspect the representation of a type value        |
-| `@type.union_of`   | union a non-empty array of type values            |
+| primitive           | meaning                                           |
+| ------------------- | ------------------------------------------------- |
+| `@type.unbounded`   | open range bound                                  |
+| `@type.int`         | signed 64-bit runtime integer domain              |
+| `@type.text`        | unbounded text domain                             |
+| `@type.float`       | the double domain, which has no bounds            |
+| `@type.float32`     | the single-precision domain                       |
+| `@type.f32x4`       | four single-precision lanes, an opaque type       |
+| `@type.f32x4_mask`  | four comparison lanes, an opaque type             |
+| `@type.unit`        | unit type/value                                   |
+| `@type.range`       | inclusive range                                   |
+| `@type.refine`      | normalize a pure integer predicate into a type    |
+| `@type.equal`       | exact alpha-equivalent equality of type values    |
+| `@type.instantiate` | eliminate one outer quantified type variable      |
+| `@type.probe`       | eliminate one binder with a kind-correct witness  |
+| `@type.union`       | flattened duplicate-free union                    |
+| `@type.intersect`   | intersection of union members                     |
+| `@type.diff`        | difference of union members                       |
+| `@type.arrow`       | function type value                               |
+| `@type.defer`       | mark a parameter type as deferred                 |
+| `@type.performs`    | attach an effect row to a function type           |
+| `@type.of`          | structural singleton type of a compile-time value |
+| `@type.seal`        | nominally seal a carrier under a text name        |
+| `@type.open`        | recover a sealed carrier                          |
+| `@type.attach`      | attach one namespace member to a type value       |
+| `@type.members`     | recover attached namespace members                |
+| `@type.reflect`     | inspect the representation of a type value        |
+| `@type.union_of`    | union a non-empty array of type values            |
 
 An empty intersection or difference, and `@type.union_of []`, are errors; Blot
 has no value representing an empty compile-time union.
@@ -2658,11 +2836,12 @@ has no value representing an empty compile-time union.
 #Unit
 #Unbounded
 #Tag { .name; .payload = #None | #Some value; }
-#Range { .low; .high; .domain = #Int | #Text; }
+#Range { .low; .high; .domain = #Int | #Text | #F64 | #F32; }
 #Union members
 #Shape fields
 #Array elements
 #Arrow { .domain; .codomain; .effects = [effect]; }
+#Forall
 #Sealed { .name; .inner; }
 #Opaque
 ```
@@ -2672,6 +2851,36 @@ this result. A generic payload which cannot yet be related to the reflected
 input is marked unevidenced: compile-time generic code may manipulate it, but it
 cannot discharge a runtime `sig`. A fresh inference variable is therefore never
 permission to claim an arbitrary reflection payload type.
+
+`#Forall` deliberately carries no payload. The compiler's binder identity and
+the open body are not source values: use `@type.instantiate quantified argument`
+to substitute one chosen closed argument, then reflect the result. Generic
+structural predicates that do not care about the binder's kind use
+`@type.probe quantified`: it substitutes `Unit` for an ordinary type binder
+or the empty row for an effect-row binder. Passing a value whose outer
+constructor is not `forall`, or explicitly substituting a non-effect into an
+effect-row variable, is `BLOT_TYPE_INSTANTIATE`.
+
+Deferred parameters are an elaboration modality and therefore do not appear in
+reflection or exact type-value equality. Their demand discipline is still
+checked from the lambda and signature syntax before residual lowering.
+
+`@type.equal left right` compares exact type values while treating quantified
+binder names as irrelevant, unions and effect rows as sets, and attached source
+namespaces as transparent. It is primitive because reflection intentionally
+hides binders, opaque identities, and effect internals. Higher questions remain
+ordinary source predicates:
+
+```blot
+const both_types = fn (left, right) => fn type => left type && right type
+const is_shape = fn type => case reflect type of
+  #Shape _ => True
+  _ => False
+const is_named_shape = both_types (
+  is_shape,
+  fn type => refines (type, { .name = Str; })
+)
+```
 
 `#Opaque` is everything with no parts to report: a closure, a primitive, a host
 function, an effect, and `F32x4`, whose whole content is its name.
@@ -2707,8 +2916,8 @@ record currently exports:
 - iterators: `ever`, `Iter`, `iterate`, and `collect`;
 - variants: `Option`, `None`, `Some`, `unwrap_or`, `Result`, `Ok`, `Error`;
 - type tools: `Type`, `attach`, `seal`, `unseal`, `Reflect`, `reflect`,
-  `refines`, `members`, `union_of`, `Extract`, `Exclude`, `Pick`, `Omit`,
-  `opened`, and `range`;
+  `type_equal`, `instantiate`, `refines`, `Is`, `Has`, `members`, `union_of`,
+  `Extract`, `Exclude`, `Pick`, `Omit`, `opened`, and `range`;
 - storage tools: `struct`, `reorder`, `layout`, `aligned`, `bit_width`, and
   `packed`; and
 - standard types and integer range constructors: `I`, `I8`, `I16`, `I32`, `I64`,

@@ -1,4 +1,9 @@
-import { type BlotRuntimeModule, validateBlotRuntimeModule } from "./hir.ts";
+import { assertEquals } from "@std/assert";
+import {
+  type BlotRuntimeModule,
+  runtimeLayoutWitness,
+  validateBlotRuntimeModule,
+} from "./hir.ts";
 
 const span = { file: "test.blot", start: 0, end: 1 } as const;
 
@@ -130,6 +135,13 @@ Deno.test("Blot Runtime HIR accepts typed control flow and declared effects", ()
   validateBlotRuntimeModule(acceptedModule());
 });
 
+Deno.test("Runtime HIR derives a closed Store layout witness", () => {
+  const layout = runtimeLayoutWitness(acceptedModule(), 3);
+  assertEquals(layout.size, 8);
+  assertEquals(layout.alignment, 4);
+  assertEquals(layout.fingerprint, "store(signed-integer-64;stride=8)");
+});
+
 Deno.test("Blot Runtime HIR rejects values that do not dominate their use", () => {
   const module = acceptedModule();
   const main = module.functions[0];
@@ -246,6 +258,76 @@ Deno.test("Blot Runtime HIR rejects owned Store reuse without ownership evidence
   assertThrows(
     () => validateBlotRuntimeModule(invalid),
     /claims owned reuse with plain ownership/,
+  );
+});
+
+Deno.test("Blot Runtime HIR rejects owned reuse across layouts", () => {
+  const module = acceptedModule();
+  const main = module.functions[0];
+  const entry = main.blocks[0];
+  const invalid: BlotRuntimeModule = {
+    ...module,
+    types: [
+      ...module.types,
+      { kind: "float-32" },
+      { kind: "store", elementType: 4 },
+    ],
+    functions: [{
+      ...main,
+      blocks: [{
+        ...entry,
+        operations: [...entry.operations, {
+          kind: "store.empty",
+          result: 4,
+          type: 3,
+          operands: [],
+          ownership: "owned",
+          span,
+        }, {
+          kind: "store.write",
+          result: 5,
+          type: 5,
+          operands: [4, 1, 1],
+          ownership: "owned",
+          update: "owned-reuse",
+          span,
+        }],
+      }, ...main.blocks.slice(1)],
+    }, ...module.functions.slice(1)],
+  };
+
+  assertThrows(
+    () => validateBlotRuntimeModule(invalid),
+    /claims owned reuse across incompatible layouts/,
+  );
+});
+
+Deno.test("Blot Runtime HIR rejects owned reuse on non-Store types", () => {
+  const module = acceptedModule();
+  const main = module.functions[0];
+  const entry = main.blocks[0];
+  const invalid: BlotRuntimeModule = {
+    ...module,
+    functions: [{
+      ...main,
+      blocks: [{
+        ...entry,
+        operations: [...entry.operations, {
+          kind: "store.write",
+          result: 4,
+          type: 1,
+          operands: [1, 1, 1],
+          ownership: "owned",
+          update: "owned-reuse",
+          span,
+        }],
+      }, ...main.blocks.slice(1)],
+    }, ...module.functions.slice(1)],
+  };
+
+  assertThrows(
+    () => validateBlotRuntimeModule(invalid),
+    /claims owned reuse without Store source and result types/,
   );
 });
 

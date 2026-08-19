@@ -137,8 +137,9 @@ let render = fn (transforms, models) =>
 sig load_transforms = Unit -> Store Transform ~ { Assets }
 let load_transforms = fn () =>
   count <- Assets.count ()
-  sig store = Store Transform
-  let store = Array.empty
+  // The empty array starts polymorphic; this one requirement makes the
+  // component store concrete without a separate declaration.
+  let store = @satisfies Array.empty (Store Transform)
   for id in Iter.range (0, count):
     entry <- Assets.entry id
     store := @array.push store (Some (
@@ -155,8 +156,7 @@ let load_transforms = fn () =>
 sig load_models = Unit -> Store Model ~ { Assets }
 let load_models = fn () =>
   count <- Assets.count ()
-  sig store = Store Model
-  let store = Array.empty
+  let store = @satisfies Array.empty (Store Model)
   for id in Iter.range (0, count):
     entry <- Assets.entry id
     store := @array.push store (Some { .kind = entry.kind; .colour = entry.colour; })

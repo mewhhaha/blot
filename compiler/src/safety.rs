@@ -8,8 +8,8 @@ use crate::ast::{
 };
 use crate::diagnostic::Diagnostic;
 use crate::eval::Context;
-use crate::recognise::{self, Comparison, Junction};
-use crate::relational::Summaries;
+use crate::recognise::{self, Junction, Ordering};
+use crate::relational::{Measure, Summaries};
 use crate::value::{Environment, Value, lookup};
 
 type Identity = u32;
@@ -477,25 +477,32 @@ impl Analysis<'_> {
         let Some(right) = self.term(arguments[1], scope) else {
             return (Vec::new(), Vec::new());
         };
-        match recognise::comparison(self.context, &callee_value) {
-            Some(Comparison::Less) => (
+        let Some(orderings) = recognise::comparison(self.context, &callee_value) else {
+            return (Vec::new(), Vec::new());
+        };
+        let answers = (
+            orderings.contains(&Ordering::Less),
+            orderings.contains(&Ordering::Equal),
+            orderings.contains(&Ordering::Greater),
+        );
+        match answers {
+            (true, false, false) => (
                 constraints_less_than(&left, &right),
                 constraints_at_least(&left, &right),
             ),
-            Some(Comparison::LessOrEqual) => (
+            (true, true, false) => (
                 constraints_at_most(&left, &right),
                 constraints_greater_than(&left, &right),
             ),
-            Some(Comparison::Equal) => (Vec::new(), Vec::new()),
-            Some(Comparison::Greater) => (
+            (false, false, true) => (
                 constraints_greater_than(&left, &right),
                 constraints_at_most(&left, &right),
             ),
-            Some(Comparison::GreaterOrEqual) => (
+            (false, true, true) => (
                 constraints_at_least(&left, &right),
                 constraints_less_than(&left, &right),
             ),
-            None => (Vec::new(), Vec::new()),
+            _ => (Vec::new(), Vec::new()),
         }
     }
 
@@ -544,6 +551,9 @@ impl Analysis<'_> {
                     if name == "@array.len" && arguments.len() == 1 {
                         return self.array_length(arguments[0], scope);
                     }
+                    if name == "@region.length" && arguments.len() == 1 {
+                        return self.region_length(arguments[0], scope);
+                    }
                     if matches!(name.as_str(), "@int.add" | "@int.sub") && arguments.len() == 2 {
                         let left = self.term(arguments[0], scope)?;
                         let Term::Literal(right) = self.term(arguments[1], scope)? else {
@@ -553,13 +563,14 @@ impl Analysis<'_> {
                         return Some(shift(left, offset));
                     }
                 }
-                if arguments.len() != 1 {
-                    return None;
-                }
                 let callee = self.callee_value(callee, scope)?;
                 let summary = self.summaries.derive(&callee, self.context)?;
-                self.array_length(arguments[0], scope)
-                    .map(|length| shift(length, summary.offset))
+                let argument = *arguments.get(summary.parameter)?;
+                match summary.measure {
+                    Measure::ArrayLength => self.array_length(argument, scope),
+                    Measure::RegionLength => self.region_length(argument, scope),
+                }
+                .map(|length| shift(length, summary.offset))
             }
             _ => None,
         }
@@ -627,6 +638,36 @@ impl Analysis<'_> {
                     return self
                         .array_length(arguments[0], scope)
                         .map(|length| shift(length, BigInt::from(1)));
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn region_length(&self, expression: ExpressionId, scope: &Scope) -> Option<Term> {
+        match &self.module.arena.expressions[expression.0 as usize] {
+            Expression::Var { name, .. } => scope
+                .identities
+                .get(name)
+                .copied()
+                .map(|identity| Term::Variable {
+                    identity,
+                    offset: BigInt::from(0),
+                }),
+            Expression::Apply { .. } => {
+                let (callee, arguments) = application_spine(expression, self.module);
+                let Expression::Intrinsic { name, .. } =
+                    &self.module.arena.expressions[callee.0 as usize]
+                else {
+                    return None;
+                };
+                if matches!(
+                    name.as_str(),
+                    "@linear.own" | "@linear.borrow" | "@linear.maybe"
+                ) && arguments.len() == 1
+                {
+                    return self.region_length(arguments[0], scope);
                 }
                 None
             }

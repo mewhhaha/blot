@@ -1240,6 +1240,7 @@ const sort_by = fn (values, before) =>
 // no type-level sublanguage for them to live in.
 
 const range = fn (low, high) => @type.range low high
+const refine = fn (base, predicate) => @type.refine base predicate
 const arrow = fn (domain, codomain) => @type.arrow domain codomain
 const type_of = fn value => @type.of value
 const seal = fn (name, value) => @type.seal name value
@@ -1341,6 +1342,14 @@ const layout = fn (shape, width_of) => do:
 // not a different kind of thing to case on.
 
 const reflect = fn t => @type.reflect t
+
+// These are the two observations reflection intentionally cannot define for
+// itself. Equality is alpha-equivalent, so compiler binder identities never
+// become source data. Instantiation eliminates one outer binder without ever
+// handing its open body to source.
+const type_equal = fn (left, right) => @type.equal left right
+const instantiate =
+  fn (quantified, argument) => @type.instantiate quantified argument
 
 // Width is part of the source-level namespace attached by `I` and `U`, not a
 // new type-lattice case. A plain range carries no storage promise and therefore
@@ -1512,6 +1521,10 @@ const rec refines =
       #Unit => True
       _ => False
 
+    // Reflection keeps the open body private. Exact equality can still compare
+    // quantified types modulo binder names; predicates that need to inspect a
+    // body instantiate it explicitly with a closed type value first.
+    #Forall => type_equal (narrow, wide)
     #Opaque => False
 
 // --- asking about a type ----------------------------------------------------
@@ -1521,7 +1534,7 @@ const rec refines =
 // the two that would otherwise be written inline every time; anything more
 // specific is `fn t => case reflect t of …`, which needs no help from here.
 
-const Is = fn expected => fn t => refines (t, expected)
+const Is = fn expected => fn t => type_equal (t, expected)
 const Has = fn shape => fn t => refines (t, shape)
 
 // The union members that fit the bound, and the ones that do not. `Extract` and
@@ -1567,6 +1580,8 @@ const opened = fn (name, t) => case reflect t of
 const Reflect =
   {
     .of = reflect;
+    .equal = type_equal;
+    .instantiate = instantiate;
     .members = members;
     .union_of = union_of;
     .refines = refines;
@@ -1913,6 +1928,7 @@ const Type =
   {
     ...Type;
     .range = range;
+    .refine = refine;
     .arrow = arrow;
     .of = type_of;
     .seal = seal;
@@ -1999,6 +2015,8 @@ return {
   .unseal = unseal;
   .Reflect = Reflect;
   .reflect = reflect;
+  .type_equal = type_equal;
+  .instantiate = instantiate;
   .refines = refines;
   .Is = Is;
   .Has = Has;
@@ -2013,6 +2031,7 @@ return {
   .every = every;
   .text_eq = text_eq;
   .range = range;
+  .refine = refine;
   .bit_width = bit_width;
   .struct = struct;
   .reorder = reorder;

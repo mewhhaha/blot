@@ -1,5 +1,12 @@
 # Case studies
 
+These programs intentionally lean on unknown-first inference: function parameters,
+results, and effect rows remain open until their bodies and calls constrain them.
+The engine uses `@satisfies` only at the genuinely ambiguous empty-store boundary;
+the agent, grep, and terminal cases need no type declarations beyond their host
+capability values. This is the intended balance—constraints where representation
+is otherwise unknowable, inference everywhere else.
+
 These are small programs with real host boundaries, not additions to the
 language's feature catalog. Each program declares every authority it uses as a
 host effect and compiles through the GPU conformance backend to the stable Blot

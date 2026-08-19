@@ -1,0 +1,9 @@
+// A relational contract exported through an ordinary module value.
+// The compiler verifies this closure from its body and publishes the finite,
+// erased `length(parameter) + 0` summary beside the function value.
+
+open import "blot:prelude"
+
+const count = fn values => Array.length values
+
+return { .count = count; }

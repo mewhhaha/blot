@@ -1,6 +1,11 @@
 import { assertEquals } from "@std/assert";
 import type { PartitionAlgebra, PartitionWitness } from "./partition.ts";
 import { combinePartition, reassociatePartition } from "./partition.ts";
+import {
+  type RectangleFootprint,
+  RECTANGLE_PARTITIONS,
+  rectangleContains,
+} from "./rectangle.ts";
 
 interface Interval {
   readonly root: string;
@@ -214,4 +219,30 @@ Deno.test("reassociation refuses a non-child inner witness", () => {
     ok: false,
     error: "inner-parent-mismatch",
   });
+});
+
+Deno.test("tensor rectangles compose only across a complete face", () => {
+  const tile = (
+    x0: number,
+    x1: number,
+    y0: number,
+    y1: number,
+  ): RectangleFootprint => ({ root: "tensor", x0, x1, y0, y1 });
+  const left = tile(0, 2, 0, 4);
+  const right = tile(2, 5, 0, 4);
+  const whole = tile(0, 5, 0, 4);
+  assertEquals(
+    RECTANGLE_PARTITIONS.compose("tensor-rectangle", left, right),
+    whole,
+  );
+  assertEquals(
+    RECTANGLE_PARTITIONS.compose(
+      "tensor-rectangle",
+      tile(0, 2, 0, 2),
+      tile(2, 5, 2, 4),
+    ),
+    null,
+  );
+  assertEquals(rectangleContains(whole, 4, 3), true);
+  assertEquals(rectangleContains(whole, 5, 3), false);
 });

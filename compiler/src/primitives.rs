@@ -7,7 +7,8 @@ use crate::ast::Span;
 use crate::diagnostic::Diagnostic;
 use crate::eval::Phase;
 use crate::value::{
-    Domain, OrderedFields, Value, as_tuple, boolean, closure_signature, equal, show, tuple,
+    Domain, OrderedFields, Value, boolean, closure_signature, equal, show,
+    substitute_type_variable, tuple,
 };
 
 const F32X4: &str = "F32x4";
@@ -104,7 +105,6 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@type.reflect"
         | "@type.members"
         | "@type.union_of"
-        | "@type.satisfies"
         | "@fail"
         | "@shape.names"
         | "@array.len"
@@ -135,6 +135,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@f32x4.w"
         | "@branch.likely"
         | "@branch.unlikely"
+        | "@type.probe"
         | "@panic" => 1,
         "@type.range"
         | "@type.union"
@@ -142,6 +143,9 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@type.diff"
         | "@type.arrow"
         | "@type.performs"
+        | "@type.refine"
+        | "@type.equal"
+        | "@type.instantiate"
         | "@type.seal"
         | "@satisfies"
         | "@shape.get"
@@ -320,6 +324,55 @@ pub fn run_primitive(
             span,
         )),
         "@type.reflect" => Ok(reflect(&arguments[0])),
+        "@type.equal" => Ok(boolean(equal(&arguments[0], &arguments[1]))),
+        "@type.instantiate" => {
+            let Value::Forall { variable, body } = &arguments[0] else {
+                return Err(Diagnostic::new(
+                    "BLOT_TYPE_INSTANTIATE",
+                    format!(
+                        "@type.instantiate needs an outer quantified type, found {}.",
+                        show(&arguments[0])
+                    ),
+                    span,
+                ));
+            };
+            substitute_type_variable(body, *variable, &arguments[1]).ok_or_else(|| {
+                Diagnostic::new(
+                    "BLOT_TYPE_INSTANTIATE",
+                    format!(
+                        "{} cannot instantiate an effect-row variable.",
+                        show(&arguments[1])
+                    ),
+                    span,
+                )
+            })
+        }
+        "@type.probe" => {
+            let Value::Forall { variable, body } = &arguments[0] else {
+                return Err(Diagnostic::new(
+                    "BLOT_TYPE_INSTANTIATE",
+                    format!(
+                        "@type.probe needs an outer quantified type, found {}.",
+                        show(&arguments[0])
+                    ),
+                    span,
+                ));
+            };
+            // Probe ordinary binders with Unit and effect-row binders with the
+            // empty row. Both witnesses are closed, so source never observes a
+            // binder identity or an open quantified body.
+            substitute_type_variable(body, *variable, &Value::Unit)
+                .or_else(|| {
+                    substitute_type_variable(body, *variable, &Value::Array(Vec::new()))
+                })
+                .ok_or_else(|| {
+                    Diagnostic::new(
+                        "BLOT_TYPE_INSTANTIATE",
+                        "The quantified type has no kind-correct closed probe.",
+                        span,
+                    )
+                })
+        }
         "@type.attach" => attach(arguments, span),
         "@type.members" => match &arguments[0] {
             Value::Extended { members, .. } => Ok(Value::Shape(members.clone())),
@@ -336,18 +389,14 @@ pub fn run_primitive(
             };
             Ok(values.iter().skip(1).cloned().fold(first, union))
         }
-        "@type.satisfies" => {
-            let Some(parts) = as_tuple(&arguments[0], 2) else {
-                return Err(Diagnostic::new(
-                    "BLOT_TYPE",
-                    "@type.satisfies takes a value and predicate tuple.",
-                    span,
-                ));
-            };
-            Ok(parts[0].clone())
-        }
         "@satisfies" => {
-            if inhabits(&arguments[0], &arguments[1]) {
+            if matches!(
+                &arguments[1],
+                Value::Closure { .. }
+                    | Value::ClosureChoice { .. }
+                    | Value::Primitive { .. }
+            ) || inhabits(&arguments[0], &arguments[1])
+            {
                 Ok(arguments[0].clone())
             } else {
                 Err(Diagnostic::new(
@@ -1637,6 +1686,7 @@ fn reflect(value: &Value) -> Value {
                 ])),
             )
         }
+        Value::Forall { .. } => bare("Forall"),
         Value::Sealed { name, inner } => tagged(
             "Sealed",
             Value::Shape(OrderedFields::from([

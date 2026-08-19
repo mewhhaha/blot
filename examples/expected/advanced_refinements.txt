@@ -1,0 +1,1 @@
+{ .safe = 30; .state = #Open 7; .packed_bytes = 6; .owned_length = 3; }

@@ -1,0 +1,46 @@
+// Types from ordinary pure predicates, normalized before inference.
+
+open import "blot:prelude"
+
+const Natural = refine (Int, fn value => value >= 0)
+const Byte = refine (Int, fn value => value >= 0 && value <= 255)
+const NonZero = refine (Int, fn value => value != 0)
+const Edge = refine (Byte, fn value => value == 0 || value == 255)
+const NotTen = refine (Int, fn value => not (value == 10))
+
+// The compiler does not know this name or privilege `!=`. It proves the
+// function factors through @int.cmp, records the orderings for which it answers
+// true, and normalizes that semantic set exactly like any other relation.
+const separated = fn left => fn right => case @int.cmp left right of
+  #Less => True
+  #Equal => False
+  #Greater => True
+const CustomNonZero = refine (Int, fn value => separated value 0)
+
+// Refinement changes the inhabitant set, not the representation contract.
+// I32's attached layout namespace must survive normalization.
+const SmallI32 = refine (I32, fn value => value >= -10 && value <= 10)
+
+sig keep_byte_or_zero = Int -> Byte
+let keep_byte_or_zero = fn value =>
+  if value >= 0 && value <= 255:
+    return value
+
+  return 0
+
+sig keep_natural = Natural -> Natural
+let keep_natural = fn value => value
+
+return {
+  .natural = Natural;
+  .byte = Byte;
+  .non_zero = NonZero;
+  .edge = Edge;
+  .not_ten = NotTen;
+  .custom_non_zero = CustomNonZero;
+  .i32_layout = SmallI32.bit_width;
+  .low = keep_byte_or_zero (-20);
+  .middle = keep_byte_or_zero 120;
+  .high = keep_byte_or_zero 300;
+  .kept = keep_natural 42;
+}

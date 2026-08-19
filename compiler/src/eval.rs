@@ -2291,6 +2291,24 @@ fn run_special_or_primitive(
             })
         });
     }
+    if name == "@type.refine" {
+        if runtime.phase != Phase::Comptime {
+            return Computation::error(Diagnostic::new(
+                "BLOT_REFINEMENT_NOT_COMPTIME",
+                "`@type.refine` can only construct a type at compile time.",
+                span,
+            ));
+        }
+        return match crate::predicate_refinement::refine(
+            &context,
+            &arguments[0],
+            &arguments[1],
+            span,
+        ) {
+            Ok(value) => Computation::value(value),
+            Err(error) => Computation::error(error),
+        };
+    }
     if name == "@include" {
         if runtime.phase != Phase::Comptime {
             return Computation::error(Diagnostic::new(

@@ -2774,3 +2774,55 @@ return a
 `,
   "`later` is bound further down",
 );
+
+// --- one requirement operation ---------------------------------------------
+
+check(
+  "a canonical requirement refines an open parameter",
+  `let name_of = fn value =>
+  let named = @satisfies value { .name = Str; }
+  return named.name
+return name_of
+`,
+  "{ .name = Str; } -> Str",
+);
+
+check(
+  "the same operation applies a predicate to a closed inferred type",
+  `const has_name = fn type => refines (type, { .name = Str; })
+let person = { .name = "Ada"; .age = 36; }
+let checked = @satisfies person has_name
+return checked.name
+`,
+  '"Ada"',
+);
+
+check(
+  "a staged requirement combinator specializes its open constraint",
+  `const require = fn requirement => fn value =>
+  @satisfies value requirement
+let person = { .name = "Ada"; .age = 36; }
+let checked = require { .name = Str; } person
+return checked.name
+`,
+  '"Ada"',
+);
+
+rejects(
+  "a runtime requirement argument is not silently trusted",
+  `let require = fn requirement => fn value =>
+  @satisfies value requirement
+return require
+`,
+  "BLOT_SIG_NOT_COMPTIME",
+);
+
+rejects(
+  "a predicate cannot inspect an unconstrained open type",
+  `const has_name = fn type => refines (type, { .name = Str; })
+let require_name = fn value => @satisfies value has_name
+return require_name
+`,
+  "BLOT_TYPE_NOT_REIFIABLE",
+);
+

@@ -102,11 +102,11 @@ Closure conversion appends the binding's lexically free runtime values to the
 function signature and to every direct call. Function identity includes the
 argument representation, capture representations, and specialized source
 signature. A recursive body is residualized when either its argument or one of
-those captures is dynamic; wholly static recursion may still be evaluated.
-Tail position is not an admission requirement. It permits the later back-edge
+those captures is dynamic; wholly static recursion may still be evaluated. Tail
+position is not an admission requirement. It permits the later back-edge
 rewrite, while a non-tail self-call remains `call.direct`. Development and
-production lowering must agree on the specialized argument, result, capture,
-and effect representations before either form reaches Runtime-HIR validation.
+production lowering must agree on the specialized argument, result, capture, and
+effect representations before either form reaches Runtime-HIR validation.
 
 A dynamic branch whose arms produce functions has no single closure to convert,
 so the join defunctionalizes them. Every reachable arm normalizes to one
@@ -144,27 +144,38 @@ the canonical scalar layout internally as well as at adapters, so reads and
 writes preserve `i64`, `f32`, and `f64` element representations rather than
 reinterpreting an unconstrained element as `Unit`.
 
+Validation derives a closed layout witness for every Runtime-HIR type:
+
+```text
+LayoutWitness = (fingerprint, size, alignment, stride)
+```
+
+The fingerprint recursively names the selected representation; products record
+aligned offsets and sums record every payload representation. `indirect` and
+`Store` are explicit recursion boundaries. A direct inline cycle has no finite
+layout and is rejected before emission. These witnesses are compiler evidence,
+not source types and not ABI values.
+
 Persistent array decomposition is a residual operation, not a staging-only
 convenience. `@array.take` and `@array.split` are saturated direct operations
-whose array-index certificate proves `0 <= index < length(array)` before
-Runtime HIR. When the array or index is dynamic, they lower to ordinary
-Runtime-HIR control flow over `store.length`, `store.read`, `store.empty`, and
-persistent `store.grow`, but no bounds-failure edge or result tag remains. The
-selected element is read once and every retained element is copied once, in
-source order, into one remainder Store for `take` or the two contiguous result
-Stores for `split`. The source ownership certificate has already partitioned
-element obligations; Runtime HIR preserves that tuple shape but carries no
-second ownership or refinement calculus.
+whose array-index certificate proves `0 <= index < length(array)` before Runtime
+HIR. When the array or index is dynamic, they lower to ordinary Runtime-HIR
+control flow over `store.length`, `store.read`, `store.empty`, and persistent
+`store.grow`, but no bounds-failure edge or result tag remains. The selected
+element is read once and every retained element is copied once, in source order,
+into one remainder Store for `take` or the two contiguous result Stores for
+`split`. The source ownership certificate has already partitioned element
+obligations; Runtime HIR preserves that tuple shape but carries no second
+ownership or refinement calculus.
 
 No `uncons`, partition, or quicksort operation is admitted at this boundary.
 `Array.uncons` remains the total prelude branch that proves index zero before
-calling `@array.take`, and
-`Array.partition` remains an ordinary fold. Type-directed residualization must
-therefore retain the settled element representation of polymorphic empty Stores
-and closed constructor joins even when their first runtime inhabitant is
-produced only inside a recursive call. A well-typed first-order collection
-program may not be made compilable by replacing its dynamic input with a staged
-constant.
+calling `@array.take`, and `Array.partition` remains an ordinary fold.
+Type-directed residualization must therefore retain the settled element
+representation of polymorphic empty Stores and closed constructor joins even
+when their first runtime inhabitant is produced only inside a recursive call. A
+well-typed first-order collection program may not be made compilable by
+replacing its dynamic input with a staged constant.
 
 A residual Region is one compiler-private product of a Store, inclusive start,
 and exclusive end. `claim` reuses only a fresh Store whose binding ownership
@@ -185,16 +196,18 @@ carries positional element obligations. Witness reassociation is validated
 before Runtime HIR and is erased completely: it performs no Store access,
 allocation, or emitted instruction.
 
-An owned-reuse Store growth receives the previous pointer and byte length. When
-that allocation ends at the private heap cursor and still satisfies the
-requested alignment, `cabi_realloc` extends it in place; otherwise it allocates
-and copies. A persistent growth never supplies the previous allocation and
-therefore cannot overwrite or extend storage observable through an older Store
-value. Linear and affine consumption both justify owned reuse because neither
-permits a second observation after the consuming occurrence. The public result
-adapter checkpoints the private heap at entry and restores it after scalar
-results or canonical post-return, so these internal allocations form a scratch
-arena per outer export call.
+An owned-reuse Store growth receives the previous pointer and byte length. The
+validator admits that annotation only when the first operand is owned and the
+source and result have the same closed layout fingerprint. When that allocation
+ends at the private heap cursor and still satisfies the requested alignment,
+`cabi_realloc` extends it in place; otherwise it allocates and copies. A
+persistent growth never supplies the previous allocation and therefore cannot
+overwrite or extend storage observable through an older Store value. Linear and
+affine consumption both justify owned reuse because neither permits a second
+observation after the consuming occurrence. The public result adapter
+checkpoints the private heap at entry and restores it after scalar results or
+canonical post-return, so these internal allocations form a scratch arena per
+outer export call.
 
 Finite recursive structures may use the prelude `Arena`: nodes occupy a
 homogeneous Store and contain stable integer indices to other nodes. This is a

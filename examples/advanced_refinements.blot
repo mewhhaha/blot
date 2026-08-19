@@ -1,0 +1,52 @@
+// Closed sets, affine facts, effectful typestate, layout evidence, and owned
+// reuse all meet at calls without becoming one undifferentiated type lattice.
+
+open import "blot:prelude"
+
+// Phi summary over the second curried parameter.
+const count_second = fn _ => fn values => Array.length values
+
+sig at = [Int] -> Int -> Int
+let at = fn values => fn index =>
+  if index >= 0 && index < count_second () values:
+    return @array.get values index
+
+  return 0
+
+// Gamma carries the state tags and effect row; Omega consumes the old state.
+const Audit = @effect { .record = Str -> Unit; }
+const Transition = #Closed Int -> #Open Int ~ { Audit }
+
+sig advance = Transition
+let advance = fn !state =>
+  result <- case state of
+    #Closed value =>
+      <- Audit.record "open"
+      return #Open value
+  return result
+
+let handler =
+  {
+    .record = fn (_, ?resume) => resume ();
+    .return = fn value => value;
+  }
+
+let run = fn () =>
+  let !closed = #Closed 7
+  return advance (!closed)
+
+let state = @handle (Audit, run, handler)
+
+// Layout stays compile-time evidence; Runtime HIR derives the closed physical
+// witness it uses to validate reuse and emission.
+const pair_layout = packed { .small = I16; .wide = I32; }
+
+let slice = Slice.claim [1, 2, 3]
+let values = Slice.freeze (!slice)
+
+return {
+  .safe = at [10, 20, 30] 2;
+  .state = state;
+  .packed_bytes = pair_layout.byte_size;
+  .owned_length = Array.length values;
+}

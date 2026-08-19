@@ -2,7 +2,6 @@ import type { Span } from "../syntax/ast.ts";
 import type { Domain } from "../check/type.ts";
 import { expect, fail } from "../diagnostic.ts";
 import {
-  bool,
   equal,
   F32X4_MASK_NAME,
   F32X4_NAME,
@@ -315,9 +314,12 @@ export function reflect(value: Value): Value {
                 id: value.effectTail,
               }],
           },
-          deferred: bool(value.deferred === true),
         }),
       );
+    case "forall":
+      // The binder and open body stay compiler-private. Source can eliminate
+      // one layer with @type.instantiate, which cannot leak a rigid variable.
+      return bare("Forall");
     case "sealed":
       return tagged(
         "Sealed",

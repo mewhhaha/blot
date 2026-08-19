@@ -22,6 +22,7 @@ import {
 } from "../comptime/value.ts";
 import {
   type Bound,
+  BOTTOM,
   type Domain,
   effects as effectRow,
   FLOAT,
@@ -35,10 +36,10 @@ import {
   TEXT,
   textLiteral,
   TOP,
-  union,
   UNIT,
   variant,
 } from "./type.ts";
+import { normalizeClosedUnion } from "./setops.ts";
 
 /** A stable label for an effect, so two effects with one operation name differ. */
 export function effectLabel(value: Value & { tag: "effect" }): string {
@@ -132,7 +133,7 @@ function bridgeValue(
         members.push(bridged);
       }
       if (cases.size > 0) members.push(variant(cases));
-      return union(members);
+      return normalizeClosedUnion(members);
     }
 
     case "tag": {
@@ -158,7 +159,12 @@ function bridgeValue(
         bridgeValue(element, variables)
       );
       if (elements.some((element) => element === null)) return null;
-      return { tag: "array", element: union(elements as SimpleType[]) };
+      return {
+        tag: "array",
+        element: elements.length === 0
+          ? BOTTOM
+          : normalizeClosedUnion(elements as SimpleType[]),
+      };
     }
 
     // Reaching into an effect names an operation, and performing it is an
@@ -264,7 +270,7 @@ export { INT, TEXT };
  *
  * `bridge` exists because a program writes types as values and inference needs
  * them as lattice elements. This goes the other way, and it exists for one
- * reason: `@type.satisfies` hands a predicate the type of an expression, and
+ * reason: predicate-form `@satisfies` hands a predicate the type of an expression, and
  * the type of an expression that is not itself compile-time lives only in the
  * lattice. Without this there is nothing to hand over — `@type.of` cannot do
  * it, because it answers the type of a *value* and so has to evaluate one.
@@ -293,8 +299,8 @@ export function reify(type: SimpleType): Value | null {
       if (low === null || high === null) return null;
       // A singleton is the literal, not a range from a value to itself. That
       // is how a program writes it, and a predicate compares what it was given
-      // against what its caller wrote — `Is { .value = 12; }` against a range
-      // of twelve to twelve is a mismatch nobody could see.
+      // against what its caller wrote — an exact literal predicate against a
+      // range of twelve to twelve is a mismatch nobody could see.
       if (low.tag !== "unbounded" && equal(low, high)) return low;
       return { tag: "range", low, high, domain: type.domain };
     }

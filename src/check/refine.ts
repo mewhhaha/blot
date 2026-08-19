@@ -115,14 +115,16 @@ export function narrowing(condition: Expr, scope: TypeEnv): Narrowing | null {
   if (answers === null) return null;
 
   // A witness decides what the named subject is compared against. It must name
-  // one value — a compile-time integer, or one array's length — and not merely
+  // one value — a compile-time integer, or one collection's length — and not
+  // merely
   // have a ground type. `n == m` where `m`'s type is `1 | 2` would let the
   // untaken branch conclude `n ∉ {1, 2}`, but all the condition said is that
   // `n` differs from *this* `m`. A whole type is a sound witness for the
   // intersection and an unsound one for the complement, so neither is taken
   // unless the witness is one value. A length is one value for the same reason
-  // a `const` is: the immutable value identity it names holds one array for its
-  // whole lifetime. A name retaining such a length may itself be the subject
+  // a `const` is: the immutable value identity it names holds one array or
+  // region for its whole lifetime. A name retaining such a length may itself
+  // be the subject
   // when the other side is a literal; the selection below keeps that case
   // separate from comparing two independent length witnesses.
   const left = condition.fn.arg;
@@ -135,8 +137,8 @@ export function narrowing(condition: Expr, scope: TypeEnv): Narrowing | null {
   // A name retaining `length(array) + k` is both a stable witness and a valid
   // subject when compared with a literal. Choosing its binding identity as the
   // subject lets the equality already recorded in Phi carry the branch bound
-  // back to that array. Two retained relationships still have no subject: the
-  // initial fragment deliberately does not compare independent lengths.
+  // back to that collection. Two retained relationships still have no subject:
+  // this decidable fragment deliberately does not compare independent lengths.
   if (
     rightWitness !== null && leftSubject !== null &&
     (leftWitness === null || typeof rightWitness === "bigint")
@@ -592,14 +594,57 @@ export function witness(expr: Expr, scope: TypeEnv): ComparisonWitness | null {
     ) return shiftRefinementTerm(right, left);
   }
   const path = namePath(head.callee);
-  if (path === null || head.args.length !== 1) return null;
+  if (path === null) return null;
   const value = comptimeAt(path, scope);
   if (value === null) return null;
   const summary = relationalSummary(value);
-  if (summary === null || summary.tag !== "array-length") return null;
-  const length = arrayLength(head.args[summary.parameter], scope);
+  if (summary === null || summary.parameter >= head.args.length) return null;
+  const argument = head.args[summary.parameter];
+  const length = summary.measure === "array-length"
+    ? arrayLength(argument, scope)
+    : regionLength(argument, scope);
   if (length === null) return null;
   return comparisonWitness(shiftRefinementTerm(length, summary.offset));
+}
+
+/** Length of a private region, tracked in Phi without exposing its Store. */
+export function regionLength(
+  expr: Expr,
+  scope: TypeEnv,
+): RefinementTerm | null {
+  const path = namePath(expr);
+  if (path !== null) {
+    const value = comptimeAt(path, scope);
+    if (value !== null && value.tag === "region-array") {
+      return { tag: "literal", value: value.end - value.start };
+    }
+  }
+  if (expr.tag === "var") {
+    const identity = lookupBinding(scope, expr.name);
+    if (identity === null) return null;
+    const nonnegative: RefinementProposition = {
+      tag: "at-least",
+      variable: identity,
+      value: 0n,
+    };
+    if (
+      !scope.refinements.entails(nonnegative) &&
+      !scope.refinements.assume(nonnegative)
+    ) {
+      throw new Error(`region length for \`${expr.name}\` is inconsistent`);
+    }
+    return { tag: "variable", identity, offset: 0n };
+  }
+  const head = spine(expr);
+  if (head === null || head.callee.tag !== "intrinsic") return null;
+  if (
+    (head.callee.name === "@linear.own" ||
+      head.callee.name === "@linear.borrow" ||
+      head.callee.name === "@linear.maybe") && head.args.length === 1
+  ) {
+    return regionLength(head.args[0], scope);
+  }
+  return null;
 }
 
 function comparisonWitness(term: RefinementTerm): ComparisonWitness {

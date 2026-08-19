@@ -66,6 +66,11 @@ pub enum Type {
     Bottom,
 }
 
+enum Requirement {
+    Type(Type),
+    Predicate(Value),
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize)]
 pub enum Scalar {
     Int(BigInt),
@@ -1624,13 +1629,13 @@ impl Checker {
                     ));
                 };
                 let signature_value = self.evaluate(path, value, values, Phase::Comptime)?;
-                let signature = self.bridge(&signature_value).ok_or_else(|| {
-                    Diagnostic::new(
+                let Requirement::Type(signature) = self.requirement(signature_value) else {
+                    return Err(Diagnostic::new(
                         "BLOT_SIG_NOT_A_TYPE",
                         format!("The signature for `{name}` is not a type value."),
                         span,
-                    )
-                })?;
+                    ));
+                };
                 if let Some(unrepresentable) = unrepresentable_integer(&signature) {
                     return Err(Diagnostic::new(
                         "BLOT_UNREPRESENTABLE_INTEGER",
@@ -2287,36 +2292,36 @@ impl Checker {
                 }
                 if let Expression::Apply {
                     function: satisfies,
-                    argument: subject,
+                    argument: subject_expression,
                     ..
                 } = module.arena.expressions[function.0 as usize]
                     && let Expression::Intrinsic { name, .. } =
                         &module.arena.expressions[satisfies.0 as usize]
                     && name == "@satisfies"
                 {
-                    let subject =
-                        self.infer(path, module, subject, environment, values, dependencies)?;
-                    if let Ok(expected_value) =
-                        self.evaluate(path, argument, values, Phase::Comptime)
-                        && let Some(expected) = self.bridge(&expected_value)
-                    {
-                        self.constrain(subject.type_.clone(), expected, span)?;
-                        return Ok(subject);
-                    }
-                }
-                if let Expression::Intrinsic { name, .. } =
-                    &module.arena.expressions[function.0 as usize]
-                    && name == "@type.satisfies"
-                {
-                    return self.infer_type_satisfies(
+                    let subject = self.infer(
                         path,
                         module,
-                        argument,
+                        subject_expression,
                         environment,
                         values,
                         dependencies,
-                        span,
-                    );
+                    )?;
+                    if let Ok(value) = self.evaluate(path, argument, values, Phase::Comptime) {
+                        return self.apply_requirement(
+                            path,
+                            subject,
+                            self.requirement(value),
+                            span,
+                        );
+                    }
+                    if self.phase.get() == Phase::Runtime {
+                        return Err(Diagnostic::new(
+                            "BLOT_SIG_NOT_COMPTIME",
+                            "The second argument to `@satisfies` must be a compile-time type value or predicate. Make a requirement combinator `const` so calls specialize it.",
+                            span,
+                        ));
+                    }
                 }
                 if let Expression::Intrinsic { name, .. } =
                     &module.arena.expressions[function.0 as usize]
@@ -2814,7 +2819,11 @@ impl Checker {
                 .evaluate(path, expression, values, Phase::Comptime)
                 .is_err()
         {
-            return self.type_error(Type::Top, expected, span);
+            return Err(Diagnostic::new(
+                "BLOT_REFLECTION_NOT_INDEXED",
+                "A result available only after compile-time specialization cannot prove a runtime requirement.",
+                span,
+            ));
         }
         if let Expression::Rec { lambda, .. } = module.arena.expressions[expression.0 as usize] {
             let inferred = self.infer_against(
@@ -3001,53 +3010,58 @@ impl Checker {
         Ok(function)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn infer_type_satisfies(
+    fn requirement(&self, value: Value) -> Requirement {
+        match self.bridge(&value) {
+            Some(type_) => Requirement::Type(type_),
+            None => Requirement::Predicate(value),
+        }
+    }
+
+    fn apply_requirement(
         &self,
         path: &str,
-        module: &Module,
-        argument: ExpressionId,
-        environment: &TypeEnvironment,
-        values: &ValueEnvironment,
-        dependencies: &BTreeMap<String, Type>,
+        subject: Inferred,
+        requirement: Requirement,
         span: Span,
     ) -> Result<Inferred, Diagnostic> {
-        let Expression::Tuple { elements, .. } = &module.arena.expressions[argument.0 as usize]
-        else {
-            return self.type_error(Type::Unit, Type::Record(Vec::new()), span);
-        };
-        if elements.len() != 2 {
-            return self.type_error(Type::Unit, Type::Record(Vec::new()), span);
-        }
-        let subject = self.infer(path, module, elements[0], environment, values, dependencies)?;
-        let settled = self.settle(subject.type_.clone(), true);
-        let reified = self.reify_runtime_type(&settled).ok_or_else(|| {
-            Diagnostic::new(
-                "BLOT_TYPE_NOT_REIFIABLE",
-                format!("`{}` has no compile-time reading.", self.show(&settled)),
-                span,
-            )
-        })?;
-        let predicate = self.evaluate(path, elements[1], values, Phase::Comptime)?;
-        let answer = run(apply(
-            self.context.clone(),
-            predicate,
-            reified,
-            span,
-            Runtime::new(Phase::Comptime, path.to_owned()),
-        ))?;
-        match answer {
-            Value::Tag { name, .. } if name == "True" => Ok(subject),
-            Value::Tag { .. } => Err(Diagnostic::new(
-                "BLOT_DOES_NOT_SATISFY",
-                format!("`{}` does not satisfy the predicate.", self.show(&settled)),
-                span,
-            )),
-            _ => Err(Diagnostic::new(
-                "BLOT_TYPE_ERROR",
-                "The predicate given to `@type.satisfies` must answer `#True` or `#False`.",
-                span,
-            )),
+        match requirement {
+            Requirement::Type(expected) => {
+                self.constrain(subject.type_.clone(), expected, span)?;
+                Ok(subject)
+            }
+            Requirement::Predicate(predicate) => {
+                let settled = self.settle(subject.type_.clone(), true);
+                let reified = self.reify_runtime_type(&settled).ok_or_else(|| {
+                    Diagnostic::new(
+                        "BLOT_TYPE_NOT_REIFIABLE",
+                        format!(
+                            "`{}` has no compile-time reading; use a canonical type value to constrain an open subject.",
+                            self.show(&settled)
+                        ),
+                        span,
+                    )
+                })?;
+                let answer = run(apply(
+                    self.context.clone(),
+                    predicate,
+                    reified,
+                    span,
+                    Runtime::new(Phase::Comptime, path.to_owned()),
+                ))?;
+                match answer {
+                    Value::Tag { name, .. } if name == "True" => Ok(subject),
+                    Value::Tag { name, .. } if name == "False" => Err(Diagnostic::new(
+                        "BLOT_DOES_NOT_SATISFY",
+                        format!("`{}` does not satisfy the predicate.", self.show(&settled)),
+                        span,
+                    )),
+                    _ => Err(Diagnostic::new(
+                        "BLOT_TYPE_ERROR",
+                        "A requirement must be a type value or a compile-time predicate from a closed type to `Bool`.",
+                        span,
+                    )),
+                }
+            }
         }
     }
 
@@ -5426,9 +5440,14 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             Type::Opaque("Type".to_owned())
         }
         "@type.unit" => Type::Unit,
-        "@type.range" | "@type.union" | "@type.intersect" | "@type.diff" | "@type.arrow"
-        | "@type.performs" => curried(
+        "@type.range" | "@type.refine" | "@type.union" | "@type.intersect" | "@type.diff"
+        | "@type.arrow" | "@type.performs" | "@type.instantiate" => curried(
             vec![checker.fresh(), checker.fresh()],
+            Type::Opaque("Type".to_owned()),
+        ),
+        "@type.equal" => curried(vec![checker.fresh(), checker.fresh()], bool_),
+        "@type.probe" => curried(
+            vec![checker.fresh()],
             Type::Opaque("Type".to_owned()),
         ),
         "@type.of" | "@type.reflect" | "@type.members" | "@type.union_of" => {
@@ -5447,16 +5466,6 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         "@satisfies" => {
             let value = checker.fresh();
             curried(vec![value.clone(), checker.fresh()], value)
-        }
-        "@type.satisfies" => {
-            let value = checker.fresh();
-            curried(
-                vec![Type::Record(vec![
-                    ("0".to_owned(), value.clone()),
-                    ("1".to_owned(), checker.fresh()),
-                ])],
-                value,
-            )
         }
         "@fail" | "@panic" => curried(vec![text], Type::Bottom),
         "@effect" | "@effect.host" | "@effect.named" | "@forall" | "@import" => {
@@ -5487,10 +5496,7 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             let array = Type::Array(Box::new(element.clone()));
             curried(
                 vec![array.clone(), int],
-                Type::Record(vec![
-                    ("0".to_owned(), element),
-                    ("1".to_owned(), array),
-                ]),
+                Type::Record(vec![("0".to_owned(), element), ("1".to_owned(), array)]),
             )
         }
         "@array.split" => {
@@ -5661,68 +5667,219 @@ fn comparison_refinements(
     checker: &Checker,
 ) -> Option<(String, Type, Type)> {
     let (callee, arguments) = application_spine_ids(module, expression);
+    let operator = comptime_expression_value(module, callee, values)?;
+
+    if arguments.len() == 2
+        && let Some(junction) = crate::recognise::junction(&checker.context, &operator)
+    {
+        let left = comparison_refinements(module, arguments[0], environment, values, checker)?;
+        let right = comparison_refinements(module, arguments[1], environment, values, checker)?;
+        if left.0 != right.0 {
+            return None;
+        }
+        let original = checker.settle(checker.instantiate(environment.lookup(&left.0)?), true);
+        return match junction {
+            crate::recognise::Junction::And => Some((
+                left.0,
+                intersect_integer_types(&left.1, &right.1)?,
+                original,
+            )),
+            crate::recognise::Junction::Or => Some((
+                left.0,
+                original,
+                intersect_integer_types(&left.2, &right.2)?,
+            )),
+        };
+    }
+
+    if arguments.len() == 1 && crate::recognise::negation(&checker.context, &operator) {
+        let (name, consequence, alternate) =
+            comparison_refinements(module, arguments[0], environment, values, checker)?;
+        return Some((name, alternate, consequence));
+    }
+
     if arguments.len() != 2 {
         return None;
     }
-    let operator = comptime_expression_value(module, callee, values)?;
-    let comparison = crate::recognise::comparison(&checker.context, &operator)?;
+    let mut orderings = crate::recognise::comparison(&checker.context, &operator)?;
     let left = arguments[0];
     let right = arguments[1];
-    let Expression::Var { name, .. } = &module.arena.expressions[left.0 as usize] else {
-        return None;
+    let (name, witness) = match (
+        &module.arena.expressions[left.0 as usize],
+        &module.arena.expressions[right.0 as usize],
+    ) {
+        (Expression::Var { name, .. }, Expression::Int { value, .. }) => {
+            (name.clone(), value.clone())
+        }
+        (Expression::Int { value, .. }, Expression::Var { name, .. }) => {
+            orderings = mirror_orderings(&orderings);
+            (name.clone(), value.clone())
+        }
+        _ => return None,
     };
-    let Expression::Int { value, .. } = &module.arena.expressions[right.0 as usize] else {
-        return None;
-    };
-    let original = checker.settle(checker.instantiate(environment.lookup(name)?), true);
-    let singleton = Type::Range {
-        domain: Domain::Int,
-        low: Some(Scalar::Int(value.clone())),
-        high: Some(Scalar::Int(value.clone())),
-    };
-    if comparison == crate::recognise::Comparison::Equal {
-        return Some((
-            name.clone(),
-            singleton.clone(),
-            remove_type(original, &singleton),
-        ));
+    let original = checker.settle(checker.instantiate(environment.lookup(&name)?), true);
+    let accepted = ordering_type(&orderings, &witness);
+    let rejected = ordering_type(&complement_orderings(&orderings), &witness);
+    Some((
+        name,
+        intersect_integer_types(&original, &accepted)?,
+        intersect_integer_types(&original, &rejected)?,
+    ))
+}
+
+fn mirror_orderings(
+    orderings: &BTreeSet<crate::recognise::Ordering>,
+) -> BTreeSet<crate::recognise::Ordering> {
+    use crate::recognise::Ordering;
+    orderings
+        .iter()
+        .map(|ordering| match ordering {
+            Ordering::Less => Ordering::Greater,
+            Ordering::Equal => Ordering::Equal,
+            Ordering::Greater => Ordering::Less,
+        })
+        .collect()
+}
+
+fn complement_orderings(
+    orderings: &BTreeSet<crate::recognise::Ordering>,
+) -> BTreeSet<crate::recognise::Ordering> {
+    use crate::recognise::Ordering;
+    [Ordering::Less, Ordering::Equal, Ordering::Greater]
+        .into_iter()
+        .filter(|ordering| !orderings.contains(ordering))
+        .collect()
+}
+
+fn ordering_type(orderings: &BTreeSet<crate::recognise::Ordering>, witness: &BigInt) -> Type {
+    use crate::recognise::Ordering;
+    let semantic_basis = [Ordering::Less, Ordering::Equal, Ordering::Greater];
+    let mut start = None;
+    let mut intervals = Vec::new();
+    for index in 0..=semantic_basis.len() {
+        let accepted = index < semantic_basis.len() && orderings.contains(&semantic_basis[index]);
+        if accepted && start.is_none() {
+            start = Some(index);
+        }
+        if !accepted && let Some(first) = start.take() {
+            let last = index - 1;
+            let low = match semantic_basis[first] {
+                Ordering::Less => None,
+                Ordering::Equal => Some(witness.clone()),
+                Ordering::Greater => Some(witness + 1),
+            };
+            let high = match semantic_basis[last] {
+                Ordering::Less => Some(witness - 1),
+                Ordering::Equal => Some(witness.clone()),
+                Ordering::Greater => None,
+            };
+            intervals.push(IntegerInterval { low, high });
+        }
     }
-    let Type::Range {
+    integer_intervals_type(intervals)
+}
+
+#[derive(Clone)]
+struct IntegerInterval {
+    low: Option<BigInt>,
+    high: Option<BigInt>,
+}
+
+fn intersect_integer_types(left: &Type, right: &Type) -> Option<Type> {
+    let left = integer_intervals(left)?;
+    let right = integer_intervals(right)?;
+    let mut intersections = Vec::new();
+    for left in &left {
+        for right in &right {
+            let low = match (&left.low, &right.low) {
+                (None, low) | (low, None) => low.clone(),
+                (Some(left), Some(right)) => Some(left.max(right).clone()),
+            };
+            let high = match (&left.high, &right.high) {
+                (None, high) | (high, None) => high.clone(),
+                (Some(left), Some(right)) => Some(left.min(right).clone()),
+            };
+            if matches!((&low, &high), (Some(low), Some(high)) if low > high) {
+                continue;
+            }
+            intersections.push(IntegerInterval { low, high });
+        }
+    }
+    Some(integer_intervals_type(intersections))
+}
+
+fn integer_intervals(type_: &Type) -> Option<Vec<IntegerInterval>> {
+    match type_ {
+        Type::Bottom => Some(Vec::new()),
+        Type::Range {
+            domain: Domain::Int,
+            low,
+            high,
+        } => Some(vec![IntegerInterval {
+            low: match low {
+                Some(Scalar::Int(value)) => Some(value.clone()),
+                None => None,
+                _ => return None,
+            },
+            high: match high {
+                Some(Scalar::Int(value)) => Some(value.clone()),
+                None => None,
+                _ => return None,
+            },
+        }]),
+        Type::Union(members) => {
+            let mut intervals = Vec::new();
+            for member in members {
+                intervals.extend(integer_intervals(member)?);
+            }
+            Some(intervals)
+        }
+        _ => None,
+    }
+}
+
+fn integer_intervals_type(mut intervals: Vec<IntegerInterval>) -> Type {
+    intervals.sort_by(|left, right| match (&left.low, &right.low) {
+        (None, None) => std::cmp::Ordering::Equal,
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (Some(left), Some(right)) => left.cmp(right),
+    });
+    let mut normalized: Vec<IntegerInterval> = Vec::new();
+    for interval in intervals {
+        let Some(previous) = normalized.last_mut() else {
+            normalized.push(interval);
+            continue;
+        };
+        let touches = match (&previous.high, &interval.low) {
+            (None, _) | (_, None) => true,
+            (Some(high), Some(low)) => low <= &(high + 1),
+        };
+        if !touches {
+            normalized.push(interval);
+            continue;
+        }
+        previous.high = match (&previous.high, &interval.high) {
+            (None, _) | (_, None) => None,
+            (Some(left), Some(right)) => Some(left.max(right).clone()),
+        };
+    }
+    let mut members = normalized.into_iter().map(|interval| Type::Range {
         domain: Domain::Int,
-        low,
-        high,
-    } = original
-    else {
-        return None;
+        low: interval.low.map(Scalar::Int),
+        high: interval.high.map(Scalar::Int),
+    });
+    let Some(first) = members.next() else {
+        return Type::Bottom;
     };
-    let below = || Type::Range {
-        domain: Domain::Int,
-        low: low.clone(),
-        high: minimum_bound(high.clone(), value - 1),
-    };
-    let at_or_above = || Type::Range {
-        domain: Domain::Int,
-        low: maximum_bound(low.clone(), value.clone()),
-        high: high.clone(),
-    };
-    let above = || Type::Range {
-        domain: Domain::Int,
-        low: maximum_bound(low.clone(), value + 1),
-        high: high.clone(),
-    };
-    let at_or_below = || Type::Range {
-        domain: Domain::Int,
-        low: low.clone(),
-        high: minimum_bound(high.clone(), value.clone()),
-    };
-    let (consequence, alternate) = match comparison {
-        crate::recognise::Comparison::Less => (below(), at_or_above()),
-        crate::recognise::Comparison::LessOrEqual => (at_or_below(), above()),
-        crate::recognise::Comparison::Greater => (above(), at_or_below()),
-        crate::recognise::Comparison::GreaterOrEqual => (at_or_above(), below()),
-        crate::recognise::Comparison::Equal => unreachable!(),
-    };
-    Some((name.clone(), consequence, alternate))
+    let remaining = members.collect::<Vec<_>>();
+    if remaining.is_empty() {
+        first
+    } else {
+        let mut all = vec![first];
+        all.extend(remaining);
+        Type::Union(all)
+    }
 }
 
 fn comptime_expression_value(
@@ -6115,20 +6272,6 @@ fn total_pattern(module: &Module, pattern: PatternId) -> bool {
             .iter()
             .all(|field| total_pattern(module, field.pattern)),
         _ => false,
-    }
-}
-
-fn minimum_bound(bound: Option<Scalar>, value: BigInt) -> Option<Scalar> {
-    match bound {
-        Some(Scalar::Int(bound)) => Some(Scalar::Int(bound.min(value))),
-        _ => Some(Scalar::Int(value)),
-    }
-}
-
-fn maximum_bound(bound: Option<Scalar>, value: BigInt) -> Option<Scalar> {
-    match bound {
-        Some(Scalar::Int(bound)) => Some(Scalar::Int(bound.max(value))),
-        _ => Some(Scalar::Int(value)),
     }
 }
 
@@ -6807,14 +6950,124 @@ fn unrepresentable_integer(type_: &Type) -> Option<&Type> {
     }
 }
 
-fn union_types(mut types: Vec<Type>) -> Type {
-    if types.is_empty() {
-        return Type::Bottom;
+fn closed_type_key(type_: &Type) -> String {
+    fn scalar(value: Option<&Scalar>) -> String {
+        match value {
+            None => "*".to_owned(),
+            Some(Scalar::Int(value)) => format!("i{value}"),
+            Some(Scalar::Text(value)) => format!("s{value:?}"),
+        }
     }
-    if types.len() == 1 {
-        return types.remove(0);
+
+    fn fields(
+        name: &str,
+        values: &[(String, Type)],
+        binders: &mut HashMap<VariableId, usize>,
+    ) -> String {
+        let mut keyed = values
+            .iter()
+            .map(|(field, type_)| format!("{field:?}:{}", visit(type_, binders)))
+            .collect::<Vec<_>>();
+        keyed.sort();
+        format!("{name}{{{}}}", keyed.join(","))
     }
-    Type::Union(types)
+
+    fn visit(type_: &Type, binders: &mut HashMap<VariableId, usize>) -> String {
+        match type_ {
+            Type::Variable(id) => format!("?{id}"),
+            Type::Rigid(id) => binders
+                .get(id)
+                .map_or_else(|| format!("!{id}"), |index| format!("^{index}")),
+            Type::Forall { variables, body } => {
+                let previous = binders.clone();
+                let depth = binders.len();
+                for (index, variable) in variables.iter().enumerate() {
+                    binders.insert(*variable, depth + index);
+                }
+                let body = visit(body, binders);
+                *binders = previous;
+                format!("all{}({body})", variables.len())
+            }
+            Type::Range { domain, low, high } => {
+                format!("range({domain:?},{},{})", scalar(low.as_ref()), scalar(high.as_ref()))
+            }
+            Type::Unit => "unit".to_owned(),
+            Type::Function {
+                parameter,
+                effects,
+                result,
+            } => format!(
+                "fun({},{},{})",
+                visit(parameter, binders),
+                visit(effects, binders),
+                visit(result, binders)
+            ),
+            Type::Record(values) => fields("record", values, binders),
+            Type::Array(element) => format!("array({})", visit(element, binders)),
+            Type::Region(element) => format!("region({})", visit(element, binders)),
+            Type::Variant { cases, open } => {
+                format!("variant({open}){}", fields("", cases, binders))
+            }
+            Type::Effects(labels) => {
+                format!("effects{{{}}}", labels.iter().map(|label| format!("{label:?}")).collect::<Vec<_>>().join(","))
+            }
+            Type::OpenEffects { labels, tail } => format!(
+                "open-effects{{{};{}}}",
+                labels.iter().map(|label| format!("{label:?}")).collect::<Vec<_>>().join(","),
+                visit(tail, binders)
+            ),
+            Type::Union(members) => {
+                let mut keys = members
+                    .iter()
+                    .map(|member| visit(member, binders))
+                    .collect::<Vec<_>>();
+                keys.sort();
+                format!("union{{{}}}", keys.join(","))
+            }
+            Type::Opaque(name) => format!("opaque({name:?})"),
+            Type::Top => "top".to_owned(),
+            Type::Bottom => "bottom".to_owned(),
+        }
+    }
+
+    visit(type_, &mut HashMap::new())
+}
+
+fn union_types(types: Vec<Type>) -> Type {
+    fn append(members: &mut Vec<(String, Type)>, type_: Type) -> bool {
+        match type_ {
+            Type::Bottom => true,
+            Type::Top => false,
+            Type::Union(nested) => nested
+                .into_iter()
+                .all(|member| append(members, member)),
+            type_ => {
+                let key = closed_type_key(&type_);
+                if !members.iter().any(|(existing, _)| existing == &key) {
+                    members.push((key, type_));
+                }
+                true
+            }
+        }
+    }
+
+    let mut members = Vec::new();
+    if !types
+        .into_iter()
+        .all(|type_| append(&mut members, type_))
+    {
+        return Type::Top;
+    }
+    members.sort_by(|(left, _), (right, _)| left.cmp(right));
+    let mut members = members
+        .into_iter()
+        .map(|(_, member)| member)
+        .collect::<Vec<_>>();
+    match members.len() {
+        0 => Type::Bottom,
+        1 => members.pop().expect("one union member exists"),
+        _ => Type::Union(members),
+    }
 }
 
 fn join_types(types: Vec<Type>) -> Type {
@@ -8038,4 +8291,91 @@ mod tests {
         assert!(!checker.can_constrain(int_type(), requirement, Span { start: 0, end: 0 },));
         assert_eq!(checker.next_skolem.get(), initial_skolem);
     }
+
+    #[test]
+    fn semantic_ordering_sets_build_exact_integer_regions() {
+        use crate::recognise::Ordering;
+        let non_zero = ordering_type(
+            &BTreeSet::from([Ordering::Less, Ordering::Greater]),
+            &BigInt::from(0),
+        );
+        assert!(same_type(
+            &non_zero,
+            &Type::Union(vec![
+                Type::Range {
+                    domain: Domain::Int,
+                    low: None,
+                    high: Some(Scalar::Int((-1).into())),
+                },
+                Type::Range {
+                    domain: Domain::Int,
+                    low: Some(Scalar::Int(1.into())),
+                    high: None,
+                },
+            ])
+        ));
+    }
+
+    #[test]
+    fn conjunction_intersects_semantic_integer_regions() {
+        use crate::recognise::Ordering;
+        let at_least_zero = ordering_type(
+            &BTreeSet::from([Ordering::Equal, Ordering::Greater]),
+            &BigInt::from(0),
+        );
+        let at_most_byte = ordering_type(
+            &BTreeSet::from([Ordering::Less, Ordering::Equal]),
+            &BigInt::from(255),
+        );
+        let byte = intersect_integer_types(&at_least_zero, &at_most_byte)
+            .expect("both sides are integer regions");
+        assert!(same_type(
+            &byte,
+            &Type::Range {
+                domain: Domain::Int,
+                low: Some(Scalar::Int(0.into())),
+                high: Some(Scalar::Int(255.into())),
+            }
+        ));
+    }
+
+    #[test]
+    fn closed_unions_have_one_canonical_form() {
+        let one = Type::Range {
+            domain: Domain::Int,
+            low: Some(Scalar::Int(1.into())),
+            high: Some(Scalar::Int(1.into())),
+        };
+        assert!(same_type(
+            &union_types(vec![
+                Type::Bottom,
+                one.clone(),
+                Type::Union(vec![one.clone()]),
+            ]),
+            &one,
+        ));
+        assert!(matches!(
+            union_types(vec![one.clone(), Type::Top]),
+            Type::Top
+        ));
+        assert_eq!(
+            closed_type_key(&union_types(vec![
+                Type::Range {
+                    domain: Domain::Int,
+                    low: Some(Scalar::Int(2.into())),
+                    high: Some(Scalar::Int(2.into())),
+                },
+                one.clone(),
+            ])),
+            closed_type_key(&union_types(vec![
+                one,
+                Type::Range {
+                    domain: Domain::Int,
+                    low: Some(Scalar::Int(2.into())),
+                    high: Some(Scalar::Int(2.into())),
+                },
+            ])),
+        );
+    }
+
 }

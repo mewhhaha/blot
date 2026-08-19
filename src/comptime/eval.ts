@@ -37,6 +37,7 @@ import {
   withInferredType,
 } from "./value.ts";
 import { makeEffect, PRIMITIVE_VALUES, PRIMITIVES } from "./primitives.ts";
+import { refineIntegerType } from "./predicate_refinement.ts";
 
 export interface Perform {
   readonly effectId: number;
@@ -1135,6 +1136,7 @@ const SPECIAL: ReadonlyMap<string, number> = new Map([
   ["@handle", 1],
   ["@include", 2],
   ["@import", 1],
+  ["@type.refine", 2],
 ]);
 
 function intrinsicValue(name: string, span: Span): Value {
@@ -1227,6 +1229,17 @@ function* runPrimitive(
     const variable: Value = { tag: "type-variable", id: nextTypeVariable };
     const body = yield* apply(args[0], variable, span, runtime);
     return { tag: "forall", variable: nextTypeVariable, body };
+  }
+
+  if (name === "@type.refine") {
+    if (runtime.phase !== "comptime") {
+      fail(
+        "BLOT_REFINEMENT_NOT_COMPTIME",
+        "`@type.refine` can only construct a type at compile time.",
+        span,
+      );
+    }
+    return refineIntegerType(args[0], args[1], span);
   }
 
   if (name === "@handle") {

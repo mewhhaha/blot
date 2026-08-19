@@ -496,6 +496,217 @@ export function rangeDomainOf(
   return "int";
 }
 
+/**
+ * Replace one quantified type variable without exposing its compiler identity.
+ *
+ * The ordinary type constructors are traversed structurally. An effect-row
+ * tail is the one kinded position in the value representation: there a type
+ * variable keeps the row open, an effect appends one member, and an array of
+ * effects supplies the remaining row. Returning `null` refuses every other
+ * replacement instead of manufacturing an ill-kinded arrow.
+ */
+export function substituteTypeVariable(
+  value: Value,
+  variable: number,
+  replacement: Value,
+): Value | null {
+  const substitute = (inner: Value): Value | null =>
+    substituteTypeVariable(inner, variable, replacement);
+  const substituteArray = (values: readonly Value[]): Value[] | null => {
+    const substituted: Value[] = [];
+    for (const item of values) {
+      const next = substitute(item);
+      if (next === null) return null;
+      substituted.push(next);
+    }
+    return substituted;
+  };
+  const substituteFields = (
+    fields: ReadonlyMap<string, Value>,
+  ): ReadonlyMap<string, Value> | null => {
+    const substituted = new Map<string, Value>();
+    for (const [name, field] of fields) {
+      const next = substitute(field);
+      if (next === null) return null;
+      substituted.set(name, next);
+    }
+    return substituted;
+  };
+
+  switch (value.tag) {
+    case "type-variable":
+      return value.id === variable ? replacement : value;
+    case "shape": {
+      const fields = substituteFields(value.fields);
+      return fields === null ? null : { ...value, fields };
+    }
+    case "array": {
+      const elements = substituteArray(value.elements);
+      return elements === null ? null : { ...value, elements };
+    }
+    case "region-type": {
+      const element = substitute(value.element);
+      return element === null ? null : { ...value, element };
+    }
+    case "tag": {
+      if (value.payload === null) return value;
+      const payload = substitute(value.payload);
+      return payload === null ? null : { ...value, payload };
+    }
+    case "deferred-type": {
+      const inner = substitute(value.inner);
+      return inner === null ? null : { ...value, inner };
+    }
+    case "range": {
+      const low = substitute(value.low);
+      const high = substitute(value.high);
+      return low === null || high === null ? null : { ...value, low, high };
+    }
+    case "union": {
+      const members = substituteArray(value.members);
+      return members === null ? null : { ...value, members };
+    }
+    case "arrow": {
+      const domain = substitute(value.domain);
+      const codomain = substitute(value.codomain);
+      const effects = substituteArray(value.effects);
+      if (domain === null || codomain === null || effects === null) return null;
+      if (value.effectTail !== variable) {
+        return { ...value, domain, codomain, effects };
+      }
+
+      let rowReplacement = replacement;
+      while (rowReplacement.tag === "extended") {
+        rowReplacement = rowReplacement.inner;
+      }
+      if (rowReplacement.tag === "type-variable") {
+        return {
+          ...value,
+          domain,
+          codomain,
+          effects,
+          effectTail: rowReplacement.id,
+        };
+      }
+      const additional = rowReplacement.tag === "effect"
+        ? [rowReplacement]
+        : rowReplacement.tag === "array" &&
+            rowReplacement.elements.every((member) => member.tag === "effect")
+        ? [...rowReplacement.elements]
+        : null;
+      if (additional === null) return null;
+      const closed = [...effects];
+      for (const effect of additional) {
+        if (!closed.some((seen) => equal(seen, effect))) closed.push(effect);
+      }
+      const { effectTail: _, ...withoutTail } = value;
+      return { ...withoutTail, domain, codomain, effects: closed };
+    }
+    case "forall": {
+      if (value.variable === variable) return value;
+      const body = substitute(value.body);
+      return body === null ? null : { ...value, body };
+    }
+    case "effect": {
+      const operations = substituteFields(value.operations);
+      return operations === null ? null : { ...value, operations };
+    }
+    case "operation": {
+      const effect = substitute(value.effect);
+      return effect === null ? null : { ...value, effect };
+    }
+    case "extended": {
+      const inner = substitute(value.inner);
+      const members = substituteFields(value.members);
+      return inner === null || members === null
+        ? null
+        : { ...value, inner, members };
+    }
+    case "sealed": {
+      const inner = substitute(value.inner);
+      return inner === null ? null : { ...value, inner };
+    }
+    default:
+      return value;
+  }
+}
+
+function collectTypeVariables(value: Value, variables: Set<number>): void {
+  switch (value.tag) {
+    case "type-variable":
+      variables.add(value.id);
+      return;
+    case "shape":
+      for (const member of value.fields.values()) {
+        collectTypeVariables(member, variables);
+      }
+      return;
+    case "array":
+      for (const member of value.elements) {
+        collectTypeVariables(member, variables);
+      }
+      return;
+    case "region-type":
+      collectTypeVariables(value.element, variables);
+      return;
+    case "tag":
+      if (value.payload !== null) {
+        collectTypeVariables(value.payload, variables);
+      }
+      return;
+    case "deferred-type":
+      collectTypeVariables(value.inner, variables);
+      return;
+    case "range":
+      collectTypeVariables(value.low, variables);
+      collectTypeVariables(value.high, variables);
+      return;
+    case "union":
+      for (const member of value.members) {
+        collectTypeVariables(member, variables);
+      }
+      return;
+    case "arrow":
+      collectTypeVariables(value.domain, variables);
+      collectTypeVariables(value.codomain, variables);
+      for (const effect of value.effects) {
+        collectTypeVariables(effect, variables);
+      }
+      if (value.effectTail !== undefined) variables.add(value.effectTail);
+      return;
+    case "forall":
+      variables.add(value.variable);
+      collectTypeVariables(value.body, variables);
+      return;
+    case "effect":
+      for (const operation of value.operations.values()) {
+        collectTypeVariables(operation, variables);
+      }
+      return;
+    case "operation":
+      collectTypeVariables(value.effect, variables);
+      return;
+    case "extended":
+      collectTypeVariables(value.inner, variables);
+      for (const member of value.members.values()) {
+        collectTypeVariables(member, variables);
+      }
+      return;
+    case "sealed":
+      collectTypeVariables(value.inner, variables);
+      return;
+  }
+}
+
+function freshTypeVariable(left: Value, right: Value): number {
+  const variables = new Set<number>();
+  collectTypeVariables(left, variables);
+  collectTypeVariables(right, variables);
+  let fresh = 0;
+  while (variables.has(fresh)) fresh += 1;
+  return fresh;
+}
+
 export function equal(left: Value, right: Value): boolean {
   if (left === right) return true;
   if (left.tag === "extended") return equal(left.inner, right);
@@ -570,8 +781,7 @@ export function equal(left: Value, right: Value): boolean {
     // The row is part of the identity. Two arrows that agree on what they
     // accept and return but not on what they perform are two types, and
     // treating them as one would let `@type.diff` remove the effectful one.
-    return (left.deferred ?? false) === (right.deferred ?? false) &&
-      equal(left.domain, right.domain) &&
+    return equal(left.domain, right.domain) &&
       equal(left.codomain, right.codomain) &&
       left.effectTail === right.effectTail &&
       left.effects.length === right.effects.length &&
@@ -583,7 +793,20 @@ export function equal(left: Value, right: Value): boolean {
     return left.id === right.id;
   }
   if (left.tag === "forall" && right.tag === "forall") {
-    return left.variable === right.variable && equal(left.body, right.body);
+    const variable = freshTypeVariable(left.body, right.body);
+    const replacement: Value = { tag: "type-variable", id: variable };
+    const leftBody = substituteTypeVariable(
+      left.body,
+      left.variable,
+      replacement,
+    );
+    const rightBody = substituteTypeVariable(
+      right.body,
+      right.variable,
+      replacement,
+    );
+    return leftBody !== null && rightBody !== null &&
+      equal(leftBody, rightBody);
   }
   if (left.tag === "union" && right.tag === "union") {
     return left.members.length === right.members.length &&

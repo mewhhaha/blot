@@ -812,13 +812,13 @@ in the comptime evaluator.
 line of every program. A default fixity naming a binding by string is the
 mechanism, and it is not going to be hidden.
 
-**No equi-recursive types in the lattice.**
-`const Json = #Null | #Num Int |
-#Arr [Json];` will keep being refused. A
-recursive datatype can be structural but never _named_, so it can never appear
-in a `sig` and — since `LANGUAGE.md` §15 requires a concrete first-order type —
-never be exported. State this in `LANGUAGE.md` §10 next to the
-`const Message = ...` example; do not attempt the lattice change.
+**No first-class equi-recursive type values.** The inference graph itself may
+be cyclic: recursive functions and recursive flows terminate through the
+visited ordered-constraint relation. That implementation fact is not a source
+constructor. `const Json = #Null | #Num Int | #Arr [Json];` remains refused. A
+recursive datatype can be structural but never _named_, so it cannot appear in
+a `sig` or cross the concrete first-order Runtime-HIR boundary. Adding it would
+be a separate closed-type design, not a reason to complicate open inference.
 
 **No record row variable.** Investigated as a go/no-go and refused. The case for
 one is that three limits look like one missing feature: a spread of a parameter
@@ -885,8 +885,8 @@ recursive declaration prebound only one name, so two functions that called each
 other died on `BLOT_UNBOUND`. The minimum was a diagnostic that distinguished
 "not in scope" from "not in scope _yet_" and named the limit. Prebinding a group
 was a grammar change and therefore a GPU-profile question; price it separately,
-and remember that AGENTS.md treats
-a profile conflict as a design signal, not a metadata override.
+and remember that AGENTS.md treats a profile conflict as a design signal, not a
+metadata override.
 
 **No impredicative instantiation.** `@forall` is explicit and predicative and
 stays that way.

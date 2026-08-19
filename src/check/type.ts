@@ -55,7 +55,10 @@ export interface Variable {
  * evidence explicitly through `freshVar`, while ordinary constraints continue
  * to see an ordinary inference variable.
  */
-export type VariableEvidence = "reflection" | "dynamic-shape";
+export type VariableEvidence =
+  | "reflection"
+  | "dynamic-shape"
+  | "staged-computation";
 
 const variableEvidence = new WeakMap<Variable, VariableEvidence>();
 

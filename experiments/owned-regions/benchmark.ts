@@ -140,18 +140,22 @@ async function measure(
   const operations = hir.functions.flatMap((fn) =>
     fn.blocks.flatMap((block) => block.operations)
   );
-  const writeOwnedSites = operations.filter((operation) =>
-    operation.kind === "store.write" && operation.update === "owned-reuse"
-  ).length;
-  const writePersistentSites = operations.filter((operation) =>
-    operation.kind === "store.write" && operation.update === "persistent"
-  ).length;
-  const growOwnedSites = operations.filter((operation) =>
-    operation.kind === "store.grow" && operation.update === "owned-reuse"
-  ).length;
-  const growPersistentSites = operations.filter((operation) =>
-    operation.kind === "store.grow" && operation.update === "persistent"
-  ).length;
+  const writeOwnedSites =
+    operations.filter((operation) =>
+      operation.kind === "store.write" && operation.update === "owned-reuse"
+    ).length;
+  const writePersistentSites =
+    operations.filter((operation) =>
+      operation.kind === "store.write" && operation.update === "persistent"
+    ).length;
+  const growOwnedSites =
+    operations.filter((operation) =>
+      operation.kind === "store.grow" && operation.update === "owned-reuse"
+    ).length;
+  const growPersistentSites =
+    operations.filter((operation) =>
+      operation.kind === "store.grow" && operation.update === "persistent"
+    ).length;
   const module = await WebAssembly.compile(artifact.wasm as BufferSource);
   const importedNames = new Set(
     WebAssembly.Module.imports(module).map((entry) => entry.name),

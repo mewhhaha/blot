@@ -1475,7 +1475,10 @@ class ResidualHirBuilder {
     let signature = fn.signature;
     while (signature?.tag === "forall") signature = signature.body;
     if (signature?.tag !== "fun") {
-      throw this.outside(span, "recursive function without a settled signature");
+      throw this.outside(
+        span,
+        "recursive function without a settled signature",
+      );
     }
     const substitutions = new Map(fn.environment.typeSubstitutions);
     this.recordRuntimeType(
@@ -1510,7 +1513,9 @@ class ResidualHirBuilder {
     if (resultType === null) {
       throw this.outside(
         span,
-        `recursive function with an unsettled runtime signature ${showType(signature)}`,
+        `recursive function with an unsettled runtime signature ${
+          showType(signature)
+        }`,
       );
     }
 
@@ -1851,7 +1856,6 @@ class ResidualHirBuilder {
       const targetType = this.types[target.type];
       if (targetType.kind === "sum") {
         return this.sumCase(expr, target, {
-          kind: "sum",
           cases: targetType.cases.map((case_) => case_.name),
           payloadTypes: targetType.cases.map((case_) => case_.payloadType),
           wrappedPayloads: targetType.cases.map(() => false),
@@ -2552,12 +2556,14 @@ class ResidualHirBuilder {
       left.kind === "tuple" && right.kind === "tuple" &&
       left.elements.length === right.elements.length
     ) {
-      return this.productTypeFromRuntimeFields(new Map(
-        left.elements.map((element, index) => [
-          String(index),
-          this.commonBranchType(element, right.elements[index], span),
-        ]),
-      ));
+      return this.productTypeFromRuntimeFields(
+        new Map(
+          left.elements.map((element, index) => [
+            String(index),
+            this.commonBranchType(element, right.elements[index], span),
+          ]),
+        ),
+      );
     }
     if (left.kind === "shape" && right.kind === "shape") {
       const fields = new Map<string, TypeId>();

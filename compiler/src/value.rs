@@ -1,6 +1,6 @@
 use std::cell::Cell;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use num_bigint::BigInt;
@@ -587,7 +587,231 @@ pub fn boolean(value: bool) -> Value {
     }
 }
 
+/// Capture-avoiding substitution over the reified type-value constructors.
+///
+/// Effect-row tails are the one kinded position in this representation. A
+/// variable keeps the row open; one effect or an array of effects closes it.
+/// Every other replacement is refused rather than creating an invalid arrow.
+pub fn substitute_type_variable(
+    value: &Value,
+    variable: u32,
+    replacement: &Value,
+) -> Option<Value> {
+    let substitute = |value: &Value| substitute_type_variable(value, variable, replacement);
+    Some(match value {
+        Value::TypeVariable(id) if *id == variable => replacement.clone(),
+        Value::Shape(fields) => Value::Shape(
+            fields
+                .iter()
+                .map(|(name, value)| Some((name.clone(), substitute(value)?)))
+                .collect::<Option<OrderedFields>>()?,
+        ),
+        Value::Array(elements) => Value::Array(
+            elements
+                .iter()
+                .map(substitute)
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        Value::EmptyArray { element } => Value::EmptyArray {
+            element: Box::new(substitute(element)?),
+        },
+        Value::RegionType(element) => Value::RegionType(Box::new(substitute(element)?)),
+        Value::Tag { name, payload } => Value::Tag {
+            name: name.clone(),
+            payload: match payload.as_deref() {
+                Some(payload) => Some(Box::new(substitute(payload)?)),
+                None => None,
+            },
+        },
+        Value::Range { low, high, domain } => Value::Range {
+            low: Box::new(substitute(low)?),
+            high: Box::new(substitute(high)?),
+            domain: *domain,
+        },
+        Value::Union(members) => {
+            Value::Union(members.iter().map(substitute).collect::<Option<Vec<_>>>()?)
+        }
+        Value::Arrow {
+            domain,
+            codomain,
+            effects,
+            effect_tail,
+        } => {
+            let domain = Box::new(substitute(domain)?);
+            let codomain = Box::new(substitute(codomain)?);
+            let mut effects = effects.iter().map(substitute).collect::<Option<Vec<_>>>()?;
+            if *effect_tail != Some(variable) {
+                Value::Arrow {
+                    domain,
+                    codomain,
+                    effects,
+                    effect_tail: *effect_tail,
+                }
+            } else {
+                let mut row_replacement = replacement;
+                while let Value::Extended { inner, .. } = row_replacement {
+                    row_replacement = inner;
+                }
+                let replacement_tail = if let Value::TypeVariable(id) = row_replacement {
+                    Some(*id)
+                } else {
+                    let additional = match row_replacement {
+                        Value::Effect { .. } => vec![row_replacement.clone()],
+                        Value::Array(members)
+                            if members
+                                .iter()
+                                .all(|member| matches!(member, Value::Effect { .. })) =>
+                        {
+                            members.clone()
+                        }
+                        _ => return None,
+                    };
+                    for effect in additional {
+                        if !effects.iter().any(|seen| equal(seen, &effect)) {
+                            effects.push(effect);
+                        }
+                    }
+                    None
+                };
+                Value::Arrow {
+                    domain,
+                    codomain,
+                    effects,
+                    effect_tail: replacement_tail,
+                }
+            }
+        }
+        Value::Forall {
+            variable: bound,
+            body,
+        } if *bound != variable => Value::Forall {
+            variable: *bound,
+            body: Box::new(substitute(body)?),
+        },
+        Value::Effect {
+            id,
+            name,
+            operations,
+            host,
+        } => Value::Effect {
+            id: *id,
+            name: name.clone(),
+            operations: operations
+                .iter()
+                .map(|(name, value)| Some((name.clone(), substitute(value)?)))
+                .collect::<Option<OrderedFields>>()?,
+            host: *host,
+        },
+        Value::Operation { effect, name } => Value::Operation {
+            effect: Box::new(substitute(effect)?),
+            name: name.clone(),
+        },
+        Value::Extended { inner, members } => Value::Extended {
+            inner: Box::new(substitute(inner)?),
+            members: members
+                .iter()
+                .map(|(name, value)| Some((name.clone(), substitute(value)?)))
+                .collect::<Option<OrderedFields>>()?,
+        },
+        Value::Sealed { name, inner } => Value::Sealed {
+            name: name.clone(),
+            inner: Box::new(substitute(inner)?),
+        },
+        _ => value.clone(),
+    })
+}
+
+fn collect_type_variables(value: &Value, variables: &mut BTreeSet<u32>) {
+    match value {
+        Value::TypeVariable(variable) => {
+            variables.insert(*variable);
+        }
+        Value::Shape(fields) => {
+            for (_, member) in fields {
+                collect_type_variables(member, variables);
+            }
+        }
+        Value::Array(members) | Value::Union(members) => {
+            for member in members {
+                collect_type_variables(member, variables);
+            }
+        }
+        Value::RegionType(element) | Value::EmptyArray { element } => {
+            collect_type_variables(element, variables);
+        }
+        Value::Tag {
+            payload: Some(payload),
+            ..
+        } => collect_type_variables(payload, variables),
+        Value::Range { low, high, .. } => {
+            collect_type_variables(low, variables);
+            collect_type_variables(high, variables);
+        }
+        Value::Arrow {
+            domain,
+            codomain,
+            effects,
+            effect_tail,
+        } => {
+            collect_type_variables(domain, variables);
+            collect_type_variables(codomain, variables);
+            for effect in effects {
+                collect_type_variables(effect, variables);
+            }
+            if let Some(tail) = effect_tail {
+                variables.insert(*tail);
+            }
+        }
+        Value::Forall { variable, body } => {
+            variables.insert(*variable);
+            collect_type_variables(body, variables);
+        }
+        Value::Effect { operations, .. } => {
+            for (_, operation) in operations {
+                collect_type_variables(operation, variables);
+            }
+        }
+        Value::Operation { effect, .. } => collect_type_variables(effect, variables),
+        Value::Extended { inner, members } => {
+            collect_type_variables(inner, variables);
+            for (_, member) in members {
+                collect_type_variables(member, variables);
+            }
+        }
+        Value::Sealed { inner, .. } => collect_type_variables(inner, variables),
+        _ => {}
+    }
+}
+
+fn fresh_type_variable(left: &Value, right: &Value) -> u32 {
+    let mut variables = BTreeSet::new();
+    collect_type_variables(left, &mut variables);
+    collect_type_variables(right, &mut variables);
+    (0..u32::MAX)
+        .find(|candidate| !variables.contains(candidate))
+        .expect("a finite type value cannot contain every type-variable identity")
+}
+
+fn range_domain(value: &Value) -> Option<Domain> {
+    let Value::Range { low, high, domain } = value else {
+        return None;
+    };
+    Some(domain.unwrap_or_else(|| {
+        if matches!(low.as_ref(), Value::Text(_)) || matches!(high.as_ref(), Value::Text(_)) {
+            Domain::Text
+        } else {
+            Domain::Int
+        }
+    }))
+}
+
 pub fn equal(left: &Value, right: &Value) -> bool {
+    if let Value::Extended { inner, .. } = left {
+        return equal(inner, right);
+    }
+    if let Value::Extended { inner, .. } = right {
+        return equal(left, inner);
+    }
     match (left, right) {
         (Value::Int(left), Value::Int(right)) => left == right,
         (Value::Float(left), Value::Float(right)) => left.to_bits() == right.to_bits(),
@@ -625,12 +849,18 @@ pub fn equal(left: &Value, right: &Value) -> bool {
                     .iter()
                     .all(|(name, value)| right.get(name).is_some_and(|other| equal(value, other)))
         }
-        (Value::Array(left), Value::Array(right)) | (Value::Union(left), Value::Union(right)) => {
+        (Value::Array(left), Value::Array(right)) => {
             left.len() == right.len()
                 && left
                     .iter()
                     .zip(right)
                     .all(|(left, right)| equal(left, right))
+        }
+        (Value::Union(left), Value::Union(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .all(|left| right.iter().any(|right| equal(left, right)))
         }
         (Value::RegionType(left), Value::RegionType(right)) => equal(left, right),
         (
@@ -692,15 +922,15 @@ pub fn equal(left: &Value, right: &Value) -> bool {
             Value::Range {
                 low: left_low,
                 high: left_high,
-                domain: left_domain,
+                ..
             },
             Value::Range {
                 low: right_low,
                 high: right_high,
-                domain: right_domain,
+                ..
             },
         ) => {
-            left_domain == right_domain
+            range_domain(left) == range_domain(right)
                 && equal(left_low, right_low)
                 && equal(left_high, right_high)
         }
@@ -724,8 +954,7 @@ pub fn equal(left: &Value, right: &Value) -> bool {
                 && left_effects.len() == right_effects.len()
                 && left_effects
                     .iter()
-                    .zip(right_effects)
-                    .all(|(left, right)| equal(left, right))
+                    .all(|left| right_effects.iter().any(|right| equal(left, right)))
         }
         (Value::TypeVariable(left), Value::TypeVariable(right)) => left == right,
         (
@@ -737,7 +966,17 @@ pub fn equal(left: &Value, right: &Value) -> bool {
                 variable: right_variable,
                 body: right_body,
             },
-        ) => left_variable == right_variable && equal(left_body, right_body),
+        ) => {
+            let variable = fresh_type_variable(left_body, right_body);
+            let replacement = Value::TypeVariable(variable);
+            substitute_type_variable(left_body, *left_variable, &replacement)
+                .zip(substitute_type_variable(
+                    right_body,
+                    *right_variable,
+                    &replacement,
+                ))
+                .is_some_and(|(left, right)| equal(&left, &right))
+        }
         (Value::Effect { id: left, .. }, Value::Effect { id: right, .. }) => left == right,
         (
             Value::Operation {
@@ -749,24 +988,6 @@ pub fn equal(left: &Value, right: &Value) -> bool {
                 name: right_name,
             },
         ) => left_name == right_name && effect_id(left) == effect_id(right),
-        (
-            Value::Extended {
-                inner: left_inner,
-                members: left_members,
-            },
-            Value::Extended {
-                inner: right_inner,
-                members: right_members,
-            },
-        ) => {
-            equal(left_inner, right_inner)
-                && left_members.len() == right_members.len()
-                && left_members.iter().all(|(name, value)| {
-                    right_members
-                        .get(name)
-                        .is_some_and(|other| equal(value, other))
-                })
-        }
         (
             Value::Sealed {
                 name: left_name,
@@ -786,6 +1007,105 @@ fn effect_id(value: &Value) -> Option<u32> {
     match value {
         Value::Effect { id, .. } => Some(*id),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod type_value_tests {
+    use super::*;
+
+    fn identity(variable: u32) -> Value {
+        Value::Forall {
+            variable,
+            body: Box::new(Value::Arrow {
+                domain: Box::new(Value::TypeVariable(variable)),
+                codomain: Box::new(Value::TypeVariable(variable)),
+                effects: Vec::new(),
+                effect_tail: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn quantified_equality_is_alpha_equivalent() {
+        assert!(equal(&identity(1), &identity(99)));
+    }
+
+    #[test]
+    fn quantified_equality_does_not_capture_a_free_variable() {
+        let free_zero = Value::Forall {
+            variable: 1,
+            body: Box::new(Value::TypeVariable(0)),
+        };
+        let bound_zero = Value::Forall {
+            variable: 0,
+            body: Box::new(Value::TypeVariable(0)),
+        };
+        assert!(!equal(&free_zero, &bound_zero));
+    }
+
+    #[test]
+    fn instantiation_substitutes_an_arrow_without_leaking_the_binder() {
+        let Value::Forall { variable, body } = identity(7) else {
+            unreachable!()
+        };
+        let instantiated =
+            substitute_type_variable(&body, variable, &Value::OpaqueType("T".into()))
+                .expect("a type argument is valid in an ordinary arrow");
+        assert!(equal(
+            &instantiated,
+            &Value::Arrow {
+                domain: Box::new(Value::OpaqueType("T".into())),
+                codomain: Box::new(Value::OpaqueType("T".into())),
+                effects: Vec::new(),
+                effect_tail: None,
+            }
+        ));
+    }
+
+    #[test]
+    fn range_equality_normalizes_an_implicit_integer_domain() {
+        let low = Box::new(Value::Int(0.into()));
+        let high = Box::new(Value::Int(10.into()));
+        assert!(equal(
+            &Value::Range {
+                low: low.clone(),
+                high: high.clone(),
+                domain: None,
+            },
+            &Value::Range {
+                low,
+                high,
+                domain: Some(Domain::Int),
+            }
+        ));
+    }
+
+    #[test]
+    fn effect_row_instantiation_closes_only_with_effects() {
+        let body = Value::Arrow {
+            domain: Box::new(Value::Unit),
+            codomain: Box::new(Value::Unit),
+            effects: Vec::new(),
+            effect_tail: Some(7),
+        };
+        let effect = Value::Effect {
+            id: 1,
+            name: "Console".into(),
+            operations: OrderedFields::default(),
+            host: true,
+        };
+        assert!(equal(
+            &substitute_type_variable(&body, 7, &effect)
+                .expect("an effect closes an effect-row tail"),
+            &Value::Arrow {
+                domain: Box::new(Value::Unit),
+                codomain: Box::new(Value::Unit),
+                effects: vec![effect],
+                effect_tail: None,
+            }
+        ));
+        assert!(substitute_type_variable(&body, 7, &Value::Int(0.into())).is_none());
     }
 }
 
