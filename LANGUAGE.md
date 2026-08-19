@@ -1672,6 +1672,41 @@ name. It remains the generic iterator fold described above. The proof comes from
 the primitive value and follows ordinary aliases and pattern bindings; a source
 record with the same fields carries no authority.
 
+Relationship evidence may be nested in ordinary tuples, shapes, and constructor
+payloads. Destructuring or projecting those values opens the hidden package and
+restores its `Phi` facts. A checked function also publishes a finite structural
+transform when its result only moves parameter data through those forms:
+
+```blot
+let carry = fn value => { .payload = value; }
+let unwrap = fn package => package.payload
+
+// Inside an Iter.indexed success arm:
+let package = carry (index, value)
+let (proved_index, selected) = unwrap package
+let same = @array.get values proved_index
+```
+
+The transform is derived from the closure body, is name-independent, crosses a
+module value, and is included in the sealed-interface fingerprint. It can select
+a curried parameter, build a tuple/shape/constructor, project one, or compose
+another verified structural transform. The ordinary arrow and record types are
+unchanged; the transform and package are erased before Runtime HIR.
+
+This is existential packaging without an `exists` constructor in the subtype
+lattice: the hidden refinement variables travel with compiler evidence, and a
+pattern opens them only in its lexical `Phi`. Rebuilding validates by evidence
+provenance. Moving a proved field preserves its proof; constructing the same
+runtime shape from unrelated integers has no package and a proof-required
+operation rejects it. An opaque or overwriting spread forgets earlier package
+fields unless the spread itself has a known record relationship.
+
+The supported relationship language is intentionally finite. It transports
+compiler-produced facts; it does not infer arbitrary user predicates, publish
+solver variable identities, or let a source annotation assert a relationship.
+Broader relations need a checked producer and an erasure rule, not an unchecked
+`assume`.
+
 An immutable field path derives its identity from its parent value and field
 name. A comparison against `@array.len box.values` therefore proves access to
 that same `box.values`, including through an immutable alias. It proves nothing
@@ -2717,10 +2752,12 @@ else:
   return 0
 ```
 
-It does not become part of `[T]`, escape through an ordinary function result, or
-attach to an unstable field or call expression. A `:=` to a different value
-invalidates facts about the previous value. These cases fail closed with
-`BLOT_UNPROVEN_INDEX` rather than leaving a possible runtime trap.
+It does not become part of `[T]` or attach to an unstable value identity. It may
+cross an ordinary function result only through the verified structural package
+transform described in §9.2; an arbitrary call publishes no relationship. A
+`:=` to a different value invalidates facts about the previous value. These
+cases fail closed with `BLOT_UNPROVEN_INDEX` rather than leaving a possible
+runtime trap.
 
 For iteration, `Iter.items xs` yields each value and `Iter.indexed xs` yields
 `(index, value)`. Both perform one total termination test per iteration, so a

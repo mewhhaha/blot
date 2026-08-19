@@ -5,7 +5,7 @@
 // derived from the value's closure body and trusted primitive contracts, never
 // from a source-level name or an unchecked annotation.
 
-import type { Expr } from "../syntax/ast.ts";
+import type { Expr, Pattern } from "../syntax/ast.ts";
 import { type Env, lookup, type Value } from "../comptime/value.ts";
 
 export type RelationalMeasure = "array-length" | "region-length";
@@ -20,15 +20,66 @@ export interface AffineMeasureSummary {
 
 export type RelationalSummary = AffineMeasureSummary;
 
-export const RELATIONAL_SUMMARY_SCHEMA = 2;
+/**
+ * A name-independent description of how a checked function moves erased
+ * relationship evidence through ordinary data.
+ *
+ * These are not source types and never reach Runtime HIR. `parameter` is an
+ * existential package slot at the call boundary; every other node merely
+ * rebuilds or projects evidence that was already present in one of those
+ * slots. Consequently a same-shaped value assembled from unrelated fields
+ * carries no proof.
+ */
+export type RelationshipTransform =
+  | { readonly tag: "parameter"; readonly parameter: number }
+  | {
+    readonly tag: "tuple";
+    readonly elements: readonly (RelationshipTransform | null)[];
+  }
+  | {
+    readonly tag: "record";
+    readonly fields: ReadonlyMap<string, RelationshipTransform | null>;
+  }
+  | {
+    readonly tag: "variant";
+    readonly cases: ReadonlyMap<string, RelationshipTransform | null>;
+  }
+  | {
+    readonly tag: "project";
+    readonly target: RelationshipTransform;
+    readonly field: string;
+  }
+  | {
+    readonly tag: "payload";
+    readonly target: RelationshipTransform;
+    readonly constructor: string;
+  };
+
+export interface RelationshipSummary {
+  readonly tag: "relationship";
+  readonly arity: number;
+  readonly result: RelationshipTransform;
+}
+
+export const RELATIONAL_SUMMARY_SCHEMA = 3;
 
 const summaries = new WeakMap<object, RelationalSummary | null>();
+const relationshipSummaries = new WeakMap<
+  object,
+  RelationshipSummary | null
+>();
 
 export function relationalSummary(value: Value): RelationalSummary | null {
   const cached = summaries.get(value);
   if (cached !== undefined) return cached;
   const active = new Set<object>();
   return derive(value, active);
+}
+
+export function relationshipSummary(value: Value): RelationshipSummary | null {
+  const cached = relationshipSummaries.get(value);
+  if (cached !== undefined) return cached;
+  return deriveRelationship(value, new Set());
 }
 
 /** Canonical local summaries included in a sealed in-process module boundary. */
@@ -38,6 +89,11 @@ export function relationalSummaryFingerprint(env: Env): string {
     measure: RelationalMeasure;
     parameter: number;
     offset: string;
+  }[] = [];
+  const relationships: {
+    path: string;
+    arity: number;
+    result: unknown;
   }[] = [];
   const seen = new WeakSet<object>();
   const visit = (path: string, value: Value): void => {
@@ -52,12 +108,310 @@ export function relationalSummaryFingerprint(env: Env): string {
         offset: summary.offset.toString(),
       });
     }
+    const relationship = relationshipSummary(value);
+    if (relationship !== null) {
+      relationships.push({
+        path,
+        arity: relationship.arity,
+        result: canonicalTransform(relationship.result),
+      });
+    }
     if (value.tag !== "shape") return;
     for (const [name, field] of value.fields) visit(`${path}.${name}`, field);
   };
   for (const [name, value] of env.names) visit(name, value);
   facts.sort((left, right) => left.path.localeCompare(right.path));
-  return JSON.stringify({ schema: RELATIONAL_SUMMARY_SCHEMA, facts });
+  relationships.sort((left, right) => left.path.localeCompare(right.path));
+  return JSON.stringify({
+    schema: RELATIONAL_SUMMARY_SCHEMA,
+    facts,
+    relationships,
+  });
+}
+
+function deriveRelationship(
+  value: Value,
+  active: Set<object>,
+): RelationshipSummary | null {
+  const cached = relationshipSummaries.get(value);
+  if (cached !== undefined) return cached;
+  if (active.has(value)) return null;
+  active.add(value);
+
+  let result: RelationshipSummary | null = null;
+  if (value.tag === "closure") {
+    const bindings = new Map<string, RelationshipTransform>();
+    bindTransformPattern(
+      value.parameter,
+      { tag: "parameter", parameter: 0 },
+      bindings,
+    );
+    result = relationshipResult(value.body, bindings, 1, value.env, active);
+  }
+
+  active.delete(value);
+  relationshipSummaries.set(value, result);
+  return result;
+}
+
+function relationshipResult(
+  expression: Expr,
+  bindings: ReadonlyMap<string, RelationshipTransform>,
+  arity: number,
+  env: Env,
+  active: Set<object>,
+): RelationshipSummary | null {
+  if (expression.tag === "lambda") {
+    const nested = new Map(bindings);
+    bindTransformPattern(
+      expression.parameter,
+      { tag: "parameter", parameter: arity },
+      nested,
+    );
+    return relationshipResult(
+      expression.body,
+      nested,
+      arity + 1,
+      env,
+      active,
+    );
+  }
+  const result = transformExpression(expression, bindings, env, active);
+  if (result === null) return null;
+  return { tag: "relationship", arity, result };
+}
+
+function transformExpression(
+  expression: Expr,
+  bindings: ReadonlyMap<string, RelationshipTransform>,
+  env: Env,
+  active: Set<object>,
+): RelationshipTransform | null {
+  if (expression.tag === "var") return bindings.get(expression.name) ?? null;
+  if (expression.tag === "field") {
+    const target = transformExpression(expression.target, bindings, env, active);
+    if (target === null) return null;
+    return { tag: "project", target, field: expression.name };
+  }
+  if (expression.tag === "tuple") {
+    const elements = expression.elements.map((element) =>
+      transformExpression(element, bindings, env, active)
+    );
+    if (elements.every((element) => element === null)) return null;
+    return { tag: "tuple", elements };
+  }
+  if (expression.tag === "shape") {
+    const fields = new Map<string, RelationshipTransform | null>();
+    for (const member of expression.members) {
+      if (member.tag !== "field") return null;
+      fields.set(
+        member.name,
+        transformExpression(member.value, bindings, env, active),
+      );
+    }
+    if ([...fields.values()].every((field) => field === null)) return null;
+    return { tag: "record", fields };
+  }
+  if (expression.tag === "block") {
+    const nested = new Map(bindings);
+    for (const declaration of expression.declarations) {
+      if (declaration.tag === "open") return null;
+      const value = transformExpression(
+        declaration.value,
+        nested,
+        env,
+        active,
+      );
+      if (declaration.tag === "shadow") {
+        if (value === null) nested.delete(declaration.name);
+        else nested.set(declaration.name, value);
+        continue;
+      }
+      bindTransformPattern(declaration.pattern, value, nested);
+    }
+    return transformExpression(expression.result, nested, env, active);
+  }
+  if (expression.tag === "if") {
+    const branches = expression.branches.map((branch) =>
+      transformExpression(branch.consequence, bindings, env, active)
+    );
+    if (expression.fallback === null) branches.push(null);
+    else {
+      branches.push(
+        transformExpression(expression.fallback, bindings, env, active),
+      );
+    }
+    return commonTransform(branches);
+  }
+  if (expression.tag === "case") {
+    const target = transformExpression(expression.target, bindings, env, active);
+    const branches = expression.arms.map((arm) => {
+      const nested = new Map(bindings);
+      bindTransformPattern(arm.pattern, target, nested);
+      return transformExpression(arm.body, nested, env, active);
+    });
+    return commonTransform(branches);
+  }
+  const call = application(expression);
+  if (call === null) return null;
+  if (call.callee.tag === "tag" && call.arguments.length <= 1) {
+    const payload = call.arguments.length === 0
+      ? null
+      : transformExpression(call.arguments[0], bindings, env, active);
+    if (payload === null) return null;
+    return {
+      tag: "variant",
+      cases: new Map([[call.callee.name, payload]]),
+    };
+  }
+  if (
+    call.callee.tag === "intrinsic" && call.arguments.length === 1 &&
+    (call.callee.name === "@linear.own" ||
+      call.callee.name === "@linear.borrow" ||
+      call.callee.name === "@linear.maybe")
+  ) {
+    return transformExpression(call.arguments[0], bindings, env, active);
+  }
+  const callee = valueAt(call.callee, env);
+  if (callee === null) return null;
+  const summary = deriveRelationship(callee, active);
+  if (summary === null || call.arguments.length !== summary.arity) return null;
+  const arguments_ = call.arguments.map((argument) =>
+    transformExpression(argument, bindings, env, active)
+  );
+  return substituteTransform(summary.result, arguments_);
+}
+
+function bindTransformPattern(
+  pattern: Pattern,
+  relation: RelationshipTransform | null,
+  bindings: Map<string, RelationshipTransform>,
+): void {
+  if (pattern.tag === "name") {
+    if (relation === null) bindings.delete(pattern.name);
+    else bindings.set(pattern.name, relation);
+    return;
+  }
+  if (pattern.tag === "tuple") {
+    for (const [index, element] of pattern.elements.entries()) {
+      bindTransformPattern(
+        element,
+        relation === null
+          ? null
+          : { tag: "project", target: relation, field: String(index) },
+        bindings,
+      );
+    }
+    return;
+  }
+  if (pattern.tag === "shape") {
+    for (const field of pattern.fields) {
+      bindTransformPattern(
+        field.pattern,
+        relation === null
+          ? null
+          : { tag: "project", target: relation, field: field.name },
+        bindings,
+      );
+    }
+    return;
+  }
+  if (pattern.tag === "constructor" && pattern.payload !== null) {
+    bindTransformPattern(
+      pattern.payload,
+      relation === null
+        ? null
+        : {
+          tag: "payload",
+          target: relation,
+          constructor: pattern.name,
+        },
+      bindings,
+    );
+  }
+}
+
+function substituteTransform(
+  transform: RelationshipTransform,
+  arguments_: readonly (RelationshipTransform | null)[],
+): RelationshipTransform | null {
+  if (transform.tag === "parameter") {
+    return arguments_[transform.parameter] ?? null;
+  }
+  if (transform.tag === "project") {
+    const target = substituteTransform(transform.target, arguments_);
+    if (target === null) return null;
+    return { ...transform, target };
+  }
+  if (transform.tag === "payload") {
+    const target = substituteTransform(transform.target, arguments_);
+    if (target === null) return null;
+    return { ...transform, target };
+  }
+  if (transform.tag === "tuple") {
+    const elements = transform.elements.map((element) =>
+      element === null ? null : substituteTransform(element, arguments_)
+    );
+    if (elements.every((element) => element === null)) return null;
+    return { tag: "tuple", elements };
+  }
+  const values = transform.tag === "record" ? transform.fields : transform.cases;
+  const mapped = new Map<string, RelationshipTransform | null>();
+  for (const [name, value] of values) {
+    mapped.set(
+      name,
+      value === null ? null : substituteTransform(value, arguments_),
+    );
+  }
+  if ([...mapped.values()].every((value) => value === null)) return null;
+  if (transform.tag === "record") return { tag: "record", fields: mapped };
+  return { tag: "variant", cases: mapped };
+}
+
+function commonTransform(
+  transforms: readonly (RelationshipTransform | null)[],
+): RelationshipTransform | null {
+  const first = transforms[0];
+  if (first === undefined || first === null) return null;
+  const canonical = JSON.stringify(canonicalTransform(first));
+  if (
+    transforms.some((transform) =>
+      transform === null ||
+      JSON.stringify(canonicalTransform(transform)) !== canonical
+    )
+  ) return null;
+  return first;
+}
+
+function canonicalTransform(transform: RelationshipTransform): unknown {
+  if (transform.tag === "parameter") return ["parameter", transform.parameter];
+  if (transform.tag === "project") {
+    return ["project", canonicalTransform(transform.target), transform.field];
+  }
+  if (transform.tag === "payload") {
+    return [
+      "payload",
+      canonicalTransform(transform.target),
+      transform.constructor,
+    ];
+  }
+  if (transform.tag === "tuple") {
+    return [
+      "tuple",
+      transform.elements.map((element) =>
+        element === null ? null : canonicalTransform(element)
+      ),
+    ];
+  }
+  const values = transform.tag === "record" ? transform.fields : transform.cases;
+  return [
+    transform.tag,
+    [...values.entries()].sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, value]) => [
+        name,
+        value === null ? null : canonicalTransform(value),
+      ]),
+  ];
 }
 
 function derive(

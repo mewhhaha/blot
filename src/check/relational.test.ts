@@ -158,3 +158,72 @@ return at
     assertEquals(checked.type, "[Int] -> Int -> Int");
   },
 );
+
+const INDEX_PACKAGE_BODY = `let at_index = fn values =>
+  let iterator = Iter.indexed values
+  let state = iterator.state
+  return case iterator.step state of
+    #None => 0
+    #Some (entry, _) =>
+      let input = (values, entry)
+      let package = CARRY input
+      let { .values = selected_values; .payload; } = package
+      let (index, _) = payload
+      return @array.get selected_values index
+return at_index [10, 20, 30]
+`;
+
+Deno.test("relationship evidence survives records and destructuring", async () => {
+  const checked = await checkSource(
+    "/tmp/relationship-record.blot",
+    PRELUDE + INDEX_PACKAGE_BODY.replace(
+      "CARRY input",
+      "{ .values = input.0; .payload = input.1; }",
+    ),
+  );
+  assertEquals(checked.type, "(0 | 10 | 20 | 30)");
+});
+
+Deno.test("checked helpers structurally transport relationship packages", async () => {
+  const checked = await checkSource(
+    "/tmp/relationship-helper.blot",
+    PRELUDE + `let carry = fn input => { .values = input.0; .payload = input.1; }
+` + INDEX_PACKAGE_BODY.replace("CARRY", "carry"),
+  );
+  assertEquals(checked.type, "(0 | 10 | 20 | 30)");
+});
+
+Deno.test("relationship package transforms cross module values", async () => {
+  const directory = await Deno.makeTempDir();
+  await Deno.writeTextFile(
+    `${directory}/packages.blot`,
+    PRELUDE + `let carry = fn input => { .values = input.0; .payload = input.1; }
+return { .carry = carry; }
+`,
+  );
+  await Deno.writeTextFile(
+    `${directory}/main.blot`,
+    PRELUDE + `const Packages = import "./packages.blot"
+` + INDEX_PACKAGE_BODY.replace("CARRY", "Packages.carry"),
+  );
+  const checked = await checkFile(`${directory}/main.blot`);
+  assertEquals(checked.type, "(0 | 10 | 20 | 30)");
+});
+
+Deno.test("same-shaped data cannot forge relationship evidence", async () => {
+  await assertRejects(
+    () =>
+      checkSource(
+        "/tmp/forged-relationship.blot",
+        PRELUDE + `sig at_index = [Int] -> Int -> Int
+let at_index = fn values => fn candidate =>
+  let package = { .payload = (candidate, 0); }
+  let (index, _) = package.payload
+  return @array.get values index
+return at_index
+`,
+      ),
+    BlotError,
+    "BLOT_UNPROVEN_INDEX",
+  );
+});

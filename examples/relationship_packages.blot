@@ -1,0 +1,21 @@
+// Phi evidence can live inside ordinary data and cross a checked structural
+// helper without becoming a source type or a runtime field.
+
+open import "blot:prelude"
+
+let carry = fn input => { .values = input.0; .payload = input.1; }
+
+let at_index = fn values =>
+  let iterator = Iter.indexed values
+  let state = iterator.state
+  return case iterator.step state of
+    #None => 0
+    #Some (entry, _) =>
+      let input = (values, entry)
+      let package = carry input
+      let { .values = selected_values; .payload; } = package
+      let (index, value) = payload
+      let selected = @array.get selected_values index
+      return selected + value
+
+return at_index [10, 20, 30]
