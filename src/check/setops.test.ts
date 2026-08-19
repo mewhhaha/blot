@@ -8,6 +8,7 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import {
   difference,
+  closedTypeFingerprint,
   intersect,
   normalizeClosedUnion,
   UNSUPPORTED_SET_OP,
@@ -113,7 +114,7 @@ Deno.test("two domains share no value", () => {
 Deno.test("text literals subtract exactly when they do not split an interval", () => {
   assertEquals(
     got(difference(texts("up", "down", "left"), textLiteral("down"))),
-    '"up" | "left"',
+    '"left" | "up"',
   );
   assertEquals(got(difference(textLiteral("a"), textLiteral("b"))), '"a"');
   assertEquals(got(difference(textLiteral("a"), TEXT)), "⊥");
@@ -259,4 +260,16 @@ Deno.test("closed unions have one canonical empty, flat, distinct form", () => {
     "1 | 2",
   );
   assertEquals(show(normalizeClosedUnion([intLiteral(1n), TOP])), "⊤");
+  assertEquals(
+    closedTypeFingerprint(
+      normalizeClosedUnion([intLiteral(2n), intLiteral(1n)]),
+    ),
+    closedTypeFingerprint(
+      normalizeClosedUnion([intLiteral(1n), intLiteral(2n)]),
+    ),
+  );
+  assertEquals(
+    show(normalizeClosedUnion([intLiteral(2n), intLiteral(1n)])),
+    show(normalizeClosedUnion([intLiteral(1n), intLiteral(2n)])),
+  );
 });

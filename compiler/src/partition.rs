@@ -116,12 +116,58 @@ where
     }
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RectangleFootprint {
+    pub(crate) root: String,
+    pub(crate) x0: u32,
+    pub(crate) x1: u32,
+    pub(crate) y0: u32,
+    pub(crate) y1: u32,
+}
+
+#[allow(dead_code)]
+pub(crate) fn compose_rectangle(
+    left: &RectangleFootprint,
+    right: &RectangleFootprint,
+) -> Option<RectangleFootprint> {
+    if left.root != right.root {
+        return None;
+    }
+    if left.y0 == right.y0 && left.y1 == right.y1 && left.x1 == right.x0 {
+        return Some(RectangleFootprint {
+            x1: right.x1,
+            ..left.clone()
+        });
+    }
+    if left.x0 == right.x0 && left.x1 == right.x1 && left.y1 == right.y0 {
+        return Some(RectangleFootprint {
+            y1: right.y1,
+            ..left.clone()
+        });
+    }
+    None
+}
+
+#[allow(dead_code)]
+pub(crate) fn rectangle_contains(
+    footprint: &RectangleFootprint,
+    x: u32,
+    y: u32,
+) -> bool {
+    footprint.x0 <= x
+        && x < footprint.x1
+        && footprint.y0 <= y
+        && y < footprint.y1
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        Direction, PartitionError, PartitionWitness, combine_partition, reassociate_partition,
+        Direction, PartitionError, PartitionWitness, RectangleFootprint, combine_partition,
+        compose_rectangle, reassociate_partition, rectangle_contains,
     };
 
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -316,6 +362,27 @@ mod tests {
         let rotated = reassociate_partition(Direction::Left, &outer, &inner, compose_keys)
             .expect("disjoint key sets should rotate");
         assert_eq!(rotated.0.left, keys("map", &["a", "b"]));
+    }
+
+    #[test]
+    fn tensor_rectangles_compose_only_across_a_complete_face() {
+        let tile = |x0, x1, y0, y1| RectangleFootprint {
+            root: "tensor".to_owned(),
+            x0,
+            x1,
+            y0,
+            y1,
+        };
+        let left = tile(0, 2, 0, 4);
+        let right = tile(2, 5, 0, 4);
+        let whole = tile(0, 5, 0, 4);
+        assert_eq!(compose_rectangle(&left, &right), Some(whole.clone()));
+        assert_eq!(
+            compose_rectangle(&tile(0, 2, 0, 2), &tile(2, 5, 2, 4)),
+            None
+        );
+        assert!(rectangle_contains(&whole, 4, 3));
+        assert!(!rectangle_contains(&whole, 5, 3));
     }
 
     #[test]

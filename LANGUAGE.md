@@ -1465,8 +1465,9 @@ can name without running the program, and there are two of them.
 The first is a single compile-time integer — an integer literal, or a name whose
 `const` value is one. `if 0 < n` reads the same as `if n > 0`.
 
-The second is the length of an array a name in scope holds, written directly as
-`@array.len xs` or through a verified unary wrapper such as `Array.length xs`.
+The second is the length of an array or owned region a name in scope holds,
+written directly as `@array.len xs` / `@region.length region`, or through a
+verified wrapper such as `Array.length xs` or `Slice.length (&region)`.
 Inference records that value relationship in the refinement context rather than
 in the integer's type:
 
@@ -1488,11 +1489,12 @@ no length (§13.3), and neither does the integer type. These propositions live
 only in `Phi`, the refinement context consumed by proof-required operations.
 
 A wrapper contributes this fact only when its compile-time closure value is
-structurally verified to return `@array.len` of its parameter, optionally with a
-literal affine offset or through another verified wrapper. The spelling
-`Array.length` is not privileged: aliases keep the verified summary, while a
-shadowed function with that name proves nothing. The summary is erased and does
-not change the function's ordinary arrow type.
+structurally verified to return the array or region length of one of its curried
+parameters, optionally with a literal affine offset or through another verified
+wrapper. For example, `fn _ => fn xs => Array.length xs - 1` summarizes the
+second parameter. The spelling `Array.length` is not privileged: aliases keep
+the verified summary, while a shadowed function with that name proves nothing.
+The summary is erased and does not change the function's ordinary arrow type.
 
 A length is keyed to the immutable array value a binding denotes. blot has no
 assignment and arrays are immutable, so that identity denotes one length for its
@@ -1750,7 +1752,11 @@ let ada = name_of { .name = "Ada"; .age = 36; }
 
 `Int`, `[Element]`, records, variants, arrows, and effect rows are canonical
 constraints over such unknowns. They are not privileged declaration forms and
-they do not require an eager nominal choice:
+they do not require an eager nominal choice. In particular, `[a]` means one
+homogeneous persistent array whose elements all satisfy `a`; it says nothing
+about length, ownership, or physical stride. An omitted or inferred `a` remains
+an unknown until uses constrain it, array length lives in `Phi`, ownership lives
+in `Omega`, and a concrete Store layout is selected only after settling:
 
 ```blot
 let count = fn values => Array.length values // ['a] -> Int
@@ -1779,10 +1785,13 @@ Layout and proof facts remain explicit layers. `I32` is the ordinary integer
 range with a `.bit_width` namespace member; refining it narrows inhabitants
 while preserving that layout metadata. Branches and recognized boolean
 predicates add duplicable `Phi` facts such as `0 <= i < Array.length xs`;
-ownership stays in the separate affine `Omega` judgment. Unary facts may cross
-a function boundary as canonical refined parameter/result types, while
-identity-dependent relations travel through recognized predicates and direct
-proof-producing operations rather than being hidden in a representation type.
+ownership stays in the separate affine `Omega` judgment. Typestate needs no new
+lattice constructor: closed/open states are ordinary variants in `Gamma`, a
+transition arrow names its effects, and `Omega` consumes the old state exactly
+once. Unary facts may cross a function boundary as canonical refined
+parameter/result types, while identity-dependent relations travel through
+recognized predicates and direct proof-producing operations rather than being
+hidden in a representation type.
 
 This is the sense in which types are constraints over unknowns: the solver never
 places an arbitrary source closure in its graph. Predicate declarations must
@@ -1876,9 +1885,10 @@ The type algebra has two deliberately different normalization layers:
   variants, arrows, and effect rows; a join of open values is several lower
   bounds rather than an arbitrary Boolean formula;
 - closed type values use exact set normalization: unions are flattened,
-  `bottom` is removed, `top` absorbs, duplicates disappear, and supported
-  ground intersections/differences are computed to ranges, closed variants,
-  unit, or `bottom`.
+  `bottom` is removed, `top` absorbs, duplicates disappear, and members are
+  ordered by an alpha-aware structural fingerprint rather than printer output;
+  supported ground intersections/differences are computed to ranges, closed
+  variants, unit, or `bottom`.
 
 This is the useful part of Boolean-algebraic subtyping without putting arbitrary
 intersection and negation into the mutable inference graph. There is no
@@ -1913,9 +1923,17 @@ The result has `.order`, `.bit_size`, `.byte_size`, `.trailing_bits`, `.fields`,
 and `.bit_offset`. Each field reports `.name`, `.bit_offset`, `.bit_width`, and
 an unshifted `.mask`; the example occupies 18 meaningful bits and three bytes,
 with six unused bits at the end. `packed` is ordinary prelude source over
-reflection and `layout`. It describes storage and does not change the positional
-tuple returned by `struct`, the runtime representation of an integer, or the
-Core Wasm ABI.
+reflection and `layout`. It describes a requested source layout and does not by
+itself change the positional tuple returned by `struct`, the runtime
+representation of an integer, or the Core Wasm ABI.
+
+Physical reuse is guarded independently. Runtime HIR derives a closed layout
+witness `(fingerprint, size, alignment, stride)` for every settled type. Direct
+inline recursion is rejected; recursion must cross an indirect or Store
+boundary. An operation marked `owned-reuse` is valid only when ownership proves
+the old Store unobservable and the source/result layout fingerprints agree.
+Thus source layout descriptions, logical refinements, and allocator evidence
+remain coherent without pretending they are the same type fact.
 
 A namespace member is a compile-time value, and projecting one is typed by that
 value rather than by the field rule. A member that is itself a type projects to

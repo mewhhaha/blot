@@ -82,6 +82,78 @@ export type SetResult =
 export const UNSUPPORTED_SET_OP = "BLOT_UNSUPPORTED_SET_OP";
 
 /**
+ * A presentation-independent identity for a closed lattice value.
+ *
+ * Closed unions are sets, records/variants are name maps, and quantified
+ * variables are equal up to renaming.  Encoding those facts here keeps the
+ * normal form independent of the pretty-printer and of construction order.
+ * Open inference variables are accepted only so diagnostics can remain total;
+ * callers must not use their process-local identity as a persisted key.
+ */
+export function closedTypeFingerprint(type: SimpleType): string {
+  const binders = new Map<number, number>();
+  const bound = (value: ClosedBound | null): string => {
+    if (value === null) return "*";
+    if (typeof value === "bigint") return `i${value}`;
+    return `s${JSON.stringify(value)}`;
+  };
+  const entries = (
+    fields: ReadonlyMap<string, SimpleType>,
+    visit: (member: SimpleType) => string,
+  ): string => [...fields]
+    .map(([name, member]) => [name, visit(member)] as const)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, member]) => `${JSON.stringify(name)}:${member}`)
+    .join(",");
+  const visit = (current: SimpleType): string => {
+    switch (current.tag) {
+      case "var":
+        return `?${current.id}`;
+      case "rigid":
+        return binders.has(current.id)
+          ? `^${binders.get(current.id)}`
+          : `!${current.id}`;
+      case "forall": {
+        const previous = new Map(binders);
+        const depth = binders.size;
+        for (const [index, variable] of current.variables.entries()) {
+          binders.set(variable, depth + index);
+        }
+        const body = visit(current.body);
+        binders.clear();
+        for (const [variable, index] of previous) binders.set(variable, index);
+        return `all${current.variables.length}(${body})`;
+      }
+      case "range":
+        return `range(${current.domain},${bound(current.low)},${bound(current.high)})`;
+      case "unit":
+      case "top":
+      case "bottom":
+        return current.tag;
+      case "fun":
+        return `fun(${current.deferred === true ? 1 : 0},${visit(current.param)},${visit(current.effects)},${visit(current.result)})`;
+      case "record":
+        return `record{${entries(current.fields, visit)}}`;
+      case "array":
+        return `array(${visit(current.element)})`;
+      case "region":
+        return `region(${visit(current.element)})`;
+      case "variant":
+        return `variant(${current.open ? 1 : 0}){${entries(current.cases, visit)}}`;
+      case "effects":
+        return `effects{${[...current.labels].sort().map((label) => JSON.stringify(label)).join(",")}}`;
+      case "open-effects":
+        return `open-effects{${[...current.labels].sort().map((label) => JSON.stringify(label)).join(",")};${visit(current.tail)}}`;
+      case "union":
+        return `union{${current.members.map(visit).sort().join(",")}}`;
+      case "opaque":
+        return `opaque(${JSON.stringify(current.name)})`;
+    }
+  };
+  return visit(type);
+}
+
+/**
  * Canonical union at the closed type-value boundary.
  *
  * Open inference does not build union nodes: several lower bounds are its
@@ -105,8 +177,12 @@ export function normalizeClosedUnion(
   if (flat.some((member) => member.tag === "top")) return TOP;
 
   const distinct = new Map<string, SimpleType>();
-  for (const member of flat) distinct.set(show(member), member);
-  const normalized = [...distinct.values()];
+  for (const member of flat) {
+    distinct.set(closedTypeFingerprint(member), member);
+  }
+  const normalized = [...distinct]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([, member]) => member);
   if (normalized.length === 0) return BOTTOM;
   return union(normalized);
 }

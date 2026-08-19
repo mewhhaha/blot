@@ -6950,8 +6950,91 @@ fn unrepresentable_integer(type_: &Type) -> Option<&Type> {
     }
 }
 
+fn closed_type_key(type_: &Type) -> String {
+    fn scalar(value: Option<&Scalar>) -> String {
+        match value {
+            None => "*".to_owned(),
+            Some(Scalar::Int(value)) => format!("i{value}"),
+            Some(Scalar::Text(value)) => format!("s{value:?}"),
+        }
+    }
+
+    fn fields(
+        name: &str,
+        values: &[(String, Type)],
+        binders: &mut HashMap<VariableId, usize>,
+    ) -> String {
+        let mut keyed = values
+            .iter()
+            .map(|(field, type_)| format!("{field:?}:{}", visit(type_, binders)))
+            .collect::<Vec<_>>();
+        keyed.sort();
+        format!("{name}{{{}}}", keyed.join(","))
+    }
+
+    fn visit(type_: &Type, binders: &mut HashMap<VariableId, usize>) -> String {
+        match type_ {
+            Type::Variable(id) => format!("?{id}"),
+            Type::Rigid(id) => binders
+                .get(id)
+                .map_or_else(|| format!("!{id}"), |index| format!("^{index}")),
+            Type::Forall { variables, body } => {
+                let previous = binders.clone();
+                let depth = binders.len();
+                for (index, variable) in variables.iter().enumerate() {
+                    binders.insert(*variable, depth + index);
+                }
+                let body = visit(body, binders);
+                *binders = previous;
+                format!("all{}({body})", variables.len())
+            }
+            Type::Range { domain, low, high } => {
+                format!("range({domain:?},{},{})", scalar(low.as_ref()), scalar(high.as_ref()))
+            }
+            Type::Unit => "unit".to_owned(),
+            Type::Function {
+                parameter,
+                effects,
+                result,
+            } => format!(
+                "fun({},{},{})",
+                visit(parameter, binders),
+                visit(effects, binders),
+                visit(result, binders)
+            ),
+            Type::Record(values) => fields("record", values, binders),
+            Type::Array(element) => format!("array({})", visit(element, binders)),
+            Type::Region(element) => format!("region({})", visit(element, binders)),
+            Type::Variant { cases, open } => {
+                format!("variant({open}){}", fields("", cases, binders))
+            }
+            Type::Effects(labels) => {
+                format!("effects{{{}}}", labels.iter().map(|label| format!("{label:?}")).collect::<Vec<_>>().join(","))
+            }
+            Type::OpenEffects { labels, tail } => format!(
+                "open-effects{{{};{}}}",
+                labels.iter().map(|label| format!("{label:?}")).collect::<Vec<_>>().join(","),
+                visit(tail, binders)
+            ),
+            Type::Union(members) => {
+                let mut keys = members
+                    .iter()
+                    .map(|member| visit(member, binders))
+                    .collect::<Vec<_>>();
+                keys.sort();
+                format!("union{{{}}}", keys.join(","))
+            }
+            Type::Opaque(name) => format!("opaque({name:?})"),
+            Type::Top => "top".to_owned(),
+            Type::Bottom => "bottom".to_owned(),
+        }
+    }
+
+    visit(type_, &mut HashMap::new())
+}
+
 fn union_types(types: Vec<Type>) -> Type {
-    fn append(members: &mut Vec<Type>, type_: Type) -> bool {
+    fn append(members: &mut Vec<(String, Type)>, type_: Type) -> bool {
         match type_ {
             Type::Bottom => true,
             Type::Top => false,
@@ -6959,8 +7042,9 @@ fn union_types(types: Vec<Type>) -> Type {
                 .into_iter()
                 .all(|member| append(members, member)),
             type_ => {
-                if !members.iter().any(|member| same_type(member, &type_)) {
-                    members.push(type_);
+                let key = closed_type_key(&type_);
+                if !members.iter().any(|(existing, _)| existing == &key) {
+                    members.push((key, type_));
                 }
                 true
             }
@@ -6974,6 +7058,11 @@ fn union_types(types: Vec<Type>) -> Type {
     {
         return Type::Top;
     }
+    members.sort_by(|(left, _), (right, _)| left.cmp(right));
+    let mut members = members
+        .into_iter()
+        .map(|(_, member)| member)
+        .collect::<Vec<_>>();
     match members.len() {
         0 => Type::Bottom,
         1 => members.pop().expect("one union member exists"),
@@ -8266,9 +8355,27 @@ mod tests {
             &one,
         ));
         assert!(matches!(
-            union_types(vec![one, Type::Top]),
+            union_types(vec![one.clone(), Type::Top]),
             Type::Top
         ));
+        assert_eq!(
+            closed_type_key(&union_types(vec![
+                Type::Range {
+                    domain: Domain::Int,
+                    low: Some(Scalar::Int(2.into())),
+                    high: Some(Scalar::Int(2.into())),
+                },
+                one.clone(),
+            ])),
+            closed_type_key(&union_types(vec![
+                one,
+                Type::Range {
+                    domain: Domain::Int,
+                    low: Some(Scalar::Int(2.into())),
+                    high: Some(Scalar::Int(2.into())),
+                },
+            ])),
+        );
     }
 
 }

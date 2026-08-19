@@ -52,7 +52,9 @@ source-visible persistent observer while destructive authority is active.
 
 The simplest root is a fresh private allocation. An optimization may preserve a
 root through an operation whose existing reuse proof shows that the old Store is
-consumed and no observer survives.
+consumed and no observer survives. Runtime HIR additionally requires the old and
+new Store to have the same closed layout fingerprint before accepting
+`owned-reuse`; uniqueness cannot justify reinterpreting bytes.
 
 Region checking never invents Store roots.
 
@@ -335,7 +337,10 @@ const Slice = {
 
 The backing Store must not be projectable from source. A Runtime-HIR
 representation may contain `(store,start,length,extent)`, but that layout is
-compiler-private and refused by ABI 1.
+compiler-private and refused by ABI 1. `Slice.length` may publish the same
+verified affine summary as `@region.length`, including selection of a later
+curried parameter and a literal offset. That fact enters `Phi`; it neither
+exposes the Store nor duplicates the authority in `Omega`.
 
 These wrappers certify as ordinary source: a region proof over an abstract
 parameter defers to the call site, where substitution makes the caller's

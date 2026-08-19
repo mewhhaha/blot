@@ -58,6 +58,179 @@ pub(crate) enum RuntimeType {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RuntimeLayoutWitness {
+    fingerprint: String,
+    size: usize,
+    alignment: usize,
+    stride: usize,
+}
+
+fn align_to(offset: usize, alignment: usize) -> Option<usize> {
+    if alignment == 0 || !alignment.is_power_of_two() {
+        return None;
+    }
+    offset
+        .checked_add(alignment - 1)
+        .map(|value| value / alignment * alignment)
+}
+
+fn runtime_layout_witness(
+    types: &[RuntimeType],
+    type_id: usize,
+) -> Result<RuntimeLayoutWitness, String> {
+    fn visit(
+        types: &[RuntimeType],
+        type_id: usize,
+        memo: &mut HashMap<usize, RuntimeLayoutWitness>,
+        active: &mut HashSet<usize>,
+    ) -> Result<RuntimeLayoutWitness, String> {
+        if let Some(witness) = memo.get(&type_id) {
+            return Ok(witness.clone());
+        }
+        let type_ = types
+            .get(type_id)
+            .ok_or_else(|| format!("layout names absent type {type_id}"))?;
+        if !active.insert(type_id) {
+            return Err(format!(
+                "type {type_id} has a direct recursive layout; use an indirect or Store representation"
+            ));
+        }
+        let scalar = |size: usize, alignment: usize, name: String| {
+            Ok(RuntimeLayoutWitness {
+                fingerprint: name,
+                size,
+                alignment,
+                stride: align_to(size, alignment)
+                    .ok_or_else(|| "invalid scalar alignment".to_owned())?,
+            })
+        };
+        let witness = match type_ {
+            RuntimeType::Unit => scalar(0, 1, "unit".to_owned())?,
+            RuntimeType::Integer32 => scalar(4, 4, "integer-32".to_owned())?,
+            RuntimeType::SignedInteger64 => {
+                scalar(8, 8, "signed-integer-64".to_owned())?
+            }
+            RuntimeType::Float32 => scalar(4, 4, "float-32".to_owned())?,
+            RuntimeType::Float64 => scalar(8, 8, "float-64".to_owned())?,
+            RuntimeType::Boolean => scalar(4, 4, "boolean".to_owned())?,
+            RuntimeType::Text => scalar(8, 4, "text(memory32)".to_owned())?,
+            RuntimeType::Vector { element, lanes } => {
+                scalar(16, 16, format!("vector({element}x{lanes})"))?
+            }
+            RuntimeType::Mask { element, lanes } => {
+                scalar(16, 16, format!("mask({element}x{lanes})"))?
+            }
+            RuntimeType::Indirect { target_type } => {
+                scalar(4, 4, format!("indirect({target_type})"))?
+            }
+            RuntimeType::Store { element_type } => {
+                memo.insert(
+                    type_id,
+                    RuntimeLayoutWitness {
+                        fingerprint: format!("store@{type_id}"),
+                        size: 8,
+                        alignment: 4,
+                        stride: 8,
+                    },
+                );
+                let element = visit(types, *element_type, memo, active)?;
+                RuntimeLayoutWitness {
+                    fingerprint: format!(
+                        "store({};stride={})",
+                        element.fingerprint, element.stride
+                    ),
+                    size: 8,
+                    alignment: 4,
+                    stride: 8,
+                }
+            }
+            RuntimeType::Sealed {
+                name,
+                representation_type,
+            } => {
+                let representation = visit(types, *representation_type, memo, active)?;
+                RuntimeLayoutWitness {
+                    fingerprint: format!(
+                        "sealed({name:?},{})",
+                        representation.fingerprint
+                    ),
+                    ..representation
+                }
+            }
+            RuntimeType::Product { name, fields } => {
+                let mut offset = 0usize;
+                let mut alignment = 1usize;
+                let mut keyed = Vec::new();
+                for field in fields {
+                    let layout = visit(types, field.type_id, memo, active)?;
+                    offset = align_to(offset, layout.alignment)
+                        .ok_or_else(|| "product layout overflow".to_owned())?;
+                    keyed.push(format!(
+                        "{:?}@{}:{}",
+                        field.name, offset, layout.fingerprint
+                    ));
+                    offset = offset
+                        .checked_add(layout.size)
+                        .ok_or_else(|| "product layout overflow".to_owned())?;
+                    alignment = alignment.max(layout.alignment);
+                }
+                let size = align_to(offset, alignment)
+                    .ok_or_else(|| "product layout overflow".to_owned())?;
+                RuntimeLayoutWitness {
+                    fingerprint: format!("product({name:?}){{{}}}", keyed.join(",")),
+                    size,
+                    alignment,
+                    stride: align_to(size, alignment)
+                        .ok_or_else(|| "product layout overflow".to_owned())?,
+                }
+            }
+            RuntimeType::Sum { name, cases } => {
+                let mut payload_size = 0usize;
+                let mut payload_alignment = 1usize;
+                let mut keyed = Vec::new();
+                for case_ in cases {
+                    let layout = visit(types, case_.payload_type, memo, active)?;
+                    payload_size = payload_size.max(layout.size);
+                    payload_alignment = payload_alignment.max(layout.alignment);
+                    keyed.push(format!("{:?}:{}", case_.name, layout.fingerprint));
+                }
+                let alignment = 4usize.max(payload_alignment);
+                let payload_offset = align_to(4, payload_alignment)
+                    .ok_or_else(|| "sum layout overflow".to_owned())?;
+                let size = align_to(
+                    payload_offset
+                        .checked_add(payload_size)
+                        .ok_or_else(|| "sum layout overflow".to_owned())?,
+                    alignment,
+                )
+                .ok_or_else(|| "sum layout overflow".to_owned())?;
+                RuntimeLayoutWitness {
+                    fingerprint: format!("sum({name:?}){{{}}}", keyed.join(",")),
+                    size,
+                    alignment,
+                    stride: align_to(size, alignment)
+                        .ok_or_else(|| "sum layout overflow".to_owned())?,
+                }
+            }
+        };
+        active.remove(&type_id);
+        memo.insert(type_id, witness.clone());
+        Ok(witness)
+    }
+
+    visit(types, type_id, &mut HashMap::new(), &mut HashSet::new())
+}
+
+fn validate_runtime_layouts(types: &[RuntimeType]) -> Result<(), Diagnostic> {
+    for type_id in 0..types.len() {
+        runtime_layout_witness(types, type_id).map_err(|error| {
+            hir_error(&format!("Runtime type {type_id} has no closed layout: {error}"))
+        })?;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Serialize)]
 pub(crate) struct RuntimeField {
     pub(crate) name: String,
@@ -508,6 +681,7 @@ impl ResidualTrace {
                 },
             }),
         );
+        validate_runtime_layouts(&self.types)?;
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
             schema_version: 2,
@@ -2555,6 +2729,7 @@ impl ResidualTrace {
                 },
             }),
         );
+        validate_runtime_layouts(&self.types)?;
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
             schema_version: 2,
@@ -3834,6 +4009,15 @@ impl ResidualTrace {
         span: crate::ast::Span,
         update: Option<&'static str>,
     ) -> RuntimeValue {
+        if update == Some("owned-reuse") {
+            let layout = runtime_layout_witness(&self.types, type_id)
+                .expect("owned reuse requires a closed runtime layout");
+            assert!(
+                matches!(self.types.get(type_id), Some(RuntimeType::Store { .. })),
+                "owned reuse requires a Store layout, found {}",
+                layout.fingerprint
+            );
+        }
         let result = self.next_value();
         let ownership = self.ownership(type_id);
         let runtime_span = self.span(span);
@@ -6381,6 +6565,7 @@ fn merge_runtime_modules(
             exports.push(exported);
         }
     }
+    validate_runtime_layouts(&types)?;
     Ok(RuntimeModule {
         format: "blot-runtime-hir",
         schema_version: 2,
@@ -6711,6 +6896,7 @@ impl HirBuilder {
                     .collect(),
             })
             .collect();
+        validate_runtime_layouts(&self.types)?;
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
             schema_version: 2,
@@ -7527,6 +7713,21 @@ mod tests {
         };
         assert_eq!(*target, 3);
         assert_eq!(trace.current_block, 3);
+    }
+
+    #[test]
+    fn runtime_store_layout_witness_is_closed_and_deterministic() {
+        let types = vec![
+            RuntimeType::SignedInteger64,
+            RuntimeType::Store { element_type: 0 },
+        ];
+        let layout = runtime_layout_witness(&types, 1).expect("Store layout");
+        assert_eq!(layout.size, 8);
+        assert_eq!(layout.alignment, 4);
+        assert_eq!(
+            layout.fingerprint,
+            "store(signed-integer-64;stride=8)"
+        );
     }
 
     #[test]

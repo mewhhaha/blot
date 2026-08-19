@@ -308,6 +308,166 @@ export type BlotRuntimeModule = {
   readonly exports: readonly BlotRuntimeExport[];
 };
 
+/**
+ * Closed physical representation selected before emission.
+ *
+ * It is intentionally not a source subtype.  The fingerprint includes the
+ * complete nested representation, while size/alignment/stride are the facts an
+ * allocator or adapter may consume.  Direct recursive layouts are rejected;
+ * recursion must cross `indirect` or `store`.
+ */
+export interface BlotRuntimeLayoutWitness {
+  readonly fingerprint: string;
+  readonly size: number;
+  readonly alignment: number;
+  readonly stride: number;
+}
+
+export function runtimeLayoutWitness(
+  module: Pick<BlotRuntimeModule, "source" | "types">,
+  typeId: number,
+): BlotRuntimeLayoutWitness {
+  const memo = new Map<number, BlotRuntimeLayoutWitness>();
+  const active = new Set<number>();
+  const visit = (id: number): BlotRuntimeLayoutWitness => {
+    const cached = memo.get(id);
+    if (cached !== undefined) return cached;
+    const type = module.types[id];
+    if (type === undefined) {
+      throw new TypeError(`${module.source}: layout names absent type ${id}`);
+    }
+    if (active.has(id)) {
+      throw new TypeError(
+        `${module.source}: type ${id} has a direct recursive layout; use an indirect or Store representation`,
+      );
+    }
+    active.add(id);
+    let witness: BlotRuntimeLayoutWitness;
+    const scalar = (size: number, alignment: number, name: string) => ({
+      fingerprint: name,
+      size,
+      alignment,
+      stride: alignTo(size, alignment),
+    });
+    switch (type.kind) {
+      case "unit":
+        witness = scalar(0, 1, "unit");
+        break;
+      case "integer-32":
+      case "float-32":
+      case "boolean":
+        witness = scalar(4, 4, type.kind);
+        break;
+      case "signed-integer-64":
+      case "float-64":
+        witness = scalar(8, 8, type.kind);
+        break;
+      case "text":
+        witness = scalar(8, 4, "text(memory32)");
+        break;
+      case "vector":
+      case "mask":
+        witness = scalar(16, 16, `${type.kind}(${type.element}x${type.lanes})`);
+        break;
+      case "indirect":
+        // The target is deliberately not visited: indirection is the recursion
+        // boundary and all memory32 references share one carrier layout.
+        witness = scalar(4, 4, `indirect(${type.targetType})`);
+        break;
+      case "function":
+        witness = scalar(4, 4, `function(${type.signature})`);
+        break;
+      case "store": {
+        // A Store is the recursion boundary.  Publish its fixed memory32
+        // carrier before visiting the element so `Store (Node (Store ...))`
+        // closes instead of looking like a direct inline cycle.
+        memo.set(id, {
+          fingerprint: `store@${id}`,
+          size: 8,
+          alignment: 4,
+          stride: 8,
+        });
+        const element = visit(type.elementType);
+        witness = {
+          fingerprint: `store(${element.fingerprint};stride=${element.stride})`,
+          size: 8,
+          alignment: 4,
+          stride: 8,
+        };
+        break;
+      }
+      case "sealed": {
+        const representation = visit(type.representationType);
+        witness = {
+          ...representation,
+          fingerprint: `sealed(${JSON.stringify(type.name)},${representation.fingerprint})`,
+        };
+        break;
+      }
+      case "product": {
+        let offset = 0;
+        let alignment = 1;
+        const fields: string[] = [];
+        for (const field of type.fields) {
+          const layout = visit(field.type);
+          offset = alignTo(offset, layout.alignment);
+          fields.push(
+            `${JSON.stringify(field.name)}@${offset}:${layout.fingerprint}`,
+          );
+          offset += layout.size;
+          alignment = Math.max(alignment, layout.alignment);
+        }
+        const size = alignTo(offset, alignment);
+        witness = {
+          fingerprint: `product(${JSON.stringify(type.name)}){${fields.join(",")}}`,
+          size,
+          alignment,
+          stride: alignTo(size, alignment),
+        };
+        break;
+      }
+      case "sum": {
+        const payloads = type.cases.map((case_) => ({
+          name: case_.name,
+          layout: visit(case_.payloadType),
+        }));
+        const payloadAlignment = Math.max(
+          1,
+          ...payloads.map(({ layout }) => layout.alignment),
+        );
+        const payloadSize = Math.max(
+          0,
+          ...payloads.map(({ layout }) => layout.size),
+        );
+        const alignment = Math.max(4, payloadAlignment);
+        const payloadOffset = alignTo(4, payloadAlignment);
+        const size = alignTo(payloadOffset + payloadSize, alignment);
+        witness = {
+          fingerprint: `sum(${JSON.stringify(type.name)}){${payloads.map(({ name, layout }) => `${JSON.stringify(name)}:${layout.fingerprint}`).join(",")}}`,
+          size,
+          alignment,
+          stride: alignTo(size, alignment),
+        };
+        break;
+      }
+    }
+    active.delete(id);
+    memo.set(id, witness);
+    return witness;
+  };
+  return visit(typeId);
+}
+
+function alignTo(offset: number, alignment: number): number {
+  if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(alignment)) {
+    throw new TypeError("runtime layout exceeds safe integer arithmetic");
+  }
+  if (offset < 0 || alignment <= 0 || (alignment & (alignment - 1)) !== 0) {
+    throw new TypeError(`invalid runtime layout alignment ${alignment}`);
+  }
+  return Math.ceil(offset / alignment) * alignment;
+}
+
 declare const validatedBlotRuntimeModule: unique symbol;
 
 export type ValidatedBlotRuntimeModule = BlotRuntimeModule & {
@@ -332,6 +492,7 @@ export function validateBlotRuntimeModule(
     throw new TypeError(`${module.source}: Blot Runtime HIR has no types`);
   }
   module.types.forEach((type, typeId) => validateType(module, type, typeId));
+  module.types.forEach((_, typeId) => runtimeLayoutWitness(module, typeId));
   module.signatures.forEach((signature, signatureId) => {
     signature.parameters.forEach((type, parameter) =>
       requireType(
@@ -559,7 +720,13 @@ function validateFunction(
           operationIndex,
         );
       }
-      validateOperation(module, function_, operation, capabilityOperations);
+      validateOperation(
+        module,
+        function_,
+        operation,
+        capabilityOperations,
+        values,
+      );
     }
     for (const operand of terminatorValues(block.terminator)) {
       requireDominatingValue(
@@ -690,6 +857,7 @@ function validateOperation(
   function_: BlotRuntimeFunction,
   operation: BlotRuntimeOperation,
   capabilityOperations: ReadonlyMap<string, number>,
+  values: ReadonlyMap<number, BlotRuntimeValueDefinition>,
 ): void {
   if (operation.kind === "call.direct" || operation.kind === "closure.make") {
     requireFunction(
@@ -724,11 +892,33 @@ function validateOperation(
   }
   if (
     (operation.kind === "store.write" || operation.kind === "store.grow") &&
-    operation.update === "owned-reuse" && operation.ownership !== "owned"
+    operation.update === "owned-reuse"
   ) {
-    throw new TypeError(
-      `${module.source}: ${operation.kind} ${function_.name}:${operation.result} claims owned reuse with ${operation.ownership} ownership`,
-    );
+    if (operation.ownership !== "owned") {
+      throw new TypeError(
+        `${module.source}: ${operation.kind} ${function_.name}:${operation.result} claims owned reuse with ${operation.ownership} ownership`,
+      );
+    }
+    const source = values.get(operation.operands[0]);
+    if (source === undefined) {
+      throw new TypeError(
+        `${module.source}: ${operation.kind} ${function_.name}:${operation.result} has no source Store`,
+      );
+    }
+    const sourceType = module.types[source.type];
+    const resultType = module.types[operation.type];
+    if (sourceType.kind !== "store" || resultType.kind !== "store") {
+      throw new TypeError(
+        `${module.source}: ${operation.kind} ${function_.name}:${operation.result} claims owned reuse without Store source and result types`,
+      );
+    }
+    const sourceLayout = runtimeLayoutWitness(module, source.type);
+    const resultLayout = runtimeLayoutWitness(module, operation.type);
+    if (sourceLayout.fingerprint !== resultLayout.fingerprint) {
+      throw new TypeError(
+        `${module.source}: ${operation.kind} ${function_.name}:${operation.result} claims owned reuse across incompatible layouts ${sourceLayout.fingerprint} and ${resultLayout.fingerprint}`,
+      );
+    }
   }
 }
 

@@ -7,8 +7,16 @@ use crate::ast::{Expression, ExpressionId, Module, Pattern};
 use crate::eval::Context;
 use crate::value::{Environment, Value, lookup};
 
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Measure {
+    ArrayLength,
+    RegionLength,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Summary {
+    pub measure: Measure,
+    pub parameter: usize,
     pub offset: BigInt,
 }
 
@@ -29,8 +37,11 @@ impl Summaries {
         active: &mut HashSet<(String, ExpressionId, usize)>,
     ) -> Option<Summary> {
         if let Value::Primitive { name, applied, .. } = value {
-            if name == "@array.len" && applied.is_empty() {
+            let measure = primitive_measure(name)?;
+            if applied.is_empty() {
                 return Some(Summary {
+                    measure,
+                    parameter: 0,
                     offset: BigInt::from(0),
                 });
             }
@@ -58,87 +69,137 @@ impl Summaries {
             return None;
         }
         let loaded = context.modules.borrow().get(module.as_ref()).cloned()?;
-        let Pattern::Name { name, .. } = &loaded.module.arena.patterns[parameter.0 as usize] else {
-            active.remove(&key);
-            self.closures.borrow_mut().insert(key, None);
-            return None;
+        let first = match &loaded.module.arena.patterns[parameter.0 as usize] {
+            Pattern::Name { name, .. } => Some(name.clone()),
+            Pattern::Wildcard { .. } => None,
+            _ => {
+                active.remove(&key);
+                self.closures.borrow_mut().insert(key, None);
+                return None;
+            }
         };
-        let result = result_offset(
+        let result = result_measure(
             self,
             &loaded.module,
             *body,
-            name,
+            vec![first],
             environment,
             context,
             active,
-        )
-        .map(|offset| Summary { offset });
+        );
         active.remove(&key);
         self.closures.borrow_mut().insert(key, result.clone());
         result
     }
 }
 
-fn result_offset(
+fn result_measure(
     summaries: &Summaries,
     module: &Module,
     expression: ExpressionId,
-    parameter: &str,
+    mut parameters: Vec<Option<String>>,
     environment: &Environment,
     context: &Context,
     active: &mut HashSet<(String, ExpressionId, usize)>,
-) -> Option<BigInt> {
+) -> Option<Summary> {
+    if let Expression::Lambda {
+        parameter, body, ..
+    } = &module.arena.expressions[expression.0 as usize]
+    {
+        let parameter = match &module.arena.patterns[parameter.0 as usize] {
+            Pattern::Name { name, .. } => Some(name.clone()),
+            Pattern::Wildcard { .. } => None,
+            _ => return None,
+        };
+        parameters.push(parameter);
+        return result_measure(
+            summaries,
+            module,
+            *body,
+            parameters,
+            environment,
+            context,
+            active,
+        );
+    }
+
     let (callee, arguments) = application_spine(expression, module);
     if arguments.is_empty() {
         return None;
     }
     if let Expression::Intrinsic { name, .. } = &module.arena.expressions[callee.0 as usize] {
-        if name == "@array.len"
-            && arguments.len() == 1
-            && is_parameter(module, arguments[0], parameter)
+        if arguments.len() == 1
+            && let Some(measure) = primitive_measure(name)
+            && let Some(parameter) = parameter_index(module, arguments[0], &parameters)
         {
-            return Some(BigInt::from(0));
+            return Some(Summary {
+                measure,
+                parameter,
+                offset: BigInt::from(0),
+            });
         }
         if matches!(name.as_str(), "@int.add" | "@int.sub") && arguments.len() == 2 {
-            if let Some(left) = result_offset(
+            if let Some(mut left) = result_measure(
                 summaries,
                 module,
                 arguments[0],
-                parameter,
+                parameters.clone(),
                 environment,
                 context,
                 active,
             ) && let Some(right) = integer(module, arguments[1], environment)
             {
                 if name == "@int.sub" {
-                    return Some(left - right);
+                    left.offset -= right;
+                } else {
+                    left.offset += right;
                 }
-                return Some(left + right);
+                return Some(left);
             }
             if name == "@int.add"
-                && let Some(right) = result_offset(
+                && let Some(mut right) = result_measure(
                     summaries,
                     module,
                     arguments[1],
-                    parameter,
+                    parameters.clone(),
                     environment,
                     context,
                     active,
                 )
                 && let Some(left) = integer(module, arguments[0], environment)
             {
-                return Some(left + right);
+                right.offset += left;
+                return Some(right);
             }
             return None;
         }
     }
-    if arguments.len() != 1 || !is_parameter(module, arguments[0], parameter) {
-        return None;
-    }
+
     let callee = value_at(module, callee, environment)?;
-    summaries
-        .derive_with(&callee, context, active)
-        .map(|summary| summary.offset)
+    let mut summary = summaries.derive_with(&callee, context, active)?;
+    let argument = *arguments.get(summary.parameter)?;
+    summary.parameter = parameter_index(module, argument, &parameters)?;
+    Some(summary)
+}
+
+fn parameter_index(
+    module: &Module,
+    expression: ExpressionId,
+    parameters: &[Option<String>],
+) -> Option<usize> {
+    parameters.iter().position(|parameter| {
+        parameter
+            .as_deref()
+            .is_some_and(|name| is_parameter(module, expression, name))
+    })
+}
+
+fn primitive_measure(name: &str) -> Option<Measure> {
+    match name {
+        "@array.len" => Some(Measure::ArrayLength),
+        "@region.length" => Some(Measure::RegionLength),
+        _ => None,
+    }
 }
 
 fn is_parameter(module: &Module, expression: ExpressionId, parameter: &str) -> bool {

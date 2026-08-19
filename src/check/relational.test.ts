@@ -1,6 +1,7 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { BlotError } from "../diagnostic.ts";
 import { checkFile, checkSource } from "./mod.ts";
+import { relationalSummary } from "./relational.ts";
 
 const PRELUDE = `open import "blot:prelude"\n`;
 
@@ -37,6 +38,31 @@ Deno.test("relational summaries retain a literal affine offset", async () => {
     `const last = fn values => @int.sub (Array.length values) 1
 `,
   );
+});
+
+Deno.test("affine summaries select a later curried parameter", async () => {
+  await checkedWith(
+    "n < count_second 0 xs",
+    `const count_second = fn _ => fn values => Array.length values
+`,
+  );
+});
+
+Deno.test("region lengths use the same affine summary language", async () => {
+  const checked = await checkSource(
+    "/tmp/region-summary.blot",
+    PRELUDE + `const count_region = fn &region => @region.length (&region)
+return count_region
+`,
+  );
+  const value = checked.values.names.get("count_region");
+  if (value === undefined) throw new Error("missing count_region value");
+  assertEquals(relationalSummary(value), {
+    tag: "affine-measure",
+    measure: "region-length",
+    parameter: 0,
+    offset: 0n,
+  });
 });
 
 Deno.test("a same-named unverified wrapper proves no length fact", async () => {

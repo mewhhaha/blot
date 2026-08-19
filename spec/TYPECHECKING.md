@@ -31,9 +31,12 @@ closed type value --Boolean normalizer--> canonical finite set
 ```
 
 Open inference remains the polynomial bound graph. Closed type values are
-flattened, deduplicated, stripped of `bottom`, absorbed by `top`, and may use
-the exact ground intersection/difference fragment. This is compatible with the
-set interpretation and with the normal forms developed by
+flattened, deduplicated by an alpha-aware structural fingerprint, sorted by that
+same fingerprint, stripped of `bottom`, absorbed by `top`, and may use the exact
+ground intersection/difference fragment. The resulting normal form is
+independent of construction order, map insertion order, rigid-variable names,
+and pretty-printer choices. This is compatible with the set interpretation and
+with the normal forms developed by
 [The Simple Essence of Boolean-Algebraic Subtyping](https://doi.org/10.1145/3776689),
 without moving arbitrary negation or intersection into open inference.
 
@@ -374,28 +377,40 @@ rechecked by Core construction. A certificate copied to a different expression
 or used after an identity-changing rebinding is invalid.
 
 `Phi` also consumes verified function summaries without extending the value type
-lattice. The initial summary language has one canonical form:
+lattice. The canonical summary language is:
 
 ```txt
-summary(f) = result = length(parameter_0) + k
+measure ::= array-length | region-length
+summary(f) = result = measure(parameter_i) + k
 ```
 
-where `k` is a compile-time integer. A summary is derived from the closure value
-by structurally checking its body against `@array.len`, transparent linearity
-wrappers, affine literal shifts, or another already derived summary. The closure
+where `i` selects any curried parameter and `k` is a compile-time integer. A
+summary is derived from the closure value by structurally checking its body
+against `@array.len` or `@region.length`, transparent linearity wrappers,
+affine literal shifts, or another already derived summary. The closure
 environment resolves callees; source spelling never does. At application, the
-argument's immutable value identity replaces `parameter_0` and the resulting
-term enters `Phi`. Cycles and bodies outside this fragment derive no fact.
+selected argument's immutable value identity replaces `parameter_i` and the
+resulting term enters `Phi`. The serialized fingerprint includes a schema
+version, measure, parameter index, and offset. Cycles and bodies outside this
+fragment derive no fact.
 
 A runtime name bound to one of these terms receives an affine equality between
 its binding identity and the retained term. When that name is compared with a
 compile-time integer, it is the comparison subject even though the same name can
 also serve as a stable witness elsewhere. Branch constraints attach to the
 binding identity, and shortest-path entailment transports them through the
-equality to the array length. Thus the untaken branch of `length < 2`, after
-`let length = @array.len xs`, proves literal index zero below `length(xs)`. Two
-retained non-literal terms remain witnesses with no subject and are not compared
-by this initial fragment.
+equality to the measured array or region length. Thus the untaken branch of
+`length < 2`, after `let length = @array.len xs`, proves literal index zero below
+`length(xs)`. Two retained non-literal terms remain witnesses with no subject
+and are not compared by this decidable fragment.
+
+Typestate and effects compose without another type constructor. A state machine
+is represented by ordinary closed variants in `Gamma`; a transition has an
+ordinary effectful arrow; and a linear state value is tracked and consumed in
+`Omega`. An effect handler discharges the named row while returning the
+transition's refined variant. Erasing `Phi` and `Omega` therefore leaves the
+same structural/effect type, while erasing the handler would still expose the
+effect. This is the required separation between value set, behavior, and use.
 
 When `:=` removes the last visible name for an old identity, the refinement
 graph projects that identity out by shortest-path closure before deleting its

@@ -42,3 +42,31 @@ Deno.test("an empty array type value means Array bottom", async () => {
     "`1` is not nothing",
   );
 });
+
+Deno.test("typestate and effect contracts compose with Omega", async () => {
+  const checked = await checkSource(
+    "/tmp/typestate-effect.blot",
+    PRELUDE + `const Audit = @effect { .record = Str -> Unit; }
+const Transition = (#Closed Int) -> (#Open Int) ~ { Audit }
+
+sig advance = Transition
+let advance = fn !state =>
+  result <- case state of
+    #Closed value =>
+      <- Audit.record "open"
+      return #Open value
+  return result
+
+let handler = {
+  .record = fn (_, ?resume) => resume ();
+  .return = fn value => value;
+}
+let run = fn () =>
+  let !closed = #Closed 7
+  return advance (!closed)
+
+return @handle (Audit, run, handler)
+`,
+  );
+  assertEquals(checked.type, "#Open Int");
+});

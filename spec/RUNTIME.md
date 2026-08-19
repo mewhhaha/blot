@@ -144,6 +144,18 @@ the canonical scalar layout internally as well as at adapters, so reads and
 writes preserve `i64`, `f32`, and `f64` element representations rather than
 reinterpreting an unconstrained element as `Unit`.
 
+Validation derives a closed layout witness for every Runtime-HIR type:
+
+```text
+LayoutWitness = (fingerprint, size, alignment, stride)
+```
+
+The fingerprint recursively names the selected representation; products record
+aligned offsets and sums record every payload representation. `indirect` and
+`Store` are explicit recursion boundaries. A direct inline cycle has no finite
+layout and is rejected before emission. These witnesses are compiler evidence,
+not source types and not ABI values.
+
 Persistent array decomposition is a residual operation, not a staging-only
 convenience. `@array.take` and `@array.split` are saturated direct operations
 whose array-index certificate proves `0 <= index < length(array)` before Runtime
@@ -184,16 +196,18 @@ carries positional element obligations. Witness reassociation is validated
 before Runtime HIR and is erased completely: it performs no Store access,
 allocation, or emitted instruction.
 
-An owned-reuse Store growth receives the previous pointer and byte length. When
-that allocation ends at the private heap cursor and still satisfies the
-requested alignment, `cabi_realloc` extends it in place; otherwise it allocates
-and copies. A persistent growth never supplies the previous allocation and
-therefore cannot overwrite or extend storage observable through an older Store
-value. Linear and affine consumption both justify owned reuse because neither
-permits a second observation after the consuming occurrence. The public result
-adapter checkpoints the private heap at entry and restores it after scalar
-results or canonical post-return, so these internal allocations form a scratch
-arena per outer export call.
+An owned-reuse Store growth receives the previous pointer and byte length. The
+validator admits that annotation only when the first operand is owned and the
+source and result have the same closed layout fingerprint. When that allocation
+ends at the private heap cursor and still satisfies the requested alignment,
+`cabi_realloc` extends it in place; otherwise it allocates and copies. A
+persistent growth never supplies the previous allocation and therefore cannot
+overwrite or extend storage observable through an older Store value. Linear and
+affine consumption both justify owned reuse because neither permits a second
+observation after the consuming occurrence. The public result adapter
+checkpoints the private heap at entry and restores it after scalar results or
+canonical post-return, so these internal allocations form a scratch arena per
+outer export call.
 
 Finite recursive structures may use the prelude `Arena`: nodes occupy a
 homogeneous Store and contain stable integer indices to other nodes. This is a
