@@ -62,19 +62,8 @@ jobs:
         run: deno fmt --check
       - name: Check lint
         run: deno lint
-      - name: Verify Baba frontend generation
-        run: >-
-          deno run
-          --allow-read
-          --allow-write
-          npm:@jsr/mewhhaha__baba@9.0.0/cli
-          grammar.baba
-          --out generated
-          --name blot
-          --root program
-          --metadata baba.json
-          --target wasm
-      - run: git diff --exit-code -- generated
+      - name: Verify generated frontend artifacts
+        run: deno task check:generated
       - name: Pack runnable Node workspace
         shell: bash
         run: |

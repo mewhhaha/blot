@@ -1042,4 +1042,4 @@ export function makeEffect(
   return { tag: "effect", id: brands += 1, name, operations, host };
 }
 
-export { asTuple };
+export { asTuple } from "./value.ts";

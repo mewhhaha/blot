@@ -29,42 +29,35 @@ Keep the source modules parallel while doing it: Node `frontend`, `typecheck`,
 Rust phase. `pnpm parity:strict` remains the graduation gate, not the production
 host wrapper itself.
 
-## 2. Recover the lower bound a nested `rec` fold loses
+## 2. Close `collect`'s remaining open element alternative
 
-`iterate` and `collect` infer `⊥` and `[⊥]` for values they demonstrably
-produce:
+The nested-`rec` lower-bound failure previously recorded here has been fixed.
+The current checker retains the base-case contribution:
 
 ```blot
 open import "blot:prelude"
 return iterate (Iter.range (1, 4), 1, fn (product, n) => product * n)
 ```
 
-`blot check` says `⊥`; `blot eval` says `6`. `collect (Iter.range (0, 4))`
-likewise types as `[⊥]` and evaluates to `[0, 1, 2, 3]`. `⊥` is the printed form
-of a positive variable with no lower bound, so the base case's type is not
-reaching the result.
-
-It is not recursion by itself. The same fold written at module scope keeps its
-bound:
+This now checks as `(1 | Int)` and evaluates to `6`, rather than claiming the
+result is `⊥`. `collect` has improved too, but its result is not yet closed:
 
 ```blot
-let rec go =
-  fn (n, carried) => case n == 0 of
-    #True => carried
-    #False => go (n - 1, carried + n)
-return go (3, 0)          -- Int
+open import "blot:prelude"
+return collect (Iter.range (0, 4))
 ```
 
-What differs is that the prelude's `go` is a recursive binding inside a
-function, closing over that function's parameters, with the accumulator flowing
-through a `visit` callback. Find which of those three loses the edge before
-changing the lattice — a union that prints one member per bound will make the
-answer visible now that the printer no longer repeats them.
+It evaluates to `[0, 1, 2, 3]` and currently prints `([(Int | 0)] | ['a'])`. The
+produced-element alternative is present; the remaining defect is the
+unconstrained `['a']` alternative inherited from the polymorphic empty
+accumulator. Trace how `@array.empty` enters the nested recursive fold and close
+its element variable from the iterator's yielded value. Do not special-case
+`collect` or widen the global lattice.
 
-Because `⊥` describes a value that cannot exist, an inferred `⊥` for a value
-that does is worth more than a presentation fix: anything that consumes these
-types — reflection, specialization keys, the ABI boundary — is reading a claim
-the program contradicts.
+The task is complete when the result is one closed homogeneous integer-array
+type, with the same principal result through the Node and Rust checkers. Empty
+iteration must remain valid; an array type does not encode whether it contains
+an element.
 
 ## 3. Construct Runtime HIR progressively
 

@@ -795,13 +795,13 @@ Arrays are ordered homogeneous collections:
 [first, second, ...rest]
 ```
 
-`[A]` means `Array A`: every position has the same element constraint `A`.
-It is not a tuple, a fixed-length vector, a list of alternatives, or an array
-whose length appears in its type. In an inferred type, `['a]` binds one
-homogeneous element variable; each polymorphic call freshens it. In a type-value
-expression, `[Int, Str]` computes `[Int | Str]`. The empty type-value array
-is `[bottom]`, while an ordinary runtime `[]` begins with a fresh element
-variable and receives its element constraint from use.
+`[A]` means `Array A`: every position has the same element constraint `A`. It is
+not a tuple, a fixed-length vector, a list of alternatives, or an array whose
+length appears in its type. In an inferred type, `['a]` binds one homogeneous
+element variable; each polymorphic call freshens it. In a type-value expression,
+`[Int, Str]` computes `[Int | Str]`. The empty type-value array is `[bottom]`,
+while an ordinary runtime `[]` begins with a fresh element variable and receives
+its element constraint from use.
 
 An array spread must evaluate to an array. Arrays are immutable; `@array.set`
 and `@array.push` return new arrays.
@@ -1713,6 +1713,43 @@ that same `box.values`, including through an immutable alias. It proves nothing
 about `box.other`; rebinding the parent mints another identity and invalidates
 the previous relationship.
 
+### 9.3 Affine address iteration
+
+The prelude expresses slices, reversal, and striding as address-order iterators
+rather than as another collection or view type:
+
+```blot
+for value in Iter.slice (values, 2, 8):
+  use value
+
+for value in Iter.reverse values:
+  use value
+
+for value in Iter.affine (values, start, stop, stride):
+  use value
+```
+
+`Iter.affine (values, start, stop, stride)` uses `start` as its integer state. A
+positive stride yields the element at each in-bounds state while the state is
+less than the exclusive `stop`; a negative stride does the same while the state
+is greater than `stop`. Each successful step advances by `stride`. A zero stride
+is empty. Reaching an out-of-bounds state ends the iterator, so every
+combination of integer arguments is total rather than trapping.
+
+`Iter.slice (values, start, stop)` is the stride-`1` specialization.
+`Iter.reverse values` starts at `Array.length values - 1`, stops at `-1`, and
+uses stride `-1`. These functions return the ordinary `.state` / `.step` shape;
+they allocate no result array and introduce no syntax, AST node, type
+constructor, ownership mode, Runtime-HIR operation, or ABI value.
+
+The generic `for` desugaring does not recognize these names. Specialization
+exposes a scalar induction variable and checked reads of one immutable Store. A
+dynamically materialized array captured by the iterator keeps the Store SSA
+identity established at its binding, rather than being reconstructed per step or
+per capture. This identity justifies sharing reads and length facts; it does not
+grant write authority. Destructive traversal still requires separate linear or
+affine ownership evidence.
+
 ## 10. Types and inference
 
 Types are compile-time values in the same value domain as runtime data. There is
@@ -1919,11 +1956,11 @@ The type algebra has two deliberately different normalization layers:
 - open inference uses Simple-sub bounds, structural records and arrays,
   variants, arrows, and effect rows; a join of open values is several lower
   bounds rather than an arbitrary Boolean formula;
-- closed type values use exact set normalization: unions are flattened,
-  `bottom` is removed, `top` absorbs, duplicates disappear, and members are
-  ordered by an alpha-aware structural fingerprint rather than printer output;
-  supported ground intersections/differences are computed to ranges, closed
-  variants, unit, or `bottom`.
+- closed type values use exact set normalization: unions are flattened, `bottom`
+  is removed, `top` absorbs, duplicates disappear, and members are ordered by an
+  alpha-aware structural fingerprint rather than printer output; supported
+  ground intersections/differences are computed to ranges, closed variants,
+  unit, or `bottom`.
 
 This is the useful part of Boolean-algebraic subtyping without putting arbitrary
 intersection and negation into the mutable inference graph. There is no
@@ -1966,9 +2003,9 @@ Physical reuse is guarded independently. Runtime HIR derives a closed layout
 witness `(fingerprint, size, alignment, stride)` for every settled type. Direct
 inline recursion is rejected; recursion must cross an indirect or Store
 boundary. An operation marked `owned-reuse` is valid only when ownership proves
-the old Store unobservable and the source/result layout fingerprints agree.
-Thus source layout descriptions, logical refinements, and allocator evidence
-remain coherent without pretending they are the same type fact.
+the old Store unobservable and the source/result layout fingerprints agree. Thus
+source layout descriptions, logical refinements, and allocator evidence remain
+coherent without pretending they are the same type fact.
 
 A namespace member is a compile-time value, and projecting one is typed by that
 value rather than by the field rule. A member that is itself a type projects to
@@ -1979,17 +2016,18 @@ result type. The arguments must therefore be values the checker can compute: a
 literal, a `const`, or a binding whose value it already computed to type an
 earlier member call. If this pass cannot evaluate the call, the marked variable
 may flow until a concrete specialization revisits it, but it cannot authorize a
-runtime operation or prove an arbitrary `sig`. This is not `⊤`: semantic
-`top` admits every value, while unavailable evidence admits no conclusion.
+runtime operation or prove an arbitrary `sig`. This is not `⊤`: semantic `top`
+admits every value, while unavailable evidence admits no conclusion.
 
 The same application rule specializes a callable field of an ordinary record
 whose value is known at compile time. Unlike an attached namespace, that record
 also has an ordinary structural type. Consequently an unevaluable call falls
-back to its inferred arrow rather than to a staged-only result. This remains true when the
-record is reached through a namespace member: `World.Position.insert entity`
-types `Position` as the attached record and `insert` as its ordinary callable
-field. Compile-time projection follows the whole chain; it does not force games
-to bind each intermediate record before using it.
+back to its inferred arrow rather than to a staged-only result. This remains
+true when the record is reached through a namespace member:
+`World.Position.insert entity` types `Position` as the attached record and
+`insert` as its ordinary callable field. Compile-time projection follows the
+whole chain; it does not force games to bind each intermediate record before
+using it.
 
 A sealed type is nominal and invariant. Its identity is its name together with
 its carrier.
@@ -2479,17 +2517,17 @@ Everything not listed here belongs in source, normally the prelude.
 
 ### 13.1 Control, files, and effects
 
-| primitive         | meaning                                                       |
-| ----------------- | ------------------------------------------------------------- |
-| `@include`        | parse a dependency-tracked file at compile time               |
-| `@json.parse`     | decode JSON under an explicit compile-time inference policy   |
-| `@effect`         | create a fresh source effect from operation types             |
-| `@effect.host`    | create a fresh host effect                                    |
-| `@handle`         | discharge one effect from a nullary computation               |
-| `@forall`         | evaluate a type function with a fresh rigid variable          |
-| `@satisfies`      | refine an open value by a type, or prove its closed type with a predicate |
-| `@fail`           | refuse compile-time evaluation with a diagnostic              |
-| `@panic`          | trap with a text message                                      |
+| primitive      | meaning                                                                   |
+| -------------- | ------------------------------------------------------------------------- |
+| `@include`     | parse a dependency-tracked file at compile time                           |
+| `@json.parse`  | decode JSON under an explicit compile-time inference policy               |
+| `@effect`      | create a fresh source effect from operation types                         |
+| `@effect.host` | create a fresh host effect                                                |
+| `@handle`      | discharge one effect from a nullary computation                           |
+| `@forall`      | evaluate a type function with a fresh rigid variable                      |
+| `@satisfies`   | refine an open value by a type, or prove its closed type with a predicate |
+| `@fail`        | refuse compile-time evaluation with a diagnostic                          |
+| `@panic`       | trap with a text message                                                  |
 
 ### 13.2 Numeric and text operations
 
@@ -2754,10 +2792,10 @@ else:
 
 It does not become part of `[T]` or attach to an unstable value identity. It may
 cross an ordinary function result only through the verified structural package
-transform described in §9.2; an arbitrary call publishes no relationship. A
-`:=` to a different value invalidates facts about the previous value. These
-cases fail closed with `BLOT_UNPROVEN_INDEX` rather than leaving a possible
-runtime trap.
+transform described in §9.2; an arbitrary call publishes no relationship. A `:=`
+to a different value invalidates facts about the previous value. These cases
+fail closed with `BLOT_UNPROVEN_INDEX` rather than leaving a possible runtime
+trap.
 
 For iteration, `Iter.items xs` yields each value and `Iter.indexed xs` yields
 `(index, value)`. Both perform one total termination test per iteration, so a
@@ -2770,9 +2808,9 @@ for (index, value) in Iter.indexed xs:
 
 ### 13.3.1 Applying a requirement
 
-The checker has one judgment, `subject satisfies requirement`. Both a `sig`
-and `@satisfies` use it; `sig` additionally drives bidirectional checking of
-a following lambda and therefore requires the canonical type form.
+The checker has one judgment, `subject satisfies requirement`. Both a `sig` and
+`@satisfies` use it; `sig` additionally drives bidirectional checking of a
+following lambda and therefore requires the canonical type form.
 
 `@satisfies value requirement` is the expression form. It returns `value`
 unchanged and accepts either form of requirement:
@@ -2813,9 +2851,9 @@ ranges, arrays, records, variants, arrows and their effect rows, seals, and
 attached layout namespaces—normalize through the existing type bridge and add
 ordinary lattice constraints. They may therefore refine a fresh variable.
 Predicates are arbitrary pure source composition over `reflect`, `refines`,
-`type_equal`, and quantifier elimination, but they only inspect a type that
-has already settled. They may reject it; they cannot grant a field, choose a
-layout, insert an effect, or add an opaque closure to the solver.
+`type_equal`, and quantifier elimination, but they only inspect a type that has
+already settled. They may reject it; they cannot grant a field, choose a layout,
+insert an effect, or add an opaque closure to the solver.
 
 A false predicate is `BLOT_DOES_NOT_SATISFY`. An open subject given to a
 predicate is `BLOT_TYPE_NOT_REIFIABLE`; use the canonical record, array, arrow,
@@ -2827,9 +2865,10 @@ checked when the concrete call supplies it.
 value's type. `@satisfies` can inspect the inferred type of an ordinary runtime
 expression without evaluating the expression itself.
 
-The prelude keeps `Is expected` and `Has shape` as ordinary one-line compatibility
-predicates over `type_equal` and `refines`. They add no type-system mechanism;
-new code can spell the underlying question directly, as the examples above do.
+The prelude keeps `Is expected` and `Has shape` as ordinary one-line
+compatibility predicates over `type_equal` and `refines`. They add no
+type-system mechanism; new code can spell the underlying question directly, as
+the examples above do.
 
 ### 13.4 Type values
 
@@ -2893,10 +2932,10 @@ permission to claim an arbitrary reflection payload type.
 the open body are not source values: use `@type.instantiate quantified argument`
 to substitute one chosen closed argument, then reflect the result. Generic
 structural predicates that do not care about the binder's kind use
-`@type.probe quantified`: it substitutes `Unit` for an ordinary type binder
-or the empty row for an effect-row binder. Passing a value whose outer
-constructor is not `forall`, or explicitly substituting a non-effect into an
-effect-row variable, is `BLOT_TYPE_INSTANTIATE`.
+`@type.probe quantified`: it substitutes `Unit` for an ordinary type binder or
+the empty row for an effect-row binder. Passing a value whose outer constructor
+is not `forall`, or explicitly substituting a non-effect into an effect-row
+variable, is `BLOT_TYPE_INSTANTIATE`.
 
 Deferred parameters are an elaboration modality and therefore do not appear in
 reflection or exact type-value equality. Their demand discipline is still
@@ -2950,7 +2989,8 @@ record currently exports:
 - arrays: `Array`, `fold`, `each`, `map`, `filter`, `partition`, `sum`, `upto`,
   `any`, `every`, and `sort_by`;
 - collections: `List`, `Map`, `Set`, and the text-keyed `Dict` specialization;
-- iterators: `ever`, `Iter`, `iterate`, and `collect`;
+- iterators: `ever`, `Iter` (`range`, `items`, `indexed`, `affine`, `slice`,
+  `reverse`, `iterate`, and `collect`), `iterate`, and `collect`;
 - variants: `Option`, `None`, `Some`, `unwrap_or`, `Result`, `Ok`, `Error`;
 - type tools: `Type`, `attach`, `seal`, `unseal`, `Reflect`, `reflect`,
   `type_equal`, `instantiate`, `refines`, `Is`, `Has`, `members`, `union_of`,
@@ -3058,8 +3098,10 @@ const ever = {
 ```
 
 `Iter.range (low, high)` iterates from `low` inclusive to `high` exclusive.
-`Iter.items array` iterates an array. `struct` builds positional storage with a
-named constructor, accessors, and metadata attached to the type value.
+`Iter.items array` iterates an array. `Iter.affine`, `Iter.slice`, and
+`Iter.reverse` traverse one array in affine address order without constructing
+an intermediate array (§9.3). `struct` builds positional storage with a named
+constructor, accessors, and metadata attached to the type value.
 
 Changing the prelude's public record is a language-library change and must
 update this specification.

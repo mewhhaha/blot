@@ -26,9 +26,9 @@ import type {
 } from "../core/refinement.ts";
 import type { SimpleType, Typing } from "./type.ts";
 import {
+  relationalSummary,
   relationshipSummary,
   type RelationshipTransform,
-  relationalSummary,
 } from "./relational.ts";
 import {
   childTypeEnv,
@@ -621,7 +621,7 @@ export function regionLength(
   if (path !== null) {
     const value = comptimeAt(path, scope);
     if (value !== null && value.tag === "region-array") {
-      return { tag: "literal", value: value.end - value.start };
+      return { tag: "literal", value: BigInt(value.end - value.start) };
     }
   }
   if (expr.tag === "var") {
@@ -746,9 +746,7 @@ export function recordExpressionRelation(expr: Expr, context: Context): void {
     if (summary === null || summary.arity !== application.args.length) return;
     const relation = instantiateRelationship(
       summary.result,
-      application.args.map((argument) =>
-        expressionRelation(argument, context)
-      ),
+      application.args.map((argument) => expressionRelation(argument, context)),
     );
     if (relation !== null) context.expressionRelations.set(expr, relation);
     return;
@@ -856,7 +854,9 @@ function instantiateRelationship(
     if (elements.every((element) => element === null)) return null;
     return { tag: "tuple", elements };
   }
-  const source = transform.tag === "record" ? transform.fields : transform.cases;
+  const source = transform.tag === "record"
+    ? transform.fields
+    : transform.cases;
   const values = new Map<string, RelationalValue | null>();
   for (const [name, value] of source) {
     values.set(
