@@ -2745,6 +2745,10 @@ checked when the concrete call supplies it.
 value's type. `@satisfies` can inspect the inferred type of an ordinary runtime
 expression without evaluating the expression itself.
 
+The prelude keeps `Is expected` and `Has shape` as ordinary one-line compatibility
+predicates over `type_equal` and `refines`. They add no type-system mechanism;
+new code can spell the underlying question directly, as the examples above do.
+
 ### 13.4 Type values
 
 | primitive           | meaning                                           |
@@ -2867,7 +2871,7 @@ record currently exports:
 - iterators: `ever`, `Iter`, `iterate`, and `collect`;
 - variants: `Option`, `None`, `Some`, `unwrap_or`, `Result`, `Ok`, `Error`;
 - type tools: `Type`, `attach`, `seal`, `unseal`, `Reflect`, `reflect`,
-  `type_equal`, `instantiate`, `refines`, `members`, `union_of`,
+  `type_equal`, `instantiate`, `refines`, `Is`, `Has`, `members`, `union_of`,
   `Extract`, `Exclude`, `Pick`, `Omit`, `opened`, and `range`;
 - storage tools: `struct`, `reorder`, `layout`, `aligned`, `bit_width`, and
   `packed`; and
