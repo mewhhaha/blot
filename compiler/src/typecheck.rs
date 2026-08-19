@@ -5432,8 +5432,11 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             Type::Opaque("Type".to_owned()),
         ),
         "@type.equal" => curried(vec![checker.fresh(), checker.fresh()], bool_),
-        "@type.of" | "@type.reflect" | "@type.members" | "@type.union_of"
-        | "@type.probe" => {
+        "@type.probe" => curried(
+            vec![checker.fresh()],
+            Type::Opaque("Type".to_owned()),
+        ),
+        "@type.of" | "@type.reflect" | "@type.members" | "@type.union_of" => {
             curried(vec![checker.fresh()], checker.fresh())
         }
         "@type.seal" => curried(vec![text, checker.fresh()], Type::Opaque("Type".to_owned())),
