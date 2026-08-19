@@ -17,6 +17,10 @@ const separated = fn left => fn right => case @int.cmp left right of
   #Greater => True
 const CustomNonZero = refine (Int, fn value => separated value 0)
 
+// Refinement changes the inhabitant set, not the representation contract.
+// I32's attached layout namespace must survive normalization.
+const SmallI32 = refine (I32, fn value => value >= -10 && value <= 10)
+
 sig keep_byte_or_zero = Int -> Byte
 let keep_byte_or_zero = fn value =>
   if value >= 0 && value <= 255:
@@ -34,6 +38,7 @@ return {
   .edge = Edge;
   .not_ten = NotTen;
   .custom_non_zero = CustomNonZero;
+  .i32_layout = SmallI32.bit_width;
   .low = keep_byte_or_zero (-20);
   .middle = keep_byte_or_zero 120;
   .high = keep_byte_or_zero 300;

@@ -14,6 +14,29 @@ and compilation guarantees. It deliberately does not replace those mechanisms.
 
 ## 1. Thesis
 
+Every unannotated value begins as a fresh inference variable. A lambda therefore
+starts schematically as `'a -> 'b`, and its body and call sites accumulate lower
+and upper constraints until the compiler has enough information to settle a
+representation. `Int`, arrays, records, variants, arrows, and effect rows are
+the canonical constraints that refine those unknowns; they are not eager
+nominal classifications.
+
+```blot
+let identity = fn value => value
+// identity : forall 'a. 'a -> 'a
+
+let name_of = fn value => value.name
+// name_of : forall 'field. { .name = 'field; } -> 'field
+
+let count = fn values => Array.length values
+// count : forall 'element. ['element] -> Int
+```
+
+Calling a quantified function freshens its variables, constrains the argument,
+result, and effect row together, and settles only what the use requires. This is
+the unknown-first core. Predicate-defined types participate by normalizing to
+the same canonical constraints before they enter the graph.
+
 A source type may be introduced by a pure predicate:
 
 ```blot
@@ -102,7 +125,7 @@ Two operations that are easy to conflate remain distinct:
    expression and runs an ordinary source predicate over that closed type.
 
 The second operation is already the general compositional route for structural,
-function, effect-free arrow, nominal, and generic questions. `@type.reflect`
+function, effect-row, nominal, and generic questions. `@type.reflect`
 exposes neutral type structure; `@shape.has`, ordinary `case`, and boolean
 functions define `has_field`, `is_function`, duck predicates, and their
 combinators in source. Those predicates are evaluated only after the subject
@@ -113,13 +136,27 @@ The minimal compiler observations added by this experiment are:
 
 ```text
 @type.equal left right         exact alpha-equivalent type-value identity
-@type.instantiate forall arg   eliminate one outer quantified variable
+@type.instantiate forall arg   eliminate one outer binder with a chosen value
+@type.probe forall             eliminate one binder with a kind-correct witness
 ```
 
 `@type.reflect` reports an outer quantified type as `#Forall`, but never exposes
 the binder's internal identity or an open body. Source inspects it by applying
-`@type.instantiate` to a chosen type value. This preserves scope and supports
-generic-aware predicates without allowing a rigid variable to escape.
+`@type.instantiate` to a chosen type value. A kind-polymorphic traversal uses
+`@type.probe`, which chooses the closed neutral witness `Unit` for an ordinary
+type binder and the empty row for an effect-row binder. Both operations preserve
+scope and support generic-aware predicates without allowing a rigid variable to
+escape.
+
+```blot
+const rec is_function = fn type => case reflect type of
+  #Arrow _ => True
+  #Forall => is_function (@type.probe type)
+  _ => False
+
+const EffectPolymorphic =
+  @forall (fn Effects => Unit -> Unit ~ { Effects })
+```
 
 Exact equality is primitive because source reflection intentionally hides
 quantifier identities, opaque type identities, and effect-row internals. Every
@@ -128,8 +165,10 @@ function decomposition, recursive arrow traversal, conjunction, and disjunction
 are not compiler operations.
 
 Structural requirements that grant field access still normalize to ordinary
-record types, arrows still normalize to ordinary function types, and explicit
-quantification still normalizes to `forall`. A predicate assertion may reject a
+record types, arrays retain homogeneous element constraints, arrows retain
+parameter, result, and effect-row constraints, and explicit quantification still
+normalizes to `forall`. Attached layout members survive refinement but remain
+transparent to subtyping. A predicate assertion may reject a
 closed inferred type, but cannot grant operations that its canonical base type
 does not provide. This keeps width subtyping and function variance in the
 existing polynomial solver.

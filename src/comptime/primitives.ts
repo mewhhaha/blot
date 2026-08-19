@@ -252,6 +252,40 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
       return instantiated;
     },
   }],
+  ["@type.probe", {
+    arity: 1,
+    run: ([quantified], span) => {
+      if (quantified.tag !== "forall") {
+        fail(
+          "BLOT_TYPE_INSTANTIATE",
+          `@type.probe needs an outer quantified type, found ${
+            show(quantified)
+          }.`,
+          span,
+        );
+      }
+      // Unit is the closed witness for an ordinary type binder. If substitution
+      // refuses it, the binder occurs in an effect-row tail, whose closed neutral
+      // witness is the empty row. No binder identity or open body reaches source.
+      const probed = substituteTypeVariable(
+        quantified.body,
+        quantified.variable,
+        UNIT,
+      ) ?? substituteTypeVariable(
+        quantified.body,
+        quantified.variable,
+        { tag: "array", elements: [] },
+      );
+      if (probed === null) {
+        fail(
+          "BLOT_TYPE_INSTANTIATE",
+          "The quantified type has no kind-correct closed probe.",
+          span,
+        );
+      }
+      return probed;
+    },
+  }],
   // Attaching a member to a type value. This is what lets `struct` hand back
   // the storage type itself with its constructor and accessors reachable on
   // it, rather than a record beside the type. A duplicate is refused, so a

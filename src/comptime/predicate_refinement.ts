@@ -23,6 +23,10 @@ interface Interval {
 
 const MIN_I64 = -0x8000000000000000n;
 const MAX_I64 = 0x7fffffffffffffffn;
+const RUNTIME_INTEGER_DOMAIN: readonly Interval[] = [{
+  low: MIN_I64,
+  high: MAX_I64,
+}];
 const MAX_PREDICATE_NODES = 256;
 
 export function refineIntegerType(
@@ -30,7 +34,10 @@ export function refineIntegerType(
   predicate: Value,
   span: Span,
 ): Value {
-  const intervals = baseIntervals(base, span);
+  const intervals = intersection(
+    baseIntervals(base, span),
+    RUNTIME_INTEGER_DOMAIN,
+  );
   if (predicate.tag !== "closure" || predicate.self !== null) {
     unsupported(span, "The predicate must be a non-recursive unary function.");
   }
@@ -54,7 +61,15 @@ export function refineIntegerType(
       span,
     );
   }
-  return intervalValue(refined);
+  return preserveExtensions(base, intervalValue(refined));
+}
+
+function preserveExtensions(base: Value, refined: Value): Value {
+  if (base.tag !== "extended") return refined;
+  return {
+    ...base,
+    inner: preserveExtensions(base.inner, refined),
+  };
 }
 
 function patternName(pattern: Pattern): string | null {

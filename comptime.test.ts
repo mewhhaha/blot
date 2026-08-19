@@ -105,6 +105,17 @@ Deno.test("effect-row instantiation closes only with effects", () => {
   );
 });
 
+Deno.test("deferred evaluation is not part of exact type identity", () => {
+  const strict = {
+    tag: "arrow",
+    domain: UNIT,
+    codomain: UNIT,
+    effects: [],
+  } satisfies Value;
+  const deferred = { ...strict, deferred: true } satisfies Value;
+  assertEquals(equal(strict, deferred), true);
+});
+
 Deno.test("an unused deferred argument is never evaluated", async () => {
   assertEquals(
     await evaluate(`let ignore = fn ~_ => 42

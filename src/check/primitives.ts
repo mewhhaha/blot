@@ -434,6 +434,7 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ["@type.refine", poly((fresh) => curried([fresh(), fresh()], TYPE))],
   ["@type.equal", poly((fresh) => curried([fresh(), fresh()], BOOL))],
   ["@type.instantiate", poly((fresh) => curried([fresh(), fresh()], TYPE))],
+  ["@type.probe", poly((fresh) => curried([fresh()], TYPE))],
   ["@type.union", poly((fresh) => curried([fresh(), fresh()], TYPE))],
   ["@type.intersect", poly((fresh) => curried([fresh(), fresh()], TYPE))],
   ["@type.diff", poly((fresh) => curried([fresh(), fresh()], TYPE))],

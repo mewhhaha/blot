@@ -29,7 +29,9 @@ pub fn refine(
     predicate: &Value,
     span: Span,
 ) -> Result<Value, Diagnostic> {
-    let base = base_intervals(base, span)?;
+    let base_intervals = base_intervals(base, span)?;
+    let base_domain = runtime_integer_domain();
+    let base_intervals = intersection(&base_intervals, &base_domain);
     let Value::Closure {
         module,
         parameter,
@@ -66,7 +68,7 @@ pub fn refine(
         span,
         &mut budget,
     )?;
-    let refined = intersection(&base, &accepted);
+    let refined = intersection(&base_intervals, &accepted);
     if refined.is_empty() {
         return Err(Diagnostic::new(
             "BLOT_EMPTY_REFINEMENT",
@@ -74,7 +76,24 @@ pub fn refine(
             span,
         ));
     }
-    Ok(interval_value(refined))
+    Ok(preserve_extensions(base, interval_value(refined)))
+}
+
+fn runtime_integer_domain() -> Vec<Interval> {
+    vec![Interval {
+        low: Some(minimum_i64()),
+        high: Some(maximum_i64()),
+    }]
+}
+
+fn preserve_extensions(base: &Value, refined: Value) -> Value {
+    match base {
+        Value::Extended { inner, members } => Value::Extended {
+            inner: Box::new(preserve_extensions(inner, refined)),
+            members: members.clone(),
+        },
+        _ => refined,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -431,9 +450,17 @@ fn minimum_high(left: &Option<BigInt>, right: &Option<BigInt>) -> Option<BigInt>
     }
 }
 
+fn minimum_i64() -> BigInt {
+    -(BigInt::from(1_u8) << 63_usize)
+}
+
+fn maximum_i64() -> BigInt {
+    (BigInt::from(1_u8) << 63_usize) - BigInt::from(1_u8)
+}
+
 fn interval_value(intervals: Vec<Interval>) -> Value {
-    let minimum = -(BigInt::from(1_u8) << 63_usize);
-    let maximum = (BigInt::from(1_u8) << 63_usize) - BigInt::from(1_u8);
+    let minimum = minimum_i64();
+    let maximum = maximum_i64();
     let mut values = intervals.into_iter().map(|interval| {
         let low = interval.low.unwrap_or_else(|| minimum.clone());
         let high = interval.high.unwrap_or_else(|| maximum.clone());

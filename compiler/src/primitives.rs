@@ -136,6 +136,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@f32x4.w"
         | "@branch.likely"
         | "@branch.unlikely"
+        | "@type.probe"
         | "@panic" => 1,
         "@type.range"
         | "@type.union"
@@ -346,6 +347,32 @@ pub fn run_primitive(
                     span,
                 )
             })
+        }
+        "@type.probe" => {
+            let Value::Forall { variable, body } = &arguments[0] else {
+                return Err(Diagnostic::new(
+                    "BLOT_TYPE_INSTANTIATE",
+                    format!(
+                        "@type.probe needs an outer quantified type, found {}.",
+                        show(&arguments[0])
+                    ),
+                    span,
+                ));
+            };
+            // Probe ordinary binders with Unit and effect-row binders with the
+            // empty row. Both witnesses are closed, so source never observes a
+            // binder identity or an open quantified body.
+            substitute_type_variable(body, *variable, &Value::Unit)
+                .or_else(|| {
+                    substitute_type_variable(body, *variable, &Value::Array(Vec::new()))
+                })
+                .ok_or_else(|| {
+                    Diagnostic::new(
+                        "BLOT_TYPE_INSTANTIATE",
+                        "The quantified type has no kind-correct closed probe.",
+                        span,
+                    )
+                })
         }
         "@type.attach" => attach(arguments, span),
         "@type.members" => match &arguments[0] {

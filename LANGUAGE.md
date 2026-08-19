@@ -1723,7 +1723,66 @@ Type checking evaluates compile-time code because signatures and type
 constructors are ordinary values. A compile-time value is bridged into the
 inference lattice only when it denotes a type.
 
-### 10.1 Predicate-defined integer types
+### 10.1 Unknown-first constraint solving
+
+Inference starts with unknowns, not guessed concrete types. An unannotated
+function initially has the schematic shape `'a -> 'b`; using its parameter or
+return value adds constraints to those variables. A call freshens quantified
+variables, relates arguments to parameters, relates the result to its use site,
+and only then settles enough of the graph to choose a representation.
+
+```blot
+// Before its body is checked: 'a -> 'b
+// The field projection adds: 'a <: { .name = 'n; }, result = 'n.
+let name_of = fn value => value.name
+
+// Calling it supplies the remaining facts.
+let ada = name_of { .name = "Ada"; .age = 36; }
+```
+
+`Int`, `[Element]`, records, variants, arrows, and effect rows are canonical
+constraints over such unknowns. They are not privileged declaration forms and
+they do not require an eager nominal choice:
+
+```blot
+let count = fn values => Array.length values // ['a] -> Int
+let apply = fn (function, value) => function value
+// apply : ('a -> 'b, 'a) -> 'b, with the callback's effect row preserved
+```
+
+A `sig` is a constraint program written with ordinary compile-time type values.
+Each use instantiates its `@forall` binders freshly. Structural records provide
+trait-like behavior by width subtyping, while effect rows describe callable
+behavior separately from parameter and result representation:
+
+```blot
+const Named = { .name = Str; }
+
+sig label = @forall (fn T => Named -> T -> Str)
+let label = fn named => fn _ => named.name
+
+const Console = @effect { .write = Str -> Unit; }
+sig map_logged =
+  (Int -> Int ~ { ..e }) ->
+  Int -> Int ~ { Console, ..e }
+```
+
+Layout and proof facts remain explicit layers. `I32` is the ordinary integer
+range with a `.bit_width` namespace member; refining it narrows inhabitants
+while preserving that layout metadata. Branches and recognized boolean
+predicates add duplicable `Phi` facts such as `0 <= i < Array.length xs`;
+ownership stays in the separate affine `Omega` judgment. Unary facts may cross
+a function boundary as canonical refined parameter/result types, while
+identity-dependent relations travel through recognized predicates and direct
+proof-producing operations rather than being hidden in a representation type.
+
+This is the sense in which types are constraints over unknowns: the solver never
+places an arbitrary source closure in its graph. Predicate declarations must
+normalize to the same finite range, array, record, variant, arrow/effect-row, or
+nominal constraints the solver already understands, and all predicate machinery
+erases before Runtime HIR and layout selection.
+
+### 10.2 Predicate-defined integer types
 
 `refine (base, predicate)` constructs an integer type from an ordinary pure
 compile-time function:
@@ -1770,7 +1829,7 @@ ownership remains a separate flow judgment. The formal boundary and erasure
 obligation are specified in
 [`spec/PREDICATE_REFINEMENTS.md`](spec/PREDICATE_REFINEMENTS.md).
 
-### 10.2 Display notation
+### 10.3 Display notation
 
 Compiler output uses notation that is not additional source syntax:
 
@@ -1798,7 +1857,7 @@ An effect row is the one piece of this notation that is also source:
 the rest of the row inside a `sig` (§12.4). The checker prints inferred open
 rows with the same `..e` notation.
 
-### 10.3 Type-value primitives
+### 10.4 Type-value primitives
 
 The primitive type values are `@type.int`, `@type.float`, `@type.float32`,
 `@type.f32x4`, `@type.text`, `@type.unit`, and `@type.unbounded`.
@@ -1864,7 +1923,7 @@ to bind each intermediate record before using it.
 A sealed type is nominal and invariant. Its identity is its name together with
 its carrier.
 
-### 10.4 Deliberate inference limits
+### 10.5 Deliberate inference limits
 
 The implemented checker does not currently prove:
 
@@ -1876,7 +1935,7 @@ The implemented checker does not currently prove:
 - the result of `@shape.get`, `@shape.set`, or `@shape.remove` whose field name
   is a runtime value (§13.3);
 - anything about a namespace member call whose arguments are not compile-time
-  values (§10.3);
+  values (§10.4);
 - the fields a spread carries through from an operand whose own fields are not
   known where the spread is written (§6); or
 - impredicative instantiation.
@@ -2328,7 +2387,7 @@ a row. A second `~` fills the next arrow outwards, so
 { Outer }` reads back as itself; a `~` on a chain
 whose arrows all carry rows is an error.
 
-Reflection (§10.3) describes an arrow's `.domain`, `.codomain`, and `.effects`,
+Reflection (§10.4) describes an arrow's `.domain`, `.codomain`, and `.effects`,
 but an effect itself reflects as `#Opaque` — nothing in Blot takes one apart.
 Open row tails remain type-checking evidence and do not add a runtime value,
 Runtime-HIR representation, or ABI field.
@@ -2683,6 +2742,7 @@ The prelude supplies the two predicates that would otherwise be written inline:
 | `@type.refine`      | normalize a pure integer predicate into a type    |
 | `@type.equal`       | exact alpha-equivalent equality of type values    |
 | `@type.instantiate` | eliminate one outer quantified type variable      |
+| `@type.probe`       | eliminate one binder with a kind-correct witness  |
 | `@type.union`       | flattened duplicate-free union                    |
 | `@type.intersect`   | intersection of union members                     |
 | `@type.diff`        | difference of union members                       |
@@ -2712,7 +2772,7 @@ has no value representing an empty compile-time union.
 #Union members
 #Shape fields
 #Array elements
-#Arrow { .domain; .codomain; .effects = [effect]; .deferred; }
+#Arrow { .domain; .codomain; .effects = [effect]; }
 #Forall
 #Sealed { .name; .inner; }
 #Opaque
@@ -2726,9 +2786,16 @@ permission to claim an arbitrary reflection payload type.
 
 `#Forall` deliberately carries no payload. The compiler's binder identity and
 the open body are not source values: use `@type.instantiate quantified argument`
-to substitute one closed argument, then reflect the result. Passing a value
-whose outer constructor is not `forall`, or substituting a non-effect into an
+to substitute one chosen closed argument, then reflect the result. Generic
+structural predicates that do not care about the binder's kind use
+`@type.probe quantified`: it substitutes `Unit` for an ordinary type binder
+or the empty row for an effect-row binder. Passing a value whose outer
+constructor is not `forall`, or explicitly substituting a non-effect into an
 effect-row variable, is `BLOT_TYPE_INSTANTIATE`.
+
+Deferred parameters are an elaboration modality and therefore do not appear in
+reflection or exact type-value equality. Their demand discipline is still
+checked from the lambda and signature syntax before residual lowering.
 
 `@type.equal left right` compares exact type values while treating quantified
 binder names as irrelevant, unions and effect rows as sets, and attached source

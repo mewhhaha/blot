@@ -1,1 +1,1 @@
-{ .name = "Ada"; .composed_duck_predicate = #True; .alpha_equal = #True; .generic_is_function = #True; .int_result_is_i32 = #True; .text_result_is_text = #True; }
+{ .name = "Ada"; .composed_duck_predicate = #True; .alpha_equal = #True; .generic_is_function = #True; .effect_generic_is_function = #True; .int_result_is_i32 = #True; .text_result_is_text = #True; }

@@ -1,0 +1,10 @@
+open import "blot:prelude"
+
+// Compile-time integers are arbitrary precision, but the runtime Int
+// representation is signed i64. This open source range must be intersected
+// with that representation before the predicate is normalized.
+const above_i64 = @int.add 9223372036854775807 1
+const OpenInt = range (@type.unbounded, @type.unbounded)
+const Impossible = refine (OpenInt, fn value => value >= above_i64)
+
+return Impossible

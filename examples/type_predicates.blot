@@ -34,8 +34,13 @@ const identity_result_at = fn argument => case reflect (identity_at argument) of
 const rec is_function =
   fn type => case reflect type of
     #Arrow _ => True
-    #Forall => is_function (instantiate (type, Unit))
+    // Probe chooses Unit for an ordinary binder and the empty row for an
+    // effect-row binder, so this traversal is genuinely kind-polymorphic.
+    #Forall => is_function (@type.probe type)
     _ => False
+
+const EffectPolymorphic =
+  @forall (fn Effects => Unit -> Unit ~ { Effects })
 
 const composed_duck_predicate =
   is_named_shape {
@@ -44,6 +49,7 @@ const composed_duck_predicate =
   }
 const alpha_equal = type_equal (Identity, RenamedIdentity)
 const generic_is_function = is_function Identity
+const effect_generic_is_function = is_function EffectPolymorphic
 const int_result_is_i32 = case identity_result_at I32 of
   #Some result => type_equal (result, I32)
   #None => False
@@ -56,6 +62,7 @@ return {
   .composed_duck_predicate = composed_duck_predicate;
   .alpha_equal = alpha_equal;
   .generic_is_function = generic_is_function;
+  .effect_generic_is_function = effect_generic_is_function;
   .int_result_is_i32 = int_result_is_i32;
   .text_result_is_text = text_result_is_text;
 }

@@ -2,7 +2,6 @@ import type { Span } from "../syntax/ast.ts";
 import type { Domain } from "../check/type.ts";
 import { expect, fail } from "../diagnostic.ts";
 import {
-  bool,
   equal,
   F32X4_MASK_NAME,
   F32X4_NAME,
@@ -315,7 +314,6 @@ export function reflect(value: Value): Value {
                 id: value.effectTail,
               }],
           },
-          deferred: bool(value.deferred === true),
         }),
       );
     case "forall":

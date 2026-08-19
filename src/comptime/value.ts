@@ -781,8 +781,7 @@ export function equal(left: Value, right: Value): boolean {
     // The row is part of the identity. Two arrows that agree on what they
     // accept and return but not on what they perform are two types, and
     // treating them as one would let `@type.diff` remove the effectful one.
-    return (left.deferred ?? false) === (right.deferred ?? false) &&
-      equal(left.domain, right.domain) &&
+    return equal(left.domain, right.domain) &&
       equal(left.codomain, right.codomain) &&
       left.effectTail === right.effectTail &&
       left.effects.length === right.effects.length &&
