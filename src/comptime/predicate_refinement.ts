@@ -14,7 +14,7 @@ import {
   type Ordering,
   recognise,
 } from "../check/narrow.ts";
-import { lookup, type Env, type Value } from "./value.ts";
+import { type Env, lookup, type Value } from "./value.ts";
 
 interface Interval {
   readonly low: bigint | null;
@@ -83,9 +83,12 @@ function predicateIntervals(
       "The predicate must be built from integer comparisons and boolean operators.",
     );
   }
-  const callee = resolve(call.callee, env);
+  const callee = resolve(call.callee, subject, env);
   if (callee === null) {
-    unsupported(call.callee.span, "This predicate function is not compile-time-known.");
+    unsupported(
+      call.callee.span,
+      "This predicate function is not compile-time-known.",
+    );
   }
 
   if (call.arguments.length === 2) {
@@ -116,14 +119,20 @@ function predicateIntervals(
       if (isSubject(left, subject)) {
         const witness = integerWitness(right, subject, env);
         if (witness === null) {
-          unsupported(right.span, "A comparison witness must be a compile-time integer.");
+          unsupported(
+            right.span,
+            "A comparison witness must be a compile-time integer.",
+          );
         }
         return orderingIntervals(answers, witness);
       }
       if (isSubject(right, subject)) {
         const witness = integerWitness(left, subject, env);
         if (witness === null) {
-          unsupported(left.span, "A comparison witness must be a compile-time integer.");
+          unsupported(
+            left.span,
+            "A comparison witness must be a compile-time integer.",
+          );
         }
         answers = mirror(answers);
         return orderingIntervals(answers, witness);
@@ -156,14 +165,15 @@ function application(
   return { callee: current, arguments: args };
 }
 
-function resolve(expression: Expr, env: Env): Value | null {
+function resolve(expression: Expr, subject: string, env: Env): Value | null {
   if (expression.tag === "var") {
+    if (expression.name === subject) return null;
     const value = lookup(env, expression.name);
     if (value === undefined) return null;
     return value;
   }
   if (expression.tag !== "field") return null;
-  const target = resolve(expression.target, env);
+  const target = resolve(expression.target, subject, env);
   if (target === null) return null;
   if (target.tag === "shape") {
     const value = target.fields.get(expression.name);
@@ -215,7 +225,9 @@ function baseIntervals(base: Value, span: Span): readonly Interval[] {
   if (base.tag === "extended") return baseIntervals(base.inner, span);
   if (base.tag === "int") return [{ low: base.value, high: base.value }];
   if (base.tag === "union") {
-    return normalize(base.members.flatMap((member) => baseIntervals(member, span)));
+    return normalize(
+      base.members.flatMap((member) => baseIntervals(member, span)),
+    );
   }
   if (base.tag === "range") {
     let domain = base.domain;
@@ -226,7 +238,10 @@ function baseIntervals(base: Value, span: Span): readonly Interval[] {
       }
     }
     if (domain !== "int") {
-      unsupported(span, "The first predicate-refinement slice accepts integer bases only.");
+      unsupported(
+        span,
+        "The first predicate-refinement slice accepts integer bases only.",
+      );
     }
     const low = bound(base.low, span);
     const high = bound(base.high, span);
@@ -243,7 +258,8 @@ function bound(value: Value, span: Span): bigint | null {
 
 function normalize(intervals: readonly Interval[]): readonly Interval[] {
   const valid = intervals.filter((interval) =>
-    interval.low === null || interval.high === null || interval.low <= interval.high
+    interval.low === null || interval.high === null ||
+    interval.low <= interval.high
   );
   const sorted = [...valid].sort((left, right) => {
     if (left.low === null) {
@@ -269,7 +285,9 @@ function normalize(intervals: readonly Interval[]): readonly Interval[] {
       continue;
     }
     let high = previous.high;
-    if (high !== null && (next.high === null || next.high > high)) high = next.high;
+    if (high !== null && (next.high === null || next.high > high)) {
+      high = next.high;
+    }
     merged[merged.length - 1] = { low: previous.low, high };
   }
   return merged;
@@ -284,7 +302,9 @@ function intersection(
     for (const other of right) {
       const low = maximumLow(one.low, other.low);
       const high = minimumHigh(one.high, other.high);
-      if (low === null || high === null || low <= high) overlaps.push({ low, high });
+      if (low === null || high === null || low <= high) {
+        overlaps.push({ low, high });
+      }
     }
   }
   return normalize(overlaps);

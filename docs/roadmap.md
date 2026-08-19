@@ -885,8 +885,8 @@ recursive declaration prebound only one name, so two functions that called each
 other died on `BLOT_UNBOUND`. The minimum was a diagnostic that distinguished
 "not in scope" from "not in scope _yet_" and named the limit. Prebinding a group
 was a grammar change and therefore a GPU-profile question; price it separately,
-and remember that AGENTS.md treats
-a profile conflict as a design signal, not a metadata override.
+and remember that AGENTS.md treats a profile conflict as a design signal, not a
+metadata override.
 
 **No impredicative instantiation.** `@forall` is explicit and predicative and
 stays that way.

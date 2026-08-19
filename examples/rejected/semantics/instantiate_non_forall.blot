@@ -1,0 +1,5 @@
+open import "blot:prelude"
+
+const Invalid = instantiate (Int, I32)
+
+return Invalid

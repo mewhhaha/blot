@@ -77,6 +77,7 @@ function reflection(fresh: () => SimpleType): SimpleType {
     ["Unit", UNIT],
     ["Unbounded", UNIT],
     ["Opaque", UNIT],
+    ["Forall", UNIT],
     [
       "Tag",
       record([
@@ -89,7 +90,15 @@ function reflection(fresh: () => SimpleType): SimpleType {
       record([
         ["low", fresh()],
         ["high", fresh()],
-        ["domain", variant([["Int", UNIT], ["Text", UNIT]])],
+        [
+          "domain",
+          variant([
+            ["Int", UNIT],
+            ["Text", UNIT],
+            ["F64", UNIT],
+            ["F32", UNIT],
+          ]),
+        ],
       ]),
     ],
     ["Union", { tag: "array", element: fresh() }],
@@ -423,6 +432,8 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   // not from constraining the operands here.
   ["@type.range", poly((fresh) => curried([fresh(), fresh()], TYPE))],
   ["@type.refine", poly((fresh) => curried([fresh(), fresh()], TYPE))],
+  ["@type.equal", poly((fresh) => curried([fresh(), fresh()], BOOL))],
+  ["@type.instantiate", poly((fresh) => curried([fresh(), fresh()], TYPE))],
   ["@type.union", poly((fresh) => curried([fresh(), fresh()], TYPE))],
   ["@type.intersect", poly((fresh) => curried([fresh(), fresh()], TYPE))],
   ["@type.diff", poly((fresh) => curried([fresh(), fresh()], TYPE))],

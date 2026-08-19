@@ -12,6 +12,7 @@ import { fail } from "../diagnostic.ts";
 import {
   asTuple,
   bool,
+  equal,
   F32X4_MASK_NAME,
   F32X4_NAME,
   I16X8_MASK_NAME,
@@ -22,6 +23,7 @@ import {
   I8X16_NAME,
   registerEffectExtension,
   show,
+  substituteTypeVariable,
   tupleOf,
   UNIT,
   type Value,
@@ -219,6 +221,37 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     },
   }],
   ["@type.reflect", { arity: 1, run: ([value]) => reflect(value) }],
+  ["@type.equal", {
+    arity: 2,
+    run: ([left, right]) => bool(equal(left, right)),
+  }],
+  ["@type.instantiate", {
+    arity: 2,
+    run: ([quantified, argument], span) => {
+      if (quantified.tag !== "forall") {
+        fail(
+          "BLOT_TYPE_INSTANTIATE",
+          `@type.instantiate needs an outer quantified type, found ${
+            show(quantified)
+          }.`,
+          span,
+        );
+      }
+      const instantiated = substituteTypeVariable(
+        quantified.body,
+        quantified.variable,
+        argument,
+      );
+      if (instantiated === null) {
+        fail(
+          "BLOT_TYPE_INSTANTIATE",
+          `${show(argument)} cannot instantiate an effect-row variable.`,
+          span,
+        );
+      }
+      return instantiated;
+    },
+  }],
   // Attaching a member to a type value. This is what lets `struct` hand back
   // the storage type itself with its constructor and accessors reachable on
   // it, rather than a record beside the type. A duplicate is refused, so a

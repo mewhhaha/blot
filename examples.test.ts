@@ -35,6 +35,14 @@ const REJECTIONS: Record<
     code: "BLOT_REFINEMENT_PREDICATE",
     stage: "check",
   },
+  "shadowed_refinement_parameter": {
+    code: "BLOT_REFINEMENT_PREDICATE",
+    stage: "check",
+  },
+  "instantiate_non_forall": {
+    code: "BLOT_TYPE_INSTANTIATE",
+    stage: "check",
+  },
   "empty_refinement": { code: "BLOT_EMPTY_REFINEMENT", stage: "check" },
   "does_not_satisfy": { code: "BLOT_DOES_NOT_SATISFY", stage: "check" },
   "out_of_range": { code: "BLOT_TYPE_ERROR", stage: "check" },

@@ -1,0 +1,61 @@
+// Advanced type questions are ordinary, composable predicates over reified
+// type values. The compiler contributes only reflection, exact equality, and
+// safe elimination of one quantifier; records, arrows, duck typing, and boolean
+// composition stay in source.
+
+open import "blot:prelude"
+
+const both_types = fn (left, right) => fn type => left type && right type
+
+const is_shape = fn type => case reflect type of
+  #Shape _ => True
+  _ => False
+
+const has_name = Has { .name = Str; }
+const is_named_shape = both_types (is_shape, has_name)
+
+// This value exists at run time, but its inferred type is closed and can be
+// handed to the source predicate while compiling. The assertion erases.
+let person = { .name = "Ada"; .age = 36; }
+let checked = @type.satisfies (person, is_named_shape)
+
+// Binder identities are private. These are equal because equality is
+// alpha-equivalent, not because the two @forall calls minted the same number.
+const Identity = @forall (fn T => T -> T)
+const RenamedIdentity = @forall (fn Element => Element -> Element)
+
+// A quantified type reports only #Forall. Instantiation substitutes a closed
+// type first; ordinary reflection then deconstructs the resulting arrow.
+const identity_at = fn argument => instantiate (Identity, argument)
+const identity_result_at = fn argument => case reflect (identity_at argument) of
+  #Arrow arrow => Some arrow.codomain
+  _ => None
+
+const rec is_function =
+  fn type => case reflect type of
+    #Arrow _ => True
+    #Forall => is_function (instantiate (type, Unit))
+    _ => False
+
+const composed_duck_predicate =
+  is_named_shape {
+    .name = Str;
+    .age = Int;
+  }
+const alpha_equal = type_equal (Identity, RenamedIdentity)
+const generic_is_function = is_function Identity
+const int_result_is_i32 = case identity_result_at I32 of
+  #Some result => type_equal (result, I32)
+  #None => False
+const text_result_is_text = case identity_result_at Str of
+  #Some result => type_equal (result, Str)
+  #None => False
+
+return {
+  .name = checked.name;
+  .composed_duck_predicate = composed_duck_predicate;
+  .alpha_equal = alpha_equal;
+  .generic_is_function = generic_is_function;
+  .int_result_is_i32 = int_result_is_i32;
+  .text_result_is_text = text_result_is_text;
+}

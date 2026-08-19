@@ -430,26 +430,26 @@ public artifact, or an explicit compiler command.
 
 ### 9.4 Normalization and representation closure
 
-| Responsibility                                                                                | Required result                             |
-| --------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| distinguish static values from residual runtime computations                                  | phase-safe erasure                          |
-| reuse compile-time results already demanded by checking                                       | no second semantic derivation               |
-| inline or apply imported module closures under concrete arguments                             | consumer-specific program meaning           |
-| specialize structural calls by concrete shape                                                 | monomorphic runtime operations              |
-| instantiate higher-order representation variables from concrete arguments                     | closed nested closure signatures            |
-| solve positive recursive representation equations by their least fixed point                  | a finite graph with private recursive roots |
-| preserve compiler-local control envelopes while erasing their payload wrappers                | one runtime sum for statement control       |
-| erase scalar refinements without changing their concrete layout                               | equal layouts for refined and open facts    |
+| Responsibility                                                                                | Required result                                       |
+| --------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| distinguish static values from residual runtime computations                                  | phase-safe erasure                                    |
+| reuse compile-time results already demanded by checking                                       | no second semantic derivation                         |
+| inline or apply imported module closures under concrete arguments                             | consumer-specific program meaning                     |
+| specialize structural calls by concrete shape                                                 | monomorphic runtime operations                        |
+| instantiate higher-order representation variables from concrete arguments                     | closed nested closure signatures                      |
+| solve positive recursive representation equations by their least fixed point                  | a finite graph with private recursive roots           |
+| preserve compiler-local control envelopes while erasing their payload wrappers                | one runtime sum for statement control                 |
+| erase scalar refinements without changing their concrete layout                               | equal layouts for refined and open facts              |
 | normalize pure integer type predicates before bridging and erase their source functions       | canonical range/union types and no residual predicate |
-| erase first-class effect values at explicit sequencing boundaries                             | one checked nullary call                    |
-| closure-convert runtime free variables into explicit function parameters                      | lexically minimal residual environments     |
-| defunctionalize the finite function set a dynamic branch joins                                | one private choice table per join           |
-| unfold static structural folds around dynamic scalar work                                     | direct runtime projections                  |
-| specialize handlers, effect identities, seals, and generated descriptors                      | closed runtime identities                   |
-| preserve source evaluation and host-request order                                             | observationally equivalent residual code    |
-| choose concrete scalar, product, sum, Store, text, SIMD, and private indirect representations | no open runtime type                        |
-| turn ownership and bounds evidence into permitted target operations                           | checked mutation and eliminated checks      |
-| identify runtime exports and their source types                                               | a closed public program boundary            |
+| erase first-class effect values at explicit sequencing boundaries                             | one checked nullary call                              |
+| closure-convert runtime free variables into explicit function parameters                      | lexically minimal residual environments               |
+| defunctionalize the finite function set a dynamic branch joins                                | one private choice table per join                     |
+| unfold static structural folds around dynamic scalar work                                     | direct runtime projections                            |
+| specialize handlers, effect identities, seals, and generated descriptors                      | closed runtime identities                             |
+| preserve source evaluation and host-request order                                             | observationally equivalent residual code              |
+| choose concrete scalar, product, sum, Store, text, SIMD, and private indirect representations | no open runtime type                                  |
+| turn ownership and bounds evidence into permitted target operations                           | checked mutation and eliminated checks                |
+| identify runtime exports and their source types                                               | a closed public program boundary                      |
 
 ### 9.5 Runtime program and ABI
 
@@ -514,17 +514,16 @@ Residual structured values use the settled checked boundary type, not only the
 constructor or element observed during staging. This keeps empty Store values,
 closed variants, records, and sealed values layout-stable. A staged self-tail
 call may become an explicit Runtime-HIR loop back-edge; a settled first-order
-non-tail recursive binding becomes a Runtime-HIR function and `call.direct`.
-An escaping closure still requires the ordinary closure representation.
-Dynamic `@array.take` and `@array.split` require the same replayed array-index
+non-tail recursive binding becomes a Runtime-HIR function and `call.direct`. An
+escaping closure still requires the ordinary closure representation. Dynamic
+`@array.take` and `@array.split` require the same replayed array-index
 certificate as direct reads and writes. After that proof boundary they
 residualize plain tuples through the same Store and control-flow vocabulary as
 prelude folds, with no failure tag and no collection-specific target operation.
 Canonical adapters currently admit direct scalar results and the existing
-structured ABI policy.
-Unsupported target policy is a `TargetRefusal`; a failure after validated
-Runtime HIR is an `InvariantFailure`. Neither is a source diagnostic, and
-neither receives a fabricated source span.
+structured ABI policy. Unsupported target policy is a `TargetRefusal`; a failure
+after validated Runtime HIR is an `InvariantFailure`. Neither is a source
+diagnostic, and neither receives a fabricated source span.
 
 Node/TypeScript is the development implementation and the CI-built Rust/Wasm
 compiler is the production implementation. Semantic authority belongs to this

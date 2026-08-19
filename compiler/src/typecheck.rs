@@ -5426,11 +5426,12 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             Type::Opaque("Type".to_owned())
         }
         "@type.unit" => Type::Unit,
-        "@type.range" | "@type.refine" | "@type.union" | "@type.intersect" | "@type.diff" | "@type.arrow"
-        | "@type.performs" => curried(
+        "@type.range" | "@type.refine" | "@type.union" | "@type.intersect" | "@type.diff"
+        | "@type.arrow" | "@type.performs" | "@type.instantiate" => curried(
             vec![checker.fresh(), checker.fresh()],
             Type::Opaque("Type".to_owned()),
         ),
+        "@type.equal" => curried(vec![checker.fresh(), checker.fresh()], bool_),
         "@type.of" | "@type.reflect" | "@type.members" | "@type.union_of" => {
             curried(vec![checker.fresh()], checker.fresh())
         }
@@ -5487,10 +5488,7 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             let array = Type::Array(Box::new(element.clone()));
             curried(
                 vec![array.clone(), int],
-                Type::Record(vec![
-                    ("0".to_owned(), element),
-                    ("1".to_owned(), array),
-                ]),
+                Type::Record(vec![("0".to_owned(), element), ("1".to_owned(), array)]),
             )
         }
         "@array.split" => {
@@ -5661,68 +5659,219 @@ fn comparison_refinements(
     checker: &Checker,
 ) -> Option<(String, Type, Type)> {
     let (callee, arguments) = application_spine_ids(module, expression);
+    let operator = comptime_expression_value(module, callee, values)?;
+
+    if arguments.len() == 2
+        && let Some(junction) = crate::recognise::junction(&checker.context, &operator)
+    {
+        let left = comparison_refinements(module, arguments[0], environment, values, checker)?;
+        let right = comparison_refinements(module, arguments[1], environment, values, checker)?;
+        if left.0 != right.0 {
+            return None;
+        }
+        let original = checker.settle(checker.instantiate(environment.lookup(&left.0)?), true);
+        return match junction {
+            crate::recognise::Junction::And => Some((
+                left.0,
+                intersect_integer_types(&left.1, &right.1)?,
+                original,
+            )),
+            crate::recognise::Junction::Or => Some((
+                left.0,
+                original,
+                intersect_integer_types(&left.2, &right.2)?,
+            )),
+        };
+    }
+
+    if arguments.len() == 1 && crate::recognise::negation(&checker.context, &operator) {
+        let (name, consequence, alternate) =
+            comparison_refinements(module, arguments[0], environment, values, checker)?;
+        return Some((name, alternate, consequence));
+    }
+
     if arguments.len() != 2 {
         return None;
     }
-    let operator = comptime_expression_value(module, callee, values)?;
-    let comparison = crate::recognise::comparison(&checker.context, &operator)?;
+    let mut orderings = crate::recognise::comparison(&checker.context, &operator)?;
     let left = arguments[0];
     let right = arguments[1];
-    let Expression::Var { name, .. } = &module.arena.expressions[left.0 as usize] else {
-        return None;
+    let (name, witness) = match (
+        &module.arena.expressions[left.0 as usize],
+        &module.arena.expressions[right.0 as usize],
+    ) {
+        (Expression::Var { name, .. }, Expression::Int { value, .. }) => {
+            (name.clone(), value.clone())
+        }
+        (Expression::Int { value, .. }, Expression::Var { name, .. }) => {
+            orderings = mirror_orderings(&orderings);
+            (name.clone(), value.clone())
+        }
+        _ => return None,
     };
-    let Expression::Int { value, .. } = &module.arena.expressions[right.0 as usize] else {
-        return None;
-    };
-    let original = checker.settle(checker.instantiate(environment.lookup(name)?), true);
-    let singleton = Type::Range {
-        domain: Domain::Int,
-        low: Some(Scalar::Int(value.clone())),
-        high: Some(Scalar::Int(value.clone())),
-    };
-    if comparison == crate::recognise::Comparison::Equal {
-        return Some((
-            name.clone(),
-            singleton.clone(),
-            remove_type(original, &singleton),
-        ));
+    let original = checker.settle(checker.instantiate(environment.lookup(&name)?), true);
+    let accepted = ordering_type(&orderings, &witness);
+    let rejected = ordering_type(&complement_orderings(&orderings), &witness);
+    Some((
+        name,
+        intersect_integer_types(&original, &accepted)?,
+        intersect_integer_types(&original, &rejected)?,
+    ))
+}
+
+fn mirror_orderings(
+    orderings: &BTreeSet<crate::recognise::Ordering>,
+) -> BTreeSet<crate::recognise::Ordering> {
+    use crate::recognise::Ordering;
+    orderings
+        .iter()
+        .map(|ordering| match ordering {
+            Ordering::Less => Ordering::Greater,
+            Ordering::Equal => Ordering::Equal,
+            Ordering::Greater => Ordering::Less,
+        })
+        .collect()
+}
+
+fn complement_orderings(
+    orderings: &BTreeSet<crate::recognise::Ordering>,
+) -> BTreeSet<crate::recognise::Ordering> {
+    use crate::recognise::Ordering;
+    [Ordering::Less, Ordering::Equal, Ordering::Greater]
+        .into_iter()
+        .filter(|ordering| !orderings.contains(ordering))
+        .collect()
+}
+
+fn ordering_type(orderings: &BTreeSet<crate::recognise::Ordering>, witness: &BigInt) -> Type {
+    use crate::recognise::Ordering;
+    let semantic_basis = [Ordering::Less, Ordering::Equal, Ordering::Greater];
+    let mut start = None;
+    let mut intervals = Vec::new();
+    for index in 0..=semantic_basis.len() {
+        let accepted = index < semantic_basis.len() && orderings.contains(&semantic_basis[index]);
+        if accepted && start.is_none() {
+            start = Some(index);
+        }
+        if !accepted && let Some(first) = start.take() {
+            let last = index - 1;
+            let low = match semantic_basis[first] {
+                Ordering::Less => None,
+                Ordering::Equal => Some(witness.clone()),
+                Ordering::Greater => Some(witness + 1),
+            };
+            let high = match semantic_basis[last] {
+                Ordering::Less => Some(witness - 1),
+                Ordering::Equal => Some(witness.clone()),
+                Ordering::Greater => None,
+            };
+            intervals.push(IntegerInterval { low, high });
+        }
     }
-    let Type::Range {
+    integer_intervals_type(intervals)
+}
+
+#[derive(Clone)]
+struct IntegerInterval {
+    low: Option<BigInt>,
+    high: Option<BigInt>,
+}
+
+fn intersect_integer_types(left: &Type, right: &Type) -> Option<Type> {
+    let left = integer_intervals(left)?;
+    let right = integer_intervals(right)?;
+    let mut intersections = Vec::new();
+    for left in &left {
+        for right in &right {
+            let low = match (&left.low, &right.low) {
+                (None, low) | (low, None) => low.clone(),
+                (Some(left), Some(right)) => Some(left.max(right).clone()),
+            };
+            let high = match (&left.high, &right.high) {
+                (None, high) | (high, None) => high.clone(),
+                (Some(left), Some(right)) => Some(left.min(right).clone()),
+            };
+            if matches!((&low, &high), (Some(low), Some(high)) if low > high) {
+                continue;
+            }
+            intersections.push(IntegerInterval { low, high });
+        }
+    }
+    Some(integer_intervals_type(intersections))
+}
+
+fn integer_intervals(type_: &Type) -> Option<Vec<IntegerInterval>> {
+    match type_ {
+        Type::Bottom => Some(Vec::new()),
+        Type::Range {
+            domain: Domain::Int,
+            low,
+            high,
+        } => Some(vec![IntegerInterval {
+            low: match low {
+                Some(Scalar::Int(value)) => Some(value.clone()),
+                None => None,
+                _ => return None,
+            },
+            high: match high {
+                Some(Scalar::Int(value)) => Some(value.clone()),
+                None => None,
+                _ => return None,
+            },
+        }]),
+        Type::Union(members) => {
+            let mut intervals = Vec::new();
+            for member in members {
+                intervals.extend(integer_intervals(member)?);
+            }
+            Some(intervals)
+        }
+        _ => None,
+    }
+}
+
+fn integer_intervals_type(mut intervals: Vec<IntegerInterval>) -> Type {
+    intervals.sort_by(|left, right| match (&left.low, &right.low) {
+        (None, None) => std::cmp::Ordering::Equal,
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (Some(left), Some(right)) => left.cmp(right),
+    });
+    let mut normalized: Vec<IntegerInterval> = Vec::new();
+    for interval in intervals {
+        let Some(previous) = normalized.last_mut() else {
+            normalized.push(interval);
+            continue;
+        };
+        let touches = match (&previous.high, &interval.low) {
+            (None, _) | (_, None) => true,
+            (Some(high), Some(low)) => low <= &(high + 1),
+        };
+        if !touches {
+            normalized.push(interval);
+            continue;
+        }
+        previous.high = match (&previous.high, &interval.high) {
+            (None, _) | (_, None) => None,
+            (Some(left), Some(right)) => Some(left.max(right).clone()),
+        };
+    }
+    let mut members = normalized.into_iter().map(|interval| Type::Range {
         domain: Domain::Int,
-        low,
-        high,
-    } = original
-    else {
-        return None;
+        low: interval.low.map(Scalar::Int),
+        high: interval.high.map(Scalar::Int),
+    });
+    let Some(first) = members.next() else {
+        return Type::Bottom;
     };
-    let below = || Type::Range {
-        domain: Domain::Int,
-        low: low.clone(),
-        high: minimum_bound(high.clone(), value - 1),
-    };
-    let at_or_above = || Type::Range {
-        domain: Domain::Int,
-        low: maximum_bound(low.clone(), value.clone()),
-        high: high.clone(),
-    };
-    let above = || Type::Range {
-        domain: Domain::Int,
-        low: maximum_bound(low.clone(), value + 1),
-        high: high.clone(),
-    };
-    let at_or_below = || Type::Range {
-        domain: Domain::Int,
-        low: low.clone(),
-        high: minimum_bound(high.clone(), value.clone()),
-    };
-    let (consequence, alternate) = match comparison {
-        crate::recognise::Comparison::Less => (below(), at_or_above()),
-        crate::recognise::Comparison::LessOrEqual => (at_or_below(), above()),
-        crate::recognise::Comparison::Greater => (above(), at_or_below()),
-        crate::recognise::Comparison::GreaterOrEqual => (at_or_above(), below()),
-        crate::recognise::Comparison::Equal => unreachable!(),
-    };
-    Some((name.clone(), consequence, alternate))
+    let remaining = members.collect::<Vec<_>>();
+    if remaining.is_empty() {
+        first
+    } else {
+        let mut all = vec![first];
+        all.extend(remaining);
+        Type::Union(all)
+    }
 }
 
 fn comptime_expression_value(
@@ -6115,20 +6264,6 @@ fn total_pattern(module: &Module, pattern: PatternId) -> bool {
             .iter()
             .all(|field| total_pattern(module, field.pattern)),
         _ => false,
-    }
-}
-
-fn minimum_bound(bound: Option<Scalar>, value: BigInt) -> Option<Scalar> {
-    match bound {
-        Some(Scalar::Int(bound)) => Some(Scalar::Int(bound.min(value))),
-        _ => Some(Scalar::Int(value)),
-    }
-}
-
-fn maximum_bound(bound: Option<Scalar>, value: BigInt) -> Option<Scalar> {
-    match bound {
-        Some(Scalar::Int(bound)) => Some(Scalar::Int(bound.max(value))),
-        _ => Some(Scalar::Int(value)),
     }
 }
 
@@ -8037,5 +8172,52 @@ mod tests {
 
         assert!(!checker.can_constrain(int_type(), requirement, Span { start: 0, end: 0 },));
         assert_eq!(checker.next_skolem.get(), initial_skolem);
+    }
+
+    #[test]
+    fn semantic_ordering_sets_build_exact_integer_regions() {
+        use crate::recognise::Ordering;
+        let non_zero = ordering_type(
+            &BTreeSet::from([Ordering::Less, Ordering::Greater]),
+            &BigInt::from(0),
+        );
+        assert!(same_type(
+            &non_zero,
+            &Type::Union(vec![
+                Type::Range {
+                    domain: Domain::Int,
+                    low: None,
+                    high: Some(Scalar::Int((-1).into())),
+                },
+                Type::Range {
+                    domain: Domain::Int,
+                    low: Some(Scalar::Int(1.into())),
+                    high: None,
+                },
+            ])
+        ));
+    }
+
+    #[test]
+    fn conjunction_intersects_semantic_integer_regions() {
+        use crate::recognise::Ordering;
+        let at_least_zero = ordering_type(
+            &BTreeSet::from([Ordering::Equal, Ordering::Greater]),
+            &BigInt::from(0),
+        );
+        let at_most_byte = ordering_type(
+            &BTreeSet::from([Ordering::Less, Ordering::Equal]),
+            &BigInt::from(255),
+        );
+        let byte = intersect_integer_types(&at_least_zero, &at_most_byte)
+            .expect("both sides are integer regions");
+        assert!(same_type(
+            &byte,
+            &Type::Range {
+                domain: Domain::Int,
+                low: Some(Scalar::Int(0.into())),
+                high: Some(Scalar::Int(255.into())),
+            }
+        ));
     }
 }

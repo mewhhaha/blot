@@ -139,8 +139,8 @@ prefix. Consequently `f = rec (fn p => body)` fails parsing rather than reaching
 elaboration. The translation deliberately retains the existing `Rec` AST so
 scope construction, recursive-group typing, ownership transfer, evaluation,
 specialization, and Runtime HIR receive the same representation as before. A
-surface binding modifier therefore does not add a downstream declaration kind
-or runtime operation.
+surface binding modifier therefore does not add a downstream declaration kind or
+runtime operation.
 
 Adjacent recursive bindings of one declaration kind elaborate to adjacent
 bindings whose values have `Rec` roots. Group discovery remains an AST property

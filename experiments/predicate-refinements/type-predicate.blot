@@ -1,0 +1,27 @@
+open import "blot:prelude"
+
+const both_types = fn (left, right) => fn type => left type && right type
+const is_shape = fn type => case reflect type of
+  #Shape _ => True
+  _ => False
+const is_reading = both_types (is_shape, Has { .value = Int; })
+
+let reading = { .value = 120; .label = "depth"; }
+let checked = @type.satisfies (reading, is_reading)
+
+const Identity = @forall (fn T => T -> T)
+const RenamedIdentity = @forall (fn Element => Element -> Element)
+
+const rec is_function =
+  fn type => case reflect type of
+    #Arrow _ => True
+    #Forall => is_function (instantiate (type, Unit))
+    _ => False
+const verified =
+  expect (
+    type_equal (Identity, RenamedIdentity) && is_function Identity,
+    "generic type observations did not compose"
+  )
+
+return case verified of
+  () => checked.value

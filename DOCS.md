@@ -786,8 +786,8 @@ prove `0 <= index < Array.length values` and use direct `@array.take` or
 `@array.split`; their tuple result conserves every obligation without a failure
 constructor.
 
-When the result may be reordered and one backing Store should be reused, enter
-a private consuming phase with `Slice`:
+When the result may be reordered and one backing Store should be reused, enter a
+private consuming phase with `Slice`:
 
 ```blot
 let region = Slice.claim values

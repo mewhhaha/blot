@@ -6,7 +6,13 @@ import {
   moduleClosure,
   run,
 } from "./src/comptime/eval.ts";
-import { childEnv, UNIT } from "./src/comptime/value.ts";
+import {
+  childEnv,
+  equal,
+  substituteTypeVariable,
+  UNIT,
+  type Value,
+} from "./src/comptime/value.ts";
 import { parse } from "./src/syntax/parse.ts";
 
 async function evaluate(source: string, fuel = 1_000): Promise<unknown> {
@@ -25,6 +31,79 @@ async function evaluate(source: string, fuel = 1_000): Promise<unknown> {
     ),
   );
 }
+
+Deno.test("quantified type-value equality is alpha-equivalent", () => {
+  const identity = (variable: number): Value => ({
+    tag: "forall",
+    variable,
+    body: {
+      tag: "arrow",
+      domain: { tag: "type-variable", id: variable },
+      codomain: { tag: "type-variable", id: variable },
+      effects: [],
+    },
+  });
+  assertEquals(equal(identity(1), identity(99)), true);
+});
+
+Deno.test("quantified equality does not capture a free type variable", () => {
+  const freeZero: Value = {
+    tag: "forall",
+    variable: 1,
+    body: { tag: "type-variable", id: 0 },
+  };
+  const boundZero: Value = {
+    tag: "forall",
+    variable: 0,
+    body: { tag: "type-variable", id: 0 },
+  };
+  assertEquals(equal(freeZero, boundZero), false);
+});
+
+Deno.test("type-value instantiation substitutes an arrow", () => {
+  const body: Value = {
+    tag: "arrow",
+    domain: { tag: "type-variable", id: 7 },
+    codomain: { tag: "type-variable", id: 7 },
+    effects: [],
+  };
+  const argument: Value = { tag: "opaque-type", name: "T" };
+  assertEquals(
+    equal(
+      substituteTypeVariable(body, 7, argument)!,
+      { ...body, domain: argument, codomain: argument },
+    ),
+    true,
+  );
+});
+
+Deno.test("effect-row instantiation closes only with effects", () => {
+  const body: Value = {
+    tag: "arrow",
+    domain: UNIT,
+    codomain: UNIT,
+    effects: [],
+    effectTail: 7,
+  };
+  const effect: Value = {
+    tag: "effect",
+    id: 1,
+    name: "Console",
+    operations: new Map(),
+    host: true,
+  };
+  assertEquals(
+    equal(
+      substituteTypeVariable(body, 7, effect)!,
+      { ...body, effects: [effect], effectTail: undefined },
+    ),
+    true,
+  );
+  assertEquals(
+    substituteTypeVariable(body, 7, { tag: "int", value: 0n }),
+    null,
+  );
+});
 
 Deno.test("an unused deferred argument is never evaluated", async () => {
   assertEquals(

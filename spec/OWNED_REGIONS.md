@@ -928,8 +928,8 @@ obligation exactly once.
 ## 15. Pure consuming transforms over one Store
 
 `Slice` is the source-level way to request destructive implementation without
-making mutation observable. A transforming operation consumes the only
-authority for an interval and returns its successor:
+making mutation observable. A transforming operation consumes the only authority
+for an interval and returns its successor:
 
 ```text
 transform : (!Slice A, arguments...) -> Slice A
@@ -964,8 +964,8 @@ Slice.partition_range (!slice, start, end, belongs_left)
    | #PartitionOutOfBounds (!slice, start)
 ```
 
-For a successful range partition over `[start,end)`, the returned boundary
-`mid` satisfies:
+For a successful range partition over `[start,end)`, the returned boundary `mid`
+satisfies:
 
 ```text
 start <= mid <= end
@@ -985,9 +985,9 @@ the total whole-interval specialization and therefore needs no failure variant.
 `partition_range` validates `0 <= start <= end <= length` before the first
 predicate call or swap. Failure returns the unchanged authority and the supplied
 start boundary. Both constructors carry the same `(authority, boundary)` shape,
-so conservation is structural across the result. A total consuming operation
-may never lose its unique input on the failure path. The whole-slice form
-constructs its own valid range and therefore needs no result variant.
+so conservation is structural across the result. A total consuming operation may
+never lose its unique input on the failure path. The whole-slice form constructs
+its own valid range and therefore needs no result variant.
 
 The operation is derived in ordinary prelude source from `length`, `get`, and
 `swap`; no new intrinsic or compiler privilege is introduced. Its element read
@@ -1004,7 +1004,7 @@ destructive reuse.
 
 `Slice.partition` instead rearranges one authority and returns an integer
 boundary. Callers that need independently recursive pieces may split at that
-boundary and later join the exact siblings with the returned rejoin witness.
-The boundary classifies positions; the witness proves ownership. Keeping those
-roles separate prevents a general `<>` from becoming a hidden, unsound memory
+boundary and later join the exact siblings with the returned rejoin witness. The
+boundary classifies positions; the witness proves ownership. Keeping those roles
+separate prevents a general `<>` from becoming a hidden, unsound memory
 operation.

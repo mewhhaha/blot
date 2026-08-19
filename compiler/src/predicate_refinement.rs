@@ -3,7 +3,8 @@
 //! Accepted predicates are normalized into the existing range/union value
 //! domain. Nothing from this module crosses the Runtime HIR boundary.
 
-use std::cmp::Ordering;
+use std::cmp::Ordering as SortOrdering;
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use num_bigint::BigInt;
@@ -11,7 +12,7 @@ use num_bigint::BigInt;
 use crate::ast::{Expression, ExpressionId, Module, Pattern, PatternId, Qualifier, Span};
 use crate::diagnostic::Diagnostic;
 use crate::eval::Context;
-use crate::recognise::{Comparison, Junction, comparison, junction, negation};
+use crate::recognise::{Junction, Ordering, comparison, junction, negation};
 use crate::value::{Domain, Environment, Value, lookup};
 
 const MAX_PREDICATE_NODES: usize = 256;
@@ -89,9 +90,7 @@ fn predicate_intervals(
     if *budget == 0 {
         return Err(unsupported(
             span,
-            &format!(
-                "A predicate may contain at most {MAX_PREDICATE_NODES} expression nodes."
-            ),
+            &format!("A predicate may contain at most {MAX_PREDICATE_NODES} expression nodes."),
         ));
     }
     *budget -= 1;
@@ -101,7 +100,7 @@ fn predicate_intervals(
             "The predicate must be built from integer comparisons and boolean operators.",
         )
     })?;
-    let callee_value = resolve(module, callee, environment).ok_or_else(|| {
+    let callee_value = resolve(module, callee, subject, environment).ok_or_else(|| {
         unsupported(
             expression_span(module, callee),
             "This predicate function is not compile-time-known.",
@@ -142,25 +141,23 @@ fn predicate_intervals(
             let left = arguments[0];
             let right = arguments[1];
             if is_subject(module, left, subject) {
-                let witness = integer_witness(module, right, subject, environment).ok_or_else(
-                    || {
+                let witness =
+                    integer_witness(module, right, subject, environment).ok_or_else(|| {
                         unsupported(
                             expression_span(module, right),
                             "A comparison witness must be a compile-time integer.",
                         )
-                    },
-                )?;
+                    })?;
                 return Ok(comparison_intervals(relation, witness));
             }
             if is_subject(module, right, subject) {
-                let witness = integer_witness(module, left, subject, environment).ok_or_else(
-                    || {
+                let witness =
+                    integer_witness(module, left, subject, environment).ok_or_else(|| {
                         unsupported(
                             expression_span(module, left),
                             "A comparison witness must be a compile-time integer.",
                         )
-                    },
-                )?;
+                    })?;
                 relation = mirror(relation);
                 return Ok(comparison_intervals(relation, witness));
             }
@@ -197,7 +194,10 @@ fn pattern_name(module: &Module, pattern: PatternId) -> Option<&str> {
     }
 }
 
-fn application(module: &Module, expression: ExpressionId) -> Option<(ExpressionId, Vec<ExpressionId>)> {
+fn application(
+    module: &Module,
+    expression: ExpressionId,
+) -> Option<(ExpressionId, Vec<ExpressionId>)> {
     let mut arguments = Vec::new();
     let mut current = expression;
     while let Expression::Apply {
@@ -214,11 +214,16 @@ fn application(module: &Module, expression: ExpressionId) -> Option<(ExpressionI
     Some((current, arguments))
 }
 
-fn resolve(module: &Module, expression: ExpressionId, environment: &Environment) -> Option<Value> {
+fn resolve(
+    module: &Module,
+    expression: ExpressionId,
+    subject: &str,
+    environment: &Environment,
+) -> Option<Value> {
     match &module.arena.expressions[expression.0 as usize] {
-        Expression::Var { name, .. } => lookup(environment, name),
+        Expression::Var { name, .. } if name != subject => lookup(environment, name),
         Expression::Field { target, name, .. } => {
-            let target = resolve(module, *target, environment)?;
+            let target = resolve(module, *target, subject, environment)?;
             match target {
                 Value::Shape(fields) => fields.get(name).cloned(),
                 Value::Extended { members, .. } => members.get(name).cloned(),
@@ -252,40 +257,42 @@ fn integer_witness(
     }
 }
 
-fn comparison_intervals(comparison: Comparison, witness: BigInt) -> Vec<Interval> {
+fn comparison_intervals(orderings: BTreeSet<Ordering>, witness: BigInt) -> Vec<Interval> {
     let one = BigInt::from(1_u8);
-    match comparison {
-        Comparison::Less => vec![Interval {
+    let mut intervals = Vec::new();
+    if orderings.contains(&Ordering::Less) {
+        intervals.push(Interval {
             low: None,
-            high: Some(witness - one),
-        }],
-        Comparison::LessOrEqual => vec![Interval {
-            low: None,
-            high: Some(witness),
-        }],
-        Comparison::Equal => vec![Interval {
+            high: Some(witness.clone() - one.clone()),
+        });
+    }
+    if orderings.contains(&Ordering::Equal) {
+        intervals.push(Interval {
             low: Some(witness.clone()),
-            high: Some(witness),
-        }],
-        Comparison::GreaterOrEqual => vec![Interval {
-            low: Some(witness),
-            high: None,
-        }],
-        Comparison::Greater => vec![Interval {
+            high: Some(witness.clone()),
+        });
+    }
+    if orderings.contains(&Ordering::Greater) {
+        intervals.push(Interval {
             low: Some(witness + one),
             high: None,
-        }],
+        });
     }
+    normalize(intervals)
 }
 
-fn mirror(comparison: Comparison) -> Comparison {
-    match comparison {
-        Comparison::Less => Comparison::Greater,
-        Comparison::LessOrEqual => Comparison::GreaterOrEqual,
-        Comparison::Equal => Comparison::Equal,
-        Comparison::GreaterOrEqual => Comparison::LessOrEqual,
-        Comparison::Greater => Comparison::Less,
+fn mirror(orderings: BTreeSet<Ordering>) -> BTreeSet<Ordering> {
+    let mut mirrored = BTreeSet::new();
+    if orderings.contains(&Ordering::Less) {
+        mirrored.insert(Ordering::Greater);
     }
+    if orderings.contains(&Ordering::Equal) {
+        mirrored.insert(Ordering::Equal);
+    }
+    if orderings.contains(&Ordering::Greater) {
+        mirrored.insert(Ordering::Less);
+    }
+    mirrored
 }
 
 fn base_intervals(base: &Value, span: Span) -> Result<Vec<Interval>, Diagnostic> {
@@ -321,7 +328,10 @@ fn base_intervals(base: &Value, span: Span) -> Result<Vec<Interval>, Diagnostic>
                 high: bound(high, span)?,
             }])
         }
-        _ => Err(unsupported(span, "The refinement base must be an integer type.")),
+        _ => Err(unsupported(
+            span,
+            "The refinement base must be an integer type.",
+        )),
     }
 }
 
@@ -329,7 +339,10 @@ fn bound(value: &Value, span: Span) -> Result<Option<BigInt>, Diagnostic> {
     match value {
         Value::Unbounded => Ok(None),
         Value::Int(value) => Ok(Some(value.clone())),
-        _ => Err(unsupported(span, "An integer range has a non-integer bound.")),
+        _ => Err(unsupported(
+            span,
+            "An integer range has a non-integer bound.",
+        )),
     }
 }
 
@@ -339,9 +352,9 @@ fn normalize(mut intervals: Vec<Interval>) -> Vec<Interval> {
         _ => true,
     });
     intervals.sort_by(|left, right| match (&left.low, &right.low) {
-        (None, None) => Ordering::Equal,
-        (None, Some(_)) => Ordering::Less,
-        (Some(_), None) => Ordering::Greater,
+        (None, None) => SortOrdering::Equal,
+        (None, Some(_)) => SortOrdering::Less,
+        (Some(_), None) => SortOrdering::Greater,
         (Some(left), Some(right)) => left.cmp(right),
     });
     let mut merged: Vec<Interval> = Vec::new();
@@ -434,7 +447,9 @@ fn interval_value(intervals: Vec<Interval>) -> Value {
             }
         }
     });
-    let first = values.next().expect("an inhabited refinement has one interval");
+    let first = values
+        .next()
+        .expect("an inhabited refinement has one interval");
     let remaining: Vec<Value> = values.collect();
     if remaining.is_empty() {
         return first;

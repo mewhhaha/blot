@@ -318,6 +318,10 @@ export function reflect(value: Value): Value {
           deferred: bool(value.deferred === true),
         }),
       );
+    case "forall":
+      // The binder and open body stay compiler-private. Source can eliminate
+      // one layer with @type.instantiate, which cannot leak a rigid variable.
+      return bare("Forall");
     case "sealed":
       return tagged(
         "Sealed",

@@ -9,20 +9,37 @@ const samples = 9;
 const warmupCalls = 10_000;
 const measuredCalls = 250_000;
 const baselinePath = resolve("experiments/predicate-refinements/baseline.blot");
-const predicatePath = resolve("experiments/predicate-refinements/predicate.blot");
+const predicatePath = resolve(
+  "experiments/predicate-refinements/predicate.blot",
+);
+const typeBaselinePath = resolve(
+  "experiments/predicate-refinements/type-baseline.blot",
+);
+const typePredicatePath = resolve(
+  "experiments/predicate-refinements/type-predicate.blot",
+);
 
 const checkTimes = {
   baseline: [] as number[],
   predicate: [] as number[],
+  typeBaseline: [] as number[],
+  typePredicate: [] as number[],
 };
 
 for (let sample = 0; sample < samples; sample += 1) {
-  let order: readonly (readonly ["baseline" | "predicate", string])[] = [
+  let order: readonly (readonly [keyof typeof checkTimes, string])[] = [
     ["baseline", baselinePath],
     ["predicate", predicatePath],
+    ["typeBaseline", typeBaselinePath],
+    ["typePredicate", typePredicatePath],
   ];
   if (sample % 2 !== 0) {
-    order = [["predicate", predicatePath], ["baseline", baselinePath]];
+    order = [
+      ["typePredicate", typePredicatePath],
+      ["typeBaseline", typeBaselinePath],
+      ["predicate", predicatePath],
+      ["baseline", baselinePath],
+    ];
   }
   for (const [name, path] of order) {
     const compiler = await Compiler.create();
@@ -46,7 +63,10 @@ try {
   const predicateCompiler = await Compiler.create();
   const predicate = await compile(predicateCompiler, resultPath);
   predicateCompiler.destroy();
-  const wasmIdentical = equalBytes(baseline.artifact.wasm, predicate.artifact.wasm);
+  const wasmIdentical = equalBytes(
+    baseline.artifact.wasm,
+    predicate.artifact.wasm,
+  );
   const hirOperationsIdentical = JSON.stringify(baseline.operations) ===
     JSON.stringify(predicate.operations);
   if (!wasmIdentical || !hirOperationsIdentical) {
@@ -59,11 +79,34 @@ try {
         `predicate SHA=${sha256(predicate.artifact.wasm)}.`,
     );
   }
+  const typeBaselineSource = await readFile(typeBaselinePath, "utf8");
+  const typePredicateSource = await readFile(typePredicatePath, "utf8");
+  await writeFile(resultPath, typeBaselineSource);
+  const typeBaselineCompiler = await Compiler.create();
+  const typeBaseline = await compile(typeBaselineCompiler, resultPath);
+  typeBaselineCompiler.destroy();
+  await writeFile(resultPath, typePredicateSource);
+  const typePredicateCompiler = await Compiler.create();
+  const typePredicate = await compile(typePredicateCompiler, resultPath);
+  typePredicateCompiler.destroy();
+  const typeWasmIdentical = equalBytes(
+    typeBaseline.artifact.wasm,
+    typePredicate.artifact.wasm,
+  );
+  const typeHirOperationsIdentical = JSON.stringify(typeBaseline.operations) ===
+    JSON.stringify(typePredicate.operations);
+  if (!typeWasmIdentical || !typeHirOperationsIdentical) {
+    throw new Error(
+      `Type-predicate assertion did not erase: Wasm identical=${typeWasmIdentical}, ` +
+        `HIR operation histogram identical=${typeHirOperationsIdentical}.`,
+    );
+  }
   const result = {
     theory: {
       baseline: "canonical range 0..255",
       experiment: "refine (Int, fn value => value >= 0 && value <= 255)",
-      expected: "compile-time-only normalization; zero Runtime HIR or Wasm overhead",
+      expected:
+        "compile-time-only normalization; zero Runtime HIR or Wasm overhead",
     },
     compile_time: {
       samples,
@@ -87,6 +130,33 @@ try {
       baseline_median_ns_per_call: baseline.runMedianNs,
       predicate_median_ns_per_call: predicate.runMedianNs,
       observed: baseline.observed.toString(),
+    },
+    advanced_type_predicates: {
+      theory:
+        "reflection, alpha equality, quantifier instantiation, and @type.satisfies erase before Runtime HIR",
+      compile_time: {
+        samples,
+        baseline_median_ms: median(checkTimes.typeBaseline),
+        predicate_median_ms: median(checkTimes.typePredicate),
+        predicate_over_baseline: median(checkTimes.typePredicate) /
+          median(checkTimes.typeBaseline),
+        baseline_samples_ms: checkTimes.typeBaseline,
+        predicate_samples_ms: checkTimes.typePredicate,
+      },
+      resulting_code: {
+        baseline_build_ms: typeBaseline.buildMs,
+        predicate_build_ms: typePredicate.buildMs,
+        baseline_wasm_bytes: typeBaseline.artifact.wasm.byteLength,
+        predicate_wasm_bytes: typePredicate.artifact.wasm.byteLength,
+        baseline_sha256: sha256(typeBaseline.artifact.wasm),
+        predicate_sha256: sha256(typePredicate.artifact.wasm),
+        wasm_identical: typeWasmIdentical,
+        runtime_hir_operations_identical: typeHirOperationsIdentical,
+        runtime_hir_operation_histogram: typeBaseline.operations,
+        baseline_median_ns_per_call: typeBaseline.runMedianNs,
+        predicate_median_ns_per_call: typePredicate.runMedianNs,
+        observed: typeBaseline.observed.toString(),
+      },
     },
   };
   console.log(JSON.stringify(result, null, 2));
@@ -114,7 +184,13 @@ async function compile(compiler: Compiler, path: string) {
   if (observed !== 120n) {
     throw new Error(`${path} returned ${observed}; expected 120`);
   }
-  return { artifact, buildMs, observed, operations, runMedianNs: median(times) };
+  return {
+    artifact,
+    buildMs,
+    observed,
+    operations,
+    runMedianNs: median(times),
+  };
 }
 
 async function instantiate(
@@ -147,9 +223,9 @@ function operationHistogram(hir: Awaited<ReturnType<Compiler["prepare"]>>) {
       }
     }
   }
-  return Object.fromEntries([...counts].sort(([left], [right]) =>
-    left.localeCompare(right)
-  ));
+  return Object.fromEntries(
+    [...counts].sort(([left], [right]) => left.localeCompare(right)),
+  );
 }
 
 function median(values: readonly number[]): number {

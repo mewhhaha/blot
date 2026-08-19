@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 
 use num_bigint::BigInt;
@@ -7,12 +7,10 @@ use crate::ast::{Declaration, Expression, ExpressionId, Module, Pattern, Pattern
 use crate::eval::{Context, Phase, Runtime, apply, run};
 use crate::value::Value;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Comparison {
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum Ordering {
     Less,
-    LessOrEqual,
     Equal,
-    GreaterOrEqual,
     Greater,
 }
 
@@ -22,21 +20,28 @@ pub enum Junction {
     Or,
 }
 
-pub fn comparison(context: &Rc<Context>, value: &Value) -> Option<Comparison> {
+pub fn comparison(context: &Rc<Context>, value: &Value) -> Option<BTreeSet<Ordering>> {
     if !factored(context, value) {
         return None;
     }
     let less = probe_int(context, value, 0, 1)?;
     let equal = probe_int(context, value, 1, 1)?;
     let greater = probe_int(context, value, 1, 0)?;
-    match (less, equal, greater) {
-        (true, false, false) => Some(Comparison::Less),
-        (true, true, false) => Some(Comparison::LessOrEqual),
-        (false, true, false) => Some(Comparison::Equal),
-        (false, true, true) => Some(Comparison::GreaterOrEqual),
-        (false, false, true) => Some(Comparison::Greater),
-        _ => None,
+    Some(orderings_from_answers(less, equal, greater))
+}
+
+fn orderings_from_answers(less: bool, equal: bool, greater: bool) -> BTreeSet<Ordering> {
+    let mut orderings = BTreeSet::new();
+    if less {
+        orderings.insert(Ordering::Less);
     }
+    if equal {
+        orderings.insert(Ordering::Equal);
+    }
+    if greater {
+        orderings.insert(Ordering::Greater);
+    }
+    orderings
 }
 
 pub fn junction(context: &Rc<Context>, value: &Value) -> Option<Junction> {
@@ -368,4 +373,22 @@ fn boolean_value(value: bool) -> Value {
 
 fn nowhere() -> Span {
     Span { start: 0, end: 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_truth_table_is_a_semantic_ordering_set() {
+        assert_eq!(
+            orderings_from_answers(true, false, true),
+            BTreeSet::from([Ordering::Less, Ordering::Greater])
+        );
+        assert!(orderings_from_answers(false, false, false).is_empty());
+        assert_eq!(
+            orderings_from_answers(true, true, true),
+            BTreeSet::from([Ordering::Less, Ordering::Equal, Ordering::Greater])
+        );
+    }
 }

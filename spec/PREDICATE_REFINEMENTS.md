@@ -61,20 +61,78 @@ an unbounded integer domain cannot be enumerated in Blot source.
 The initial accepted predicate grammar is semantic rather than lexical:
 
 ```text
-p ::= x op k | k op x | p and p | p or p | not p
-op ::= < | <= | == | != | >= | >
+p ::= x relation k | k relation x | p junction p | negation p
 ```
 
 `k` is a compile-time integer. Operators are accepted only when their
 compile-time values satisfy the same factorisation proof used by branch
-narrowing. A shadowed function called `>=` has no authority merely because of
-its spelling. Boolean junctions and negation are recognized by truth table, not
-by name.
+narrowing: `relation` is any function of two integers whose result factors
+through `@int.cmp`, `junction` has the truth table of conjunction or
+disjunction, and `negation` has the truth table of boolean complement. A
+shadowed function called `>=` has no authority merely because of its spelling.
 
 The predicate parameter must occur only as an operand of accepted comparisons.
 Recursion, effects, run-time captures, arbitrary calls, and opaque observations
-are rejected with `BLOT_REFINEMENT_PREDICATE`. Refusal is preferable to sampling:
-testing a few inputs cannot prove a predicate over an unbounded domain.
+are rejected with `BLOT_REFINEMENT_PREDICATE`. Refusal is preferable to
+sampling: testing a few inputs cannot prove a predicate over an unbounded
+domain.
+
+### 2.1 The primitive boundary is semantic, not an operator list
+
+The compiler does not assign authority to `==`, `!=`, `<`, `&&`, or any other
+source spelling. Integer comparison functions are ordinary source values. A
+candidate is accepted only when the existing factorisation proof establishes
+that it observes both operands exactly once through `@int.cmp`. The compiler
+then records the subset of `{ less, equal, greater }` for which that value
+answers true. All eight subsets are meaningful; there is no closed compiler
+enumeration of source comparison operators.
+
+Conjunction, disjunction, and negation are likewise ordinary source functions.
+Their complete input domains are finite, so their boolean truth tables can be
+established exactly. This is a primitive semantic basis, not a privileged
+prelude vocabulary. Source may define and compose any names over it.
+
+### 2.2 Constructing types and asking about types
+
+Two operations that are easy to conflate remain distinct:
+
+1. `refine(base, predicate)` inverts a predicate over inhabitants and must
+   normalize it to an existing canonical type value before inference; and
+2. `@type.satisfies (value, predicate)` reifies the inferred type of one
+   expression and runs an ordinary source predicate over that closed type.
+
+The second operation is already the general compositional route for structural,
+function, effect-free arrow, nominal, and generic questions. `@type.reflect`
+exposes neutral type structure; `@shape.has`, ordinary `case`, and boolean
+functions define `has_field`, `is_function`, duck predicates, and their
+combinators in source. Those predicates are evaluated only after the subject
+type is reifiable, are bounded by ordinary compile-time fuel, and erase with the
+assertion. They do not become arbitrary closure nodes in biunification.
+
+The minimal compiler observations added by this experiment are:
+
+```text
+@type.equal left right         exact alpha-equivalent type-value identity
+@type.instantiate forall arg   eliminate one outer quantified variable
+```
+
+`@type.reflect` reports an outer quantified type as `#Forall`, but never exposes
+the binder's internal identity or an open body. Source inspects it by applying
+`@type.instantiate` to a chosen type value. This preserves scope and supports
+generic-aware predicates without allowing a rigid variable to escape.
+
+Exact equality is primitive because source reflection intentionally hides
+quantifier identities, opaque type identities, and effect-row internals. Every
+higher predicate remains source. In particular, `has_field`, `is_function`,
+function decomposition, recursive arrow traversal, conjunction, and disjunction
+are not compiler operations.
+
+Structural requirements that grant field access still normalize to ordinary
+record types, arrows still normalize to ordinary function types, and explicit
+quantification still normalizes to `forall`. A predicate assertion may reject a
+closed inferred type, but cannot grant operations that its canonical base type
+does not provide. This keeps width subtyping and function variance in the
+existing polynomial solver.
 
 ## 3. Elaboration and normalization
 
@@ -100,9 +158,9 @@ Delta |- refine(base, fn x => p) downarrow U
 
 `U` is an existing range or finite ground union value. No predicate node enters
 the biunification graph. Existing subtyping, coverage, reflection, and signature
-checking therefore receive the same canonical types they already understand.
-An empty intersection is rejected with `BLOT_EMPTY_REFINEMENT`; Blot has no
-source bottom type value.
+checking therefore receive the same canonical types they already understand. An
+empty intersection is rejected with `BLOT_EMPTY_REFINEMENT`; Blot has no source
+bottom type value.
 
 The first slice accepts integer bases only. This is a principled boundary: the
 existing integer lattice has discrete inclusive bounds and exact difference.
@@ -165,22 +223,28 @@ benchmark records:
 3. Runtime HIR operation counts; and
 4. execution result and steady-state run time.
 
-Recognition is linear in the predicate AST after operator values have been
-recognized. Operator recognition is cached by compile-time value identity.
-Normalization over the initial fragment produces at most one additional range
-piece per distinct comparison boundary; implementation limits must reject an
-oversized predicate before pathological compile-time growth.
+Recognition is linear in the predicate AST after comparison and boolean values
+have been characterized by their finite semantic answer sets. Recognition is
+cached by compile-time value identity. Normalization over the initial fragment
+produces at most one additional range piece per distinct comparison boundary;
+implementation limits must reject an oversized predicate before pathological
+compile-time growth.
 
 ## 7. Non-goals of the first slice
 
 - no unchecked `assume`;
 - no implicit run-time validation or coercion;
-- no structural, text, float, or effect predicates as types;
+- no inversion of structural, text, float, or effect predicates into new solver
+  nodes; structural and function predicates remain erased type assertions or
+  source functions that construct existing canonical types;
 - no dependent function arrows;
 - no ownership facts inside the type lattice; and
 - no change to Runtime HIR or the public ABI.
 
-Future work may generalize the normalizer to decidable structural predicates or
-allow an explicit total run-time validator returning `Option Refined`. Either
-extension must preserve the separation of `Gamma`, `Phi`, and `Omega` and must
-state its erasure and representation theorem before implementation.
+Future work may generalize predicate inversion only where it can still normalize
+to the existing lattice, or allow an explicit total run-time validator returning
+`Option Refined`. An arbitrary predicate closure must not be added to the
+solver: that would make subtyping depend on program equivalence and lose the
+current complexity bound. Either extension must preserve the separation of
+`Gamma`, `Phi`, and `Omega` and must state its erasure and representation
+theorem before implementation.

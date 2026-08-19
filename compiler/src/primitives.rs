@@ -7,7 +7,8 @@ use crate::ast::Span;
 use crate::diagnostic::Diagnostic;
 use crate::eval::Phase;
 use crate::value::{
-    Domain, OrderedFields, Value, as_tuple, boolean, closure_signature, equal, show, tuple,
+    Domain, OrderedFields, Value, as_tuple, boolean, closure_signature, equal, show,
+    substitute_type_variable, tuple,
 };
 
 const F32X4: &str = "F32x4";
@@ -143,6 +144,8 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@type.arrow"
         | "@type.performs"
         | "@type.refine"
+        | "@type.equal"
+        | "@type.instantiate"
         | "@type.seal"
         | "@satisfies"
         | "@shape.get"
@@ -321,6 +324,29 @@ pub fn run_primitive(
             span,
         )),
         "@type.reflect" => Ok(reflect(&arguments[0])),
+        "@type.equal" => Ok(boolean(equal(&arguments[0], &arguments[1]))),
+        "@type.instantiate" => {
+            let Value::Forall { variable, body } = &arguments[0] else {
+                return Err(Diagnostic::new(
+                    "BLOT_TYPE_INSTANTIATE",
+                    format!(
+                        "@type.instantiate needs an outer quantified type, found {}.",
+                        show(&arguments[0])
+                    ),
+                    span,
+                ));
+            };
+            substitute_type_variable(body, *variable, &arguments[1]).ok_or_else(|| {
+                Diagnostic::new(
+                    "BLOT_TYPE_INSTANTIATE",
+                    format!(
+                        "{} cannot instantiate an effect-row variable.",
+                        show(&arguments[1])
+                    ),
+                    span,
+                )
+            })
+        }
         "@type.attach" => attach(arguments, span),
         "@type.members" => match &arguments[0] {
             Value::Extended { members, .. } => Ok(Value::Shape(members.clone())),
@@ -1638,6 +1664,7 @@ fn reflect(value: &Value) -> Value {
                 ])),
             )
         }
+        Value::Forall { .. } => bare("Forall"),
         Value::Sealed { name, inner } => tagged(
             "Sealed",
             Value::Shape(OrderedFields::from([

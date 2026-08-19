@@ -8,7 +8,7 @@ use crate::ast::{
 };
 use crate::diagnostic::Diagnostic;
 use crate::eval::Context;
-use crate::recognise::{self, Comparison, Junction};
+use crate::recognise::{self, Junction, Ordering};
 use crate::relational::Summaries;
 use crate::value::{Environment, Value, lookup};
 
@@ -477,25 +477,32 @@ impl Analysis<'_> {
         let Some(right) = self.term(arguments[1], scope) else {
             return (Vec::new(), Vec::new());
         };
-        match recognise::comparison(self.context, &callee_value) {
-            Some(Comparison::Less) => (
+        let Some(orderings) = recognise::comparison(self.context, &callee_value) else {
+            return (Vec::new(), Vec::new());
+        };
+        let answers = (
+            orderings.contains(&Ordering::Less),
+            orderings.contains(&Ordering::Equal),
+            orderings.contains(&Ordering::Greater),
+        );
+        match answers {
+            (true, false, false) => (
                 constraints_less_than(&left, &right),
                 constraints_at_least(&left, &right),
             ),
-            Some(Comparison::LessOrEqual) => (
+            (true, true, false) => (
                 constraints_at_most(&left, &right),
                 constraints_greater_than(&left, &right),
             ),
-            Some(Comparison::Equal) => (Vec::new(), Vec::new()),
-            Some(Comparison::Greater) => (
+            (false, false, true) => (
                 constraints_greater_than(&left, &right),
                 constraints_at_most(&left, &right),
             ),
-            Some(Comparison::GreaterOrEqual) => (
+            (false, true, true) => (
                 constraints_at_least(&left, &right),
                 constraints_less_than(&left, &right),
             ),
-            None => (Vec::new(), Vec::new()),
+            _ => (Vec::new(), Vec::new()),
         }
     }
 

@@ -74,9 +74,9 @@ in layout elaboration before parsing and therefore changes no parser counter.
 Moving `rec` from a prefix expression to the `let` and `const` binding headers
 adds two island transitions and 147 packed bytes. Lexer states, island count,
 island states, dense transitions, candidate multiplicity, contraction rounds,
-scratch bounds, the root loop, and parallel long-region admission are
-unchanged. The surface modifier lowers to the existing recursive-expression
-AST, so this grammar cost does not extend into evaluation or compilation.
+scratch bounds, the root loop, and parallel long-region admission are unchanged.
+The surface modifier lowers to the existing recursive-expression AST, so this
+grammar cost does not extend into evaluation or compilation.
 
 ## Historical strict-profile measurements
 

@@ -265,9 +265,7 @@ return ordered_checksum (sorted, 0, 0)
   await withSource(source, async (compiler, path) => {
     const hir = await compiler.prepare(path);
     assert(
-      allOperations(hir).some((operation) =>
-        operation.kind === "call.direct"
-      ),
+      allOperations(hir).some((operation) => operation.kind === "call.direct"),
       "non-tail structural recursion must remain a direct Runtime-HIR call",
     );
     assert(

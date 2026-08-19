@@ -1,0 +1,7 @@
+open import "blot:prelude"
+
+// The predicate parameter shadows the outer negation. Treating the callee as
+// that captured function would accept a body whose actual callee is an Int.
+const Invalid = refine (Int, fn not => not (not > 0))
+
+return Invalid

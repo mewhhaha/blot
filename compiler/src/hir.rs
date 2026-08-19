@@ -4082,13 +4082,7 @@ impl ResidualTrace {
             span: output_span,
         });
         self.current_block = header;
-        let has_next = self.operation(
-            "scalar",
-            1,
-            vec![cursor, end.id],
-            span,
-            Some("less-than"),
-        );
+        let has_next = self.operation("scalar", 1, vec![cursor, end.id], span, Some("less-than"));
         let body = self.block();
         let done = self.block();
         self.blocks[header].terminator = Some(RuntimeTerminator::Conditional {
@@ -4115,13 +4109,7 @@ impl ResidualTrace {
             Some("persistent"),
         );
         let one = self.constant(WireConstant::SignedInteger64("1".to_owned()), integer, span);
-        let next = self.operation(
-            "scalar",
-            integer,
-            vec![cursor, one.id],
-            span,
-            Some("add"),
-        );
+        let next = self.operation("scalar", integer, vec![cursor, one.id], span, Some("add"));
         self.blocks[body].terminator = Some(RuntimeTerminator::Branch {
             target: header,
             arguments: vec![next.id, grown.id],
@@ -4174,13 +4162,8 @@ impl ResidualTrace {
         let empty = self.array_operation("store.empty", store.type_id, Vec::new(), span, None);
         let before = self.append_store_range(&store, &zero, &index, &empty, span)?;
         let one = self.constant(WireConstant::SignedInteger64("1".to_owned()), integer, span);
-        let after_start = self.operation(
-            "scalar",
-            integer,
-            vec![index.id, one.id],
-            span,
-            Some("add"),
-        );
+        let after_start =
+            self.operation("scalar", integer, vec![index.id, one.id], span, Some("add"));
         let length = self.operation("store.length", integer, vec![store.id], span, None);
         let remainder = self.append_store_range(&store, &after_start, &length, &before, span)?;
         Ok(self.operation(
@@ -4228,18 +4211,12 @@ impl ResidualTrace {
             self.array_operation("store.empty", store.type_id, Vec::new(), span, None);
         let before = self.append_store_range(&store, &zero, &index, &before_empty, span)?;
         let one = self.constant(WireConstant::SignedInteger64("1".to_owned()), integer, span);
-        let after_start = self.operation(
-            "scalar",
-            integer,
-            vec![index.id, one.id],
-            span,
-            Some("add"),
-        );
+        let after_start =
+            self.operation("scalar", integer, vec![index.id, one.id], span, Some("add"));
         let length = self.operation("store.length", integer, vec![store.id], span, None);
         let after_empty =
             self.array_operation("store.empty", store.type_id, Vec::new(), span, None);
-        let after =
-            self.append_store_range(&store, &after_start, &length, &after_empty, span)?;
+        let after = self.append_store_range(&store, &after_start, &length, &after_empty, span)?;
         Ok(self.operation(
             "product.make",
             payload_type,
@@ -7564,11 +7541,7 @@ mod tests {
             },
         );
         let store = trace.array_operation("store.empty", store_type, Vec::new(), span, None);
-        let index = trace.constant(
-            WireConstant::SignedInteger64("0".to_owned()),
-            integer,
-            span,
-        );
+        let index = trace.constant(WireConstant::SignedInteger64("0".to_owned()), integer, span);
         let taken = trace
             .array_take(store.clone(), index.clone(), span)
             .expect("dynamic take should lower");
@@ -7586,7 +7559,11 @@ mod tests {
         assert!(kinds.contains(&"store.length"));
         assert!(kinds.contains(&"store.read"));
         assert!(kinds.contains(&"store.grow"));
-        assert!(!kinds.iter().any(|kind| kind.contains("take") || kind.contains("split")));
+        assert!(
+            !kinds
+                .iter()
+                .any(|kind| kind.contains("take") || kind.contains("split"))
+        );
     }
 
     #[test]
