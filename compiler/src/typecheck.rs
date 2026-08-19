@@ -66,6 +66,11 @@ pub enum Type {
     Bottom,
 }
 
+enum Requirement {
+    Type(Type),
+    Predicate(Value),
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize)]
 pub enum Scalar {
     Int(BigInt),
@@ -1624,13 +1629,13 @@ impl Checker {
                     ));
                 };
                 let signature_value = self.evaluate(path, value, values, Phase::Comptime)?;
-                let signature = self.bridge(&signature_value).ok_or_else(|| {
-                    Diagnostic::new(
+                let Requirement::Type(signature) = self.requirement(signature_value) else {
+                    return Err(Diagnostic::new(
                         "BLOT_SIG_NOT_A_TYPE",
                         format!("The signature for `{name}` is not a type value."),
                         span,
-                    )
-                })?;
+                    ));
+                };
                 if let Some(unrepresentable) = unrepresentable_integer(&signature) {
                     return Err(Diagnostic::new(
                         "BLOT_UNREPRESENTABLE_INTEGER",
@@ -2302,49 +2307,15 @@ impl Checker {
                         values,
                         dependencies,
                     )?;
-                    if let Ok(requirement) =
-                        self.evaluate(path, argument, values, Phase::Comptime)
-                    {
-                        if let Some(expected) = self.bridge(&requirement) {
-                            self.constrain(subject.type_.clone(), expected, span)?;
-                            return Ok(subject);
-                        }
-
-                        let settled = self.settle(subject.type_.clone(), true);
-                        let reified = self.reify_runtime_type(&settled).ok_or_else(|| {
-                            Diagnostic::new(
-                                "BLOT_TYPE_NOT_REIFIABLE",
-                                format!(
-                                    "`{}` has no compile-time reading; use a canonical type value to constrain an open subject.",
-                                    self.show(&settled)
-                                ),
-                                span,
-                            )
-                        })?;
-                        let answer = run(apply(
-                            self.context.clone(),
-                            requirement,
-                            reified,
+                    if let Ok(value) = self.evaluate(path, argument, values, Phase::Comptime) {
+                        return self.apply_requirement(
+                            path,
+                            subject,
+                            self.requirement(value),
                             span,
-                            Runtime::new(Phase::Comptime, path.to_owned()),
-                        ))?;
-                        return match answer {
-                            Value::Tag { name, .. } if name == "True" => Ok(subject),
-                            Value::Tag { name, .. } if name == "False" => Err(Diagnostic::new(
-                                "BLOT_DOES_NOT_SATISFY",
-                                format!(
-                                    "`{}` does not satisfy the predicate.",
-                                    self.show(&settled)
-                                ),
-                                span,
-                            )),
-                            _ => Err(Diagnostic::new(
-                                "BLOT_TYPE_ERROR",
-                                "The second argument to `@satisfies` must be a type value or a compile-time predicate from a closed type to `Bool`.",
-                                span,
-                            )),
-                        };
-                    } else if self.phase.get() == Phase::Runtime {
+                        );
+                    }
+                    if self.phase.get() == Phase::Runtime {
                         return Err(Diagnostic::new(
                             "BLOT_SIG_NOT_COMPTIME",
                             "The second argument to `@satisfies` must be a compile-time type value or predicate. Make a requirement combinator `const` so calls specialize it.",
@@ -2848,7 +2819,11 @@ impl Checker {
                 .evaluate(path, expression, values, Phase::Comptime)
                 .is_err()
         {
-            return self.type_error(Type::Top, expected, span);
+            return Err(Diagnostic::new(
+                "BLOT_REFLECTION_NOT_INDEXED",
+                "A result available only after compile-time specialization cannot prove a runtime requirement.",
+                span,
+            ));
         }
         if let Expression::Rec { lambda, .. } = module.arena.expressions[expression.0 as usize] {
             let inferred = self.infer_against(
@@ -3033,6 +3008,61 @@ impl Checker {
             self.constrain(function.clone(), recursive, closure_ast.span)?;
         }
         Ok(function)
+    }
+
+    fn requirement(&self, value: Value) -> Requirement {
+        match self.bridge(&value) {
+            Some(type_) => Requirement::Type(type_),
+            None => Requirement::Predicate(value),
+        }
+    }
+
+    fn apply_requirement(
+        &self,
+        path: &str,
+        subject: Inferred,
+        requirement: Requirement,
+        span: Span,
+    ) -> Result<Inferred, Diagnostic> {
+        match requirement {
+            Requirement::Type(expected) => {
+                self.constrain(subject.type_.clone(), expected, span)?;
+                Ok(subject)
+            }
+            Requirement::Predicate(predicate) => {
+                let settled = self.settle(subject.type_.clone(), true);
+                let reified = self.reify_runtime_type(&settled).ok_or_else(|| {
+                    Diagnostic::new(
+                        "BLOT_TYPE_NOT_REIFIABLE",
+                        format!(
+                            "`{}` has no compile-time reading; use a canonical type value to constrain an open subject.",
+                            self.show(&settled)
+                        ),
+                        span,
+                    )
+                })?;
+                let answer = run(apply(
+                    self.context.clone(),
+                    predicate,
+                    reified,
+                    span,
+                    Runtime::new(Phase::Comptime, path.to_owned()),
+                ))?;
+                match answer {
+                    Value::Tag { name, .. } if name == "True" => Ok(subject),
+                    Value::Tag { name, .. } if name == "False" => Err(Diagnostic::new(
+                        "BLOT_DOES_NOT_SATISFY",
+                        format!("`{}` does not satisfy the predicate.", self.show(&settled)),
+                        span,
+                    )),
+                    _ => Err(Diagnostic::new(
+                        "BLOT_TYPE_ERROR",
+                        "A requirement must be a type value or a compile-time predicate from a closed type to `Bool`.",
+                        span,
+                    )),
+                }
+            }
+        }
     }
 
     fn fresh(&self) -> Type {
@@ -6920,14 +6950,35 @@ fn unrepresentable_integer(type_: &Type) -> Option<&Type> {
     }
 }
 
-fn union_types(mut types: Vec<Type>) -> Type {
-    if types.is_empty() {
-        return Type::Bottom;
+fn union_types(types: Vec<Type>) -> Type {
+    fn append(members: &mut Vec<Type>, type_: Type) -> bool {
+        match type_ {
+            Type::Bottom => true,
+            Type::Top => false,
+            Type::Union(nested) => nested
+                .into_iter()
+                .all(|member| append(members, member)),
+            type_ => {
+                if !members.iter().any(|member| same_type(member, &type_)) {
+                    members.push(type_);
+                }
+                true
+            }
+        }
     }
-    if types.len() == 1 {
-        return types.remove(0);
+
+    let mut members = Vec::new();
+    if !types
+        .into_iter()
+        .all(|type_| append(&mut members, type_))
+    {
+        return Type::Top;
     }
-    Type::Union(types)
+    match members.len() {
+        0 => Type::Bottom,
+        1 => members.pop().expect("one union member exists"),
+        _ => Type::Union(members),
+    }
 }
 
 fn join_types(types: Vec<Type>) -> Type {
@@ -8198,4 +8249,26 @@ mod tests {
             }
         ));
     }
+
+    #[test]
+    fn closed_unions_have_one_canonical_form() {
+        let one = Type::Range {
+            domain: Domain::Int,
+            low: Some(Scalar::Int(1.into())),
+            high: Some(Scalar::Int(1.into())),
+        };
+        assert!(same_type(
+            &union_types(vec![
+                Type::Bottom,
+                one.clone(),
+                Type::Union(vec![one.clone()]),
+            ]),
+            &one,
+        ));
+        assert!(matches!(
+            union_types(vec![one, Type::Top]),
+            Type::Top
+        ));
+    }
+
 }

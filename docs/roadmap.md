@@ -812,13 +812,13 @@ in the comptime evaluator.
 line of every program. A default fixity naming a binding by string is the
 mechanism, and it is not going to be hidden.
 
-**No equi-recursive types in the lattice.**
-`const Json = #Null | #Num Int |
-#Arr [Json];` will keep being refused. A
-recursive datatype can be structural but never _named_, so it can never appear
-in a `sig` and — since `LANGUAGE.md` §15 requires a concrete first-order type —
-never be exported. State this in `LANGUAGE.md` §10 next to the
-`const Message = ...` example; do not attempt the lattice change.
+**No first-class equi-recursive type values.** The inference graph itself may
+be cyclic: recursive functions and recursive flows terminate through the
+visited ordered-constraint relation. That implementation fact is not a source
+constructor. `const Json = #Null | #Num Int | #Arr [Json];` remains refused. A
+recursive datatype can be structural but never _named_, so it cannot appear in
+a `sig` or cross the concrete first-order Runtime-HIR boundary. Adding it would
+be a separate closed-type design, not a reason to complicate open inference.
 
 **No record row variable.** Investigated as a go/no-go and refused. The case for
 one is that three limits look like one missing feature: a spread of a parameter

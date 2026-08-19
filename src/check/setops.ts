@@ -58,6 +58,7 @@ import {
   boundAtMost,
   type ClosedBound,
   type SimpleType,
+  TOP,
   union,
 } from "./type.ts";
 import { show, showRange } from "./print.ts";
@@ -79,6 +80,36 @@ export type SetResult =
   | { readonly tag: "refused"; readonly refusal: Refusal };
 
 export const UNSUPPORTED_SET_OP = "BLOT_UNSUPPORTED_SET_OP";
+
+/**
+ * Canonical union at the closed type-value boundary.
+ *
+ * Open inference does not build union nodes: several lower bounds are its
+ * join. Type values have already finished that job, so they can be flattened,
+ * stripped of `bottom`, short-circuited by `top`, and deduplicated here. This
+ * is the one normalization boundary shared by bridging and exact set algebra.
+ */
+export function normalizeClosedUnion(
+  members: readonly SimpleType[],
+): SimpleType {
+  const flat: SimpleType[] = [];
+  const append = (member: SimpleType): void => {
+    if (member.tag === "bottom") return;
+    if (member.tag === "union") {
+      for (const nested of member.members) append(nested);
+      return;
+    }
+    flat.push(member);
+  };
+  for (const member of members) append(member);
+  if (flat.some((member) => member.tag === "top")) return TOP;
+
+  const distinct = new Map<string, SimpleType>();
+  for (const member of flat) distinct.set(show(member), member);
+  const normalized = [...distinct.values()];
+  if (normalized.length === 0) return BOTTOM;
+  return union(normalized);
+}
 
 /** A ground shape whose inhabitants the lattice can name exactly. */
 type Atom =
@@ -173,13 +204,7 @@ function atomsOf(type: SimpleType): Atom[] {
 }
 
 function fromAtoms(pieces: readonly Atom[]): SimpleType {
-  const distinct = new Map<string, Atom>();
-  for (const piece of pieces) distinct.set(show(piece), piece);
-  const members = [...distinct.values()];
-  // `union` renders an empty member list as nothing at all; the empty set is
-  // `bottom`, which the lattice already prints as `⊥`.
-  if (members.length === 0) return BOTTOM;
-  return union(members);
+  return normalizeClosedUnion(pieces);
 }
 
 /** The atom both describe, or `null` when they are disjoint. */

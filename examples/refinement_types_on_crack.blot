@@ -32,7 +32,9 @@ let rendered = render {
 // by an ordinary handler value.
 const Tick = @effect { .next = Unit -> Int; }
 
-let apply = fn callback => fn value => callback value
+let apply = fn callback => fn value =>
+  result <- callback value
+  return result
 let add_tick = fn value =>
   tick <- Tick.next ()
   return value + tick
@@ -45,9 +47,13 @@ let ticking = {
   .return = fn value => value;
 }
 
+let apply_tick = fn () =>
+  result <- apply add_tick 40
+  return result
+
 let effect_result = @handle (
   Tick,
-  fn () => apply add_tick 40,
+  apply_tick,
   ticking
 )
 
@@ -68,7 +74,7 @@ let at = fn values => fn index => case index >= 0 && index < Contracts.count val
   #False => 0
 
 // Omega stays affine while participating in the same call-site decision.
-let consume = fn !value => value
+let consume = fn !value => value + 0
 let !token = 7
 let owned_result = consume (!token)
 

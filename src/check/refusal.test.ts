@@ -55,14 +55,14 @@ Deno.test("a refusal from the prelude points at the caller, not the prelude", as
   assertEquals(found.line <= found.lines, true);
 });
 
-Deno.test("a refusal from a `@type.satisfies` predicate points at the predicate", async () => {
+Deno.test("a refusal from an `@satisfies` predicate points at the predicate", async () => {
   const found = await refusalAt(
     `open import "blot:prelude"
 ` +
       `let reading = { .value = 12; }
 ` +
-      `let _ = @type.satisfies (reading, fn t =>\n` +
-      `  return expect (refines (t, Has { .missing = Int; }), "needs .missing")\n` +
+      `let _ = @satisfies reading (fn t =>\n` +
+      `  return expect (refines (t, { .missing = Int; }), "needs .missing")\n` +
       `)\n` +
       `return reading.value
 `,

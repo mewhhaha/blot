@@ -180,9 +180,9 @@ return (reflected, point)
       character: 19,
     });
     assert(attachedMember !== null);
-    assertStringIncludes(
-      attachedMember.contents.value,
-      "sig Point.new = ⊤",
+    assertEquals(
+      attachedMember.contents.value.includes("sig Point.new"),
+      false,
     );
     assertStringIncludes(
       attachedMember.contents.value,

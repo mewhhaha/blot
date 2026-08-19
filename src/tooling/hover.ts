@@ -125,9 +125,6 @@ function bindingAt(
     if (type === null || type === undefined) {
       if (attachedMember !== null) {
         type = bridge(attachedMember);
-        if (type === null && attachedMember.tag === "closure") {
-          type = { tag: "top" };
-        }
       }
     }
   }

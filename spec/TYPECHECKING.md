@@ -23,6 +23,32 @@ Predicate-defined integer types do not change this algebra. As specified in
 normalizes an accepted pure predicate to existing ranges and finite ground
 unions before bridging. Biunification never receives a predicate constructor.
 
+The coherent core is intentionally asymmetric:
+
+```txt
+open expression  --Simple-sub bounds--> principal structural type
+closed type value --Boolean normalizer--> canonical finite set
+```
+
+Open inference remains the polynomial bound graph. Closed type values are
+flattened, deduplicated, stripped of `bottom`, absorbed by `top`, and may use
+the exact ground intersection/difference fragment. This is compatible with the
+set interpretation and with the normal forms developed by
+[The Simple Essence of Boolean-Algebraic Subtyping](https://doi.org/10.1145/3776689),
+without moving arbitrary negation or intersection into open inference.
+
+Elaboration exposes one requirement judgment:
+
+```txt
+Gamma |- subject satisfies canonical(A)   iff Gamma |- subject <= A
+Gamma |- subject satisfies predicate(p)   iff close(subject) and p(reify(subject)) = True
+```
+
+Both `sig` and `@satisfies` call this judgment. `sig` accepts only
+`canonical(A)` because its following lambda may need bidirectional and rank-N
+checking. Predicate requirements are observations of a closed result: they may
+reject, but never grant an operation or add a solver node.
+
 ## 1. Type algebra
 
 Let labels range over interned field, constructor, and effect names. Let scalar
@@ -50,9 +76,12 @@ only after the same left-instantiation and right-skolemisation checks have been
 performed.
 
 A type is **ground** when it contains no inference variable or `forall`. Source
-union values bridge only to ground unions. Inference may compute joins
-containing variables internally; those joins are not admissible as the
-right-hand disjunction rule described below.
+union values bridge only to ground unions. At that boundary, nested unions are
+flattened, duplicate members and `bottom` are removed, `top` absorbs, and zero
+members becomes `bottom`. The same normalizer receives exact ground
+intersection and difference results. Inference may compute joins containing
+variables internally; those joins are not admissible as the right-hand
+disjunction rule described below.
 
 ## 2. Declarative subtyping
 
@@ -228,6 +257,10 @@ most once, and each ordered variable pair is expanded at most once per root
 constraint. Extrusion memoises source variables. Ground union choice is finite.
 The implementation must compare interned identities rather than repeatedly walk
 trees for this measure to be reflected in runtime cost.
+
+A visited ordered pair may close a cycle in the inference graph. This supports
+recursive functions and recursive flows; it does not introduce a first-class
+equi-recursive source type. Recursive type values remain outside this algebra.
 
 ### Lemma 6: persistent environments preserve lexical lookup
 
@@ -437,10 +470,13 @@ constants.
 
 When a callable belongs to an ordinary compile-time record and one premise is
 unavailable, checking falls back to the record's settled arrow. An attached
-namespace has no such runtime field type and therefore retains the existing
-`top` refusal. Fresh inference variables are allocated for every `VType`
-derivation, so two call sites never share an instantiation merely because they
-selected the same source lambda.
+namespace has no such runtime field type, so the checker returns a fresh
+inference variable carrying staged-availability evidence. That evidence lives
+outside the subtype lattice and prevents the variable from authorizing runtime
+work or proving a signature. It is deliberately not `top`: lack of compile-time
+evidence is not the set of all inhabitants. Fresh inference variables are
+allocated for every `VType` derivation, so two call sites never share an
+instantiation merely because they selected the same source lambda.
 
 While deriving `VType` for a selected closure, a structural projection whose
 label is not yet a value introduces a staged projection obligation rather than

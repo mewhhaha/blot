@@ -133,6 +133,12 @@ inference variable. Otherwise the checker reifies the subject's settled type,
 applies the requirement as a compile-time predicate, and accepts only
 `#True` or `#False`. The assertion then erases.
 
+A `sig` uses this same requirement classifier and subtype judgment. It accepts
+only the canonical branch because an adjacent lambda may need bidirectional
+rank-N checking; predicate requirements are observations and cannot elaborate a
+lambda. Thus there is one semantic kernel with two source presentations, not two
+assertion mechanisms.
+
 That one rule covers scalar, collection, structural, higher-order, effect, and
 nominal requirements:
 
@@ -256,6 +262,12 @@ affine obligations before and after refinement. These three domains compose at
 a call site without being collapsed into one unsound lattice.
 
 ## 3. Elaboration and normalization
+
+Closed unions have one normal form before they enter the solver: flatten nested
+unions, remove `bottom`, let `top` absorb, remove duplicate members, and map
+zero or one member to `bottom` or that member. Exact ground intersection and
+difference return through the same normalizer. Open inference variables never
+enter this Boolean layer; their joins remain Simple-sub lower bounds.
 
 Write `R(p)` for the exact integer set denoted by an accepted predicate. The
 normalizer is defined by:

@@ -795,6 +795,14 @@ Arrays are ordered homogeneous collections:
 [first, second, ...rest]
 ```
 
+`[A]` means `Array A`: every position has the same element constraint `A`.
+It is not a tuple, a fixed-length vector, a list of alternatives, or an array
+whose length appears in its type. In an inferred type, `['a]` binds one
+homogeneous element variable; each polymorphic call freshens it. In a type-value
+expression, `[Int, Str]` computes `[Int | Str]`. The empty type-value array
+is `[bottom]`, while an ordinary runtime `[]` begins with a fresh element
+variable and receives its element constraint from use.
+
 An array spread must evaluate to an array. Arrays are immutable; `@array.set`
 and `@array.push` return new arrays.
 
@@ -1862,19 +1870,27 @@ rows with the same `..e` notation.
 The primitive type values are `@type.int`, `@type.float`, `@type.float32`,
 `@type.f32x4`, `@type.text`, `@type.unit`, and `@type.unbounded`.
 
-The type algebra includes:
+The type algebra has two deliberately different normalization layers:
 
-- inclusive ranges;
-- union, intersection, and difference;
-- function arrows, and the effect row an arrow performs;
-- structural shapes and arrays;
-- nominal sealing and opening;
-- namespace attachment;
-- reflection;
-- type-of;
-- union construction from an array; and
-- pure integer predicate refinement; and
-- explicit predicative `@forall`.
+- open inference uses Simple-sub bounds, structural records and arrays,
+  variants, arrows, and effect rows; a join of open values is several lower
+  bounds rather than an arbitrary Boolean formula;
+- closed type values use exact set normalization: unions are flattened,
+  `bottom` is removed, `top` absorbs, duplicates disappear, and supported
+  ground intersections/differences are computed to ranges, closed variants,
+  unit, or `bottom`.
+
+This is the useful part of Boolean-algebraic subtyping without putting arbitrary
+intersection and negation into the mutable inference graph. There is no
+intersection or complement type constructor in open inference. A closed
+operation that the representable algebra cannot answer exactly is rejected
+rather than approximated.
+
+The closed type-value surface includes inclusive ranges; union, supported exact
+intersection and difference; function arrows and effect rows; structural shapes
+and arrays; nominal sealing and opening; namespace attachment; reflection;
+type-of; union construction from an array; pure integer predicate refinement;
+and explicit predicative `@forall`.
 
 An attached namespace is transparent to type checking. This is how the prelude
 `struct` returns one value that is both a storage type and a namespace
@@ -1903,18 +1919,20 @@ Core Wasm ABI.
 
 A namespace member is a compile-time value, and projecting one is typed by that
 value rather than by the field rule. A member that is itself a type projects to
-that type. A member that is a function has no arrow to read off it and projects
-to `⊤`. Calling one is typed by evaluating the whole application at compile
-time, and the value produced is the result type. The arguments must therefore be
-values the checker can compute: a literal, a `const`, or a binding whose value
-it already computed to type an earlier member call. A call it cannot evaluate
-has result type `⊤`, so nothing can be done with the result and no `sig` is
-satisfied by it.
+that type. A member function with no recoverable arrow projects to an inference
+variable marked as available only after specialization. Calling one is typed by
+evaluating the whole application at compile time, and the value produced is the
+result type. The arguments must therefore be values the checker can compute: a
+literal, a `const`, or a binding whose value it already computed to type an
+earlier member call. If this pass cannot evaluate the call, the marked variable
+may flow until a concrete specialization revisits it, but it cannot authorize a
+runtime operation or prove an arbitrary `sig`. This is not `⊤`: semantic
+`top` admits every value, while unavailable evidence admits no conclusion.
 
 The same application rule specializes a callable field of an ordinary record
 whose value is known at compile time. Unlike an attached namespace, that record
 also has an ordinary structural type. Consequently an unevaluable call falls
-back to its inferred arrow rather than becoming `⊤`. This remains true when the
+back to its inferred arrow rather than to a staged-only result. This remains true when the
 record is reached through a namespace member: `World.Position.insert entity`
 types `Position` as the attached record and `insert` as its ordinary callable
 field. Compile-time projection follows the whole chain; it does not force games
@@ -1938,10 +1956,15 @@ The implemented checker does not currently prove:
   values (§10.4);
 - the fields a spread carries through from an operand whose own fields are not
   known where the spread is written (§6); or
-- impredicative instantiation.
+- impredicative instantiation; or
+- a first-class recursive type value such as
+  `const Json = #Null | #Array [Json]`.
 
-Rank-N types are explicit and predicative through `@forall`. Higher-kinded
-abstraction is compile-time function application rather than a kind system.
+The constraint graph may itself be cyclic: recursive functions and recursive
+flows are checked by revisiting ordered constraints at most once. That internal
+graph recursion is not an equi-recursive source type constructor. Rank-N types
+are explicit and predicative through `@forall`. Higher-kinded abstraction is
+compile-time function application rather than a kind system.
 
 There is no record row variable, and there is not going to be one; the reasoning
 is in `docs/roadmap.md`. The lattice has width subtyping, which says what a
@@ -2692,8 +2715,12 @@ for (index, value) in Iter.indexed xs:
 
 ### 13.3.1 Applying a requirement
 
-`@satisfies value requirement` is the single assertion and refinement
-operation. It returns `value` unchanged and accepts either form of requirement:
+The checker has one judgment, `subject satisfies requirement`. Both a `sig`
+and `@satisfies` use it; `sig` additionally drives bidirectional checking of
+a following lambda and therefore requires the canonical type form.
+
+`@satisfies value requirement` is the expression form. It returns `value`
+unchanged and accepts either form of requirement:
 
 1. A canonical type value constrains the subject's open inferred type.
 2. A compile-time predicate receives the subject's closed, reifiable inferred

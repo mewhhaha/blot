@@ -6,7 +6,12 @@
 // answer show up as a diff rather than as "still returns something".
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { difference, intersect, UNSUPPORTED_SET_OP } from "./setops.ts";
+import {
+  difference,
+  intersect,
+  normalizeClosedUnion,
+  UNSUPPORTED_SET_OP,
+} from "./setops.ts";
 import { show } from "./print.ts";
 import {
   BOTTOM,
@@ -241,4 +246,17 @@ Deno.test("a union with a repeated member answers once", () => {
     ),
     "1 | 2",
   );
+});
+
+Deno.test("closed unions have one canonical empty, flat, distinct form", () => {
+  assertEquals(show(normalizeClosedUnion([])), "⊥");
+  assertEquals(
+    show(normalizeClosedUnion([
+      BOTTOM,
+      intLiteral(1n),
+      union([intLiteral(1n), intLiteral(2n)]),
+    ])),
+    "1 | 2",
+  );
+  assertEquals(show(normalizeClosedUnion([intLiteral(1n), TOP])), "⊤");
 });
