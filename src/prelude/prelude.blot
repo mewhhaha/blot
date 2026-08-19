@@ -893,6 +893,48 @@ const iter_items = fn values => {
   ;
 }
 
+// A half-open affine walk over one array Store. The state is only the logical
+// index: `values`, `stop`, and `stride` are loop-invariant captures, so Runtime
+// HIR can keep one Store identity and lower the walk to scalar induction plus
+// `store.read`. A zero stride is empty rather than an accidental infinite loop.
+//
+// `slice` and `reverse` below are ordinary specializations. They deliberately
+// return iterators, not arrays: the recommended consumer is still `for`, and no
+// temporary collection is implied by selecting or reversing an address order.
+const iter_affine_next =
+  fn (values, index, stride) => case array_get (values, index) of
+    #None => None
+    #Some value => Some (value, @int.add index stride)
+
+const iter_affine = fn (values, start, stop, stride) => {
+  .state = start;
+  .step = fn index =>
+    if is_less (@int.cmp 0 stride):
+      if is_less (@int.cmp index stop):
+        return iter_affine_next (values, index, stride)
+      else:
+        return None
+    else:
+      if is_less (@int.cmp stride 0):
+        if is_less (@int.cmp stop index):
+          return iter_affine_next (values, index, stride)
+        else:
+          return None
+      else:
+        return None
+  ;
+}
+
+const iter_slice =
+  fn (values, start, stop) => iter_affine (values, start, stop, 1)
+
+const iter_reverse = fn values => iter_affine (
+  values,
+  @int.sub (Array.length values) 1,
+  -1,
+  -1
+)
+
 // Draining one. `for` is this loop with the accumulator inferred from the names
 // its body rebinds; written out, it is the same fold.
 const iterate = fn (iterator, initial, visit) =>
@@ -916,6 +958,9 @@ const Iter =
   {
     .range = iter_range;
     .items = iter_items;
+    .affine = iter_affine;
+    .slice = iter_slice;
+    .reverse = iter_reverse;
     .indexed = @array.indexed;
     .iterate = iterate;
     .collect = collect;

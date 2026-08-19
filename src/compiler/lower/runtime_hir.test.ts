@@ -83,6 +83,39 @@ else:
   }
 });
 
+Deno.test("Runtime HIR keeps one Store identity across affine for loops", async () => {
+  const source = `open import "blot:prelude"
+const Source = @effect.host { .value = Int -> Int; }
+dynamic <- Source.value 0
+let values = [dynamic, 2, 3, 4, 5]
+let total = 0
+for value in Iter.slice (values, 1, 5):
+  total := total + value
+for value in Iter.reverse values:
+  total := total + value
+for value in Iter.affine (values, 0, 5, 2):
+  total := total + value
+return total
+`;
+  await withSource(source, async (compiler, path) => {
+    const hir = await compiler.prepare(path);
+    const operations = hir.functions.flatMap((fn) => fn.blocks).flatMap(
+      (block) => block.operations,
+    );
+    const kinds = operations.map((operation) => operation.kind);
+    assertEquals(kinds.filter((kind) => kind === "store.empty").length, 1);
+    assertEquals(kinds.filter((kind) => kind === "store.grow").length, 5);
+    assertEquals(kinds.filter((kind) => kind === "store.read").length, 3);
+    assertEquals(kinds.filter((kind) => kind === "call.direct").length, 0);
+
+    const artifact = await compiler.compile(path);
+    assertEquals(
+      await runDefault(artifact.wasm, { value: (_: bigint) => 1n }),
+      38n,
+    );
+  });
+});
+
 Deno.test("Runtime HIR retains non-tail structural recursion as direct calls", async () => {
   const source = `operators {
   infixl 55 (<>) = Array.append;

@@ -1,0 +1,1 @@
+{ .slice_total = 14; .reverse_squares = 55; .alternating_total = 9; .zero_stride_total = 0; }
