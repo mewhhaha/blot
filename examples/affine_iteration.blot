@@ -1,0 +1,29 @@
+// Address transforms are iterators, so the ordinary `for` surface performs
+// slices, reversal, and striding without constructing intermediate arrays.
+
+open import "blot:prelude"
+
+let values = [1, 2, 3, 4, 5]
+
+let slice_total = 0
+for value in Iter.slice (values, 1, 5):
+  slice_total := slice_total + value
+
+let reverse_squares = 0
+for value in Iter.reverse values:
+  reverse_squares := reverse_squares + value * value
+
+let alternating_total = 0
+for value in Iter.affine (values, 0, Array.length values, 2):
+  alternating_total := alternating_total + value
+
+let zero_stride_total = 0
+for value in Iter.affine (values, 0, Array.length values, 0):
+  zero_stride_total := zero_stride_total + value
+
+return {
+  .slice_total = slice_total;
+  .reverse_squares = reverse_squares;
+  .alternating_total = alternating_total;
+  .zero_stride_total = zero_stride_total;
+}

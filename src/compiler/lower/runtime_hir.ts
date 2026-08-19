@@ -2956,12 +2956,39 @@ class ResidualHirBuilder {
   ): boolean {
     if (pattern.tag === "wildcard") return true;
     if (pattern.tag === "name") {
-      let bound = value;
-      if (value.kind === "dynamic" && value.meaning === "fresh-store") {
+      let bindable = value;
+      if (
+        value.kind === "array" && this.staticValue(value) === undefined
+      ) {
+        let elementType = value.elementType;
+        if (elementType === undefined) {
+          const first = value.elements[0];
+          if (first === undefined) {
+            throw this.outside(pattern.span, "untyped dynamic empty array");
+          }
+          elementType = this.typeForResidualValue(first, pattern.span);
+        }
+        bindable = {
+          ...this.materialize(
+            value,
+            this.storeType(elementType),
+            pattern.span,
+          ),
+          meaning: "fresh-store",
+        };
+      }
+      let bound = bindable;
+      if (
+        bindable.kind === "dynamic" && bindable.meaning === "fresh-store"
+      ) {
         if (pattern.qualifier === "linear") {
-          bound = { ...value, meaning: "reusable-store" };
+          bound = { ...bindable, meaning: "reusable-store" };
         } else {
-          bound = { kind: "dynamic", value: value.value, type: value.type };
+          bound = {
+            kind: "dynamic",
+            value: bindable.value,
+            type: bindable.type,
+          };
         }
       }
       environment.names.set(pattern.name, bound);

@@ -325,6 +325,34 @@ returning the next closure: both express the protocol, but the closure form
 allocates one per element and leaves the compiler resolving a lambda set that
 grows with the loop.
 
+Array address order is also expressed through that protocol, without a second
+`View` value or a temporary array. `Iter.affine (values, start, stop, stride)`
+walks a half-open interval: a positive stride continues while `index < stop`, a
+negative stride continues while `index > stop`, and zero produces no elements.
+`Iter.slice` and `Iter.reverse` are ordinary specializations. The intended
+surface remains `for`:
+
+```blot
+let total = 0
+
+for value in Iter.slice (values, 2, 8):
+  total := total + value
+
+for value in Iter.reverse values:
+  total := total + value * value
+
+for value in Iter.affine (values, 0, Array.length values, 2):
+  total := total + value       // every other element
+```
+
+These iterators borrow one logical array value. Runtime lowering gives a bound
+dynamic array one Store identity, keeps the root and affine parameters
+loop-invariant, and emits scalar induction plus `store.read`; selecting,
+reversing, and striding do not allocate collections. Bounds remain total:
+starting outside the Store or stepping to its edge ends the iterator. See
+[`spec/AFFINE_ITERATION.md`](spec/AFFINE_ITERATION.md) for the lowering and
+evidence contract.
+
 Nothing is in scope that the module did not ask for. The prelude is an ordinary
 module with no privilege, so every file begins by opening it:
 
