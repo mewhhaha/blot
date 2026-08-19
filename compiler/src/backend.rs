@@ -1341,6 +1341,9 @@ fn emit_dynamic_operation(
                 (RuntimeType::Float64, Some("negate")) => {
                     instructions.f64_neg();
                 }
+                (RuntimeType::Float32, Some("square-root")) => {
+                    instructions.f32_sqrt();
+                }
                 (type_, operator) => {
                     return Err(format!(
                         "{}: dynamic unary scalar operator {operator:?} does not accept {}",
@@ -1363,6 +1366,9 @@ fn emit_dynamic_operation(
                 }
                 Some("signed-integer-64-to-float-64") => {
                     instructions.f64_convert_i64_s();
+                }
+                Some("signed-integer-64-to-float-32") => {
+                    instructions.f32_convert_i64_s();
                 }
                 Some("float-64-to-float-32") => {
                     instructions.f32_demote_f64();

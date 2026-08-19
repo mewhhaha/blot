@@ -124,8 +124,10 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@float.of_int"
         | "@int.of_float"
         | "@f32.neg"
+        | "@f32.sqrt"
         | "@f32.is_nan"
         | "@f32.of_float"
+        | "@f32.of_int"
         | "@float.of_f32"
         | "@f32x4.splat"
         | "@f32x4.sum"
@@ -362,9 +364,7 @@ pub fn run_primitive(
             // empty row. Both witnesses are closed, so source never observes a
             // binder identity or an open quantified body.
             substitute_type_variable(body, *variable, &Value::Unit)
-                .or_else(|| {
-                    substitute_type_variable(body, *variable, &Value::Array(Vec::new()))
-                })
+                .or_else(|| substitute_type_variable(body, *variable, &Value::Array(Vec::new())))
                 .ok_or_else(|| {
                     Diagnostic::new(
                         "BLOT_TYPE_INSTANTIATE",
@@ -389,27 +389,9 @@ pub fn run_primitive(
             };
             Ok(values.iter().skip(1).cloned().fold(first, union))
         }
-        "@satisfies" => {
-            if matches!(
-                &arguments[1],
-                Value::Closure { .. }
-                    | Value::ClosureChoice { .. }
-                    | Value::Primitive { .. }
-            ) || inhabits(&arguments[0], &arguments[1])
-            {
-                Ok(arguments[0].clone())
-            } else {
-                Err(Diagnostic::new(
-                    "BLOT_DOES_NOT_SATISFY",
-                    format!(
-                        "{} does not inhabit {}.",
-                        show(&arguments[0]),
-                        show(&arguments[1])
-                    ),
-                    span,
-                ))
-            }
-        }
+        // Type checking owns this judgment. Evaluation preserves the checked
+        // subject instead of losing inferred evidence by checking it again.
+        "@satisfies" => Ok(arguments[0].clone()),
         "@shape.get" => {
             let fields = shape(&arguments[0], span, name)?;
             let key = text(&arguments[1], span, name)?;
@@ -777,6 +759,7 @@ pub fn run_primitive(
         "@f32.mul" => float32_binary(arguments, span, name, |left, right| left * right),
         "@f32.div" => float32_binary(arguments, span, name, |left, right| left / right),
         "@f32.neg" => Ok(Value::Float32(-float32(&arguments[0], span, name)?)),
+        "@f32.sqrt" => Ok(Value::Float32(float32(&arguments[0], span, name)?.sqrt())),
         "@f32.is_nan" => Ok(boolean(float32(&arguments[0], span, name)?.is_nan())),
         "@f32.cmp" => float_ordering(
             f64::from(float32(&arguments[0], span, name)?),
@@ -785,6 +768,17 @@ pub fn run_primitive(
             name,
         ),
         "@f32.of_float" => Ok(Value::Float32(float(&arguments[0], span, name)? as f32)),
+        "@f32.of_int" => {
+            let value = integer(&arguments[0], span, name)?;
+            let converted = value.to_f32().unwrap_or_else(|| {
+                if value.sign() == num_bigint::Sign::Minus {
+                    f32::NEG_INFINITY
+                } else {
+                    f32::INFINITY
+                }
+            });
+            Ok(Value::Float32(converted))
+        }
         "@float.of_f32" => Ok(Value::Float(f64::from(float32(&arguments[0], span, name)?))),
         "@f32x4.of" => Ok(Value::Vector([
             float32(&arguments[0], span, name)?,
@@ -1954,5 +1948,27 @@ mod tests {
             assert_eq!(error.code, "BLOT_UNORDERED");
             assert!(error.message.starts_with(operation));
         }
+    }
+
+    #[test]
+    fn scalar_float32_primitives_round_at_the_operation() {
+        let span = Span { start: 1, end: 2 };
+        let converted = run_primitive(
+            "@f32.of_int",
+            vec![Value::Int(BigInt::from(16_777_217))],
+            span,
+            Phase::Comptime,
+        )
+        .expect("integer converts to F32");
+        assert!(matches!(converted, Value::Float32(value) if value == 16_777_216.0));
+
+        let root = run_primitive(
+            "@f32.sqrt",
+            vec![Value::Float32(9.0)],
+            span,
+            Phase::Comptime,
+        )
+        .expect("F32 square root evaluates");
+        assert!(matches!(root, Value::Float32(value) if value == 3.0));
     }
 }

@@ -2283,7 +2283,7 @@ check(
   `const Money = #Money I32 <+ { .of = fn n => #Money n; }
 return fn amount => Money.of amount
 `,
-  "'a -> ⊤",
+  "'a -> 'b",
 );
 
 rejects(
@@ -2295,7 +2295,7 @@ const priced = fn amount =>
   return converted
 return priced 42
 `,
-  "anything is not #Money",
+  "BLOT_REFLECTION_NOT_INDEXED",
 );
 
 check(
@@ -2784,7 +2784,7 @@ check(
   return named.name
 return name_of
 `,
-  "{ .name = Str; } -> Str",
+  "({ .name = Str; } & { .name = 'a; }) -> 'a",
 );
 
 check(
@@ -2799,8 +2799,7 @@ return checked.name
 
 check(
   "a staged requirement combinator specializes its open constraint",
-  `const require = fn requirement => fn value =>
-  @satisfies value requirement
+  `const require = fn requirement => fn value => @satisfies value requirement
 let person = { .name = "Ada"; .age = 36; }
 let checked = require { .name = Str; } person
 return checked.name
@@ -2810,8 +2809,7 @@ return checked.name
 
 rejects(
   "a runtime requirement argument is not silently trusted",
-  `let require = fn requirement => fn value =>
-  @satisfies value requirement
+  `let require = fn requirement => fn value => @satisfies value requirement
 return require
 `,
   "BLOT_SIG_NOT_COMPTIME",
@@ -2825,4 +2823,3 @@ return require_name
 `,
   "BLOT_TYPE_NOT_REIFIABLE",
 );
-

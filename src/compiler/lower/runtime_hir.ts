@@ -207,6 +207,7 @@ export function exportResidualRuntimeHir(
       exportedWasmName,
       exported.sourceName,
       exported.named,
+      stagedModule === undefined ? undefined : exported.value,
     );
     runtimeFunctions.set(exported.sourceName, function_);
   }
@@ -293,6 +294,7 @@ class ResidualHirBuilder {
     wasmName: string,
     sourceName: string,
     namedExport: boolean,
+    stagedValue?: Value,
   ): BlotRuntimeFunction {
     const functionId = this.reserveFunction();
     this.#blocks = [];
@@ -323,14 +325,70 @@ class ResidualHirBuilder {
       forceResult = computation.result.tag === "tail";
       projectResult = namedExport;
     }
-    let residual = this.evaluate(resultExpression, environment);
-    if (forceResult) {
-      residual = this.forceEffectValue(residual, resultExpression.span);
+    let exportedType = this.checkedExportType(
+      this.#checked.moduleType,
+      sourceName,
+      namedExport,
+      new Set(),
+    );
+    let functionType = exportedType === null
+      ? null
+      : this.functionType(exportedType, new Set());
+    let residual: ResidualValue;
+    if (stagedValue === undefined || functionType === null) {
+      residual = this.evaluate(resultExpression, environment);
+      if (forceResult) {
+        residual = this.forceEffectValue(residual, resultExpression.span);
+      }
+      if (projectResult) {
+        residual = this.project(residual, sourceName, resultExpression.span);
+      }
+    } else {
+      residual = this.residualizeStatic(
+        { kind: "static", value: stagedValue },
+        environment,
+      );
     }
-    if (projectResult) {
-      residual = this.project(residual, sourceName, resultExpression.span);
+    const parameterTypes: TypeId[] = [];
+    while (functionType !== null) {
+      const parameterType = this.typeForSimpleType(
+        functionType.param,
+        resultExpression.span,
+        new Set(),
+      );
+      if (parameterType === null) {
+        return this.unsupported(
+          resultExpression.span,
+          "function export without a concrete parameter ABI",
+        );
+      }
+      const parameter = this.nextValue();
+      this.current().parameters.push({
+        value: parameter,
+        type: parameterType,
+        ownership: this.ownership(parameterType),
+        span: this.span(resultExpression.span),
+      });
+      parameterTypes.push(parameterType);
+      residual = this.apply(
+        residual,
+        { kind: "dynamic", value: parameter, type: parameterType },
+        resultExpression.span,
+        functionType.param,
+        functionType.result,
+      );
+      exportedType = functionType.result;
+      functionType = this.functionType(exportedType, new Set());
     }
-    const resultType = this.typeForExportValue(
+    let resultType: TypeId | null = null;
+    if (parameterTypes.length > 0 && exportedType !== null) {
+      resultType = this.typeForSimpleType(
+        exportedType,
+        resultExpression.span,
+        new Set(),
+      );
+    }
+    resultType ??= this.typeForExportValue(
       residual,
       sourceName,
       namedExport,
@@ -348,7 +406,11 @@ class ResidualHirBuilder {
     });
     const effects = [...this.#functionCapabilities].sort();
     const signature = this.signatures.length;
-    this.signatures.push({ parameters: [], result: result.type, effects });
+    this.signatures.push({
+      parameters: parameterTypes,
+      result: result.type,
+      effects,
+    });
     const function_: BlotRuntimeFunction = {
       id: functionId,
       name: wasmName,
@@ -930,6 +992,7 @@ class ResidualHirBuilder {
       });
       return { kind: "never" };
     }
+    if (fn.name === "@satisfies") return applied[0];
     const staticArguments = applied.map((value) => this.staticValue(value));
     if (staticArguments.every((value) => value !== undefined)) {
       return {
@@ -1262,7 +1325,10 @@ class ResidualHirBuilder {
       );
     }
     if (fn.name === "@float.of_int") {
-      return this.floatOfInteger(applied[0], span);
+      return this.floatOfInteger(applied[0], "float-64", span, fn.name);
+    }
+    if (fn.name === "@f32.of_int") {
+      return this.floatOfInteger(applied[0], "float-32", span, fn.name);
     }
     if (fn.name === "@f32.of_float") {
       const value = this.floating(
@@ -1344,6 +1410,20 @@ class ResidualHirBuilder {
         undefined,
         "multiply",
       );
+    }
+    if (fn.name === "@f32.sqrt") {
+      const value = this.floating(applied[0], "float-32", span, fn.name);
+      const result = this.nextValue();
+      this.current().operations.push({
+        kind: "scalar.unary",
+        result,
+        type: value.type,
+        operands: [value.value],
+        ownership: "plain",
+        operator: "square-root",
+        span: this.span(span),
+      });
+      return { kind: "dynamic", value: result, type: value.type };
     }
     if (fn.name === "@float.is_nan" || fn.name === "@f32.is_nan") {
       let expected: "float-32" | "float-64" = "float-64";
@@ -3194,7 +3274,10 @@ class ResidualHirBuilder {
   ): Extract<ResidualValue, { kind: "dynamic" }> {
     if (value.kind === "dynamic") {
       if (value.type !== expectedType) {
-        throw this.outside(span, "host argument type disagreement");
+        return this.unsupported(
+          span,
+          "runtime value representation disagrees with its checked argument type",
+        );
       }
       return value;
     }
@@ -3284,7 +3367,10 @@ class ResidualHirBuilder {
     if (expected.kind !== "product") {
       const scalar = this.dynamic(value);
       if (scalar.type !== expectedType) {
-        throw this.outside(span, "host argument type disagreement");
+        return this.unsupported(
+          span,
+          "runtime value representation disagrees with its checked argument type",
+        );
       }
       return scalar;
     }
@@ -3527,6 +3613,21 @@ class ResidualHirBuilder {
     return null;
   }
 
+  private functionType(
+    type: SimpleType,
+    seen: Set<number>,
+  ): Extract<SimpleType, { readonly tag: "fun" }> | null {
+    if (type.tag === "forall") return this.functionType(type.body, seen);
+    if (type.tag === "fun") return type;
+    if (type.tag !== "var" || seen.has(type.id)) return null;
+    seen.add(type.id);
+    for (const bound of [...type.lower, ...type.upper]) {
+      const functionType = this.functionType(bound, new Set(seen));
+      if (functionType !== null) return functionType;
+    }
+    return null;
+  }
+
   private typeForSimpleType(
     type: SimpleType,
     span: Span,
@@ -3664,16 +3765,22 @@ class ResidualHirBuilder {
     value: ResidualValue,
     substitutions: Map<string, TypeId>,
     span: Span,
+    seen: Set<number> = new Set(),
   ): void {
+    const staticValue = this.staticValue(value);
+    if (staticValue !== undefined && this.compileTimeOnly(staticValue)) return;
     if (type.tag === "forall") {
-      this.recordRuntimeType(type.body, value, substitutions, span);
+      this.recordRuntimeType(type.body, value, substitutions, span, seen);
       return;
     }
     if (type.tag === "var" || type.tag === "rigid") {
       if (this.valueHasUntypedStore(value)) {
         if (type.tag === "var") {
+          if (seen.has(type.id)) return;
+          const next = new Set(seen);
+          next.add(type.id);
           for (const bound of [...type.lower, ...type.upper]) {
-            this.recordRuntimeType(bound, value, substitutions, span);
+            this.recordRuntimeType(bound, value, substitutions, span, next);
           }
         }
         return;
@@ -3713,7 +3820,7 @@ class ResidualHirBuilder {
         const index = Number(name);
         const field = value.elements[index];
         if (field !== undefined) {
-          this.recordRuntimeType(fieldType, field, substitutions, span);
+          this.recordRuntimeType(fieldType, field, substitutions, span, seen);
         }
       }
       return;
@@ -3722,7 +3829,7 @@ class ResidualHirBuilder {
       for (const [name, fieldType] of type.fields) {
         const field = value.fields.get(name);
         if (field !== undefined) {
-          this.recordRuntimeType(fieldType, field, substitutions, span);
+          this.recordRuntimeType(fieldType, field, substitutions, span, seen);
         }
       }
       return;
@@ -3753,6 +3860,29 @@ class ResidualHirBuilder {
       );
     }
     if (value.kind === "tag") return this.valueHasUntypedStore(value.payload);
+    return false;
+  }
+
+  private compileTimeOnly(value: Value): boolean {
+    if (
+      value.tag === "opaque-type" || value.tag === "range" ||
+      value.tag === "union" || value.tag === "unbounded" ||
+      value.tag === "arrow" || value.tag === "type-variable" ||
+      value.tag === "forall" || value.tag === "effect" ||
+      value.tag === "extended"
+    ) return true;
+    if (value.tag === "sealed") return this.compileTimeOnly(value.inner);
+    if (value.tag === "shape") {
+      return [...value.fields.values()].every((field) =>
+        this.compileTimeOnly(field)
+      );
+    }
+    if (value.tag === "array") {
+      return value.elements.every((element) => this.compileTimeOnly(element));
+    }
+    if (value.tag === "tag" && value.payload !== null) {
+      return this.compileTimeOnly(value.payload);
+    }
     return false;
   }
 
@@ -3865,9 +3995,11 @@ class ResidualHirBuilder {
 
   private floatOfInteger(
     value: ResidualValue,
+    precision: "float-32" | "float-64",
     span: Span,
+    primitive: "@float.of_int" | "@f32.of_int",
   ): Extract<ResidualValue, { kind: "dynamic" }> {
-    const integer = this.integer(value, span, "@float.of_int");
+    const integer = this.integer(value, span, primitive);
     const integerType = integer.type;
     const base = this.constant(2_147_483_648n, integerType, span);
     const quotient = this.operation(
@@ -3919,7 +4051,10 @@ class ResidualHirBuilder {
       "subtract",
     );
     const integer32Type = this.type("integer-32");
-    const floatType = this.type("float-64");
+    const floatType = this.type(precision);
+    const conversion = precision === "float-32"
+      ? "signed-integer-32-to-float-32"
+      : "signed-integer-32-to-float-64";
     const high32 = this.convert(
       high,
       integer32Type,
@@ -3941,19 +4076,19 @@ class ResidualHirBuilder {
     const highFloat = this.convert(
       high32,
       floatType,
-      "signed-integer-32-to-float-64",
+      conversion,
       span,
     );
     const middleFloat = this.convert(
       middle32,
       floatType,
-      "signed-integer-32-to-float-64",
+      conversion,
       span,
     );
     const remainderFloat = this.convert(
       remainder32,
       floatType,
-      "signed-integer-32-to-float-64",
+      conversion,
       span,
     );
     const floatBase = this.constant(2_147_483_648, floatType, span);
@@ -4571,6 +4706,7 @@ class ResidualHirBuilder {
       };
     }
     if (known.tag === "array") {
+      if (known.elements.length === 0) return { kind: "empty-store" };
       return {
         kind: "array",
         elements: known.elements.map((element) =>

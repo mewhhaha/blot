@@ -21,8 +21,8 @@ import {
   type Value,
 } from "../comptime/value.ts";
 import {
-  type Bound,
   BOTTOM,
+  type Bound,
   type Domain,
   effects as effectRow,
   FLOAT,

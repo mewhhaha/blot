@@ -64,7 +64,10 @@ const REJECTIONS: Record<
   // value would never be compared against the `sig`, the second because a
   // variable satisfies every constraint put on it.
   "member_sig_unchecked": { code: "BLOT_TYPE_ERROR", stage: "check" },
-  "member_sig_unknowable": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "member_sig_unknowable": {
+    code: "BLOT_REFLECTION_NOT_INDEXED",
+    stage: "check",
+  },
   "literal_outside_union": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "missing_case": { code: "BLOT_TYPE_ERROR", stage: "check" },
   // A constructor set is covered by subtyping and reports through `constrain`;

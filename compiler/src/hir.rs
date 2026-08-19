@@ -96,21 +96,20 @@ fn runtime_layout_witness(
                 "type {type_id} has a direct recursive layout; use an indirect or Store representation"
             ));
         }
-        let scalar = |size: usize, alignment: usize, name: String| {
-            Ok(RuntimeLayoutWitness {
-                fingerprint: name,
-                size,
-                alignment,
-                stride: align_to(size, alignment)
-                    .ok_or_else(|| "invalid scalar alignment".to_owned())?,
-            })
-        };
+        let scalar =
+            |size: usize, alignment: usize, name: String| -> Result<RuntimeLayoutWitness, String> {
+                Ok(RuntimeLayoutWitness {
+                    fingerprint: name,
+                    size,
+                    alignment,
+                    stride: align_to(size, alignment)
+                        .ok_or_else(|| "invalid scalar alignment".to_owned())?,
+                })
+            };
         let witness = match type_ {
             RuntimeType::Unit => scalar(0, 1, "unit".to_owned())?,
             RuntimeType::Integer32 => scalar(4, 4, "integer-32".to_owned())?,
-            RuntimeType::SignedInteger64 => {
-                scalar(8, 8, "signed-integer-64".to_owned())?
-            }
+            RuntimeType::SignedInteger64 => scalar(8, 8, "signed-integer-64".to_owned())?,
             RuntimeType::Float32 => scalar(4, 4, "float-32".to_owned())?,
             RuntimeType::Float64 => scalar(8, 8, "float-64".to_owned())?,
             RuntimeType::Boolean => scalar(4, 4, "boolean".to_owned())?,
@@ -151,10 +150,7 @@ fn runtime_layout_witness(
             } => {
                 let representation = visit(types, *representation_type, memo, active)?;
                 RuntimeLayoutWitness {
-                    fingerprint: format!(
-                        "sealed({name:?},{})",
-                        representation.fingerprint
-                    ),
+                    fingerprint: format!("sealed({name:?},{})", representation.fingerprint),
                     ..representation
                 }
             }
@@ -225,7 +221,9 @@ fn runtime_layout_witness(
 fn validate_runtime_layouts(types: &[RuntimeType]) -> Result<(), Diagnostic> {
     for type_id in 0..types.len() {
         runtime_layout_witness(types, type_id).map_err(|error| {
-            hir_error(&format!("Runtime type {type_id} has no closed layout: {error}"))
+            hir_error(&format!(
+                "Runtime type {type_id} has no closed layout: {error}"
+            ))
         })?;
     }
     Ok(())
@@ -779,6 +777,11 @@ impl ResidualTrace {
                 let float = self.insert_type("float-32", RuntimeType::Float32);
                 self.convert_operation("float-64-to-float-32", float, value.id, span)
             }
+            "@f32.of_int" => {
+                let value = self.lower_as(arguments.first(), "signed-integer-64", span)?;
+                let float = self.insert_type("float-32", RuntimeType::Float32);
+                self.convert_operation("signed-integer-64-to-float-32", float, value.id, span)
+            }
             "@float.of_f32" => {
                 let value = self.lower_as(arguments.first(), "float-32", span)?;
                 let float = self.insert_type("float-64", RuntimeType::Float64);
@@ -827,6 +830,16 @@ impl ResidualTrace {
                     vec![value.id],
                     span,
                     Some("negate"),
+                )
+            }
+            "@f32.sqrt" => {
+                let value = self.lower_as(arguments.first(), "float-32", span)?;
+                self.operation(
+                    "scalar.unary",
+                    value.type_id,
+                    vec![value.id],
+                    span,
+                    Some("square-root"),
                 )
             }
             "@float.is_nan" | "@f32.is_nan" => {
@@ -7724,10 +7737,7 @@ mod tests {
         let layout = runtime_layout_witness(&types, 1).expect("Store layout");
         assert_eq!(layout.size, 8);
         assert_eq!(layout.alignment, 4);
-        assert_eq!(
-            layout.fingerprint,
-            "store(signed-integer-64;stride=8)"
-        );
+        assert_eq!(layout.fingerprint, "store(signed-integer-64;stride=8)");
     }
 
     #[test]

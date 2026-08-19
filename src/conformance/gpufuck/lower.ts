@@ -5179,6 +5179,18 @@ function lowerApply(
         lower(spine.args[0], scope, lowering),
       );
     }
+    if (spine.callee.name === "@f32.sqrt" && spine.args.length === 1) {
+      return at.unary(
+        UnaryOperator.SquareRootFloat32,
+        lower(spine.args[0], scope, lowering),
+      );
+    }
+    if (spine.callee.name === "@f32.of_int" && spine.args.length === 1) {
+      return at.convert(
+        NumericConversion.SignedInteger64ToFloat32,
+        lower(spine.args[0], scope, lowering),
+      );
+    }
     if (spine.callee.name === "@f32.of_float" && spine.args.length === 1) {
       return at.convert(
         NumericConversion.Float64ToFloat32,

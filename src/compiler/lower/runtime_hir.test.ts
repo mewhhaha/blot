@@ -37,6 +37,70 @@ async function runDefault(
   return run();
 }
 
+Deno.test("Runtime HIR exports inferred functions with a concrete ABI", async () => {
+  const source = `open import "blot:prelude"
+return {
+  .double = fn value => value + value;
+}
+`;
+  await withSource(source, async (compiler, path) => {
+    const hir = await compiler.prepare(path);
+    const exported = hir.exports.find((candidate) =>
+      candidate.sourceName === "double"
+    );
+    assert(exported?.phase === "runtime");
+    assertEquals(hir.signatures[exported.signature].parameters.length, 1);
+
+    const artifact = await compiler.compile(path);
+    const module = await WebAssembly.compile(artifact.wasm as BufferSource);
+    const instance = await WebAssembly.instantiate(module, {
+      [coreRuntimeImportModule]: createRuntimeImports(createRuntimeHeap([])),
+    });
+    const double = instance.exports["blot:double"];
+    assert(typeof double === "function");
+    assertEquals(double(21n), 42n);
+  });
+});
+
+Deno.test("Runtime HIR emits direct scalar F32 conversion and square root", async () => {
+  const source = `open import "blot:prelude"
+return {
+  .from_int = Float32.of_int;
+  .root = Float32.sqrt;
+}
+`;
+  await withSource(source, async (compiler, path) => {
+    const hir = await compiler.prepare(path);
+    const operations = hir.functions.flatMap((fn) =>
+      fn.blocks.flatMap((block) => block.operations)
+    );
+    assert(
+      operations.some((operation) =>
+        operation.kind === "scalar.unary" &&
+        operation.operator === "square-root"
+      ),
+    );
+    assert(
+      operations.some((operation) =>
+        operation.kind === "convert" &&
+        operation.conversion === "signed-integer-32-to-float-32"
+      ),
+    );
+
+    const artifact = await compiler.compile(path);
+    const module = await WebAssembly.compile(artifact.wasm as BufferSource);
+    const instance = await WebAssembly.instantiate(module, {
+      [coreRuntimeImportModule]: createRuntimeImports(createRuntimeHeap([])),
+    });
+    const fromInt = instance.exports["blot:from_int"];
+    const root = instance.exports["blot:root"];
+    assert(typeof fromInt === "function");
+    assert(typeof root === "function");
+    assertEquals(fromInt(16_777_217n), 16_777_216);
+    assertEquals(root(9), 3);
+  });
+});
+
 Deno.test("Runtime HIR lowers dynamic array decomposition through generic Store control flow", async () => {
   const operations = [
     {
