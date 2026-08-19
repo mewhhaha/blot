@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { BlotError } from "../diagnostic.ts";
-import { checkSource } from "./mod.ts";
+import { checkFile, checkSource } from "./mod.ts";
 
 const PRELUDE = `open import "blot:prelude"\n`;
 
@@ -104,4 +104,29 @@ Deno.test("statically out-of-bounds consuming extraction is rejected", async () 
     BlotError,
     "BLOT_OUT_OF_BOUNDS",
   );
+});
+
+
+Deno.test("verified relational summaries cross an imported module value", async () => {
+  const directory = await Deno.makeTempDir();
+  const library = `${directory}/contracts.blot`;
+  const root = `${directory}/main.blot`;
+  await Deno.writeTextFile(
+    library,
+    PRELUDE + `const count = fn values => Array.length values
+return { .count = count; }
+`,
+  );
+  await Deno.writeTextFile(
+    root,
+    PRELUDE + `const Contracts = import "./contracts.blot"
+sig at = [Int] -> Int -> Int
+let at = fn values => fn index => case index >= 0 && index < Contracts.count values of
+  #True => @array.get values index
+  #False => 0
+return at
+`,
+  );
+  const checked = await checkFile(root);
+  assertEquals(checked.type, "[Int] -> Int -> Int");
 });

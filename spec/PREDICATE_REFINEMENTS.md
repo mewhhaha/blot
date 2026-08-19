@@ -2,15 +2,18 @@
 
 ## Status
 
-This document specifies the first experimental slice of predicate-defined types.
-[`LANGUAGE.md`](../LANGUAGE.md) is normative for the implemented surface.
+This document specifies the implemented unknown-first refinement contract.
+[`LANGUAGE.md`](../LANGUAGE.md) is normative for the source surface.
 [`TYPECHECKING.md`](TYPECHECKING.md) remains authoritative for the ordinary type
 lattice, and [`SAFETY.md`](SAFETY.md) remains authoritative for relational
 proofs over particular run-time values.
 
-The experiment asks whether Blot can make most type declarations read as pure
-predicates while retaining the existing representation, inference, ownership,
-and compilation guarantees. It deliberately does not replace those mechanisms.
+The contract makes most type declarations ordinary compile-time values or pure
+predicates while retaining the existing representation, inference, effect,
+ownership, layout, and compilation guarantees. The supported model is complete
+at the canonicalization boundary defined below: open variables receive
+canonical constraints, closed types admit composable source predicates, and
+safety-sensitive relations require finite replayable evidence.
 
 ## 1. Thesis
 
@@ -81,7 +84,7 @@ where `Predicate` is an ordinary pure compile-time function. Its implementation
 uses the compiler primitive `@type.refine`; the primitive is necessary because
 an unbounded integer domain cannot be enumerated in Blot source.
 
-The initial accepted predicate grammar is semantic rather than lexical:
+The accepted inhabitant-predicate grammar is semantic rather than lexical:
 
 ```text
 p ::= x relation k | k relation x | p junction p | negation p
@@ -132,7 +135,7 @@ combinators in source. Those predicates are evaluated only after the subject
 type is reifiable, are bounded by ordinary compile-time fuel, and erase with the
 assertion. They do not become arbitrary closure nodes in biunification.
 
-The minimal compiler observations added by this experiment are:
+The minimal compiler observations in this contract are:
 
 ```text
 @type.equal left right         exact alpha-equivalent type-value identity
@@ -201,10 +204,13 @@ checking therefore receive the same canonical types they already understand. An
 empty intersection is rejected with `BLOT_EMPTY_REFINEMENT`; Blot has no source
 bottom type value.
 
-The first slice accepts integer bases only. This is a principled boundary: the
-existing integer lattice has discrete inclusive bounds and exact difference.
-Text has no successor operation, floats contain NaN and do not have singleton
-types, and structural predicates need a separate row/shape proposition design.
+Inhabitant-predicate inversion accepts integer bases. This is the complete
+supported inversion boundary: the existing integer lattice has discrete
+inclusive bounds and exact difference. Arrays, records, arrows, variants,
+effect rows, and seals already constrain unknowns directly as canonical type
+values, so they do not require closure inversion. Text has no successor
+operation, floats contain NaN and do not have singleton types, and accepting an
+arbitrary closure for either would turn subtyping into program equivalence.
 
 ## 4. Flow-sensitive facts
 
@@ -254,8 +260,7 @@ erase(e checked with U) = erase(e checked with the equivalent canonical range)
 
 For integer refinements, both layouts are signed `i64`. A program that differs
 only by spelling a canonical range as an equivalent predicate must produce
-identical Runtime HIR operations and equivalent WebAssembly. The experiment's
-benchmark records:
+identical Runtime HIR operations and equivalent WebAssembly. The benchmark records:
 
 1. cold and warm checking time for predicate and canonical-range spellings;
 2. emitted Wasm byte length and SHA-256;
@@ -269,21 +274,44 @@ produces at most one additional range piece per distinct comparison boundary;
 implementation limits must reject an oversized predicate before pathological
 compile-time growth.
 
-## 7. Non-goals of the first slice
+## 7. Deliberate rejection boundaries
+
+The following are rejection boundaries of the supported language,
+not incomplete implementations:
 
 - no unchecked `assume`;
 - no implicit run-time validation or coercion;
-- no inversion of structural, text, float, or effect predicates into new solver
-  nodes; structural and function predicates remain erased type assertions or
-  source functions that construct existing canonical types;
-- no dependent function arrows;
+- no arbitrary closure nodes in biunification: structural, array, arrow,
+  variant, seal, and effect requirements enter as existing canonical
+  constraints, while source predicates inspect closed reifiable types;
+- no dependent function arrows or general theorem proving;
+- relational publication is the verified unary affine
+  `length(parameter) + literal` certificate schema;
 - no ownership facts inside the type lattice; and
 - no change to Runtime HIR or the public ABI.
 
-Future work may generalize predicate inversion only where it can still normalize
-to the existing lattice, or allow an explicit total run-time validator returning
-`Option Refined`. An arbitrary predicate closure must not be added to the
-solver: that would make subtyping depend on program equivalence and lose the
-current complexity bound. Either extension must preserve the separation of
-`Gamma`, `Phi`, and `Omega` and must state its erasure and representation
-theorem before implementation.
+These boundaries keep checking decidable, evidence unforgeable, and the runtime
+representation stable. Any different language feature would need its own
+normalization, evidence, and erasure theorem; it is not an unfinished mode of
+this contract.
+
+## 8. Implemented behavior map
+
+| Requirement | Implemented mechanism | Regression evidence |
+| --- | --- | --- |
+| Unknown carriers | fresh Simple-sub variables and call-site freshening | `inference.test.ts` |
+| Integer inhabitants | exact predicate-to-range normalization | `predicate_refinements.blot` |
+| Arrays | homogeneous canonical constraints from operations and calls | `collections.blot` |
+| Trait-like behavior | record width/depth subtyping and direct projections | `type_predicates.blot` |
+| Higher-order functions | arrow intersections and shared row variables | `inference.test.ts` |
+| Effects | inferred open rows, handlers, and reflected closed rows | `effects.blot` |
+| Layout | attached namespaces preserved by refinement | `layout_table.blot`, `predicate_refinements.blot` |
+| Fact passing | verified affine summaries replayed across functions/modules | `relational_summaries.blot`, `refinement_types_on_crack.blot` |
+| Ownership | separate affine `Omega` analysis | `owned_region_capabilities.blot` |
+| End-to-end composition | all layers in one checked and evaluated program | `refinement_types_on_crack.blot` |
+
+The integrated example imports a body-verified length wrapper, uses the
+published summary to authorize a direct array read, propagates a callback effect
+through a higher-order function, invokes a structural method, preserves an
+`I32` layout namespace through scalar refinement, and consumes an affine value.
+Every predicate and certificate erases before Runtime HIR.

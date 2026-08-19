@@ -1,0 +1,81 @@
+// One executable tour of the unknown-first refinement model. Every function
+// begins with fresh variables; uses, calls, effects, facts, and ownership
+// obligations refine those variables before Runtime HIR is produced.
+
+open import "blot:prelude"
+
+const Contracts = import "./lib/refinement_contracts.blot"
+
+// forall a. a -> a. Each call receives a fresh instantiation.
+let identity = fn value => value
+let identity_int = identity 42
+let identity_text = identity "unknown"
+
+// The `values` carrier begins unknown. Calling Array.length constrains it to a
+// homogeneous array while leaving its element type polymorphic.
+let count = fn values => Array.length values
+let array_count = count [1, 2, 3]
+
+// Field projection is the trait constraint. Width subtyping admits the extra
+// `.debug` field; the call is a direct projection, with no instance registry.
+let render = fn value => value.render ()
+let rendered = render {
+  .render = fn () => "painted";
+  .debug = True;
+}
+
+// The callback's open effect row flows through `apply` and is then discharged
+// by an ordinary handler value.
+const Tick = @effect { .next = Unit -> Int; }
+
+let apply = fn callback => fn value => callback value
+let add_tick = fn value =>
+  tick <- Tick.next ()
+  return value + tick
+
+let ticking = {
+  .next = fn ((), ?resume) =>
+    result <- resume 2
+    return result
+  ;
+  .return = fn value => value;
+}
+
+let effect_result = @handle (
+  Tick,
+  fn () => apply add_tick 40,
+  ticking
+)
+
+// Inhabitant predicates normalize to the ordinary integer range lattice.
+// Refining I32 keeps its attached namespace, including layout evidence.
+const Natural = refine (Int, fn value => value >= 0)
+const SmallI32 = refine (I32, fn value => value >= -10 && value <= 10)
+
+sig keep_natural = Natural -> Natural
+let keep_natural = fn value => value
+
+// `Contracts.count` came from another module. Its body-derived relational
+// summary contributes `index < length(values)` to Phi, authorizing the direct
+// array read without putting a length in `[Int]` or trusting an annotation.
+sig at = [Int] -> Int -> Int
+let at = fn values => fn index => case index >= 0 && index < Contracts.count values of
+  #True => @array.get values index
+  #False => 0
+
+// Omega stays affine while participating in the same call-site decision.
+let consume = fn !value => value
+let !token = 7
+let owned_result = consume (!token)
+
+return {
+  .identity_int = identity_int;
+  .identity_text = identity_text;
+  .array_count = array_count;
+  .trait = rendered;
+  .effect = effect_result;
+  .natural = keep_natural 6;
+  .layout = SmallI32.bit_width;
+  .fact = at [10, 20, 30] 1;
+  .owned = owned_result;
+}

@@ -1,0 +1,1 @@
+{ .identity_int = 42; .identity_text = "unknown"; .array_count = 3; .trait = "painted"; .effect = 42; .natural = 6; .layout = 32; .fact = 20; .owned = 7; }
