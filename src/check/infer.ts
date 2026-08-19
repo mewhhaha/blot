@@ -1806,87 +1806,70 @@ function inferSpecial(
     return handledResult;
   }
 
-  // Does this expression's *inferred* type satisfy a compile-time predicate?
-  //
-  // Distinct from `@satisfies`, which asks whether a compile-time value
-  // inhabits a type. This asks a question about the type itself — has it an
-  // `.a`, is it a record at all — and the type of an expression that is not
-  // itself compile-time lives only in the lattice, so it has to be reified
-  // before a predicate can be handed it. `@type.of` cannot stand in: it answers
-  // the type of a *value*, so it evaluates one, and on a runtime expression
-  // that is an unhandled effect rather than a type.
-  // Takes a tuple rather than being curried, for the reason `@handle` does:
-  // the checker has to see the whole call to type it at all, and a partially
-  // applied one would be a closure whose parameter is not a compile-time value.
-  if (
-    callee.name === "@type.satisfies" && head.args.length === 1 &&
-    head.args[0].tag === "tuple" && head.args[0].elements.length === 2
-  ) {
-    const [subjectExpr, predicateExpr] = head.args[0].elements;
+  // A requirement has one source operation and one canonicalization boundary.
+  // Type values constrain open inference variables directly. Anything that is
+  // not a type value is applied as a predicate to the subject's closed,
+  // reifiable inferred type. Predicates can reject a type, but cannot smuggle
+  // arbitrary closures into the constraint graph or grant operations.
+  if (callee.name === "@satisfies" && head.args.length === 2) {
+    const [subjectExpr, requirementExpr] = head.args;
     const valueType = infer(subjectExpr, context, level, row);
+
+    // A requirement this pass cannot evaluate is deferred, not refused:
+    // `struct`'s `.new` names a field type through a loop variable that only
+    // specialization binds. Concrete calls revisit this site with that value.
+    const requirement = comptime(requirementExpr, context);
+    if (requirement === null) {
+      if (context.phase === "comptime") return null;
+      fail(
+        "BLOT_SIG_NOT_COMPTIME",
+        "The second argument to `@satisfies` must be a compile-time type value or predicate. Make a requirement combinator `const` so calls specialize it.",
+        requirementExpr.span,
+      );
+    }
+
+    const expected = bridge(requirement);
+    if (expected !== null) {
+      located(expr.span, () => constrain(valueType, expected));
+      return valueType;
+    }
+
     const subject = reify(valueType);
     if (subject === null) {
       fail(
         "BLOT_TYPE_NOT_REIFIABLE",
         `\`${
           showType(valueType)
-        }\` has no compile-time reading, so a predicate cannot be given it. An inference variable, an effect row, and an open variant are the usual reasons.`,
+        }\` has no compile-time reading, so a predicate cannot be given it. Use a canonical type value to constrain an open subject; inference variables, effect rows, and open variants cannot be inspected by predicates.`,
         subjectExpr.span,
       );
     }
-    const predicate = comptime(predicateExpr, context);
-    if (predicate === null) {
-      fail(
-        "BLOT_SIG_NOT_COMPTIME",
-        "The second argument to `@type.satisfies` must be a compile-time function from a type to a `Bool`.",
-        predicateExpr.span,
-      );
-    }
+
     const answer = comptimeApply(
-      predicate,
+      requirement,
       subject,
       context,
-      predicateExpr.span,
+      requirementExpr.span,
     );
-    if (answer === null || answer.tag !== "tag") {
+    if (
+      answer === null || answer.tag !== "tag" ||
+      (answer.name !== "True" && answer.name !== "False")
+    ) {
       fail(
         "BLOT_TYPE_ERROR",
-        "The predicate given to `@type.satisfies` must answer `#True` or `#False`.",
-        predicateExpr.span,
+        `The second argument to \`@satisfies\` must be a type value or a compile-time predicate from a closed type to \`Bool\`; this is ${
+          show(requirement)
+        }.`,
+        requirementExpr.span,
       );
     }
-    if (answer.name !== "True") {
+    if (answer.name === "False") {
       fail(
         "BLOT_DOES_NOT_SATISFY",
         `\`${showType(valueType)}\` does not satisfy the predicate.`,
         expr.span,
       );
     }
-    return valueType;
-  }
-
-  if (callee.name === "@satisfies" && head.args.length === 2) {
-    const valueType = infer(head.args[0], context, level, row);
-    // A type this pass cannot evaluate is deferred, not refused: `struct`'s
-    // `.new` names the field's type through a loop variable that only
-    // specialization binds, and refusing here would refuse `struct` itself.
-    const typeValue = comptime(head.args[1], context);
-    if (typeValue === null) return null;
-    // But one that evaluates to something which is not a type is refused. It
-    // used to fall through to the ordinary scheme, which checks nothing — so
-    // handing this a predicate rather than a type passed silently, and the
-    // program went on believing it had been checked.
-    const expected = bridge(typeValue);
-    if (expected === null) {
-      fail(
-        "BLOT_TYPE_ERROR",
-        `The second argument to \`@satisfies\` must be a type; this is ${
-          show(typeValue)
-        }. To ask a question *about* a type rather than to check a value against one, use \`@type.satisfies\`.`,
-        head.args[1].span,
-      );
-    }
-    located(expr.span, () => constrain(valueType, expected));
     return valueType;
   }
 

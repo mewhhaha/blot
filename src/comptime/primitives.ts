@@ -10,7 +10,6 @@
 
 import { fail } from "../diagnostic.ts";
 import {
-  asTuple,
   bool,
   equal,
   F32X4_MASK_NAME,
@@ -339,31 +338,22 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map<
     },
   }],
 
-  // Checked entirely by the checker, which is the only place the subject's
-  // type exists. By the time the evaluator sees this the question has been
-  // answered, so the value passes through — the same shape `@satisfies` has,
-  // for the same reason.
-  ["@type.satisfies", {
-    arity: 1,
-    run: ([pair], span) => {
-      const parts = asTuple(pair, 2);
-      if (parts === null) {
-        fail(
-          "BLOT_TYPE",
-          "@type.satisfies takes a value and a predicate as one tuple.",
-          span,
-        );
-      }
-      return parts[0];
-    },
-  }],
+  // Canonical requirements remain checkable from values. A callable
+  // requirement was already applied to the subject's reified type by the
+  // checker, which is the only layer that owns that inferred type, so it erases
+  // here as the same identity operation.
   ["@satisfies", {
     arity: 2,
-    run: ([value, type], span) => {
-      if (!inhabits(value, type)) {
+    run: ([value, requirement], span) => {
+      if (
+        requirement.tag === "closure" ||
+        requirement.tag === "core-closure" ||
+        requirement.tag === "primitive"
+      ) return value;
+      if (!inhabits(value, requirement)) {
         fail(
           "BLOT_DOES_NOT_SATISFY",
-          `${show(value)} does not inhabit ${show(type)}.`,
+          `${show(value)} does not inhabit ${show(requirement)}.`,
           span,
         );
       }

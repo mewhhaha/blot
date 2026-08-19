@@ -7,7 +7,7 @@ use crate::ast::Span;
 use crate::diagnostic::Diagnostic;
 use crate::eval::Phase;
 use crate::value::{
-    Domain, OrderedFields, Value, as_tuple, boolean, closure_signature, equal, show,
+    Domain, OrderedFields, Value, boolean, closure_signature, equal, show,
     substitute_type_variable, tuple,
 };
 
@@ -105,7 +105,6 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@type.reflect"
         | "@type.members"
         | "@type.union_of"
-        | "@type.satisfies"
         | "@fail"
         | "@shape.names"
         | "@array.len"
@@ -390,18 +389,14 @@ pub fn run_primitive(
             };
             Ok(values.iter().skip(1).cloned().fold(first, union))
         }
-        "@type.satisfies" => {
-            let Some(parts) = as_tuple(&arguments[0], 2) else {
-                return Err(Diagnostic::new(
-                    "BLOT_TYPE",
-                    "@type.satisfies takes a value and predicate tuple.",
-                    span,
-                ));
-            };
-            Ok(parts[0].clone())
-        }
         "@satisfies" => {
-            if inhabits(&arguments[0], &arguments[1]) {
+            if matches!(
+                &arguments[1],
+                Value::Closure { .. }
+                    | Value::ClosureChoice { .. }
+                    | Value::Primitive { .. }
+            ) || inhabits(&arguments[0], &arguments[1])
+            {
                 Ok(arguments[0].clone())
             } else {
                 Err(Diagnostic::new(

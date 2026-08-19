@@ -118,38 +118,100 @@ Their complete input domains are finite, so their boolean truth tables can be
 established exactly. This is a primitive semantic basis, not a privileged
 prelude vocabulary. Source may define and compose any names over it.
 
-### 2.2 Constructing types and asking about types
+### 2.2 One requirement operation
 
-Two operations that are easy to conflate remain distinct:
-
-1. `refine(base, predicate)` inverts a predicate over inhabitants and must
-   normalize it to an existing canonical type value before inference; and
-2. `@type.satisfies (value, predicate)` reifies the inferred type of one
-   expression and runs an ordinary source predicate over that closed type.
-
-The second operation is already the general compositional route for structural,
-function, effect-row, nominal, and generic questions. `@type.reflect`
-exposes neutral type structure; `@shape.has`, ordinary `case`, and boolean
-functions define `has_field`, `is_function`, duck predicates, and their
-combinators in source. Those predicates are evaluated only after the subject
-type is reifiable, are bounded by ordinary compile-time fuel, and erase with the
-assertion. They do not become arbitrary closure nodes in biunification.
-
-The minimal compiler observations in this contract are:
+The surface has one operation for applying a requirement:
 
 ```text
+@satisfies : value -> (canonical type | closed-type predicate) -> value
+```
+
+This is a normalization boundary rather than a union injected into the type
+lattice. The checker first evaluates the requirement. If `bridge(requirement)`
+produces a canonical type, that type constrains the subject's still-open
+inference variable. Otherwise the checker reifies the subject's settled type,
+applies the requirement as a compile-time predicate, and accepts only
+`#True` or `#False`. The assertion then erases.
+
+That one rule covers scalar, collection, structural, higher-order, effect, and
+nominal requirements:
+
+```blot
+// Scalar. Int is the canonical signed-integer domain constraint.
+let increment = fn value =>
+  let value = @satisfies value Int
+  return value + 1
+
+// Homogeneous collection. The carrier and element start open.
+let accept_ints = fn values => @satisfies values [Int]
+
+// Trait-like behavior is a record constraint plus width subtyping.
+const Renderable = { .render = Unit -> Str; }
+let render = fn value =>
+  let renderable = @satisfies value Renderable
+  return renderable.render ()
+
+// Higher-order behavior includes the callback's effect row.
+const Console = @effect { .write = Str -> Unit; }
+const Command = Str -> Unit ~ { Console }
+let install = fn callback => @satisfies callback Command
+
+// Variants and nominal seals are the same kind of canonical requirement.
+const Message = #Ready | #Failed Str
+const UserId = seal ("UserId", Int)
+let accept_message = fn value => @satisfies value Message
+let accept_user = fn value => @satisfies value UserId
+```
+
+Requirements may be abstracted by a staged function:
+
+```blot
+const require = fn requirement => fn value => @satisfies value requirement
+let checked = require { .name = Str; } { .name = "Ada"; .age = 36; }
+```
+
+The `const` is semantically important: specialization supplies the requirement
+before checking the returned closure. An ordinary runtime parameter is rejected
+with `BLOT_SIG_NOT_COMPTIME`; it is never trusted as an unchecked predicate.
+
+A call freshens quantified variables, connects the argument, result, and effect
+rows, and solves the accumulated constraints. Thus `identity` remains
+`forall a. a -> a`, while calling `increment` makes its carrier integer and
+calling `render` requires only the one method it uses.
+
+Closed questions use the same operation with an ordinary source predicate:
+
+```blot
+const both = fn (left, right) => fn type => left type && right type
+const is_shape = fn type => case reflect type of
+  #Shape _ => True
+  _ => False
+const has_name = fn type => refines (type, { .name = Str; })
+const named_shape = both (is_shape, has_name)
+
+let person = { .name = "Ada"; .age = 36; }
+let checked = @satisfies person named_shape
+```
+
+Predicates do not constrain open variables. That is deliberate: a predicate can
+reject a closed type but cannot grant an operation or become an arbitrary
+closure node in biunification. Use the canonical record, array, arrow, variant,
+seal, or range value when the requirement must refine an unknown.
+
+The minimal closed-type observations are:
+
+```text
+@type.reflect type             expose neutral outer structure
 @type.equal left right         exact alpha-equivalent type-value identity
 @type.instantiate forall arg   eliminate one outer binder with a chosen value
 @type.probe forall             eliminate one binder with a kind-correct witness
 ```
 
-`@type.reflect` reports an outer quantified type as `#Forall`, but never exposes
-the binder's internal identity or an open body. Source inspects it by applying
-`@type.instantiate` to a chosen type value. A kind-polymorphic traversal uses
-`@type.probe`, which chooses the closed neutral witness `Unit` for an ordinary
-type binder and the empty row for an effect-row binder. Both operations preserve
-scope and support generic-aware predicates without allowing a rigid variable to
-escape.
+`@type.reflect` reports an outer quantified type as `#Forall`, but never
+exposes the binder's internal identity or an open body. Source inspects it by
+applying `@type.instantiate` to a chosen type value. A kind-polymorphic
+traversal uses `@type.probe`, which chooses `Unit` for an ordinary type
+binder and the empty row for an effect-row binder.
 
 ```blot
 const rec is_function = fn type => case reflect type of
@@ -157,24 +219,41 @@ const rec is_function = fn type => case reflect type of
   #Forall => is_function (@type.probe type)
   _ => False
 
-const EffectPolymorphic =
-  @forall (fn Effects => Unit -> Unit ~ { Effects })
+const Identity = @forall (fn T => T -> T)
+let id = fn value => value
+let checked_id = @satisfies id is_function
 ```
 
-Exact equality is primitive because source reflection intentionally hides
-quantifier identities, opaque type identities, and effect-row internals. Every
-higher predicate remains source. In particular, `has_field`, `is_function`,
-function decomposition, recursive arrow traversal, conjunction, and disjunction
-are not compiler operations.
+Exact equality remains primitive because reflection intentionally hides
+quantifier identities, opaque type identities, and effect-row internals. Field
+tests, function decomposition, recursive arrow traversal, conjunction, and
+disjunction remain ordinary source.
 
-Structural requirements that grant field access still normalize to ordinary
-record types, arrays retain homogeneous element constraints, arrows retain
-parameter, result, and effect-row constraints, and explicit quantification still
-normalizes to `forall`. Attached layout members survive refinement but remain
-transparent to subtyping. A predicate assertion may reject a
-closed inferred type, but cannot grant operations that its canonical base type
-does not provide. This keeps width subtyping and function variance in the
-existing polynomial solver.
+### 2.3 Layout, facts, and ownership stay compositional
+
+Layout members travel with canonical type values, so refining an attached
+integer type keeps the namespace that selects its representation:
+
+```blot
+const SmallI32 = refine (I32, fn value => value >= -10 && value <= 10)
+const bits = SmallI32.bit_width
+```
+
+Relationships between particular immutable values remain replayable evidence in
+`Phi`, not type parameters. A body-verified summary can cross a function or
+module boundary and authorize a later direct access:
+
+```blot
+let at = fn values => fn index =>
+  if index >= 0 && index < Contracts.count values:
+    return @array.get values index
+  return 0
+```
+
+Ownership remains `Omega`. Applying a requirement is an identity: it neither
+copies nor consumes the carrier, so an owned value still has exactly the same
+affine obligations before and after refinement. These three domains compose at
+a call site without being collapsed into one unsound lattice.
 
 ## 3. Elaboration and normalization
 

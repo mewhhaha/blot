@@ -4,10 +4,11 @@ const both_types = fn (left, right) => fn type => left type && right type
 const is_shape = fn type => case reflect type of
   #Shape _ => True
   _ => False
-const is_reading = both_types (is_shape, Has { .value = Int; })
+const is_reading = both_types (is_shape, fn type => refines (type, { .value = Int; }))
 
 let reading = { .value = 120; .label = "depth"; }
-let checked = @type.satisfies (reading, is_reading)
+let structural = @satisfies reading { .value = Int; }
+let checked = @satisfies structural is_reading
 
 const Identity = @forall (fn T => T -> T)
 const RenamedIdentity = @forall (fn Element => Element -> Element)

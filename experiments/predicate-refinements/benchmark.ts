@@ -133,7 +133,7 @@ try {
     },
     advanced_type_predicates: {
       theory:
-        "reflection, alpha equality, quantifier instantiation, and @type.satisfies erase before Runtime HIR",
+        "reflection, alpha equality, quantifier instantiation, and unified @satisfies requirements erase before Runtime HIR",
       compile_time: {
         samples,
         baseline_median_ms: median(checkTimes.typeBaseline),

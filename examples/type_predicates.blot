@@ -11,13 +11,14 @@ const is_shape = fn type => case reflect type of
   #Shape _ => True
   _ => False
 
-const has_name = Has { .name = Str; }
+const has_name = fn type => refines (type, { .name = Str; })
 const is_named_shape = both_types (is_shape, has_name)
 
 // This value exists at run time, but its inferred type is closed and can be
 // handed to the source predicate while compiling. The assertion erases.
 let person = { .name = "Ada"; .age = 36; }
-let checked = @type.satisfies (person, is_named_shape)
+let structural = @satisfies person { .name = Str; }
+let checked = @satisfies structural is_named_shape
 
 // Binder identities are private. These are equal because equality is
 // alpha-equivalent, not because the two @forall calls minted the same number.

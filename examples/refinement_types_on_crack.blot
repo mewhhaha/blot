@@ -16,9 +16,13 @@ let identity_text = identity "unknown"
 let count = fn values => Array.length values
 let array_count = count [1, 2, 3]
 
-// Field projection is the trait constraint. Width subtyping admits the extra
-// `.debug` field; the call is a direct projection, with no instance registry.
-let render = fn value => value.render ()
+// A canonical record requirement refines the open carrier before projection.
+// Width subtyping admits the extra `.debug` field; there is no instance
+// registry or nominal trait declaration.
+const Renderable = { .render = Unit -> Str; }
+let render = fn value =>
+  let renderable = @satisfies value Renderable
+  return renderable.render ()
 let rendered = render {
   .render = fn () => "painted";
   .debug = True;

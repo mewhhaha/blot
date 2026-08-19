@@ -2411,8 +2411,7 @@ Everything not listed here belongs in source, normally the prelude.
 | `@effect.host`    | create a fresh host effect                                    |
 | `@handle`         | discharge one effect from a nullary computation               |
 | `@forall`         | evaluate a type function with a fresh rigid variable          |
-| `@satisfies`      | return a value after proving it inhabits a type               |
-| `@type.satisfies` | return a value after proving its _type_ satisfies a predicate |
+| `@satisfies`      | refine an open value by a type, or prove its closed type with a predicate |
 | `@fail`           | refuse compile-time evaluation with a diagnostic              |
 | `@panic`          | trap with a text message                                      |
 
@@ -2691,40 +2690,60 @@ for (index, value) in Iter.indexed xs:
   <- visit (index, value)
 ```
 
-### 13.3.1 Asking about a type
+### 13.3.1 Applying a requirement
 
-`@satisfies (value, type)` proves that a compile-time _value_ inhabits a type.
-`@type.satisfies (value, predicate)` asks a different question: whether the
-_type_ of an expression satisfies a compile-time predicate.
+`@satisfies value requirement` is the single assertion and refinement
+operation. It returns `value` unchanged and accepts either form of requirement:
+
+1. A canonical type value constrains the subject's open inferred type.
+2. A compile-time predicate receives the subject's closed, reifiable inferred
+   type and must answer `#True` or `#False`.
 
 ```blot
-reading <- { .value = Source.read (); .label = "depth"; }
-let checked = @type.satisfies (reading, Has { .value = Int; })
+// Canonical requirements refine unknowns and grant the operations they name.
+let name_of = fn value =>
+  let named = @satisfies value { .name = Str; }
+  return named.name
+
+let int_store = fn values => @satisfies values [Int]
+
+const Console = @effect { .write = Str -> Unit; }
+let command = fn callback =>
+  @satisfies callback (Str -> Unit ~ { Console })
+
+// Predicates compose over a closed inferred type.
+const is_shape = fn type => case reflect type of
+  #Shape _ => True
+  _ => False
+const has_name = fn type => refines (type, { .name = Str; })
+const named_shape = fn type => is_shape type && has_name type
+
+let person = { .name = "Ada"; .age = 36; }
+let checked = @satisfies person named_shape
+
+// Requirements can themselves be staged and specialized.
+const require = fn requirement => fn value => @satisfies value requirement
+let also_checked = require { .name = Str; } person
 ```
 
-The predicate is an ordinary compile-time function from a type value to a
-`Bool`, so it may ask anything `reflect` and `refines` can answer. The value
-passes through unchanged; this asserts, it does not coerce. A predicate that
-answers `#False` is `BLOT_DOES_NOT_SATISFY` while compiling.
+The distinction is semantic, not syntactic sugar. Canonical values—integer
+ranges, arrays, records, variants, arrows and their effect rows, seals, and
+attached layout namespaces—normalize through the existing type bridge and add
+ordinary lattice constraints. They may therefore refine a fresh variable.
+Predicates are arbitrary pure source composition over `reflect`, `refines`,
+`type_equal`, and quantifier elimination, but they only inspect a type that
+has already settled. They may reject it; they cannot grant a field, choose a
+layout, insert an effect, or add an opaque closure to the solver.
 
-It takes its two arguments as one tuple rather than curried, for the reason
-`@handle` does: the checker has to see the whole call to type it, and a
-partially applied one would be a closure whose parameter is not a compile-time
-value.
+A false predicate is `BLOT_DOES_NOT_SATISFY`. An open subject given to a
+predicate is `BLOT_TYPE_NOT_REIFIABLE`; use the canonical record, array, arrow,
+or scalar type value as the requirement when the purpose is to constrain that
+subject. A requirement unavailable until generic specialization is deferred and
+checked when the concrete call supplies it.
 
-`@type.of` cannot stand in for this. It answers the type of a _value_, so it
-evaluates one — on an expression whose value only exists at run time that is an
-unhandled effect rather than a type. The type of such an expression lives only
-in the lattice, and reaching it is the whole reason this primitive exists.
-
-The type must have a compile-time reading. An inference variable with no single
-lower bound, an effect row, and an open variant do not, and each is
-`BLOT_TYPE_NOT_REIFIABLE` naming the type rather than a silently permissive
-answer.
-
-The prelude supplies the two predicates that would otherwise be written inline:
-`Is` for an exact type and `Has` for a subset of fields. Both are one line over
-`type_equal` or `refines`, respectively, and neither is machinery.
+`@type.of` is different: it evaluates a compile-time value and returns that
+value's type. `@satisfies` can inspect the inferred type of an ordinary runtime
+expression without evaluating the expression itself.
 
 ### 13.4 Type values
 
@@ -2808,7 +2827,10 @@ const both_types = fn (left, right) => fn type => left type && right type
 const is_shape = fn type => case reflect type of
   #Shape _ => True
   _ => False
-const is_named_shape = both_types (is_shape, Has { .name = Str; })
+const is_named_shape = both_types (
+  is_shape,
+  fn type => refines (type, { .name = Str; })
+)
 ```
 
 `#Opaque` is everything with no parts to report: a closure, a primitive, a host
@@ -2845,7 +2867,7 @@ record currently exports:
 - iterators: `ever`, `Iter`, `iterate`, and `collect`;
 - variants: `Option`, `None`, `Some`, `unwrap_or`, `Result`, `Ok`, `Error`;
 - type tools: `Type`, `attach`, `seal`, `unseal`, `Reflect`, `reflect`,
-  `type_equal`, `instantiate`, `refines`, `Is`, `Has`, `members`, `union_of`,
+  `type_equal`, `instantiate`, `refines`, `members`, `union_of`,
   `Extract`, `Exclude`, `Pick`, `Omit`, `opened`, and `range`;
 - storage tools: `struct`, `reorder`, `layout`, `aligned`, `bit_width`, and
   `packed`; and

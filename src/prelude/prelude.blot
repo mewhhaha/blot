@@ -1527,15 +1527,9 @@ const rec refines =
     #Forall => type_equal (narrow, wide)
     #Opaque => False
 
-// --- asking about a type ----------------------------------------------------
-//
-// `@type.satisfies` hands a predicate the type of an expression, and a
-// predicate is an ordinary function from a type value to a `Bool`. These are
-// the two that would otherwise be written inline every time; anything more
-// specific is `fn t => case reflect t of …`, which needs no help from here.
-
-const Is = fn expected => fn t => type_equal (t, expected)
-const Has = fn shape => fn t => refines (t, shape)
+// Closed type questions are ordinary source predicates over `reflect`,
+// `type_equal`, and `refines`. Open values use their canonical type values
+// directly with `@satisfies`; no wrapper vocabulary is needed.
 
 // The union members that fit the bound, and the ones that do not. `Extract` and
 // `Exclude` read as they do in TypeScript, except that neither can quietly
@@ -2018,8 +2012,6 @@ return {
   .type_equal = type_equal;
   .instantiate = instantiate;
   .refines = refines;
-  .Is = Is;
-  .Has = Has;
   .members = members;
   .union_of = union_of;
   .Extract = Extract;

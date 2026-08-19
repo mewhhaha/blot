@@ -2287,36 +2287,70 @@ impl Checker {
                 }
                 if let Expression::Apply {
                     function: satisfies,
-                    argument: subject,
+                    argument: subject_expression,
                     ..
                 } = module.arena.expressions[function.0 as usize]
                     && let Expression::Intrinsic { name, .. } =
                         &module.arena.expressions[satisfies.0 as usize]
                     && name == "@satisfies"
                 {
-                    let subject =
-                        self.infer(path, module, subject, environment, values, dependencies)?;
-                    if let Ok(expected_value) =
-                        self.evaluate(path, argument, values, Phase::Comptime)
-                        && let Some(expected) = self.bridge(&expected_value)
-                    {
-                        self.constrain(subject.type_.clone(), expected, span)?;
-                        return Ok(subject);
-                    }
-                }
-                if let Expression::Intrinsic { name, .. } =
-                    &module.arena.expressions[function.0 as usize]
-                    && name == "@type.satisfies"
-                {
-                    return self.infer_type_satisfies(
+                    let subject = self.infer(
                         path,
                         module,
-                        argument,
+                        subject_expression,
                         environment,
                         values,
                         dependencies,
-                        span,
-                    );
+                    )?;
+                    if let Ok(requirement) =
+                        self.evaluate(path, argument, values, Phase::Comptime)
+                    {
+                        if let Some(expected) = self.bridge(&requirement) {
+                            self.constrain(subject.type_.clone(), expected, span)?;
+                            return Ok(subject);
+                        }
+
+                        let settled = self.settle(subject.type_.clone(), true);
+                        let reified = self.reify_runtime_type(&settled).ok_or_else(|| {
+                            Diagnostic::new(
+                                "BLOT_TYPE_NOT_REIFIABLE",
+                                format!(
+                                    "`{}` has no compile-time reading; use a canonical type value to constrain an open subject.",
+                                    self.show(&settled)
+                                ),
+                                span,
+                            )
+                        })?;
+                        let answer = run(apply(
+                            self.context.clone(),
+                            requirement,
+                            reified,
+                            span,
+                            Runtime::new(Phase::Comptime, path.to_owned()),
+                        ))?;
+                        return match answer {
+                            Value::Tag { name, .. } if name == "True" => Ok(subject),
+                            Value::Tag { name, .. } if name == "False" => Err(Diagnostic::new(
+                                "BLOT_DOES_NOT_SATISFY",
+                                format!(
+                                    "`{}` does not satisfy the predicate.",
+                                    self.show(&settled)
+                                ),
+                                span,
+                            )),
+                            _ => Err(Diagnostic::new(
+                                "BLOT_TYPE_ERROR",
+                                "The second argument to `@satisfies` must be a type value or a compile-time predicate from a closed type to `Bool`.",
+                                span,
+                            )),
+                        };
+                    } else if self.phase.get() == Phase::Runtime {
+                        return Err(Diagnostic::new(
+                            "BLOT_SIG_NOT_COMPTIME",
+                            "The second argument to `@satisfies` must be a compile-time type value or predicate. Make a requirement combinator `const` so calls specialize it.",
+                            span,
+                        ));
+                    }
                 }
                 if let Expression::Intrinsic { name, .. } =
                     &module.arena.expressions[function.0 as usize]
@@ -2999,56 +3033,6 @@ impl Checker {
             self.constrain(function.clone(), recursive, closure_ast.span)?;
         }
         Ok(function)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn infer_type_satisfies(
-        &self,
-        path: &str,
-        module: &Module,
-        argument: ExpressionId,
-        environment: &TypeEnvironment,
-        values: &ValueEnvironment,
-        dependencies: &BTreeMap<String, Type>,
-        span: Span,
-    ) -> Result<Inferred, Diagnostic> {
-        let Expression::Tuple { elements, .. } = &module.arena.expressions[argument.0 as usize]
-        else {
-            return self.type_error(Type::Unit, Type::Record(Vec::new()), span);
-        };
-        if elements.len() != 2 {
-            return self.type_error(Type::Unit, Type::Record(Vec::new()), span);
-        }
-        let subject = self.infer(path, module, elements[0], environment, values, dependencies)?;
-        let settled = self.settle(subject.type_.clone(), true);
-        let reified = self.reify_runtime_type(&settled).ok_or_else(|| {
-            Diagnostic::new(
-                "BLOT_TYPE_NOT_REIFIABLE",
-                format!("`{}` has no compile-time reading.", self.show(&settled)),
-                span,
-            )
-        })?;
-        let predicate = self.evaluate(path, elements[1], values, Phase::Comptime)?;
-        let answer = run(apply(
-            self.context.clone(),
-            predicate,
-            reified,
-            span,
-            Runtime::new(Phase::Comptime, path.to_owned()),
-        ))?;
-        match answer {
-            Value::Tag { name, .. } if name == "True" => Ok(subject),
-            Value::Tag { .. } => Err(Diagnostic::new(
-                "BLOT_DOES_NOT_SATISFY",
-                format!("`{}` does not satisfy the predicate.", self.show(&settled)),
-                span,
-            )),
-            _ => Err(Diagnostic::new(
-                "BLOT_TYPE_ERROR",
-                "The predicate given to `@type.satisfies` must answer `#True` or `#False`.",
-                span,
-            )),
-        }
     }
 
     fn fresh(&self) -> Type {
@@ -5452,16 +5436,6 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         "@satisfies" => {
             let value = checker.fresh();
             curried(vec![value.clone(), checker.fresh()], value)
-        }
-        "@type.satisfies" => {
-            let value = checker.fresh();
-            curried(
-                vec![Type::Record(vec![
-                    ("0".to_owned(), value.clone()),
-                    ("1".to_owned(), checker.fresh()),
-                ])],
-                value,
-            )
         }
         "@fail" | "@panic" => curried(vec![text], Type::Bottom),
         "@effect" | "@effect.host" | "@effect.named" | "@forall" | "@import" => {
