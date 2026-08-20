@@ -7,17 +7,25 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
           node-version: 22.16.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
@@ -25,6 +33,7 @@ jobs:
         with:
           toolchain: 1.97.1
           targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
       - name: Rebuild Rust compiler Wasm
         run: >-
           deno run
@@ -51,10 +60,16 @@ jobs:
           retention-days: 90
       - name: Check Rust formatting
         run: cargo fmt --manifest-path compiler/Cargo.toml -- --check
+      - name: Check generated-code Rust formatting
+        run: rustfmt --edition 2024 --check experiments/generated-code/counterpart.rs
+      - name: Check Rust lint
+        run: >-
+          cargo clippy
+          --manifest-path compiler/Cargo.toml
+          --target wasm32-unknown-unknown
+          -- -D warnings
       - name: Test Rust compiler
         run: cargo test --manifest-path compiler/Cargo.toml
-      - run: corepack enable
-      - run: corepack prepare pnpm@11.21.0 --activate
       - run: pnpm install --frozen-lockfile
       - name: Check TypeScript
         run: deno check .
