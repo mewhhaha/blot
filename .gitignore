@@ -6,3 +6,4 @@ generated/compiler/compiler-artifact.json
 formal/lean/.lake/
 compiler/target/
 node_modules/
+.pnp.cjs
