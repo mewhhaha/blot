@@ -72,6 +72,7 @@ jobs:
             git ls-files -z
             printf 'generated/compiler/compiler.wasm\0'
             printf 'generated/compiler/compiler-artifact.json\0'
+            printf '.pnp.cjs\0'
             printf 'node_modules\0'
           } > "$RUNNER_TEMP/blot-node-workspace.files"
           tar \
@@ -94,6 +95,7 @@ jobs:
           test -f experiments/node-wasm-benchmark.ts
           test -f generated/compiler/compiler.wasm
           test -f generated/compiler/compiler-artifact.json
+          test -s .pnp.cjs
           pnpm exec tsx --import ./src/node/polyfills.mjs src/node/cli.ts check examples/minimal.blot
           pnpm exec tsx --import ./src/node/polyfills.mjs --test src/node/pipeline.test.ts
           pnpm parity:strict examples/minimal.blot
