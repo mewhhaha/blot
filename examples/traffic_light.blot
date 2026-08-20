@@ -1,0 +1,30 @@
+// A finite-state machine as data.
+//
+// States and events are ordinary constructor unions. Matching the pair keeps
+// the transition table visible, while `fold` turns an event stream into the
+// final state without introducing mutable storage.
+
+open import "blot:prelude"
+
+const Light = #Red | #Green | #Yellow
+const Event = #Timer | #Emergency | #Reset
+
+sig step = (Light, Event) -> Light
+let step = fn pair => case pair of
+  (#Red, #Timer) => #Green
+  (#Green, #Timer) => #Yellow
+  (#Yellow, #Timer) => #Red
+  (_, #Emergency) => #Red
+  (#Red, #Reset) => #Red
+  (#Green, #Reset) => #Green
+  (#Yellow, #Reset) => #Yellow
+
+sig run = Light -> [Event] -> Light
+let run = fn initial => fn events =>
+  return fold (events, initial, fn (state, event) => step (state, event))
+
+return {
+  .cycle = run #Red [#Timer, #Timer, #Timer];
+  .emergency = run #Green [#Timer, #Emergency, #Timer];
+  .reset = run #Yellow [#Reset];
+}

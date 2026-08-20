@@ -1,0 +1,46 @@
+// A command workflow with several inferred loop accumulators.
+//
+// Each entry is data. `apply` decides the next balance and whether the command
+// was accepted, while the loop carries balance and counters as one inferred
+// fold state. A rejected withdrawal leaves the balance unchanged.
+
+open import "blot:prelude"
+
+const Entry = #Deposit Int | #Withdraw Int | #Fee Int
+
+sig apply = Int -> Entry -> (Int, Int, Int)
+let apply = fn balance => fn entry => case entry of
+  #Deposit amount => (balance + amount, 1, 0)
+  #Withdraw amount =>
+    if balance >= amount:
+      return (balance - amount, 1, 0)
+
+    return (balance, 0, 1)
+  #Fee amount =>
+    if balance >= amount:
+      return (balance - amount, 1, 0)
+
+    return (balance, 0, 1)
+
+let balance = 0
+let accepted = 0
+let rejected = 0
+
+for entry in Iter.items [
+  #Deposit 100,
+  #Withdraw 30,
+  #Fee 5,
+  #Withdraw 80,
+  #Deposit 20
+]:
+  let (next_balance, accepted_delta, rejected_delta) = apply balance entry
+  balance := next_balance
+  accepted := accepted + accepted_delta
+  rejected := rejected + rejected_delta
+
+return {
+  .balance = balance;
+  .accepted = accepted;
+  .rejected = rejected;
+  .processed = accepted + rejected;
+}

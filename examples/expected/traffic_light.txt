@@ -1,0 +1,1 @@
+{ .cycle = #Red; .emergency = #Green; .reset = #Yellow; }
