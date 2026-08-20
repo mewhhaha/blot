@@ -43,9 +43,11 @@ keeps the graph linear.
 
 The source-language obligations are:
 
-- **progress with classified outcomes:** a closed well-typed computation
-  returns, steps, requests a declared effect, takes a specified trap, or
-  diverges;
+- **one-step progress with classified outcomes:** a closed well-typed
+  computation returns, takes a reduction step, requests a declared effect, or
+  takes a specified trap;
+- **maximal-execution safety:** every maximal execution reaches one of those
+  classified outcomes or contains infinitely many reduction steps;
 - **preservation:** reduction preserves result type and cannot introduce an
   unaccounted effect;
 - **coverage:** an accepted closed match does not get stuck on a missing arm;
@@ -69,6 +71,14 @@ Each translation needs preservation plus simulation:
 | specialized program to Runtime HIR | structural polymorphism and proof terms       | every residual value has a related closed representation |
 | Runtime HIR to Wasm                | administrative machine state                  | returns, requests, traps, and divergence agree           |
 | private value to ABI               | private allocation identity                   | caller-visible values and ownership agree                |
+
+Module instantiation is part of the source-to-residual simulation even when the
+implementation fuses it with checking or staging. Each written import occurrence
+owns one instance identity. Sharing the value produced by that instance is
+permitted; merging two occurrences or replaying one occurrence for several uses
+of its result is not. Generative compile-time identities allocated while an
+instance evaluates are scoped by that occurrence, so a cache may reuse the
+instance only under the same occurrence identity and source revision.
 
 For a positive recursive result, the specialized-to-HIR relation is guarded by
 one private indirect root. Constructing the root stores a related non-recursive

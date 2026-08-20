@@ -7,6 +7,7 @@ that implements it.
 | ------------------------------------------------------------ | ---------------------------------------------------------------------- |
 | [`LANGUAGE.md`](../LANGUAGE.md)                              | Normative accepted syntax and current language behavior                |
 | [`PAPER.md`](PAPER.md)                                       | Coherent target model and research direction for the language          |
+| [`CORE_SEMANTICS.md`](CORE_SEMANTICS.md)                     | Demand, semantic identities, module instances, handlers, and progress  |
 | [`COMPILER.md`](COMPILER.md)                                 | Compiler-wide judgments, pass contracts, and theorem dependencies      |
 | [`TYPECHECKING.md`](TYPECHECKING.md)                         | Declarative subtyping, inference, staging facts, and solver invariants |
 | [`PREDICATE_REFINEMENTS.md`](PREDICATE_REFINEMENTS.md)       | Experimental pure predicates normalized into canonical types           |

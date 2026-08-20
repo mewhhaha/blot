@@ -27,12 +27,23 @@ pub struct LoadedModule {
     pub includes: BTreeMap<String, IncludedFile>,
 }
 
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct ModuleInstanceSite {
+    importer: String,
+    span_start: u32,
+    span_end: u32,
+    imported: String,
+}
+
+type ModuleInstanceScope = Vec<ModuleInstanceSite>;
+
 #[derive(Eq, Hash, PartialEq)]
 struct EffectIdentity {
     module: String,
     span_start: u32,
     span_end: u32,
     scope: String,
+    instances: ModuleInstanceScope,
     host: bool,
 }
 
@@ -75,6 +86,7 @@ impl Context {
                 .map(|argument| show(argument))
                 .collect::<Vec<_>>()
                 .join("\u{1f}"),
+            instances: runtime.module_instances.as_ref().clone(),
             host,
         };
         if let Some(id) = self.effect_ids.borrow().get(&key) {
@@ -116,6 +128,7 @@ pub struct Runtime {
     pub module: Rc<String>,
     pub residual: Option<Rc<RefCell<crate::hir::ResidualTrace>>>,
     effect_scope: Rc<Vec<Rc<Value>>>,
+    module_instances: Rc<ModuleInstanceScope>,
 }
 
 struct ArrayProgress {
@@ -149,6 +162,7 @@ impl Runtime {
             module: Rc::new(module),
             residual: None,
             effect_scope: Rc::new(Vec::new()),
+            module_instances: Rc::new(Vec::new()),
         }
     }
 
@@ -170,6 +184,7 @@ impl Runtime {
             module: self.module.clone(),
             residual: self.residual.clone(),
             effect_scope: self.effect_scope.clone(),
+            module_instances: self.module_instances.clone(),
         }
     }
 }
@@ -1871,6 +1886,17 @@ pub(crate) fn force_effect_value(
     apply(context, value, Value::Unit, span, runtime)
 }
 
+fn enter_module_instance(mut runtime: Runtime, imported: &str, span: Span) -> Runtime {
+    let site = ModuleInstanceSite {
+        importer: runtime.module.as_ref().clone(),
+        span_start: span.start,
+        span_end: span.end,
+        imported: imported.to_owned(),
+    };
+    Rc::make_mut(&mut runtime.module_instances).push(site);
+    runtime
+}
+
 pub fn apply(
     context: Rc<Context>,
     function: Value,
@@ -1880,14 +1906,13 @@ pub fn apply(
 ) -> Computation {
     match function {
         Value::ModuleClosure { module } => {
-            if runtime.phase == Phase::Comptime
-                && runtime.residual.is_none()
-                && matches!(argument, Value::Unit)
-                && let Some(value) = context.module_results.borrow().get(&module).cloned()
-            {
-                return Computation::value(value);
-            }
-            evaluate_module(context, module, argument, runtime)
+            // A cached module result is a definition-level value. Reusing it
+            // across import expressions would merge generative identities that
+            // belong to distinct written occurrences. Re-evaluate the module
+            // under a stable occurrence stack instead; repeated compiler reads
+            // of the same occurrence still recover the same effect atoms.
+            let module_runtime = enter_module_instance(runtime, &module, span);
+            evaluate_module(context, module, argument, module_runtime)
         }
         Value::IndexedStep { elements } => {
             let Value::Int(index) = argument else {
@@ -3264,5 +3289,68 @@ impl BigIntExt {
 
     fn two_to_63_minus_one() -> num_bigint::BigInt {
         Self::two_to_63() - 1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn effect_id_for_instance(
+        context: &Context,
+        mut runtime: Runtime,
+        effect_span: Span,
+    ) -> u32 {
+        runtime.module = Rc::new("dependency.blot".to_owned());
+        context.effect_id(&runtime, effect_span, false)
+    }
+
+    #[test]
+    fn import_occurrence_is_part_of_generative_effect_identity() {
+        let context = Context::default();
+        let base = Runtime::new(Phase::Comptime, "root.blot".to_owned());
+        let effect_span = Span { start: 10, end: 20 };
+        let first_site = Span { start: 1, end: 2 };
+        let second_site = Span { start: 3, end: 4 };
+
+        let first = enter_module_instance(base.clone(), "dependency.blot", first_site);
+        let first_again = enter_module_instance(base.clone(), "dependency.blot", first_site);
+        let second = enter_module_instance(base, "dependency.blot", second_site);
+
+        let first_id = effect_id_for_instance(&context, first, effect_span);
+        assert_eq!(
+            first_id,
+            effect_id_for_instance(&context, first_again, effect_span)
+        );
+        assert_ne!(
+            first_id,
+            effect_id_for_instance(&context, second, effect_span)
+        );
+    }
+
+    #[test]
+    fn parent_instance_keeps_nested_imports_distinct() {
+        let context = Context::default();
+        let base = Runtime::new(Phase::Comptime, "root.blot".to_owned());
+        let effect_span = Span { start: 30, end: 40 };
+        let nested_site = Span { start: 7, end: 8 };
+
+        let first_parent = enter_module_instance(
+            base.clone(),
+            "parent.blot",
+            Span { start: 1, end: 2 },
+        );
+        let second_parent = enter_module_instance(
+            base,
+            "parent.blot",
+            Span { start: 3, end: 4 },
+        );
+        let first_nested = enter_module_instance(first_parent, "dependency.blot", nested_site);
+        let second_nested = enter_module_instance(second_parent, "dependency.blot", nested_site);
+
+        assert_ne!(
+            effect_id_for_instance(&context, first_nested, effect_span),
+            effect_id_for_instance(&context, second_nested, effect_span)
+        );
     }
 }
