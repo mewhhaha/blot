@@ -1,4 +1,6 @@
-import { assertEquals, assertThrows } from "@std/assert";
+import { assertEquals, assertNotEquals, assertThrows } from "@std/assert";
+import type { Value } from "../comptime/value.ts";
+import { bridge } from "./bridge.ts";
 import { constrain } from "./constrain.ts";
 import {
   boundAbove,
@@ -36,6 +38,53 @@ Deno.test("integer bounds step by literal offsets", () => {
   assertEquals(shiftBound(3n, -1n), 2n);
   assertEquals(shiftBound(3n, 1n), 4n);
   assertThrows(() => shiftBound("a", 1n), Error, "blot invariant violated");
+});
+
+Deno.test("seal identity is structural and alpha-aware", () => {
+  const integer: Value = { tag: "int", value: 1n };
+  const text: Value = { tag: "text", value: "one" };
+  const leftRecord: Value = {
+    tag: "shape",
+    fields: new Map([
+      ["left", integer],
+      ["right", text],
+    ]),
+  };
+  const rightRecord: Value = {
+    tag: "shape",
+    fields: new Map([
+      ["right", text],
+      ["left", integer],
+    ]),
+  };
+  assertEquals(
+    bridge(seal("Pair", leftRecord)),
+    bridge(seal("Pair", rightRecord)),
+  );
+
+  const quantified = (variable: number): Value => ({
+    tag: "forall",
+    variable,
+    body: {
+      tag: "arrow",
+      domain: { tag: "type-variable", id: variable },
+      codomain: { tag: "type-variable", id: variable },
+      effects: [],
+    },
+  });
+  assertEquals(
+    bridge(seal("Identity", quantified(7))),
+    bridge(seal("Identity", quantified(19))),
+  );
+
+  assertEquals(
+    bridge(seal("Pair", leftRecord)),
+    bridge(seal("Pair", leftRecord)),
+  );
+  assertNotEquals(
+    bridge(seal("Pair", leftRecord)),
+    bridge(seal("Pair", integer)),
+  );
 });
 
 Deno.test("an inferred upper union retains every admitted member", () => {
@@ -102,4 +151,8 @@ function record(
   fields: readonly (readonly [string, SimpleType])[],
 ): SimpleType {
   return { tag: "record", fields: new Map(fields) };
+}
+
+function seal(name: string, inner: Value): Value {
+  return { tag: "sealed", name, inner };
 }
