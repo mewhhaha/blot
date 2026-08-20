@@ -1,0 +1,1 @@
+{ .empty = 0; .deep = 2080; .mutual = 45; }

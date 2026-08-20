@@ -1,6 +1,6 @@
 // The executable catalog.
 //
-// Three invariants, one per directory:
+// Five invariants, one per outcome:
 //
 //   * `examples/*.blot` evaluate to exactly the value recorded in
 //     `examples/expected/`. A golden value catches a semantics change that a
@@ -8,7 +8,10 @@
 //   * `examples/rejected/syntax/` must fail to parse;
 //   * `examples/rejected/semantics/` must parse and then fail with a specific
 //     diagnostic code. Asserting the code, not merely the failure, is what
-//     keeps an error from silently becoming a different error.
+//     keeps an error from silently becoming a different error;
+//   * `examples/traps/` check, then reach their specified run-time trap;
+//   * `examples/pending/` preserve a named current limitation until it is
+//     implemented and the example can be promoted.
 //
 // Nothing here needs WebGPU.
 
@@ -300,6 +303,42 @@ const REJECTIONS: Record<
     code: "BLOT_CONST_CAPTURES_RUNTIME",
     stage: "check",
   },
+  "runtime_requirement": {
+    code: "BLOT_SIG_NOT_COMPTIME",
+    stage: "check",
+  },
+};
+
+/** Valid programs whose requested evaluation has a specified trap. */
+const TRAPS: Record<string, string> = {
+  "division_by_zero": "BLOT_DIVIDE_BY_ZERO",
+  "integer_overflow": "BLOT_INTEGER_OVERFLOW",
+};
+
+/**
+ * Desirable programs which are deliberately not part of the language yet.
+ * A resolved entry fails this test so it must be promoted to the executable
+ * catalog instead of disappearing from the frontier by accident.
+ */
+const PENDING: Record<
+  string,
+  | { code: string; stage: "check" | "run" }
+  | { type: string; stage: "type" }
+> = {
+  "collect_principal_type": {
+    type: "([(Int | 0)] | ['a])",
+    stage: "type",
+  },
+  "type_directed_text_equality": {
+    code: "BLOT_TYPE_ERROR",
+    stage: "check",
+  },
+  "affine_index_rebinding": {
+    code: "BLOT_UNPROVEN_INDEX",
+    stage: "check",
+  },
+  "total_float_ordering": { code: "BLOT_UNORDERED", stage: "run" },
+  "text_codepoints": { code: "BLOT_TYPE_ERROR", stage: "check" },
 };
 
 async function blotFiles(directory: string): Promise<string[]> {
@@ -389,4 +428,63 @@ for (const name of await blotFiles("examples/rejected/semantics")) {
       assertStringIncludes(message, expected.code);
     },
   );
+}
+
+for (const name of await blotFiles("examples/traps")) {
+  const stem = basename(name, ".blot");
+  const expected = TRAPS[stem];
+  Deno.test(`examples/traps/${name} reaches ${expected}`, async () => {
+    if (expected === undefined) {
+      throw new Error(`add \`${stem}\` to TRAPS with its diagnostic code`);
+    }
+    const path = join("examples/traps", name);
+    await checkFile(path);
+    const message = await failureMessage(
+      () => evaluateFile(path, { write: () => {} }),
+    );
+    assertStringIncludes(message, expected);
+  });
+}
+
+for (const name of await blotFiles("examples/pending")) {
+  const stem = basename(name, ".blot");
+  const expected = PENDING[stem];
+  const label = expected === undefined
+    ? "an unrecorded limitation"
+    : expected.stage === "type"
+    ? expected.type
+    : expected.code;
+  Deno.test(`examples/pending/${name} records ${label}`, async () => {
+    if (expected === undefined) {
+      throw new Error(`add \`${stem}\` to PENDING with its result and stage`);
+    }
+    const path = join("examples/pending", name);
+    if (expected.stage === "type") {
+      const checked = await checkFile(path);
+      assertEquals(checked.type, expected.type);
+      return;
+    }
+    let run: () => Promise<unknown>;
+    if (expected.stage === "check") {
+      run = () => checkFile(path);
+    } else {
+      run = () => evaluateFile(path, { write: () => {} });
+    }
+    const message = await failureMessage(run);
+    assertStringIncludes(message, expected.code);
+  });
+}
+
+async function failureMessage(run: () => Promise<unknown>): Promise<string> {
+  try {
+    await run();
+  } catch (error) {
+    if (error instanceof Error) {
+      const coded = error as Error & { readonly code?: string };
+      if (coded.code !== undefined) return `${coded.code}: ${coded.message}`;
+      return error.message;
+    }
+    throw error;
+  }
+  throw new Error("expected this example to retain its recorded failure");
 }

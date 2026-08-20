@@ -1,0 +1,29 @@
+// PATHOLOGICAL BUT SUPPORTED: specialization chooses among three closures with
+// different capture products, including a choice nested inside another choice.
+// Both calls have known inputs, so staging must choose the right body and
+// captures before Runtime HIR. Merging on source body alone would silently use
+// the wrong capture. A truly dynamic choice at the ABI remains a documented
+// compiler limitation, not a portable source-language example.
+
+open import "blot:prelude"
+
+sig run = (Int, Int) -> Int
+let run = fn (flag, value) =>
+  let bias = value * 2
+  let selected = case flag > 10 of
+    #True => do:
+      let inner = case flag > 100 of
+        #True => fn n => n + flag + bias
+        #False => fn n => n + flag
+      return inner
+    #False => do:
+      let offset = value - flag
+      return fn n => n - offset
+  let first = selected value
+  let second = selected 7
+  return first + second
+
+return {
+  .positive = run (20, 3);
+  .negative = run (2, 3);
+}

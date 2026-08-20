@@ -1,0 +1,20 @@
+// NOT IMPLEMENTED YET (SUGGESTION.md §11): Phi proves the initial index is in
+// bounds, but `index := index + 1` widens the rebound value and loses the affine
+// relation. Carrying that relation through literal addition would let this
+// hand-written traversal retain its proof without changing `[Int]` into a
+// length-indexed type.
+
+open import "blot:prelude"
+
+sig sum = [Int] -> Int
+let sum = fn values =>
+  let index = 0
+  let total = 0
+  if index >= 0 && index < Array.length values:
+    for _ in Iter.range (0, Array.length values):
+      total := total + @array.get values index
+      index := index + 1
+
+  return total
+
+return sum
