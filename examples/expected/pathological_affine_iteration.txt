@@ -1,0 +1,1 @@
+{ .backwards = 60; .overshoot = 50; .stop_past_store = 70; .wrong_direction = 0; .outside_start = 0; .zero_stride = 0; .reverse_empty = 0; }

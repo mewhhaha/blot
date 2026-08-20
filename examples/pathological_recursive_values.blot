@@ -1,0 +1,46 @@
+// PATHOLOGICAL BUT SUPPORTED: direct and mutually recursive algebraic values
+// terminate while constructing and consuming nested sums. Every input here is
+// known, so the values disappear during staging instead of crossing ABI 1,
+// where recursive roots deliberately have no public representation.
+
+open import "blot:prelude"
+
+let rec build = fn count =>
+  if count == 0:
+    return #Nil
+  else:
+    return #Cons (count, build (count - 1))
+
+let rec total = fn values => case values of
+  #Nil => 0
+  #Cons node => node.0 + total node.1
+
+sig sum_list = Int -> Int
+let sum_list = fn count => total (build count)
+
+let rec build_even = fn count =>
+  if count == 0:
+    return #EvenDone
+  else:
+    return #Even (count, build_odd (count - 1))
+let rec build_odd = fn count =>
+  if count == 0:
+    return #OddDone
+  else:
+    return #Odd (count, build_even (count - 1))
+
+let rec total_even = fn values => case values of
+  #EvenDone => 0
+  #Even node => node.0 + total_odd node.1
+let rec total_odd = fn values => case values of
+  #OddDone => 0
+  #Odd node => node.0 + total_even node.1
+
+sig mutual_sum = Int -> Int
+let mutual_sum = fn count => total_even (build_even count)
+
+return {
+  .empty = sum_list 0;
+  .deep = sum_list 64;
+  .mutual = mutual_sum 9;
+}

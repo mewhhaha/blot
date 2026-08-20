@@ -1,0 +1,21 @@
+// PATHOLOGICAL BUT SUPPORTED: the textbook Fibonacci definition expresses the
+// recurrence directly, including its overlapping non-tail calls. This is an
+// executable compiler baseline, not yet a claim that the exponential algorithm
+// has been memoized or transformed into a linear one.
+
+open import "blot:prelude"
+
+sig fibonacci = Int -> Int
+let rec fibonacci = fn n =>
+  if n < 2:
+    return n
+
+  return fibonacci (n - 1) + fibonacci (n - 2)
+
+return {
+  .zero = fibonacci 0;
+  .one = fibonacci 1;
+  .ten = fibonacci 10;
+  .twenty = fibonacci 20;
+  .fibonacci = fibonacci;
+}

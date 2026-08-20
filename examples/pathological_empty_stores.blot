@@ -1,0 +1,24 @@
+// PATHOLOGICAL BUT SUPPORTED: `[]` begins with an unknown element variable.
+// Independent signatures settle several empty values to `[Int]`, including a
+// branch where neither arm contributes an element and a nested Store whose
+// inner Stores are all empty. Taking their lengths proves the empty values are
+// usable without inventing an element or leaking an unresolved type variable.
+
+open import "blot:prelude"
+
+sig empty_ints = Unit -> [Int]
+let empty_ints = fn () => []
+
+sig choose_empty = Bool -> [Int]
+let choose_empty = fn condition => case condition of
+  #True => []
+  #False => []
+
+sig nested = [[Int]]
+let nested = [empty_ints (), choose_empty False]
+
+return {
+  .direct = Array.length (empty_ints ());
+  .branch = Array.length (choose_empty True);
+  .nested = Array.length nested;
+}

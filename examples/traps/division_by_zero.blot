@@ -1,0 +1,9 @@
+// SPECIFIED TRAP: this program is well typed. Division by zero is a run-time
+// outcome, not a type error and not undefined behavior. The `let` bindings keep
+// the example on the run-time evaluation path instead of making it a const.
+
+open import "blot:prelude"
+
+let numerator = 42
+let denominator = 0
+return @int.div numerator denominator

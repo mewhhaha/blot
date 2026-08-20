@@ -1,0 +1,46 @@
+// PATHOLOGICAL BUT SUPPORTED: affine iterators are total for every integer
+// start, stop, and stride. Wrong-way, zero-stride, and initially out-of-bounds
+// walks are empty; overshooting either logical stop or the Store ends the walk
+// instead of reaching an array trap.
+
+open import "blot:prelude"
+
+let values = [10, 20, 30, 40]
+
+let backwards = 0
+for value in Iter.affine (values, 3, -1, -2):
+  backwards := backwards + value
+
+let overshoot = 0
+for value in Iter.affine (values, 0, 4, 3):
+  overshoot := overshoot + value
+
+let stop_past_store = 0
+for value in Iter.affine (values, 2, 99, 1):
+  stop_past_store := stop_past_store + value
+
+let wrong_direction = 0
+for value in Iter.affine (values, 0, 4, -1):
+  wrong_direction := wrong_direction + value
+
+let outside_start = 0
+for value in Iter.affine (values, -3, 4, 1):
+  outside_start := outside_start + value
+
+let zero_stride = 0
+for value in Iter.affine (values, 0, 4, 0):
+  zero_stride := zero_stride + value
+
+let reverse_empty = 0
+for value in Iter.reverse []:
+  reverse_empty := reverse_empty + value
+
+return {
+  .backwards = backwards;
+  .overshoot = overshoot;
+  .stop_past_store = stop_past_store;
+  .wrong_direction = wrong_direction;
+  .outside_start = outside_start;
+  .zero_stride = zero_stride;
+  .reverse_empty = reverse_empty;
+}
