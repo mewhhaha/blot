@@ -26,6 +26,32 @@ const result = await parse("return 42\n");
 
 Run `pnpm pack --dry-run` to verify the package before publishing.
 
+## Direct definitions should stay viable
+
+Blot's performance goal is not to make programmers translate the clear version
+of an algorithm into compiler-shaped ceremony. Textbook definitions that are
+often presented as elegant but dismissed as impractical should remain useful
+source programs, with staging, specialization, loop recovery, layout selection,
+and ownership reuse doing the mechanical work.
+
+The executable catalog keeps that claim concrete:
+
+| definition               | executable source                                                                            | what it pressures                                                    |
+| ------------------------ | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| persistent quicksort     | [`examples/quicksort.blot`](examples/quicksort.blot)                                         | structural recursion, stable partitioning, and allocation visibility |
+| in-place quicksort       | [`examples/owned_quicksort.blot`](examples/owned_quicksort.blot)                             | one-Store ownership, partitioning, and memory reuse                  |
+| naïve Fibonacci          | [`examples/pathological_fibonacci.blot`](examples/pathological_fibonacci.blot)               | non-tail overlapping recursion and the future memoization boundary   |
+| recursive lists          | [`examples/pathological_recursive_values.blot`](examples/pathological_recursive_values.blot) | direct and mutual recursive algebraic values                         |
+| binary trees             | [`examples/arena_binary_tree.blot`](examples/arena_binary_tree.blot)                         | compact arena layout and recursive traversal                         |
+| recursive descent        | [`examples/walker.blot`](examples/walker.blot)                                               | mutually recursive functions with checked indexing                   |
+| ordinary loops and folds | [`examples/loops.blot`](examples/loops.blot)                                                 | inferred loop state and structured control-flow recovery             |
+
+These files are executable correctness claims. Performance claims are added only
+with equal-semantics benchmarks: accepting naïve Fibonacci is not yet a claim
+that exponential recursion has become linear. The point of keeping the direct
+program in the corpus is to give optimization work a stable source-level target
+without replacing it with a hand-written different algorithm.
+
 The development and production compilers intentionally use the same phase
 vocabulary: `frontend`, `typecheck`, `hir`, `backend`, and `session`. The Node
 modules under `src/compiler/` are arranged to resemble the corresponding Rust
