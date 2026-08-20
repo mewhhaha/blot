@@ -1,0 +1,10 @@
+// NOT IMPLEMENTED YET (SUGGESTION.md §12): Float.cmp has only Less, Equal,
+// and Greater, so NaN currently reaches BLOT_UNORDERED. A future total result
+// would return #Unordered and make the caller handle it explicitly. This file
+// records the current trap; it must be promoted and given a fourth case if that
+// design becomes language law.
+
+open import "blot:prelude"
+
+let nan = Float.div 0.0 0.0
+return Float.cmp nan 1.0

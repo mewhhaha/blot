@@ -1,0 +1,9 @@
+// SPECIFIED TRAP: Blot Int arithmetic traps rather than wrapping. The largest
+// signed i64 is representable, but adding one to it is not. Optimizers and Wasm
+// lowering must preserve this boundary case.
+
+open import "blot:prelude"
+
+let maximum = 9223372036854775807
+let one = 1
+return maximum + one

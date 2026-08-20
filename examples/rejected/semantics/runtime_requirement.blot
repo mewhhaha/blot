@@ -1,0 +1,11 @@
+// INTENTIONALLY INVALID: a predicate can inspect a settled type, but an
+// arbitrary runtime parameter cannot become a requirement and grant evidence.
+// Make the requirement combinator `const` so specialization supplies it before
+// the returned closure is checked.
+
+open import "blot:prelude"
+
+let require = fn requirement => fn value =>
+  return @satisfies value requirement
+
+return require Int 42

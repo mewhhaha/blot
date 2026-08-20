@@ -1,0 +1,8 @@
+// NOT IMPLEMENTED YET (SUGGESTION.md §14): text can be measured and combined,
+// but it cannot yet be taken apart in Blot source. Code-point iteration is the
+// missing primitive that would make split, find, trim, and parsers ordinary
+// prelude code. `Text.codepoints` is intentionally absent today.
+
+open import "blot:prelude"
+
+return Text.codepoints "pathological"
