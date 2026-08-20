@@ -169,7 +169,7 @@ impl Runtime {
     pub(crate) fn residual(
         phase: Phase,
         module: String,
-        trace: Rc<RefCell<crate::hir::ResidualTrace>>>,
+        trace: Rc<RefCell<crate::hir::ResidualTrace>>,
     ) -> Self {
         let mut runtime = Self::new(phase, module);
         runtime.residual = Some(trace);
@@ -458,12 +458,18 @@ pub fn evaluate_expression(
                 runtime,
             )
             .and_then(move |function| {
+                // A deferred parameter is handed the argument unevaluated, so
+                // the decision not to run it belongs to the body's reads.
                 if let Value::Closure {
                     module: closure_module,
                     deferred: true,
                     ..
                 } = &function
                 {
+                    // Deferral is settled while compiling. A residual trace
+                    // means this call is being staged into the running
+                    // program, which has no representation for a suspension —
+                    // source elaboration refuses the same program.
                     if argument_runtime.residual.is_some() {
                         return Computation::error(Diagnostic::new(
                             "BLOT_DEFERRED_AT_RUNTIME",
