@@ -209,8 +209,7 @@ result = (
   LAYOUT_NEWLINE
 ) ;
 
-// Patterns. The qualifier carries `!` (linear, consumed exactly once), `&`
-// (bounded borrow), and `^` (pin an existing scalar), and absorbs `-` so that
+// Patterns. The qualifier carries `!` (linear, consumed exactly once), `&` (bounded borrow), and `^` (pin an existing scalar), and absorbs `-` so that
 // negative literal patterns need no separate rule. It is OPERATOR rather than a
 // set of literals because spelling those as literals would shadow them out of
 // the operator class entirely, costing every custom operator that uses those
@@ -284,11 +283,9 @@ expression = (
   rest:infix_operation*
 ) ;
 
-// A value continued after `=` cannot begin with a block or conditional. Both
-// begin with the same layout tokens as a binding block, and treating `if` as a
-// continued value would make its branch suites indistinguishable from a
-// statement conditional's suites. Other values have disjoint starts; an
-// explicit block remains available through the ordinary `value` alternative.
+// A value continued after `=` cannot begin with a statement conditional. Its
+// layout would be indistinguishable from the binding continuation itself. An
+// explicit statement value begins with the disjoint `do` or `compdo` token.
 continued_expression = (
   first:continued_operand
   rest:infix_operation*
@@ -380,7 +377,6 @@ primary_expression = (
   | unit
   | case_expression
   | do_block
-  | block
   | array
   | shape
   | effect_row
@@ -599,15 +595,6 @@ case_arm = (
 case_guard = ( "if" condition:expression ) ;
 
 
-
-// Construct-owned suites lower through this internal block form. It has no
-// opening source token of its own.
-block = (
-  LAYOUT_NEWLINE
-  LAYOUT_INDENT
-  statements:statement*
-  LAYOUT_DEDENT
-) ;
 
 // `do:` is the explicit statement scope available as a value. `compdo:` is
 // the same scope with a compile-time obligation. Parentheses are only

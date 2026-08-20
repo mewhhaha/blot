@@ -33,7 +33,7 @@ the smaller functional core.
 Inside a function, code should read like an imperative procedure:
 
 ```blot
-let publish = fn source =>
+let publish = fn source => do:
   values <- source.read ()
   let values = filter (values, fn value => value >= 0)
   let values = map (values, normalize)
@@ -59,19 +59,19 @@ Compose at the larger scale. Functions take values and return values; modules
 execute in source order from an optional input to one returned value:
 
 ```blot
-let prepare = fn values =>
+let prepare = fn values => do:
   let values = filter (values, valid)
   let values = map (values, normalize)
   return values
 
-let summarize = fn values =>
+let summarize = fn values => do:
   let total = 0
   for value in Iter.items values:
     total := total + value
 
   return { .values = values; .total = total; }
 
-let run = fn source =>
+let run = fn source => do:
   values <- source.read ()
   let values = prepare values
   let summary = summarize values
@@ -94,7 +94,7 @@ open import "blot:prelude"
 
 const Limit = 100
 
-let clamp = fn value =>
+let clamp = fn value => do:
   if value > Limit:
     return Limit
 
@@ -138,7 +138,7 @@ from treating its fields as local vocabulary:
 ```blot
 const prelude = import "blot:prelude"
 
-let calculate = fn values =>
+let calculate = fn values => do:
   open prelude
 
   let total = 0
@@ -162,7 +162,7 @@ const Colours = {
   .blue = { .r = 0; .g = 0; .b = 255; };
 }
 
-let warning =
+let warning = do:
   open Colours
   let foreground = red
   let background = blue
@@ -325,393 +325,338 @@ let total = fold (
 
 ## Treat shapes, tuples, arrays, and variants differently
 
-A shape has named fields and supports width subtyping. Use it for domain data
-whose field names matter:
+A shape has named fields and should represent data whose fields have meaning:
 
 ```blot
-let point = { .x = 20; .y = 22; }
-let moved = { ...point; .x = point.x + 1; }
-let { .x; .y = height; } = moved
+let user = {
+  .name = "Ada";
+  .age = 36;
+  .active = True;
+}
 ```
 
-A tuple is a small positional product. Use it when position already carries the
-meaning and the values travel together briefly:
+A tuple should represent a small positional product whose positions are obvious:
 
 ```blot
-let bounds = (0, 100)
-let (low, high) = bounds
+let range = (start, stop)
+let point = (x, y)
 ```
 
-An array is a homogeneous sequence:
+Use an array for a homogeneous sequence:
 
 ```blot
-let values = [1, 2, 3]
-let extended = [0, ...values, 4]
-let doubled = map (values, fn value => value * 2)
+let names = ["Ada", "Grace", "Linus"]
+let names = [...names, "Edsger"]
 ```
 
-A constructor describes which kind of value exists. Prefer a variant over a
-record with a status field and conditionally meaningful fields:
+Use constructors for alternatives, not ad hoc tag fields:
 
 ```blot
-const Result = fn value => #Ok value | #Error Str
+const Result = #Ok Int | #Error Str
 
 let render = fn result => case result of
   #Ok value => Text.of_int value
   #Error reason => reason
 ```
 
-Match a variant with `case`. The patterns should make the valid states visible
-without requiring the reader to remember a Boolean convention.
-
-Use `Option` for expected absence and `Result` for an expected failure that
-carries an explanation. Handle either at the boundary where recovery is
-possible:
+Patterns should destructure at the point where a value's shape becomes useful:
 
 ```blot
-let read_or = fn (values, index, fallback) =>
-  if let #Some value = Array.get (values, index) else:
-    return fallback
-
-  return value
+let { .name; .age; } = user
+let (left, right) = range
 ```
 
-Use `@fail` for a compile-time refusal with a reason and `@panic` for a runtime
-path that should be unreachable. Do not encode an expected failure as a panic.
+Do not carry fields through temporary projection variables unless the names make
+a later operation clearer.
 
-## Use `case` to explain data
+## Prefer guards and early returns
 
-Prefer one `case` to a chain of equality tests:
-
-```blot
-let name = fn phase => case phase of
-  #Starting => "starting"
-  #Running => "running"
-  #Stopped reason => reason
-```
-
-The linter offers this rewrite for equality ladders, including a terminal
-statement ladder and one nested directly under `else`. Equality may put the
-literal on either side; the generated `case` still evaluates the shared target
-once.
-
-Use a guarded arm when a pattern identifies the data and a predicate refines
-that arm:
+A function that checks exceptional or terminating paths first is usually easier
+to read than one that nests the successful path:
 
 ```blot
-let classify = fn result => case result of
-  #Score value if value >= 100 => "excellent"
-  #Score value if value >= 50 => "passing"
-  #Score _ => "retry"
-  #Missing => "missing"
-```
-
-Keep specific arms above general ones. A false guard falls through to the arms
-below it, and guarded arms do not prove exhaustiveness.
-
-## Distinguish value conditionals from control flow
-
-A conditional on the right of `let`, inside an argument, or otherwise used as a
-value has an `else`. Each branch is its own result scope:
-
-```blot
-let label = if ready:
-  return "ready"
-else:
-  return "waiting"
-```
-
-Treat those branch returns as supplying the conditional's value. They do not
-return from the surrounding function.
-
-Write a direct fallback decision as `else if`, not as another `if` nested in an
-otherwise empty `else` suite. The linter flattens that shape for both value and
-statement conditionals, while leaving a suite with additional work nested.
-
-When a function is choosing its final result, skip the outer value conditional
-and return directly from statement branches:
-
-```blot
-let minimum = fn (left, right) =>
-  if left < right:
-    return left
-  else:
-    return right
-```
-
-Use early returns for exceptional or terminal paths, then leave the main path
-flat:
-
-```blot
-let describe = fn value =>
+let classify = fn value => do:
   if value < 0:
-    return "negative"
+    return #Negative
 
   if value == 0:
-    return "zero"
+    return #Zero
 
-  return "positive"
+  return #Positive value
 ```
 
-Use a deconstructing guard when failure leaves and success continues:
+Use `if let ... else:` when one variant must be present for the rest of the
+function to make sense:
 
 ```blot
-let unwrap_or = fn (candidate, fallback) =>
-  if let #Some value = candidate else:
-    return fallback
+let first_or = fn values => do:
+  if let #Some first = Array.get (values, 0) else:
+    return #Missing
 
-  return value
+  return #Found first
 ```
 
-The success path is the code after the guard. Do not add a success suite, and do
-not let the failure branch continue: the pattern's names would not exist there.
+The matched names remain available below the guard. That makes the main path
+flat and avoids wrapping the rest of the function in a `case` arm.
 
-## Treat `return` and `break` as different exits
-
-`return value` exits the current module or function result scope. It crosses a
-statement `if` and a `for`:
+A statement `if` may omit `else` when the false path naturally continues:
 
 ```blot
-let find = fn (values, wanted) =>
-  for value in Iter.items values:
-    if value == wanted:
-      return Some value
+if trace:
+  <- Console.write "starting"
 
-  return None
+return run ()
 ```
 
-`break` exits only the nearest `for` and carries that loop's current accumulator
-state:
+Use `case` instead when the branches choose a value:
 
 ```blot
-let count = 0
-for ever:
-  count := count + 1
-  if count >= 10:
+let label = case status of
+  #Ready => "ready"
+  #Failed reason => reason
+```
+
+This split is one of the most useful readability rules in the language: `if`
+reads as control flow; `case` reads as data elimination.
+
+## Make statement blocks explicit
+
+A function body and a `case` arm are value positions. Keep the common case as a
+single expression:
+
+```blot
+let increment = fn value => value + 1
+
+let describe = fn option => case option of
+  #Some value => Text.of_int value
+  #None => "none"
+```
+
+When that value needs declarations, rebinding, sequencing, statement control,
+loops, `break`, or `return`, introduce the statement scope with `do:`:
+
+```blot
+let normalize = fn value => do:
+  if value < 0:
+    return 0
+
+  let doubled = value * 2
+  return doubled
+
+let describe = fn option => case option of
+  #Some value => do:
+    let normalized = normalize value
+    return Text.of_int normalized
+  #None => "none"
+```
+
+Indentation after `=` or `=>` may continue an expression, but indentation alone
+does not create a statement block. `do:` is the explicit lexical and `return`
+boundary; `compdo:` is the same form when the whole statement scope must execute
+at compile time.
+
+## Use `case` to explain closed data
+
+`case` is the normal way to consume a closed constructor union:
+
+```blot
+let describe = fn state => case state of
+  #Waiting => "waiting"
+  #Running progress => Text.of_int progress
+  #Failed reason => reason
+```
+
+Prefer constructor names that describe domain states. Use `_` as the wildcard
+only when the omitted distinctions truly do not matter:
+
+```blot
+let is_done = fn state => case state of
+  #Done => True
+  _ => False
+```
+
+A guarded arm should express an additional condition on a matched shape, not
+replace a clear nested data split:
+
+```blot
+let bucket = fn result => case result of
+  #Ok value if value >= 100 => #Large value
+  #Ok value => #Small value
+  #Error reason => #Rejected reason
+```
+
+Use exhaustive cases. A missing constructor is a checker error, and the explicit
+coverage is useful documentation.
+
+Keep `return` out of a case arm unless the arm intentionally returns from an
+explicit surrounding `do:` scope. A simple case arm is already its value.
+
+## Write loops as loops
+
+Use `for` for ordinary traversal:
+
+```blot
+let total = 0
+for value in Iter.items values:
+  total := total + value
+return total
+```
+
+Treat the names rebound with `:=` as the loop's inferred accumulator. Keep that
+set small and obvious. A local `let` inside the loop is per-iteration scratch:
+
+```blot
+let total = 0
+for value in Iter.items values:
+  let weighted = value * 2
+  total := total + weighted
+return total
+```
+
+Use `break` when stopping is genuinely imperative and the accumulator already
+contains the result you want:
+
+```blot
+let found = None
+for value in Iter.items values:
+  if matches value:
+    found := Some value
     break
-
-return count
+return found
 ```
 
-Do not use `break` from a value conditional. A value conditional is a separate
-result scope, so it cannot transfer control to an outer loop.
-
-## Treat every `for` as a fold
-
-Prefer `for` over a hand-written `fold` or recursive iterator whenever the
-intent is “visit these values and update this local state.” The surface form is
-not less functional: lowering turns it into recursion with an explicit
-accumulator before inference.
-
-Names rebound with `:=` are the loop accumulator. Initialize them before the
-loop and make every update obvious:
+Use a refutable loop pattern when a constructor pattern is the filter:
 
 ```blot
 let total = 0
-let count = 0
-for value in Iter.items values:
+for #Some value in Iter.items choices:
   total := total + value
-  count := count + 1
-
-return { .total = total; .count = count; }
-```
-
-A `let` inside the body is local to one iteration:
-
-```blot
-let total = 0
-for value in Iter.items values:
-  let squared = value * value
-  total := total + squared
-
 return total
 ```
 
-A refutable binder is an idiomatic filter:
+Do not manually unwrap `.state` and `.step` unless implementing an iterator.
+`for value in iterator:` is the consumer-facing form.
+
+Write a custom iterator as one shape with `.state` and `.step`:
 
 ```blot
-let total = 0
-for #Some value in Iter.items candidates:
-  total := total + value
-
-return total
-```
-
-Prefer the loop even with several accumulator fields. Named state is easier to
-scan than tuple positions threaded through a callback:
-
-```blot
-let total = 0
-let smallest = None
-for value in Iter.items values:
-  total := total + value
-  smallest := case smallest of
-    #None => Some value
-    #Some current => Some (Ord.min current value)
-
-return { .total = total; .smallest = smallest; }
-```
-
-Use `map` or `filter` when one familiar collection operation says the whole
-thing. Use `fold` when implementing a reusable collection operation, when the
-fold itself is the value being composed, or when its state transition is the
-abstraction the caller cares about:
-
-```blot
-let total = fold (
-  values,
-  0,
-  fn (state, value) => state + value
-)
-```
-
-An iterator is just `{ .state; .step; }`. Define one as an ordinary value rather
-than asking the compiler for another loop kind:
-
-```blot
-const halving = fn start => {
+let countdown = fn start => {
   .state = start;
-  .step = fn value =>
-    if value < 1:
+  .step = fn current =>
+    if current <= 0:
       return None
     else:
-      return Some (value, value / 2)
+      return Some (current, current - 1)
   ;
 }
 ```
 
-## Keep effects visible in the statement order
+The generic loop understands the protocol, not the name `countdown`.
 
-Use `<-` for an effectful expression. It is the sequencing operation, not a
-decorated `let`:
-
-```blot
-let greet = fn () =>
-  name <- Terminal.read_line ()
-  <- Terminal.write ("Hello, " <> name)
-  return name
-```
-
-Bind a meaningful result by name. Use a leading `<-` when the result is
-intentionally discarded; `_ <- expression` is the explicit equivalent but is
-usually noisier. Never use `let` merely to force an effect to happen; pure `let`
-values may be discarded or reordered.
-
-An effect value can be retained and explicitly executed:
+Use a named recursive function when recursion is the algorithm rather than an
+implementation of ordinary traversal:
 
 ```blot
-let effect = Assets.generation
-generation <- effect
-<- effect
+sig factorial = Int -> Int
+let rec factorial = fn value => do:
+  if value <= 1:
+    return 1
+
+  return value * factorial (value - 1)
 ```
 
-Stored effects can be passed to a parent as children without executing them or
-adding another suspension:
+## Make effects visible in the statement stream
 
-```blot
-let foreground = <Mesh />
-let lighting = <DirectionalLight />
-let scene =
-  <Camera>
-    {foreground}
-    {lighting}
-  </Camera>
-```
-
-Define an effect as a compile-time operation shape:
+Create an effect once and thread it through types and handlers:
 
 ```blot
 const Console = @effect {
   .write = Str -> Unit;
 }
-
-sig report = Unit -> Str ~ { Console }
-let report = fn () =>
-  <- Console.write "working"
-  return "done"
 ```
 
-A handler is an ordinary shape. Give every operation its argument and affine
-continuation, and include `.return` when the result needs a final transform:
+Bind an effect result with `<-`:
 
 ```blot
-let collecting = {
-  .write = fn (message, ?resume) =>
-    rest <- resume ()
-    return message <> rest
-  ;
-  .return = fn value => value;
-}
-
-let transcript = @handle (Console, report, collecting)
+time <- Clock.now ()
 ```
 
-Treat `?resume` as genuinely one-shot. Calling it continues the suspended
-computation; omitting it aborts that computation; calling it twice is an error.
+Discard an effect result with the statement spelling:
+
+```blot
+<- Console.write "starting"
+```
+
+This is preferred to `_ <- ...`: the source says directly that the result is not
+used.
+
+Do not rely on a pure `let` for ordering. If an operation must happen before the
+next operation, place it in the statement stream with `<-`.
+
+Write effectful callbacks with the effect row in the signature when the boundary
+matters:
+
+```blot
+sig report = Str -> Unit ~ { Console }
+let report = fn text => do:
+  <- Console.write text
+  return ()
+```
+
+Handle at the narrowest useful boundary. A handler is a plain record of
+operations and an optional return clause:
+
+```blot
+let buffered = computation |> @handle (Console, {
+  .write = fn (resume, text) => resume ();
+  .return = fn value => value;
+})
+```
+
+Use `|>` for handler composition so the dataflow reads left to right. Keep
+handlers next to the computation whose effects they explain.
 
 ## Pass interfaces explicitly
 
-Interfaces are structural types, not an implicit instance registry. State the
-required operations in a signature and accept the implementation as an ordinary
-argument:
+There is no trait registry, implicit dictionary, or instance search. Describe a
+structural capability with a compile-time record:
 
 ```blot
-sig join = Monoid [Int] -> [Int] -> [Int] -> [Int]
-let join = fn implementation => fn left => fn right =>
-  return implementation.append left right
-
-let combined = join Array [1, 2] [3, 4]
-```
-
-Use a narrower interface when it says enough:
-
-```blot
-sig count = Length [Int] -> [Int] -> Int
-let count = fn implementation => fn values =>
-  return implementation.length values
-
-let size = count Array values
-```
-
-Treat `Array`, `Text`, and similar records as implementations that happen to
-carry more operations than a function requires. Width subtyping lets them
-satisfy the smaller structural interface.
-
-Operators do not perform implicit interface lookup. The default `*` names the
-concrete `Num.mul`; floating-point code names `Float.mul` or `Float32.mul`.
-Declare another fixity when a module intentionally wants another concrete
-meaning.
-
-## Create operators for composition
-
-Operators are ordinary curried functions with a local fixity declaration. Make
-one when a domain operation is repeatedly composed, chained, combined, or
-transformed. The operator lets the source show the algebra while the qualified
-target remains available when it needs to be passed as a value.
-
-```blot
-operators {
-  infixl 20 (>>>) = Pipeline.then;
+const Comparable = {
+  .compare = Int -> Int -> Ordering;
 }
-
-open import "blot:prelude"
-
-const Pipeline = {
-  .then = fn left => fn right => fn input => right (left input);
-}
-
-let prepare = decode >>> validate >>> normalize
-let result = prepare input
-
-return result
 ```
 
-Prefer the operator once it exists. Repeating
-`Pipeline.then (Pipeline.then decode validate) normalize` makes the mechanism
-louder than the composition it represents.
+Pass the implementation as an ordinary value:
 
-Put operator targets in a domain namespace and choose precedence by what the
-operation means:
+```blot
+let sort = fn (comparable, values) => ...
+let ordered = sort (IntOrder, values)
+```
+
+If the implementation is used throughout a small scope, open it locally:
+
+```blot
+let sort = fn (order, values) => do:
+  open order
+  return sort_by compare values
+```
+
+This keeps dependencies visible while allowing the implementation to read like a
+small local vocabulary.
+
+Use `@satisfies` when a value should be checked against a structural requirement
+while remaining the same runtime value:
+
+```blot
+const Named = { .name = Str; }
+let item = @satisfies value Named
+```
+
+## Use operators for algebra and composition
+
+Declare an operator when the operation has a natural algebraic or pipeline
+reading:
 
 ```blot
 operators {
@@ -771,7 +716,7 @@ operators {
 
 let result = case Array.uncons values of
   #None => []
-  #Some (first, rest) =>
+  #Some (first, rest) => do:
     let (small, large) = partition (rest, fn value => value <= first)
     return small <> [first] <> large
 ```
@@ -900,7 +845,7 @@ sentinel, and make the arena affine so appends may reuse its scratch storage:
 
 ```blot
 sig build = (Int, [(Int, Int)], Int) -> ([(Int, Int)], Int)
-let rec build = fn (remaining, ?nodes, head) =>
+let rec build = fn (remaining, ?nodes, head) => do:
   if remaining == 0:
     return (nodes, head)
   else:
@@ -922,8 +867,7 @@ persistent array when older versions must remain observable.
 Use `comptime` for an expression whose result must be known while compiling:
 
 ```blot
-const build_table = fn count =>
-  return map (upto (0, count), fn value => value * value)
+const build_table = fn count => map (upto (0, count), fn value => value * value)
 
 const Squares = comptime build_table 16
 ```
@@ -960,7 +904,7 @@ elements or arguments vertically and indent inside every delimiter:
 store <- fold (
   upto (0, count),
   Array.empty,
-  fn (state, id) =>
+  fn (state, id) => do:
     entry <- Assets.entry id
     return E.attach (
       state,

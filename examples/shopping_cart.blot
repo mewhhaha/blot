@@ -15,7 +15,7 @@ let featured_names = map (featured, fn (name, _, _) => name)
 let featured_total = sum (map (featured, line_total))
 let total = sum subtotals
 
-let checkout = fn amount =>
+let checkout = fn amount => do:
   if amount >= 100:
     return amount - 5
 
