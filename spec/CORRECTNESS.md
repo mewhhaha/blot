@@ -17,6 +17,23 @@ Terminal states preserve returns, host requests, traps, and continuation use.
 Divergence preservation requires that the target cannot turn an infinite source
 execution into a return or unrelated trap, nor remove demanded divergence.
 
+The finite-step clause is therefore only one part of the pass obligation. Every
+pass relation also carries a **progress-sensitive adequacy package**:
+
+1. when a source step is matched by zero target steps, a well-founded
+   stuttering rank strictly decreases;
+2. if a related source state is a return, host request, or specified trap, every
+   maximal target execution reaches the matching visible outcome after finitely
+   many administrative steps;
+3. every target return, host request, or specified trap is reflected by the
+   related source state; and
+4. related host requests agree on effect identity, operation, and argument, and
+   every pair of related host responses resumes related continuations.
+
+Equivalently, a pass may prove a progress-sensitive weak bisimulation. Either
+form prevents infinite administrative stuttering, target-only visible outcomes,
+and introduced or erased divergence.
+
 ## 2. Dependency graph
 
 ```text
@@ -131,6 +148,13 @@ The implementation should advance in this order:
 `formal/lean` is an initial checked boundary, not yet a proof of the whole
 language. A claim graduates from “tested invariant” to “proved lemma” only when
 its formal assumptions and conclusion match the artifact contract used here.
+Every mechanized claim records two independent dimensions: its **logical
+assurance** (the syntax, reductions, observations, assumptions, and conclusion
+that Lean checks) and its **artifact correspondence** (the production compiler
+artifact or translation-validation boundary that instantiates those rules). A
+strong theorem over a seed calculus and a broad differential test are different
+evidence; neither substitutes for the missing correspondence argument of the
+other.
 
 Auxiliary analysis may remain outside the mechanized trusted core only through
 translation validation. A producer may infer control-flow environments,
