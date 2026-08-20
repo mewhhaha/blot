@@ -1,0 +1,7 @@
+// Statement-valued case arms require an explicit `do:` introducer.
+
+return case #Some 42 of
+  #Some value =>
+    let result = value
+    return result
+  #None => 0

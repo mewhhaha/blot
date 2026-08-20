@@ -1,0 +1,7 @@
+// Statement-valued function bodies require an explicit `do:` introducer.
+
+let identity = fn value =>
+  let result = value
+  return result
+
+return identity 42

@@ -11,12 +11,12 @@ const Entry = #Deposit Int | #Withdraw Int | #Fee Int
 sig apply = Int -> Entry -> (Int, Int, Int)
 let apply = fn balance => fn entry => case entry of
   #Deposit amount => (balance + amount, 1, 0)
-  #Withdraw amount =>
+  #Withdraw amount => do:
     if balance >= amount:
       return (balance - amount, 1, 0)
 
     return (balance, 0, 1)
-  #Fee amount =>
+  #Fee amount => do:
     if balance >= amount:
       return (balance - amount, 1, 0)
 
