@@ -5,11 +5,8 @@
 
 open import "blot:prelude"
 
-let items = [
-  ("notebook", 3, 12),
-  ("pen", 10, 2),
-  ("bag", 1, 45)
-]
+let items =
+  [("notebook", 3, 12), ("pen", 10, 2), ("bag", 1, 45)]
 
 let line_total = fn (_, quantity, unit_price) => quantity * unit_price
 let subtotals = map (items, line_total)
