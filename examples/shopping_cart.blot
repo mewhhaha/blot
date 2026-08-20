@@ -1,0 +1,29 @@
+// A small data pipeline over an immutable shopping cart.
+//
+// Tuples keep each line compact, `map` derives line totals, `filter` selects a
+// featured subset, and `fold`-based prelude helpers produce the checkout value.
+
+open import "blot:prelude"
+
+let items =
+  [("notebook", 3, 12), ("pen", 10, 2), ("bag", 1, 45)]
+
+let line_total = fn (_, quantity, unit_price) => quantity * unit_price
+let subtotals = map (items, line_total)
+let featured = filter (items, fn item => line_total item >= 25)
+let featured_names = map (featured, fn (name, _, _) => name)
+let featured_total = sum (map (featured, line_total))
+let total = sum subtotals
+
+let checkout = fn amount =>
+  if amount >= 100:
+    return amount - 5
+
+  return amount
+
+return {
+  .subtotals = subtotals;
+  .featured = featured_names;
+  .featured_total = featured_total;
+  .checkout = checkout total;
+}
