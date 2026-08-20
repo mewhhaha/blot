@@ -1,0 +1,24 @@
+// A familiar loop written as an ordinary Blot program.
+//
+// The labels are text values, and the array grows through rebinding rather
+// than assignment. `Num.rem` is a prelude function, not a built-in operator.
+
+open import "blot:prelude"
+
+let label = fn value =>
+  if Num.rem value 15 == 0:
+    return "fizzbuzz"
+  else:
+    if Num.rem value 3 == 0:
+      return "fizz"
+    else:
+      if Num.rem value 5 == 0:
+        return "buzz"
+      else:
+        return Text.of_int value
+
+let output = []
+for value in Iter.range (1, 16):
+  output := [...output, label value]
+
+return output
