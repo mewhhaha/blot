@@ -15,6 +15,20 @@ permissions:
   contents: read
 
 jobs:
+  formal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check stable Core metatheory
+        uses: leanprover/lean-action@v1
+        with:
+          lake-package-directory: formal/lean
+          build: true
+          test: false
+          nanoda: true
+          nanoda-allow-sorry: false
+
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -126,6 +140,8 @@ jobs:
       - run: pnpm run smoke
       - run: pnpm blot run examples/node-runner-demo.blot
       - run: pnpm parity:strict
+      - run: pnpm test:compiler
+      - run: pnpm verify:compiler
       - run: pnpm run benchmark -- examples/storage.blot
       - name: Verify compiler artifact is derived output
         shell: bash

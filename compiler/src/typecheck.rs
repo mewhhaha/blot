@@ -839,6 +839,7 @@ pub struct Checker {
     active: RefCell<Vec<String>>,
     closure_types: RefCell<HashMap<(String, ExpressionId), Type>>,
     recursive_closure_bodies: RefCell<HashSet<(String, ExpressionId)>>,
+    empty_array_elements: RefCell<HashSet<VariableId>>,
     incomplete_evaluations: RefCell<HashSet<String>>,
     module_interfaces: Rc<RefCell<HashMap<String, CachedModuleInterface>>>,
     module_analyses: Rc<RefCell<HashMap<String, CachedModuleAnalyses>>>,
@@ -873,6 +874,7 @@ impl Checker {
             active: RefCell::new(Vec::new()),
             closure_types: RefCell::new(HashMap::new()),
             recursive_closure_bodies: RefCell::new(HashSet::new()),
+            empty_array_elements: RefCell::new(HashSet::new()),
             incomplete_evaluations: RefCell::new(HashSet::new()),
             module_interfaces,
             module_analyses,
@@ -1887,6 +1889,7 @@ impl Checker {
                         *deferred,
                         types,
                         dependencies,
+                        None,
                     );
                     self.phase.set(previous_phase);
                     inferred.type_ = selected?;
@@ -2171,6 +2174,7 @@ impl Checker {
                         deferred,
                         environment,
                         dependencies,
+                        None,
                     )?;
                     for argument in arguments {
                         let result = self.fresh();
@@ -2229,6 +2233,7 @@ impl Checker {
                         deferred,
                         environment,
                         dependencies,
+                        None,
                     )?;
                     let result = self.fresh();
                     let performed = self.fresh();
@@ -2391,26 +2396,140 @@ impl Checker {
                 if let Some(imported) = literal_import(module, function, argument, dependencies) {
                     return Ok(Inferred::pure(imported));
                 }
-                let argument_id = argument;
-                let function =
-                    self.infer(path, module, function, environment, values, dependencies)?;
-                let argument =
-                    self.infer(path, module, argument_id, environment, values, dependencies)?;
+                let statically_known = statically_known_callee(module, function, environment);
+                let contextual_argument = if self.specialization_depth.get() == 0
+                    && statically_known
+                {
+                    Some(self.infer(path, module, argument, environment, values, dependencies)?)
+                } else {
+                    None
+                };
+                let evaluated_function = if statically_known {
+                    self.evaluate(path, function, values, Phase::Comptime).ok()
+                } else {
+                    None
+                };
+                if let Some(argument) = contextual_argument.as_ref()
+                    && contains_function(&self.settle(argument.type_.clone(), true))
+                    && let Some(Value::Closure {
+                        module: closure_module,
+                        parameter,
+                        body,
+                        environment: closure_values,
+                        self_name,
+                        deferred,
+                        ..
+                    }) = evaluated_function.as_ref()
+                    && self_name.is_none()
+                {
+                    let function = self.infer_evaluated_closure(
+                        path,
+                        module,
+                        closure_module,
+                        *parameter,
+                        *body,
+                        closure_values,
+                        self_name.as_deref(),
+                        *deferred,
+                        environment,
+                        dependencies,
+                        Some(argument.type_.clone()),
+                    )?;
+                    let result = self.fresh();
+                    let performed = self.fresh();
+                    self.constrain(
+                        function,
+                        Type::Function {
+                            parameter: Box::new(argument.type_.clone()),
+                            effects: Box::new(performed.clone()),
+                            result: Box::new(result.clone()),
+                        },
+                        span,
+                    )?;
+                    return Ok(Inferred {
+                        type_: result,
+                        effects: self.join_effects(argument.effects.clone(), performed)?,
+                    });
+                }
+                let function = match evaluated_function
+                    .as_ref()
+                    .and_then(|value| self.bridge_closed_attached_signature(value))
+                    .filter(function_result_contains_embedded_function)
+                {
+                    Some(type_) => Inferred::pure(type_),
+                    None => {
+                        self.infer(path, module, function, environment, values, dependencies)?
+                    }
+                };
+                let argument = match contextual_argument {
+                    Some(argument) => argument,
+                    None => {
+                        self.infer(path, module, argument, environment, values, dependencies)?
+                    }
+                };
+                let argument_type = argument.type_.clone();
                 let result = self.fresh();
                 let performed = self.fresh();
                 self.constrain(
                     function.type_,
                     Type::Function {
-                        parameter: Box::new(argument.type_),
+                        parameter: Box::new(argument_type.clone()),
                         effects: Box::new(performed.clone()),
                         result: Box::new(result.clone()),
                     },
                     span,
                 )?;
-                let effects = self.join_effects(function.effects, argument.effects)?;
-                let effects = self.join_effects(effects, performed)?;
+                let inferred_result = self.settle(result.clone(), true);
+                let mut selected_effects = None;
+                let selected_result = if self.specialization_depth.get() == 0
+                    && matches!(inferred_result, Type::Top | Type::Bottom)
+                    && let Some(Value::Closure {
+                        module: closure_module,
+                        parameter,
+                        body,
+                        environment: closure_values,
+                        self_name,
+                        deferred,
+                        ..
+                    }) = evaluated_function.as_ref()
+                    && self_name.is_none()
+                {
+                    let selected = self.infer_evaluated_closure(
+                        path,
+                        module,
+                        closure_module,
+                        *parameter,
+                        *body,
+                        closure_values,
+                        self_name.as_deref(),
+                        *deferred,
+                        environment,
+                        dependencies,
+                        Some(argument_type.clone()),
+                    )?;
+                    let selected_result = self.fresh();
+                    let selected_performed = self.fresh();
+                    self.constrain(
+                        selected,
+                        Type::Function {
+                            parameter: Box::new(argument_type),
+                            effects: Box::new(selected_performed.clone()),
+                            result: Box::new(selected_result.clone()),
+                        },
+                        span,
+                    )?;
+                    selected_effects = Some(selected_performed);
+                    selected_result
+                } else {
+                    result
+                };
+                let mut effects = self.join_effects(function.effects, argument.effects)?;
+                effects = self.join_effects(effects, performed)?;
+                if let Some(selected_effects) = selected_effects {
+                    effects = self.join_effects(effects, selected_effects)?;
+                }
                 Ok(Inferred {
-                    type_: result,
+                    type_: selected_result,
                     effects,
                 })
             }
@@ -2461,23 +2580,6 @@ impl Checker {
                 deferred,
                 ..
             } => {
-                // Deferral is settled while compiling, so a deferred lambda
-                // belongs to a compile-time declaration. One checked in the
-                // runtime phase is part of the program that runs, where the
-                // argument would be evaluated whether or not the parameter is
-                // read — the same refusal source elaboration makes when it
-                // builds Core.
-                if deferred && self.phase.get() == Phase::Runtime {
-                    return Err(Diagnostic::new(
-                        "BLOT_DEFERRED_AT_RUNTIME",
-                        concat!(
-                            "A deferred parameter is only supplied while compiling. This ",
-                            "function survives into the running program, where its argument ",
-                            "would run whether or not the parameter is read."
-                        ),
-                        expression_span(&expression),
-                    ));
-                }
                 let parameter_type = self.fresh();
                 let mut scope = TypeEnvironment::child(Rc::new(environment.clone()));
                 let parameter_phase = if deferred {
@@ -2935,6 +3037,7 @@ impl Checker {
         deferred: bool,
         environment: &TypeEnvironment,
         dependencies: &BTreeMap<String, Type>,
+        parameter_type: Option<Type>,
     ) -> Result<Type, Diagnostic> {
         let closure_loaded = self
             .context
@@ -2991,7 +3094,10 @@ impl Checker {
             };
             Rc::make_mut(&mut scope.phases).insert(name.clone(), phase);
         }
-        let parameter_type = self.fresh();
+        let parameter_type = match parameter_type {
+            Some(parameter_type) => parameter_type,
+            None => self.fresh(),
+        };
         let parameter_phase = if deferred {
             Phase::Comptime
         } else {
@@ -3092,6 +3198,15 @@ impl Checker {
             upper: Vec::new(),
         });
         Type::Variable(id)
+    }
+
+    fn fresh_empty_array_element(&self) -> Type {
+        let type_ = self.fresh();
+        let Type::Variable(variable) = type_ else {
+            unreachable!("fresh always returns a variable")
+        };
+        self.empty_array_elements.borrow_mut().insert(variable);
+        Type::Variable(variable)
     }
 
     fn fresh_at_next_level(&self) -> Type {
@@ -3288,6 +3403,11 @@ impl Checker {
                 }
                 let replacement = self.fresh();
                 fresh.insert(id, replacement.clone());
+                if self.empty_array_elements.borrow().contains(&id)
+                    && let Type::Variable(replacement) = &replacement
+                {
+                    self.empty_array_elements.borrow_mut().insert(*replacement);
+                }
                 let source = self.variables.borrow()[id as usize].clone();
                 let lower = source
                     .lower
@@ -3423,6 +3543,9 @@ impl Checker {
                 let Type::Variable(copy_id) = copy else {
                     unreachable!("fresh always returns a variable")
                 };
+                if self.empty_array_elements.borrow().contains(&id) {
+                    self.empty_array_elements.borrow_mut().insert(copy_id);
+                }
                 let source = self.variables.borrow()[id as usize].clone();
                 if polarity {
                     let copy_type = self.constraint_type(&Type::Variable(copy_id));
@@ -3540,6 +3663,9 @@ impl Checker {
                 .expect("a journalled bound insertion must still be present");
         }
         variables.truncate(variable_count);
+        self.empty_array_elements
+            .borrow_mut()
+            .retain(|variable| (*variable as usize) < variable_count);
         self.next_skolem.set(next_skolem);
     }
 
@@ -3705,6 +3831,12 @@ impl Checker {
             }
             (ConstraintTypeNode::Array(left), ConstraintTypeNode::Array(right)) => {
                 self.constrain_ids(left, right, span, seen)?;
+                let empty = self
+                    .constraint_variable(left)
+                    .is_some_and(|variable| self.empty_array_elements.borrow().contains(&variable));
+                if empty {
+                    self.constrain_ids(right, left, span, seen)?;
+                }
                 true
             }
             (ConstraintTypeNode::Region(left), ConstraintTypeNode::Region(right)) => {
@@ -4798,7 +4930,7 @@ impl Checker {
                     .map(|value| self.bridge_runtime_value(value))
                     .collect(),
             ))),
-            Value::EmptyArray { .. } => Type::Array(Box::new(Type::Bottom)),
+            Value::EmptyArray { .. } => Type::Array(Box::new(self.fresh_empty_array_element())),
             Value::Tag { name, payload } => Type::Variant {
                 cases: vec![(
                     name.clone(),
@@ -4848,7 +4980,9 @@ impl Checker {
                     .filter_map(|value| self.bridge(value))
                     .collect(),
             )))),
-            Value::EmptyArray { .. } => Some(Type::Array(Box::new(Type::Bottom))),
+            Value::EmptyArray { .. } => {
+                Some(Type::Array(Box::new(self.fresh_empty_array_element())))
+            }
             Value::Tag { name, payload } => Some(Type::Variant {
                 cases: vec![(
                     name.clone(),
@@ -4923,6 +5057,28 @@ impl Checker {
             }
             Value::TypeVariable(id) => Some(Type::Rigid(*id)),
             _ => None,
+        }
+    }
+
+    fn bridge_closed_attached_signature(&self, value: &Value) -> Option<Type> {
+        let Value::Closure {
+            signature: Some(signature),
+            ..
+        } = value
+        else {
+            return None;
+        };
+        self.bridge_closed_value(signature)
+    }
+
+    fn bridge_closed_value(&self, value: &Value) -> Option<Type> {
+        let signature = self.bridge(value)?;
+        if !closed_checked_type(&signature, &mut HashSet::new()) {
+            return None;
+        }
+        match signature {
+            Type::Forall { variables, body } => Some(self.instantiate_forall(variables, *body)),
+            signature => Some(signature),
         }
     }
 
@@ -5429,7 +5585,7 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
                 Type::Array(Box::new(element)),
             )
         }
-        "@array.empty" => Type::Array(Box::new(checker.fresh())),
+        "@array.empty" => Type::Array(Box::new(checker.fresh_empty_array_element())),
         "@array.len" => curried(vec![Type::Array(Box::new(checker.fresh()))], int),
         "@array.get" => {
             let element = checker.fresh();
@@ -5628,6 +5784,45 @@ fn variant(names: &[&str]) -> Type {
 }
 fn bool_type() -> Type {
     variant(&["True", "False"])
+}
+
+fn statically_known_callee(
+    module: &Module,
+    expression: ExpressionId,
+    environment: &TypeEnvironment,
+) -> bool {
+    match &module.arena.expressions[expression.0 as usize] {
+        Expression::Var { name, .. } => environment.binding_phase(name) == Some(Phase::Comptime),
+        Expression::Field { target, .. } => statically_known_callee(module, *target, environment),
+        Expression::Comptime { .. } => true,
+        _ => false,
+    }
+}
+
+fn contains_function(type_: &Type) -> bool {
+    match type_ {
+        Type::Function { .. } => true,
+        Type::Forall { body, .. }
+        | Type::Array(body)
+        | Type::Region(body)
+        | Type::OpenEffects { tail: body, .. } => contains_function(body),
+        Type::Record(fields) | Type::Variant { cases: fields, .. } => {
+            fields.iter().any(|(_, field)| contains_function(field))
+        }
+        Type::Union(members) => members.iter().any(contains_function),
+        _ => false,
+    }
+}
+
+fn function_result_contains_embedded_function(type_: &Type) -> bool {
+    match type_ {
+        Type::Forall { body, .. } => function_result_contains_embedded_function(body),
+        Type::Function { result, .. } => match result.as_ref() {
+            Type::Function { .. } => false,
+            result => contains_function(result),
+        },
+        _ => false,
+    }
 }
 
 fn literal_import(

@@ -5,12 +5,13 @@ import { encodePortableModule } from "../syntax/portable.ts";
 const revisionKeyByLoaded = new WeakMap<Loaded, string>();
 
 /**
- * Process-local semantic revision identity for one loaded module graph node.
+ * Exact process-local compiler-output identity for one loaded graph node.
  *
  * Child revisions enter by their fixed-size digest rather than by embedding the
- * child's serialized key. The canonical portable AST still owns semantic/source
- * location equality, so comment-only revisions keep the same key while edits
- * that move or change syntax do not.
+ * child's serialized key. The portable AST retains every observable origin and
+ * span, so an edit that shifts source locations cannot inherit a prior
+ * ClosedProgram. Text outside the accepted syntax may reuse it when every
+ * source artifact is byte-for-byte identical.
  */
 export function loadedRevisionKey(loaded: Loaded): string {
   const cached = revisionKeyByLoaded.get(loaded);

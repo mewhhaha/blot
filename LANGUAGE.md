@@ -801,7 +801,10 @@ length appears in its type. In an inferred type, `['a]` binds one homogeneous
 element variable; each polymorphic call freshens it. In a type-value expression,
 `[Int, Str]` computes `[Int | Str]`. The empty type-value array is `[bottom]`,
 while an ordinary runtime `[]` begins with a fresh element variable and receives
-its element constraint from use.
+its element constraint from use. In a recursive homogeneous accumulator, that
+empty origin contributes no inhabitant alternative of its own: yielded or pushed
+values constrain the same element variable. The array may still be empty at
+runtime because array types do not encode cardinality.
 
 An array spread must evaluate to an array. Arrays are immutable; `@array.set`
 and `@array.push` return new arrays.

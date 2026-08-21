@@ -1,8 +1,13 @@
 import { checkProgram } from "./typecheck.ts";
+import type { CheckResult } from "../check/mod.ts";
 import type { Imports } from "../comptime/eval.ts";
 import { type Loaded, loadProgram } from "./frontend.ts";
-import type { BlotRuntimeModule } from "../runtime/hir.ts";
+import {
+  type BlotRuntimeModule,
+  validateBlotRuntimeModule,
+} from "../runtime/hir.ts";
 import { stageModule } from "../stage.ts";
+import { elaborateModule } from "../core/computation.ts";
 import { CompilerTargetRefusal } from "./backend.ts";
 import { exportResidualRuntimeHir } from "./lower/runtime_hir.ts";
 
@@ -15,12 +20,14 @@ const hirByLoadedRevision = new WeakMap<Loaded, BlotRuntimeModule>();
  */
 export async function lowerRuntimeHir(
   path: string,
+  existingCheck?: CheckResult,
 ): Promise<BlotRuntimeModule> {
   const loaded = await loadProgram(path);
   const cached = hirByLoadedRevision.get(loaded);
   if (cached !== undefined) return cached;
 
-  const checked = await checkProgram(path);
+  let checked = existingCheck;
+  if (checked === undefined) checked = await checkProgram(path);
   if (loaded.closure.tag !== "closure") {
     throw new Error("a module must load as a closure");
   }
@@ -46,13 +53,30 @@ export async function lowerRuntimeHir(
   const residualTopLevel = runtimeExports.some((exported) =>
     exported.value === undefined
   );
-  const hir = freezeSnapshot(exportResidualRuntimeHir(
+  const residualTypes = new Map(checked.expressionTypes);
+  residualTypes.set(staged.module.result, checked.moduleType);
+  const residualCore = elaborateModule(
+    staged.module,
+    residualTypes,
+    checked.moduleType,
+    true,
+    checked.comptimeValues,
+    checked.opens,
+    checked.recordAdaptations,
+    checked.arrayProofs,
+    new Map([...checked.shapes, ...staged.shapes]),
+    checked.variants,
+    checked.optionalCases,
+    checked.grants,
+    checked.modules,
+  );
+  const hir = freezeSnapshot(validateBlotRuntimeModule(exportResidualRuntimeHir(
     loaded.path,
     checked,
     staged.exports,
     "blot:default",
-    staged.module,
-  ));
+    residualCore,
+  )));
   if (
     residualTopLevel && hir.capabilities.length > 0 &&
     runtimeExports.length > 1

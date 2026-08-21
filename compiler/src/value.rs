@@ -18,7 +18,8 @@ pub(crate) fn closure_signature(value: &Value) -> Option<Value> {
 }
 
 pub(crate) fn attach_signature(value: &mut Value, signature: &Value) {
-    let signature = match signature {
+    let complete_signature = signature;
+    let signature = match complete_signature {
         Value::Forall { body, .. } => body.as_ref(),
         signature => signature,
     };
@@ -39,7 +40,12 @@ pub(crate) fn attach_signature(value: &mut Value, signature: &Value) {
             },
             Value::Arrow { .. },
         ) => {
-            *closure_signature = Some(Box::new(signature.clone()));
+            let relates_input_to_output = closure_signature
+                .as_deref()
+                .is_some_and(has_quantified_input_output_relationship);
+            if !relates_input_to_output {
+                *closure_signature = Some(Box::new(complete_signature.clone()));
+            }
         }
         (Value::Shape(values), Value::Shape(signatures)) => {
             let values = Rc::make_mut(&mut values.0);
@@ -96,6 +102,32 @@ pub(crate) fn attach_signature(value: &mut Value, signature: &Value) {
         }
         _ => {}
     }
+}
+
+fn has_quantified_input_output_relationship(signature: &Value) -> bool {
+    let mut quantified = BTreeSet::new();
+    let mut body = signature;
+    while let Value::Forall {
+        variable,
+        body: nested,
+    } = body
+    {
+        quantified.insert(*variable);
+        body = nested;
+    }
+    let Value::Arrow {
+        domain, codomain, ..
+    } = body
+    else {
+        return false;
+    };
+    let mut input = BTreeSet::new();
+    let mut output = BTreeSet::new();
+    collect_type_variables(domain, &mut input);
+    collect_type_variables(codomain, &mut output);
+    quantified
+        .into_iter()
+        .any(|variable| input.contains(&variable) && output.contains(&variable))
 }
 
 #[derive(Debug)]
@@ -1024,6 +1056,34 @@ mod type_value_tests {
                 effect_tail: None,
             }),
         }
+    }
+
+    #[test]
+    fn enclosing_values_do_not_degrade_a_closure_signature() {
+        let mut closure = Value::Closure {
+            module: Rc::new("test.blot".to_owned()),
+            parameter: PatternId(0),
+            body: ExpressionId(0),
+            environment: child_env(None),
+            self_name: None,
+            imports: None,
+            signature: None,
+            deferred: false,
+        };
+        let principal = identity(7);
+        attach_signature(&mut closure, &principal);
+        attach_signature(
+            &mut closure,
+            &Value::Arrow {
+                domain: Box::new(Value::Unbounded),
+                codomain: Box::new(Value::Unbounded),
+                effects: Vec::new(),
+                effect_tail: None,
+            },
+        );
+
+        let attached = closure_signature(&closure).expect("the closure retains a signature");
+        assert!(equal(&attached, &principal));
     }
 
     #[test]

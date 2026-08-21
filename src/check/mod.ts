@@ -130,7 +130,7 @@ export interface CheckResult {
   /** Checked dependencies keyed by each literal import site. */
   readonly modules: ReadonlyMap<
     Expr,
-    { readonly module: Loaded["module"]; readonly values: ValueEnv }
+    { readonly core: TypedCoreModule; readonly values: ValueEnv }
   >;
   /**
    * The module's compile-time bindings, including its own `const`s.
@@ -196,6 +196,7 @@ interface ReusableLeafCheck {
   readonly interface: NonNullable<ReturnType<typeof specializationInterface>>;
 }
 const reusableLeafChecks = new WeakMap<Loaded, ReusableLeafCheck>();
+const reusableLeafResults = new WeakMap<Loaded, CheckResult>();
 const unsealableLeafChecks = new WeakSet<Loaded>();
 const linearityByModule = new WeakMap<
   Loaded["module"],
@@ -449,6 +450,8 @@ function assemble(
 ): CheckResult {
   const done = results.get(loaded);
   if (done !== undefined) return done;
+  const reusable = reusableLeafResults.get(loaded);
+  if (reusable !== undefined) return reusable;
 
   const file = cache.get(loaded);
   if (file === undefined) {
@@ -488,6 +491,30 @@ function assemble(
     ...below.map((dependency) => dependency.opens),
     checked.opens,
   ]);
+  const arrayProofs = mergeAll([
+    ...below.map((dependency) => dependency.arrayProofs),
+    checked.arrayProofs,
+  ]);
+  const shapes = mergeAll([
+    ...below.map((dependency) => dependency.shapes),
+    checked.shapes,
+  ]);
+  const recordAdaptations = mergeAll([
+    ...below.map((dependency) => dependency.recordAdaptations),
+    checked.recordAdaptations,
+  ]);
+  const optionalCases = new Set([
+    ...below.flatMap((dependency) => [...dependency.optionalCases]),
+    ...checked.optionalCases,
+  ]);
+  const variants = mergeAll([
+    ...below.map((dependency) => dependency.variants),
+    checked.variants,
+  ]);
+  const modules = mergeAll([
+    ...below.map((dependency) => dependency.modules),
+    importSites(loaded, dependencies),
+  ]);
   let coreModule = loaded.module;
   const resultEffects = showRow(checked.resultEffects);
   if (coreModule.resultEffects === "ambient" && resultEffects === "") {
@@ -504,42 +531,27 @@ function assemble(
       coreModule,
       expressionTypes,
       checked.type,
+      true,
       comptimeValues,
       opens,
-      mergeAll([
-        ...below.map((dependency) => dependency.recordAdaptations),
-        checked.recordAdaptations,
-      ]),
-      mergeAll([
-        ...below.map((dependency) => dependency.arrayProofs),
-        checked.arrayProofs,
-      ]),
+      recordAdaptations,
+      arrayProofs,
+      shapes,
+      variants,
+      optionalCases,
+      checked.grants,
+      modules,
     ),
     expressionTypes,
-    arrayProofs: mergeAll([
-      ...below.map((dependency) => dependency.arrayProofs),
-      checked.arrayProofs,
-    ]),
+    arrayProofs,
     ownership,
     ownershipCertificate: ownershipProof,
     opens,
     comptimeValues,
-    shapes: mergeAll([
-      ...below.map((dependency) => dependency.shapes),
-      checked.shapes,
-    ]),
-    recordAdaptations: mergeAll([
-      ...below.map((dependency) => dependency.recordAdaptations),
-      checked.recordAdaptations,
-    ]),
-    optionalCases: new Set([
-      ...below.flatMap((dependency) => [...dependency.optionalCases]),
-      ...checked.optionalCases,
-    ]),
-    variants: mergeAll([
-      ...below.map((dependency) => dependency.variants),
-      checked.variants,
-    ]),
+    shapes,
+    recordAdaptations,
+    optionalCases,
+    variants,
     patternShapes: mergeAll([
       ...below.map((dependency) => dependency.patternShapes),
       checked.patternShapes,
@@ -553,13 +565,16 @@ function assemble(
       checked.declarationTags,
     ]),
     grants: checked.grants,
-    modules: mergeAll([
-      ...below.map((dependency) => dependency.modules),
-      importSites(loaded, dependencies),
-    ]),
+    modules,
     values: file.values,
   };
   results.set(loaded, result);
+  if (
+    loaded.module.parameter === null && loaded.dependencies.size === 0 &&
+    reusableLeafChecks.has(loaded)
+  ) {
+    reusableLeafResults.set(loaded, result);
+  }
   return result;
 }
 
@@ -567,8 +582,8 @@ function assemble(
 function importSites(
   loaded: Loaded,
   dependencies: ReadonlyMap<string, CheckResult>,
-): ReadonlyMap<Expr, { module: Loaded["module"]; values: ValueEnv }> {
-  const sites = new Map<Expr, { module: Loaded["module"]; values: ValueEnv }>();
+): ReadonlyMap<Expr, { core: TypedCoreModule; values: ValueEnv }> {
+  const sites = new Map<Expr, { core: TypedCoreModule; values: ValueEnv }>();
   for (const [site, specifier] of importExpressions(loaded.module)) {
     const dependency = dependencies.get(specifier);
     const resolved = loaded.dependencies.get(specifier);
@@ -577,7 +592,7 @@ function importSites(
         `loaded module ${loaded.path} omitted dependency ${specifier}`,
       );
     }
-    sites.set(site, { module: resolved.module, values: dependency.values });
+    sites.set(site, { core: dependency.core, values: dependency.values });
   }
   return sites;
 }

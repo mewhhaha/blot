@@ -28,6 +28,7 @@ import {
   type CoreExpression,
   coreResultExpression,
   type CoreStep,
+  type TypedCoreModule,
 } from "../../core/computation.ts";
 import {
   type Decl,
@@ -192,11 +193,13 @@ export function exportResidualRuntimeHir(
   checked: CheckResult,
   stagedExports: readonly StagedExport[],
   wasmName: string,
-  stagedModule?: Module,
+  residualCore?: TypedCoreModule,
 ): BlotRuntimeModule {
-  const builder = new ResidualHirBuilder(source, checked);
+  let core = checked.core;
+  if (residualCore !== undefined) core = residualCore;
+  const builder = new ResidualHirBuilder(source, checked, core);
   let residualModule: CoreComputation | Module = checked.core;
-  if (stagedModule !== undefined) residualModule = stagedModule;
+  if (residualCore !== undefined) residualModule = residualCore;
   const runtimeFunctions = new Map<string, BlotRuntimeFunction>();
   for (const exported of stagedExports) {
     if (exported.phase !== "runtime") continue;
@@ -207,7 +210,6 @@ export function exportResidualRuntimeHir(
       exportedWasmName,
       exported.sourceName,
       exported.named,
-      stagedModule === undefined ? undefined : exported.value,
     );
     runtimeFunctions.set(exported.sourceName, function_);
   }
@@ -268,6 +270,8 @@ class ResidualHirBuilder {
     Map<string, { readonly signature: number; readonly key: string }>
   >();
   readonly #checked: CheckResult;
+  readonly #residualCoreClosures: ReadonlyMap<Value, CoreExpression>;
+  readonly #residualCoreClosureTypes: ReadonlyMap<Value, SimpleType>;
   #functionCapabilities = new Set<string>();
   #sourceHandlers: {
     readonly effect: number;
@@ -275,14 +279,36 @@ class ResidualHirBuilder {
   }[] = [];
   readonly #source: string;
   readonly #typeByName = new Map<string, TypeId>();
+  readonly #runtimeTypeByStructuralType = new Map<SimpleType, TypeId>();
   #currentBlock = 0;
   #dynamicBranchDepth = 0;
   #nextValue = 0;
   #residualOrigin: Span | null = null;
 
-  constructor(source: string, checked: CheckResult) {
+  constructor(
+    source: string,
+    checked: CheckResult,
+    residualCore: TypedCoreModule,
+  ) {
     this.#source = source;
     this.#checked = checked;
+    const closures = new Map<Value, CoreExpression>();
+    const closureTypes = new Map<Value, SimpleType>();
+    const visited = new Set<TypedCoreModule>();
+    const collect = (core: TypedCoreModule): void => {
+      if (visited.has(core)) return;
+      visited.add(core);
+      for (const dependency of core.dependencies) collect(dependency);
+      for (const [value, body] of core.residualClosures) {
+        closures.set(value, body);
+      }
+      for (const [value, type] of core.residualClosureTypes) {
+        closureTypes.set(value, type);
+      }
+    };
+    collect(residualCore);
+    this.#residualCoreClosures = closures;
+    this.#residualCoreClosureTypes = closureTypes;
     this.type("unit");
     this.type("boolean");
     this.type("integer-32");
@@ -294,7 +320,6 @@ class ResidualHirBuilder {
     wasmName: string,
     sourceName: string,
     namedExport: boolean,
-    stagedValue?: Value,
   ): BlotRuntimeFunction {
     const functionId = this.reserveFunction();
     this.#blocks = [];
@@ -334,20 +359,12 @@ class ResidualHirBuilder {
     let functionType = exportedType === null
       ? null
       : this.functionType(exportedType, new Set());
-    let residual: ResidualValue;
-    if (stagedValue === undefined || functionType === null) {
-      residual = this.evaluate(resultExpression, environment);
-      if (forceResult) {
-        residual = this.forceEffectValue(residual, resultExpression.span);
-      }
-      if (projectResult) {
-        residual = this.project(residual, sourceName, resultExpression.span);
-      }
-    } else {
-      residual = this.residualizeStatic(
-        { kind: "static", value: stagedValue },
-        environment,
-      );
+    let residual = this.evaluate(resultExpression, environment);
+    if (forceResult) {
+      residual = this.forceEffectValue(residual, resultExpression.span);
+    }
+    if (projectResult) {
+      residual = this.project(residual, sourceName, resultExpression.span);
     }
     const parameterTypes: TypeId[] = [];
     while (functionType !== null) {
@@ -449,6 +466,10 @@ class ResidualHirBuilder {
     expr: ResidualExpression,
     environment: ResidualEnvironment,
   ): ResidualValue {
+    if ("hirState" in expr) {
+      const settled = this.consumeHirState(expr, environment);
+      if (settled !== null) return settled;
+    }
     if (expr.tag === "int") {
       return { kind: "static", value: { tag: "int", value: expr.value } };
     }
@@ -477,7 +498,7 @@ class ResidualHirBuilder {
           `${this.#source}:${expr.span.start}: residual name ${expr.name} is unbound`,
         );
       }
-      return this.residualizeStatic(value, environment);
+      return value;
     }
     if (expr.tag === "intrinsic") {
       if (expr.name === "@array.empty") {
@@ -539,15 +560,20 @@ class ResidualHirBuilder {
       );
     }
     if (expr.tag === "intrinsic-apply") {
-      if (
-        expr.name === "@handle" && expr.args.length === 1 &&
-        expr.args[0].tag === "tuple" && expr.args[0].elements.length === 3
-      ) {
-        return this.handleSourceEffect(
-          expr.args[0].elements,
-          environment,
-          expr.span,
-        );
+      if (expr.name === "@handle") {
+        if (expr.args.length === 3) {
+          return this.handleSourceEffect(expr.args, environment, expr.span);
+        }
+        if (
+          expr.args.length === 1 && expr.args[0].tag === "tuple" &&
+          expr.args[0].elements.length === 3
+        ) {
+          return this.handleSourceEffect(
+            expr.args[0].elements,
+            environment,
+            expr.span,
+          );
+        }
       }
       const primitive = PRIMITIVES.get(expr.name);
       if (primitive === undefined) {
@@ -576,6 +602,71 @@ class ResidualHirBuilder {
         payload: this.evaluate(expr.payload, environment),
       };
     }
+    if (expr.tag === "static-member") {
+      const target = this.lookup(environment, expr.target);
+      if (target === undefined) {
+        throw this.outside(expr.span, `unknown static target ${expr.target}`);
+      }
+      return this.project(target, expr.name, expr.span);
+    }
+    if (expr.tag === "static-member-apply") {
+      const target = this.lookup(environment, expr.target);
+      if (target === undefined) {
+        throw this.outside(expr.span, `unknown static target ${expr.target}`);
+      }
+      let value = this.project(target, expr.name, expr.span);
+      for (const argument of expr.args) {
+        value = this.apply(
+          value,
+          this.evaluate(argument, environment),
+          expr.span,
+          argument.type,
+        );
+      }
+      return value;
+    }
+    if (expr.tag === "import") {
+      const dependency = expr.dependency;
+      const scope = this.environment(null, dependency.values);
+      let argumentIndex = 0;
+      if (dependency.core.parameter !== null) {
+        const argument = expr.args[0];
+        if (argument === undefined) {
+          throw this.outside(
+            expr.span,
+            `import ${expr.specifier} without input`,
+          );
+        }
+        this.bind(
+          dependency.core.parameter,
+          this.evaluate(argument, environment),
+          scope,
+          expr.span,
+        );
+        argumentIndex = 1;
+      }
+      this.coreDeclarations(dependency.core.steps, scope);
+      let value = this.evaluate(
+        coreResultExpression(dependency.core.result),
+        scope,
+      );
+      if (dependency.core.result.tag === "tail") {
+        value = this.forceEffectValue(value, expr.span);
+      }
+      for (; argumentIndex < expr.args.length; argumentIndex += 1) {
+        const argument = expr.args[argumentIndex];
+        if (argument === undefined) {
+          throw new Error("typed Core import lost an argument");
+        }
+        value = this.apply(
+          value,
+          this.evaluate(argument, environment),
+          expr.span,
+          argument.type,
+        );
+      }
+      return value;
+    }
     if (expr.tag === "checked") return this.evaluate(expr.value, environment);
     if (expr.tag === "field") {
       return this.project(
@@ -585,6 +676,13 @@ class ResidualHirBuilder {
       );
     }
     if (expr.tag === "lambda") {
+      if (expr.deferred === true) {
+        fail(
+          "BLOT_DEFERRED_AT_RUNTIME",
+          "A deferred parameter is only supplied while compiling. This function survives into the running program, where its argument would run whether or not the parameter is read.",
+          expr.span,
+        );
+      }
       return {
         kind: "closure",
         parameter: expr.parameter,
@@ -688,6 +786,36 @@ class ResidualHirBuilder {
     if (expr.tag === "if") return this.conditional(expr, environment);
     if (expr.tag === "case") return this.caseExpression(expr, environment);
     throw this.outside(expr.span, expr.tag);
+  }
+
+  private consumeHirState(
+    expression: CoreExpression,
+    environment: ResidualEnvironment,
+  ): ResidualValue | null {
+    const state = expression.hirState;
+    if (state.typeRep !== expression.typeRep) {
+      throw new Error("typed Core changed a progressive HIR type identity");
+    }
+    if (state.tag === "pending") return null;
+    const represented = this.typeForSimpleType(
+      expression.type,
+      expression.span,
+      new Set(),
+      environment.typeSubstitutions,
+    );
+    if (represented === null) {
+      throw new Error(
+        `settled Core node ${expression.id} has no Runtime HIR representation`,
+      );
+    }
+    const existing = this.#runtimeTypeByStructuralType.get(expression.type);
+    if (existing !== undefined && existing !== represented) {
+      throw new Error(
+        `typed Core representation ${state.typeRep} changed Runtime HIR identity`,
+      );
+    }
+    this.#runtimeTypeByStructuralType.set(expression.type, represented);
+    return { kind: "static", value: state.node.value };
   }
 
   private coreDeclarations(
@@ -854,9 +982,26 @@ class ResidualHirBuilder {
     if (fn.kind === "static") {
       const value = fn.value;
       if (value.tag === "closure" || value.tag === "core-closure") {
+        if (value.tag === "closure" && value.deferred === true) {
+          fail(
+            "BLOT_DEFERRED_AT_RUNTIME",
+            "A deferred parameter is only supplied while compiling. This function survives into the running program, where its argument would run whether or not the parameter is read.",
+            span,
+          );
+        }
+        let body: ResidualExpression;
+        if (value.tag === "core-closure") {
+          body = value.body;
+        } else {
+          const coreBody = this.#residualCoreClosures.get(value);
+          if (coreBody === undefined) {
+            throw new Error("typed Core omitted a reachable residual closure");
+          }
+          body = coreBody;
+        }
         if (
           value.self !== null &&
-          this.shouldLowerTailRecursion(value.body, value.self)
+          this.shouldLowerTailRecursion(body, value.self)
         ) {
           const residual = this.residualizeStatic(fn);
           if (residual.kind !== "closure") {
@@ -870,7 +1015,7 @@ class ResidualHirBuilder {
         const previousOrigin = this.#residualOrigin;
         if (previousOrigin === null) this.#residualOrigin = span;
         try {
-          return this.evaluate(value.body, scope);
+          return this.evaluate(body, scope);
         } finally {
           this.#residualOrigin = previousOrigin;
         }
@@ -1747,6 +1892,7 @@ class ResidualHirBuilder {
     for (const name of [...names].sort()) {
       const found = this.lookup(fn.environment, name);
       if (found === undefined) continue;
+      if (this.staticValue(found) !== undefined) continue;
       const value = this.residualizeStatic(found, fn.environment);
       if (this.staticValue(value) !== undefined) continue;
       if (
@@ -4693,13 +4839,27 @@ class ResidualHirBuilder {
     const known = value.value;
     if (known.tag === "closure" || known.tag === "core-closure") {
       let signature: SimpleType | undefined;
-      if (known.tag === "closure" && known.source !== undefined) {
-        signature = this.#checked.expressionTypes.get(known.source);
+      let body: ResidualExpression;
+      if (known.tag === "core-closure") {
+        body = known.body;
+      } else {
+        signature = this.#residualCoreClosureTypes.get(known);
+        const coreBody = this.#residualCoreClosures.get(known);
+        if (coreBody === undefined) {
+          let origin = "without a source lambda";
+          if (known.source !== undefined) {
+            origin = `at ${known.source.span.start}..${known.source.span.end}`;
+          }
+          throw new Error(
+            `typed Core omitted a residualized closure body ${origin}`,
+          );
+        }
+        body = coreBody;
       }
       return {
         kind: "closure",
         parameter: known.parameter,
-        body: known.body,
+        body,
         environment: this.environment(environment, known.env),
         self: known.self,
         signature,

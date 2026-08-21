@@ -2,16 +2,26 @@ import { assertEquals, assertNotEquals, assertThrows } from "@std/assert";
 import type { Value } from "../comptime/value.ts";
 import { bridge } from "./bridge.ts";
 import { constrain } from "./constrain.ts";
+import { show } from "./print.ts";
 import {
   boundAbove,
   boundAtMost,
   boundBelow,
   freshVar,
+  INT,
   intLiteral,
   shiftBound,
   type SimpleType,
   textLiteral,
 } from "./type.ts";
+
+Deno.test("a homogeneous array drops ranges covered by its element domain", () => {
+  const element = freshVar(0);
+  constrain(INT, element);
+  constrain(intLiteral(0n), element);
+
+  assertEquals(show({ tag: "array", element }), "[Int]");
+});
 
 Deno.test("literal bounds compare exactly within their domain", () => {
   assertEquals(boundAtMost(1n, 2n), true);

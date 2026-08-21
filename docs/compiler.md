@@ -85,6 +85,30 @@ try {
 }
 ```
 
+Release and embedding hosts can select the CI-built Rust implementation without
+changing the phase-facing code:
+
+```ts
+import { readFile } from "node:fs/promises";
+import { ProductionCompiler } from "@mewhhaha/blot/compiler";
+
+const wasm = await readFile("generated/compiler/compiler.wasm");
+const compiler = await ProductionCompiler.create({ wasm });
+try {
+  const checked = await compiler.check("examples/minimal.blot");
+  const hir = await compiler.prepare("examples/minimal.blot");
+  const artifact = await compiler.compile("examples/minimal.blot");
+  console.log(checked.type, hir.schemaVersion, artifact.wasm.length);
+} finally {
+  compiler.destroy();
+}
+```
+
+The production host resolves and configures the complete source graph in one
+resident Rust session. Rust source diagnostics become located `BlotError`s,
+target refusals remain `CompilerTargetRefusal`, and post-check failures remain
+`CompilerInvariantFailure`.
+
 ## Wasm boundaries
 
 The checked-in Blot parser binary and plan live under `generated/wasm/`. Layout

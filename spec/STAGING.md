@@ -88,6 +88,14 @@ respective call types. Memoization keys include closure identity, argument
 representation, effect identity, and every compile-time value observed while
 selecting the result.
 
+Those components are structural identities. `TyRepId` identifies a node in the
+settled type graph, representation identities identify already-closed Runtime
+layouts, and generative compile-time values retain their owning instance
+identity. A formatted type or value is diagnostic output only; it is not a
+specialization, cache, or recursion key. The key is published only after every
+component is closed. Until then the specialization remains pending and cannot
+choose a convenient scalar or indirect fallback.
+
 For a closure `lambda x. e`, let `FV_r(e)` be the lexically free bindings whose
 values contain residual runtime components. Closure conversion is:
 

@@ -6,7 +6,7 @@ import test from "node:test";
 import { loadSource } from "../load.ts";
 import { loadedRevisionKey } from "./revision.ts";
 
-test("semantic revision keys are fixed-size recursive digests", async () => {
+test("origin-exact revision keys are fixed-size recursive digests", async () => {
   const directory = await mkdtemp(join(tmpdir(), "blot-revision-key-"));
   const leaf = join(directory, "leaf.blot");
   const dependency = join(directory, "dependency.blot");
@@ -28,6 +28,9 @@ test("semantic revision keys are fixed-size recursive digests", async () => {
       `${source}\n// comment only\n`,
     );
     assert.equal(loadedRevisionKey(rootCommentOnly), firstKey);
+
+    const shiftedRoot = await loadSource(root, `// shifts origins\n${source}`);
+    assert.notEqual(loadedRevisionKey(shiftedRoot), firstKey);
 
     await writeFile(leaf, "return 42\n// dependency comment only\n");
     const dependencyCommentOnly = await loadSource(root, source);

@@ -16,7 +16,7 @@ return value
     [declaration.value, UNIT],
     [parsed.module.result, UNIT],
   ]);
-  const core = elaborateModule(parsed.module, expressionTypes, UNIT);
+  const core = elaborateModule(parsed.module, expressionTypes, UNIT, true);
   assertEquals(core.steps[0]?.tag, "define");
   const step = core.steps[0];
   if (step === undefined) {
@@ -27,9 +27,27 @@ return value
   }
   assertEquals(step.definition.value.tag, "unit");
   assertEquals(step.definition.value.type, UNIT);
+  assertEquals(step.definition.value.hirState, {
+    tag: "settled",
+    typeRep: step.definition.value.typeRep,
+    effects: "pure",
+    representation: "structural-type-rep",
+    ownership: "certified",
+    safety: "not-required",
+    node: { tag: "static", value: { tag: "unit" } },
+  });
   assertEquals(
     core.typeRepresentations.nodes[step.definition.value.typeRep],
     { tag: "unit" },
   );
   assertEquals(core.resultType, UNIT);
+  assertEquals(core.hirProgress, {
+    settled: 1,
+    pending: {
+      "structural-fold": 0,
+      "specialization-choice": 1,
+      "open-representation": 0,
+      "ownership-certificate": 0,
+    },
+  });
 });

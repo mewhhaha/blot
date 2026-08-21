@@ -77,6 +77,7 @@ import {
 } from "../core/refinement.ts";
 import {
   admitsOmission,
+  copyEmptyArrayElement,
   type Domain,
   effects,
   evidenceOf,
@@ -4390,6 +4391,7 @@ function snapshotType(
     let snapshot: Variable;
     if (evidence === null) snapshot = freshVar(source.level);
     else snapshot = freshVar(source.level, evidence);
+    copyEmptyArrayElement(source, snapshot);
     snapshots.set(source, snapshot);
     snapshot.lower.push(
       ...source.lower.map((bound) => snapshotType(bound, snapshots)),

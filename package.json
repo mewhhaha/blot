@@ -22,6 +22,8 @@
     "benchmark:owned-maps": "tsx --import ./src/node/polyfills.mjs experiments/owned-maps/benchmark.ts",
     "benchmark:predicate-refinements": "tsx --import ./src/node/polyfills.mjs experiments/predicate-refinements/benchmark.ts",
     "compiler:build": "deno run --allow-read --allow-write --allow-run=cargo --allow-env scripts/build_compiler.ts",
+    "test:compiler": "deno run --allow-read conformance/compiler/parity.ts && deno run --allow-read conformance/compiler/check_parity.ts && deno run --allow-read conformance/compiler/eval_parity.ts && deno run --allow-read conformance/compiler/hir_parity.ts",
+    "verify:compiler": "deno run --allow-read scripts/verify_runtime.ts",
     "compiler:download": "deno run --allow-read --allow-write --allow-run=gh,git scripts/download_compiler.ts",
     "parity": "tsx --import ./src/node/polyfills.mjs src/node/parity.ts",
     "parity:strict": "tsx --import ./src/node/polyfills.mjs src/node/parity.ts --strict"

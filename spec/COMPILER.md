@@ -90,6 +90,7 @@ SourceGraph
   -> TypedAST + InferenceFacts
   -> SafeAST + SafetyCertificates
   -> OwnedAST + OwnershipCertificates
+  -> TypedCore + ProgressiveHIRState
   -> StagedProgram
   -> SpecializedProgram
   -> ClosedProgram(ValidatedRuntimeHIR, PublicLayout)
@@ -123,6 +124,14 @@ Gpupaper owns Core-to-Wasm planning and binary emission. The CI-built Blot Rust
 compiler Wasm is the production implementation and parity counterpart; it is not
 invoked by an ordinary Node development compilation.
 
+`TypedCore` is the first shared value/computation schedule. Each Core node has a
+stable node identity and a structural type-representation identity. A
+`ProgressiveHIRState` is either pending, with the unresolved structural fold or
+finite specialization choice named explicitly, or settled, with closed type,
+effect, representation, ownership-permission, and safety-evidence identities. A
+settled state may commit its final Runtime-HIR contribution immediately. There
+is no state that means "pending with a fallback representation".
+
 ### 2.1 Production compiler distribution
 
 `compiler.wasm` is derived output. A distribution manifest binds its byte length
@@ -140,6 +149,15 @@ reproduce the artifact with the pinned build procedure or download the artifact
 for an exactly matching source tree. Ordinary Node compilation still uses Baba
 and gpupaper's embedded emitter and therefore requires neither artifact nor
 Cargo.
+
+The production distribution has a host adapter with the same resident phase
+shape as the development `Compiler`: `check`, `prepare`, `compile`, and
+`destroy`. The adapter resolves the exact source graph, installs every source or
+portable-AST module and include in one Rust session, and configures import edges
+before requesting a semantic phase. Its transport is not a fourth failure class:
+located source failures become ordinary source diagnostics, explicit target
+refusals become `TargetRefusal`, and failures after successful checking or
+Runtime-HIR validation become `InvariantFailure` without fabricated spans.
 
 ## 3. Pass contract
 
@@ -168,6 +186,7 @@ The concrete contracts are:
 | inference      | typed AST and inference facts           | declarative typing, principal rank-1 result where promised                        |
 | safety         | coverage and relational certificates    | no missing finite case or forged proved operation                                 |
 | ownership      | structural use and lineage certificates | no double move, illegal borrow, omitted extraction, or path-dependent linear loss |
+| typed Core     | value/computation schedule and node IDs | live order, source origin, type representation, and proof markers agree           |
 | staging        | residual program and phase facts        | erased compile-time values cannot be observed at runtime                          |
 | specialization | representation-closed program           | no residual polymorphic shape or dynamic structural fold                          |
 | Runtime HIR    | validated monomorphic graph             | every operation has a closed target representation                                |
@@ -217,6 +236,13 @@ dynamic extraction partition. Neither certificate recognizes a source binding
 name. Staging owns compile-time values and residualization decisions.
 Specialization owns concrete representations. A later pass verifies and consumes
 these facts; it does not infer them again.
+
+The progressive Runtime-HIR builder state is keyed by the typed-Core node ID,
+not by a printed type. Its structural representation key is composed from the
+interned type-representation graph, closure identity, and settled compile-time
+identities that specialization actually observes. Ownership and safety remain
+separate certificates: their compact occurrence IDs are consumed when a node is
+committed, then the complete Runtime-HIR graph is validated independently.
 
 An identity is valid only within its source revision. Serializing a fact
 requires a closed certificate whose premises name stable serialized identities.
@@ -294,6 +320,12 @@ reuse a dependency's mutable inference facts independently: those facts can
 observe importer constraints and staging context. Baba and gpupaper Wasm runtime
 instances are process resources, not semantic facts, and may be initialized once
 and shared across resident compiler sessions.
+
+A progressive node may be reused only when its Core node identity, exact source
+origin, and every consumed certificate identity are unchanged. Equality of
+runtime operations with different origins is insufficient. An edit that shifts
+an earlier span rebuilds the affected suffix even when the emitted machine
+behavior would otherwise be equal.
 
 A content hash establishes identity, not authority. In particular, an untrusted
 package cannot justify a checked interface by hashing an interface it supplied

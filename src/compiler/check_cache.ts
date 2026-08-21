@@ -5,6 +5,7 @@ import { refreshProgram } from "./frontend.ts";
 import { checkProgram } from "./typecheck.ts";
 import { checkedSourceFingerprint } from "./checked_boundary.ts";
 import { relationalSummaryFingerprint } from "../check/relational.ts";
+import { loadedRevisionKey } from "./revision.ts";
 
 interface Dependency {
   readonly specifier: string;
@@ -32,9 +33,11 @@ interface Summary {
 interface RootState {
   readonly nodes: Map<string, SnapshotNode>;
   summary: Summary;
+  checked: Checked;
 }
 
 export interface IncrementalCheckResult extends Summary {
+  readonly checked: Checked;
   readonly rechecked: readonly string[];
   readonly cacheHit: boolean;
   readonly graphReset: boolean;
@@ -43,8 +46,9 @@ export interface IncrementalCheckResult extends Summary {
 /**
  * Resident checked-interface cache with conservative sealed propagation.
  * Live inference state never crosses a module boundary: a changed module is
- * freshly checked, and only its immutable fingerprint decides whether parents
- * need the same treatment.
+ * freshly checked, and its exact immutable revision fingerprint decides
+ * whether parents need the same treatment. Source origins are backend facts,
+ * so even a type-neutral edit propagates to importers that inline them.
  */
 export class IncrementalCheckCache {
   readonly #roots = new Map<string, RootState>();
@@ -70,6 +74,7 @@ export class IncrementalCheckCache {
     if (changed.size === 0) {
       return {
         ...previous.summary,
+        checked: previous.checked,
         rechecked: [],
         cacheHit: true,
         graphReset: false,
@@ -79,6 +84,7 @@ export class IncrementalCheckCache {
     // Publish only after every fresh check succeeds.
     const nodes = new Map(previous.nodes);
     let summary = previous.summary;
+    let rootChecked = previous.checked;
     const pending = new Set(changed);
     const rechecked: string[] = [];
     while (pending.size > 0) {
@@ -102,15 +108,19 @@ export class IncrementalCheckCache {
         fingerprint,
       });
       rechecked.push(nodePath);
-      if (nodePath === rootPath) summary = summarize(checked);
+      if (nodePath === rootPath) {
+        summary = summarize(checked);
+        rootChecked = checked;
+      }
       if (fingerprint !== old.fingerprint) {
         for (const parent of node.parents) pending.add(parent);
       }
     }
 
-    this.#roots.set(rootPath, { nodes, summary });
+    this.#roots.set(rootPath, { nodes, summary, checked: rootChecked });
     return {
       ...summary,
+      checked: rootChecked,
       rechecked,
       cacheHit: !rechecked.includes(rootPath),
       graphReset: false,
@@ -142,9 +152,10 @@ export class IncrementalCheckCache {
       });
     }
     const summary = summarize(rootChecked);
-    this.#roots.set(rootPath, { nodes, summary });
+    this.#roots.set(rootPath, { nodes, summary, checked: rootChecked });
     return {
       ...summary,
+      checked: rootChecked,
       rechecked: [...graph.keys()],
       cacheHit: false,
       graphReset,
@@ -159,17 +170,7 @@ function summarize(checked: Checked): Summary {
 }
 
 function inputRevision(loaded: Loaded): string {
-  let capsule: string | null = null;
-  if (loaded.storage.tag === "capsule") capsule = loaded.storage.source;
-  return hash(JSON.stringify({
-    source: loaded.source,
-    includedFiles: [...loaded.includedFiles].map(([specifier, included]) => ({
-      specifier,
-      path: included.path,
-      source: included.source,
-    })),
-    capsule,
-  }));
+  return loadedRevisionKey(loaded);
 }
 
 function moduleFingerprint(
@@ -188,6 +189,7 @@ function moduleFingerprint(
   let capsule: string | null = null;
   if (loaded.storage.tag === "capsule") capsule = loaded.storage.source;
   return hash(JSON.stringify({
+    inputRevision: inputRevision(loaded),
     type: checked.type,
     effects: checked.effects,
     relational: relationalSummaryFingerprint(checked.values),

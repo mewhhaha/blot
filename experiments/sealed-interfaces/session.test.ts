@@ -30,7 +30,7 @@ async function chain(
   return { root: paths.at(-1)!, leaf, paths };
 }
 
-test("a dead private edit stops at a sealed module boundary", async () => {
+test("a dead private edit propagates exact source-origin identity", async () => {
   const fixture = await chain(
     6,
     "const hidden = 1\nreturn { .answer = 42; }\n",
@@ -46,8 +46,8 @@ test("a dead private edit stops at a sealed module boundary", async () => {
   );
   const changed = await session.check(fixture.root);
   assert.equal(changed.type, "{ .answer = 42; }");
-  assert.deepEqual(changed.rechecked, [fixture.leaf]);
-  assert.equal(changed.cacheHit, true);
+  assert.deepEqual(changed.rechecked, fixture.paths);
+  assert.equal(changed.cacheHit, false);
 });
 
 test("a live public change propagates through every importer", async () => {

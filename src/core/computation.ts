@@ -10,10 +10,11 @@ import {
   intLiteral,
   type SimpleType,
   textLiteral,
+  union,
   UNIT,
   variant,
 } from "../check/type.ts";
-import type { Value } from "../comptime/value.ts";
+import type { Env as ValueEnv, Value } from "../comptime/value.ts";
 import { bridge } from "../check/bridge.ts";
 import type {
   Decl,
@@ -23,10 +24,14 @@ import type {
   Span,
 } from "../syntax/ast.ts";
 import { patternNames } from "../syntax/ast.ts";
-import { fail } from "../diagnostic.ts";
 import { freeNames, liveDeclarations } from "../syntax/live.ts";
 import { TyRepBuilder, type TyRepId, type TyRepTable } from "./type_rep.ts";
-import type { RecordAdaptation } from "../check/infer.ts";
+import type {
+  GrantSignature,
+  RecordAdaptation,
+  Shape,
+  VariantCase,
+} from "../check/infer.ts";
 import type { ArrayIndexProof } from "./proof.ts";
 
 export interface CoreNode {
@@ -38,8 +43,51 @@ export interface CoreNode {
   readonly adaptation: RecordAdaptation | null;
   /** Erasable bounds evidence for a proof-required intrinsic application. */
   readonly arrayProof: ArrayIndexProof | null;
+  /** Settled structural field evidence for this exact occurrence. */
+  readonly shape: Shape | null;
+  /** Settled constructor evidence for this exact occurrence. */
+  readonly variants: readonly VariantCase[] | null;
+  /** Whether this exact case is the optional-record completion form. */
+  readonly optionalCase: boolean;
+  /** Settled host-capability signature for this exact projection. */
+  readonly grant: GrantSignature | null;
+  /** Progressive Runtime-HIR commitment made at the checked Core boundary. */
+  readonly hirState: HirBuilderState;
   /** Provenance only. No Core consumer may recover semantics from this node. */
   readonly origin: Expr;
+}
+
+export type HirPendingReason =
+  | "structural-fold"
+  | "specialization-choice"
+  | "open-representation"
+  | "ownership-certificate";
+
+export type HirBuilderState =
+  | {
+    readonly tag: "pending";
+    readonly typeRep: TyRepId;
+    readonly reason: HirPendingReason;
+  }
+  | {
+    readonly tag: "settled";
+    readonly typeRep: TyRepId;
+    readonly effects: "pure";
+    readonly representation: "structural-type-rep";
+    readonly ownership: "certified";
+    readonly safety: "not-required" | "proved";
+    /** Final residual node consumed without rebuilding source semantics. */
+    readonly node: HirSettledNode;
+  };
+
+export type HirSettledNode = {
+  readonly tag: "static";
+  readonly value: Value;
+};
+
+export interface HirProgress {
+  readonly settled: number;
+  readonly pending: Readonly<Record<HirPendingReason, number>>;
 }
 
 export type CoreExpression =
@@ -66,6 +114,7 @@ export type CoreExpression =
       readonly tag: "import";
       readonly specifier: string;
       readonly args: readonly CoreExpression[];
+      readonly dependency: CoreImportDependency;
     }
     | {
       readonly tag: "static-member-apply";
@@ -94,6 +143,7 @@ export type CoreExpression =
       readonly tag: "lambda";
       readonly parameter: Pattern;
       readonly body: CoreExpression;
+      readonly deferred: boolean;
     }
     | {
       readonly tag: "array";
@@ -193,8 +243,20 @@ export interface CoreComputation {
 
 export interface TypedCoreModule extends CoreComputation {
   readonly parameter: Pattern | null;
+  readonly span: Span;
   readonly resultType: SimpleType;
   readonly typeRepresentations: TyRepTable;
+  readonly hirProgress: HirProgress;
+  /** Runtime closure bodies retained by static values, already typed as Core. */
+  readonly residualClosures: ReadonlyMap<Value, CoreExpression>;
+  readonly residualClosureTypes: ReadonlyMap<Value, SimpleType>;
+  /** Checked module cores reachable through literal imports, including opens. */
+  readonly dependencies: ReadonlySet<TypedCoreModule>;
+}
+
+export interface CoreImportDependency {
+  readonly core: TypedCoreModule;
+  readonly values: ValueEnv;
 }
 
 export function coreResultExpression(result: CoreResult): CoreExpression {
@@ -208,13 +270,20 @@ export function elaborateModule(
     readonly declarations: readonly Decl[];
     readonly result: Expr;
     readonly resultEffects: "pure" | "ambient";
+    readonly span: Span;
   },
   expressionTypes: ReadonlyMap<Expr, SimpleType>,
   resultType: SimpleType,
+  ownershipCertified = false,
   comptimeValues: ReadonlyMap<Expr, Value> = new Map(),
   opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>> = new Map(),
   recordAdaptations: ReadonlyMap<Expr, RecordAdaptation> = new Map(),
   arrayProofs: ReadonlyMap<Expr, ArrayIndexProof> = new Map(),
+  shapes: ReadonlyMap<Expr, Shape> = new Map(),
+  variants: ReadonlyMap<Expr, readonly VariantCase[]> = new Map(),
+  optionalCases: ReadonlySet<Expr> = new Set(),
+  grants: ReadonlyMap<Expr, GrantSignature> = new Map(),
+  modules: ReadonlyMap<Expr, CoreImportDependency> = new Map(),
 ): TypedCoreModule {
   const elaborator = new Elaborator(
     expressionTypes,
@@ -222,18 +291,32 @@ export function elaborateModule(
     opens,
     recordAdaptations,
     arrayProofs,
+    shapes,
+    variants,
+    optionalCases,
+    grants,
+    modules,
+    ownershipCertified,
   );
   elaborator.runtimeParameter(module.parameter);
   const computation = elaborator.computation(
     module.declarations,
     module.result,
     module.resultEffects,
+    resultType,
   );
   return {
     ...computation,
     parameter: module.parameter,
+    span: module.span,
     resultType,
     typeRepresentations: elaborator.typeRepresentations(),
+    hirProgress: elaborator.hirProgress(),
+    residualClosures: elaborator.residualClosures(),
+    residualClosureTypes: elaborator.residualClosureTypes(),
+    dependencies: new Set(
+      [...modules.values()].map((dependency) => dependency.core),
+    ),
   };
 }
 
@@ -243,9 +326,28 @@ class Elaborator {
   readonly #opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
   readonly #recordAdaptations: ReadonlyMap<Expr, RecordAdaptation>;
   readonly #arrayProofs: ReadonlyMap<Expr, ArrayIndexProof>;
+  readonly #shapes: ReadonlyMap<Expr, Shape>;
+  readonly #variants: ReadonlyMap<Expr, readonly VariantCase[]>;
+  readonly #optionalCases: ReadonlySet<Expr>;
+  readonly #grants: ReadonlyMap<Expr, GrantSignature>;
+  readonly #modules: ReadonlyMap<Expr, CoreImportDependency>;
+  readonly #ownershipCertified: boolean;
   readonly #typeRepresentations = new TyRepBuilder();
+  readonly #residualClosures = new Map<Value, CoreExpression>();
+  readonly #residualClosureTypes = new Map<Value, SimpleType>();
+  readonly #visitedResidualValues = new WeakSet<object>();
+  readonly #visitedResidualEnvironments = new WeakSet<object>();
+  readonly #closedRepresentations = new WeakMap<SimpleType, boolean>();
+  #staticValues = new Map<string, Value>();
   #runtimeNames = new Set<string>();
   #nextNode = 0;
+  #settledHirNodes = 0;
+  readonly #pendingHirNodes: Record<HirPendingReason, number> = {
+    "structural-fold": 0,
+    "specialization-choice": 0,
+    "open-representation": 0,
+    "ownership-certificate": 0,
+  };
 
   constructor(
     expressionTypes: ReadonlyMap<Expr, SimpleType>,
@@ -253,16 +355,43 @@ class Elaborator {
     opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>,
     recordAdaptations: ReadonlyMap<Expr, RecordAdaptation>,
     arrayProofs: ReadonlyMap<Expr, ArrayIndexProof>,
+    shapes: ReadonlyMap<Expr, Shape>,
+    variants: ReadonlyMap<Expr, readonly VariantCase[]>,
+    optionalCases: ReadonlySet<Expr>,
+    grants: ReadonlyMap<Expr, GrantSignature>,
+    modules: ReadonlyMap<Expr, CoreImportDependency>,
+    ownershipCertified: boolean,
   ) {
     this.#expressionTypes = expressionTypes;
     this.#comptimeValues = comptimeValues;
     this.#opens = opens;
     this.#recordAdaptations = recordAdaptations;
     this.#arrayProofs = arrayProofs;
+    this.#shapes = shapes;
+    this.#variants = variants;
+    this.#optionalCases = optionalCases;
+    this.#grants = grants;
+    this.#modules = modules;
+    this.#ownershipCertified = ownershipCertified;
   }
 
   typeRepresentations(): TyRepTable {
     return this.#typeRepresentations.table();
+  }
+
+  hirProgress(): HirProgress {
+    return {
+      settled: this.#settledHirNodes,
+      pending: { ...this.#pendingHirNodes },
+    };
+  }
+
+  residualClosures(): ReadonlyMap<Value, CoreExpression> {
+    return this.#residualClosures;
+  }
+
+  residualClosureTypes(): ReadonlyMap<Value, SimpleType> {
+    return this.#residualClosureTypes;
   }
 
   runtimeParameter(pattern: Pattern | null): void {
@@ -274,9 +403,12 @@ class Elaborator {
     declarations: readonly Decl[],
     result: Expr,
     resultEffects: "pure" | "ambient",
+    expectedResult?: SimpleType,
   ): CoreComputation {
     const outerRuntimeNames = this.#runtimeNames;
+    const outerStaticValues = this.#staticValues;
     this.#runtimeNames = new Set(outerRuntimeNames);
+    this.#staticValues = new Map(outerStaticValues);
     const live = liveDeclarations(declarations, result);
     const steps: CoreStep[] = [];
     for (const declaration of declarations) {
@@ -285,6 +417,7 @@ class Elaborator {
       if (declaration.tag === "shadow") {
         const value = this.#comptimeValues.get(declaration.value);
         if (value !== undefined && erasedComptimeValue(value)) {
+          this.recordResidualValue(value);
           steps.push({
             tag: "define",
             definition: {
@@ -295,6 +428,7 @@ class Elaborator {
               origin: declaration,
             },
           });
+          this.#staticValues.set(declaration.name, value);
           continue;
         }
       }
@@ -304,6 +438,7 @@ class Elaborator {
           value !== undefined &&
           !dependsOnNames(declaration.value, this.#runtimeNames)
         ) {
+          this.recordResidualValue(value);
           steps.push({
             tag: "define",
             definition: {
@@ -314,6 +449,9 @@ class Elaborator {
               origin: declaration,
             },
           });
+          if (declaration.pattern.tag === "name") {
+            this.#staticValues.set(declaration.pattern.name, value);
+          }
           continue;
         }
       }
@@ -326,13 +464,16 @@ class Elaborator {
       if (declaration.tag === "binding") {
         for (const name of patternNames(declaration.pattern)) {
           this.#runtimeNames.add(name);
+          this.#staticValues.delete(name);
         }
       } else if (declaration.tag === "shadow") {
         this.#runtimeNames.add(declaration.name);
+        this.#staticValues.delete(declaration.name);
       }
     }
-    const expression = this.expression(result);
+    const expression = this.expression(result, expectedResult);
     this.#runtimeNames = outerRuntimeNames;
+    this.#staticValues = outerStaticValues;
     if (resultEffects === "pure") {
       return { steps, result: { tag: "return", value: expression } };
     }
@@ -366,6 +507,7 @@ class Elaborator {
         `typed Core is missing open bindings at ${declaration.span.start}..${declaration.span.end}`,
       );
     }
+    for (const [name, value] of bindings) this.#staticValues.set(name, value);
     return {
       tag: "open",
       bindings,
@@ -374,32 +516,66 @@ class Elaborator {
     };
   }
 
-  expression(expression: Expr): CoreExpression {
-    const type = this.typeOf(expression);
+  expression(
+    expression: Expr,
+    expectedType?: SimpleType,
+    foldConstants = true,
+    trackStaticValue = true,
+  ): CoreExpression {
+    const type = this.typeOf(expression, expectedType);
     let adaptation: RecordAdaptation | null = null;
     const foundAdaptation = this.#recordAdaptations.get(expression);
     if (foundAdaptation !== undefined) adaptation = foundAdaptation;
     let arrayProof: ArrayIndexProof | null = null;
     const foundArrayProof = this.#arrayProofs.get(expression);
     if (foundArrayProof !== undefined) arrayProof = foundArrayProof;
+    let shape: Shape | null = null;
+    const foundShape = this.#shapes.get(expression);
+    if (foundShape !== undefined) shape = foundShape;
+    let variants: readonly VariantCase[] | null = null;
+    const foundVariants = this.#variants.get(expression);
+    if (foundVariants !== undefined) variants = foundVariants;
+    let grant: GrantSignature | null = null;
+    const foundGrant = this.#grants.get(expression);
+    if (foundGrant !== undefined) grant = foundGrant;
+    const typeRep = this.#typeRepresentations.reference(type);
+    const constant = this.#comptimeValues.get(expression);
+    if (constant !== undefined) this.recordResidualValue(constant);
+    const constantClosed = foldConstants && constant !== undefined &&
+      !dependsOnNames(expression, this.#runtimeNames);
+    let settledConstant: Value | null = null;
+    if (constantClosed && constant !== undefined) settledConstant = constant;
+    const hirState = this.hirState(
+      expression,
+      type,
+      typeRep,
+      arrayProof,
+      settledConstant,
+    );
     const metadata = {
       id: this.#nextNode++,
       type,
-      typeRep: this.#typeRepresentations.reference(type),
+      typeRep,
       span: expression.span,
       adaptation,
       arrayProof,
+      shape,
+      variants,
+      optionalCase: this.#optionalCases.has(expression),
+      grant,
+      hirState,
       origin: expression,
     };
-    const constant = this.#comptimeValues.get(expression);
-    if (
-      constant !== undefined &&
-      !dependsOnNames(expression, this.#runtimeNames)
-    ) {
+    if (constantClosed && constant !== undefined) {
       return { ...metadata, tag: "constant", value: constant };
     }
     switch (expression.tag) {
       case "var":
+        if (trackStaticValue) {
+          const value = this.#staticValues.get(expression.name);
+          if (value !== undefined) this.recordResidualValue(value);
+        }
+        return { ...metadata, tag: "var", name: expression.name };
       case "int":
       case "float":
       case "text":
@@ -421,6 +597,12 @@ class Elaborator {
               application.args.length >= 1 &&
               application.args[0].tag === "text"
             ) {
+              const dependency = this.#modules.get(application.args[0]);
+              if (dependency === undefined) {
+                throw new Error(
+                  `typed Core is missing import ${application.args[0].value}`,
+                );
+              }
               return {
                 ...metadata,
                 tag: "import",
@@ -428,6 +610,7 @@ class Elaborator {
                 args: application.args.slice(1).map((argument) =>
                   this.expression(argument)
                 ),
+                dependency,
               };
             }
             if (
@@ -486,6 +669,10 @@ class Elaborator {
                 "a static Core member call has a computed namespace",
               );
             }
+            this.recordStaticMember(
+              application.callee.target.name,
+              application.callee.name,
+            );
             return {
               ...metadata,
               tag: "static-member-apply",
@@ -504,10 +691,14 @@ class Elaborator {
           arg: this.expression(expression.arg),
         };
       case "field":
+        if (expression.target.tag === "var") {
+          this.recordStaticMember(expression.target.name, expression.name);
+        }
         if (
           expression.target.tag === "var" &&
           !this.#expressionTypes.has(expression.target)
         ) {
+          this.recordStaticMember(expression.target.name, expression.name);
           return {
             ...metadata,
             tag: "static-member",
@@ -518,22 +709,10 @@ class Elaborator {
         return {
           ...metadata,
           tag: "field",
-          target: this.expression(expression.target),
+          target: this.expression(expression.target, undefined, true, false),
           name: expression.name,
         };
       case "lambda": {
-        // Core has one calling convention, and it evaluates the argument. A
-        // deferred lambda that reaches it would be run strictly by every
-        // consumer of Core — the evaluator, the backend, the oracle — while
-        // the source said the argument may never run at all. Refusing here is
-        // what keeps `eval` and `build` answering the same way.
-        if (expression.deferred === true) {
-          fail(
-            "BLOT_DEFERRED_AT_RUNTIME",
-            "A deferred parameter is only supplied while compiling. This function survives into the running program, where its argument would run whether or not the parameter is read.",
-            expression.span,
-          );
-        }
         const outerRuntimeNames = this.#runtimeNames;
         this.#runtimeNames = new Set(outerRuntimeNames);
         for (const name of patternNames(expression.parameter)) {
@@ -546,6 +725,7 @@ class Elaborator {
           tag: "lambda",
           parameter: expression.parameter,
           body,
+          deferred: expression.deferred === true,
         };
       }
       case "array":
@@ -554,15 +734,18 @@ class Elaborator {
           tag: "array",
           elements: expression.elements.map((element) => ({
             spread: element.spread,
-            value: this.expression(element.value),
+            value: this.expression(
+              element.value,
+              this.arrayElement(type),
+            ),
           })),
         };
       case "tuple":
         return {
           ...metadata,
           tag: "tuple",
-          elements: expression.elements.map((element) =>
-            this.expression(element)
+          elements: expression.elements.map((element, index) =>
+            this.expression(element, this.recordField(type, String(index)))
           ),
         };
       case "shape": {
@@ -572,7 +755,10 @@ class Elaborator {
             members.push({
               tag: "field",
               name: member.name,
-              value: this.expression(member.value),
+              value: this.expression(
+                member.value,
+                this.recordField(type, member.name),
+              ),
             });
           } else {
             members.push({
@@ -586,14 +772,14 @@ class Elaborator {
       case "if": {
         let fallback: CoreExpression | null = null;
         if (expression.fallback !== null) {
-          fallback = this.expression(expression.fallback);
+          fallback = this.expression(expression.fallback, type);
         }
         return {
           ...metadata,
           tag: "if",
           branches: expression.branches.map((branch) => ({
             condition: this.expression(branch.condition),
-            consequence: this.expression(branch.consequence),
+            consequence: this.expression(branch.consequence, type),
           })),
           fallback,
         };
@@ -605,7 +791,7 @@ class Elaborator {
           target: this.expression(expression.target),
           arms: expression.arms.map((arm) => ({
             pattern: arm.pattern,
-            body: this.expression(arm.body),
+            body: this.expression(arm.body, type),
           })),
         };
       case "block":
@@ -616,6 +802,7 @@ class Elaborator {
             expression.declarations,
             expression.result,
             expression.resultEffects,
+            type,
           ),
         };
       case "rec":
@@ -638,9 +825,68 @@ class Elaborator {
     }
   }
 
-  typeOf(expression: Expr): SimpleType {
+  hirState(
+    expression: Expr,
+    type: SimpleType,
+    typeRep: TyRepId,
+    arrayProof: ArrayIndexProof | null,
+    constant: Value | null,
+  ): HirBuilderState {
+    let reason: HirPendingReason | null = null;
+    if (!this.#ownershipCertified) {
+      reason = "ownership-certificate";
+    } else if (
+      expression.tag === "if" || expression.tag === "case" ||
+      expression.tag === "block" || expression.tag === "rec"
+    ) {
+      reason = "structural-fold";
+    } else if (!this.closedRepresentation(type)) {
+      reason = "open-representation";
+    } else if (
+      constant === null && expression.tag !== "int" &&
+      expression.tag !== "float" && expression.tag !== "text" &&
+      expression.tag !== "unit" && expression.tag !== "tag"
+    ) {
+      reason = "specialization-choice";
+    }
+    if (reason !== null) {
+      this.#pendingHirNodes[reason] += 1;
+      return { tag: "pending", typeRep, reason };
+    }
+    this.#settledHirNodes += 1;
+    let safety: "not-required" | "proved" = "not-required";
+    if (arrayProof !== null) safety = "proved";
+    let value: Value;
+    if (constant !== null) {
+      value = constant;
+    } else if (expression.tag === "int") {
+      value = { tag: "int", value: expression.value };
+    } else if (expression.tag === "float") {
+      value = { tag: "float", value: expression.value };
+    } else if (expression.tag === "text") {
+      value = { tag: "text", value: expression.value };
+    } else if (expression.tag === "unit") {
+      value = { tag: "unit" };
+    } else if (expression.tag === "tag") {
+      value = { tag: "tag", name: expression.name, payload: null };
+    } else {
+      throw new Error("a settled progressive HIR node is not static");
+    }
+    return {
+      tag: "settled",
+      typeRep,
+      effects: "pure",
+      representation: "structural-type-rep",
+      ownership: "certified",
+      safety,
+      node: { tag: "static", value },
+    };
+  }
+
+  typeOf(expression: Expr, expectedType?: SimpleType): SimpleType {
     const type = this.#expressionTypes.get(expression);
     if (type !== undefined) return type;
+    if (expectedType !== undefined) return expectedType;
     if (expression.tag === "rec") return this.typeOf(expression.lambda);
     if (expression.tag === "int") return intLiteral(expression.value);
     if (expression.tag === "float") return FLOAT;
@@ -656,6 +902,251 @@ class Elaborator {
       `typed Core is missing inference for ${expression.tag} at ${expression.span.start}..${expression.span.end}`,
     );
   }
+
+  closedRepresentation(type: SimpleType): boolean {
+    const cached = this.#closedRepresentations.get(type);
+    if (cached !== undefined) return cached;
+    const closed = closedRepresentation(type, new Set());
+    this.#closedRepresentations.set(type, closed);
+    return closed;
+  }
+
+  recordField(
+    type: SimpleType,
+    name: string,
+    seen = new Set<number>(),
+  ): SimpleType | undefined {
+    if (type.tag === "record") return type.fields.get(name);
+    if (type.tag === "forall") return this.recordField(type.body, name, seen);
+    if (type.tag === "union") {
+      const found: SimpleType[] = [];
+      for (const member of type.members) {
+        const field = this.recordField(member, name, seen);
+        if (field !== undefined) found.push(field);
+      }
+      if (found.length > 0) return union(found);
+      return undefined;
+    }
+    if (type.tag !== "var" || seen.has(type.id)) return undefined;
+    seen.add(type.id);
+    const found: SimpleType[] = [];
+    for (const bound of [...type.lower, ...type.upper]) {
+      const field = this.recordField(bound, name, seen);
+      if (field !== undefined) found.push(field);
+    }
+    if (found.length > 0) return union(found);
+    return undefined;
+  }
+
+  arrayElement(
+    type: SimpleType,
+    seen = new Set<number>(),
+  ): SimpleType | undefined {
+    if (type.tag === "array") return type.element;
+    if (type.tag === "forall") return this.arrayElement(type.body, seen);
+    if (type.tag === "union") {
+      const found: SimpleType[] = [];
+      for (const member of type.members) {
+        const element = this.arrayElement(member, seen);
+        if (element !== undefined) found.push(element);
+      }
+      if (found.length > 0) return union(found);
+      return undefined;
+    }
+    if (type.tag !== "var" || seen.has(type.id)) return undefined;
+    seen.add(type.id);
+    const found: SimpleType[] = [];
+    for (const bound of [...type.lower, ...type.upper]) {
+      const element = this.arrayElement(bound, seen);
+      if (element !== undefined) found.push(element);
+    }
+    if (found.length > 0) return union(found);
+    return undefined;
+  }
+
+  recordResidualValue(value: Value): void {
+    if (this.#visitedResidualValues.has(value)) return;
+    this.#visitedResidualValues.add(value);
+    if (value.tag === "closure") {
+      if (value.source !== undefined && value.source.tag === "lambda") {
+        let expectedType: SimpleType | undefined;
+        const recorded = this.#expressionTypes.get(value.source);
+        if (recorded !== undefined) expectedType = recorded;
+        const inferred = bridge(value);
+        if (expectedType === undefined && inferred !== null) {
+          expectedType = inferred;
+        }
+        if (expectedType === undefined) {
+          return;
+        }
+        const lambda = this.expression(value.source, expectedType, false);
+        if (lambda.tag !== "lambda") {
+          throw new Error("a residual closure source is not a Core lambda");
+        }
+        this.#residualClosures.set(value, lambda.body);
+        this.#residualClosureTypes.set(value, lambda.type);
+      } else {
+        const outerRuntimeNames = this.#runtimeNames;
+        this.#runtimeNames = new Set(outerRuntimeNames);
+        for (const name of patternNames(value.parameter)) {
+          this.#runtimeNames.add(name);
+        }
+        this.#residualClosures.set(value, this.expression(value.body));
+        this.#runtimeNames = outerRuntimeNames;
+      }
+      for (const name of freeNames(value.body)) {
+        this.recordResidualBinding(value.env, name);
+      }
+      return;
+    }
+    if (value.tag === "core-closure") {
+      this.#residualClosures.set(value, value.body);
+      this.recordResidualEnvironment(value.env);
+      return;
+    }
+    if (value.tag === "shape") {
+      for (const field of value.fields.values()) {
+        this.recordResidualValue(field);
+      }
+      return;
+    }
+    if (value.tag === "array") {
+      for (const element of value.elements) this.recordResidualValue(element);
+      return;
+    }
+    if (value.tag === "tag") {
+      if (value.payload !== null) this.recordResidualValue(value.payload);
+      return;
+    }
+    if (value.tag === "primitive" || value.tag === "native") {
+      for (const applied of value.applied) this.recordResidualValue(applied);
+      return;
+    }
+    if (value.tag === "range") {
+      this.recordResidualValue(value.low);
+      this.recordResidualValue(value.high);
+      return;
+    }
+    if (value.tag === "union") {
+      for (const member of value.members) this.recordResidualValue(member);
+      return;
+    }
+    if (value.tag === "arrow") {
+      this.recordResidualValue(value.domain);
+      this.recordResidualValue(value.codomain);
+      for (const effect of value.effects) this.recordResidualValue(effect);
+      return;
+    }
+    if (value.tag === "forall") {
+      this.recordResidualValue(value.body);
+      return;
+    }
+    if (value.tag === "effect") {
+      for (const operation of value.operations.values()) {
+        this.recordResidualValue(operation);
+      }
+      return;
+    }
+    if (value.tag === "operation") {
+      this.recordResidualValue(value.effect);
+      return;
+    }
+    if (value.tag === "extended") {
+      this.recordResidualValue(value.inner);
+      for (const member of value.members.values()) {
+        this.recordResidualValue(member);
+      }
+      return;
+    }
+    if (value.tag === "sealed") {
+      this.recordResidualValue(value.inner);
+      return;
+    }
+    if (value.tag === "region-type") {
+      this.recordResidualValue(value.element);
+      return;
+    }
+    if (value.tag === "deferred-type") {
+      this.recordResidualValue(value.inner);
+      return;
+    }
+    if (value.tag === "region-array") {
+      for (const cell of value.store.cells) this.recordResidualValue(cell);
+    }
+  }
+
+  recordResidualEnvironment(environment: ValueEnv): void {
+    if (this.#visitedResidualEnvironments.has(environment)) return;
+    this.#visitedResidualEnvironments.add(environment);
+    for (const value of environment.names.values()) {
+      this.recordResidualValue(value);
+    }
+    if (environment.parent !== null) {
+      this.recordResidualEnvironment(environment.parent);
+    }
+  }
+
+  recordResidualBinding(environment: ValueEnv, name: string): void {
+    let current: ValueEnv | null = environment;
+    while (current !== null) {
+      const value = current.names.get(name);
+      if (value !== undefined) {
+        this.recordResidualValue(value);
+        return;
+      }
+      current = current.parent;
+    }
+  }
+
+  recordStaticMember(target: string, name: string): void {
+    const namespace = this.#staticValues.get(target);
+    if (namespace === undefined) return;
+    let value = namespace;
+    while (value.tag === "extended") {
+      const member = value.members.get(name);
+      if (member !== undefined) {
+        this.recordResidualValue(member);
+        return;
+      }
+      value = value.inner;
+    }
+    if (value.tag === "shape") {
+      const member = value.fields.get(name);
+      if (member !== undefined) this.recordResidualValue(member);
+    }
+  }
+}
+
+function closedRepresentation(
+  type: SimpleType,
+  seen: Set<SimpleType>,
+): boolean {
+  if (seen.has(type)) return true;
+  seen.add(type);
+  if (
+    type.tag === "var" || type.tag === "rigid" || type.tag === "forall" ||
+    type.tag === "open-effects" || type.tag === "top" ||
+    type.tag === "bottom"
+  ) return false;
+  if (
+    type.tag === "fun" || type.tag === "effects" || type.tag === "union" ||
+    type.tag === "opaque"
+  ) return false;
+  if (type.tag === "record") {
+    return [...type.fields.values()].every((field) =>
+      closedRepresentation(field, seen)
+    );
+  }
+  if (type.tag === "array" || type.tag === "region") {
+    return closedRepresentation(type.element, seen);
+  }
+  if (type.tag === "variant") {
+    if (type.open) return false;
+    return [...type.cases.values()].every((payload) =>
+      closedRepresentation(payload, seen)
+    );
+  }
+  return true;
 }
 
 function erasedComptimeValue(value: Value): boolean {

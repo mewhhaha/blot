@@ -174,8 +174,11 @@ export function show(type: SimpleType): string {
         return `{ ${members.join("; ")}; }`;
       }
 
-      case "array":
+      case "array": {
+        const covered = coveredHomogeneousRange(current.element, polarity);
+        if (covered !== null) return `[${go(covered, polarity)}]`;
         return `[${go(current.element, polarity)}]`;
+      }
 
       case "region":
         return `Region ${go(current.element, polarity)}`;
@@ -237,6 +240,62 @@ function showUnion(members: readonly string[]): string {
   }
   if (shown.length === 0) return "⊥";
   return shown.join(" | ");
+}
+
+/**
+ * Arrays are homogeneous, so a narrower range already covered by another
+ * element contribution is not a second element alternative. This is exact
+ * set normalization, not a hull: disjoint ranges keep their ordinary union.
+ */
+function coveredHomogeneousRange(
+  type: SimpleType,
+  polarity: boolean,
+): SimpleType | null {
+  const ranges: Extract<SimpleType, { tag: "range" }>[] = [];
+  const seen = new Set<number>();
+  let unresolved = false;
+
+  const collect = (current: SimpleType): void => {
+    if (current.tag === "range") {
+      ranges.push(current);
+      return;
+    }
+    if (current.tag === "union") {
+      for (const member of current.members) collect(member);
+      return;
+    }
+    if (current.tag !== "var") {
+      unresolved = true;
+      return;
+    }
+    if (seen.has(current.id)) return;
+    seen.add(current.id);
+    let bounds = current.lower;
+    if (!polarity) bounds = current.upper;
+    if (bounds.length === 0) unresolved = true;
+    for (const bound of bounds) collect(bound);
+  };
+
+  collect(type);
+  if (unresolved || ranges.length === 0) return null;
+  for (const candidate of ranges) {
+    if (ranges.every((range) => rangeWithin(range, candidate))) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function rangeWithin(
+  inner: Extract<SimpleType, { tag: "range" }>,
+  outer: Extract<SimpleType, { tag: "range" }>,
+): boolean {
+  if (inner.domain !== outer.domain) return false;
+  const lowWithin = outer.low === null ||
+    (inner.low !== null && outer.low <= inner.low);
+  const highWithin = outer.high === null ||
+    (inner.high !== null && inner.high <= outer.high);
+  return lowWithin && highWithin;
 }
 
 /** Which variables are reachable in which polarity. */

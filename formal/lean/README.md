@@ -7,7 +7,7 @@ representation.
 
 ## Checked scope
 
-`Blot/Core.lean` currently defines:
+`Blot/Core.lean` defines the computation/effect seed calculus:
 
 - separate value and computation syntax with hygienic names;
 - binder-respecting substitution under hygienic names through variants,
@@ -20,22 +20,38 @@ representation.
 - an argument-substituting one-shot continuation transition with explicit
   cancellation.
 
-The checked lemmas state those local rules. In particular, they no longer call a
+The checked lemmas state those local rules. In particular, they do not call a
 `define` transparent while ignoring its value or call two independent
 computations a data-carrying bind.
 
+`Blot/Stable.lean` then fixes the first production correspondence boundary. It
+contains:
+
+- intrinsically typed residual terms for live pure bindings, finite function
+  choices, variants with exhaustive cases, effects and handlers, checked signed
+  addition, proof-bearing array reads, specified traps, and divergence;
+- structural preservation and an executable value/step/divergence/trap
+  classifier;
+- compile-time binding erasure lemmas;
+- structural ownership predicates and proofs of no double move, affine
+  at-most-once use, and linear exact use on terminating exits;
+- a bounds-safety theorem for the only array-read constructor; and
+- a small Runtime-HIR-to-target evaluator simulation.
+
+The package contains no `sorry` or admitted axioms. CI builds it and asks nanoda
+to check the generated declarations independently.
+
 ## Correspondence boundary
 
-The syntax is a seed calculus for Blot's typed Core, not a serialization of the
-production TypeScript or Rust arenas. It models return values, ordered effects,
-and the ready-to-spent continuation transition. The next correspondence layer
-must translate production typed Core into this syntax and validate stable
-binding and effect identities.
+The syntax is a model of the stable subset, not a serialization of the
+TypeScript or Rust arenas. The correspondence is structural: `Term` mirrors
+typed Core's result index and closed residual forms; `HirOperation` mirrors the
+validated integer, branch, proved-array, and host-effect operations that cross
+the backend boundary. Source modules, parsing, reflection, SIMD, desugarings,
+and the public ABI remain intentionally outside this first artifact.
 
-Typing, coverage, refinement evidence, ownership, handler reduction under
-arbitrary evaluation contexts, preservation, one-step progress, divergence, and
-compiler-pass simulation remain outside the checked package. Handler clauses
-receive the captured one-shot continuation at a direct operation redex, but the
-model does not yet prove that captured linear obligations are discharged.
+The bounded TypeScript/Rust parity, mutation, artifact-reproducibility, ABI, and
+emitted-Wasm gates remain authoritative executable checks. The mechanization
+supplements them; it does not replace them.
 
 Run `lake build` from this directory.

@@ -30,15 +30,17 @@ export interface CompilerOptions {
   readonly targetPolicy?: CompilerTargetPolicy;
 }
 
+export interface CompilerHost {
+  check(path: string): Promise<CheckedModule>;
+  prepare(path: string): Promise<BlotRuntimeModule>;
+  compile(path: string): Promise<CompilerArtifact>;
+  destroy(): void;
+}
+
 interface CachedArtifact {
   readonly wasm: Uint8Array;
   readonly manifestBytes: Uint8Array;
   readonly capabilities: readonly string[];
-}
-
-interface PreparedArtifact {
-  readonly hir: BlotRuntimeModule;
-  readonly artifact: CachedArtifact;
 }
 
 interface ResidentRevision {
@@ -54,9 +56,8 @@ interface ResidentRevision {
  * binary-plan validation and emission. No Deno runtime or native Rust toolchain
  * participates in this path.
  */
-export class Compiler {
+export class Compiler implements CompilerHost {
   readonly #compiled = new WeakMap<BlotRuntimeModule, CachedArtifact>();
-  readonly #compiledByPath = new Map<string, PreparedArtifact>();
   readonly #revisions = new Map<string, ResidentRevision>();
   readonly #checks = new IncrementalCheckCache();
   readonly #targetPolicy: ResolvedCompilerTargetPolicy;
@@ -91,7 +92,8 @@ export class Compiler {
     const absolute = resolve(path);
     const revision = await this.#revision(absolute);
     if (revision.hir !== undefined) return revision.hir;
-    const hir = await lowerRuntimeHir(absolute);
+    const checked = await this.#checks.check(absolute);
+    const hir = await lowerRuntimeHir(absolute, checked.checked);
     revision.hir = hir;
     return hir;
   }
@@ -103,12 +105,6 @@ export class Compiler {
     const cached = this.#compiled.get(hir);
     if (cached !== undefined) return cachedArtifact(cached);
 
-    const previous = this.#compiledByPath.get(absolute);
-    if (previous !== undefined && sameRuntimeProgram(previous.hir, hir)) {
-      this.#compiled.set(hir, previous.artifact);
-      return cachedArtifact(previous.artifact);
-    }
-
     const program = close(hir, this.#targetPolicy);
     const emitted = await program.compile();
     const artifact: CachedArtifact = {
@@ -117,7 +113,6 @@ export class Compiler {
       capabilities: emitted.capabilities.slice(),
     };
     this.#compiled.set(hir, artifact);
-    this.#compiledByPath.set(absolute, { hir, artifact });
     return {
       wasm: artifact.wasm.slice(),
       manifestBytes: artifact.manifestBytes.slice(),
@@ -174,32 +169,4 @@ function cachedArtifact(artifact: CachedArtifact): CompilerArtifact {
     capabilities: artifact.capabilities.slice(),
     artifactSource: "revision-cache",
   };
-}
-
-/** Runtime source locations do not affect a successfully emitted program. */
-function sameRuntimeProgram(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (typeof left !== typeof right || left === null || right === null) {
-    return false;
-  }
-  if (typeof left !== "object") return false;
-  if (Array.isArray(left)) {
-    if (!Array.isArray(right) || left.length !== right.length) return false;
-    return left.every((value, index) =>
-      sameRuntimeProgram(value, right[index])
-    );
-  }
-  if (Array.isArray(right)) return false;
-
-  const leftRecord = left as Readonly<Record<string, unknown>>;
-  const rightRecord = right as Readonly<Record<string, unknown>>;
-  const leftKeys = Object.keys(leftRecord).filter((key) => key !== "span");
-  const rightKeys = Object.keys(rightRecord).filter((key) => key !== "span");
-  if (leftKeys.length !== rightKeys.length) return false;
-  for (let index = 0; index < leftKeys.length; index += 1) {
-    const key = leftKeys[index]!;
-    if (key !== rightKeys[index]) return false;
-    if (!sameRuntimeProgram(leftRecord[key], rightRecord[key])) return false;
-  }
-  return true;
 }

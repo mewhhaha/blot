@@ -93,6 +93,22 @@ Deno.test("Blot compiler artifact reuse misses after a direct edit", async () =>
   assertByteArraysEqual(repeated.wasm, edited.wasm);
 });
 
+Deno.test("Blot compiler rebuilds when an origin-only edit shifts spans", async () => {
+  const path = `${await Deno.makeTempDir({ dir: "/tmp" })}/origin-edit.blot`;
+  await Deno.writeTextFile(path, "return 42\n");
+  const [first] = await buildBatch([path]);
+  if (first === undefined || first.status !== "built") {
+    throw new Error("initial origin module did not compile");
+  }
+
+  await Deno.writeTextFile(path, "// shifted\nreturn 42\n");
+  const [shifted] = await buildBatch([path]);
+  if (shifted === undefined || shifted.status !== "built") {
+    throw new Error("shifted origin module did not compile");
+  }
+  assertEquals(shifted.artifactSource, "compiled");
+});
+
 Deno.test("Blot compiler artifact reuse misses after a dependency edit", async () => {
   const directory = await Deno.makeTempDir({ dir: "/tmp" });
   const dependency = `${directory}/dependency.blot`;

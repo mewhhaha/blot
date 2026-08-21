@@ -265,7 +265,7 @@ impl CompilerSession {
     pub fn prepare_runtime_hir(&self, path: &str) -> serde_json::Value {
         match self.close_program(path) {
             Ok(program) => serde_json::json!({ "ok": true, "module": program.runtime() }),
-            Err(diagnostic) => diagnostic_json(diagnostic),
+            Err(diagnostic) => compiler_failure_json(diagnostic, "Runtime HIR preparation"),
         }
     }
 
@@ -372,6 +372,32 @@ fn diagnostic_json(diagnostic: crate::diagnostic::Diagnostic) -> serde_json::Val
             },
         },
     })
+}
+
+pub fn compiler_failure_json(
+    diagnostic: crate::diagnostic::Diagnostic,
+    phase: &str,
+) -> serde_json::Value {
+    if diagnostic.code == "BLOT_TARGET_REFUSAL" {
+        return serde_json::json!({
+            "ok": false,
+            "targetRefusal": {
+                "code": diagnostic.code,
+                "message": diagnostic.message,
+            },
+        });
+    }
+    if diagnostic.code == "BLOT_BACKEND_ERROR" {
+        return serde_json::json!({
+            "ok": false,
+            "invariantFailure": {
+                "code": "BLOT_COMPILER_INVARIANT",
+                "phase": phase,
+                "message": diagnostic.message,
+            },
+        });
+    }
+    diagnostic_json(diagnostic)
 }
 
 fn json_value(value: &Value) -> serde_json::Value {
@@ -904,11 +930,11 @@ mod tests {
         let prepared = session.prepare_runtime_hir("main.blot");
         assert_eq!(prepared["ok"], false, "{}", prepared);
         assert_eq!(
-            prepared["diagnostic"]["code"], "BLOT_TARGET_REFUSAL",
+            prepared["targetRefusal"]["code"], "BLOT_TARGET_REFUSAL",
             "{}",
-            prepared["diagnostic"]
+            prepared["targetRefusal"]
         );
-        assert_ne!(prepared["diagnostic"]["span"]["end"], 0);
+        assert!(prepared.get("diagnostic").is_none());
     }
 
     #[test]
@@ -1259,6 +1285,45 @@ mod tests {
             .expect("source should configure");
         let checked = session.check_module("main.blot");
         assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
+    }
+
+    #[test]
+    fn recursive_empty_array_accumulator_closes_from_pushed_elements() {
+        std::thread::Builder::new()
+            .stack_size(4 * 1024 * 1024)
+            .spawn(|| {
+                let mut session = CompilerSession::default();
+                session
+                    .add_source(
+                        "prelude.blot".to_owned(),
+                        source(include_str!("../../src/prelude/prelude.blot")),
+                    )
+                    .expect("prelude should load");
+                session
+                    .add_source(
+                        "main.blot".to_owned(),
+                        source(include_str!("../../examples/collect_principal_type.blot")),
+                    )
+                    .expect("source should load");
+                session
+                    .configure_module("prelude.blot", BTreeMap::new(), BTreeMap::new())
+                    .expect("prelude should configure");
+                session
+                    .configure_module(
+                        "main.blot",
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("source should configure");
+
+                let checked = session.check_module("main.blot");
+
+                assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
+                assert_eq!(checked["type"], "[Int]");
+            })
+            .expect("collect test thread should start")
+            .join()
+            .expect("collect test thread should finish");
     }
 
     fn source(value: &str) -> Vec<u16> {

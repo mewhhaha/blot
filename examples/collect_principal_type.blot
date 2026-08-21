@@ -1,0 +1,8 @@
+// A recursively accumulated empty array closes from the iterator's yielded
+// element type. Empty iteration remains valid because `[Int]` does not claim
+// that an element exists.
+
+open import "blot:prelude"
+
+let collected = collect (Iter.range (0, 4))
+return collected

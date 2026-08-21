@@ -24,7 +24,7 @@ mod value;
 use std::cell::RefCell;
 use std::sync::{Mutex, OnceLock};
 
-use session::{AddSourceError, CompilerSession};
+use session::{AddSourceError, CompilerSession, compiler_failure_json};
 
 static LOWER_RESULT: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
 thread_local! {
@@ -467,8 +467,8 @@ pub unsafe extern "C" fn compile_compiler_session_module(
                 .and_then(Option::as_ref)
                 .ok_or_else(|| format!("unknown compiler session {handle}"))?;
             session.compile_module(&path).map_err(|diagnostic| {
-                serde_json::to_string(&diagnostic_json(&diagnostic))
-                    .expect("backend diagnostic serialization failed")
+                serde_json::to_string(&compiler_failure_json(diagnostic, "backend emission"))
+                    .expect("backend failure serialization failed")
             })
         })
     });
@@ -480,8 +480,8 @@ pub unsafe extern "C" fn compile_compiler_session_module(
         }
         Err(message) => {
             COMPILED_MODULE.with(|slot| *slot.borrow_mut() = None);
-            if let Ok(diagnostic) = serde_json::from_str::<serde_json::Value>(&message) {
-                serde_json::json!({ "ok": false, "diagnostic": diagnostic })
+            if let Ok(failure) = serde_json::from_str::<serde_json::Value>(&message) {
+                failure
             } else {
                 serde_json::json!({ "ok": false, "message": message })
             }

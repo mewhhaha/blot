@@ -15,9 +15,19 @@ const wasm = await Deno.readFile(
 const rust = await CompilerWasm.load(wasm);
 let roots = Deno.args;
 if (roots.length === 0) roots = await repositoryPrograms();
+const expectedTargetRefusals = new Set([
+  "examples/capabilities.blot",
+  "examples/projected.blot",
+  "examples/simd.blot",
+  "examples/tour.blot",
+]);
 {
   const failures: { readonly root: string; readonly message: string }[] = [];
   const oracleRejections: {
+    readonly root: string;
+    readonly message: string;
+  }[] = [];
+  const targetRefusals: {
     readonly root: string;
     readonly message: string;
   }[] = [];
@@ -66,9 +76,28 @@ if (roots.length === 0) roots = await repositoryPrograms();
           mutualRejections += 1;
           continue;
         }
-        let code = prepared.diagnostic?.code;
+        if (prepared.targetRefusal !== undefined) {
+          if (!expectedTargetRefusals.has(root)) {
+            throw new Error(
+              `${prepared.targetRefusal.code}: ${prepared.targetRefusal.message}`,
+            );
+          }
+          targetRefusals.push({
+            root,
+            message: prepared.targetRefusal.message,
+          });
+          continue;
+        }
+        let code: string | undefined;
+        let message: string | undefined;
+        if (prepared.invariantFailure !== undefined) {
+          code = prepared.invariantFailure.code;
+          message =
+            `${prepared.invariantFailure.phase}: ${prepared.invariantFailure.message}`;
+        }
+        if (code === undefined) code = prepared.diagnostic?.code;
+        if (message === undefined) message = prepared.diagnostic?.message;
         if (code === undefined) code = "RUST_HIR_ERROR";
-        let message = prepared.diagnostic?.message;
         if (message === undefined) message = prepared.message;
         throw new Error(
           `${code}: ${message}`,
@@ -112,7 +141,13 @@ if (roots.length === 0) roots = await repositoryPrograms();
   }
   console.log(
     JSON.stringify(
-      { compared, mutualRejections, oracleRejections, failures },
+      {
+        compared,
+        mutualRejections,
+        targetRefusals,
+        oracleRejections,
+        failures,
+      },
       null,
       2,
     ),

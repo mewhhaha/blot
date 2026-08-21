@@ -26,6 +26,7 @@ import {
   F32X4_MASK,
   FLOAT,
   FLOAT32,
+  freshEmptyArrayElement,
   freshVar,
   fun,
   I16X8,
@@ -343,7 +344,10 @@ export const PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map<
   ],
 
   // --- arrays ---
-  ["@array.empty", poly((fresh) => ({ tag: "array", element: fresh() }))],
+  [
+    "@array.empty",
+    scheme({ tag: "array", element: freshEmptyArrayElement(1) }, 0),
+  ],
   [
     "@array.len",
     poly((fresh) => curried([{ tag: "array", element: fresh() }], INT)),
