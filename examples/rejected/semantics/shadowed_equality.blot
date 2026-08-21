@@ -20,7 +20,7 @@ open import "blot:prelude"
 let Eq = { .eq = fn a => fn b => True; .ne = fn a => fn b => False; }
 
 sig name = 1 | 2 | 3 -> Str
-let name = fn n =>
+let name = fn n => do:
   if n == 1:
     return case n of
       1 => "one"

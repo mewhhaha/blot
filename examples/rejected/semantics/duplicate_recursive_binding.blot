@@ -6,7 +6,7 @@
 
 open import "blot:prelude"
 
-let rec step = fn n =>
+let rec step = fn n => do:
   if n == 0:
     return 0
   else:

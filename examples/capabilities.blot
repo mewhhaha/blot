@@ -19,7 +19,7 @@ const Console =
 // written in blot over the granted function, which is the ordinary case.
 const to_host =
   {
-    .write = fn (message, ?resume) =>
+    .write = fn (message, ?resume) => do:
       <- init.print message
       result <- resume ()
       return result
@@ -29,14 +29,14 @@ const to_host =
 
 // The same computation, discharged two different ways. Nothing in `report`
 // mentions which.
-const report = fn () =>
+const report = fn () => do:
   <- Console.write "compiled"
   <- Console.write "linked"
   return "ok"
 
 const to_memory =
   {
-    .write = fn (message, ?resume) =>
+    .write = fn (message, ?resume) => do:
       rest <- resume ()
       return @text.concat message rest
     ;

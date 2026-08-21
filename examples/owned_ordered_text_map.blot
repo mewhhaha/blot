@@ -5,7 +5,7 @@ open import "blot:prelude"
 
 sig replace_keep =
   (OrderedTextMap.of Int, Str, Int) -> (OrderedTextMap.of Int, Int)
-let replace_keep = fn (!entries, key, value) =>
+let replace_keep = fn (!entries, key, value) => do:
   return case OrderedTextMap.replace ((!entries), key, value) of
     #MapReplaced (previous, !updated) => (updated, previous)
     #MapMissing (returned, !original) => (original, returned)
@@ -20,7 +20,7 @@ let beta = case OrderedTextMap.get ((&entries), "beta") of
 
 let (entries, previous_beta) = replace_keep ((!entries), "beta", 20)
 let entries = case OrderedTextMap.split_before ((!entries), "gamma") of
-  #Split (!left, !right, !rejoin) =>
+  #Split (!left, !right, !rejoin) => do:
     let (left, previous_alpha) = replace_keep ((!left), "alpha", 10)
     let (right, previous_gamma) = replace_keep ((!right), "gamma", 30)
     let joined = OrderedTextMap.join ((!rejoin), (!left), (!right))

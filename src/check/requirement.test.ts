@@ -7,7 +7,7 @@ const PRELUDE = `open import "blot:prelude"\n`;
 Deno.test("sig and @satisfies share canonical requirement checking", async () => {
   const checked = await checkSource(
     "/tmp/requirements.blot",
-    PRELUDE + `let increment = fn value =>
+    PRELUDE + `let increment = fn value => do:
   let value = @satisfies value Int
   return value + 1
 
@@ -50,9 +50,9 @@ Deno.test("typestate and effect contracts compose with Omega", async () => {
 const Transition = (#Closed Int) -> (#Open Int) ~ { Audit }
 
 sig advance = Transition
-let advance = fn !state =>
+let advance = fn !state => do:
   result <- case state of
-    #Closed value =>
+    #Closed value => do:
       <- Audit.record "open"
       return #Open value
   return result
@@ -61,7 +61,7 @@ let handler = {
   .record = fn (_, ?resume) => resume ();
   .return = fn value => value;
 }
-let run = fn () =>
+let run = fn () => do:
   let !closed = #Closed 7
   return advance (!closed)
 

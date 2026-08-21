@@ -22,7 +22,7 @@ const CustomNonZero = refine (Int, fn value => separated value 0)
 const SmallI32 = refine (I32, fn value => value >= -10 && value <= 10)
 
 sig keep_byte_or_zero = Int -> Byte
-let keep_byte_or_zero = fn value =>
+let keep_byte_or_zero = fn value => do:
   if value >= 0 && value <= 255:
     return value
 

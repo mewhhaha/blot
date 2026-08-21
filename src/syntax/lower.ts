@@ -2467,16 +2467,18 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
     return lowerGuards(target, arms, rule.span);
   }
 
-  if (rule.name === "block" || rule.name === "do_block") {
-    const phase = rule.name === "do_block"
-      ? tokenOf(required(rule, "phase")).text
-      : "do";
+  if (rule.name === "do_block") {
+    const phase = tokenOf(required(rule, "phase")).text;
     expect(
       phase === "do" || phase === "compdo",
       `unknown block phase ${phase}`,
     );
-    const finish = (body: Expr): Expr =>
-      phase === "compdo" ? { tag: "comptime", body, span: rule.span } : body;
+    const finish = (body: Expr): Expr => {
+      if (phase === "compdo") {
+        return { tag: "comptime", body, span: rule.span };
+      }
+      return body;
+    };
     let statements = fieldList(rule, "statements");
     let result: Expr = { tag: "unit", span: rule.span };
     let resultEffects: "pure" | "ambient" = "pure";

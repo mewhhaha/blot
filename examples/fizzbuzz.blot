@@ -5,7 +5,7 @@
 
 open import "blot:prelude"
 
-let label = fn value =>
+let label = fn value => do:
   if Num.rem value 15 == 0:
     return "fizzbuzz"
   else:

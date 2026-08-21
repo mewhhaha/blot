@@ -5,14 +5,14 @@
 open import "blot:prelude"
 
 sig keep_swap = (Slice.of Int, Int, Int) -> Slice.of Int
-let keep_swap = fn (!region, left, right) =>
+let keep_swap = fn (!region, left, right) => do:
   return case Slice.swap ((!region), left, right) of
     #Updated !updated => updated
     #SwapOutOfBounds !original => original
 
 sig sort_work = (Slice.of Int, [(Int, Int)], Int) -> Slice.of Int
 let rec sort_work =
-  fn (!region, work, cursor) =>
+  fn (!region, work, cursor) => do:
     let count = Array.length work
     if count <= cursor:
       return region
@@ -41,7 +41,7 @@ let rec sort_work =
         return sort_work (!updated, pending, cursor + 1)
 
 sig quicksort = [Int] -> [Int]
-let quicksort = fn values =>
+let quicksort = fn values => do:
   let region = Slice.claim values
   let length = Slice.length (&region)
   return Slice.freeze (sort_work (!region, [(0, length)], 0))

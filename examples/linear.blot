@@ -44,7 +44,7 @@ let fields = first + pair.right ()
 // `?` is affine: at most once. Not a weaker `!` but a different rule, and the
 // right one for a continuation — spending it on one branch and not the other is
 // still at most once, so branches need not agree.
-let choose = fn ?resume =>
+let choose = fn ?resume => do:
   if 1 < 2:
     return resume 10
   else:

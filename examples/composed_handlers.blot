@@ -9,7 +9,7 @@ const Terminal = @effect { .read = Unit -> Int; }
 const Clock = @effect { .now = Unit -> Int; }
 const Random = @effect { .add = Int -> Int; }
 
-let program = fn () =>
+let program = fn () => do:
   input <- Terminal.read ()
   time <- Clock.now ()
   result <- Random.add (input + time)
@@ -17,21 +17,21 @@ let program = fn () =>
 
 let fake_terminal =
   {
-    .read = fn ((), !resume) =>
+    .read = fn ((), !resume) => do:
       result <- resume 10
       return result
     ;
   }
 let fake_clock =
   {
-    .now = fn ((), !resume) =>
+    .now = fn ((), !resume) => do:
       result <- resume 20
       return result
     ;
   }
 let fake_random =
   {
-    .add = fn (value, !resume) =>
+    .add = fn (value, !resume) => do:
       result <- resume (value + 12)
       return result
     ;

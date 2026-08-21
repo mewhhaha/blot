@@ -13,7 +13,7 @@ open import "blot:prelude"
 // `adding` is generic in `T` and rejects any `T` it cannot add. The rejection
 // happens while compiling, because `const` is compile time.
 
-const adding = fn T =>
+const adding = fn T => do:
   let _ =
     expect (
       refines (T, Int),
@@ -37,7 +37,7 @@ const Point2 = { .x = I32; .y = I32; }
 const Point3 = { .x = I32; .y = I32; .z = I32; }
 const HasX = { .x = Int; }
 
-const projecting = fn T =>
+const projecting = fn T => do:
   let _ = expect (refines (T, HasX), "projecting needs a record with an .x")
   return fn value => value.x
 

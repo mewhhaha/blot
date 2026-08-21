@@ -21,7 +21,7 @@ async function applyLintFix(source: string, code: string): Promise<string> {
 }
 
 Deno.test("a terminal statement equality ladder becomes a returned case", async () => {
-  const source = `let label = fn n =>
+  const source = `let label = fn n => do:
   if n == 1:
     return "one"
   else:
@@ -43,7 +43,7 @@ return label
 
   assertEquals(
     fixed,
-    `let label = fn n =>
+    `let label = fn n => do:
   return case n of
     1 => "one"
     2 => "two"
@@ -63,7 +63,7 @@ return label
 });
 
 Deno.test("a nested statement conditional becomes an else-if ladder", async () => {
-  const source = `let choose = fn () =>
+  const source = `let choose = fn () => do:
   let choice = 0
   if first:
     choice := 1
@@ -78,7 +78,7 @@ return choose
 
   assertEquals(
     await applyLintFix(source, "BLOT_LINT_NESTED_IF_CHAIN"),
-    `let choose = fn () =>
+    `let choose = fn () => do:
   let choice = 0
   if first:
     choice := 1
@@ -93,7 +93,7 @@ return choose
 });
 
 Deno.test("an else suite with work after its conditional stays nested", async () => {
-  const source = `let choose = fn () =>
+  const source = `let choose = fn () => do:
   if first:
     _ <- one ()
   else:
@@ -145,9 +145,9 @@ return count
   {
     name: "an Option failure arm can be written as a guard",
     code: "BLOT_LINT_GUARD_SHAPED_CASE",
-    source: `let unwrap = fn option =>
+    source: `let unwrap = fn option => do:
   return case option of
-    #None =>
+    #None => do:
       return ()
     #Some value => value
 return unwrap
@@ -190,7 +190,7 @@ return (updated, previous_length)
   {
     name: "an unread effect result is explicitly discarded",
     code: "BLOT_LINT_UNUSED_EFFECT_RESULT",
-    source: `let run = fn () =>
+    source: `let run = fn () => do:
   ignored <- perform_work ()
   return ()
 return run
@@ -385,9 +385,9 @@ Deno.test("every default operator target has a spelling action", async () => {
 });
 
 Deno.test("a terminal Option match offers a guard action", async () => {
-  const source = `let unwrap = fn option =>
+  const source = `let unwrap = fn option => do:
   return case option of
-    #None =>
+    #None => do:
       return ()
     #Some value => value
 return unwrap
@@ -408,7 +408,7 @@ return unwrap
 Deno.test("rule visitors cover effect rows and structural interfaces", async () => {
   const source = `const Console = @effect { .write = Unit -> Unit; }
 const Host = @effect.host { .write = Unit -> Unit; }
-let run = fn () =>
+let run = fn () => do:
   value <- Console.write ()
   return value
 let composed = run

@@ -1,5 +1,6 @@
 nodeLinker: pnp
-symlink: false
+# pnpm 11's PnP hook covers CommonJS; tsx needs symlinks for its ESM dependencies.
+symlink: true
 allowBuilds:
   esbuild: true
 minimumReleaseAge: 10080

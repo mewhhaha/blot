@@ -358,7 +358,7 @@ return value
 
 rejects(
   "a declaration tag descriptor must be known before a local binding",
-  `let tagged = fn descriptor =>
+  `let tagged = fn descriptor => do:
   @[descriptor] let value = 1
   return value
 return tagged test
@@ -412,7 +412,7 @@ return { .number = identity 1; .text = identity "two"; }
 
 check(
   "an unconditional return determines its block result",
-  `let answer = fn () =>
+  `let answer = fn () => do:
   return 42
 return answer
 `,
@@ -421,7 +421,7 @@ return answer
 
 check(
   "a statement conditional returns from its surrounding block",
-  `let describe = fn value =>
+  `let describe = fn value => do:
   if value < 0:
     return "negative"
   return "positive"
@@ -432,7 +432,7 @@ return describe
 
 check(
   "a return crosses a for loop",
-  `let find = fn wanted =>
+  `let find = fn wanted => do:
   for value in Iter.range (0, 5):
     if value == wanted:
       return value
@@ -444,7 +444,7 @@ return find
 
 check(
   "a return crosses an unbounded loop",
-  `let count_to = fn limit =>
+  `let count_to = fn limit => do:
   let count = 0
   for ever:
     count := count + 1
@@ -458,7 +458,7 @@ return count_to
 
 check(
   "a value if keeps a nested return inside its result scope",
-  `let answer = fn () =>
+  `let answer = fn () => do:
   let inner = case 1 < 2 of
     #True => do:
       return 41
@@ -471,9 +471,9 @@ return answer
 
 check(
   "a value case keeps a nested return inside its result scope",
-  `let answer = fn () =>
+  `let answer = fn () => do:
   let inner = case Some 41 of
-    #Some value =>
+    #Some value => do:
       return value
 
     #None => 0
@@ -686,7 +686,7 @@ return f
 
 check(
   "a guard types what it binds",
-  `let f = fn m =>
+  `let f = fn m => do:
   if let #Some inner = m else:
     return "none"
   return inner
@@ -697,7 +697,7 @@ return f (#Some 7)
 
 rejects(
   "a guard rejects a payload used at the wrong type",
-  `let f = fn m =>
+  `let f = fn m => do:
   if let #Some inner = m else:
     return "none"
   return Text.append inner "!"
@@ -1112,7 +1112,7 @@ check(
   `sig h = 1 -> Str
 let h = fn k => "one"
 sig f = 1 | 2 | 3 -> Str
-let f = fn n =>
+let f = fn n => do:
   if n == 1:
     return h n
   return "rest"
@@ -1168,7 +1168,7 @@ return f
 check(
   "two conditions on one name do not accumulate an intersection",
   `sig f = 1 | 2 | 3 -> Str
-let f = fn n =>
+let f = fn n => do:
   let a = case n == 1 of
     #True => "x"
     #False => "y"
@@ -1290,7 +1290,7 @@ return f
 rejects(
   "an operator carried through a binding proves nothing",
   `sig f = 1 | 2 | 3 -> Str
-let f = fn n =>
+let f = fn n => do:
   let same = Eq.eq
   return case same n 1 of
     #True => case n of
@@ -1596,7 +1596,7 @@ return at
 rejects(
   "an alias preserves the array identity used by a proof",
   `sig at = [Int] -> Int -> Int
-let at = fn xs => fn n =>
+let at = fn xs => fn n => do:
   let ys = xs
   return case n >= @array.len xs of
     #True => @array.get ys n
@@ -1655,7 +1655,7 @@ return at
 check(
   "a bound length keeps its relationship to the measured array",
   `sig at = [Int] -> Int -> Int
-let at = fn xs => fn n =>
+let at = fn xs => fn n => do:
   let length = @array.len xs
   return case n >= 0 && n < length of
     #True => @array.get xs n
@@ -1668,7 +1668,7 @@ return at
 check(
   "the untaken branch of a bound length guard proves a literal index",
   `sig first = [Int] -> Int
-let first = fn xs =>
+let first = fn xs => do:
   let length = Array.length xs
   if length < 2:
     return 0
@@ -1682,7 +1682,7 @@ return first
 check(
   "a bound affine length may prove itself as an index",
   `sig last = [Int] -> Int
-let last = fn xs =>
+let last = fn xs => do:
   let index = @int.sub (@array.len xs) 1
   if index < 0:
     return 0
@@ -1696,7 +1696,7 @@ return last
 rejects(
   "two bound lengths still do not become subject and witness",
   `sig first = [Int] -> [Int] -> Int
-let first = fn xs => fn ys =>
+let first = fn xs => fn ys => do:
   let xs_length = @array.len xs
   let ys_length = @array.len ys
   if xs_length < ys_length:
@@ -1711,7 +1711,7 @@ return first
 check(
   "affine arithmetic preserves a bound length relationship",
   `sig at = [Int] -> Int -> Int
-let at = fn xs => fn n =>
+let at = fn xs => fn n => do:
   let last = @int.sub (@array.len xs) 1
   return case n >= 0 && n <= last of
     #True => @array.get xs n
@@ -1724,7 +1724,7 @@ return at
 check(
   "a proof follows an immutable array alias",
   `sig at = [Int] -> Int -> Int
-let at = fn xs => fn n =>
+let at = fn xs => fn n => do:
   let ys = xs
   return case n >= 0 && n < @array.len xs of
     #True => @array.get ys n
@@ -1755,7 +1755,7 @@ return put
 check(
   "indexed iteration installs its erased bounds package in the loop body",
   `sig sum = [Int] -> Int
-let sum = fn values =>
+let sum = fn values => do:
   let total = 0
   for (index, _) in Iter.indexed values:
     total := total + @array.get values index
@@ -1768,7 +1768,7 @@ return sum
 rejects(
   "an ordinary iterator record cannot forge an index package",
   `sig sum = [Int] -> Int
-let sum = fn values =>
+let sum = fn values => do:
   let iterator = {
     .state = 0;
     .step = fn index => case index < @array.len values of
@@ -1798,7 +1798,7 @@ return f
 check(
   "performing an operation puts it in the row",
   `const Console = @effect { .write = Str -> Unit; }
-let greet = fn name =>
+let greet = fn name => do:
   result <- Console.write name
   return result
 return { .greet = greet; }
@@ -1809,7 +1809,7 @@ return { .greet = greet; }
 check(
   "conditional rebinding stays local to its effect-bound scope",
   `const Counter = @effect { .read = Unit -> Int; }
-let adjust = fn () =>
+let adjust = fn () => do:
   let result = 0
   if True:
     current <- Counter.read ()
@@ -1856,7 +1856,7 @@ check(
 check(
   "effect binding executes a nullary effect value",
   `const Clock = @effect { .now = Unit -> Int; }
-let operation = fn () =>
+let operation = fn () => do:
   read <- Clock.now
   return read
 return { .operation = operation; }
@@ -1868,7 +1868,7 @@ check(
   "two effects join into one row",
   `const Console = @effect { .write = Str -> Unit; }
 const Clock = @effect { .now = Unit -> Int; }
-let stamped = fn name =>
+let stamped = fn name => do:
   t <- Clock.now ()
   _ <- Console.write name
   return t
@@ -1880,7 +1880,7 @@ return { .stamped = stamped; }
 check(
   "a compile-time function exposes its inferred effects through type reflection",
   `const Access = (@effect { .read = Unit -> Int; }) <+ { .ecs = 7; }
-const system = fn () =>
+const system = fn () => do:
   value <- Access.read ()
   return value
 const metadata = case @type.reflect (@type.of system) of
@@ -1896,7 +1896,7 @@ return metadata
 check(
   "a row variable makes an effect-polymorphic wrapper",
   `const Console = @effect { .write = Str -> Unit; }
-let logged = fn f => fn x =>
+let logged = fn f => fn x => do:
   _ <- Console.write "call"
   result <- f x
   return result
@@ -1908,7 +1908,7 @@ return { .logged = logged; }
 Deno.test("a signature can reuse an effect row tail", async () => {
   const type = await typeOf(`const Console = @effect { .write = Str -> Unit; }
 sig logged = (Int -> Int ~ { ..e }) -> Int -> Int ~ { Console, ..e }
-let logged = fn f => fn x =>
+let logged = fn f => fn x => do:
   <- Console.write "call"
   result <- f x
   return result
@@ -1944,7 +1944,7 @@ check(
   "a written row is what the printer prints",
   `const Console = @effect { .write = Str -> Unit; }
 sig greet = Str -> Unit ~ { Console }
-let greet = fn name =>
+let greet = fn name => do:
   result <- Console.write name
   return result
 return { .greet = greet; }
@@ -1966,7 +1966,7 @@ rejects(
   "a bare arrow is the empty row, not an unwritten one",
   `const Console = @effect { .write = Str -> Unit; }
 sig greet = Str -> Unit
-let greet = fn name =>
+let greet = fn name => do:
   result <- Console.write name
   return result
 return { .greet = greet; }
@@ -1981,7 +1981,7 @@ check(
   "a curried signature carries its row on the last arrow",
   `const Console = @effect { .write = Str -> Unit; }
 sig join = Str -> Str -> Unit ~ { Console }
-let join = fn a => fn b =>
+let join = fn a => fn b => do:
   result <- Console.write (a <> b)
   return result
 return { .join = join; }
@@ -2180,11 +2180,11 @@ return @satisfies 42 Digit
 check(
   "a handler result is the common clause result",
   `const Ask = @effect { .ask = Int -> Str; }
-let work = fn () =>
+let work = fn () => do:
   result <- Ask.ask 1
   return result
 let text = {
-  .ask = fn (_, ?resume) =>
+  .ask = fn (_, ?resume) => do:
     resumed <- resume "ok"
     return @text.concat resumed "!"
   ;
@@ -2198,11 +2198,11 @@ return @handle (Ask, work, text)
 rejects(
   "resume accepts the operation result type",
   `const Ask = @effect { .ask = Int -> Str; }
-let work = fn () =>
+let work = fn () => do:
   result <- Ask.ask 1
   return result
 let wrong = {
-  .ask = fn (argument, ?resume) =>
+  .ask = fn (argument, ?resume) => do:
     result <- resume argument
     return result
   ;
@@ -2289,7 +2289,7 @@ return fn amount => Money.of amount
 rejects(
   "a sig is not believed for a member call the checker cannot run",
   `const Money = #Money I32 <+ { .of = fn n => #Money n; }
-const priced = fn amount =>
+const priced = fn amount => do:
   sig converted = Money
   let converted = Money.of amount
   return converted
@@ -2628,7 +2628,7 @@ check(
 
 check(
   "a group inside a lambda body sees itself",
-  `let outer = fn start =>
+  `let outer = fn start => do:
   let rec up = fn n => case n == 0 of
     #True => 0
     #False => down (n - 1)
@@ -2766,7 +2766,7 @@ return up 5
 // early for the same reason.
 rejects(
   "a nested block reads an enclosing binding too early",
-  `let a =
+  `let a = do:
   let t = 1
   return t + later
 let later = 2
@@ -2779,7 +2779,7 @@ return a
 
 check(
   "a canonical requirement refines an open parameter",
-  `let name_of = fn value =>
+  `let name_of = fn value => do:
   let named = @satisfies value { .name = Str; }
   return named.name
 return name_of

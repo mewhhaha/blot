@@ -140,13 +140,13 @@ const Ord =
     .le = fn left => fn right => not (is_greater (@int.cmp left right));
     .gt = fn left => fn right => is_greater (@int.cmp left right);
     .ge = fn left => fn right => not (is_less (@int.cmp left right));
-    .min = fn left => fn right =>
+    .min = fn left => fn right => do:
       if is_greater (@int.cmp left right):
         return right
       else:
         return left
     ;
-    .max = fn left => fn right =>
+    .max = fn left => fn right => do:
       if is_less (@int.cmp left right):
         return right
       else:
@@ -166,7 +166,7 @@ const Num =
     .div = fn left => fn right => @int.div left right;
     .rem = fn left => fn right => @int.rem left right;
     .negate = fn value => @int.neg value;
-    .abs = fn value =>
+    .abs = fn value => do:
       if is_less (@int.cmp value 0):
         return @int.neg value
       else:
@@ -221,7 +221,7 @@ const text_eq = fn (left, right) => is_equal (@text.cmp left right)
 
 // --- arrays -----------------------------------------------------------------
 
-const array_get = fn (&values, index) =>
+const array_get = fn (&values, index) => do:
   if index >= 0:
     if index < @array.len (&values):
       return #Some (@array.get (&values) index)
@@ -230,7 +230,7 @@ const array_get = fn (&values, index) =>
   else:
     return #None
 
-const array_set = fn (values, index, value) =>
+const array_set = fn (values, index, value) => do:
   if index >= 0:
     if index < @array.len values:
       return #Some (@array.set values index value)
@@ -246,11 +246,11 @@ const Continuation =
 
 // Structural recursion, which is all a surface loop becomes before inference.
 // Rebindings form the accumulator; `for` does not introduce assignment.
-const fold = fn (values, state, step) =>
+const fold = fn (values, state, step) => do:
   let rec go =
-    fn (index, current) =>
+    fn (index, current) => do:
       result <- case array_get (values, index) of
-        #Some value =>
+        #Some value => do:
           next <- step (current, value)
           continued <- go (@int.add index 1, next)
           return continued
@@ -260,14 +260,14 @@ const fold = fn (values, state, step) =>
   result <- go (0, state)
   return result
 
-const array_append = fn left => fn right =>
+const array_append = fn left => fn right => do:
   return fold (
     right,
     left,
     fn (state, value) => @array.push state value
   )
 
-const array_map = fn (values, transform) =>
+const array_map = fn (values, transform) => do:
   return fold (
     values,
     @array.empty,
@@ -290,7 +290,7 @@ const array_partition = fn (values, belongs_left) => fold (
     #False => (left, @array.push right value)
 )
 
-const array_uncons_at = fn (values, index) =>
+const array_uncons_at = fn (values, index) => do:
   if index >= 0:
     if index < @array.len values:
       return #Some (@array.take values index)
@@ -336,7 +336,7 @@ sig slice_get =
 const slice_get = fn (&region, index) => @region.get (&region) index
 
 sig slice_set =
-  @forall (fn T =>
+  @forall (fn T => do:
     return
       (@region.type T, @type.int, T) -> (#Updated (@region.type T) | #SetOutOfBounds (@region.type T))
   )
@@ -344,7 +344,7 @@ const slice_set =
   fn (!region, index, value) => @region.set (!region) index value
 
 sig slice_replace =
-  @forall (fn T =>
+  @forall (fn T => do:
     return (@region.type T, @type.int, T) ->
         (#Replaced (T, @region.type T) |
          #ReplaceOutOfBounds (T, @region.type T))
@@ -353,7 +353,7 @@ const slice_replace =
   fn (!region, index, !value) => @region.replace (!region) index (!value)
 
 sig slice_swap =
-  @forall (fn T =>
+  @forall (fn T => do:
     return
       (@region.type T, @type.int, @type.int) -> (#Updated (@region.type T) | #SwapOutOfBounds (@region.type T))
   )
@@ -361,7 +361,7 @@ const slice_swap =
   fn (!region, left, right) => @region.swap (!region) left right
 
 sig slice_partition_unchecked =
-  @forall (fn T =>
+  @forall (fn T => do:
     return (
       @region.type T,
       @type.int,
@@ -370,9 +370,9 @@ sig slice_partition_unchecked =
     ) -> (@region.type T, @type.int)
   )
 const slice_partition_unchecked =
-  fn (!region, start, end, belongs_left) =>
+  fn (!region, start, end, belongs_left) => do:
     let rec go =
-      fn (!current_region, scan, boundary) =>
+      fn (!current_region, scan, boundary) => do:
         if is_equal (@int.cmp scan end):
           return (!current_region, boundary)
         else:
@@ -380,7 +380,7 @@ const slice_partition_unchecked =
             #Some value => value
             #None => @panic "partition index escaped its Slice"
           return case belongs_left current of
-            #True =>
+            #True => do:
               let updated = case slice_swap (
                 (!current_region),
                 scan,
@@ -401,7 +401,7 @@ const slice_partition_unchecked =
     return go (!region, start, start)
 
 sig slice_partition_range =
-  @forall (fn T =>
+  @forall (fn T => do:
     return (
       @region.type T,
       @type.int,
@@ -413,7 +413,7 @@ sig slice_partition_range =
     )
   )
 const slice_partition_range =
-  fn (!region, start, end, belongs_left) =>
+  fn (!region, start, end, belongs_left) => do:
     let length = slice_length (&region)
     if is_less (@int.cmp start 0):
       return #PartitionOutOfBounds (!region, start)
@@ -434,14 +434,14 @@ const slice_partition_range =
           return #Partitioned (!partitioned, boundary)
 
 sig slice_partition =
-  @forall (fn T =>
+  @forall (fn T => do:
     return (
       @region.type T,
       (T -> (#True | #False))
     ) -> (@region.type T, @type.int)
   )
 const slice_partition =
-  fn (!region, belongs_left) =>
+  fn (!region, belongs_left) => do:
     let length = slice_length (&region)
     return slice_partition_unchecked (
       !region,
@@ -451,7 +451,7 @@ const slice_partition =
     )
 
 sig slice_split =
-  @forall (fn T =>
+  @forall (fn T => do:
     return (@region.type T, @type.int) -> (#Split (
         @region.type T,
         @region.type T,
@@ -461,7 +461,7 @@ sig slice_split =
 const slice_split = fn (!region, index) => @region.split (!region) index
 
 sig slice_join =
-  @forall (fn T =>
+  @forall (fn T => do:
     return (
       @region.rejoin,
       @region.type T,
@@ -504,7 +504,7 @@ const Slice =
 const Arena =
   {
     .singleton = fn value => [value];
-    .insert = fn (?values, value) =>
+    .insert = fn (?values, value) => do:
       let address = @array.len (&values)
       return (@array.push values value, address)
     ;
@@ -512,11 +512,11 @@ const Arena =
     .get = Array.get;
   }
 
-const each = fn (values, visit) =>
+const each = fn (values, visit) => do:
   result <- fold (
     values,
     (),
-    fn (_, value) =>
+    fn (_, value) => do:
       <- visit value
   )
   return result
@@ -527,30 +527,30 @@ const filter = array_filter
 
 const partition = array_partition
 
-const sum = fn values =>
+const sum = fn values => do:
   return fold (
     values,
     0,
     fn (state, value) => @int.add state value
   )
 
-const any = fn (values, holds) =>
+const any = fn (values, holds) => do:
   return fold (
     values,
     False,
     fn (seen, value) => seen || holds value
   )
 
-const every = fn (values, holds) =>
+const every = fn (values, holds) => do:
   return fold (
     values,
     True,
     fn (seen, value) => seen && holds value
   )
 
-const upto = fn (low, high) =>
+const upto = fn (low, high) => do:
   let rec build =
-    fn (index, state) =>
+    fn (index, state) => do:
       if is_less (@int.cmp index high):
         return build (
           @int.add index 1,
@@ -583,7 +583,7 @@ const Float =
     .cmp = fn left => fn right => @float.cmp left right;
     .of_int = fn value => @float.of_int value;
     .truncate = fn value => @int.of_float value;
-    .abs = fn value =>
+    .abs = fn value => do:
       if is_less (@float.cmp value 0.0):
         return @float.neg value
       else:
@@ -598,7 +598,7 @@ const Float =
     // Newton's method, seeded at the value. Core has no f64 square root, so a
     // `@float.sqrt` primitive would have been open-coded at lowering anyway —
     // and a primitive is for what blot cannot write, which this is not.
-    .sqrt = fn value =>
+    .sqrt = fn value => do:
       if is_equal (@float.cmp value 0.0):
         return 0.0
       else if is_less (@float.cmp value 0.0):
@@ -607,7 +607,7 @@ const Float =
         return fold (
           upto (0, 24),
           value,
-          fn (guess, _) =>
+          fn (guess, _) => do:
             return @float.mul 0.5 (@float.add guess (@float.div value guess))
         )
     ;
@@ -633,7 +633,7 @@ const Float32 =
     .of_int = fn value => @f32.of_int value;
     .widen = fn value => @float.of_f32 value;
     .truncate = fn value => @int.of_float (@float.of_f32 value);
-    .abs = fn value =>
+    .abs = fn value => do:
       if is_less (@f32.cmp value (@f32.of_float 0.0)):
         return @f32.neg value
       else:
@@ -642,7 +642,7 @@ const Float32 =
 
     // Core has no f32 remainder, so it is computed in double precision and
     // narrowed once at the end. Square root is a direct scalar operation.
-    .rem = fn left => fn right =>
+    .rem = fn left => fn right => do:
       return @f32.of_float
         (@float.rem (@float.of_f32 left) (@float.of_f32 right))
     ;
@@ -670,13 +670,13 @@ const Vec4 =
     .div = fn left => fn right => @f32x4.div left right;
     .equal = fn left => fn right => @f32x4.eq left right;
     .less = fn left => fn right => @f32x4.less left right;
-    .select = fn mask => fn when_true => fn when_false =>
+    .select = fn mask => fn when_true => fn when_false => do:
       return @f32x4.select mask when_true when_false
     ;
-    .shuffle = fn (left, right, lane0, lane1, lane2, lane3) =>
+    .shuffle = fn (left, right, lane0, lane1, lane2, lane3) => do:
       return @f32x4.shuffle left right lane0 lane1 lane2 lane3
     ;
-    .swizzle = fn (value, lane0, lane1, lane2, lane3) =>
+    .swizzle = fn (value, lane0, lane1, lane2, lane3) => do:
       return @f32x4.shuffle value value lane0 lane1 lane2 lane3
     ;
     .x = fn value => @f32x4.x value;
@@ -724,7 +724,7 @@ const Int32x4 =
     .min_unsigned = fn left => fn right => @i32x4.min_u left right;
     .max_signed = fn left => fn right => @i32x4.max_s left right;
     .max_unsigned = fn left => fn right => @i32x4.max_u left right;
-    .select = fn mask => fn when_true => fn when_false =>
+    .select = fn mask => fn when_true => fn when_false => do:
       return @i32x4.select mask when_true when_false
     ;
     .x = fn value => @i32x4.lane0 value;
@@ -736,16 +736,16 @@ const Int32x4 =
     .with_y = fn value => fn lane => @i32x4.with_lane1 value lane;
     .with_z = fn value => fn lane => @i32x4.with_lane2 value lane;
     .with_w = fn value => fn lane => @i32x4.with_lane3 value lane;
-    .with_x_wrapping = fn value => fn lane =>
+    .with_x_wrapping = fn value => fn lane => do:
       return @i32x4.with_lane0_wrapping value lane
     ;
-    .with_y_wrapping = fn value => fn lane =>
+    .with_y_wrapping = fn value => fn lane => do:
       return @i32x4.with_lane1_wrapping value lane
     ;
-    .with_z_wrapping = fn value => fn lane =>
+    .with_z_wrapping = fn value => fn lane => do:
       return @i32x4.with_lane2_wrapping value lane
     ;
-    .with_w_wrapping = fn value => fn lane =>
+    .with_w_wrapping = fn value => fn lane => do:
       return @i32x4.with_lane3_wrapping value lane
     ;
     .mask_bits = fn mask => @i32x4.mask_bitmask mask;
@@ -781,7 +781,7 @@ const Int16x8 =
     .min_unsigned = fn left => fn right => @i16x8.min_u left right;
     .max_signed = fn left => fn right => @i16x8.max_s left right;
     .max_unsigned = fn left => fn right => @i16x8.max_u left right;
-    .select = fn mask => fn when_true => fn when_false =>
+    .select = fn mask => fn when_true => fn when_false => do:
       return @i16x8.select mask when_true when_false
     ;
     .mask_bits = fn mask => @i16x8.mask_bitmask mask;
@@ -816,7 +816,7 @@ const Int8x16 =
     .min_unsigned = fn left => fn right => @i8x16.min_u left right;
     .max_signed = fn left => fn right => @i8x16.max_s left right;
     .max_unsigned = fn left => fn right => @i8x16.max_u left right;
-    .select = fn mask => fn when_true => fn when_false =>
+    .select = fn mask => fn when_true => fn when_false => do:
       return @i8x16.select mask when_true when_false
     ;
     .mask_bits = fn mask => @i8x16.mask_bitmask mask;
@@ -875,7 +875,7 @@ const ever =
 
 const iter_range = fn (from, to) => {
   .state = from;
-  .step = fn index =>
+  .step = fn index => do:
     if is_less (@int.cmp index to):
       return Some (index, @int.add index 1)
     else:
@@ -906,7 +906,7 @@ const iter_affine_next =
 
 const iter_affine = fn (values, start, stop, stride) => {
   .state = start;
-  .step = fn index =>
+  .step = fn index => do:
     if is_less (@int.cmp 0 stride):
       if is_less (@int.cmp index stop):
         return iter_affine_next (values, index, stride)
@@ -926,7 +926,7 @@ const iter_affine = fn (values, start, stop, stride) => {
 const iter_slice =
   fn (values, start, stop) => iter_affine (values, start, stop, 1)
 
-const iter_reverse = fn values =>
+const iter_reverse = fn values => do:
   return iter_affine (
     values,
     @int.sub (Array.length values) 1,
@@ -936,14 +936,14 @@ const iter_reverse = fn values =>
 
 // Draining one. `for` is this loop with the accumulator inferred from the names
 // its body rebinds; written out, it is the same fold.
-const iterate = fn (iterator, initial, visit) =>
+const iterate = fn (iterator, initial, visit) => do:
   let rec go =
     fn (state, carried) => case iterator.step state of
       #None => carried
       #Some pair => go (pair.1, visit (carried, pair.0))
   return go (iterator.state, initial)
 
-const collect = fn iterator =>
+const collect = fn iterator => do:
   let values = Array.empty
   for value in iterator:
     values := @array.push values value
@@ -974,12 +974,12 @@ const list_type = fn value => ([(value, @type.int)], @type.int)
 const list_view = fn value => #Nil | #Cons (value, list_type value)
 const list_empty = (Array.empty, -1)
 
-const list_prepend = fn value => fn list =>
+const list_prepend = fn value => fn list => do:
   let (nodes, head) = list
   let address = @array.len (&nodes)
   return (@array.push nodes (value, head), address)
 
-const list_uncons = fn list =>
+const list_uncons = fn list => do:
   let (nodes, head) = list
   if is_less (@int.cmp head 0):
     return #Nil
@@ -989,7 +989,7 @@ const list_uncons = fn list =>
       #None => #Nil
 
 const rec list_fold_nodes =
-  fn (&nodes, address, state, visit) =>
+  fn (&nodes, address, state, visit) => do:
     if is_less (@int.cmp address 0):
       return state
     else:
@@ -1002,20 +1002,20 @@ const rec list_fold_nodes =
         )
         #None => state
 
-const list_fold = fn (list, state, visit) =>
+const list_fold = fn (list, state, visit) => do:
   let (nodes, head) = list
   return list_fold_nodes ((&nodes), head, state, visit)
 
-const list_reverse_onto = fn (source, target) =>
+const list_reverse_onto = fn (source, target) => do:
   return
     list_fold (source, target, fn (result, value) => list_prepend value result)
 
 const list_reverse = fn list => list_reverse_onto (list, list_empty)
 
-const list_append = fn left => fn right =>
+const list_append = fn left => fn right => do:
   return list_reverse_onto (list_reverse left, right)
 
-const list_from_array = fn values =>
+const list_from_array = fn values => do:
   let reversed =
     fold (
       values,
@@ -1024,7 +1024,7 @@ const list_from_array = fn values =>
     )
   return list_reverse reversed
 
-const list_map = fn (list, transform) =>
+const list_map = fn (list, transform) => do:
   let reversed =
     list_fold (
       list,
@@ -1033,7 +1033,7 @@ const list_map = fn (list, transform) =>
     )
   return list_reverse reversed
 
-const list_filter = fn (list, keep) =>
+const list_filter = fn (list, keep) => do:
   let reversed =
     list_fold (
       list,
@@ -1044,7 +1044,7 @@ const list_filter = fn (list, keep) =>
     )
   return list_reverse reversed
 
-const list_to_array = fn list =>
+const list_to_array = fn list => do:
   return list_fold (
       list,
       Array.empty,
@@ -1080,7 +1080,7 @@ const List =
 
 const map_type = fn (key, value) => [(key, value)]
 
-const map_get = fn (equal, entries, key) =>
+const map_get = fn (equal, entries, key) => do:
   let rec find =
     fn index => case array_get (entries, index) of
       #Some entry => case equal entry.0 key of
@@ -1090,12 +1090,12 @@ const map_get = fn (equal, entries, key) =>
       #None => None
   return find 0
 
-const map_put = fn (equal, entries, key, value) =>
+const map_put = fn (equal, entries, key, value) => do:
   let replaced =
     fold (
       entries,
       (Array.empty, None, False),
-      fn (state, entry) =>
+      fn (state, entry) => do:
         if state.2:
           return (@array.push state.0 entry, state.1, state.2)
         else if equal entry.0 key:
@@ -1112,12 +1112,12 @@ const map_put = fn (equal, entries, key, value) =>
     #False => @array.push replaced.0 (key, value)
   return (replaced.1, updated)
 
-const map_remove = fn (equal, entries, key) =>
+const map_remove = fn (equal, entries, key) => do:
   let removed =
     fold (
       entries,
       (Array.empty, None, False),
-      fn (state, entry) =>
+      fn (state, entry) => do:
         if state.2:
           return (@array.push state.0 entry, state.1, state.2)
         else if equal entry.0 key:
@@ -1127,9 +1127,9 @@ const map_remove = fn (equal, entries, key) =>
     )
   return (removed.1, removed.0)
 
-const map_with = fn equal =>
+const map_with = fn equal => do:
   let put = fn (entries, key, value) => map_put (equal, entries, key, value)
-  let append = fn left => fn right =>
+  let append = fn left => fn right => do:
     return fold (
       right,
       left,
@@ -1148,7 +1148,7 @@ const map_with = fn equal =>
     .remove = fn (entries, key) => map_remove (equal, entries, key);
     .append = append;
     .fold = fold;
-    .map = fn (entries, transform) =>
+    .map = fn (entries, transform) => do:
       return array_map (
         entries,
         fn entry => (entry.0, transform entry.1)
@@ -1165,19 +1165,19 @@ const Map = { .of = map_type; .with = map_with; }
 
 const set_type = fn value => [value]
 
-const set_has = fn (equal, values, needle) =>
+const set_has = fn (equal, values, needle) => do:
   return fold (
     values,
     False,
     fn (found, value) => found || equal value needle
   )
 
-const set_insert = fn (equal, values, inserted) =>
+const set_insert = fn (equal, values, inserted) => do:
   let replaced =
     fold (
       values,
       (Array.empty, None, False),
-      fn (state, value) =>
+      fn (state, value) => do:
         if state.2:
           return (@array.push state.0 value, state.1, state.2)
         else if equal value inserted:
@@ -1190,12 +1190,12 @@ const set_insert = fn (equal, values, inserted) =>
     #False => @array.push replaced.0 inserted
   return (replaced.1, updated)
 
-const set_remove = fn (equal, values, needle) =>
+const set_remove = fn (equal, values, needle) => do:
   let removed =
     fold (
       values,
       (Array.empty, None, False),
-      fn (state, value) =>
+      fn (state, value) => do:
         if state.2:
           return (@array.push state.0 value, state.1, state.2)
         else if equal value needle:
@@ -1205,19 +1205,19 @@ const set_remove = fn (equal, values, needle) =>
     )
   return (removed.1, removed.0)
 
-const set_with = fn equal =>
+const set_with = fn equal => do:
   let insert = fn (values, value) => set_insert (equal, values, value)
-  let union = fn left => fn right =>
+  let union = fn left => fn right => do:
     return fold (
       right,
       left,
       fn (values, value) => (insert (values, value)).1
     )
-  let map_with_equal = fn (values, mapped_equal, transform) =>
+  let map_with_equal = fn (values, mapped_equal, transform) => do:
     return fold (
       values,
       Array.empty,
-      fn (mapped, value) =>
+      fn (mapped, value) => do:
         return (set_insert (mapped_equal, mapped, transform value)).1
     )
   return {
@@ -1229,13 +1229,13 @@ const set_with = fn equal =>
     .remove = fn (values, value) => set_remove (equal, values, value);
     .append = union;
     .union = union;
-    .intersect = fn left => fn right =>
+    .intersect = fn left => fn right => do:
       return array_filter (
         left,
         fn value => set_has (equal, right, value)
       )
     ;
-    .diff = fn left => fn right =>
+    .diff = fn left => fn right => do:
       return array_filter (
         left,
         fn value => not (set_has (equal, right, value))
@@ -1260,7 +1260,7 @@ const Dict = map_with (fn left => fn right => text_eq (left, right))
 // Written with `for` rather than a fold inside a fold: the inner pass carries
 // two things at once, and naming them beats threading a record through a
 // closure that has to rebuild it on every element.
-const sort_by = fn (values, before) =>
+const sort_by = fn (values, before) => do:
   let sorted = Array.empty
   for value in Iter.items values:
     let out = Array.empty
@@ -1295,11 +1295,11 @@ const unseal = fn value => @type.open value
 // is curried and left-associative, so a namespace is written as a sequence of
 // attachments rather than as nested calls — which is as close to a sequence of
 // statements as a language without assignment gets.
-const attach = fn target => fn members =>
+const attach = fn target => fn members => do:
   return fold (
     @shape.names members,
     target,
-    fn (extended, name) =>
+    fn (extended, name) => do:
       return @type.attach extended name (@shape.get members name)
   )
 
@@ -1307,7 +1307,7 @@ const attach = fn target => fn members =>
 // domain, so wider bounds are computed rather than spelled. Compile time is the
 // same language, so this costs nothing at runtime.
 const rec pow2 =
-  fn n =>
+  fn n => do:
     if is_less (@int.cmp n 1):
       return 1
     else:
@@ -1337,7 +1337,7 @@ const unlikely = fn condition => @branch.unlikely condition
 // uses `Int` and has to prove a narrower result when a signature asks for one.
 const integer_width = fn bits => case is_greater (@int.cmp bits 0) of
   #True => bits
-  #False =>
+  #False => do:
     return
       @fail (Text.append "integer bit width must be positive, found " (Text.of_int bits))
 
@@ -1504,7 +1504,7 @@ const rec refines =
       // Width and depth: a wider record refines a narrower one.
       #Shape narrow_fields => every (
         @shape.names wide_fields,
-        fn name =>
+        fn name => do:
           if @shape.has narrow_fields name:
             return refines (
               @shape.get narrow_fields name,
@@ -1585,27 +1585,27 @@ const Has = fn shape => fn t => refines (t, shape)
 // `Exclude` read as they do in TypeScript, except that neither can quietly
 // produce a bottom type, because blot does not have one — an empty result is
 // reported where it happens.
-const Extract = fn (whole, bound) =>
+const Extract = fn (whole, bound) => do:
   return union_of (filter (
     members whole,
     fn option => refines (option, bound)
   ))
 
-const Exclude = fn (whole, bound) =>
+const Exclude = fn (whole, bound) => do:
   return union_of (filter (
     members whole,
     fn option => not (refines (option, bound))
   ))
 
 // The field-level pair. `@shape.*` already does the work; these only name it.
-const Pick = fn (shape, names) =>
+const Pick = fn (shape, names) => do:
   return fold (
     names,
     @shape.empty,
     fn (kept, name) => @shape.set kept name (@shape.get shape name)
   )
 
-const Omit = fn (shape, names) =>
+const Omit = fn (shape, names) => do:
   return fold (
     names,
     shape,
@@ -1655,14 +1655,14 @@ const Reflect =
 // placement is an operation on the shape rather than a second entry point
 // into the struct.
 
-const reorder = fn (shape, order) =>
+const reorder = fn (shape, order) => do:
   return fold (
     order,
     @shape.empty,
     fn (moved, name) => @shape.set moved name (@shape.get shape name)
   )
 
-const struct = fn shape =>
+const struct = fn shape => do:
   let order = @shape.names shape
   // Where each field lives.
   let next = 0
@@ -1687,7 +1687,7 @@ const struct = fn shape =>
   // One accessor per field: a projection at a known slot, nothing more. The
   // names are computed, so this is `@type.attach` rather than `<+`.
   for name in Iter.items order:
-    product := @type.attach product name (fn value =>
+    product := @type.attach product name (fn value => do:
       return @shape.get value (key name)
     )
 
@@ -1696,7 +1696,7 @@ const struct = fn shape =>
     // in whatever order reads well; the order decides where they land. A field
     // the shape does not declare is refused here rather than stored, and a
     // missing one fails on the read.
-    .new = fn record =>
+    .new = fn record => do:
       let _ = @satisfies (@shape.names record) order
       let product = @shape.empty
       for name in Iter.items order:
@@ -1706,7 +1706,7 @@ const struct = fn shape =>
     ;
 
     // ...and back, so storage can be read by name without knowing the order.
-    .named = fn value =>
+    .named = fn value => do:
       let record = @shape.empty
       for name in Iter.items order:
         record := @shape.set record name (@shape.get value (key name))
@@ -1730,7 +1730,7 @@ const struct = fn shape =>
 // Offsets in a given order, each field aligned to its own width. `.padding` is
 // reported rather than hidden: a placement that wastes space should say so,
 // because choosing a better order is the reason to look.
-const aligned = fn (shape, order, width_of) =>
+const aligned = fn (shape, order, width_of) => do:
   let offset = 0
   let padding = 0
   let fields = Array.empty
@@ -1751,7 +1751,7 @@ const aligned = fn (shape, order, width_of) =>
 // unshifted field mask; a consumer combines it with `bit_offset` when loading
 // or storing a containing word. Tail padding is the unused part of the final
 // byte, not space between fields.
-const packed = fn shape =>
+const packed = fn shape => do:
   let order = @shape.names shape
   let bits = layout (shape, bit_width)
   let fields =
@@ -1774,7 +1774,7 @@ const packed = fn shape =>
     .bit_offset = fn name => fold (
       fields,
       None,
-      fn (found, field) =>
+      fn (found, field) => do:
         if text_eq (field.name, name):
           return Some field.bit_offset
         else:
@@ -1789,7 +1789,7 @@ const packed = fn shape =>
 // entry product is a real Type value built by struct; its storage is still the
 // two-slot tuple accepted by the persistent Map representation.
 const ordered_text_map_entry_type =
-  fn value =>
+  fn value => do:
     let entry = struct { .key = Str; .value = value; }
     return @type.attach entry "ordered_text_map_entry" ()
 
@@ -1797,11 +1797,11 @@ const ordered_text_map_type =
   fn value => @region.type (ordered_text_map_entry_type value)
 
 sig ordered_text_map_is_strict =
-  @forall (fn V =>
+  @forall (fn V => do:
     return ([ordered_text_map_entry_type V], Int, Int) -> Bool
   )
 const rec ordered_text_map_is_strict =
-  fn (&entries, index, length) =>
+  fn (&entries, index, length) => do:
     if index >= length:
       return True
     else:
@@ -1821,11 +1821,11 @@ const rec ordered_text_map_is_strict =
         return False
 
 sig ordered_text_map_claim =
-  @forall (fn V =>
+  @forall (fn V => do:
     return [ordered_text_map_entry_type V] ->
       @region.type (ordered_text_map_entry_type V)
   )
-const ordered_text_map_claim = fn entries =>
+const ordered_text_map_claim = fn entries => do:
   let length = @array.len (&entries)
   if ordered_text_map_is_strict ((&entries), 1, length):
     return @region.claim entries
@@ -1834,12 +1834,12 @@ const ordered_text_map_claim = fn entries =>
 
 sig ordered_text_map_validate =
   @forall (fn V => [ordered_text_map_entry_type V] -> Bool)
-const ordered_text_map_validate = fn &entries =>
+const ordered_text_map_validate = fn &entries => do:
   let length = @array.len (&entries)
   return ordered_text_map_is_strict ((&entries), 1, length)
 
 sig ordered_text_map_lower_bound_from =
-  @forall (fn V =>
+  @forall (fn V => do:
     return (
       @region.type (ordered_text_map_entry_type V),
       Str,
@@ -1848,7 +1848,7 @@ sig ordered_text_map_lower_bound_from =
     ) -> Int
   )
 const rec ordered_text_map_lower_bound_from =
-  fn (&entries, key, low, high) =>
+  fn (&entries, key, low, high) => do:
     if low >= high:
       return low
     else:
@@ -1872,13 +1872,13 @@ const rec ordered_text_map_lower_bound_from =
         )
 
 sig ordered_text_map_lower_bound =
-  @forall (fn V =>
+  @forall (fn V => do:
     return (
       @region.type (ordered_text_map_entry_type V),
       Str
     ) -> Int
   )
-const ordered_text_map_lower_bound = fn (&entries, key) =>
+const ordered_text_map_lower_bound = fn (&entries, key) => do:
   let length = @region.length (&entries)
   return ordered_text_map_lower_bound_from (
     (&entries),
@@ -1888,16 +1888,16 @@ const ordered_text_map_lower_bound = fn (&entries, key) =>
   )
 
 sig ordered_text_map_get =
-  @forall (fn V =>
+  @forall (fn V => do:
     return (
       @region.type (ordered_text_map_entry_type V),
       Str
     ) -> (#Some V | #None)
   )
-const ordered_text_map_get = fn (&entries, key) =>
+const ordered_text_map_get = fn (&entries, key) => do:
   let index = ordered_text_map_lower_bound ((&entries), key)
   return case @region.get (&entries) index of
-    #Some entry =>
+    #Some entry => do:
       if text_eq (entry.0, key):
         return #Some entry.1
       else:
@@ -1905,7 +1905,7 @@ const ordered_text_map_get = fn (&entries, key) =>
     #None => #None
 
 sig ordered_text_map_replace =
-  @forall (fn V =>
+  @forall (fn V => do:
     return (
       @region.type (ordered_text_map_entry_type V),
       Str,
@@ -1915,10 +1915,10 @@ sig ordered_text_map_replace =
       #MapMissing (V, @region.type (ordered_text_map_entry_type V))
     )
   )
-const ordered_text_map_replace = fn (!entries, key, replacement) =>
+const ordered_text_map_replace = fn (!entries, key, replacement) => do:
   let index = ordered_text_map_lower_bound ((&entries), key)
   return case @region.get (&entries) index of
-    #Some entry =>
+    #Some entry => do:
       if text_eq (entry.0, key):
         return case @region.set (!entries) index (entry.0, replacement) of
           #Updated !updated => #MapReplaced (entry.1, updated)
@@ -1928,7 +1928,7 @@ const ordered_text_map_replace = fn (!entries, key, replacement) =>
     #None => #MapMissing (replacement, entries)
 
 sig ordered_text_map_split_before =
-  @forall (fn V =>
+  @forall (fn V => do:
     return (
       @region.type (ordered_text_map_entry_type V),
       Str
@@ -1940,12 +1940,12 @@ sig ordered_text_map_split_before =
         @region.type (ordered_text_map_entry_type V)
       ))
   )
-const ordered_text_map_split_before = fn (!entries, key) =>
+const ordered_text_map_split_before = fn (!entries, key) => do:
   let index = ordered_text_map_lower_bound ((&entries), key)
   return @region.split (!entries) index
 
 sig ordered_text_map_freeze =
-  @forall (fn V =>
+  @forall (fn V => do:
     return @region.type (ordered_text_map_entry_type V) ->
       [ordered_text_map_entry_type V]
   )

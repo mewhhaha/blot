@@ -3,14 +3,14 @@ open import "blot:prelude"
 const Source = @effect.host { .value = Int -> Int; }
 
 sig keep_swap = (Slice.of Int, Int, Int) -> Slice.of Int
-let keep_swap = fn (!region, left, right) =>
+let keep_swap = fn (!region, left, right) => do:
   return case Slice.swap ((!region), left, right) of
     #Updated !updated => updated
     #SwapOutOfBounds !original => original
 
 sig sort_work = (Slice.of Int, [(Int, Int)], Int) -> Slice.of Int
 let rec sort_work =
-  fn (!region, work, cursor) =>
+  fn (!region, work, cursor) => do:
     let count = Array.length work
     if count <= cursor:
       return region

@@ -1,6 +1,6 @@
 open import "blot:prelude"
 
-let tagged = fn descriptor =>
+let tagged = fn descriptor => do:
   @[descriptor]
   let value = 1
   return value

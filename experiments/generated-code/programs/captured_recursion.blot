@@ -1,9 +1,9 @@
 open import "blot:prelude"
 
 sig count_to = Int -> Int
-const count_to = fn limit =>
+const count_to = fn limit => do:
   sig go = (Int, Int) -> Int
-  let rec go = fn (index, total) =>
+  let rec go = fn (index, total) => do:
     if index < limit:
       return go (index + 1, total + index)
 

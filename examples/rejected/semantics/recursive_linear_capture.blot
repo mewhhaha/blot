@@ -7,7 +7,7 @@ open import "blot:prelude"
 
 let consume = fn !value => @int.add value 1
 let !token = 41
-let rec go = fn n =>
+let rec go = fn n => do:
   if n < 1:
     return consume (!token)
   else:

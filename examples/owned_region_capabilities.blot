@@ -8,36 +8,36 @@ let !new_token = 2
 let owned_values = [fn () => consume (!old_token), fn () => 1]
 let owned = Slice.claim owned_values
 let replaced = case Slice.split ((!owned), 1) of
-  #Split (!left, !right, !rejoin) =>
+  #Split (!left, !right, !rejoin) => do:
     return case Slice.replace (
       (!left),
       0,
       fn () => consume (!new_token)
     ) of
-      #Replaced (!old, !updated) =>
+      #Replaced (!old, !updated) => do:
         let joined = Slice.join ((!rejoin), (!updated), (!right))
         let [current, tail] = Slice.freeze (!joined)
         return old () + current () + tail ()
-      #ReplaceOutOfBounds (!replacement, !original) =>
+      #ReplaceOutOfBounds (!replacement, !original) => do:
         let joined = Slice.join ((!rejoin), (!original), (!right))
         let [current, tail] = Slice.freeze (!joined)
         return replacement () + current () + tail ()
-  #SplitOutOfBounds !original =>
+  #SplitOutOfBounds !original => do:
     let [first, second] = Slice.freeze (!original)
     return first () + second () + consume (!new_token)
 
 let whole = Slice.claim [1, 2, 3]
 let rotated = case Slice.split ((!whole), 1) of
-  #Split (!a, !bc, !outer) =>
+  #Split (!a, !bc, !outer) => do:
     return case Slice.split ((!bc), 1) of
-      #Split (!b, !c, !inner) =>
+      #Split (!b, !c, !inner) => do:
         let (outer_left, inner_left) =
           Slice.reassociate_left ((!outer), (!inner))
         let (outer_right, inner_right) =
           Slice.reassociate_right ((!outer_left), (!inner_left))
         let bc = Slice.join ((!inner_right), (!b), (!c))
         return Slice.join ((!outer_right), (!a), (!bc))
-      #SplitOutOfBounds !bc_original =>
+      #SplitOutOfBounds !bc_original => do:
         return Slice.join ((!outer), (!a), (!bc_original))
   #SplitOutOfBounds !original => original
 

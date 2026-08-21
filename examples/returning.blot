@@ -3,7 +3,7 @@
 
 open import "blot:prelude"
 
-let describe = fn value =>
+let describe = fn value => do:
   if value < 0:
     return "negative"
 
@@ -12,20 +12,20 @@ let describe = fn value =>
 
   return "positive"
 
-let unwrap = fn option =>
+let unwrap = fn option => do:
   if let #Some value = option else:
     return -1
 
   return value
 
-let find = fn wanted =>
+let find = fn wanted => do:
   for value in Iter.range (0, 5):
     if value == wanted:
       return value
 
   return -1
 
-let count_to = fn limit =>
+let count_to = fn limit => do:
   let count = 0
   for ever:
     count := count + 1
@@ -34,7 +34,7 @@ let count_to = fn limit =>
 
   return 0
 
-let count_or_stop = fn limit =>
+let count_or_stop = fn limit => do:
   let count = 0
   for ever:
     count := count + 1
@@ -48,15 +48,15 @@ let count_or_stop = fn limit =>
 
 // A Boolean value choice uses `case`; `return` keeps its one surrounding-scope
 // meaning instead of becoming a branch-local yield.
-let nested_if = fn () =>
+let nested_if = fn () => do:
   let inner = case 1 < 2 of
     #True => 41
     #False => 0
   return inner + 1
 
-let nested_case = fn () =>
+let nested_case = fn () => do:
   let inner = case Some 41 of
-    #Some value =>
+    #Some value => do:
       return value
 
     #None => 0

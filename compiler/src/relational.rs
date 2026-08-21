@@ -45,8 +45,7 @@ pub struct RelationshipSummary {
 #[derive(Default)]
 pub struct Summaries {
     closures: RefCell<HashMap<(String, ExpressionId, usize), Option<Summary>>>,
-    relationships:
-        RefCell<HashMap<(String, ExpressionId, usize), Option<RelationshipSummary>>>,
+    relationships: RefCell<HashMap<(String, ExpressionId, usize), Option<RelationshipSummary>>>,
 }
 
 impl Summaries {
@@ -97,16 +96,12 @@ impl Summaries {
             Some(RelationshipTransform::Parameter(0)),
             &mut bindings,
         );
-        let result = relationship_result(
-            self,
-            &loaded.module,
-            *body,
-            bindings,
-            1,
+        let mut traversal = RelationshipTraversal {
             environment,
             context,
             active,
-        );
+        };
+        let result = relationship_result(self, &loaded.module, *body, bindings, 1, &mut traversal);
         active.remove(&key);
         self.relationships.borrow_mut().insert(key, result.clone());
         result
@@ -175,15 +170,19 @@ impl Summaries {
     }
 }
 
+struct RelationshipTraversal<'a> {
+    environment: &'a Environment,
+    context: &'a Context,
+    active: &'a mut HashSet<(String, ExpressionId, usize)>,
+}
+
 fn relationship_result(
     summaries: &Summaries,
     module: &Module,
     expression: ExpressionId,
     mut bindings: HashMap<String, RelationshipTransform>,
     arity: usize,
-    environment: &Environment,
-    context: &Context,
-    active: &mut HashSet<(String, ExpressionId, usize)>,
+    traversal: &mut RelationshipTraversal,
 ) -> Option<RelationshipSummary> {
     if let Expression::Lambda {
         parameter, body, ..
@@ -195,25 +194,16 @@ fn relationship_result(
             Some(RelationshipTransform::Parameter(arity)),
             &mut bindings,
         );
-        return relationship_result(
-            summaries,
-            module,
-            *body,
-            bindings,
-            arity + 1,
-            environment,
-            context,
-            active,
-        );
+        return relationship_result(summaries, module, *body, bindings, arity + 1, traversal);
     }
     let result = transform_expression(
         summaries,
         module,
         expression,
         &bindings,
-        environment,
-        context,
-        active,
+        traversal.environment,
+        traversal.context,
+        traversal.active,
     )?;
     Some(RelationshipSummary { arity, result })
 }
@@ -256,7 +246,10 @@ fn transform_expression(
                     )
                 })
                 .collect::<Vec<_>>();
-            elements.iter().any(Option::is_some).then_some(RelationshipTransform::Tuple(elements))
+            elements
+                .iter()
+                .any(Option::is_some)
+                .then_some(RelationshipTransform::Tuple(elements))
         }
         Expression::Shape { members, .. } => {
             let mut fields = BTreeMap::new();
@@ -277,7 +270,10 @@ fn transform_expression(
                     ),
                 );
             }
-            fields.values().any(Option::is_some).then_some(RelationshipTransform::Record(fields))
+            fields
+                .values()
+                .any(Option::is_some)
+                .then_some(RelationshipTransform::Record(fields))
         }
         Expression::Block {
             declarations,
@@ -329,9 +325,7 @@ fn transform_expression(
             )
         }
         Expression::If {
-            branches,
-            fallback,
-            ..
+            branches, fallback, ..
         } => {
             let mut results = branches
                 .iter()
@@ -407,8 +401,7 @@ fn transform_expression(
                     Some(payload),
                 )])));
             }
-            if let Expression::Intrinsic { name, .. } =
-                &module.arena.expressions[callee.0 as usize]
+            if let Expression::Intrinsic { name, .. } = &module.arena.expressions[callee.0 as usize]
                 && matches!(
                     name.as_str(),
                     "@linear.borrow" | "@linear.own" | "@linear.maybe"
@@ -479,10 +472,12 @@ fn bind_transform_pattern(
                 bind_transform_pattern(
                     module,
                     *pattern,
-                    relation.clone().map(|target| RelationshipTransform::Project {
-                        target: Box::new(target),
-                        field: index.to_string(),
-                    }),
+                    relation
+                        .clone()
+                        .map(|target| RelationshipTransform::Project {
+                            target: Box::new(target),
+                            field: index.to_string(),
+                        }),
                     bindings,
                 );
             }
@@ -492,10 +487,12 @@ fn bind_transform_pattern(
                 bind_transform_pattern(
                     module,
                     field.pattern,
-                    relation.clone().map(|target| RelationshipTransform::Project {
-                        target: Box::new(target),
-                        field: field.name.clone(),
-                    }),
+                    relation
+                        .clone()
+                        .map(|target| RelationshipTransform::Project {
+                            target: Box::new(target),
+                            field: field.name.clone(),
+                        }),
                     bindings,
                 );
             }
@@ -539,7 +536,10 @@ fn substitute_transform(
                 .into_iter()
                 .map(|element| element.and_then(|value| substitute_transform(value, arguments)))
                 .collect::<Vec<_>>();
-            elements.iter().any(Option::is_some).then_some(RelationshipTransform::Tuple(elements))
+            elements
+                .iter()
+                .any(Option::is_some)
+                .then_some(RelationshipTransform::Tuple(elements))
         }
         RelationshipTransform::Record(fields) => {
             let fields = fields
@@ -551,7 +551,10 @@ fn substitute_transform(
                     )
                 })
                 .collect::<BTreeMap<_, _>>();
-            fields.values().any(Option::is_some).then_some(RelationshipTransform::Record(fields))
+            fields
+                .values()
+                .any(Option::is_some)
+                .then_some(RelationshipTransform::Record(fields))
         }
         RelationshipTransform::Choice(cases) => {
             let cases = cases
@@ -563,7 +566,10 @@ fn substitute_transform(
                     )
                 })
                 .collect::<BTreeMap<_, _>>();
-            cases.values().any(Option::is_some).then_some(RelationshipTransform::Choice(cases))
+            cases
+                .values()
+                .any(Option::is_some)
+                .then_some(RelationshipTransform::Choice(cases))
         }
     }
 }

@@ -21,7 +21,7 @@ let program = [1, 0, 4, 5, 0, 6, 7]
 // A read past the end is a malformed tree rather than a trap. The guard is
 // what proves the index, exactly as in `indexed.blot`.
 sig token = [Int] -> Int -> Int
-let token = fn source => fn at =>
+let token = fn source => fn at => do:
   if at >= 0 && at < @array.len source:
     return @array.get source at
 
@@ -31,7 +31,7 @@ let token = fn source => fn at =>
 // caller knows where its next child begins.
 sig walk = [Int] -> Int -> (Int, Int)
 let rec walk =
-  fn source => fn at =>
+  fn source => fn at => do:
     let head = token source at
     if head < 2:
       return combine source (at + 1) head
@@ -40,7 +40,7 @@ let rec walk =
 
 sig combine = [Int] -> Int -> Int -> (Int, Int)
 let rec combine =
-  fn source => fn at => fn operator =>
+  fn source => fn at => fn operator => do:
     let (left, after_left) = walk source at
     let (right, after_right) = walk source after_left
     if operator == 0:

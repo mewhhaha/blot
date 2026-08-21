@@ -55,7 +55,7 @@ const Record =
 // what the derivation actually needs.
 const derive_names = fn names => map (names, fn name => @text.concat "." name)
 
-const describe = fn names =>
+const describe = fn names => do:
   return fold (
     names,
     "",

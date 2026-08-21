@@ -21,18 +21,18 @@ in a benchmark months later.
 | --------------------------- | ------: | -------------------------------------------------- |
 | `lexerStates`               |     122 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |      22 | worst-case island candidates allocated per token   |
-| `islandCount`               |      67 | one island for every grammar rule                  |
-| `islandStates`              |     395 |                                                    |
-| `islandTransitions`         |     405 |                                                    |
+| `islandCount`               |      66 | one island for every grammar rule                  |
+| `islandStates`              |     389 |                                                    |
+| `islandTransitions`         |     398 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 587,760 | immutable device table                             |
-| `packedBytes`               | 459,954 | version-3 runtime section                          |
+| `denseTransitionBytes`      | 574,164 | immutable device table                             |
+| `packedBytes`               | 449,799 | version-3 runtime section                          |
 | `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |       6 | islands admitted to parallel long-region execution |
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
-and edge arrays directly. Declaring all 67 rules as islands is what preserves
+and edge arrays directly. Declaring all 66 rules as islands is what preserves
 the full CST shape needed by source lowering.
 
 Removing element syntax while adding `compdo:` and effect-row tails moves the
@@ -68,8 +68,12 @@ island states, twelve island transitions, 31,260 dense-transition bytes, and
 22,616 packed bytes relative to the pre-`do:` profile. Candidate multiplicity,
 contraction rounds, scratch factors, the root loop, and parallel long-region
 admission are unchanged. `do_block` is retained as its own island and lowers to
-the existing block AST. Removing the old parenthesized-suite inference happens
-in layout elaboration before parsing and therefore changes no parser counter.
+the existing block AST. Removing the old parenthesized-suite inference happened
+in layout elaboration before parsing. Retiring its stale `block` metadata island
+now removes one island, six island states, seven island transitions, 13,596
+dense-transition bytes, and 10,155 packed bytes without changing the lexer,
+candidate multiplicity, contraction rounds, scratch bounds, root loop, or
+parallel long-region admission.
 
 Moving `rec` from a prefix expression to the `let` and `const` binding headers
 adds two island transitions and 147 packed bytes. Lexer states, island count,

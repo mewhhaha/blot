@@ -407,13 +407,6 @@
         }
       },
       {
-        "rule": "block",
-        "boundary": {
-          "kind": "terminated",
-          "terminal": "LAYOUT_DEDENT"
-        }
-      },
-      {
         "rule": "statement_suite",
         "boundary": {
           "kind": "terminated",
@@ -481,7 +474,6 @@
       "scopes": [
         "program",
         "lambda",
-        "block",
         "do_block",
         "case_arm"
       ],

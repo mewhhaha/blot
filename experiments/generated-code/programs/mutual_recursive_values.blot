@@ -1,11 +1,11 @@
 open import "../../../src/prelude/prelude.blot"
 
-let rec build_even = fn count =>
+let rec build_even = fn count => do:
   if count == 0:
     return #Done
   else:
     return #Even (count, build_odd (count - 1))
-let rec build_odd = fn count =>
+let rec build_odd = fn count => do:
   if count == 0:
     return #Done
   else:

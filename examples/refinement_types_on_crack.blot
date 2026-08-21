@@ -20,7 +20,7 @@ let array_count = count [1, 2, 3]
 // Width subtyping admits the extra `.debug` field; there is no instance
 // registry or nominal trait declaration.
 const Renderable = { .render = Unit -> Str; }
-let render = fn value =>
+let render = fn value => do:
   let renderable = @satisfies value Renderable
   return renderable.render ()
 let rendered =
@@ -33,23 +33,23 @@ let rendered =
 // by an ordinary handler value.
 const Tick = @effect { .next = Unit -> Int; }
 
-let apply = fn callback => fn value =>
+let apply = fn callback => fn value => do:
   result <- callback value
   return result
-let add_tick = fn value =>
+let add_tick = fn value => do:
   tick <- Tick.next ()
   return value + tick
 
 let ticking =
   {
-    .next = fn ((), ?resume) =>
+    .next = fn ((), ?resume) => do:
       result <- resume 2
       return result
     ;
     .return = fn value => value;
   }
 
-let apply_tick = fn () =>
+let apply_tick = fn () => do:
   result <- apply add_tick 40
   return result
 

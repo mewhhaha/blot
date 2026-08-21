@@ -5,43 +5,42 @@
 [`LANGUAGE.md`](../LANGUAGE.md) remains the normative description of accepted
 source. This document owns the focused semantic obligations that connect source
 evaluation to checking and staging when identity, demand, effects, or module
-instantiation matter. [`PAPER.md`](PAPER.md) supplies the broader research model;
-[`COMPILER.md`](COMPILER.md) supplies the pass graph; and
+instantiation matter. [`PAPER.md`](PAPER.md) supplies the broader research
+model; [`COMPILER.md`](COMPILER.md) supplies the pass graph; and
 [`CORRECTNESS.md`](CORRECTNESS.md) supplies the translation theorems.
 
-The purpose of this document is to prevent several different notions of
-"same value" or "same module" from becoming interchangeable compiler cache
-keys.
+The purpose of this document is to prevent several different notions of "same
+value" or "same module" from becoming interchangeable compiler cache keys.
 
 ## 1. Identity classes
 
 The compiler uses identities with different allocation and lifetime rules:
 
-| Identity | Allocated by | Equality means | May cross revision/cache? |
-| --- | --- | --- | --- |
-| expression | frontend AST | same expression in one source revision | only through a serialized stable expression id |
-| binding | elaboration/checking | same lexical binding in one source revision | only through a closed certificate |
-| immutable value | refinement analysis | same runtime value origin for `Phi` | no, unless reconstructed by a certificate |
-| effect atom | compile-time evaluation | same generative effect instance | only when the owning module-instance identity is preserved |
-| seal | compile-time type construction | same public name and invariant carrier | yes, when both inputs are reconstructed |
-| module definition | resolver | same resolved source/module artifact | yes under the ordinary revision rules |
-| import occurrence | frontend/resolved source graph | same written import site in one importer revision | yes only with that importer revision |
-| module instance | module evaluation | same import occurrence under the same enclosing instance stack | yes only under that complete instance identity |
-| Store/root | ownership/lowering | same physical authority root | only through the corresponding ownership certificate |
-| revision | incremental compiler | same complete observed compiler input | yes; this identity exists for cache reuse |
+| Identity          | Allocated by                   | Equality means                                                 | May cross revision/cache?                                  |
+| ----------------- | ------------------------------ | -------------------------------------------------------------- | ---------------------------------------------------------- |
+| expression        | frontend AST                   | same expression in one source revision                         | only through a serialized stable expression id             |
+| binding           | elaboration/checking           | same lexical binding in one source revision                    | only through a closed certificate                          |
+| immutable value   | refinement analysis            | same runtime value origin for `Phi`                            | no, unless reconstructed by a certificate                  |
+| effect atom       | compile-time evaluation        | same generative effect instance                                | only when the owning module-instance identity is preserved |
+| seal              | compile-time type construction | same public name and invariant carrier                         | yes, when both inputs are reconstructed                    |
+| module definition | resolver                       | same resolved source/module artifact                           | yes under the ordinary revision rules                      |
+| import occurrence | frontend/resolved source graph | same written import site in one importer revision              | yes only with that importer revision                       |
+| module instance   | module evaluation              | same import occurrence under the same enclosing instance stack | yes only under that complete instance identity             |
+| Store/root        | ownership/lowering             | same physical authority root                                   | only through the corresponding ownership certificate       |
+| revision          | incremental compiler           | same complete observed compiler input                          | yes; this identity exists for cache reuse                  |
 
 No pass may replace one identity class with another because their printable data
-happen to match. In particular, a module-definition path is not a module-instance
-identity and a source name is not an effect atom.
+happen to match. In particular, a module-definition path is not a
+module-instance identity and a source name is not an effect atom.
 
 ## 2. Demand and pure declarations
 
-Liveness is a lexical graph judgment, not an observation guessed by an optimizer.
-For a block with declarations `d_1 ... d_n` and result `r`, construct the
-resolved dependency graph after surface elaboration. Start with the free binding
-identities of `r`; walk declarations backwards, retaining a declaration when it
-is semantically forced or when it defines an identity already needed, then add
-that declaration's resolved reads to the needed set.
+Liveness is a lexical graph judgment, not an observation guessed by an
+optimizer. For a block with declarations `d_1 ... d_n` and result `r`, construct
+the resolved dependency graph after surface elaboration. Start with the free
+binding identities of `r`; walk declarations backwards, retaining a declaration
+when it is semantically forced or when it defines an identity already needed,
+then add that declaration's resolved reads to the needed set.
 
 Write the resulting finite set as:
 
@@ -49,10 +48,10 @@ Write the resulting finite set as:
 live(block, result) = L
 ```
 
-Pure declarations outside `L` are absent from source evaluation. Remaining
-pure declarations evaluate exactly once in source order. Operational
-declarations such as signatures, effect declarations, explicit shadowing, and
-`open` remain forced according to their existing source rules.
+Pure declarations outside `L` are absent from source evaluation. Remaining pure
+declarations evaluate exactly once in source order. Operational declarations
+such as signatures, effect declarations, explicit shadowing, and `open` remain
+forced according to their existing source rules.
 
 The proof obligation is:
 
@@ -81,9 +80,9 @@ return an uninvoked source module function.
 
 One written occurrence owns one semantic instance in the staged source graph.
 Its top-level declarations evaluate once in source order. Aliasing, projecting,
-or returning the resulting value does not instantiate the module again. A
-second written occurrence is a distinct instance even when its resolved module
-and supplied argument are equal.
+or returning the resulting value does not instantiate the module again. A second
+written occurrence is a distinct instance even when its resolved module and
+supplied argument are equal.
 
 Nested instances include the complete enclosing occurrence stack in their
 identity. Thus two instances of a parent module do not merge a generative effect
@@ -109,16 +108,16 @@ inputs. Re-evaluating the same source node administratively during checking or
 lowering must recover the recorded `ell`; evaluating the declaration in a
 different module instance must not.
 
-Aliases preserve the atom. Structural equality of operation descriptors does
-not identify effects. Named compiler-private effects may use their separately
+Aliases preserve the atom. Structural equality of operation descriptors does not
+identify effects. Named compiler-private effects may use their separately
 specified applicative identity rule; they are not evidence that ordinary
 `@effect` is applicative.
 
 ## 5. Handler row elimination
 
 Let the handled computation have row `epsilon_c` and let all handler clauses,
-including the optional return clause, contribute row `epsilon_h`. Handling
-`ell` has the rule:
+including the optional return clause, contribute row `epsilon_h`. Handling `ell`
+has the rule:
 
 ```text
 Gamma |- c : A ! epsilon_c
@@ -132,9 +131,9 @@ Set difference is part of the rule. Factoring the premise as
 `epsilon union {ell}` without an absence side condition is insufficient because
 set union is idempotent and does not determine `epsilon` uniquely.
 
-A handler clause that performs `ell` reintroduces the label through
-`epsilon_h`; the operation is not recursively swallowed by the handler whose
-clause is currently running.
+A handler clause that performs `ell` reintroduces the label through `epsilon_h`;
+the operation is not recursively swallowed by the handler whose clause is
+currently running.
 
 Handling an effect absent from `epsilon_c` is valid. Its operation clauses are
 unreachable for that computation, while its return clause may still transform
@@ -174,8 +173,8 @@ choose and specify one of these extensions:
 
 1. linear means unique but explicitly droppable, with required finalization
    represented separately;
-2. cancellation carries a checked summary that finalizes every captured
-   must-use obligation; or
+2. cancellation carries a checked summary that finalizes every captured must-use
+   obligation; or
 3. a continuation with a must-use capture cannot be cancelled and must resume
    exactly once.
 
@@ -199,6 +198,6 @@ The maintained regressions for this boundary must establish at least:
 
 The Rust evaluator carries the import-occurrence stack in the identity used by
 ordinary effect allocation. The TypeScript checker/evaluator already evaluates
-written import occurrences independently and refuses reusable checked-leaf
-state that contains a generative brand. Both implementations remain subject to
-the same rules above.
+written import occurrences independently and refuses reusable checked-leaf state
+that contains a generative brand. Both implementations remain subject to the
+same rules above.

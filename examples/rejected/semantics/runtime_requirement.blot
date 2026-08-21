@@ -5,7 +5,7 @@
 
 open import "blot:prelude"
 
-let require = fn requirement => fn value =>
+let require = fn requirement => fn value => do:
   return @satisfies value requirement
 
 return require Int 42

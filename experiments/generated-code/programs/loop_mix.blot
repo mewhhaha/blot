@@ -2,7 +2,7 @@ open import "blot:prelude"
 
 sig mix_go = (Int, Int) -> Int
 const rec mix_go =
-  fn (remaining, state) =>
+  fn (remaining, state) => do:
     if remaining <= 0:
       return state
 

@@ -1,7 +1,7 @@
 open import "blot:prelude"
 
 sig construct_go = (Int, [Int]) -> Int
-const rec construct_go = fn (remaining, values) =>
+const rec construct_go = fn (remaining, values) => do:
   if remaining <= 0:
     return @array.len values
 

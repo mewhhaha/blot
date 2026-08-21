@@ -3,7 +3,7 @@ import { parse } from "../syntax/parse.ts";
 import { formatSource } from "./formatter.ts";
 
 Deno.test("formatting indents nested conditionals within calls", async () => {
-  const source = `const remove_residence = fn tile =>
+  const source = `const remove_residence = fn tile => do:
   present <- Residences.has tile
   if present > 0:
     burning <- ResidenceBurning.get_or (tile, 0)
@@ -34,7 +34,7 @@ return remove_residence
 
   assertEquals(
     formatted.source,
-    `const remove_residence = fn tile =>
+    `const remove_residence = fn tile => do:
   present <- Residences.has tile
   if present > 0:
     burning <- ResidenceBurning.get_or (tile, 0)
@@ -186,13 +186,13 @@ return values
 
 Deno.test("formatting indents a separated return inside a colon block", async () => {
   const returnedValue = "x".repeat(70);
-  const source = `let choose = fn ready =>
+  const source = `let choose = fn ready => do:
   if ready:
     return ${returnedValue}
   return fallback
 return choose
 `;
-  const expected = `let choose = fn ready =>
+  const expected = `let choose = fn ready => do:
   if ready:
     return
       ${returnedValue}
@@ -259,11 +259,11 @@ return (values, pair)
 });
 
 Deno.test("formatting removes parentheses around a tuple lambda argument", async () => {
-  const source = `let load = fn count =>
+  const source = `let load = fn count => do:
   store <- fold (
   upto (0, count),
   @array.empty,
-  (fn (store, id) =>
+  (fn (store, id) => do:
     return append (store, id)
   )
   )
@@ -273,11 +273,11 @@ return load
 
   await assertStableFormatting(
     source,
-    `let load = fn count =>
+    `let load = fn count => do:
   store <- fold (
       upto (0, count),
       @array.empty,
-      fn (store, id) =>
+      fn (store, id) => do:
         return append (store, id)
     )
   return store
@@ -287,10 +287,10 @@ return load
 });
 
 Deno.test("formatting staggers adjacent vertical delimiters", async () => {
-  const source = `let draw = fn values =>
+  const source = `let draw = fn values => do:
   <- each (
   values,
-  (fn value =>
+  (fn value => do:
     <- visit value
   )
   )
@@ -299,10 +299,10 @@ return draw
 
   await assertStableFormatting(
     source,
-    `let draw = fn values =>
+    `let draw = fn values => do:
   <- each (
       values,
-      fn value =>
+      fn value => do:
         <- visit value
     )
 return draw
@@ -349,7 +349,7 @@ return 1 != 2
 
 Deno.test("formatting separates a completed statement suite", async () => {
   await assertStableFormatting(
-    `let update = fn generation =>
+    `let update = fn generation => do:
   current <- Generation.current ()
   if current != generation:
     transforms <- load_transforms ()
@@ -359,7 +359,7 @@ Deno.test("formatting separates a completed statement suite", async () => {
   return transforms
 return update
 `,
-    `let update = fn generation =>
+    `let update = fn generation => do:
   current <- Generation.current ()
   if current != generation:
     transforms <- load_transforms ()
@@ -375,7 +375,7 @@ return update
 
 Deno.test("formatting attaches a dedented comment to the following statement", async () => {
   await assertStableFormatting(
-    `let update = fn generation =>
+    `let update = fn generation => do:
   if current != generation:
     generation := current
     // Advance the current generation.
@@ -383,7 +383,7 @@ Deno.test("formatting attaches a dedented comment to the following statement", a
   return transforms
 return update
 `,
-    `let update = fn generation =>
+    `let update = fn generation => do:
   if current != generation:
     generation := current
 
@@ -508,7 +508,7 @@ return (nested, called)
 });
 
 Deno.test("formatting indents scoped returns as statements", async () => {
-  const source = `let result =
+  const source = `let result = do:
  if 1 == 1:
   return 1
  return 2
@@ -518,7 +518,7 @@ return result
   if (!formatted.ok) throw new Error("valid source did not format");
   assertEquals(
     formatted.source,
-    `let result =
+    `let result = do:
   if 1 == 1:
     return 1
 
@@ -551,8 +551,8 @@ return ()
 });
 
 Deno.test("formatting does not extend a nested function over following statements", async () => {
-  const source = `let outer = fn values =>
-  let inner = fn () =>
+  const source = `let outer = fn values => do:
+  let inner = fn () => do:
     return ()
   for value in values:
     let selected = value
@@ -563,8 +563,8 @@ return outer
   if (!formatted.ok) throw new Error("valid source did not format");
   assertEquals(
     formatted.source,
-    `let outer = fn values =>
-  let inner = fn () =>
+    `let outer = fn values => do:
+  let inner = fn () => do:
     return ()
   for value in values:
     let selected = value

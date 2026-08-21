@@ -92,10 +92,10 @@ Deno.test("OrderedTextMap missing replacement returns both inputs", async () => 
     `open import "blot:prelude"
 let entries = OrderedTextMap.claim [("a", 1), ("b", 2)]
 return case OrderedTextMap.replace ((!entries), "z", 9) of
-  #MapReplaced (previous, !updated) =>
+  #MapReplaced (previous, !updated) => do:
     let frozen = OrderedTextMap.freeze (!updated)
     return previous * 10 + Array.length frozen
-  #MapMissing (returned, !original) =>
+  #MapMissing (returned, !original) => do:
     let frozen = OrderedTextMap.freeze (!original)
     return returned * 10 + Array.length frozen
 `,

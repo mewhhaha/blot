@@ -6,11 +6,11 @@ open import "blot:prelude"
 
 sig map_lengths =
   Mappable (List.of Str, List.of Int, Str, Int) -> List.of Str -> List.of Int
-let map_lengths = fn implementation => fn values =>
+let map_lengths = fn implementation => fn values => do:
   return implementation.map (values, Text.length)
 
 sig total_lengths = Foldable (List.of Str, Str, Int) -> List.of Str -> Int
-let total_lengths = fn implementation => fn values =>
+let total_lengths = fn implementation => fn values => do:
   return implementation.fold (
     values,
     0,
@@ -18,12 +18,12 @@ let total_lengths = fn implementation => fn values =>
   )
 
 sig retain_long = Filterable (List.of Str, Str) -> List.of Str -> List.of Str
-let retain_long = fn implementation => fn values =>
+let retain_long = fn implementation => fn values => do:
   return implementation.filter (values, fn value => Text.length value > 3)
 
 sig collect_words =
   Iterable (List.of Str, Str, List.of Str) -> List.of Str -> [Str]
-let collect_words = fn implementation => fn values =>
+let collect_words = fn implementation => fn values => do:
   let collected = Array.empty
   for value in implementation.items values:
     collected := @array.push collected value
@@ -37,7 +37,7 @@ sig map_name_lengths =
     Str,
     Int
   ) -> Map.of (Int, Str) -> Map.of (Int, Int)
-let map_name_lengths = fn implementation => fn names =>
+let map_name_lengths = fn implementation => fn names => do:
   return implementation.map (names, Text.length)
 
 sig increment_members =
@@ -47,7 +47,7 @@ sig increment_members =
     Int,
     Int
   ) -> Set.of Int -> Set.of Int
-let increment_members = fn implementation => fn members =>
+let increment_members = fn implementation => fn members => do:
   return implementation.map (members, fn value => value + 1)
 
 let words = List.from_array ["one", "two", "three"]

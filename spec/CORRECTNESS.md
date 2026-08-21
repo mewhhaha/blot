@@ -20,8 +20,8 @@ execution into a return or unrelated trap, nor remove demanded divergence.
 The finite-step clause is therefore only one part of the pass obligation. Every
 pass relation also carries a **progress-sensitive adequacy package**:
 
-1. when a source step is matched by zero target steps, a well-founded
-   stuttering rank strictly decreases;
+1. when a source step is matched by zero target steps, a well-founded stuttering
+   rank strictly decreases;
 2. if a related source state is a return, host request, or specified trap, every
    maximal target execution reaches the matching visible outcome after finitely
    many administrative steps;

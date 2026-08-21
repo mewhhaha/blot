@@ -275,7 +275,7 @@ return value
 Deno.test("an unused effect result offers an explicit discard action", async () => {
   const service = new LanguageService();
   const uri = "untitled:unused-effect-result.blot";
-  const source = `let run = fn () =>
+  const source = `let run = fn () => do:
   ignored <- perform_work ()
   return ()
 return run
@@ -300,9 +300,9 @@ Deno.test("a terminal Option match offers a compiler-checked guard action", asyn
   const path = join(directory, "option-guard.blot");
   const source = `open import "blot:prelude"
 sig unwrap = Option Unit -> Unit
-let unwrap = fn option =>
+let unwrap = fn option => do:
   return case option of
-    #None =>
+    #None => do:
       return ()
     #Some value => value
 return unwrap

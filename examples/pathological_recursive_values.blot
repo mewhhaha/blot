@@ -5,7 +5,7 @@
 
 open import "blot:prelude"
 
-let rec build = fn count =>
+let rec build = fn count => do:
   if count == 0:
     return #Nil
   else:
@@ -18,12 +18,12 @@ let rec total = fn values => case values of
 sig sum_list = Int -> Int
 let sum_list = fn count => total (build count)
 
-let rec build_even = fn count =>
+let rec build_even = fn count => do:
   if count == 0:
     return #EvenDone
   else:
     return #Even (count, build_odd (count - 1))
-let rec build_odd = fn count =>
+let rec build_odd = fn count => do:
   if count == 0:
     return #OddDone
   else:

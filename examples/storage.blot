@@ -42,7 +42,7 @@ const byte_width = fn t => case refines (t, U8) of
 
 const Declared = struct Record
 
-const alphabetical = fn names =>
+const alphabetical = fn names => do:
   return sort_by (
     names,
     fn (left, right) => is_less (@text.cmp left right)
@@ -78,7 +78,7 @@ const raw = layout (Record, byte_width)
 // as nested calls.
 
 const Meters =
-  seal ("Meters", I32) <+ { .of = fn n =>
+  seal ("Meters", I32) <+ { .of = fn n => do:
     return seal ("Meters", n)
   ; } <+ { .unit = "m"; }
 
