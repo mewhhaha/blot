@@ -49,6 +49,11 @@ interface PhaseTimes {
   readonly check: number;
   readonly prepare_after_check: number;
   readonly compile_after_prepare: number;
+  readonly heap_used_peak_bytes: {
+    readonly check: number;
+    readonly prepare_after_check: number;
+    readonly compile_after_prepare: number;
+  };
 }
 
 interface IncrementalTimes {
@@ -399,22 +404,33 @@ async function incrementalPhaseTimes(
       const checks: number[] = [];
       const preparations: number[] = [];
       const compilations: number[] = [];
+      const checkHeap: number[] = [];
+      const preparationHeap: number[] = [];
+      const compilationHeap: number[] = [];
       for (let revision = 1; revision <= samples; revision += 1) {
         await writeFile(path, editedModule(source, revision));
         let started = performance.now();
         await entry.compiler.check(path);
         checks.push(performance.now() - started);
+        checkHeap.push(process.memoryUsage().heapUsed);
         started = performance.now();
         await entry.compiler.prepare(path);
         preparations.push(performance.now() - started);
+        preparationHeap.push(process.memoryUsage().heapUsed);
         started = performance.now();
         await entry.compiler.compile(path);
         compilations.push(performance.now() - started);
+        compilationHeap.push(process.memoryUsage().heapUsed);
       }
       results.set(entry.name, {
         check: medianValue(checks),
         prepare_after_check: medianValue(preparations),
         compile_after_prepare: medianValue(compilations),
+        heap_used_peak_bytes: {
+          check: Math.max(...checkHeap),
+          prepare_after_check: Math.max(...preparationHeap),
+          compile_after_prepare: Math.max(...compilationHeap),
+        },
       });
     }
     return results;

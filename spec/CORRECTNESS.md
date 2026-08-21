@@ -81,13 +81,14 @@ depend.
 
 Each translation needs preservation plus simulation:
 
-| Translation                        | Relation ignores                              | Critical obligation                                      |
-| ---------------------------------- | --------------------------------------------- | -------------------------------------------------------- |
-| surface to AST                     | surface sugar and compiler-local control tags | scope, order, and control targets agree                  |
-| staged AST to residual program     | compile-time-only values                      | erasure cannot change a demanded observation             |
-| specialized program to Runtime HIR | structural polymorphism and proof terms       | every residual value has a related closed representation |
-| Runtime HIR to Wasm                | administrative machine state                  | returns, requests, traps, and divergence agree           |
-| private value to ABI               | private allocation identity                   | caller-visible values and ownership agree                |
+| Translation                        | Relation ignores                              | Critical obligation                                       |
+| ---------------------------------- | --------------------------------------------- | --------------------------------------------------------- |
+| surface to AST                     | surface sugar and compiler-local control tags | scope, order, and control targets agree                   |
+| staged AST to residual program     | compile-time-only values                      | erasure cannot change a demanded observation              |
+| specialized program to Runtime HIR | structural polymorphism and proof terms       | every residual value has a related closed representation  |
+| typed Core to bounded oracle       | source scheduling and AST object identity     | values, binds, handlers, control, and proof markers agree |
+| Runtime HIR to Wasm                | administrative machine state                  | returns, requests, traps, and divergence agree            |
+| private value to ABI               | private allocation identity                   | caller-visible values and ownership agree                 |
 
 Module instantiation is part of the source-to-residual simulation even when the
 implementation fuses it with checking or staging. Each written import occurrence
@@ -132,6 +133,12 @@ call, evaluator/emitted-Wasm host traces, Runtime-HIR parity, and whole-corpus
 evaluator/oracle/Wasm observations. These are bounded simulations, not
 substitutes for the preservation and progress proofs above.
 
+The bounded gpupaper oracle consumes typed Core directly. The source-AST
+evaluator remains an independent observation model and is never consulted to
+reconstruct Core declaration liveness, `define`/`bind` order, handler order, or
+proof markers. This makes source-to-Core and Core-to-oracle two separately
+testable relations rather than two consumers of one source schedule.
+
 ## 6. Evidence ladder
 
 The implementation should advance in this order:
@@ -155,6 +162,14 @@ artifact or translation-validation boundary that instantiates those rules). A
 strong theorem over a seed calculus and a broad differential test are different
 evidence; neither substitutes for the missing correspondence argument of the
 other.
+
+Within that stated boundary, `Blot/Stable.lean` now encodes the intrinsically
+typed stable residual forms and checks preservation, classified progress,
+compile-time phase erasure, structural affine/linear use, proof-bearing array
+access, and Runtime-HIR-to-target evaluation simulation without admitted axioms.
+Its correspondence is structural rather than a deserialization theorem for the
+TypeScript or Rust arenas; modules, parsing, reflection, SIMD, source
+desugarings, and ABI adequacy remain outside this first artifact.
 
 Auxiliary analysis may remain outside the mechanized trusted core only through
 translation validation. A producer may infer control-flow environments,

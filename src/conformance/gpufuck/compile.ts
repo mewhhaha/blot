@@ -38,6 +38,7 @@ import { resolve } from "@std/path";
 import { BlotError, fail } from "../../diagnostic.ts";
 import { load, type Loaded, refreshLoadedModules } from "../../load.ts";
 import { checkFile } from "../../check/mod.ts";
+import { elaborateModule } from "../../core/computation.ts";
 import {
   evaluate,
   evaluationRuntime,
@@ -573,12 +574,26 @@ async function prepare(path: string) {
       value: exported.value,
     }];
   });
-  const lowered = lowerModule(
+  const oracleTypes = new Map(checked.expressionTypes);
+  oracleTypes.set(staged.module.result, checked.moduleType);
+  const oracleCore = elaborateModule(
     staged.module,
-    {
-      ...checked,
-      shapes: new Map([...checked.shapes, ...staged.shapes]),
-    },
+    oracleTypes,
+    checked.moduleType,
+    true,
+    checked.comptimeValues,
+    checked.opens,
+    checked.recordAdaptations,
+    checked.arrayProofs,
+    new Map([...checked.shapes, ...staged.shapes]),
+    checked.variants,
+    checked.optionalCases,
+    checked.grants,
+    checked.modules,
+  );
+  const lowered = lowerModule(
+    oracleCore,
+    checked,
     checked.values,
     runtimeExports,
   );

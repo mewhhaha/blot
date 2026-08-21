@@ -65,6 +65,8 @@ const Pixel =
     .mode = U 2;
   }
 const pixel_bits = packed Pixel
+sig mode_at = Option Int
+let mode_at = pixel_bits.bit_offset "mode"
 const signed_bit_width = bit_width (I 7)
 const unsigned_bit_width = bit_width U64
 
@@ -109,7 +111,7 @@ return {
   .packed_byte_size = pixel_bits.byte_size;
   .packed_trailing_bits = pixel_bits.trailing_bits;
   .packed_fields = pixel_bits.fields;
-  .mode_at = pixel_bits.bit_offset "mode";
+  .mode_at = mode_at;
 
   .sorted_order = Sorted.fields;
   .unpadded_size = raw.size;

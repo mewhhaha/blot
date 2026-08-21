@@ -54,12 +54,67 @@ async function blotFiles(directory: string): Promise<string[]> {
   return found.sort();
 }
 
+function poisonCoreOrigins(
+  value: unknown,
+  seen: WeakSet<object> = new WeakSet(),
+): void {
+  if (value === null || typeof value !== "object" || seen.has(value)) return;
+  seen.add(value);
+  if (value instanceof Map) {
+    for (const [key, entry] of value) {
+      poisonCoreOrigins(key, seen);
+      poisonCoreOrigins(entry, seen);
+    }
+    return;
+  }
+  if (value instanceof Set) {
+    for (const entry of value) poisonCoreOrigins(entry, seen);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) poisonCoreOrigins(entry, seen);
+    return;
+  }
+  const object = value as Record<PropertyKey, unknown>;
+  const origin = Object.getOwnPropertyDescriptor(object, "origin");
+  if (origin !== undefined && origin.configurable === true) {
+    Object.defineProperty(object, "origin", {
+      configurable: true,
+      enumerable: origin.enumerable,
+      get(): never {
+        throw new Error("typed-Core lowering consulted a source origin");
+      },
+    });
+  }
+  for (const key of Reflect.ownKeys(object)) {
+    if (key === "origin") continue;
+    poisonCoreOrigins(object[key], seen);
+  }
+}
+
 for (const name of await blotFiles("examples")) {
   if (name === "node-runner-demo.blot") continue;
   Deno.test(`examples/${name} lowers to gpufuck Core`, async () => {
     await validateLowering(join("examples", name));
   });
 }
+
+Deno.test("the bounded oracle consumes typed Core without source origins", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "handler.blot");
+  try {
+    await Deno.writeTextFile(
+      path,
+      await Deno.readTextFile("examples/handlers.blot"),
+    );
+    const checked = await checkFile(path);
+    poisonCoreOrigins(checked.core);
+    const lowered = lowerModule(checked.core, checked, checked.values);
+    assert(lowered.definitions.length > 0);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
 
 Deno.test("imported structural folds residualize over runtime records", async () => {
   const directory = await Deno.makeTempDir();
@@ -330,12 +385,25 @@ return fn value => value
   );
 });
 
+Deno.test("Runtime HIR refuses a deferred call that survives staging", async () => {
+  const path = join(
+    "examples/rejected/semantics",
+    "deferred_at_runtime.blot",
+  );
+  await checkFile(path);
+  const error = await assertRejects(
+    () => prepareGpupaperHir(path),
+    BlotError,
+  );
+  assertEquals(error.diagnostic.code, "BLOT_DEFERRED_AT_RUNTIME");
+});
+
 for (const name of ["handler_aborts.blot", "handlers.blot"]) {
   Deno.test(`examples/${name} lowers its handler before staging`, async () => {
     const path = join("examples", name);
     const loaded = await load(path);
     const checked = await checkFile(path);
-    const lowered = lowerModule(loaded.module, checked, checked.values);
+    const lowered = lowerModule(checked.core, checked, checked.values);
     const module = buildSurfaceModule(
       lowered.definitions,
       lowered.types,
@@ -395,9 +463,8 @@ return (@type.members reflected).handler 42 system
 
 Deno.test("return control lowers without synthetic variant declarations", async () => {
   const path = join("examples", "returning.blot");
-  const loaded = await load(path);
   const checked = await checkFile(path);
-  const lowered = lowerModule(loaded.module, checked, checked.values);
+  const lowered = lowerModule(checked.core, checked, checked.values);
 
   assertEquals(
     lowered.types.some((type) =>
@@ -411,9 +478,8 @@ Deno.test("return control lowers without synthetic variant declarations", async 
 
 Deno.test("loop control lowers without synthetic variant declarations", async () => {
   const path = join("examples", "breaking.blot");
-  const loaded = await load(path);
   const checked = await checkFile(path);
-  const lowered = lowerModule(loaded.module, checked, checked.values);
+  const lowered = lowerModule(checked.core, checked, checked.values);
 
   assertEquals(
     lowered.types.some((type) =>
@@ -1057,9 +1123,8 @@ Deno.test("indexed iteration carries a bounds proof into a dynamic loop", async 
 async function storeUpdates(
   path: string,
 ): Promise<readonly { readonly kind: string; readonly owned: boolean }[]> {
-  const loaded = await load(path);
   const checked = await checkFile(path);
-  const lowered = lowerModule(loaded.module, checked, checked.values);
+  const lowered = lowerModule(checked.core, checked, checked.values);
   const pending: unknown[] = lowered.definitions.map((definition) =>
     definition.body
   );
@@ -1629,9 +1694,8 @@ Deno.test("a horizontal sum lowers to gpufuck's reduction", async () => {
   // gpufuck's, and taking it is what keeps `dot` from becoming the four
   // extracts and three adds it would be if blot wrote the reduction itself.
   const path = join("examples", "simd.blot");
-  const loaded = await load(path);
   const checked = await checkFile(path);
-  const lowered = lowerModule(loaded.module, checked, checked.values);
+  const lowered = lowerModule(checked.core, checked, checked.values);
 
   // gpufuck's own bodies are spliced in alongside blot's, and they name
   // `ReduceAdd` whether or not the program summed anything — so only the
@@ -1660,7 +1724,7 @@ Deno.test("Blot SIMD chains stay native through gpufuck let bindings", async () 
   const path = join("examples", "simd.blot");
   const loaded = await load(path);
   const checked = await checkFile(path);
-  const lowered = lowerModule(loaded.module, checked, checked.values);
+  const lowered = lowerModule(checked.core, checked, checked.values);
   const encoded = buildSurfaceModule(
     lowered.definitions,
     lowered.types,
@@ -1707,9 +1771,8 @@ Deno.test("a prelude wrapper over a primitive is not a definition", async () => 
   // and, for a vector, costs the register, because gpufuck decides what can
   // stay native from the shape of the Core it is handed.
   const path = join("examples", "simd.blot");
-  const loaded = await load(path);
   const checked = await checkFile(path);
-  const lowered = lowerModule(loaded.module, checked, checked.values);
+  const lowered = lowerModule(checked.core, checked, checked.values);
 
   const names = lowered.definitions
     .filter((definition) => !definition.name.startsWith("$"))

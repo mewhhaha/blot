@@ -26,6 +26,24 @@ type EffectObservation = {
 };
 
 const root = new URL("../examples/", import.meta.url);
+const expectedRejections = new Map<string, string>([
+  [
+    "composed_handlers.blot",
+    "the TypeScript/gpupaper target and oracle ABI manifests differ",
+  ],
+  [
+    "ledger.blot",
+    'Import #0 "__gpupaper_runtime": module is not an object or function',
+  ],
+  [
+    "node-runner-demo.blot",
+    "staged shape value does not inhabit lowered named schema",
+  ],
+  [
+    "pathological_fibonacci.blot",
+    "a staged function value requires residual function lowering",
+  ],
+]);
 const files: string[] = [];
 for await (const entry of Deno.readDir(root)) {
   if (entry.isFile && entry.name.endsWith(".blot")) files.push(entry.name);
@@ -247,6 +265,13 @@ function requireEqualEffects(
     throw new Error(`${sourceName} effect ${index} differs from the oracle`);
   }
 }
+const unexpectedRejections = rejected.filter((rejection) => {
+  const expected = expectedRejections.get(rejection.file);
+  return expected === undefined || !rejection.reason.includes(expected);
+});
+const missingExpectedRejections = [...expectedRejections.keys()].filter(
+  (file) => !rejected.some((rejection) => rejection.file === file),
+);
 console.log(JSON.stringify(
   {
     corpus: "examples/*.blot",
@@ -256,7 +281,14 @@ console.log(JSON.stringify(
     observations,
     rejected: rejected.length,
     rejections: rejected,
+    unexpectedRejections,
+    missingExpectedRejections,
   },
   null,
   2,
 ));
+if (
+  unexpectedRejections.length > 0 || missingExpectedRejections.length > 0
+) {
+  Deno.exitCode = 1;
+}

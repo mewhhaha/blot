@@ -94,18 +94,16 @@ test("comment-only revisions reuse the compiled artifact", async () => {
   }
 });
 
-test("runtime-neutral semantic revisions reuse the compiled artifact", async () => {
+test("runtime-neutral semantic revisions recompile for exact source origins", async () => {
   const directory = await mkdtemp(join(tmpdir(), "blot-node-semantic-cache-"));
   const path = join(directory, "minimal.blot");
   const compiler = await Compiler.create();
   try {
     await writeFile(path, "const hidden = 1\nreturn 42\n");
-    const first = await compiler.compile(path);
+    await compiler.compile(path);
     await writeFile(path, "const hidden = 100\nreturn 42\n");
     const second = await compiler.compile(path);
-    assert.equal(second.artifactSource, "revision-cache");
-    assert.deepEqual(second.wasm, first.wasm);
-    assert.deepEqual(second.manifestBytes, first.manifestBytes);
+    assert.equal(second.artifactSource, "compiled");
 
     const fresh = await Compiler.create();
     try {

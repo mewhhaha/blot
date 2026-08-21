@@ -547,6 +547,28 @@ Mutable bound arrays, pending constraints, and fact sinks are not interface
 members. At an importing call, every scheme is instantiated freshly and facts
 derived while checking the selected closure belong to the importing compilation.
 
+An evaluated closure retains the residual quantified signature established at
+its own declaration. Attaching a settled signature to an enclosing record,
+array, constructor, or module result may fill an unsigned closure or refine a
+quantifier local to its output, but must not remove a quantifier relating the
+closure's input to its output. The enclosing view can be less precise because it
+settles the same variable once in each polarity; it is not evidence against that
+principal input-output relationship. When a statically known callee evaluates to
+a closure with a closed attached signature whose returned data contains a
+callable, an application instantiates that signature directly. An ordinary
+curried result is not returned data for this rule. This preserves the closure's
+own quantified relationships after it has passed through an enclosing value and
+hands the next higher-order specialization its exact input. It does not make
+arbitrary closure-bearing records exact at their declarations or exported module
+boundaries.
+
+If an ordinary statically known application still settles to top or bottom, the
+checker infers the selected nonrecursive closure once against the actual
+argument type. This recovers evidence from the closure body while an explicit
+signature remains the way to widen a known singleton into a stable public
+contract. Effects found while checking the body join the application's ordinary
+inferred row.
+
 Write `encode(C_m)` for an immutable capsule snapshot and `decode` for loading
 one with fresh inference identities. Level-4 coherence is
 
@@ -890,6 +912,30 @@ the Wasm artifact is a deterministic function of that HIR and ABI policy. A
 reverse-import invalidation removes both caches. Thus a cache hit cannot retain
 code produced from a stale dependency, and `prepare` followed by `compile`
 shares work without introducing a second authority.
+
+The checked artifact also publishes typed Core. Every Core expression carries
+one stable `CoreNodeId` and one `TyRepId` into an interned structural type
+graph. After safety and ownership replay, the checker may attach a settled HIR
+builder state to that node when its effect row, representation, permission, and
+proof markers are closed. Structural folds and finite closure choices that still
+need specialization remain explicitly pending. Consumers compare these
+identities; they do not format recursive types and compare the resulting text.
+
+For an invariant recursive accumulator constructor such as `Array`, the
+recursive call and the initializing value constrain the same element variable.
+An empty initializer contributes no inhabitant and therefore cannot remain as an
+independent positive array alternative once a recursive step contributes an
+element type:
+
+```txt
+empty : Array a    step : (Array a, b) -> Array a    b <= a
+----------------------------------------------------------- recursive-array
+loop(empty, step) : Array a
+```
+
+This closes the element type without asserting that an iteration is non-empty.
+It is a recursive-knot rule over an invariant constructor, not a special rule
+for `collect` and not a lattice-wide widening.
 
 Checked-module certificates also carry the closure bodies belonging to recursive
 components. The checker builds the free-name graph for each prebound `rec` group

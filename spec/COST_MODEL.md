@@ -89,6 +89,8 @@ N = compact-CST and AST nodes
 E = inference bound edges
 L = total finite row members examined
 V = residual runtime nodes
+H_s = settled typed-Core nodes committed during checking
+H_p = typed-Core nodes left pending for specialization
 Q = emitted WebAssembly instructions and bytes
 C = distributed capsule bytes
 M = package-owned modules in a capsule
@@ -101,6 +103,13 @@ the finite bound graph; duplicate edges and visited ordered pairs are processed
 once per transaction, while failed union choices add the work of the candidates
 actually explored. Runtime validation, Core construction, and emission should be
 linear in their artifact sizes.
+
+Progressive Runtime-HIR construction visits each settled Core node once and
+stores `O(H_s)` compact builder state. Preparation subsequently visits the `H_p`
+pending nodes plus the final graph validation, rather than repeating all settled
+semantic work. Structural identity hashing is linear in newly interned edges and
+is memoized by `TyRepId`; formatting a recursive type is never part of the hot
+key path.
 
 Recursive parser state follows the current derivation path. Copying the active
 path at every island call adds `O(D^2)` element copies along a depth-`D` chain
@@ -185,6 +194,7 @@ for graphs without simultaneous ready work.
 The compiler performs each semantic derivation once:
 
 - checking records facts that lowering consumes;
+- checking commits Runtime-HIR nodes whose complete premises are already closed;
 - an unchanged top-level declaration prefix retains deterministic values across
   a later semantic edit while the checker derives the new revision;
 - a complete checked compile-time environment may feed staging;
@@ -199,6 +209,14 @@ If a later phase appears to need the same traversal, first decide whether the
 earlier artifact omitted a necessary certificate. Moving work between
 TypeScript, Rust, gpupaper, or Wasm without removing it is not itself an
 optimization.
+
+The progressive-HIR benchmark reports checking, pending-node completion,
+whole-graph validation, emission, and phase-boundary heap high-water marks as
+separate counters for unchanged, source-only, and semantic edits. A win requires
+the combined check-plus-prepare median to improve with identical Runtime HIR and
+artifact observations; relabeling the same work is rejected. The measured
+baseline and artifact hash are recorded in
+[`experiments/progressive-hir-performance.md`](../experiments/progressive-hir-performance.md).
 
 ## 6. Prelude economics
 

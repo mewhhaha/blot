@@ -1,4 +1,4 @@
-// blot AST -> gpufuck Functional Surface.
+// blot typed Core -> gpufuck Functional Surface.
 //
 // gpufuck re-runs Hindley-Milner on whatever it is handed, so blot's
 // algebraic-subtyping result is the authority and what reaches here has to be
@@ -44,14 +44,20 @@ import type {
   ArrayElement,
   Decl,
   Expr,
-  Module,
   Pattern,
   RecursiveMember,
   ShapeMember,
   Span,
 } from "../../syntax/ast.ts";
-import { freeNames, liveDeclarations } from "../../syntax/live.ts";
+import { freeNames } from "../../syntax/live.ts";
 import { recursiveGroups } from "../../syntax/ast.ts";
+import type {
+  CoreComputation,
+  CoreDefinition,
+  CoreExpression,
+  CoreNode,
+  TypedCoreModule,
+} from "../../core/computation.ts";
 import { fail } from "../../diagnostic.ts";
 import {
   type GrantSignature,
@@ -98,32 +104,29 @@ interface ConformanceSchedule {
     | { readonly tag: "tail"; readonly computation: Expr };
 }
 
-function scheduleComputation(
-  declarations: readonly Decl[],
-  result: Expr,
-  resultEffects: "pure" | "ambient",
+function scheduledResultExpression(
+  result: ConformanceSchedule["result"],
+): Expr {
+  if (result.tag === "return") return result.value;
+  return result.computation;
+}
+
+/** Schedule for surface fragments synthesized inside this lowering itself. */
+function internalSchedule(
+  expr: Expr & { readonly tag: "block" },
 ): ConformanceSchedule {
-  const live = liveDeclarations(declarations, result);
   const steps: ConformanceSchedule["steps"][number][] = [];
-  for (const declaration of declarations) {
-    if (!live.has(declaration)) continue;
+  for (const declaration of expr.declarations) {
     let tag: "define" | "bind" = "define";
     if (declaration.tag === "binding" && declaration.kind === "effect") {
       tag = "bind";
     }
     steps.push({ tag, declaration });
   }
-  if (resultEffects === "pure") {
-    return { steps, result: { tag: "return", value: result } };
+  if (expr.resultEffects === "pure") {
+    return { steps, result: { tag: "return", value: expr.result } };
   }
-  return { steps, result: { tag: "tail", computation: result } };
-}
-
-function scheduledResultExpression(
-  result: ConformanceSchedule["result"],
-): Expr {
-  if (result.tag === "return") return result.value;
-  return result.computation;
+  return { steps, result: { tag: "tail", computation: expr.result } };
 }
 
 /**
@@ -136,29 +139,466 @@ export interface Facts {
   /** Binding-level ownership proofs produced after inference. */
   readonly ownership: ReadonlyMap<NamePattern, OwnedBinding>;
   readonly ownershipCertificate: OwnershipCertificate;
-  /** Bounds certificates for direct Store accesses. */
-  readonly arrayProofs: ReadonlyMap<Expr, ArrayIndexProof>;
-  /** Settled source types used only to select closed specializations. */
-  readonly expressionTypes: ReadonlyMap<Expr, SimpleType>;
-  /** What each `open` brought into scope, so an inlined module keeps its own. */
-  readonly opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
-  /** Compile-time declaration values that remain inside residual blocks. */
-  readonly comptimeValues: ReadonlyMap<Expr, Value>;
-  readonly shapes: ReadonlyMap<Expr, Shape>;
-  readonly recordAdaptations: ReadonlyMap<Expr, RecordAdaptation>;
-  readonly optionalCases: ReadonlySet<Expr>;
-  readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
-  /** Dependencies keyed by literal import site, so relative paths never alias. */
-  readonly modules: ReadonlyMap<
-    Expr,
-    { readonly module: Module; readonly values: ValueEnv }
-  >;
   /** The field set of the value a shape pattern destructures. */
   readonly patternShapes: ReadonlyMap<Pattern, Shape>;
   /** Equality domains for pins, recorded by inference rather than re-derived. */
   readonly pinnedPatterns: ReadonlyMap<Pattern, PinnedDomain>;
-  /** Signatures of the capabilities granted through the module input. */
+}
+
+interface AdaptedCoreModule {
+  readonly parameter: Pattern | null;
+  readonly span: Span;
+  readonly computation: ConformanceSchedule;
+}
+
+interface SurfaceFacts extends Facts {
+  readonly arrayProofs: ReadonlyMap<Expr, ArrayIndexProof>;
+  readonly expressionTypes: ReadonlyMap<Expr, SimpleType>;
+  readonly opens: ReadonlyMap<Expr, ReadonlyMap<string, Value>>;
+  readonly comptimeValues: ReadonlyMap<Expr, Value>;
+  readonly coreConstants: ReadonlyMap<Expr, Value>;
+  readonly coreClosures: ReadonlyMap<Value, Expr>;
+  readonly coreClosureTypes: ReadonlyMap<Value, SimpleType>;
+  readonly shapes: ReadonlyMap<Expr, Shape>;
+  readonly recordAdaptations: ReadonlyMap<Expr, RecordAdaptation>;
+  readonly optionalCases: ReadonlySet<Expr>;
+  readonly variants: ReadonlyMap<Expr, readonly VariantCase[]>;
+  readonly modules: ReadonlyMap<
+    Expr,
+    { readonly module: AdaptedCoreModule; readonly values: ValueEnv }
+  >;
   readonly grants: ReadonlyMap<Expr, GrantSignature>;
+  readonly blocks: ReadonlyMap<Expr, ConformanceSchedule>;
+}
+
+/**
+ * A representation adapter, not another elaborator.
+ *
+ * gpufuck's API still accepts its historical surface nodes. This adapter
+ * serializes typed Core into those nodes while copying every trusted fact from
+ * Core metadata. It never follows `origin`, computes liveness, or asks the
+ * source checker another question.
+ */
+class CoreAdapter {
+  readonly #facts: Facts;
+  readonly #modules = new Map<TypedCoreModule, AdaptedCoreModule>();
+  readonly #arrayProofs = new Map<Expr, ArrayIndexProof>();
+  readonly #expressionTypes = new Map<Expr, SimpleType>();
+  readonly #opens = new Map<Expr, ReadonlyMap<string, Value>>();
+  readonly #comptimeValues = new Map<Expr, Value>();
+  readonly #coreConstants = new Map<Expr, Value>();
+  readonly #coreClosures = new Map<Value, Expr>();
+  readonly #coreClosureTypes = new Map<Value, SimpleType>();
+  readonly #shapes = new Map<Expr, Shape>();
+  readonly #recordAdaptations = new Map<Expr, RecordAdaptation>();
+  readonly #optionalCases = new Set<Expr>();
+  readonly #variants = new Map<Expr, readonly VariantCase[]>();
+  readonly #imports = new Map<
+    Expr,
+    { readonly module: AdaptedCoreModule; readonly values: ValueEnv }
+  >();
+  readonly #grants = new Map<Expr, GrantSignature>();
+  readonly #blocks = new Map<Expr, ConformanceSchedule>();
+
+  constructor(facts: Facts) {
+    this.#facts = facts;
+  }
+
+  facts(): SurfaceFacts {
+    return {
+      ...this.#facts,
+      arrayProofs: this.#arrayProofs,
+      expressionTypes: this.#expressionTypes,
+      opens: this.#opens,
+      comptimeValues: this.#comptimeValues,
+      coreConstants: this.#coreConstants,
+      coreClosures: this.#coreClosures,
+      coreClosureTypes: this.#coreClosureTypes,
+      shapes: this.#shapes,
+      recordAdaptations: this.#recordAdaptations,
+      optionalCases: this.#optionalCases,
+      variants: this.#variants,
+      modules: this.#imports,
+      grants: this.#grants,
+      blocks: this.#blocks,
+    };
+  }
+
+  module(core: TypedCoreModule): AdaptedCoreModule {
+    const cached = this.#modules.get(core);
+    if (cached !== undefined) return cached;
+    for (const dependency of core.dependencies) this.module(dependency);
+    const adapted = {
+      parameter: core.parameter,
+      span: core.span,
+      computation: this.computation(core),
+    };
+    this.#modules.set(core, adapted);
+    for (const [value, body] of core.residualClosures) {
+      if (this.#coreClosures.has(value)) continue;
+      const expression = this.expression(body);
+      this.#coreClosures.set(value, expression);
+    }
+    for (const [value, type] of core.residualClosureTypes) {
+      this.#coreClosureTypes.set(value, type);
+    }
+    return adapted;
+  }
+
+  computation(core: CoreComputation): ConformanceSchedule {
+    const steps: ConformanceSchedule["steps"][number][] = [];
+    for (const step of core.steps) {
+      steps.push({
+        tag: step.tag,
+        declaration: this.definition(step.definition),
+      });
+    }
+    if (core.result.tag === "return") {
+      return {
+        steps,
+        result: { tag: "return", value: this.expression(core.result.value) },
+      };
+    }
+    return {
+      steps,
+      result: {
+        tag: "tail",
+        computation: this.expression(core.result.computation),
+      },
+    };
+  }
+
+  definition(definition: CoreDefinition): Decl {
+    if (definition.tag === "binding") {
+      return {
+        tag: "binding",
+        kind: definition.kind,
+        tags: [],
+        pattern: definition.pattern,
+        value: this.expression(definition.value),
+        span: definition.span,
+      };
+    }
+    if (definition.tag === "shadow") {
+      return {
+        tag: "shadow",
+        name: definition.name,
+        value: this.expression(definition.value),
+        span: definition.span,
+      };
+    }
+    const placeholder: Expr = { tag: "unit", span: definition.span };
+    if (definition.tag === "open") {
+      this.#opens.set(placeholder, definition.bindings);
+      return { tag: "open", value: placeholder, span: definition.span };
+    }
+    if (definition.tag === "static-shadow") {
+      this.#comptimeValues.set(placeholder, definition.value);
+      return {
+        tag: "shadow",
+        name: definition.name,
+        value: placeholder,
+        span: definition.span,
+      };
+    }
+    this.#comptimeValues.set(placeholder, definition.value);
+    return {
+      tag: "binding",
+      kind: "const",
+      tags: [],
+      pattern: definition.pattern,
+      value: placeholder,
+      span: definition.span,
+    };
+  }
+
+  expression(core: CoreExpression): Expr {
+    let expression: Expr;
+    switch (core.tag) {
+      case "var":
+        expression = { tag: "var", name: core.name, span: core.span };
+        break;
+      case "int":
+        expression = { tag: "int", value: core.value, span: core.span };
+        break;
+      case "float":
+        expression = { tag: "float", value: core.value, span: core.span };
+        break;
+      case "text":
+        expression = { tag: "text", value: core.value, span: core.span };
+        break;
+      case "unit":
+        expression = { tag: "unit", span: core.span };
+        break;
+      case "intrinsic":
+        expression = { tag: "intrinsic", name: core.name, span: core.span };
+        break;
+      case "tag":
+        expression = { tag: "tag", name: core.name, span: core.span };
+        break;
+      case "apply":
+        expression = {
+          tag: "apply",
+          fn: this.expression(core.fn),
+          arg: this.expression(core.arg),
+          span: core.span,
+        };
+        break;
+      case "intrinsic-apply":
+        {
+          let arguments_ = core.args;
+          if (core.name === "@handle") {
+            const tuple: CoreExpression = {
+              id: core.id,
+              type: core.type,
+              typeRep: core.typeRep,
+              span: core.span,
+              adaptation: core.adaptation,
+              arrayProof: core.arrayProof,
+              shape: core.shape,
+              variants: core.variants,
+              optionalCase: core.optionalCase,
+              grant: core.grant,
+              hirState: core.hirState,
+              origin: { tag: "unit", span: core.span },
+              tag: "tuple",
+              elements: core.args,
+            };
+            arguments_ = [tuple];
+          }
+          expression = this.applications(
+            { tag: "intrinsic", name: core.name, span: core.span },
+            arguments_,
+            core.span,
+          );
+        }
+        break;
+      case "import": {
+        const specifier: Expr = {
+          tag: "text",
+          value: core.specifier,
+          span: core.span,
+        };
+        const dependency = this.module(core.dependency.core);
+        this.#imports.set(specifier, {
+          module: dependency,
+          values: core.dependency.values,
+        });
+        const callee: Expr = {
+          tag: "intrinsic",
+          name: "@import",
+          span: core.span,
+        };
+        let imported: Expr = {
+          tag: "apply",
+          fn: callee,
+          arg: specifier,
+          span: core.span,
+        };
+        for (const argument of core.args) {
+          imported = {
+            tag: "apply",
+            fn: imported,
+            arg: this.expression(argument),
+            span: core.span,
+          };
+        }
+        expression = imported;
+        break;
+      }
+      case "static-member":
+        expression = {
+          tag: "field",
+          target: { tag: "var", name: core.target, span: core.span },
+          name: core.name,
+          span: core.span,
+        };
+        break;
+      case "static-member-apply":
+        {
+          const member: Expr = {
+            tag: "field",
+            target: { tag: "var", name: core.target, span: core.span },
+            name: core.name,
+            span: core.span,
+          };
+          expression = this.applications(
+            member,
+            core.args,
+            core.span,
+          );
+        }
+        break;
+      case "constructor":
+        expression = {
+          tag: "apply",
+          fn: { tag: "tag", name: core.name, span: core.span },
+          arg: this.expression(core.payload),
+          span: core.span,
+        };
+        break;
+      case "checked":
+        expression = {
+          tag: "comptime",
+          body: this.expression(core.value),
+          span: core.span,
+        };
+        break;
+      case "constant":
+        expression = { tag: "unit", span: core.span };
+        this.#coreConstants.set(expression, core.value);
+        this.#comptimeValues.set(expression, core.value);
+        break;
+      case "field":
+        expression = {
+          tag: "field",
+          target: this.expression(core.target),
+          name: core.name,
+          span: core.span,
+        };
+        break;
+      case "lambda":
+        expression = {
+          tag: "lambda",
+          parameter: core.parameter,
+          body: this.expression(core.body),
+          deferred: core.deferred,
+          span: core.span,
+        };
+        break;
+      case "array":
+        expression = {
+          tag: "array",
+          elements: core.elements.map((element) => ({
+            spread: element.spread,
+            value: this.expression(element.value),
+          })),
+          span: core.span,
+        };
+        break;
+      case "tuple":
+        expression = {
+          tag: "tuple",
+          elements: core.elements.map((element) => this.expression(element)),
+          span: core.span,
+        };
+        break;
+      case "shape":
+        expression = {
+          tag: "shape",
+          members: core.members.map((member) => {
+            if (member.tag === "field") {
+              return {
+                tag: "field" as const,
+                name: member.name,
+                value: this.expression(member.value),
+              };
+            }
+            return {
+              tag: "spread" as const,
+              value: this.expression(member.value),
+            };
+          }),
+          span: core.span,
+        };
+        break;
+      case "if":
+        expression = {
+          tag: "if",
+          branches: core.branches.map((branch) => ({
+            condition: this.expression(branch.condition),
+            consequence: this.expression(branch.consequence),
+          })),
+          fallback: this.fallback(core.fallback),
+          span: core.span,
+        };
+        break;
+      case "case":
+        expression = {
+          tag: "case",
+          target: this.expression(core.target),
+          arms: core.arms.map((arm) => ({
+            pattern: arm.pattern,
+            body: this.expression(arm.body),
+          })),
+          span: core.span,
+        };
+        break;
+      case "block": {
+        const computation = this.computation(core.computation);
+        expression = {
+          tag: "block",
+          declarations: computation.steps.map((step) => step.declaration),
+          result: scheduledResultExpression(computation.result),
+          resultEffects: this.resultEffects(computation.result),
+          span: core.span,
+        };
+        this.#blocks.set(expression, computation);
+        break;
+      }
+      case "rec":
+        expression = {
+          tag: "rec",
+          lambda: this.expression(core.lambda),
+          span: core.span,
+        };
+        break;
+      case "comptime":
+        expression = {
+          tag: "comptime",
+          body: this.expression(core.body),
+          span: core.span,
+        };
+        break;
+    }
+    this.remember(core, expression);
+    return expression;
+  }
+
+  applications(
+    callee: Expr,
+    arguments_: readonly CoreExpression[],
+    span: Span,
+  ): Expr {
+    let expression = callee;
+    for (const argument of arguments_) {
+      expression = {
+        tag: "apply",
+        fn: expression,
+        arg: this.expression(argument),
+        span,
+      };
+    }
+    return expression;
+  }
+
+  fallback(core: CoreExpression | null): Expr | null {
+    if (core === null) return null;
+    return this.expression(core);
+  }
+
+  resultEffects(
+    result: ConformanceSchedule["result"],
+  ): "pure" | "ambient" {
+    if (result.tag === "return") return "pure";
+    return "ambient";
+  }
+
+  remember(core: CoreNode, expression: Expr): void {
+    this.#expressionTypes.set(expression, core.type);
+    if (core.arrayProof !== null) {
+      this.#arrayProofs.set(expression, core.arrayProof);
+    }
+    if (core.adaptation !== null) {
+      this.#recordAdaptations.set(expression, core.adaptation);
+    }
+    if (core.shape !== null) this.#shapes.set(expression, core.shape);
+    if (core.variants !== null) {
+      this.#variants.set(expression, core.variants);
+    }
+    if (core.optionalCase) this.#optionalCases.add(expression);
+    if (core.grant !== null) this.#grants.set(expression, core.grant);
+  }
 }
 
 /** Every union of constructors bound to a compile-time name, in scope order. */
@@ -321,7 +761,7 @@ class Lowering {
   readonly declared: readonly (readonly VariantCase[])[];
   readonly reusableOwnership: ReadonlySet<string>;
 
-  constructor(readonly facts: Facts, values: ValueEnv) {
+  constructor(readonly facts: SurfaceFacts, values: ValueEnv) {
     this.declared = declaredUnions(values);
     const verified = verifyOwnershipCertificate(facts.ownershipCertificate);
     if (verified === null) {
@@ -820,7 +1260,11 @@ function specializableRuntimeLambdaAggregate(
   return aggregateRuntimeLambdas(expr, scope);
 }
 
-function handledLambda(expr: Expr, scope: Scope): RuntimeLambda | null {
+function handledLambda(
+  expr: Expr,
+  scope: Scope,
+  lowering: Lowering,
+): RuntimeLambda | null {
   const runtime = specializableLambda(expr, scope);
   if (runtime !== null) return runtime;
 
@@ -830,30 +1274,37 @@ function handledLambda(expr: Expr, scope: Scope): RuntimeLambda | null {
   } else if (expr.tag === "field") {
     value = comptimeShapeMember(expr, scope);
   }
-  if (value === null || value.tag !== "closure" || value.self !== null) {
+  if (
+    value === null ||
+    (value.tag !== "closure" && value.tag !== "core-closure") ||
+    value.self !== null
+  ) {
     return null;
   }
 
-  const inferredEffects = closureEffectIds(value);
-
-  if (value.source?.tag === "lambda") {
-    return {
-      expression: value.source,
-      environment: childScope(null, value.env),
-      inferredEffects,
-    };
+  let inferredEffects = closureEffectIds(value);
+  if (inferredEffects === undefined) {
+    const closureType = lowering.facts.coreClosureTypes.get(value);
+    if (closureType !== undefined) {
+      inferredEffects = simpleClosureEffectIds(closureType);
+    }
   }
-
-  const span = value.body.span;
+  const body = lowering.facts.coreClosures.get(value);
+  if (body === undefined) {
+    throw new Error("typed Core omitted a handled closure body");
+  }
+  const span = body.span;
+  let deferred: boolean | undefined;
+  if (value.tag === "closure") deferred = value.deferred;
   return {
     expression: {
       tag: "lambda",
       parameter: value.parameter,
-      body: value.body,
+      body,
       // A closure rebuilt from its parts keeps its calling convention. A
       // residual lambda that lost it would be lowered as an ordinary one, and
       // its argument would run where the evaluator never demanded it.
-      deferred: value.deferred,
+      deferred,
       span,
     },
     environment: childScope(null, value.env),
@@ -862,7 +1313,7 @@ function handledLambda(expr: Expr, scope: Scope): RuntimeLambda | null {
 }
 
 function closureEffectIds(
-  closure: Value & { readonly tag: "closure" },
+  closure: Value & { readonly tag: "closure" | "core-closure" },
 ): ReadonlySet<number> | undefined {
   let inferred = inferredTypeOf(closure);
   while (inferred?.tag === "forall") inferred = inferred.body;
@@ -873,6 +1324,34 @@ function closureEffectIds(
     if (selected.tag === "extended") selected = selected.inner;
     if (selected.tag === "effect") ids.add(selected.id);
   }
+  return ids;
+}
+
+function simpleClosureEffectIds(
+  type: SimpleType,
+): ReadonlySet<number> | undefined {
+  let current = type;
+  while (current.tag === "forall") current = current.body;
+  if (current.tag !== "fun") return undefined;
+  const ids = new Set<number>();
+  const visit = (effects: SimpleType, seen: Set<number>): boolean => {
+    if (effects.tag === "effects") {
+      for (const label of effects.labels) {
+        const separator = label.lastIndexOf("#");
+        if (separator < 0) continue;
+        const id = Number(label.slice(separator + 1));
+        if (Number.isSafeInteger(id)) ids.add(id);
+      }
+      return true;
+    }
+    if (effects.tag === "forall") return visit(effects.body, seen);
+    if (effects.tag !== "var" || seen.has(effects.id)) return false;
+    seen.add(effects.id);
+    const bounds = [...effects.lower, ...effects.upper];
+    if (bounds.length === 0) return true;
+    return bounds.every((bound) => visit(bound, seen));
+  };
+  if (!visit(current.effects, new Set())) return undefined;
   return ids;
 }
 
@@ -1246,12 +1725,14 @@ const BINARY: ReadonlyMap<string, BinaryOperator> = new Map([
 ]);
 
 export function lowerModule(
-  module: Module,
+  core: TypedCoreModule,
   facts: Facts,
   values: ValueEnv,
   runtimeExports: readonly RuntimeExport[] = [],
 ): Lowered {
-  const lowering = new Lowering(facts, values);
+  const adapter = new CoreAdapter(facts);
+  const module = adapter.module(core);
+  const lowering = new Lowering(adapter.facts(), values);
   const scope = childScope(null, values);
 
   // The entry module's parameter is the program's whole authority, and at this
@@ -1269,9 +1750,7 @@ export function lowerModule(
   }
 
   const body = lowerBlock(
-    module.declarations,
-    module.result,
-    module.resultEffects,
+    module.computation,
     scope,
     lowering,
   );
@@ -1285,7 +1764,7 @@ export function lowerModule(
     body,
   });
   const exports = lowerExports(
-    module.result,
+    scheduledResultExpression(module.computation.result),
     runtimeExports,
     lowering,
   );
@@ -2132,20 +2611,14 @@ function boundaryType(
  * binder, so `let { .x; } = p` becomes the match it always meant.
  */
 function lowerBlock(
-  declarations: Module["declarations"],
-  result: Expr,
-  resultEffects: "pure" | "ambient",
+  computation: ConformanceSchedule,
   scope: Scope,
   lowering: Lowering,
 ): SurfaceExpression {
   const inner = childScope(scope);
   const wrappers: ((body: SurfaceExpression) => SurfaceExpression)[] = [];
+  const declarations = computation.steps.map((step) => step.declaration);
   const groups = recursiveGroups(declarations);
-  const computation = scheduleComputation(
-    declarations,
-    result,
-    resultEffects,
-  );
 
   for (const step of computation.steps) {
     const declaration = step.declaration;
@@ -2666,6 +3139,10 @@ function lower(
   lowering: Lowering,
 ): SurfaceExpression {
   const at = surface.at({ startByte: expr.span.start, endByte: expr.span.end });
+  const constant = lowering.facts.coreConstants.get(expr);
+  if (constant !== undefined) {
+    return lowerValue(constant, "typed Core constant", expr.span, lowering);
+  }
 
   switch (expr.tag) {
     case "int":
@@ -3004,7 +3481,7 @@ function lower(
           const value = lookupValue(scope.values, conditionSpine.callee.name);
           const expanded = value === undefined
             ? null
-            : etaExpandedPrimitive(value, conditionSpine.args);
+            : etaExpandedPrimitive(value, conditionSpine.args, lowering);
           branchPrimitive = expanded?.primitive;
         }
         const likelihood = conditionSpine.args.length === 1 &&
@@ -3047,14 +3524,13 @@ function lower(
     case "case":
       return lowerCase(expr, scope, lowering, at);
 
-    case "block":
-      return lowerBlock(
-        expr.declarations,
-        expr.result,
-        expr.resultEffects,
-        scope,
-        lowering,
-      );
+    case "block": {
+      const computation = lowering.facts.blocks.get(expr);
+      if (computation !== undefined) {
+        return lowerBlock(computation, scope, lowering);
+      }
+      return lowerBlock(internalSchedule(expr), scope, lowering);
+    }
 
     case "comptime":
       return lower(expr.body, scope, lowering);
@@ -4055,7 +4531,14 @@ function lowerValue(
       );
     }
 
-    case "closure": {
+    case "closure":
+    case "core-closure": {
+      const coreBody = lowering.facts.coreClosures.get(value);
+      if (coreBody === undefined) {
+        throw new Error(
+          `typed Core omitted the residual closure body for ${hint}`,
+        );
+      }
       const existing = lowering.hoisted.get(value);
       if (existing !== undefined) return at.name(existing);
       const name = lowering.fresh(hint);
@@ -4077,7 +4560,7 @@ function lowerValue(
         name,
         parameters: [parameter],
         annotation: null,
-        body: body(value.body),
+        body: body(coreBody),
       });
       return at.name(name);
     }
@@ -4298,8 +4781,12 @@ function lowerIntegerBinary(
 function etaExpandedPrimitive(
   value: Value,
   args: readonly Expr[],
+  lowering: Lowering,
 ): { readonly primitive: string; readonly args: readonly Expr[] } | null {
-  if (value.tag !== "closure" || value.self !== null) return null;
+  if (
+    (value.tag !== "closure" && value.tag !== "core-closure") ||
+    value.self !== null
+  ) return null;
 
   // A wrapper over a primitive of more than one argument takes them as one
   // tuple, because that is how the prelude spells every such function. The
@@ -4326,7 +4813,11 @@ function etaExpandedPrimitive(
     return null;
   }
 
-  let body: Expr = value.body;
+  const foundBody = lowering.facts.coreClosures.get(value);
+  if (foundBody === undefined) {
+    throw new Error("typed Core omitted an eta-expanded closure body");
+  }
+  let body = foundBody;
   while (parameters.length < passed.length) {
     if (body.tag !== "lambda" || body.parameter.tag !== "name") return null;
     parameters.push(body.parameter.name);
@@ -4838,7 +5329,7 @@ function lowerApply(
           at,
         );
       }
-      const expanded = etaExpandedPrimitive(member, spine.args);
+      const expanded = etaExpandedPrimitive(member, spine.args, lowering);
       if (expanded !== null) {
         let rebuilt: Expr = {
           tag: "intrinsic",
@@ -5846,7 +6337,7 @@ function lowerHandle(
     clauses.set(member.name, clause);
   }
 
-  const thunk = handledLambda(computation, scope);
+  const thunk = handledLambda(computation, scope, lowering);
   if (thunk === null) {
     return unsupported(
       "a `@handle` whose computation is not a lambda written in this module",
@@ -5932,7 +6423,7 @@ function lowerHandle(
         }
       }
 
-      const specialized = handledLambda(expr.fn, activeScope);
+      const specialized = handledLambda(expr.fn, activeScope, lowering);
       if (
         specialized !== null && lambdaMayPerform(specialized, effect, lowering)
       ) {
@@ -6167,9 +6658,7 @@ function lowerImport(
     : bind(parameter, lower(spine.args[1], scope, lowering), inner, lowering);
 
   const body = lowerBlock(
-    dependency.module.declarations,
-    dependency.module.result,
-    dependency.module.resultEffects,
+    dependency.module.computation,
     inner,
     lowering,
   );

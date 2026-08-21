@@ -187,7 +187,7 @@ const REJECTIONS: Record<
     code: "BLOT_LINEAR_CONSUMED_TWICE",
     stage: "check",
   },
-  "deferred_at_runtime": { code: "BLOT_DEFERRED_AT_RUNTIME", stage: "check" },
+  "deferred_at_runtime": { code: "BLOT_DEFERRED_AT_RUNTIME", stage: "build" },
   "deferred_demanded_twice": {
     code: "BLOT_DEFERRED_DEMANDED_TWICE",
     stage: "check",

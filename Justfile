@@ -87,5 +87,18 @@ check:
 test:
   pnpm test
 
+# Check the intrinsically typed stable-Core metatheory.
+formal:
+  cd formal/lean && lake build
+
+# Exercise the built Rust/Wasm compiler across its frontend, checker,
+# evaluator, and Runtime-HIR integration boundaries.
+compiler-integration:
+  pnpm test:compiler
+
+# Compare every executable example through the oracle and emitted Wasm.
+verify-compiler:
+  pnpm verify:compiler
+
 fmt:
   deno fmt

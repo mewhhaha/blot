@@ -1,144 +1,58 @@
 # Remaining work
 
-The implemented language is now substantially aligned with the model. Recursive
-representations have checked SCC evidence, ownership certificates publish
-complete extraction lineage, tight recursive loops become structured Runtime
-HIR, and the Rust compiler admits the full executable example corpus. The work
-below is what remains; capacity-bearing Stores and new surface features are not
-part of this list.
+There are no remaining items in this roadmap. The five compiler tasks that were
+listed here are complete; new language features and capacity-bearing Stores
+remain outside its scope.
 
-## 1. Give the Rust production compiler the development compiler's host API
+## Completed compiler boundaries
 
-Node/TypeScript is now the default development compiler. `Compiler` exposes the
-resident `check`, `prepare`, and `compile` loop used by the CLI, tests, language
-service, and benchmarks. The checked-in Rust compiler Wasm is the production
-implementation, but its Node host surface is still the lower-level
-`CompilerWasm` session API.
+1. **Rust production host.** `ProductionCompiler` gives the CI-built Rust/Wasm
+   compiler the resident `check`, `prepare`, `compile`, and `destroy` contract
+   used by the Node development compiler. It installs exact source graphs and
+   transports source diagnostics, target refusals, and compiler invariant
+   failures without synthetic source locations.
 
-Add a production host wrapper with the same high-level phase shape as `Compiler`
-without making ordinary repository development go through Rust. It should
-resolve and configure a source graph, expose matching
-`check`/`prepare`/`compile` methods, and translate the Rust transport's source
-diagnostics, target refusals, and invariant failures into the same public
-failure classes as the development compiler. Once that exists, release and
-embedding paths can select the production implementation without changing their
-compiler-facing code.
+2. **Closed `collect` inference.** Empty-array origins constrain the same
+   homogeneous element variable as recursive pushes.
+   `collect (Iter.range
+   (0, 4))` has the principal result `[Int]` in both
+   TypeScript and Rust while empty iteration remains valid. The executable
+   contract is `examples/collect_principal_type.blot`.
 
-Keep the source modules parallel while doing it: Node `frontend`, `typecheck`,
-`hir`, `backend`, and `session` should map directly to the correspondingly named
-Rust phase. `pnpm parity:strict` remains the graduation gate, not the production
-host wrapper itself.
+3. **Progressive Runtime HIR.** Typed Core nodes carry structural type
+   identities and explicit settled or pending HIR-builder state. Closed static
+   nodes commit their final residual contribution during checking; structural
+   folds, representation choices, and specialization remain pending without a
+   fallback representation. Runtime-HIR preparation consumes the existing
+   checked artifact, structural specialization keys replace formatted types, and
+   revision reuse preserves exact source origins. The measured boundary and
+   byte-identical artifact check are recorded in
+   `experiments/progressive-hir-performance.md`.
 
-## 2. Close `collect`'s remaining open element alternative
+4. **Typed-Core bounded oracle.** The gpupaper conformance oracle consumes typed
+   Core's `define`/`bind` schedule, imports, handlers, constants, residual
+   closures, types, and proof markers. The source evaluator remains an
+   independent observation model. A poisoned-origin regression test proves the
+   adapter does not recover scheduling semantics from source provenance.
 
-The nested-`rec` lower-bound failure previously recorded here has been fixed.
-The current checker retains the base-case contribution:
+5. **Mechanized stable core.** `formal/lean/Blot/Stable.lean` contains the first
+   intrinsically typed stable residual model: pure bindings, finite function
+   choices, variants and exhaustive cases, effects and handlers, classified
+   traps and divergence, proof-bearing array reads, phase erasure, structural
+   affine/linear use, and Runtime-HIR-to-target simulation. Lake and CI check it
+   without `sorry` or admitted axioms.
 
-```blot
-open import "blot:prelude"
-return iterate (Iter.range (1, 4), 1, fn (product, n) => product * n)
-```
+## Release gates
 
-This now checks as `(1 | Int)` and evaluates to `6`, rather than claiming the
-result is `⊥`. `collect` has improved too, but its result is not yet closed:
-
-```blot
-open import "blot:prelude"
-return collect (Iter.range (0, 4))
-```
-
-It evaluates to `[0, 1, 2, 3]` and currently prints `([(Int | 0)] | ['a'])`. The
-produced-element alternative is present; the remaining defect is the
-unconstrained `['a']` alternative inherited from the polymorphic empty
-accumulator. Trace how `@array.empty` enters the nested recursive fold and close
-its element variable from the iterator's yielded value. Do not special-case
-`collect` or widen the global lattice.
-
-The task is complete when the result is one closed homogeneous integer-array
-type, with the same principal result through the Node and Rust checkers. Empty
-iteration must remain valid; an array type does not encode whether it contains
-an element.
-
-## 3. Construct Runtime HIR progressively
-
-Checking and Runtime-HIR preparation still traverse overlapping semantic work.
-Fuse them without moving ownership into the type lattice:
-
-1. Give each settled residual expression a stable typed-HIR builder state.
-2. Commit a final Runtime-HIR node as soon as its type, effects, representation,
-   ownership permission, and safety evidence are closed.
-3. Keep unresolved structural folds and specialization choices pending; they are
-   not final nodes and must not acquire a fallback representation.
-4. Replace formatted-type specialization keys with structural identities from
-   the settled graph.
-5. Consume compact ownership and safety evidence while constructing the node,
-   then independently validate the completed graph.
-
-Do not reuse a `ClosedProgram` across a source edit merely because runtime
-behavior appears unchanged: source origins are observable compiler output, and
-an earlier edit can shift every later span. Revision reuse must preserve exact
-origin identity or rebuild the affected suffix.
-
-Measure unchanged preparation, semantic edits, checking, Runtime-HIR
-construction, emission, and peak memory independently. The change is complete
-only when the artifact and all parity gates are unchanged and the measured
-preparation/checking boundary improves; moving work behind a different timer is
-not an optimization. Update the pass and cache contracts in `spec/COMPILER.md`,
-`spec/TYPECHECKING.md`, `spec/STAGING.md`, and `spec/COST_MODEL.md`.
-
-## 4. Move the bounded oracle onto typed Core
-
-The production Rust/Wasm compiler is already independent of gpupaper, but the
-bounded TypeScript/gpupaper conformance oracle still shares part of the source
-schedule. Make typed Core its input so the oracle compares a real pass boundary:
-
-1. Lower Core values and computations, including `define`, `bind`, handlers,
-   control results, and ownership/proof markers, without consulting surface
-   scheduling again.
-2. Keep gpupaper bounded and independent. It must not become a compiler fallback
-   or a production dependency.
-3. Retain the current source-AST evaluator only as an independent observation
-   model, not as input to Core lowering.
-
-Generated source/Core evaluations, handler traces, host traces, and the complete
-bounded oracle corpus must continue to agree. Update `spec/COMPILER.md`,
-`spec/CORRECTNESS.md`, and the effect-sequencing row in `spec/PAPER.md`.
-
-## 5. Mechanize the stable core
-
-Once residual closures stop changing the core representation, mechanize the
-smallest useful preservation/progress result. Include live pure bindings,
-functions and finite closure choices, variants and exhaustive cases, effects and
-one-shot handlers, checked signed-integer traps, structural ownership, and
-proved array operations. Omit modules, parsing, reflection, SIMD, source
-desugarings, and the public ABI from the first artifact.
-
-Prove or encode:
-
-- type preservation and classified progress, including divergence and specified
-  traps;
-- phase erasure for compile-time-only values;
-- no double move, affine at-most-once use, and linear exact use on terminating
-  exits;
-- bounds safety for proved array operations; and
-- simulation from validated Runtime HIR operations to the small target model.
-
-Keep executable generation and mutation tests. The mechanization supplements
-those bounded simulations; it does not replace the Rust/TypeScript parity,
-artifact reproducibility, ABI, or emitted-Wasm gates.
-
-## Handoff checks
-
-Before each push, run:
+The normal handoff remains:
 
 ```sh
 just check
 just test
 ```
 
-For compiler-artifact changes, also rebuild the checked-in Rust compiler and
-prelude snapshot, verify reproducibility, run the complete Rust compiler
-integration suite, and confirm `verify:compiler` still admits all executable
-examples. Keep `LANGUAGE.md` synchronized with source semantics and the focused
-compiler specifications synchronized with every pass, certificate, cache, or
-Runtime-HIR contract change.
+Compiler-artifact changes additionally rebuild the Rust compiler and prelude
+snapshot, verify reproducibility, run the Rust compiler integration suite, and
+run `verify:compiler` against the exact bounded-oracle rejection inventory.
+`LANGUAGE.md` and the focused compiler specifications remain part of the same
+change whenever their contracts move.

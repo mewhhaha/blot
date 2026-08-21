@@ -421,10 +421,82 @@ pub(crate) struct ResidualTrace {
     next_value: usize,
     active_primitive: Option<String>,
     functions: BTreeMap<usize, RuntimeFunction>,
-    function_ids: HashMap<String, (usize, usize)>,
+    function_ids: Vec<ResidualFunctionIdentity>,
     pending_recursive_types: HashSet<usize>,
+    recursive_result_ids: Vec<RecursiveResultIdentity>,
     next_function: usize,
     function_frames: Vec<ResidualFunctionFrame>,
+}
+
+struct ResidualFunctionIdentity {
+    module: String,
+    body: crate::ast::ExpressionId,
+    argument_type: usize,
+    result_type: usize,
+    capture_types: Vec<usize>,
+    signature: Value,
+    function: usize,
+    runtime_signature: usize,
+}
+
+struct RecursiveResultIdentity {
+    module: String,
+    body: crate::ast::ExpressionId,
+    argument_type: usize,
+    signature: Value,
+    type_id: usize,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum RepresentationShape {
+    Leaf,
+    Shape(Vec<(String, RepresentationShape)>),
+    Array(Option<Box<RepresentationShape>>),
+    Tag(String, Option<Box<RepresentationShape>>),
+}
+
+#[derive(Default)]
+struct RepresentationFacts {
+    exact: Vec<(Value, Option<usize>)>,
+    shapes: HashMap<RepresentationShape, Option<usize>>,
+}
+
+impl RepresentationFacts {
+    fn record(&mut self, value: &Value, type_id: usize) {
+        if let Some((_, known)) = self
+            .exact
+            .iter_mut()
+            .find(|(candidate, _)| crate::value::equal(candidate, value))
+        {
+            if known.is_some_and(|known| known != type_id) {
+                *known = None;
+            }
+        } else {
+            self.exact.push((value.clone(), Some(type_id)));
+        }
+        if let Some(shape) = representation_shape(value) {
+            self.shapes
+                .entry(shape)
+                .and_modify(|known| {
+                    if known.is_some_and(|known| known != type_id) {
+                        *known = None;
+                    }
+                })
+                .or_insert(Some(type_id));
+        }
+    }
+
+    fn get(&self, value: &Value) -> Option<usize> {
+        if let Some((_, Some(type_id))) = self
+            .exact
+            .iter()
+            .find(|(candidate, _)| crate::value::equal(candidate, value))
+        {
+            return Some(*type_id);
+        }
+        let shape = representation_shape(value)?;
+        self.shapes.get(&shape).copied().flatten()
+    }
 }
 
 struct ResidualFunctionFrame {
@@ -505,8 +577,9 @@ impl ResidualTrace {
             next_value: 0,
             active_primitive: None,
             functions: BTreeMap::new(),
-            function_ids: HashMap::new(),
+            function_ids: Vec::new(),
             pending_recursive_types: HashSet::new(),
+            recursive_result_ids: Vec::new(),
             next_function: 1,
             function_frames: Vec::new(),
         };
@@ -2404,7 +2477,7 @@ impl ResidualTrace {
             ));
         };
         let mut substitutions = HashMap::new();
-        let mut representation_facts = HashMap::new();
+        let mut representation_facts = RepresentationFacts::default();
         self.record_runtime_substitutions(
             domain,
             argument,
@@ -2457,15 +2530,30 @@ impl ResidualTrace {
             Err(_)
                 if recursive_result && has_unresolved_representation(codomain, &substitutions) =>
             {
-                let key = format!(
-                    "recursive-result:{module}:{}:{}:{}",
-                    body.0,
-                    caller_argument.type_id,
-                    crate::value::show(signature_value),
-                );
-                let result_type = self.insert_type(&key, RuntimeType::Indirect { target_type: 0 });
-                self.pending_recursive_types.insert(result_type);
-                result_type
+                if let Some(identity) = self.recursive_result_ids.iter().find(|identity| {
+                    identity.module == module
+                        && identity.body == body
+                        && identity.argument_type == caller_argument.type_id
+                        && crate::value::equal(&identity.signature, signature_value)
+                }) {
+                    identity.type_id
+                } else {
+                    let key = format!(
+                        "recursive-result:structural:{}",
+                        self.recursive_result_ids.len()
+                    );
+                    let result_type =
+                        self.insert_type(&key, RuntimeType::Indirect { target_type: 0 });
+                    self.pending_recursive_types.insert(result_type);
+                    self.recursive_result_ids.push(RecursiveResultIdentity {
+                        module: module.to_owned(),
+                        body,
+                        argument_type: caller_argument.type_id,
+                        signature: signature_value.clone(),
+                        type_id: result_type,
+                    });
+                    result_type
+                }
             }
             Err(mut diagnostic) => {
                 diagnostic.message = format!(
@@ -2480,13 +2568,16 @@ impl ResidualTrace {
             .iter()
             .map(|capture| capture.type_id)
             .collect::<Vec<_>>();
-        let key = format!(
-            "{module}:{}:{}:{result_type}:{capture_types:?}:{}",
-            body.0,
-            caller_argument.type_id,
-            crate::value::show(signature_value),
-        );
-        if let Some((function, signature)) = self.function_ids.get(&key).copied() {
+        if let Some(identity) = self.function_ids.iter().find(|identity| {
+            identity.module == module
+                && identity.body == body
+                && identity.argument_type == caller_argument.type_id
+                && identity.result_type == result_type
+                && identity.capture_types == capture_types
+                && crate::value::equal(&identity.signature, signature_value)
+        }) {
+            let function = identity.function;
+            let signature = identity.runtime_signature;
             let result_type = self.signatures[signature].result;
             let mut caller_arguments = vec![caller_argument.id];
             caller_arguments.extend(captures.iter().map(|capture| capture.id));
@@ -2505,7 +2596,16 @@ impl ResidualTrace {
         });
         let function = self.next_function;
         self.next_function += 1;
-        self.function_ids.insert(key, (function, signature_id));
+        self.function_ids.push(ResidualFunctionIdentity {
+            module: module.to_owned(),
+            body,
+            argument_type: caller_argument.type_id,
+            result_type,
+            capture_types: captures.iter().map(|capture| capture.type_id).collect(),
+            signature: signature_value.clone(),
+            function,
+            runtime_signature: signature_id,
+        });
         self.function_frames.push(ResidualFunctionFrame {
             source: self.source.clone(),
             blocks: std::mem::take(&mut self.blocks),
@@ -3599,23 +3699,10 @@ impl ResidualTrace {
         expected: &Value,
         actual: &Value,
         substitutions: &mut HashMap<u32, usize>,
-        representation_facts: &mut HashMap<String, Option<usize>>,
+        representation_facts: &mut RepresentationFacts,
     ) -> Result<(), Diagnostic> {
         if let Ok(type_id) = self.value_type(actual) {
-            let mut keys = vec![crate::value::show(expected)];
-            if let Some(key) = representation_shape_key(expected) {
-                keys.push(key);
-            }
-            for key in keys {
-                representation_facts
-                    .entry(key)
-                    .and_modify(|known| {
-                        if known.is_some_and(|known| known != type_id) {
-                            *known = None;
-                        }
-                    })
-                    .or_insert(Some(type_id));
-            }
+            representation_facts.record(expected, type_id);
         }
         match expected {
             Value::TypeVariable(variable) => {
@@ -3680,15 +3767,10 @@ impl ResidualTrace {
         &mut self,
         value: &Value,
         substitutions: &mut HashMap<u32, usize>,
-        representation_facts: &HashMap<String, Option<usize>>,
+        representation_facts: &RepresentationFacts,
     ) -> Result<usize, Diagnostic> {
-        if let Some(Some(type_id)) = representation_facts.get(&crate::value::show(value)) {
-            return Ok(*type_id);
-        }
-        if let Some(key) = representation_shape_key(value)
-            && let Some(Some(type_id)) = representation_facts.get(&key)
-        {
-            return Ok(*type_id);
+        if let Some(type_id) = representation_facts.get(value) {
+            return Ok(type_id);
         }
         match value {
             Value::TypeVariable(variable) => {
@@ -5247,33 +5329,30 @@ fn contains_static_integer(value: &Value) -> bool {
     }
 }
 
-fn representation_shape_key(value: &Value) -> Option<String> {
-    fn shape(value: &Value) -> String {
+fn representation_shape(value: &Value) -> Option<RepresentationShape> {
+    fn shape(value: &Value) -> RepresentationShape {
         match value {
-            Value::Shape(fields) => {
-                let fields = fields
+            Value::Shape(fields) => RepresentationShape::Shape(
+                fields
                     .iter()
-                    .map(|(name, value)| format!("{name}:{}", shape(value)))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                format!("{{{fields}}}")
+                    .map(|(name, value)| (name.clone(), shape(value)))
+                    .collect(),
+            ),
+            Value::Array(elements) => {
+                RepresentationShape::Array(elements.first().map(|element| Box::new(shape(element))))
             }
-            Value::Array(elements) => elements
-                .first()
-                .map(|element| format!("[{}]", shape(element)))
-                .unwrap_or_else(|| "[]".to_owned()),
-            Value::Tag { name, payload } => payload
-                .as_deref()
-                .map(|payload| format!("#{name} {}", shape(payload)))
-                .unwrap_or_else(|| format!("#{name}")),
+            Value::Tag { name, payload } => RepresentationShape::Tag(
+                name.clone(),
+                payload.as_deref().map(|payload| Box::new(shape(payload))),
+            ),
             Value::Extended { inner, .. }
             | Value::Sealed { inner, .. }
             | Value::Forall { body: inner, .. } => shape(inner),
-            _ => "_".to_owned(),
+            _ => RepresentationShape::Leaf,
         }
     }
 
-    matches!(value, Value::Shape(_) | Value::Array(_)).then(|| format!("shape:{}", shape(value)))
+    matches!(value, Value::Shape(_) | Value::Array(_)).then(|| shape(value))
 }
 
 fn collect_fields(

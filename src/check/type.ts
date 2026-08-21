@@ -61,6 +61,7 @@ export type VariableEvidence =
   | "staged-computation";
 
 const variableEvidence = new WeakMap<Variable, VariableEvidence>();
+const emptyArrayElements = new WeakSet<Variable>();
 
 export interface RigidVariable {
   readonly tag: "rigid";
@@ -185,6 +186,25 @@ export function freshVar(
   };
   if (evidence !== undefined) variableEvidence.set(variable, evidence);
   return variable;
+}
+
+/** Element hole introduced specifically by the polymorphic empty array. */
+export function freshEmptyArrayElement(level: Level): Variable {
+  const variable = freshVar(level);
+  emptyArrayElements.add(variable);
+  return variable;
+}
+
+export function isEmptyArrayElement(type: SimpleType): type is Variable {
+  return type.tag === "var" && emptyArrayElements.has(type);
+}
+
+export function copyEmptyArrayElement(
+  source: SimpleType,
+  target: SimpleType,
+): void {
+  if (!isEmptyArrayElement(source) || target.tag !== "var") return;
+  emptyArrayElements.add(target);
 }
 
 export function evidenceOf(variable: Variable): VariableEvidence | null {

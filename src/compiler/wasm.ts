@@ -75,18 +75,34 @@ export type CompilerLoweringResult =
   | { readonly ok: true; readonly module: unknown }
   | CompilerSourceFailure;
 
-interface CompilerSourceDiagnostic {
+export interface CompilerSourceDiagnostic {
   readonly code: string;
   readonly message: string;
   readonly origin?: string;
   readonly span: { readonly start: number; readonly end: number };
 }
 
-type CompilerSourceFailure = {
+export interface CompilerTransportTargetRefusal {
+  readonly code: "BLOT_TARGET_REFUSAL";
+  readonly message: string;
+}
+
+export interface CompilerTransportInvariantFailure {
+  readonly code: "BLOT_COMPILER_INVARIANT";
+  readonly phase: string;
+  readonly message: string;
+}
+
+export interface CompilerTransportFailure {
   readonly ok: false;
   readonly message?: string;
+  readonly diagnostic?: CompilerSourceDiagnostic;
   readonly diagnostics?: readonly CompilerSourceDiagnostic[];
-};
+  readonly targetRefusal?: CompilerTransportTargetRefusal;
+  readonly invariantFailure?: CompilerTransportInvariantFailure;
+}
+
+type CompilerSourceFailure = CompilerTransportFailure;
 
 export type AddedCompilerModuleResult =
   | {
@@ -107,42 +123,15 @@ export interface CompilerModuleConfiguration {
 
 export type CompilerEvaluationResult =
   | { readonly ok: true; readonly value: unknown; readonly display: string }
-  | {
-    readonly ok: false;
-    readonly message?: string;
-    readonly diagnostic?: {
-      readonly code: string;
-      readonly message: string;
-      readonly origin?: string;
-      readonly span: { readonly start: number; readonly end: number };
-    };
-  };
+  | CompilerTransportFailure;
 
 export type CompilerCheckResult =
   | { readonly ok: true; readonly type: string; readonly effects: string }
-  | {
-    readonly ok: false;
-    readonly message?: string;
-    readonly diagnostic?: {
-      readonly code: string;
-      readonly message: string;
-      readonly origin?: string;
-      readonly span: { readonly start: number; readonly end: number };
-    };
-  };
+  | CompilerTransportFailure;
 
 export type CompilerRuntimeHirResult =
   | { readonly ok: true; readonly module: BlotRuntimeModule }
-  | {
-    readonly ok: false;
-    readonly message?: string;
-    readonly diagnostic?: {
-      readonly code: string;
-      readonly message: string;
-      readonly origin?: string;
-      readonly span: { readonly start: number; readonly end: number };
-    };
-  };
+  | CompilerTransportFailure;
 
 export type CompilerCompilationResult =
   | {
@@ -151,16 +140,7 @@ export type CompilerCompilationResult =
     readonly manifestBytes: Uint8Array;
     readonly capabilities: readonly string[];
   }
-  | {
-    readonly ok: false;
-    readonly message?: string;
-    readonly diagnostic?: {
-      readonly code: string;
-      readonly message: string;
-      readonly origin?: string;
-      readonly span: { readonly start: number; readonly end: number };
-    };
-  };
+  | CompilerTransportFailure;
 
 export class CompilerWasm {
   readonly #exports: CompilerWasmExports;

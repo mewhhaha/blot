@@ -251,9 +251,32 @@ function rustFailure(
       readonly code: string;
       readonly message: string;
     }[];
+    readonly targetRefusal?: {
+      readonly code: string;
+      readonly message: string;
+    };
+    readonly invariantFailure?: {
+      readonly code: string;
+      readonly phase: string;
+      readonly message: string;
+    };
   },
   fallbackCode: string,
 ): CompilerRejection {
+  if (failure.targetRefusal !== undefined) {
+    return rejection(
+      stage,
+      failure.targetRefusal.code,
+      failure.targetRefusal.message,
+    );
+  }
+  if (failure.invariantFailure !== undefined) {
+    return rejection(
+      stage,
+      failure.invariantFailure.code,
+      `${failure.invariantFailure.phase}: ${failure.invariantFailure.message}`,
+    );
+  }
   const diagnostic = failure.diagnostic;
   if (diagnostic !== undefined) {
     return rejection(stage, diagnostic.code, diagnostic.message);
@@ -291,6 +314,12 @@ function errorRejection(
   }
   let message = String(error);
   if (error instanceof Error) message = error.message;
+  if (
+    error instanceof TypeError &&
+    message.includes("outside the checked residual Runtime-HIR calculus")
+  ) {
+    return rejection(stage, "BLOT_UNSUPPORTED_LOWERING", message);
+  }
   return rejection(stage, fallbackCode, message);
 }
 

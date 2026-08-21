@@ -16,10 +16,12 @@ import {
   boundAbove,
   boundBelow,
   checkpointInferenceIdentities,
+  copyEmptyArrayElement,
   effects,
   evidenceOf,
   freshRigid,
   freshVar,
+  isEmptyArrayElement,
   type Level,
   levelOf,
   openEffects,
@@ -205,6 +207,9 @@ function constrainWithState(
 
   if (lhs.tag === "array" && rhs.tag === "array") {
     constrainWithState(lhs.element, rhs.element, state);
+    if (isEmptyArrayElement(lhs.element)) {
+      constrainWithState(rhs.element, lhs.element, state);
+    }
     return;
   }
 
@@ -409,6 +414,7 @@ function extrude(
       if (existing !== undefined) return existing;
       const evidence = evidenceOf(type);
       const copy = freshVar(level, evidence === null ? undefined : evidence);
+      copyEmptyArrayElement(type, copy);
       seen.set(type, copy);
       if (polarity) {
         insertBound(type, "upper", copy, state);
@@ -563,6 +569,7 @@ function freshenAbove(
     case "var": {
       const evidence = evidenceOf(type);
       const copy = freshVar(level, evidence === null ? undefined : evidence);
+      copyEmptyArrayElement(type, copy);
       freshenedTypes.set(type, copy);
       // Not a bound. The copy is where this use's constraints land, and the
       // edge is what lets a fact read at the definition find them again.
