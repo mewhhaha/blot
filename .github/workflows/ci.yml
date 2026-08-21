@@ -26,8 +26,15 @@ jobs:
           lake-package-directory: formal/lean
           build: true
           test: false
-          nanoda: true
-          nanoda-allow-sorry: false
+          leanchecker: true
+      - name: Reject admitted formal declarations
+        shell: bash
+        run: |
+          if git grep -n -E '(^|[^[:alnum:]_])(sorry|admit|axiom)([^[:alnum:]_]|$)' \
+            -- formal/lean/Blot.lean 'formal/lean/Blot/*.lean'; then
+            echo 'Formal sources must not contain admitted declarations.' >&2
+            exit 1
+          fi
 
   check:
     runs-on: ubuntu-latest
