@@ -203,7 +203,7 @@ let holder = {
   .second = fn () => consume (!right);
   }
 let first = holder.first ()
-let consume_holder = fn !value =>
+let consume_holder = fn !value => do:
   let { .first; .second; } = !value
   let _ = first ()
   return second ()
@@ -320,7 +320,7 @@ return selected ()
 accepts(
   "an inferred ownership summary follows destructuring",
   `let consume = fn !value => @int.add value 1
-let select = fn holder =>
+let select = fn holder => do:
   let { .value; .label; } = holder
   return value
 let !token = 41
@@ -690,7 +690,7 @@ rejects(
   "a borrow cannot cross a host effect boundary",
   `const Sink = @effect.host { .write = Int -> Unit; }
 sig send = Int -> Unit ~ { Sink }
-let send = fn &value =>
+let send = fn &value => do:
   _ <- Sink.write (&value)
 return send
 `,
@@ -710,7 +710,7 @@ return @int.add result (consume (!token))
 
 rejects(
   "a closure carrying a borrow cannot be stored",
-  `let inspect = fn &point =>
+  `let inspect = fn &point => do:
   let later = fn () => @int.add point.x 0
   return later ()
 return inspect { .x = 41; }
@@ -764,7 +764,7 @@ rejects(
   `let consume = fn !value => @int.add value 1
 const Ask = @effect { .ask = Unit -> Unit; }
 let !token = 41
-let work = fn () =>
+let work = fn () => do:
   _ <- Ask.ask ()
   return consume (!token)
 let aborting = { .ask = fn (_, ?resume) => 0; }
@@ -778,7 +778,7 @@ accepts(
   `let consume = fn !value => @int.add value 1
 const Ask = @effect { .ask = Unit -> Unit; }
 let !token = 41
-let work = fn () =>
+let work = fn () => do:
   _ <- Ask.ask ()
   return consume (!token)
 let resuming = { .ask = fn (_, !resume) => resume (); }
@@ -791,10 +791,10 @@ accepts(
   `let consume = fn !value => @int.add value 1
 const Ask = @effect { .ask = Unit -> Unit; }
 let !token = 41
-let work = fn () =>
+let work = fn () => do:
   _ <- Ask.ask ()
   return consume (!token)
-let cancelling = { .ask = fn (_, !resume) =>
+let cancelling = { .ask = fn (_, !resume) => do:
   _ <- Continuation.cancel resume
   return 0
 ; }
@@ -805,9 +805,9 @@ return @handle (Ask, work, cancelling)
 rejects(
   "cancelling a handler continuation twice is rejected",
   `const Ask = @effect { .ask = Unit -> Unit; }
-let work = fn () =>
+let work = fn () => do:
   _ <- Ask.ask ()
-let cancelling = { .ask = fn (_, !resume) =>
+let cancelling = { .ask = fn (_, !resume) => do:
   _ <- Continuation.cancel resume
   _ <- Continuation.cancel resume
 ; }
@@ -828,9 +828,9 @@ return do:
 rejects(
   "cancellation must be sequenced",
   `const Ask = @effect { .ask = Unit -> Unit; }
-let work = fn () =>
+let work = fn () => do:
   _ <- Ask.ask ()
-let cancelling = { .ask = fn (_, !resume) =>
+let cancelling = { .ask = fn (_, !resume) => do:
   let cancelled = Continuation.cancel resume
   return cancelled
 ; }

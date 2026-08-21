@@ -5,7 +5,7 @@ open import "blot:prelude"
 
 const Ask = @effect { .ask = Int -> Int; }
 let quiet = { .ask = fn (n, ?resume) => 0; }
-let work = fn () =>
+let work = fn () => do:
   result <- Ask.ask 1
   return result
 return @handle (Ask, work, quiet)

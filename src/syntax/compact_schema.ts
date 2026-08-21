@@ -1,3 +1,5 @@
+// Stable rule identifiers. Retired names remain here so compiler snapshots do
+// not renumber existing rules; new names append at the end.
 export const compactRuleNames = [
   "operator_token",
   "program",

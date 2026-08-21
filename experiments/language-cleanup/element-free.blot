@@ -5,7 +5,7 @@ const Draw =
     .write = Str -> Unit;
   }
 
-let element = fn name => fn _properties => fn children =>
+let element = fn name => fn _properties => fn children => do:
   <- Draw.write ("<" <> name <> ">")
   for child in Iter.items children:
     <- child
@@ -15,7 +15,7 @@ let element = fn name => fn _properties => fn children =>
 
 let Render =
   {
-    .text = fn text =>
+    .text = fn text => do:
       <- Draw.write text
     ;
     .div = element "div";
@@ -32,7 +32,7 @@ sig Button =
     .disabled? = Bool;
     .order? = Int;
   } -> [Unit -> Unit ~ { Draw }] -> Unit ~ { Draw }
-let Button = fn properties => fn children =>
+let Button = fn properties => fn children => do:
   let disabled = case properties.disabled of
     () => ""
     #False => ""
@@ -47,25 +47,25 @@ let Button = fn properties => fn children =>
 
   <- Draw.write "</button>"
 
-let view = fn () =>
-  let count = fn () =>
+let view = fn () => do:
+  let count = fn () => do:
     <- text "Count: "
 
-  let save = fn () =>
+  let save = fn () => do:
     <- Button {
       .label = "Save";
       .disabled = ();
       .order = ();
     } []
 
-  let delete = fn () =>
+  let delete = fn () => do:
     <- Button {
       .label = "Delete";
       .disabled = #True;
       .order = 2;
     } []
 
-  let glyph = fn () =>
+  let glyph = fn () => do:
     <- icon {} []
 
   root <- div
@@ -78,7 +78,7 @@ let view = fn () =>
 
 let collecting =
   {
-    .write = fn (fragment, ?resume) =>
+    .write = fn (fragment, ?resume) => do:
       rest <- resume ()
       return fragment <> rest
     ;
@@ -87,7 +87,7 @@ let collecting =
 
 return @handle (
   Draw,
-  (fn () =>
+  (fn () => do:
     <- view ()
   ),
   collecting

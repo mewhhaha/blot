@@ -14,7 +14,7 @@ sig quicksort = [Int] -> [Int]
 let rec quicksort =
   fn values => case Array.uncons values of
     #None => []
-    #Some (pivot, rest) =>
+    #Some (pivot, rest) => do:
       let (smaller, larger) =
         partition (rest, fn value => value <= pivot)
       return quicksort smaller <> [pivot] <> quicksort larger

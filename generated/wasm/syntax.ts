@@ -288,7 +288,6 @@ export type RuleName =
   | "case_expression"
   | "case_arm"
   | "case_guard"
-  | "block"
   | "do_block"
   | "statement_suite"
   | "qualified_name"
@@ -710,12 +709,6 @@ export interface CaseGuardCursor extends RuleCursorBase<"case_guard"> {
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
-export interface BlockCursor extends RuleCursorBase<"block"> {
-  field(name: "statements"): ReadonlyArray<StatementCursor>;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
 export interface DoBlockCursor extends RuleCursorBase<"do_block"> {
   field(name: "phase"): TokenCursor<"literal", "compdo"> | TokenCursor<"literal", "do">;
   field(name: "statements"): ReadonlyArray<StatementCursor>;
@@ -807,7 +800,6 @@ export type AnyRuleCursor =
   | CaseExpressionCursor
   | CaseArmCursor
   | CaseGuardCursor
-  | BlockCursor
   | DoBlockCursor
   | StatementSuiteCursor
   | QualifiedNameCursor

@@ -1,6 +1,6 @@
 open import "blot:prelude"
 
-let unwrap = fn option =>
+let unwrap = fn option => do:
   if let #Some value = option else:
     let ignored = ()
   return value

@@ -6,9 +6,10 @@ open import "blot:prelude"
 
 const counted = #Some 3
 
-let shout = fn () =>
+let shout = fn () => do:
   if let #Some inner = counted else:
     return "none"
+
   return Text.append inner "!"
 
 return shout ()

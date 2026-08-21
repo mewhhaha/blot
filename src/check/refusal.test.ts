@@ -61,7 +61,7 @@ Deno.test("a refusal from an `@satisfies` predicate points at the predicate", as
 ` +
       `let reading = { .value = 12; }
 ` +
-      `let _ = @satisfies reading (fn t =>\n` +
+      `let _ = @satisfies reading (fn t => do:\n` +
       `  return expect (refines (t, { .missing = Int; }), "needs .missing")\n` +
       `)\n` +
       `return reading.value

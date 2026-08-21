@@ -6,7 +6,7 @@
 open import "blot:prelude"
 
 sig fibonacci = Int -> Int
-let rec fibonacci = fn n =>
+let rec fibonacci = fn n => do:
   if n < 2:
     return n
 

@@ -26,7 +26,7 @@ const Count = I32
 // transforms, so tagging does not create a second recursion rule.
 @[tag ("identity", (), identity)]
 const rec factorial =
-  fn n =>
+  fn n => do:
     if n == 0:
       return 1
     else:
@@ -35,7 +35,7 @@ const rec factorial =
 // A test is an ordinary identity transform whose descriptor name is `test`.
 // Normal evaluation leaves this function alone; `blot test` discovers it.
 @[test]
-let transformations_work = fn () =>
+let transformations_work = fn () => do:
   return expect (
     ordered == 7,
     "tags apply nearest-first"

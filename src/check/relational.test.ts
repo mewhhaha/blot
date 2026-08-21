@@ -82,14 +82,14 @@ Deno.test("refined consuming extraction returns plain tuples", async () => {
   const checked = await checkSource(
     "/tmp/refined-array-extraction.blot",
     PRELUDE + `sig take_at = [Int] -> Int -> (Int, [Int])
-let take_at = fn values => fn index =>
+let take_at = fn values => fn index => do:
   if index >= 0 && index < Array.length values:
     return @array.take values index
   else:
     return @panic "take index out of bounds"
 
 sig split_at = [Int] -> Int -> ([Int], Int, [Int])
-let split_at = fn values => fn index =>
+let split_at = fn values => fn index => do:
   if index >= 0 && index < Array.length values:
     return @array.split values index
   else:
@@ -159,12 +159,12 @@ return at
   },
 );
 
-const INDEX_PACKAGE_BODY = `let at_index = fn values =>
+const INDEX_PACKAGE_BODY = `let at_index = fn values => do:
   let iterator = Iter.indexed values
   let state = iterator.state
   return case iterator.step state of
     #None => 0
-    #Some (entry, _) =>
+    #Some (entry, _) => do:
       let input = (values, entry)
       let package = CARRY input
       let { .values = selected_values; .payload; } = package
@@ -218,7 +218,7 @@ Deno.test("same-shaped data cannot forge relationship evidence", async () => {
       checkSource(
         "/tmp/forged-relationship.blot",
         PRELUDE + `sig at_index = [Int] -> Int -> Int
-let at_index = fn values => fn candidate =>
+let at_index = fn values => fn candidate => do:
   let package = { .payload = (candidate, 0); }
   let (index, _) = package.payload
   return @array.get values index

@@ -241,7 +241,7 @@ function visitCursor(
     return;
   }
 
-  if (rule.name === "do_block" || rule.name === "block") {
+  if (rule.name === "do_block") {
     const frame = newFrame(scope, validation);
     visitStatements(fieldList(rule, "statements"), frame, validation);
     return;
@@ -282,7 +282,7 @@ function visitFrameBody(
 function directStatementScope(cursor: Cursor): Rule | null {
   let current = cursor;
   while (current.type === "rule") {
-    if (current.name === "do_block" || current.name === "block") return current;
+    if (current.name === "do_block") return current;
     const children = current.children().filter((child) =>
       child.type === "rule"
     );

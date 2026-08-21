@@ -3,7 +3,7 @@ open import "blot:prelude"
 let consume = fn !value => value + 1
 let !token = 41
 let rec even =
-  fn n =>
+  fn n => do:
     if n < 1:
       return consume (!token)
     else:

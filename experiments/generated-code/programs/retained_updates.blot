@@ -1,7 +1,7 @@
 open import "blot:prelude"
 
 sig retained_go = (Int, [Int], Int) -> Int
-const rec retained_go = fn (remaining, values, observed) =>
+const rec retained_go = fn (remaining, values, observed) => do:
   if remaining <= 0:
     return observed
 

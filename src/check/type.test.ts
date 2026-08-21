@@ -45,14 +45,14 @@ Deno.test("seal identity is structural and alpha-aware", () => {
   const text: Value = { tag: "text", value: "one" };
   const leftRecord: Value = {
     tag: "shape",
-    fields: new Map([
+    fields: new Map<string, Value>([
       ["left", integer],
       ["right", text],
     ]),
   };
   const rightRecord: Value = {
     tag: "shape",
-    fields: new Map([
+    fields: new Map<string, Value>([
       ["right", text],
       ["left", integer],
     ]),

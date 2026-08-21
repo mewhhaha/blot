@@ -11,7 +11,8 @@ Reviewed and implemented on top of `main` at
 
 ## What the merged work resolved
 
-Pull request #52 closed several findings that were present in the earlier review:
+Pull request #52 closed several findings that were present in the earlier
+review:
 
 - [`CORE_SEMANTICS.md`](../spec/CORE_SEMANTICS.md) centralizes demand, semantic
   identities, module instances, handler rows, progress, and cancellation
@@ -55,9 +56,9 @@ stuttering in one target state forever.
 
 ## 2. Applicative seal identity — implemented in the checker boundary
 
-A seal is identified by `(public name, invariant carrier)`. Checker identity must
-therefore be structural modulo alpha-renaming and closed-type equivalence, not
-presentation text and not the public name alone.
+A seal is identified by `(public name, invariant carrier)`. Checker identity
+must therefore be structural modulo alpha-renaming and closed-type equivalence,
+not presentation text and not the public name alone.
 
 The TypeScript bridge now fingerprints the bridged carrier with the same
 alpha-aware canonical fingerprint used by closed type normalization. Its

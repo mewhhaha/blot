@@ -383,11 +383,11 @@ Deno.test("typed Core simulates generated one-shot handlers", async () => {
     const source = `open import "blot:prelude"
 const Shift = @effect { .by = Int -> Int; }
 let shifting =
-  { .by = fn (value, ?resume) =>
+  { .by = fn (value, ?resume) => do:
     result <- resume (value + ${offset})
     return result
   ; }
-let work = fn () =>
+let work = fn () => do:
   left <- Shift.by ${first}
   right <- Shift.by ${second}
   return left + right

@@ -2,7 +2,7 @@ open import "blot:prelude"
 
 const Console = @effect { .write = Str -> Unit; }
 
-let choose = fn selected =>
+let choose = fn selected => do:
   <- case selected of
     1 => Console.write "one"
     _ => Console.write "other"
@@ -16,7 +16,7 @@ let recording =
 return {
   .first = @handle (
     Console,
-    (fn () =>
+    (fn () => do:
       result <- choose 1
       return result
     ),
@@ -24,7 +24,7 @@ return {
   );
   .other = @handle (
     Console,
-    (fn () =>
+    (fn () => do:
       result <- choose 2
       return result
     ),

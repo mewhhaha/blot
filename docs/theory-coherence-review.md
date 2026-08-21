@@ -2,12 +2,11 @@
 
 ## Status
 
-This is a design review, not a language or compiler specification. The
-normative contracts remain [`LANGUAGE.md`](../LANGUAGE.md) and the documents in
+This is a design review, not a language or compiler specification. The normative
+contracts remain [`LANGUAGE.md`](../LANGUAGE.md) and the documents in
 [`spec/`](../spec/README.md).
 
-Reviewed against `main` at
-`34a2e74649eadd95c4ed125d34f42f57b0bf94ea`.
+Reviewed against `main` at `34a2e74649eadd95c4ed125d34f42f57b0bf94ea`.
 
 ## Implementation status
 
@@ -25,11 +24,11 @@ than leaving them as prose only:
 - Rust unit tests distinguish repeated evaluation of one occurrence, different
   occurrences, and the same nested import site under different parent instances;
 - TypeScript regressions cover distinct import effects, aliases, handler
-  reintroduction of an effect, and the implemented policy that handling an absent
-  effect is valid; and
-- the handler subtraction itself required no checker rewrite: both TypeScript and
-  Rust already remove the handled label before joining clause effects. The new
-  spec and tests make that existing behavior explicit.
+  reintroduction of an effect, and the implemented policy that handling an
+  absent effect is valid; and
+- the handler subtraction itself required no checker rewrite: both TypeScript
+  and Rust already remove the handled label before joining clause effects. The
+  new spec and tests make that existing behavior explicit.
 
 The continuation-cancellation question remains intentionally open. Choosing
 must-use resource finalization would be a language change, not a cleanup that
@@ -55,8 +54,8 @@ property to one explicit compiler judgment:
 
 That separation is the strongest part of the design. It prevents relational
 reasoning from becoming accidental dependent typing, prevents ownership from
-complicating principal inference, and gives the compiler a plausible sequence
-of independently checkable boundaries.
+complicating principal inference, and gives the compiler a plausible sequence of
+independently checkable boundaries.
 
 The distinction between [`LANGUAGE.md`](../LANGUAGE.md) as the implemented
 contract and [`spec/PAPER.md`](../spec/PAPER.md) as the coherent target model is
@@ -111,8 +110,8 @@ The handler rule in [`spec/PAPER.md`](../spec/PAPER.md) factors the computation
 row as `epsilon union {ell}` and returns `epsilon union epsilon_h`.
 
 For finite sets, that factorization is not unique: `epsilon` may already contain
-`ell`. The same premise can therefore produce different result rows depending
-on which `epsilon` is chosen.
+`ell`. The same premise can therefore produce different result rows depending on
+which `epsilon` is chosen.
 
 State the elimination directly:
 
@@ -124,8 +123,8 @@ Gamma |- handle ell c with h
   : B ! ((epsilon_c \ {ell}) union epsilon_h)
 ```
 
-The set difference is the semantic operation. If a handler clause performs
-`ell` again, the label is reintroduced through `epsilon_h`.
+The set difference is the semantic operation. If a handler clause performs `ell`
+again, the label is reintroduced through `epsilon_h`.
 
 The source contract should also decide whether handling an effect absent from
 `epsilon_c` is:
@@ -178,8 +177,8 @@ resources, choose one model explicitly:
 1. **Unique but droppable.** Cancellation is a valid final use. Required
    finalization is represented separately, perhaps as an effect or a dedicated
    resource protocol.
-2. **Must-use with cancellation evidence.** A cancellable continuation carries
-   a checked summary describing how every captured obligation is finalized when
+2. **Must-use with cancellation evidence.** A cancellable continuation carries a
+   checked summary describing how every captured obligation is finalized when
    the continuation is discarded.
 3. **Must resume.** Cancellation is rejected whenever the continuation owns a
    linear obligation; the handler must resume exactly once.
@@ -212,8 +211,8 @@ live(block-result, declaration-dependency graph) = binding identities retained
 
 The dependency graph should be built after name resolution and surface
 elaboration, before optimization. Its edges should include all ordinary value
-uses and compile-time facts needed by retained declarations. The resulting
-lemma is then:
+uses and compile-time facts needed by retained declarations. The resulting lemma
+is then:
 
 ```text
 erase_dead(block) preserves every demanded return, request, trap, and divergence
@@ -222,9 +221,9 @@ erase_dead(block) preserves every demanded return, request, trap, and divergence
 This prevents an optimizer from declaring an expression dead because it appears
 unobservable under an optimization that already erased it.
 
-**Specified here.** `CORE_SEMANTICS.md` describes the backward lexical dependency
-judgment that the evaluators already approximate operationally. A mechanized
-preservation proof remains future work.
+**Specified here.** `CORE_SEMANTICS.md` describes the backward lexical
+dependency judgment that the evaluators already approximate operationally. A
+mechanized preservation proof remains future work.
 
 ### 6. The identity vocabulary should be centralized
 
@@ -245,9 +244,9 @@ identity is allocated, how long it remains valid, whether it is generative or
 applicative, and whether it may cross a cache, module capsule, Runtime HIR, or
 ABI boundary.
 
-This would make many existing rules shorter. For example, “do not re-evaluate
-an effect declaration in a later pass” becomes an instance of a general rule:
-a later pass may consume an identity allocated by its owning phase but may not
+This would make many existing rules shorter. For example, “do not re-evaluate an
+effect declaration in a later pass” becomes an instance of a general rule: a
+later pass may consume an identity allocated by its owning phase but may not
 mint a replacement.
 
 **Implemented here.** `CORE_SEMANTICS.md` now carries the centralized identity
@@ -261,8 +260,8 @@ narrower:
 
 1. mechanize the demand and module-instance preservation lemmas once the Lean
    core reaches modules and effects;
-2. make any future reusable module-result cache key include the complete semantic
-   instance identity rather than a definition path; and
+2. make any future reusable module-result cache key include the complete
+   semantic instance identity rather than a definition path; and
 3. decide the cancellation/finalization model before adding must-use host
    resources.
 

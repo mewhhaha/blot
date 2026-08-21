@@ -7,7 +7,7 @@ open import "blot:prelude"
 const Eq = { .eq = fn _ => fn _ => True; .ne = fn _ => fn _ => False; }
 
 sig name = 1 | 2 | 3 -> Str
-let name = fn n =>
+let name = fn n => do:
   if n == 1:
     return case n of
       1 => "one"

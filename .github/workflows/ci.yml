@@ -50,7 +50,7 @@ jobs:
           --allow-run=git,rustc
           scripts/package_compiler_artifact.ts
       - name: Upload Rust compiler artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: blot-rust-compiler
           path: |
@@ -115,7 +115,7 @@ jobs:
           pnpm exec tsx --import ./src/node/polyfills.mjs --test src/node/pipeline.test.ts
           pnpm parity:strict examples/minimal.blot
       - name: Upload runnable Node workspace
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: blot-node-workspace-${{ github.sha }}
           path: blot-node-workspace.tar.gz

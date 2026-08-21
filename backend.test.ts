@@ -68,7 +68,7 @@ Deno.test("imported structural folds residualize over runtime records", async ()
   await Deno.writeTextFile(
     library,
     `open import "blot:prelude"
-const component = fn definition =>
+const component = fn definition => do:
   let names = @shape.names definition.fields
   return {
     .pack = fn value => fold (names, 0, (fn (sum, name) => @int.add sum (@shape.get value name)));
@@ -154,7 +154,7 @@ Deno.test("runtime booleans survive local function results", async () => {
     root,
     `open import "blot:prelude"
 const Source = @effect.host { .value = Int -> Int; }
-let positive = fn () =>
+let positive = fn () => do:
   value <- Source.value 0
   return value > 0
 present <- positive ()
@@ -364,7 +364,7 @@ Deno.test("an effect can carry its specialized handler into inferred reflection"
   await Deno.writeTextFile(
     path,
     `open import "blot:prelude"
-const capability = fn () =>
+const capability = fn () => do:
   const Raw = @effect { .read = Unit -> Int; }
   const handle = fn selected => fn computation => @handle (
     Raw,
@@ -374,7 +374,7 @@ const capability = fn () =>
   const Access = Raw <+ { .handler = handle; }
   return { .read = Access; }
 const Component = capability ()
-const system = fn () =>
+const system = fn () => do:
   value <- Component.read.read ()
   return value
 const reflected = case @type.reflect (@type.of system) of
@@ -692,7 +692,7 @@ Deno.test("a structural function remains specializable through a record", async 
 `,
     `sig at = Int -> Int
 `,
-    "let at = fn n =>",
+    "let at = fn n => do:",
     "  return functions.project { .x = n; .y = 0; } +",
     "    functions.project { .x = n; .z = 0; }",
     `return { .at = at; }
@@ -720,7 +720,7 @@ Deno.test("a structural function remains specializable through nested aggregates
 `,
     `sig at = Int -> Int
 `,
-    "let at = fn n =>",
+    "let at = fn n => do:",
     "  let from_record = nested.first.project { .x = n; .y = 0; }",
     "  let from_tuple = nested.second { .x = n; .z = 0; }",
     "  return from_record + from_tuple",
@@ -774,7 +774,7 @@ Deno.test("a known higher-order runtime choice preserves structural specializati
 `,
     `sig run = Int -> Int
 `,
-    "let run = fn flag =>",
+    "let run = fn flag => do:",
     "  let selected = choose flag",
     "  let left = selected { .x = 20; .y = 1; }",
     "  let right = selected { .x = 22; .z = 2; }",
@@ -899,7 +899,7 @@ Deno.test("a runtime function choice specializes once per concrete shape", async
     path,
     `open import "blot:prelude"
 sig run = Int -> Int
-let run = fn flag =>
+let run = fn flag => do:
   let selected = case flag > 0 of
     #True => fn value => value.x
     #False => fn value => value.x
@@ -929,7 +929,7 @@ Deno.test("a generalized destructuring takes its shape from the call site", asyn
   await Deno.writeTextFile(
     path,
     `open import "blot:prelude"
-let get_x = fn v =>
+let get_x = fn v => do:
   let { .x = a; } = v
   return a
 sig at = Int -> Int
@@ -1030,7 +1030,7 @@ Deno.test("indexed iteration carries a bounds proof into a dynamic loop", async 
 `,
     `sig sum = [Int] -> Int
 `,
-    "let sum = fn values =>",
+    "let sum = fn values => do:",
     `  let total = 0
 `,
     "  for (index, _) in Iter.indexed values:",
@@ -1386,7 +1386,7 @@ Deno.test({
       path,
       `open import "blot:prelude"
 sig at = Int -> Int
-let at = fn value =>
+let at = fn value => do:
   let [only] = [value]
   return only
 return { .at = at; }
@@ -2045,7 +2045,7 @@ Deno.test("a recursive group's members keep what they captured", async () => {
   await Deno.writeTextFile(
     path,
     `open import "blot:prelude"
-let total = fn step =>
+let total = fn step => do:
   let rec down = fn n => case n < step of
     #True => 0
     #False => n + up (n - step)

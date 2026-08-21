@@ -127,7 +127,7 @@ Deno.test("Slice-relative get and set cannot reach a sibling Region", async () =
   const source = `open import "blot:prelude"
 let whole = Slice.claim [10, 20, 30]
 return case Slice.split ((!whole), 1) of
-  #Split (!left, !right, !rejoin) =>
+  #Split (!left, !right, !rejoin) => do:
     let crossed = case Slice.get ((&left), 1) of
       #Some _ => 1
       #None => 0
@@ -140,7 +140,7 @@ return case Slice.split ((!whole), 1) of
       #Some value => value
       #None => 99
     return crossed * 100 + middle
-  #SplitOutOfBounds !original =>
+  #SplitOutOfBounds !original => do:
     let frozen = Slice.freeze (!original)
     return 900 + Array.length (&frozen)
 `;
@@ -242,13 +242,13 @@ const Source = @effect.host { .value = Int -> Int; }
 sig quicksort = [Int] -> [Int]
 let rec quicksort = fn values => case Array.uncons values of
   #None => []
-  #Some (pivot, rest) =>
+  #Some (pivot, rest) => do:
     let (smaller, larger) =
       Array.partition (rest, fn value => value <= pivot)
     return quicksort smaller <> [pivot] <> quicksort larger
 
 sig ordered_checksum = ([Int], Int, Int) -> Int
-let rec ordered_checksum = fn (values, index, total) =>
+let rec ordered_checksum = fn (values, index, total) => do:
   if index >= Array.length values:
     return total
   else:
@@ -289,7 +289,7 @@ Deno.test("direct recursive functions close over dynamic values", async () => {
 const Source = @effect.host { .value = Int -> Int; }
 offset <- Source.value 0
 sig add_depth = Int -> Int
-let rec add_depth = fn depth =>
+let rec add_depth = fn depth => do:
   if depth <= 0:
     return offset
   else:
@@ -391,7 +391,7 @@ sig freeze_it = @region.type Int -> [Int]
 let freeze_it = fn !region => Slice.freeze (!region)
 let whole = Slice.claim [4, 5, 6]
 return case Slice.split ((!whole), 1) of
-  #Split (!left, !right, !rejoin) =>
+  #Split (!left, !right, !rejoin) => do:
     let frozen = freeze_it (!left)
     let restored = Slice.join ((!rejoin), (Slice.claim frozen), (!right))
     return Slice.freeze (!restored)

@@ -685,14 +685,16 @@ impl Analysis<'_> {
 
     fn region_length(&self, expression: ExpressionId, scope: &Scope) -> Option<Term> {
         match &self.module.arena.expressions[expression.0 as usize] {
-            Expression::Var { name, .. } => scope
-                .identities
-                .get(name)
-                .copied()
-                .map(|identity| Term::Variable {
-                    identity,
-                    offset: BigInt::from(0),
-                }),
+            Expression::Var { name, .. } => {
+                scope
+                    .identities
+                    .get(name)
+                    .copied()
+                    .map(|identity| Term::Variable {
+                        identity,
+                        offset: BigInt::from(0),
+                    })
+            }
             Expression::Apply { .. } => {
                 let (callee, arguments) = application_spine(expression, self.module);
                 let Expression::Intrinsic { name, .. } =
@@ -724,7 +726,10 @@ impl Analysis<'_> {
                     .iter()
                     .map(|element| self.relation(*element, scope))
                     .collect::<Vec<_>>();
-                elements.iter().any(Option::is_some).then_some(Relation::Tuple(elements))
+                elements
+                    .iter()
+                    .any(Option::is_some)
+                    .then_some(Relation::Tuple(elements))
             }
             Expression::Shape { members, .. } => {
                 let mut fields = BTreeMap::new();
@@ -734,7 +739,8 @@ impl Analysis<'_> {
                             fields.insert(name.clone(), self.relation(*value, scope));
                         }
                         ShapeMember::Spread { value } => {
-                            let Some(Relation::Record(spread)) = self.relation(*value, scope) else {
+                            let Some(Relation::Record(spread)) = self.relation(*value, scope)
+                            else {
                                 fields.clear();
                                 continue;
                             };
@@ -742,7 +748,10 @@ impl Analysis<'_> {
                         }
                     }
                 }
-                fields.values().any(Option::is_some).then_some(Relation::Record(fields))
+                fields
+                    .values()
+                    .any(Option::is_some)
+                    .then_some(Relation::Record(fields))
             }
             Expression::Apply { .. } => {
                 let (callee, arguments) = application_spine(expression, self.module);
@@ -796,12 +805,7 @@ impl Analysis<'_> {
         }
     }
 
-    fn projected_identity(
-        &mut self,
-        parent: Identity,
-        field: &str,
-        scope: &mut Scope,
-    ) -> Identity {
+    fn projected_identity(&mut self, parent: Identity, field: &str, scope: &mut Scope) -> Identity {
         let key = (parent, field.to_owned());
         if let Some(identity) = scope.projections.get(&key) {
             return *identity;
@@ -900,12 +904,7 @@ impl Analysis<'_> {
                 continue;
             }
             let projected = self.projected_identity(root, &field, scope);
-            self.record_transform_projection_aliases(
-                value,
-                projected,
-                arguments,
-                scope,
-            );
+            self.record_transform_projection_aliases(value, projected, arguments, scope);
         }
     }
 
@@ -945,18 +944,14 @@ impl Analysis<'_> {
                 let Some(callee) = self.callee_value(callee, scope) else {
                     return;
                 };
-                let Some(summary) = self.summaries.derive_relationship(&callee, self.context) else {
+                let Some(summary) = self.summaries.derive_relationship(&callee, self.context)
+                else {
                     return;
                 };
                 if summary.arity != arguments.len() {
                     return;
                 }
-                self.record_transform_projection_aliases(
-                    &summary.result,
-                    root,
-                    &arguments,
-                    scope,
-                );
+                self.record_transform_projection_aliases(&summary.result, root, &arguments, scope);
             }
             _ => {}
         }
@@ -989,8 +984,7 @@ impl Analysis<'_> {
                 payload: Some(payload),
                 ..
             } => {
-                let projected =
-                    self.projected_identity(parent, &format!("#{name}"), scope);
+                let projected = self.projected_identity(parent, &format!("#{name}"), scope);
                 self.bind_pattern_projection_identities(payload, projected, scope);
             }
             _ => {}
@@ -998,11 +992,7 @@ impl Analysis<'_> {
     }
 }
 
-fn existing_identity(
-    module: &Module,
-    expression: ExpressionId,
-    scope: &Scope,
-) -> Option<Identity> {
+fn existing_identity(module: &Module, expression: ExpressionId, scope: &Scope) -> Option<Identity> {
     match &module.arena.expressions[expression.0 as usize] {
         Expression::Var { name, .. } => scope.identities.get(name).copied(),
         Expression::Field { target, name, .. } => {
@@ -1200,7 +1190,8 @@ fn instantiate_relationship(
             target,
             constructor,
         } => {
-            let Relation::Choice(mut choices) = instantiate_relationship(*target, arguments)? else {
+            let Relation::Choice(mut choices) = instantiate_relationship(*target, arguments)?
+            else {
                 return None;
             };
             choices.remove(&constructor).flatten()
@@ -1210,7 +1201,10 @@ fn instantiate_relationship(
                 .into_iter()
                 .map(|element| element.and_then(|value| instantiate_relationship(value, arguments)))
                 .collect::<Vec<_>>();
-            elements.iter().any(Option::is_some).then_some(Relation::Tuple(elements))
+            elements
+                .iter()
+                .any(Option::is_some)
+                .then_some(Relation::Tuple(elements))
         }
         RelationshipTransform::Record(fields) => {
             let fields = fields
@@ -1222,7 +1216,10 @@ fn instantiate_relationship(
                     )
                 })
                 .collect::<BTreeMap<_, _>>();
-            fields.values().any(Option::is_some).then_some(Relation::Record(fields))
+            fields
+                .values()
+                .any(Option::is_some)
+                .then_some(Relation::Record(fields))
         }
         RelationshipTransform::Choice(cases) => {
             let cases = cases
@@ -1234,7 +1231,10 @@ fn instantiate_relationship(
                     )
                 })
                 .collect::<BTreeMap<_, _>>();
-            cases.values().any(Option::is_some).then_some(Relation::Choice(cases))
+            cases
+                .values()
+                .any(Option::is_some)
+                .then_some(Relation::Choice(cases))
         }
     }
 }

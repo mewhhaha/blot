@@ -22,7 +22,7 @@ open import "blot:prelude"
 
 // One definition, two implementations, and nothing at run time chooses between
 // them: `measuring` is applied while compiling and the loser is never emitted.
-const measuring = fn T =>
+const measuring = fn T => do:
   if refines (T, Str):
     return fn x => Text.length x
   else:
@@ -44,7 +44,7 @@ let int_itself = measure_int 41
 // is returned. This is the shape `examples/generics.blot` uses, and it kept
 // working throughout — a body with nothing to select between never needed the
 // evaluator's answer.
-const adding = fn T =>
+const adding = fn T => do:
   let _ =
     expect (
       refines (T, Int),
@@ -60,9 +60,9 @@ const add = adding Int
 // recursive group ties around several names at once. A `const` that *is* a
 // group is still typed with its group; this is for one that arrived as a value,
 // selected here by a compile-time conditional.
-const counting = fn T =>
+const counting = fn T => do:
   const rec down =
-    fn n =>
+    fn n => do:
       if n <= 0:
         return 0
       else:

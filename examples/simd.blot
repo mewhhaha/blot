@@ -29,7 +29,7 @@ const Console =
 // the opcode assertions are really about, and a chain is the only way to state
 // it in a program.
 sig normalize = F32x4 -> F32x4
-let normalize = fn input =>
+let normalize = fn input => do:
   let gain = Vec4.splat (Float32.of_int 10)
   let biased = Vec4.add input gain
   let scaled = Vec4.mul biased gain

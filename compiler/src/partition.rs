@@ -12,6 +12,11 @@ pub(crate) struct PartitionWitness<Family, Part> {
     pub(crate) right: Part,
 }
 
+pub(crate) type PartitionReassociation<Family, Part> = (
+    PartitionWitness<Family, Part>,
+    PartitionWitness<Family, Part>,
+);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Direction {
     Left,
@@ -54,13 +59,7 @@ pub(crate) fn reassociate_partition<Family, Part>(
     outer: &PartitionWitness<Family, Part>,
     inner: &PartitionWitness<Family, Part>,
     compose: impl FnOnce(&Family, &Part, &Part) -> Option<Part>,
-) -> Result<
-    (
-        PartitionWitness<Family, Part>,
-        PartitionWitness<Family, Part>,
-    ),
-    PartitionError,
->
+) -> Result<PartitionReassociation<Family, Part>, PartitionError>
 where
     Family: Clone + PartialEq,
     Part: Clone + PartialEq,
@@ -150,15 +149,8 @@ pub(crate) fn compose_rectangle(
 }
 
 #[allow(dead_code)]
-pub(crate) fn rectangle_contains(
-    footprint: &RectangleFootprint,
-    x: u32,
-    y: u32,
-) -> bool {
-    footprint.x0 <= x
-        && x < footprint.x1
-        && footprint.y0 <= y
-        && y < footprint.y1
+pub(crate) fn rectangle_contains(footprint: &RectangleFootprint, x: u32, y: u32) -> bool {
+    footprint.x0 <= x && x < footprint.x1 && footprint.y0 <= y && y < footprint.y1
 }
 
 #[cfg(test)]

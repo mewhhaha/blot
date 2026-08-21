@@ -3296,11 +3296,7 @@ impl BigIntExt {
 mod tests {
     use super::*;
 
-    fn effect_id_for_instance(
-        context: &Context,
-        mut runtime: Runtime,
-        effect_span: Span,
-    ) -> u32 {
+    fn effect_id_for_instance(context: &Context, mut runtime: Runtime, effect_span: Span) -> u32 {
         runtime.module = Rc::new("dependency.blot".to_owned());
         context.effect_id(&runtime, effect_span, false)
     }
@@ -3335,16 +3331,9 @@ mod tests {
         let effect_span = Span { start: 30, end: 40 };
         let nested_site = Span { start: 7, end: 8 };
 
-        let first_parent = enter_module_instance(
-            base.clone(),
-            "parent.blot",
-            Span { start: 1, end: 2 },
-        );
-        let second_parent = enter_module_instance(
-            base,
-            "parent.blot",
-            Span { start: 3, end: 4 },
-        );
+        let first_parent =
+            enter_module_instance(base.clone(), "parent.blot", Span { start: 1, end: 2 });
+        let second_parent = enter_module_instance(base, "parent.blot", Span { start: 3, end: 4 });
         let first_nested = enter_module_instance(first_parent, "dependency.blot", nested_site);
         let second_nested = enter_module_instance(second_parent, "dependency.blot", nested_site);
 

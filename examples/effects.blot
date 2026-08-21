@@ -33,13 +33,13 @@ const Terminal =
   }
 
 sig ask = Unit -> Str ~ { Terminal }
-let ask = fn () =>
+let ask = fn () => do:
   answer <- Terminal.read ()
   return answer <> "!"
 
 let answering =
   {
-    .read = fn ((), ?resume) =>
+    .read = fn ((), ?resume) => do:
       answer <- resume "42"
       return answer
     ;
@@ -49,7 +49,7 @@ let answering =
 // Performing is a call, and the row follows from it. The `sig` says the same
 // thing the printer would: the body may perform `Console` and nothing else.
 sig greet = Unit -> Str ~ { Console }
-let greet = fn () =>
+let greet = fn () => do:
   <- Console.write "hello"
   <- Console.write "world"
   return "done"
@@ -62,7 +62,7 @@ let greet = fn () =>
 // catches the second call statically.
 let collecting =
   {
-    .write = fn (message, ?resume) =>
+    .write = fn (message, ?resume) => do:
       rest <- resume ()
       return @text.concat (@text.concat message "|") rest
     ;
@@ -71,7 +71,7 @@ let collecting =
 
 let counting =
   {
-    .write = fn (_, ?resume) =>
+    .write = fn (_, ?resume) => do:
       rest <- resume ()
       return @int.add 1 rest
     ;
@@ -80,7 +80,7 @@ let counting =
 
 let passing =
   {
-    .write = fn (_, ?resume) =>
+    .write = fn (_, ?resume) => do:
       value <- resume ()
       return value
     ;

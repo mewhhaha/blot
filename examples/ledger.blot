@@ -6,11 +6,12 @@
 open import "blot:prelude"
 
 const Event = #Deposit Int | #Withdraw Int
-const Ledger = {
-  .balance = Int;
-  .accepted = Int;
-  .rejected = Int;
-}
+const Ledger =
+  {
+    .balance = Int;
+    .accepted = Int;
+    .rejected = Int;
+  }
 
 sig apply = (Ledger, Event) -> Ledger
 let apply = fn (state, event) => case event of
@@ -19,7 +20,7 @@ let apply = fn (state, event) => case event of
     .accepted = state.accepted + 1;
     .rejected = state.rejected;
   }
-  #Withdraw amount =>
+  #Withdraw amount => do:
     if amount <= state.balance:
       return {
         .balance = state.balance - amount;
@@ -31,7 +32,7 @@ let apply = fn (state, event) => case event of
         .balance = state.balance;
         .accepted = state.accepted;
         .rejected = state.rejected + 1;
-      }
+    }
 
 let events = [#Deposit 10, #Withdraw 4, #Withdraw 20, #Deposit 3, #Withdraw 8]
 let initial = { .balance = 0; .accepted = 0; .rejected = 0; }

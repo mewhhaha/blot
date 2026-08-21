@@ -7,7 +7,7 @@ const node = fn (value, previous, next) => {
   }
 
 let rec build =
-  fn (value, ?nodes) =>
+  fn (value, ?nodes) => do:
     if value > 10:
       return nodes
     else:
@@ -18,7 +18,7 @@ let rec build =
       return build (value + 1, nodes)
 
 let rec total_forward =
-  fn (&nodes, address, sum) =>
+  fn (&nodes, address, sum) => do:
     if address == 0:
       return sum
     else:
@@ -31,7 +31,7 @@ let rec total_forward =
         #None => sum
 
 let rec total_backward =
-  fn (&nodes, address, sum) =>
+  fn (&nodes, address, sum) => do:
     if address == 0:
       return sum
     else:

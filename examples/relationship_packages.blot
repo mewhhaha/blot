@@ -5,12 +5,12 @@ open import "blot:prelude"
 
 let carry = fn input => { .values = input.0; .payload = input.1; }
 
-let at_index = fn values =>
+let at_index = fn values => do:
   let iterator = Iter.indexed values
   let state = iterator.state
   return case iterator.step state of
     #None => 0
-    #Some (entry, _) =>
+    #Some (entry, _) => do:
       let input = (values, entry)
       let package = carry input
       let { .values = selected_values; .payload; } = package

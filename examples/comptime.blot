@@ -32,7 +32,7 @@ const aligned_layout = layout (Header.shape, word_width)
 const derive_show = fn names => fn value => fold (
     names,
     "",
-    fn (state, name) =>
+    fn (state, name) => do:
       let rendered = @text.of_int (@shape.get value name)
       return
         @text.concat state (@text.concat name (@text.concat "=" (@text.concat rendered " ")))
@@ -40,7 +40,7 @@ const derive_show = fn names => fn value => fold (
 
 const show_header = derive_show Header.fields
 
-const derive_sum = fn names => fn value =>
+const derive_sum = fn names => fn value => do:
   return fold (
     names,
     0,

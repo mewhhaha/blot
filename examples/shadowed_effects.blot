@@ -11,11 +11,11 @@ open import "blot:prelude"
 
 const Log = @effect { .write = Int -> Int; }
 let doubling =
-  { .write = fn (n, ?resume) =>
+  { .write = fn (n, ?resume) => do:
     result <- resume (n * 2)
     return result
   ; }
-let work = fn () =>
+let work = fn () => do:
   result <- Log.write 20
   return result
 let first = @handle (Log, work, doubling)
@@ -25,11 +25,11 @@ let first = @handle (Log, work, doubling)
 // so a fresh effect is introduced with another `const`.
 const Log = @effect { .write = Int -> Int; }
 let tripling =
-  { .write = fn (n, ?resume) =>
+  { .write = fn (n, ?resume) => do:
     result <- resume (n * 3)
     return result
   ; }
-let other = fn () =>
+let other = fn () => do:
   result <- Log.write 1
   return result
 let second = @handle (Log, other, tripling)

@@ -12,7 +12,7 @@ let nodes =
   ]
 
 let rec layout =
-  fn (index, !frames) =>
+  fn (index, !frames) => do:
     if index < 0 || index >= @array.len nodes:
       return frames
     else:

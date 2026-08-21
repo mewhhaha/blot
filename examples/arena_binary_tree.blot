@@ -17,7 +17,7 @@ let (nodes, six) = Arena.insert (?nodes, branch (6, four, five))
 let (nodes, root) = Arena.insert (?nodes, branch (7, three, six))
 
 let rec total =
-  fn (&tree, address) =>
+  fn (&tree, address) => do:
     if address == 0:
       return 0
     else:

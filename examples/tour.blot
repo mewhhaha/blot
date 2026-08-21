@@ -33,7 +33,7 @@ let distance = fn (from, to) => Num.abs (to - from)
 
 // `rec` makes the binding's own name visible inside the lambda.
 const rec factorial =
-  fn n =>
+  fn n => do:
     if n < 2:
       return 1
     else:
@@ -62,7 +62,7 @@ let [head, waist, tail] = [1, 2, 3]
 
 // --- shadowing and blocks ---------------------------------------------------
 
-let staged =
+let staged = do:
   let base = left * 2
   let scaled = base + right
   // `:=` rebinds at the same stable type; there is no assignment anywhere.
@@ -89,14 +89,14 @@ for ever:
 
 const Console = @effect { .write = Str -> Unit; }
 
-let report = fn () =>
+let report = fn () => do:
   <- Console.write "one"
   <- Console.write "two"
   return "done"
 
 let joining =
   {
-    .write = fn (message, ?resume) =>
+    .write = fn (message, ?resume) => do:
       rest <- resume ()
       return message ++ rest
     ;
@@ -107,7 +107,7 @@ let joining =
 // function and the program's entire authority.
 let printing =
   {
-    .write = fn (message, ?resume) =>
+    .write = fn (message, ?resume) => do:
       <- init.print message
       result <- resume ()
       return result

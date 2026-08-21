@@ -30,8 +30,8 @@ let unwrap_or_zero = fn option => case option of
 ```
 
 The same rule applies in every value position. Layout alone does not construct a
-statement block. `do:` is the explicit lexical and `return` boundary;
-`compdo:` is its compile-time counterpart.
+statement block. `do:` is the explicit lexical and `return` boundary; `compdo:`
+is its compile-time counterpart.
 
 ## Frontend contract
 

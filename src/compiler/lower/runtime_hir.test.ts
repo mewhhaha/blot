@@ -189,12 +189,12 @@ const Source = @effect.host { .value = Int -> Int; }
 sig quicksort = [Int] -> [Int]
 let rec quicksort = fn values => case Array.uncons values of
   #None => []
-  #Some (pivot, rest) =>
+  #Some (pivot, rest) => do:
     let (smaller, larger) =
       Array.partition (rest, fn value => value <= pivot)
     return quicksort smaller <> [pivot] <> quicksort larger
 sig checksum = ([Int], Int, Int) -> Int
-let rec checksum = fn (values, index, total) =>
+let rec checksum = fn (values, index, total) => do:
   if index >= Array.length values:
     return total
   else:
@@ -225,7 +225,7 @@ Deno.test("Runtime HIR closure-converts dynamic recursive captures", async () =>
 const Source = @effect.host { .value = Int -> Int; }
 offset <- Source.value 0
 sig add_depth = Int -> Int
-let rec add_depth = fn depth =>
+let rec add_depth = fn depth => do:
   if depth <= 0:
     return offset
   else:

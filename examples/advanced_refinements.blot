@@ -7,7 +7,7 @@ open import "blot:prelude"
 const count_second = fn _ => fn values => Array.length values
 
 sig at = [Int] -> Int -> Int
-let at = fn values => fn index =>
+let at = fn values => fn index => do:
   if index >= 0 && index < count_second () values:
     return @array.get values index
 
@@ -18,9 +18,9 @@ const Audit = @effect { .record = Str -> Unit; }
 const Transition = #Closed Int -> #Open Int ~ { Audit }
 
 sig advance = Transition
-let advance = fn !state =>
+let advance = fn !state => do:
   result <- case state of
-    #Closed value =>
+    #Closed value => do:
       <- Audit.record "open"
       return #Open value
   return result
@@ -31,7 +31,7 @@ let handler =
     .return = fn value => value;
   }
 
-let run = fn () =>
+let run = fn () => do:
   let !closed = #Closed 7
   return advance (!closed)
 

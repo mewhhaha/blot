@@ -1,7 +1,7 @@
 open import "blot:prelude"
 
 sig fold_go = (Int, Int) -> Int
-const rec fold_go = fn (remaining, total) =>
+const rec fold_go = fn (remaining, total) => do:
   if remaining <= 0:
     return total
 

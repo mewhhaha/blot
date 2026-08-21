@@ -107,12 +107,12 @@ let advance = fn ts => E.each_1 (
 // brush takes placement and a colour rather than a component, because a record
 // carries its whole field set across a module boundary and the renderer has no
 // business knowing that a transform of this game's also has a spin.
-let render = fn (transforms, models) =>
-  <- R.frame (fn draw =>
+let render = fn (transforms, models) => do:
+  <- R.frame (fn draw => do:
       <- E.visit_2 (
           transforms,
           models,
-          fn (transform, model) =>
+          fn (transform, model) => do:
             <- case model.kind == KIND_MESH of
               #True => draw.mesh (
                   transform.position, transform.angle, transform.scale, model.colour
@@ -135,7 +135,7 @@ let render = fn (transforms, models) =>
 // artifact.
 
 sig load_transforms = Unit -> Store Transform ~ { Assets }
-let load_transforms = fn () =>
+let load_transforms = fn () => do:
   count <- Assets.count ()
   // The empty array starts polymorphic; this one requirement makes the
   // component store concrete without a separate declaration.
@@ -154,7 +154,7 @@ let load_transforms = fn () =>
   return store
 
 sig load_models = Unit -> Store Model ~ { Assets }
-let load_models = fn () =>
+let load_models = fn () => do:
   count <- Assets.count ()
   let store = @satisfies Array.empty (Store Model)
   for id in Iter.range (0, count):

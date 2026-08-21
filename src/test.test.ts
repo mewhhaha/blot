@@ -70,7 +70,7 @@ return ()
 
 Deno.test("a nested test is rejected instead of silently undiscovered", async () => {
   const path = await sourceFile(
-    `let outer = fn () =>
+    `let outer = fn () => do:
   @[test] let hidden = fn () => ()
 return outer
 `,

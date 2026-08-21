@@ -11,7 +11,7 @@ let unwrap_or = fn m => case m of
   #Some inner => inner
   _ => "none"
 
-let shout = fn m =>
+let shout = fn m => do:
   if let #Some inner = m else:
     return "none"
 

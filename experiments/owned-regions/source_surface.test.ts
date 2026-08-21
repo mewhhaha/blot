@@ -103,13 +103,13 @@ Deno.test("Region replacement returns the displaced value and successor", async 
       `open import "blot:prelude"
 let region = Slice.claim [10, 20, 30]
 let result = case Slice.replace ((!region), 1, 7) of
-  #Replaced (old, !updated) =>
+  #Replaced (old, !updated) => do:
     let frozen = Slice.freeze (!updated)
     let current = case Array.get (frozen, 1) of
       #Some value => value
       #None => 0
     return old * 10 + current
-  #ReplaceOutOfBounds (_, !original) =>
+  #ReplaceOutOfBounds (_, !original) => do:
     let frozen = Slice.freeze (!original)
     return Array.length (&frozen)
 return result
@@ -176,12 +176,12 @@ let consume = fn !value => value
 let !old_token = 40
 let !new_token = 2
 let region = Slice.claim [fn () => consume (!old_token)]
-let settle = fn (!old, !updated) =>
+let settle = fn (!old, !updated) => do:
   let [current] = Slice.freeze (!updated)
   return (old ()) + (current ())
 return case Slice.replace ((!region), 0, (fn () => consume (!new_token))) of
   #Replaced (!old, !updated) => settle ((!old), (!updated))
-  #ReplaceOutOfBounds (!replacement, !original) =>
+  #ReplaceOutOfBounds (!replacement, !original) => do:
     return settle ((!replacement), (!original))
 `,
   );
@@ -197,17 +197,17 @@ let !old_token = 40
 let !new_token = 2
 let whole = Slice.claim [fn () => consume (!old_token), fn () => 1]
 let restored = case Slice.split ((!whole), 1) of
-  #Split (!left, !right, !rejoin) =>
+  #Split (!left, !right, !rejoin) => do:
     return case Slice.replace ((!left), 0, (fn () => consume (!new_token))) of
-      #Replaced (!old, !updated) =>
+      #Replaced (!old, !updated) => do:
         let joined = Slice.join ((!rejoin), (!updated), (!right))
         let [current, tail] = Slice.freeze (!joined)
         return (old ()) + (current ()) + (tail ())
-      #ReplaceOutOfBounds (!replacement, !original) =>
+      #ReplaceOutOfBounds (!replacement, !original) => do:
         let joined = Slice.join ((!rejoin), (!original), (!right))
         let [current, tail] = Slice.freeze (!joined)
         return (replacement ()) + (current ()) + (tail ())
-  #SplitOutOfBounds !original =>
+  #SplitOutOfBounds !original => do:
     let [first, second] = Slice.freeze (!original)
     return (first ()) + (second ()) + consume (!new_token)
 return restored
@@ -222,16 +222,16 @@ Deno.test("nested Region witnesses reassociate in both directions", async () => 
     `open import "blot:prelude"
 let whole = Slice.claim [1, 2, 3]
 let restored = case Slice.split ((!whole), 1) of
-  #Split (!a, !bc, !outer) =>
+  #Split (!a, !bc, !outer) => do:
     return case Slice.split ((!bc), 1) of
-      #Split (!b, !c, !inner) =>
+      #Split (!b, !c, !inner) => do:
         let (outer_left, inner_left) =
           Slice.reassociate_left ((!outer), (!inner))
         let (outer_right, inner_right) =
           Slice.reassociate_right ((!outer_left), (!inner_left))
         let bc = Slice.join ((!inner_right), (!b), (!c))
         return Slice.join ((!outer_right), (!a), (!bc))
-      #SplitOutOfBounds !bc_original =>
+      #SplitOutOfBounds !bc_original => do:
         return Slice.join ((!outer), (!a), (!bc_original))
   #SplitOutOfBounds !original => original
 return Slice.freeze (!restored)

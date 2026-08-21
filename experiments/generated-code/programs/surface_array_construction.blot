@@ -1,7 +1,7 @@
 open import "blot:prelude"
 
 sig construct = Int -> Int
-const construct = fn count =>
+const construct = fn count => do:
   sig values = [Int]
   let values = Array.empty
   for value in Iter.range (0, count):

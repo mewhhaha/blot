@@ -18,7 +18,7 @@ for Iter.range (0, 4):
 // A written iterator is an ordinary record.
 const halving = fn start => {
     .state = start;
-    .step = fn value =>
+    .step = fn value => do:
       if is_less (@int.cmp value 1):
         return None
       else:

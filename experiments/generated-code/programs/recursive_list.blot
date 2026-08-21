@@ -1,6 +1,6 @@
 open import "../../../src/prelude/prelude.blot"
 
-let rec build = fn n =>
+let rec build = fn n => do:
   if n == 0:
     return #Nil
   else:

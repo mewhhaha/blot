@@ -34,13 +34,13 @@ const Probes = {
   // Every free occurrence of a parameter is inside the one comparison, but
   // \`open\` binds \`right\` from a compile-time value, so no node in the body
   // carries the name. This function is \`fn a => fn b => a == 0\`.
-  .opened = fn left => fn right =>
+  .opened = fn left => fn right => do:
     open Sneaky
     return is_equal (@int.cmp left right)
   ;
 
   // \`left\` occurs once as a \`var\`, but a binder rebinds it first.
-  .rebound = fn left => fn right =>
+  .rebound = fn left => fn right => do:
     let left = 5
     return is_equal (@int.cmp left right)
   ;
