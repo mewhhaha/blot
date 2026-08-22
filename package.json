@@ -15,6 +15,7 @@
     "test:regression": "node scripts/node_regression_tests.mjs",
     "smoke": "tsx --import ./src/node/polyfills.mjs src/node/cli.ts build examples/minimal.blot",
     "benchmark": "tsx --import ./src/node/polyfills.mjs experiments/node-wasm-benchmark.ts",
+    "benchmark:owned-arrays": "tsx --import ./src/node/polyfills.mjs experiments/owned-arrays/benchmark.ts",
     "benchmark:owned-regions": "tsx --import ./src/node/polyfills.mjs experiments/owned-regions/benchmark.ts",
     "benchmark:owned-maps": "tsx --import ./src/node/polyfills.mjs experiments/owned-maps/benchmark.ts",
     "benchmark:predicate-refinements": "tsx --import ./src/node/polyfills.mjs experiments/predicate-refinements/benchmark.ts",

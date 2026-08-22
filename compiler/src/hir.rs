@@ -542,6 +542,7 @@ pub(crate) struct ResidualFunctionCompilation {
     function: usize,
     signature: usize,
     result_type: usize,
+    result_ownership: Produced,
     caller_arguments: Vec<usize>,
     name: String,
     reuse: bool,
@@ -2713,6 +2714,12 @@ impl ResidualTrace {
             .iter()
             .map(|capture| capture.type_id)
             .collect::<Vec<_>>();
+        let (input_ownership, result_ownership) = context
+            .ownership_contracts
+            .borrow()
+            .get(&(module.to_owned(), body))
+            .map(|contract| (contract.input.clone(), contract.result.clone()))
+            .unwrap_or((Produced::None, Produced::None));
         if let Some(identity) = self.function_ids.iter().find(|identity| {
             identity.module == module
                 && identity.body == body
@@ -2726,9 +2733,10 @@ impl ResidualTrace {
             let result_type = self.signatures[signature].result;
             let mut caller_arguments = vec![caller_argument.id];
             caller_arguments.extend(captures.iter().map(|capture| capture.id));
-            return self
+            let value = self
                 .direct_call(function, result_type, caller_arguments, span)
-                .map(ResidualFunctionCall::Existing);
+                .map(|value| mark_reusable_stores(&result_ownership, value, &self.types))?;
+            return Ok(ResidualFunctionCall::Existing(value));
         }
 
         let signature_id = self.signatures.len();
@@ -2778,13 +2786,7 @@ impl ResidualTrace {
             },
             span,
         )?;
-        let input = context
-            .ownership_contracts
-            .borrow()
-            .get(&(module.to_owned(), body))
-            .map(|contract| contract.input.clone())
-            .unwrap_or(Produced::None);
-        let argument = mark_reusable_stores(&input, argument, &self.types);
+        let argument = mark_reusable_stores(&input_ownership, argument, &self.types);
         let mut replacements = HashMap::new();
         for capture in &captures {
             let parameter = self.next_value();
@@ -2814,6 +2816,7 @@ impl ResidualTrace {
             function,
             signature: signature_id,
             result_type,
+            result_ownership,
             caller_arguments,
             name: name.to_owned(),
             reuse,
@@ -2927,9 +2930,10 @@ impl ResidualTrace {
             compilation.result_type,
             compilation.caller_arguments,
             compilation.span,
-        );
+        )?;
+        let call = mark_reusable_stores(&compilation.result_ownership, call, &self.types);
         self.source = frame.source;
-        call
+        Ok(call)
     }
 
     fn direct_call(
@@ -3272,6 +3276,49 @@ impl ResidualTrace {
                 }
                 let type_id = self.insert_product_type(runtime_fields);
                 Ok(self.operation("product.make", type_id, operands, span, None))
+            }
+            (Value::Array(elements), Value::Array(element_types)) if !elements.is_empty() => {
+                let element_type = element_types.first().ok_or_else(|| {
+                    hir_error("A residual array signature omitted its element type.")
+                })?;
+                let elements = elements
+                    .iter()
+                    .map(|element| {
+                        self.lower_residual_argument(element, element_type, substitutions, span)
+                    })
+                    .collect::<Result<Vec<_>, Diagnostic>>()?;
+                let element_type_id = elements
+                    .first()
+                    .expect("guarded non-empty residual array")
+                    .type_id;
+                if elements
+                    .iter()
+                    .any(|element| element.type_id != element_type_id)
+                {
+                    return Err(hir_error(
+                        "A residual array argument has incompatible element representations.",
+                    ));
+                }
+                let store_type = self.insert_type(
+                    &format!("store:{element_type_id}"),
+                    RuntimeType::Store {
+                        element_type: element_type_id,
+                    },
+                );
+                let mut store =
+                    self.array_operation("store.empty", store_type, Vec::new(), span, None);
+                store.meaning = RuntimeMeaning::ReusableStore;
+                for element in elements {
+                    store = self.array_operation(
+                        "store.grow",
+                        store_type,
+                        vec![store.id, element.id],
+                        span,
+                        Some("owned-reuse"),
+                    );
+                    store.meaning = RuntimeMeaning::ReusableStore;
+                }
+                Ok(store)
             }
             (Value::Array(elements), expected) if elements.is_empty() => {
                 if let Value::TypeVariable(variable) = expected
@@ -6615,6 +6662,9 @@ fn tail_call_suffix_returns(
 
 fn merge_meaning(left: &RuntimeMeaning, right: &RuntimeMeaning) -> RuntimeMeaning {
     match (left, right) {
+        (RuntimeMeaning::ReusableStore, RuntimeMeaning::ReusableStore) => {
+            RuntimeMeaning::ReusableStore
+        }
         (RuntimeMeaning::Sum { cases: left }, RuntimeMeaning::Sum { cases: right })
             if left == right =>
         {

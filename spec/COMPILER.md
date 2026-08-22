@@ -216,38 +216,47 @@ body. The compiler-distributed module certificate serializes both closed facts.
 Runtime HIR may use a checked application-result type to settle a recursive
 call's first-order result representation before evaluating its body.
 Representation facts additionally record the concrete call-site layout of a
-residual type expression and of an unambiguous structural product shape. A
-conflicting observation invalidates the fact; it never selects one observation
-by order. Safety owns coverage decisions and relational proofs. It may
-instantiate only a summary derived from the compile-time closure value or a
-trusted primitive contract; a binding path or source name is not a safety
-premise. The current summary certificate is unary array length plus a literal
-affine offset and is erased after the direct-operation proof is constructed.
-Ownership owns path consumption, extraction lineage, Store-reuse permission, and
-closure ownership contracts. A contract is keyed by defining module revision and
-lambda-body identity and contains a parameter-pattern identity, a closed
-inferred-input authority tree, and a closed produced-result tree. An unqualified
-settled Array position begins with affine Store authority and contributes it to
-the published input only when the body consumes or transfers it; linearity
-remains outside the type lattice. For a recursive function whose checked result
-is Array, ownership may seed one provisional produced-result tree from the sole
+residual type expression and of an unambiguous structural product shape. The
+substitution walk traverses every matching aggregate component, including the
+element of a non-empty Array, and residual argument lowering consumes that same
+substitution instead of reopening the type expression. A conflicting observation
+invalidates the fact; it never selects one observation by order. Safety owns
+coverage decisions and relational proofs. It may instantiate only a summary
+derived from the compile-time closure value or a trusted primitive contract; a
+binding path or source name is not a safety premise. The current summary
+certificate is unary array length plus a literal affine offset and is erased
+after the direct-operation proof is constructed. Ownership owns path
+consumption, extraction lineage, Store-reuse permission, and closure ownership
+contracts. A contract is keyed by defining module revision and lambda-body
+identity and contains a parameter-pattern identity, a closed inferred-input
+authority tree, and a closed produced-result tree. An unqualified settled Array
+position begins with affine Store authority and contributes it to the published
+input only when the body consumes or transfers it; linearity remains outside the
+type lattice. The compiler-known identity transform of an `assert.reuse`
+declaration tag forwards the raw closure's exact contract; it does not recompute
+one from the decorated binding. For a recursive function whose checked result is
+Array, ownership may seed one provisional produced-result tree from the sole
 affine Array input. The completed body must return that exact authority tree on
 every terminating path or checking reports `BLOT_RECURSIVE_OWNERSHIP_RESULT`; an
 arbitrary recursive result is never upgraded from its runtime type alone. When
 the produced tree says the result is one parameter component, Runtime HIR may
 reuse the component's already settled representation for a recursive result;
 this is consumption of the structural certificate, not type inference from a
-name. The compiler-distributed module certificate serializes it beside the
-closure signature and validates every expression, pattern, span, and region
-derivation reference against the installed AST before an importer may substitute
-an argument through it. Checked-module certificate schema 8 adds the inferred
-input tree and identifies every lineage source by module-local binding identity,
-requiring a complete dynamic extraction partition. Reuse assertions travel on
-evaluated closures and are discharged only after Runtime HIR exists; they are
-not authority facts. Neither certificate recognizes a source binding name.
-Staging owns compile-time values and residualization decisions. Specialization
-owns concrete representations. A later pass verifies and consumes these facts;
-it does not infer them again.
+name. The result of a residual `call.direct` is marked from that produced tree
+after its runtime value is materialized. At a runtime control-flow join, equal
+owned Store successors retain their authority; exclusivity comes from control
+flow and agreement from the ownership certificate. The compiler-distributed
+module certificate serializes it beside the closure signature and validates
+every expression, pattern, span, and region derivation reference against the
+installed AST before an importer may substitute an argument through it.
+Checked-module certificate schema 8 adds the inferred input tree and identifies
+every lineage source by module-local binding identity, requiring a complete
+dynamic extraction partition. Reuse assertions travel on evaluated closures and
+are discharged only after Runtime HIR exists; they are not authority facts.
+Neither certificate recognizes a source binding name. Staging owns compile-time
+values and residualization decisions. Specialization owns concrete
+representations. A later pass verifies and consumes these facts; it does not
+infer them again.
 
 The progressive Runtime-HIR builder state is keyed by the typed-Core node ID,
 not by a printed type. Its structural representation key is composed from the
@@ -540,7 +549,9 @@ constructor or element observed during staging. This keeps empty Store values,
 closed variants, records, and sealed values layout-stable. A staged self-tail
 call may become an explicit Runtime-HIR loop back-edge; a settled first-order
 non-tail recursive binding becomes a Runtime-HIR function and `call.direct`. An
-escaping closure still requires the ordinary closure representation. Dynamic
+escaping closure still requires the ordinary closure representation. A direct
+call's structural ownership result is replayed onto its materialized value, so
+an Array successor remains reusable across separately emitted recursion. Dynamic
 `@array.take` and `@array.split` require the same replayed array-index
 certificate as direct reads and writes. After that proof boundary they
 residualize plain tuples through the same Store and control-flow vocabulary as

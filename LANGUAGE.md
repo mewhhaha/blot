@@ -2120,6 +2120,11 @@ Every branch starts from the same ownership state and must end in an agreeing
 state. A linear binding consumed on only one branch is rejected. An affine
 binding may be consumed on zero or one branch but never twice.
 
+When both arms of a runtime branch return a successor carrying the same affine
+Store authority, the joined value carries that authority. The arms are
+exclusive, so joining them does not create an alias. If either arm shares or
+loses the Store, the join is shared or rejected by the ordinary agreement rule.
+
 Every fresh array has one affine Store authority even though its type is still
 ordinary `[T]`. An unqualified Array parameter begins as an authority candidate
 and consumes it only when the checked body updates, returns, captures, or passes
@@ -2168,19 +2173,23 @@ published input retains it only when the body demands ownership; explicit `!`,
 positions are matched structurally. The result summary follows statically known
 consuming calls, fixed field projections, and direct `case` or declaration
 destructuring, and an importer substitutes the caller's concrete authority
-through it. Unknown and host-supplied functions remain conservative. This usage
-summary is separate from the type lattice and keyed by exact module and closure
-identity, never by a binding name. A module or host result freezes remaining
-owned Stores implicitly because that transition copies no bytes; non-Store
-linear resources remain forbidden. Last-use and proved-consumption facts are
-recorded for the backend.
+through it. The identity transform of `@[assert.reuse]` preserves that exact
+contract even when the tagged declaration is local or recursive; the tag cannot
+erase or add an ownership promise. Unknown and host-supplied functions remain
+conservative. This usage summary is separate from the type lattice and keyed by
+exact module and closure identity, never by a binding name. A module or host
+result freezes remaining owned Stores implicitly because that transition copies
+no bytes; non-Store linear resources remain forbidden. Last-use and
+proved-consumption facts are recorded for the backend.
 
 A recursive Array function may publish one provisional Store result only when
 its checked result type is Array and exactly one parameter position supplies the
 affine authority. Every non-recursive result path must return that same
 authority shape; otherwise `BLOT_RECURSIVE_OWNERSHIP_RESULT` rejects the
 function. This is the induction step that lets the successor from one recursive
-call feed another without treating an arbitrary recursive result as owned.
+call feed another without treating an arbitrary recursive result as owned. A
+residual direct call reattaches that certified result authority after lowering;
+the runtime representation alone never upgrades a plain Store.
 
 ### 11.1 A recursive group
 
@@ -3254,6 +3263,12 @@ the production compiler. If the ownership certificate proves that a recursive
 result is exactly one linear parameter component, lowering may carry that
 component's representation through the recursive call without a copy. These
 transformations change neither source scope nor the public ABI.
+
+Call-site representation substitution traverses tuples, shapes, variants, and
+non-empty arrays. A runtime element in an otherwise staged array therefore
+settles the array element representation before a generic recursive callee is
+lowered. Lowering may not ignore that settled representation and reject the same
+well-typed call merely because one aggregate component is residual.
 
 A positive recursive result equation is closed automatically. Runtime HIR schema
 2 represents its root as one private indirect word whose target is allocated in
