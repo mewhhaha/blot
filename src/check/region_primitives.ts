@@ -46,7 +46,7 @@ export const REGION_PRIMITIVE_TYPES: ReadonlyMap<string, Scheme> = new Map([
   ["@region.type", mono(curried([TYPE], TYPE))],
   ["@region.rejoin", mono(TYPE)],
   [
-    "@region.claim",
+    "@region.copy",
     poly((fresh) => {
       const element = fresh();
       return curried(

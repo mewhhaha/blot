@@ -212,22 +212,28 @@ Facts = InferenceFacts + PhaseFacts + SafetyCertificates
       + OwnershipCertificates + RepresentationFacts
 ```
 
-Inference owns field sets, constructor sets, settled types, effect identities,
-type-directed adaptations, and residual closure signatures. A closure signature
-is keyed by its defining module revision and lambda-body expression identity;
-the compiler-distributed module certificate serializes the closed signature with
-that identity. Representation facts additionally record the concrete call-site
-layout of a residual type expression and of an unambiguous structural product
-shape. A conflicting observation invalidates the fact; it never selects one
-observation by order. Safety owns coverage decisions and relational proofs. It
-may instantiate only a summary derived from the compile-time closure value or a
+Inference owns field sets, constructor sets, checked application types, effect
+identities, type-directed adaptations, and residual closure signatures. Each
+retained application type is keyed by its defining module revision and
+expression identity; a closure signature uses the same key shape with its lambda
+body. The compiler-distributed module certificate serializes both closed facts.
+Runtime HIR may use a checked application-result type to settle a recursive
+call's first-order result representation before evaluating its body.
+Representation facts additionally record the concrete call-site layout of a
+residual type expression and of an unambiguous structural product shape. A
+conflicting observation invalidates the fact; it never selects one observation
+by order. Safety owns coverage decisions and relational proofs. It may
+instantiate only a summary derived from the compile-time closure value or a
 trusted primitive contract; a binding path or source name is not a safety
 premise. The current summary certificate is unary array length plus a literal
 affine offset and is erased after the direct-operation proof is constructed.
 Ownership owns path consumption, extraction lineage, reuse permission, and
 closure ownership contracts. A contract is keyed by defining module revision and
 lambda-body identity and contains a parameter-pattern identity plus a closed
-produced-result tree. The compiler-distributed module certificate serializes it
+produced-result tree. When that tree says the result is one parameter component,
+Runtime HIR may reuse the component's already settled representation for a
+recursive result; this is consumption of the structural certificate, not type
+inference from a name. The compiler-distributed module certificate serializes it
 beside the closure signature and validates every expression, pattern, span, and
 region derivation reference against the installed AST before an importer may
 substitute an argument through it. Ownership certificate schema 2 identifies

@@ -562,6 +562,17 @@ hands the next higher-order specialization its exact input. It does not make
 arbitrary closure-bearing records exact at their declarations or exported module
 boundaries.
 
+Closed residual signatures reify `Slice.of T` as the compiler-private
+`@region.type T` type value. This preserves the signature of a local recursive
+closure whose argument or result carries Region authority. It does not reify a
+live Region value, expose Store identity or bounds, or admit Region at a public
+ABI boundary.
+
+An unsettled top or bottom position in a residual signature reifies as a fresh
+representation hole, never as runtime `Unit`. The call site's checked expression
+type, a structural ownership result, or the private recursive-representation
+rule must close that hole before ordinary first-order use.
+
 If an ordinary statically known application still settles to top or bottom, the
 checker infers the selected nonrecursive closure once against the actual
 argument type. This recovers evidence from the closure body while an explicit
@@ -815,7 +826,7 @@ flat arena:
 FlatTypeId = u32
 FlatNode   = tag + child FlatTypeId values
 Interface = <arena, result, effects, parameter, evaluated-value-certificate,
-             closure-signatures, ownership-contracts>
+             expression-types, closure-signatures, ownership-contracts>
 ```
 
 Encoding rejects every inference variable and every rigid not bound by an
@@ -823,6 +834,11 @@ enclosing `forall`. Decoding allocates a fresh rigid identity for every
 quantifier and reconstructs an ordinary checker type. Consequently no mutable
 bound edge crosses compilations, and two cache hits are alpha-equivalent but
 share no generated rigid identity.
+
+Encoding structurally interns equal flat nodes across module results,
+application types, and closure signatures. The certificate therefore pays once
+for repeated type structure; interning changes neither identity scope nor the
+decoded type graph.
 
 A resident checker may retain the expanded `CheckedModule` after that encoding
 gate succeeds. Its types contain no mutable inference variables, its quantified
@@ -945,6 +961,14 @@ serialized body set must be duplicate-free and a subset of the certificate's
 closure signatures. Runtime lowering may allocate a private recursive
 representation only for a body in that set.
 
+The certificate carries the closed checked result type of each application,
+keyed by its module-local expression identity. Installation rejects duplicate or
+absent identities. Runtime lowering consumes that type as a representation
+expectation, so a recursive function can choose its first-order result layout
+before its body evaluates another recursive call. This is the compact Rust/Wasm
+counterpart of the Node compiler's full typed-Core expression map, not a backend
+reconstruction of source constraints.
+
 The certificate also carries each source closure's ownership contract, keyed by
 the same `(module, body-expression)` identity as its runtime closure signature.
 Its parameter pattern and produced-result tree are interpreted only against the
@@ -954,6 +978,12 @@ contract becomes visible to an importer. At a statically resolved call, the
 importer substitutes its concrete argument authority through that defining
 pattern. This is interface transport of the same ownership judgement, not
 re-inference and not trust attached to an exported name.
+
+When a closure contract's produced-result tree is exactly `Parameter(source)`,
+residual lowering may project `source` structurally from the closure's actual
+argument and use that value's settled runtime type as the recursive result type.
+The permission applies to any certified linear parameter component; it does not
+recognize Region, Slice, an algorithm, or a source name.
 
 ### Flat constraint graph
 

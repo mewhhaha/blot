@@ -6,7 +6,7 @@ let consume = fn !value => value
 let !old_token = 40
 let !new_token = 2
 let owned_values = [fn () => consume (!old_token), fn () => 1]
-let owned = Slice.claim owned_values
+let owned = Slice.copy owned_values
 let replaced = case Slice.split ((!owned), 1) of
   #Split (!left, !right, !rejoin) => do:
     return case Slice.replace (
@@ -26,7 +26,7 @@ let replaced = case Slice.split ((!owned), 1) of
     let [first, second] = Slice.freeze (!original)
     return first () + second () + consume (!new_token)
 
-let whole = Slice.claim [1, 2, 3]
+let whole = Slice.copy [1, 2, 3]
 let rotated = case Slice.split ((!whole), 1) of
   #Split (!a, !bc, !outer) => do:
     return case Slice.split ((!bc), 1) of

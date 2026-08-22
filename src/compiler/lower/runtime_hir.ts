@@ -3,6 +3,7 @@ import type {
   BlotRuntimeFunction,
   BlotRuntimeModule,
   BlotRuntimeOperation,
+  BlotRuntimeTerminator,
   BlotRuntimeType,
 } from "../../runtime/hir.ts";
 import { PRIMITIVES } from "../../comptime/primitives.ts";
@@ -244,10 +245,204 @@ export function exportResidualRuntimeHir(
     source,
     types: builder.types,
     signatures: builder.signatures,
-    functions: builder.functions,
+    functions: builder.functions.map(recoverDirectTailCalls),
     capabilities: builder.capabilities(),
     exports,
   };
+}
+
+interface TailDemand {
+  readonly value: number;
+  readonly sumCase: number | null;
+}
+
+// Tail position can become visible only after a recursive closure has been
+// converted to a direct function. Follow only the administrative value flow
+// allowed by spec/RUNTIME.md, then replace the proven call with an entry edge.
+// The Rust production compiler applies the same rewrite in compiler/src/hir.rs.
+function recoverDirectTailCalls(
+  function_: BlotRuntimeFunction,
+): BlotRuntimeFunction {
+  const blocks = new Map(function_.blocks.map((block) => [block.id, block]));
+  const incoming = new Map<number, number[]>();
+  const recordIncoming = (target: number, arguments_: readonly number[]) => {
+    const block = blocks.get(target);
+    if (block === undefined) {
+      throw new Error(`tail-call recovery target block ${target} is absent`);
+    }
+    if (block.parameters.length !== arguments_.length) {
+      throw new Error(
+        `tail-call recovery branch to block ${target} has ${arguments_.length} arguments for ${block.parameters.length} parameters`,
+      );
+    }
+    for (let index = 0; index < block.parameters.length; index += 1) {
+      const parameter = block.parameters[index].value;
+      const argumentsForParameter = incoming.get(parameter);
+      if (argumentsForParameter === undefined) {
+        incoming.set(parameter, [arguments_[index]]);
+      } else {
+        argumentsForParameter.push(arguments_[index]);
+      }
+    }
+  };
+  for (const block of function_.blocks) {
+    const terminator = block.terminator;
+    if (terminator.kind === "branch") {
+      recordIncoming(terminator.target, terminator.arguments);
+    }
+    if (terminator.kind === "conditional") {
+      recordIncoming(
+        terminator.consequent,
+        terminator.consequentArguments,
+      );
+      recordIncoming(terminator.alternate, terminator.alternateArguments);
+    }
+  }
+
+  const definitions = new Map<number, BlotRuntimeOperation>();
+  const valueTypes = new Map<number, number>();
+  for (const block of function_.blocks) {
+    for (const parameter of block.parameters) {
+      valueTypes.set(parameter.value, parameter.type);
+    }
+    for (const operation of block.operations) {
+      definitions.set(operation.result, operation);
+      valueTypes.set(operation.result, operation.type);
+    }
+  }
+
+  const productAliases = new Map<number, number>();
+  for (const operation of definitions.values()) {
+    if (operation.kind !== "product.make" || operation.operands.length === 0) {
+      continue;
+    }
+    let source: number | undefined;
+    let exact = true;
+    for (let field = 0; field < operation.operands.length; field += 1) {
+      const projection = definitions.get(operation.operands[field]);
+      if (
+        projection === undefined || projection.kind !== "product.project" ||
+        projection.field !== field || projection.operands.length === 0
+      ) {
+        exact = false;
+        break;
+      }
+      const projected = projection.operands[0];
+      if (source === undefined) {
+        source = projected;
+      } else if (source !== projected) {
+        exact = false;
+        break;
+      }
+    }
+    if (
+      exact && source !== undefined &&
+      valueTypes.get(source) === operation.type
+    ) {
+      productAliases.set(operation.result, source);
+    }
+  }
+
+  const pending: TailDemand[] = [];
+  for (const block of function_.blocks) {
+    if (block.terminator.kind === "return") {
+      pending.push({ value: block.terminator.value, sumCase: null });
+    }
+  }
+  const demands = new Set<string>();
+  const tailCalls = new Set<number>();
+  while (pending.length > 0) {
+    const demand = pending.pop();
+    if (demand === undefined) break;
+    const key = `${demand.value}:${String(demand.sumCase)}`;
+    if (demands.has(key)) continue;
+    demands.add(key);
+
+    if (demand.sumCase === null) {
+      const source = productAliases.get(demand.value);
+      if (source !== undefined) {
+        pending.push({ value: source, sumCase: null });
+        continue;
+      }
+    }
+    const arguments_ = incoming.get(demand.value);
+    if (arguments_ !== undefined) {
+      for (const argument of arguments_) {
+        pending.push({ value: argument, sumCase: demand.sumCase });
+      }
+      continue;
+    }
+    const operation = definitions.get(demand.value);
+    if (operation === undefined) continue;
+    if (
+      demand.sumCase === null && operation.kind === "sum.payload" &&
+      operation.operands.length > 0
+    ) {
+      pending.push({ value: operation.operands[0], sumCase: operation.case });
+      continue;
+    }
+    if (
+      demand.sumCase === null && operation.kind === "call.direct" &&
+      operation.function === function_.id
+    ) {
+      tailCalls.add(operation.result);
+      continue;
+    }
+    if (
+      demand.sumCase !== null && operation.kind === "sum.make" &&
+      operation.case === demand.sumCase && operation.operands.length > 0
+    ) {
+      pending.push({ value: operation.operands[0], sumCase: null });
+    }
+  }
+  if (tailCalls.size === 0) return function_;
+
+  let changed = false;
+  const rewritten = function_.blocks.map((block) => {
+    let callIndex = -1;
+    for (let index = block.operations.length - 1; index >= 0; index -= 1) {
+      const operation = block.operations[index];
+      if (
+        operation.kind === "call.direct" &&
+        operation.function === function_.id && tailCalls.has(operation.result)
+      ) {
+        callIndex = index;
+        break;
+      }
+    }
+    if (callIndex < 0) return block;
+    const administrative = block.operations.slice(callIndex + 1).every(
+      (operation) =>
+        operation.kind === "product.make" ||
+        operation.kind === "product.project" ||
+        operation.kind === "sum.make",
+    );
+    if (!administrative) return block;
+    const terminator = block.terminator;
+    let returns = terminator.kind === "return";
+    if (terminator.kind === "branch" && terminator.arguments.length === 1) {
+      returns = true;
+    }
+    if (!returns) return block;
+    const call = block.operations[callIndex];
+    if (call.kind !== "call.direct") {
+      throw new Error("tail-call recovery lost its direct call");
+    }
+    changed = true;
+    const backEdge: BlotRuntimeTerminator = {
+      kind: "branch",
+      target: function_.entryBlock,
+      arguments: call.operands,
+      span: call.span,
+    };
+    return {
+      ...block,
+      operations: block.operations.slice(0, callIndex),
+      terminator: backEdge,
+    };
+  });
+  if (!changed) return function_;
+  return { ...function_, blocks: rewritten };
 }
 
 interface ResidualRegion {
@@ -1191,7 +1386,7 @@ class ResidualHirBuilder {
     if (fn.name === "@linear.own" || fn.name === "@linear.borrow") {
       return applied[0];
     }
-    if (fn.name === "@region.claim") {
+    if (fn.name === "@region.copy") {
       const original = applied[0];
       let store = this.store(original, span, fn.name);
       if (

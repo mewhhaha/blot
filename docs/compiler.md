@@ -134,8 +134,10 @@ before projecting its named field. This deliberately preserves module-level host
 request order and replay behavior shared with the Rust compiler. Settled checked
 types drive Store, record, variant, sealed, and host-grant layouts; the value
 observed during staging is not allowed to narrow a public layout. Specialized
-self-tail recursion becomes a Runtime-HIR loop back-edge, and direct scalar
-results cross the canonical Wasm boundary without a return area.
+self-tail recursion becomes a Runtime-HIR loop back-edge. A direct self-tail
+call exposed only after closure conversion receives the same rewrite through
+administrative product and sum returns. Direct scalar results cross the
+canonical Wasm boundary without a return area.
 
 Gpupaper embeds its checked Rust emitter bytes in its published package. Node
 instantiates those bytes with the standard `WebAssembly` API, so final emission

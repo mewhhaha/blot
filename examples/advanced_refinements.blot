@@ -41,7 +41,7 @@ let state = @handle (Audit, run, handler)
 // witness it uses to validate reuse and emission.
 const pair_layout = packed { .small = I16; .wide = I32; }
 
-let slice = Slice.claim [1, 2, 3]
+let slice = Slice.copy [1, 2, 3]
 let values = Slice.freeze (!slice)
 
 return {

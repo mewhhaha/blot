@@ -110,7 +110,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@array.len"
         | "@array.indexed"
         | "@region.type"
-        | "@region.claim"
+        | "@region.copy"
         | "@region.length"
         | "@region.freeze"
         | "@int.neg"
@@ -424,7 +424,7 @@ pub fn run_primitive(
             shape(&arguments[0], span, name)?.contains_key(text(&arguments[1], span, name)?),
         )),
         "@region.type" => Ok(Value::RegionType(Box::new(arguments[0].clone()))),
-        "@region.claim" => {
+        "@region.copy" => {
             let values = array(&arguments[0], span, name)?.to_vec();
             let length = values.len();
             Ok(Value::Region {

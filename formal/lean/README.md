@@ -38,8 +38,9 @@ contains:
 - a bounds-safety theorem for the only array-read constructor; and
 - a small Runtime-HIR-to-target evaluator simulation.
 
-The package contains no `sorry` or admitted axioms. CI builds it and asks nanoda
-to check the generated declarations independently.
+The package contains no `sorry` or admitted axioms. CI builds it, asks Lean's
+standalone `leanchecker` to check the generated declarations independently, and
+rejects `sorry`, `admit`, or `axiom` declarations in the formal source.
 
 ## Correspondence boundary
 

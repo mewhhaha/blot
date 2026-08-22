@@ -7,10 +7,11 @@ use crate::diagnostic::Diagnostic;
 use crate::eval::{
     Computation, Context, Phase, Runtime, closure_free_names, evaluate_expression, evaluate_module,
 };
+use crate::ownership::Produced;
 use crate::typecheck::{CheckedModule, Domain, Scalar, Type};
 use crate::value::{
     ChoiceSource, ClosureAlternative, Environment, OrderedFields, RuntimeMeaning, RuntimeValue,
-    Value, child_env, lookup,
+    Value, as_tuple, child_env, lookup,
 };
 
 #[derive(Clone, Serialize)]
@@ -452,6 +453,7 @@ enum RepresentationShape {
     Leaf,
     Shape(Vec<(String, RepresentationShape)>),
     Array(Option<Box<RepresentationShape>>),
+    Region(Box<RepresentationShape>),
     Tag(String, Option<Box<RepresentationShape>>),
 }
 
@@ -1006,11 +1008,11 @@ impl ResidualTrace {
                     Some(operator),
                 )
             }
-            "@region.claim" if arguments.len() == 1 => {
+            "@region.copy" if arguments.len() == 1 => {
                 let original = &arguments[0];
                 let lowered = self.lower_value(original, span)?;
                 if !matches!(self.types[lowered.type_id], RuntimeType::Store { .. }) {
-                    return Err(hir_error("Region claim lowered a non-Store array."));
+                    return Err(hir_error("Region copy lowered a non-Store array."));
                 }
                 let store = if matches!(original, Value::Array(_))
                     || matches!(lowered.meaning, RuntimeMeaning::ReusableStore)
@@ -2414,6 +2416,7 @@ impl ResidualTrace {
         &mut self,
         closure: ResidualClosure<'_>,
         argument: &Value,
+        expected_result: Option<&Value>,
         span: crate::ast::Span,
     ) -> Result<ResidualFunctionCall, Diagnostic> {
         let ResidualClosure {
@@ -2521,12 +2524,43 @@ impl ResidualTrace {
             .recursive_closures
             .borrow()
             .contains(&(module.to_owned(), body));
-        let result_type = match self.specialized_type_from_type_value(
+        let forwarded_result_type = self.forwarded_parameter_result_type(
+            context,
+            module,
+            body,
+            closure_parameter,
+            argument,
+        )?;
+        let signature_result = self.specialized_type_from_type_value(
             codomain,
             &mut substitutions,
             &representation_facts,
-        ) {
+        );
+        let contextual_result = if signature_result.is_err() {
+            expected_result.and_then(|expected| {
+                let mut contextual_substitutions = substitutions.clone();
+                let specialized = self.specialized_type_from_type_value(
+                    expected,
+                    &mut contextual_substitutions,
+                    &representation_facts,
+                );
+                let result = specialized.ok();
+                if result.is_some() {
+                    substitutions = contextual_substitutions;
+                }
+                result
+            })
+        } else {
+            None
+        };
+        let result_type = match signature_result {
             Ok(result_type) => result_type,
+            Err(_) if contextual_result.is_some() => {
+                contextual_result.expect("guarded contextual recursive result")
+            }
+            Err(_) if forwarded_result_type.is_some() => {
+                forwarded_result_type.expect("guarded forwarded recursive result")
+            }
             Err(_)
                 if recursive_result && has_unresolved_representation(codomain, &substitutions) =>
             {
@@ -2679,6 +2713,47 @@ impl ResidualTrace {
             name: name.to_owned(),
             span,
         }))
+    }
+
+    fn forwarded_parameter_result_type(
+        &mut self,
+        context: &Rc<Context>,
+        module: &str,
+        body: crate::ast::ExpressionId,
+        parameter: crate::ast::PatternId,
+        argument: &Value,
+    ) -> Result<Option<usize>, Diagnostic> {
+        let contract = context
+            .ownership_contracts
+            .borrow()
+            .get(&(module.to_owned(), body))
+            .cloned();
+        let Some(crate::ownership::OwnershipContract {
+            parameter: contract_parameter,
+            result:
+                Produced::Parameter {
+                    source,
+                    qualifier: _,
+                },
+        }) = contract
+        else {
+            return Ok(None);
+        };
+        if contract_parameter != parameter {
+            return Err(hir_error(
+                "A recursive closure ownership contract changed its parameter.",
+            ));
+        }
+        let loaded = context
+            .modules
+            .borrow()
+            .get(module)
+            .map(|loaded| loaded.module.clone())
+            .ok_or_else(|| hir_error("A recursive closure lost its source module."))?;
+        let value = value_at_pattern(&loaded, parameter, source, argument).ok_or_else(|| {
+            hir_error("A recursive closure ownership result is absent from its argument pattern.")
+        })?;
+        self.value_type(&value).map(Some)
     }
 
     pub(crate) fn finish_recursive_function(
@@ -3748,6 +3823,16 @@ impl ResidualTrace {
                     )?;
                 }
             }
+            Value::Union(members) => {
+                for member in members {
+                    self.record_runtime_substitutions(
+                        member,
+                        actual,
+                        substitutions,
+                        representation_facts,
+                    )?;
+                }
+            }
             Value::Extended { inner, .. }
             | Value::Sealed { inner, .. }
             | Value::Forall { body: inner, .. } => {
@@ -4512,7 +4597,11 @@ impl ResidualTrace {
     ) -> Result<(RuntimeValue, RuntimeValue, RuntimeValue), Diagnostic> {
         let runtime = self.lower_value(value, span)?;
         let RuntimeType::Product { name, fields } = self.types[runtime.type_id].clone() else {
-            return Err(hir_error("Region value is not a private Product."));
+            let type_ = serde_json::to_string(&self.types[runtime.type_id])
+                .unwrap_or_else(|_| format!("type {}", runtime.type_id));
+            return Err(hir_error(&format!(
+                "Region value is not a private Product: {type_}."
+            )));
         };
         if !name.starts_with("$region:") {
             return Err(hir_error(
@@ -4539,7 +4628,7 @@ impl ResidualTrace {
         span: crate::ast::Span,
     ) -> Result<RuntimeValue, Diagnostic> {
         let RuntimeType::Store { element_type } = self.types[store.type_id] else {
-            return Err(hir_error("Region claim copy source is not a Store."));
+            return Err(hir_error("Region copy source is not a Store."));
         };
         let integer = self.region_integer_type();
         let length = self.operation("store.length", integer, vec![store.id], span, None);
@@ -5341,6 +5430,7 @@ fn representation_shape(value: &Value) -> Option<RepresentationShape> {
             Value::Array(elements) => {
                 RepresentationShape::Array(elements.first().map(|element| Box::new(shape(element))))
             }
+            Value::RegionType(element) => RepresentationShape::Region(Box::new(shape(element))),
             Value::Tag { name, payload } => RepresentationShape::Tag(
                 name.clone(),
                 payload.as_deref().map(|payload| Box::new(shape(payload))),
@@ -5352,7 +5442,12 @@ fn representation_shape(value: &Value) -> Option<RepresentationShape> {
         }
     }
 
-    matches!(value, Value::Shape(_) | Value::Array(_)).then(|| shape(value))
+    let represented = match value {
+        Value::Shape(_) | Value::Array(_) => true,
+        Value::RegionType(element) => matches!(element.as_ref(), Value::TypeVariable(_)),
+        _ => false,
+    };
+    represented.then(|| shape(value))
 }
 
 fn collect_fields(
@@ -6425,6 +6520,65 @@ fn merge_meaning(left: &RuntimeMeaning, right: &RuntimeMeaning) -> RuntimeMeanin
             }
         }
         _ => RuntimeMeaning::Plain,
+    }
+}
+
+fn value_at_pattern(
+    module: &crate::ast::Module,
+    pattern: crate::ast::PatternId,
+    target: crate::ast::PatternId,
+    value: &Value,
+) -> Option<Value> {
+    if pattern == target {
+        return Some(value.clone());
+    }
+    match &module.arena.patterns[pattern.0 as usize] {
+        crate::ast::Pattern::Tuple { elements, .. } => {
+            let values = as_tuple(value, elements.len())?;
+            elements
+                .iter()
+                .zip(values)
+                .find_map(|(pattern, value)| value_at_pattern(module, *pattern, target, &value))
+        }
+        crate::ast::Pattern::Array { elements, .. } => {
+            let values = match value {
+                Value::Array(values) => values.as_slice(),
+                Value::EmptyArray { .. } => &[],
+                _ => return None,
+            };
+            elements
+                .iter()
+                .zip(values)
+                .find_map(|(pattern, value)| value_at_pattern(module, *pattern, target, value))
+        }
+        crate::ast::Pattern::Constructor { payload, .. } => {
+            let pattern = payload.as_ref()?;
+            let Value::Tag {
+                payload: Some(value),
+                ..
+            } = value
+            else {
+                return None;
+            };
+            value_at_pattern(module, *pattern, target, value)
+        }
+        crate::ast::Pattern::Shape { fields, .. } => {
+            let Value::Shape(values) = value else {
+                return None;
+            };
+            fields.iter().find_map(|field| {
+                values
+                    .get(&field.name)
+                    .and_then(|value| value_at_pattern(module, field.pattern, target, value))
+            })
+        }
+        crate::ast::Pattern::Name { .. }
+        | crate::ast::Pattern::Wildcard { .. }
+        | crate::ast::Pattern::Pin { .. }
+        | crate::ast::Pattern::Int { .. }
+        | crate::ast::Pattern::Float { .. }
+        | crate::ast::Pattern::Text { .. }
+        | crate::ast::Pattern::Unit { .. } => None,
     }
 }
 

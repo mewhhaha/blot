@@ -5,7 +5,7 @@ text-keyed map in two representations:
 
 - `persistent-map` updates the same ordered association array with `Array.set`;
   every replacement persistently copies the Store; and
-- `owned-ordered-map` validates and claims one `OrderedTextMap`, then every
+- `owned-ordered-map` validates and copies one `OrderedTextMap`, then every
   replacement binary-searches the key and performs one owned Store write.
 
 Both programs receive the replacement base through the same host effect, update
@@ -19,7 +19,7 @@ persistent control and keeps the comparison focused on Store-copy cost.
 For `n` entries and `n` updates, the persistent form performs `O(n²)`
 element-copy work. The owned form performs `O(n log n)` comparisons, `O(n)`
 destructive writes, and no persistent element-Store write after acquisition. The
-one-time sortedness validation and copy-safe claim are `O(n)`.
+one-time sortedness validation and explicit copy are `O(n)`.
 
 The benchmark validates observations before timing, reports the median of 11
 fresh-instance executions after three warmups, records complete Wasm size and

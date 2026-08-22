@@ -1437,16 +1437,16 @@ function walk(
       if (application.callee.tag === "intrinsic") {
         const name = application.callee.name;
         const ownershipArguments = application.args;
-        if (name === "@region.claim" && ownershipArguments.length === 1) {
+        if (name === "@region.copy" && ownershipArguments.length === 1) {
           const source = walk(
             ownershipArguments[0],
             scope,
             analysis,
             "project",
           );
-          // Claim mints a fresh interval authority and transfers the consumed
-          // array's hidden element tree into it. Copying the Store does not copy
-          // ownership: the source value is unavailable after this operation.
+          // Copy mints a fresh interval authority. For linear elements the
+          // source must be consumed, so cloning the Store shell never clones
+          // the array's hidden ownership tree.
           return {
             tag: "region",
             authority: {

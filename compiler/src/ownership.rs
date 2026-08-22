@@ -1090,7 +1090,7 @@ fn walk_apply(
             }
             return Produced::None;
         }
-        if name == "@region.claim" && arguments.len() == 1 {
+        if name == "@region.copy" && arguments.len() == 1 {
             let source = walk(arguments[0], scope, analysis, Use::Project);
             return Produced::Region {
                 qualifier: Qualifier::Linear,

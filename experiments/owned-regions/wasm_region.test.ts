@@ -77,6 +77,13 @@ Deno.test("owned Slice quicksort executes through Rust Core Wasm without recursi
   await withCompiler(async (compiler) => {
     const hir = await compiler.prepare(quicksortPath);
     const operations = allOperations(hir);
+    assert(
+      operations.every((operation) =>
+        !operation.kind.includes("quicksort") &&
+        !operation.kind.includes("partition")
+      ),
+      "generic quicksort must lower through ordinary Runtime-HIR operations",
+    );
     const storeWrites = operations.filter((operation) =>
       operation.kind === "store.write"
     );
@@ -109,6 +116,32 @@ Deno.test("owned Slice quicksort executes through Rust Core Wasm without recursi
       operations.filter((operation) => operation.kind === "store.new").length,
       0,
     );
+    const recursive = hir.functions.find((function_) =>
+      function_.blocks.some((block) =>
+        block.operations.some((operation) =>
+          operation.kind === "call.direct" &&
+          operation.function === function_.id
+        )
+      )
+    );
+    assert(recursive !== undefined, "quicksort lost its recursive function");
+    assertEquals(
+      recursive.blocks.flatMap((block) => block.operations).filter(
+        (operation) =>
+          operation.kind === "call.direct" &&
+          operation.function === recursive.id,
+      ).length,
+      2,
+      "only the smaller-side calls should remain recursive calls",
+    );
+    assertEquals(
+      recursive.blocks.filter((block) =>
+        block.terminator.kind === "branch" &&
+        block.terminator.target === recursive.entryBlock
+      ).length,
+      2,
+      "both larger-side tail calls should become loop back-edges",
+    );
 
     const artifact = await compiler.compile(quicksortPath);
     const run = await instantiateDefault(artifact.wasm, {
@@ -125,7 +158,7 @@ Deno.test("owned Slice quicksort executes through Rust Core Wasm without recursi
 
 Deno.test("Slice-relative get and set cannot reach a sibling Region", async () => {
   const source = `open import "blot:prelude"
-let whole = Slice.claim [10, 20, 30]
+let whole = Slice.copy [10, 20, 30]
 return case Slice.split ((!whole), 1) of
   #Split (!left, !right, !rejoin) => do:
     let crossed = case Slice.get ((&left), 1) of
@@ -156,7 +189,7 @@ Deno.test("dynamic Slice split conserves authority on success and failure", asyn
   const source = `open import "blot:prelude"
 const Source = @effect.host { .offset = Int -> Int; }
 at <- Source.offset 0
-let whole = Slice.claim [4, 5, 6]
+let whole = Slice.copy [4, 5, 6]
 let restored = case Slice.split ((!whole), at) of
   #Split (!left, !right, !rejoin) => Slice.join ((!rejoin), (!left), (!right))
   #SplitOutOfBounds !original => original
@@ -312,13 +345,13 @@ return add_depth 3
   });
 });
 
-Deno.test("Slice claim copies shared Stores but reuses proven private Stores", async () => {
+Deno.test("Slice copy is elided only for proven private Stores", async () => {
   const source = (owned: boolean) =>
     `open import "blot:prelude"
 const Source = @effect.host { .value = Int -> Int; }
 x <- Source.value 0
 ${owned ? "let !candidate" : "let candidate"} = @array.set [x, 2, 3] 1 2
-let region = Slice.claim ${owned ? "(!candidate)" : "candidate"}
+let region = Slice.copy ${owned ? "(!candidate)" : "candidate"}
 let frozen = Slice.freeze (!region)
 return case Array.get (frozen, 0) of
   #Some value => value
@@ -346,7 +379,7 @@ sig rejoin_parts =
   (@region.rejoin, @region.type Int, @region.type Int) -> @region.type Int
 let rejoin_parts =
   fn (!rejoin, !left, !right) => Slice.join ((!rejoin), (!left), (!right))
-let whole = Slice.claim [7, 8, 9]
+let whole = Slice.copy [7, 8, 9]
 let restored = case Slice.split ((!whole), 1) of
   #Split (!left, !right, !rejoin) => rejoin_parts ((!rejoin), (!left), (!right))
   #SplitOutOfBounds !original => original
@@ -369,7 +402,7 @@ sig rejoin_parts =
   (@region.rejoin, @region.type Int, @region.type Int) -> @region.type Int
 let rejoin_parts =
   fn (!rejoin, !left, !right) => Slice.join ((!rejoin), (!left), (!right))
-let whole = Slice.claim [7, 8, 9]
+let whole = Slice.copy [7, 8, 9]
 let restored = case Slice.split ((!whole), 1) of
   #Split (!left, !right, !rejoin) => rejoin_parts ((!rejoin), (!right), (!left))
   #SplitOutOfBounds !original => original
@@ -389,11 +422,11 @@ Deno.test("a wrapper freeze of a split part is caught at the call site", async (
   const source = `open import "blot:prelude"
 sig freeze_it = @region.type Int -> [Int]
 let freeze_it = fn !region => Slice.freeze (!region)
-let whole = Slice.claim [4, 5, 6]
+let whole = Slice.copy [4, 5, 6]
 return case Slice.split ((!whole), 1) of
   #Split (!left, !right, !rejoin) => do:
     let frozen = freeze_it (!left)
-    let restored = Slice.join ((!rejoin), (Slice.claim frozen), (!right))
+    let restored = Slice.join ((!rejoin), (Slice.copy frozen), (!right))
     return Slice.freeze (!restored)
   #SplitOutOfBounds !original => Slice.freeze (!original)
 `;
@@ -407,7 +440,7 @@ return case Slice.split ((!whole), 1) of
 
 Deno.test("Rust ownership rejects reversed Slice siblings", async () => {
   const source = `open import "blot:prelude"
-let whole = Slice.claim [3, 1, 2]
+let whole = Slice.copy [3, 1, 2]
 let restored = case Slice.split ((!whole), 1) of
   #Split (!left, !right, !rejoin) => Slice.join ((!rejoin), (!right), (!left))
   #SplitOutOfBounds !original => original

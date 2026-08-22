@@ -2,12 +2,12 @@
 
 open import "blot:prelude"
 
-let whole = Slice.claim [5, 2, 4, 1, 3]
+let whole = Slice.copy [5, 2, 4, 1, 3]
 let (!partitioned, boundary) =
   Slice.partition ((!whole), fn value => value <= 3)
 let whole_result = Slice.freeze (!partitioned)
 
-let ranged = Slice.claim [9, 5, 2, 4, 1, 3, 8]
+let ranged = Slice.copy [9, 5, 2, 4, 1, 3, 8]
 let (!range_region, range_boundary) = case Slice.partition_range (
   (!ranged),
   1,

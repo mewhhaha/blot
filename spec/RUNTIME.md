@@ -178,12 +178,13 @@ well-typed first-order collection program may not be made compilable by
 replacing its dynamic input with a staged constant.
 
 A residual Region is one compiler-private product of a Store, inclusive start,
-and exclusive end. `claim` reuses only a fresh Store whose binding ownership
-proves it unavailable elsewhere; a shared or unknown Store receives one
-persistent copy before authority is minted. Relative reads and writes add the
-start only after proving the relative index inside `[0,end-start)`. `split`
-branches on the relative offset and returns either two products over the same
-Store or the unchanged parent. The ownership pass has already checked the linear
+and exclusive end. `copy` is the explicit source allocation boundary. Its
+physical work is elided only for a fresh Store whose binding ownership proves it
+unavailable elsewhere; a shared or unknown Store receives one persistent copy
+before authority is minted. Relative reads and writes add the start only after
+proving the relative index inside `[0,end-start)`. `split` branches on the
+relative offset and returns either two products over the same Store or the
+unchanged parent. The ownership pass has already checked the linear
 recombination witness, so `join` erases that witness and rebuilds the parent
 bounds. `freeze` erases a complete root product to its Store. Region products
 and live witnesses are private layouts and are refused at ABI 1.

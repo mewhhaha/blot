@@ -735,27 +735,32 @@ When the result may be reordered and one backing Store should be reused, enter a
 private consuming phase with `Slice`:
 
 ```blot
-let region = Slice.claim values
+let region = Slice.copy values
 let (!partitioned, boundary) =
   Slice.partition ((!region), fn value => value <= pivot)
 return (Slice.freeze (!partitioned), boundary)
 ```
 
-This is pure at the language boundary: `claim` consumes the input value,
-`partition` consumes the old authority and returns its successor, and `freeze`
-ends the private phase. If the input Store is proved unique, acquisition and
-freeze are constant-time and partition rearranges that Store in place. A shared
-input is copied once during `claim`, after which the same in-place algorithm is
-used. Partition itself is one unstable `O(n)` pass with `O(1)` auxiliary element
-storage and no element-Store allocation.
+This is pure at the language boundary: `copy` makes the persistent-to-private
+allocation boundary explicit, `partition` consumes the old authority and returns
+its successor, and `freeze` ends the private phase. If the input Store is proved
+unique, the compiler may elide the physical copy; otherwise a shared input is
+copied once at that written boundary. Partition itself is one unstable `O(n)`
+pass with `O(1)` auxiliary element storage and no element-Store allocation.
 
-Use `Slice.partition_range ((!region), start, end, predicate)` when an algorithm
-keeps a complete root and works over index ranges. It returns
-`#Partitioned (!successor, boundary)` or
-`#PartitionOutOfBounds (!original, start)`; an invalid range performs no
-predicate call or swap. `examples/owned_quicksort.blot` uses this form, so its
-recursive bookkeeping stays persistent while all element updates reuse the
-private Store.
+Use `Slice.whole (&region)` or `Slice.range ((&region), start, end)` when an
+algorithm keeps a complete root and works over half-open index ranges.
+`Slice.range_length`, `range_last`, `range_before`, and `range_after` keep the
+arithmetic explicit. Pass the selected bounds to `Slice.partition_in`; its
+underlying `partition_range` revalidates that ordinary metadata against the
+current region before calling a predicate or swapping. The range is not
+authority; invalid consuming operations preserve and return the original
+authority.
+
+`examples/owned_quicksort.blot` uses these helpers to recurse into the smaller
+partition before tail-recursing into the larger partition. All element updates
+reuse the private Store, no persistent worklist is allocated, and tail-loop
+recovery bounds the remaining call stack to `O(log n)`.
 
 ## Treat types as compile-time values
 

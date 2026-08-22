@@ -335,6 +335,10 @@ impl CompilerSession {
             .borrow_mut()
             .retain(|path, _| !invalidated.contains(path));
         self.context
+            .expression_types
+            .borrow_mut()
+            .retain(|(path, _), _| !invalidated.contains(path));
+        self.context
             .closure_signatures
             .borrow_mut()
             .retain(|(path, _), _| !invalidated.contains(path));
@@ -1290,7 +1294,7 @@ mod tests {
     #[test]
     fn recursive_empty_array_accumulator_closes_from_pushed_elements() {
         std::thread::Builder::new()
-            .stack_size(4 * 1024 * 1024)
+            .stack_size(8 * 1024 * 1024)
             .spawn(|| {
                 let mut session = CompilerSession::default();
                 session

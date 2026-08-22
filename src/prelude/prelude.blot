@@ -325,8 +325,8 @@ const Array =
     .push = fn (values, value) => @array.push values value;
   }
 
-sig slice_claim = @forall (fn T => [T] -> @region.type T)
-const slice_claim = fn !values => @region.claim (!values)
+sig slice_copy = @forall (fn T => [T] -> @region.type T)
+const slice_copy = fn !values => @region.copy (!values)
 
 sig slice_length = @forall (fn T => @region.type T -> @type.int)
 const slice_length = fn &region => @region.length (&region)
@@ -372,8 +372,8 @@ sig slice_partition_unchecked =
 const slice_partition_unchecked =
   fn (!region, start, end, belongs_left) => do:
     let rec go =
-      fn (!current_region, scan, boundary) => do:
-        if is_equal (@int.cmp scan end):
+      fn (!current_region, scan, boundary, final) => do:
+        if is_equal (@int.cmp scan final):
           return (!current_region, boundary)
         else:
           let current = case slice_get ((&current_region), scan) of
@@ -391,14 +391,16 @@ const slice_partition_unchecked =
               return go (
                 !updated,
                 @int.add scan 1,
-                @int.add boundary 1
+                @int.add boundary 1,
+                final
               )
             #False => go (
               !current_region,
               @int.add scan 1,
-              boundary
+              boundary,
+              final
             )
-    return go (!region, start, start)
+    return go (!region, start, start, end)
 
 sig slice_partition_range =
   @forall (fn T => do:
@@ -483,17 +485,118 @@ const slice_reassociate_right =
 sig slice_freeze = @forall (fn T => @region.type T -> [T])
 const slice_freeze = fn !region => @region.freeze (!region)
 
+// Checked range metadata is deliberately not ownership authority. Every
+// consuming operation still validates the bounds against the current Slice.
+const SliceRange =
+  {
+    .start = @type.int;
+    .end = @type.int;
+  }
+
+const slice_range_value = fn (start, end) => do:
+  return { .start = start; .end = end; }
+
+const slice_range_bounds = fn bounds => bounds
+
+sig slice_range_length = SliceRange -> @type.int
+const slice_range_length = fn bounds => do:
+  let { .start; .end; } = slice_range_bounds bounds
+  return @int.sub end start
+
+sig slice_range_last = SliceRange -> @type.int
+const slice_range_last = fn bounds => do:
+  let { .end; } = slice_range_bounds bounds
+  return @int.sub end 1
+
+sig slice_range_before = (SliceRange, @type.int) -> SliceRange
+const slice_range_before = fn (bounds, boundary) => do:
+  let { .start; } = slice_range_bounds bounds
+  return slice_range_value (start, boundary)
+
+sig slice_range_after = (SliceRange, @type.int) -> SliceRange
+const slice_range_after = fn (bounds, boundary) => do:
+  let { .end; } = slice_range_bounds bounds
+  return slice_range_value (@int.add boundary 1, end)
+
+sig slice_whole = @forall (fn T => @region.type T -> SliceRange)
+const slice_whole = fn &region => do:
+  return slice_range_value (0, slice_length (&region))
+
+sig slice_range =
+  @forall (fn T => do:
+    return (@region.type T, @type.int, @type.int) ->
+      (#Range SliceRange | #RangeOutOfBounds)
+  )
+const slice_range = fn (&region, start, end) => do:
+  let length = slice_length (&region)
+  if is_less (@int.cmp start 0):
+    return #RangeOutOfBounds
+  else:
+    if is_less (@int.cmp end start):
+      return #RangeOutOfBounds
+    else:
+      if is_less (@int.cmp length end):
+        return #RangeOutOfBounds
+      else:
+        return #Range (slice_range_value (start, end))
+
+sig slice_expect_get =
+  @forall (fn T => (@region.type T, @type.int) -> T)
+const slice_expect_get = fn (&region, index) => do:
+  return case slice_get ((&region), index) of
+    #Some value => value
+    #None => @panic "index escaped its checked Slice range"
+
+sig slice_partition_in =
+  @forall (fn T => do:
+    return (
+      @region.type T,
+      SliceRange,
+      (T -> (#True | #False))
+    ) -> (
+      #Partitioned (@region.type T, @type.int) |
+      #PartitionOutOfBounds (@region.type T, @type.int)
+    )
+  )
+const slice_partition_in = fn (!region, bounds, belongs_left) => do:
+  let { .start; .end; } = slice_range_bounds bounds
+  return slice_partition_range (
+    !region,
+    start,
+    end,
+    belongs_left
+  )
+
+sig slice_swap_or_keep =
+  @forall (fn T => do:
+    return (@region.type T, @type.int, @type.int) -> @region.type T
+  )
+const slice_swap_or_keep = fn (!region, left, right) => do:
+  return case slice_swap ((!region), left, right) of
+    #Updated !updated => updated
+    #SwapOutOfBounds !original => original
+
 const Slice =
   {
     .of = @region.type;
-    .claim = slice_claim;
+    .Range = SliceRange;
+    .copy = slice_copy;
     .length = slice_length;
     .get = slice_get;
+    .expect_get = slice_expect_get;
     .set = slice_set;
     .replace = slice_replace;
     .swap = slice_swap;
+    .swap_or_keep = slice_swap_or_keep;
     .partition = slice_partition;
     .partition_range = slice_partition_range;
+    .partition_in = slice_partition_in;
+    .whole = slice_whole;
+    .range = slice_range;
+    .range_length = slice_range_length;
+    .range_last = slice_range_last;
+    .range_before = slice_range_before;
+    .range_after = slice_range_after;
     .split = slice_split;
     .join = slice_join;
     .reassociate_left = slice_reassociate_left;
@@ -1820,17 +1923,17 @@ const rec ordered_text_map_is_strict =
       else:
         return False
 
-sig ordered_text_map_claim =
+sig ordered_text_map_copy =
   @forall (fn V => do:
     return [ordered_text_map_entry_type V] ->
       @region.type (ordered_text_map_entry_type V)
   )
-const ordered_text_map_claim = fn entries => do:
+const ordered_text_map_copy = fn entries => do:
   let length = @array.len (&entries)
   if ordered_text_map_is_strict ((&entries), 1, length):
-    return @region.claim entries
+    return @region.copy entries
   else:
-    return @panic "OrderedTextMap.claim requires strictly increasing keys"
+    return @panic "OrderedTextMap.copy requires strictly increasing keys"
 
 sig ordered_text_map_validate =
   @forall (fn V => [ordered_text_map_entry_type V] -> Bool)
@@ -1956,7 +2059,7 @@ const OrderedTextMap =
     .entry = ordered_text_map_entry_type;
     .of = ordered_text_map_type;
     .validate = ordered_text_map_validate;
-    .claim = ordered_text_map_claim;
+    .copy = ordered_text_map_copy;
     .length = slice_length;
     .lower_bound = ordered_text_map_lower_bound;
     .get = ordered_text_map_get;

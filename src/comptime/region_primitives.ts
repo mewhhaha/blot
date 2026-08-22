@@ -68,14 +68,14 @@ const entries: readonly (readonly [string, Primitive])[] = [
     },
   ],
   [
-    "@region.claim",
+    "@region.copy",
     {
       arity: 1,
       run: ([array], span) => {
         if (array.tag !== "array") {
           fail(
             "BLOT_TYPE",
-            `@region.claim expects an array, found ${show(array)}.`,
+            `@region.copy expects an array, found ${show(array)}.`,
             span,
           );
         }
