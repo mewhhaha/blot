@@ -8,7 +8,7 @@ import {
 export const PACKAGE_MANIFEST = "blot.json";
 export const PACKAGE_SCHEMA = "blot-package";
 export const MODULE_CAPSULE_SCHEMA = "blot-module-capsule";
-export const PACKAGE_FORMAT_VERSION = 3;
+export const PACKAGE_FORMAT_VERSION = 4;
 const CAPSULE_ENCODING = "gzip+json";
 
 export interface PackageExport {

@@ -1,454 +1,168 @@
-# The Backend
+# The Rust Backend
 
 ```bash
-just build examples/compiled.blot   # Node development compiler
-pnpm compiler:download              # matching production compiler Wasm
-just wasm                           # interpreter vs GPU evaluator vs Wasm
+pnpm compiler:build
+pnpm conformance
+pnpm blot build examples/owned_quicksort.blot
 ```
 
-The compiler executes Baba-generated parser tables, checks and specializes the
-program, constructs validated Blot Runtime HIR, derives ABI 1 adapters, and
-emits WebAssembly in one validated Rust-built WebAssembly instance. The
-TypeScript host supplies files and package resolution. It does not repeat
-checking, staging, ABI planning, or emission.
+Blot has one semantic compiler implementation. The checked-in Rust source is
+compiled to `generated/compiler/compiler.wasm`; the TypeScript process hosts
+that artifact, resolves the source graph, runs Baba's syntax frontend, and
+passes compact portable ASTs and included bytes into a resident compiler
+session. It does not check, evaluate, specialize, analyze ownership, construct
+Runtime HIR, plan the ABI, or emit program Wasm.
 
-The mathematical pass contracts and lowering simulations are specified in
+The mathematical pass contracts live in
 [`spec/COMPILER.md`](../spec/COMPILER.md) and
 [`spec/RUNTIME.md`](../spec/RUNTIME.md). This document records the current
-implementation and its supported boundaries.
+implementation boundary and its deliberate target restrictions.
 
-Neither repository initializes a WebGPU device on the Blot build path or offers
-a GPU build target. The GPU frontend and evaluator remain independent
-conformance checks. `just parity` and `just wasm` exercise them without defining
-a second source-language meaning. There is no WAT route.
+## Artifact boundary
 
-## Production compiler
+`pnpm compiler:build` builds the pinned Rust target, snapshots the dependency-
+free prelude, and writes the compiler artifact manifest. The manifest binds:
 
-The Rust/Wasm production compiler runs in one WebAssembly instance. The host
-supplies source modules and included file contents. Rust executes Baba's
-generated DFA and island plan, lowers the compact CST, evaluates comptime,
-infers and checks the program, performs ownership analysis and staging,
-constructs Runtime HIR and ABI 1, and emits the final WebAssembly binary.
+- the compiler Wasm SHA-256;
+- the compiler-host ABI version;
+- the prelude snapshot SHA-256;
+- the pinned Rust toolchain; and
+- a deterministic digest of every Rust compiler input.
 
-The compiler is generated as `generated/compiler/compiler.wasm` but is not
-tracked by Git. CI publishes it directly and inside a runnable workspace, so
-consumers can use the production compiler without Cargo. Its adjacent manifest
-binds the bytes to a SHA-256, pinned Rust toolchain, and exact source tree. One
-process owns a resident Rust session. A revision consists of the entry source
-plus the revisions of every resolved import and included file; an unchanged
-revision returns the cached binary artifact. Changes invalidate the affected
-entry before compilation.
+The compiler Wasm and manifest are derived outputs. The prelude snapshot is
+tracked because it is the language's distributed ordinary-module interface. The
+Node host refuses a missing, mismatched, or incompatible artifact before it
+creates a compiler session. A caller supplying custom compiler bytes must also
+supply the matching prelude snapshot.
 
-Rust residual staging emits named recursive closures as internal Runtime-HIR
-functions and uses `call.direct` for recursive and outer calls. A source
-function with a concrete `sig` may cross the public ABI directly; curried
-domains become ordered Wasm parameters. Dynamic Store length, read, persistent
-write, and persistent growth use the same residual path. Empty forwarding blocks
-are removed before emission, which shortens branch-heavy dispatcher graphs
-without changing their values or effects. A recursive function closed over
-compile-time values becomes Runtime HIR directly. Runtime captures become
-explicit parameters selected from the closure's lexical free variables, and a
-dynamic argument or dynamic capture causes recursion to residualize. Settled
-closure signatures are checked facts keyed by module and lambda-body identity;
-the prelude snapshot carries them so the compiler does not re-infer snapshot
-internals. Dynamic surface `for` over `Iter.range` compiles through this path.
+One `Compiler` owns one resident Rust session. Requests are serialized, while
+unchanged loaded revisions reuse prepared Runtime HIR and emitted artifacts.
+Source, import, include, or capsule changes invalidate the affected root.
 
-Its release gates compare the complete AST, rejection diagnostics, pure
-evaluation, staged export phases, exact ABI bytes, decoded Wasm values, and
-host-effect observations with bounded independent oracles. The repository-wide
-HIR gate also covers the terminal application: a text-returning host effect
-feeds prelude comparison, dynamic branches, sum joins, and a later text effect
-without returning to TypeScript. Canonical text results are bounds-checked and
-UTF-8-checked before they enter that residual program, including text nested in
-structural host results. Structural fields use canonical ordering and dynamic
-signed arithmetic traps on overflow. The benchmark and current measurements are
-in [`docs/compiler.md`](compiler.md).
+## Compiler path
 
-Generated-artifact execution is measured separately from compiler latency. The
-Blot-Wasm versus Rust-Wasm workloads, current results, and unsupported runtime
-programs are recorded in
-[`docs/generated-code-performance.md`](generated-code-performance.md).
-
-## Three executions, one language
-
-blot runs the same program three ways, and `just wasm` requires all three to
-agree:
-
-|                         |                                                                                     |
-| ----------------------- | ----------------------------------------------------------------------------------- |
-| the comptime evaluator  | also the runtime, and the engine behind `const`/`compdo:` — one semantics, no drift |
-| gpufuck's GPU evaluator | a cross-check on the lowering                                                       |
-| the emitted Wasm        | the artifact                                                                        |
-
-A lowering can satisfy one and not another, which is why the check is on all
-three rather than on whichever is convenient.
-
-## What lowering has to close
-
-gpufuck's Core is deliberately small: unary application, lambdas, `let`,
-`let-rec`, `if`, primitive operations, nominal constructors with flat exhaustive
-`case`, and an indexed `Store`. Records, lists, and multi-argument functions are
-not primitives — the frontend lowers them. Three gaps, and how each closes:
-
-- **Records and tuples become nominal declarations.** One nominal per distinct
-  field-name set, so two shapes with the same labels are one type. A tuple is a
-  shape with integer labels, so it needs no second mechanism.
-- **Unions become nominal declarations too**, one per constructor set, with a
-  type parameter per constructor that carries a payload — `#Ready` and
-  `#Failed Text` cannot share a field list.
-- **`if` wants a boolean.** blot's conditions are `#True | #False`, ordinary
-  prelude constructors, so those two tags become Core booleans and a `case` over
-  them becomes an `if`.
-
-Unary application costs nothing, which is exactly why blot's single-parameter
-rule was worth keeping.
-
-## Inference feeds the backend
-
-A nominal needs the _whole_ field set, and `p.x` does not say what else `p`
-holds. Inference does, so it records it: `Checked` carries a map from projection
-nodes to field sets and from `case` nodes to constructor sets, keyed by AST node
-identity. The backend reads them rather than re-deriving them, because
-re-deriving them means a second type checker.
-
-That is also why `load` keeps one cache per process. Two `load` calls returning
-two structurally equal trees would silently lose every recorded fact. A source
-edit gives the changed module and its importers new trees, while unrelated
-dependencies retain theirs; no path-keyed result can survive an edit
-accidentally.
-
-**Two caches, opposite lifetimes.** The loader's cache is process-wide and is
-what keeps AST node identity — the key for every inference fact — stable from
-one call to the next. The _check_ cache is per `checkFile` call, because a
-dependency's facts depend on its importers: there is no single answer it could
-carry between two programs, and one AST-keyed map could not hold both answers
-anyway. Anything that reintroduces a process-wide check cache reintroduces that
-bug.
-
-### Checking a program is two passes
-
-Bottom-up first, because a diagnostic belongs to the module that caused it and a
-dependency's spans index the dependency's source — an importer that relabelled
-one would name the wrong line. Then one settle of the held field-set reads. Then
-a second pass that assembles each module's result. The two passes exist because
-a fact and a diagnostic want opposite moments: an error is local to its module,
-and a field set belongs to the whole program, since the record that reaches
-`fn c => c.zoom` may be built two files away.
-
-Facts merge from a dependency's _assembled_ result rather than from its own
-module's `Checked`. The backend inlines the whole subtree into the root, so a
-fact found two levels down has to arrive at the root too.
-
-### What a shape fact reads
-
-A variable's lower bounds are the records that flowed into it and its upper
-bounds are the records the program demanded of it, and those answer different
-questions. What flowed in decides, because a value carries exactly the fields of
-the record that reached it. Demands speak only when nothing flowed in at all — a
-parameter whose caller is outside the module is pinned from above, which is what
-gives `fn &p => p.x + p.y` a shape — and then they are unioned, because each
-projection writes its own one-field record.
-
-A `let`-bound function is generalized, so the record its callers pass never
-reaches the definition-site variable through the bound graph at all. `extrude`
-links its copies into that graph; `freshenAbove` must not, because a scheme's
-instantiations are exactly what does not constrain each other. The edge from a
-definition-site variable to each of its copies is therefore recorded beside the
-lattice, in `Instances` — one map per program checked, held in that program's
-`Staging` alongside the held reads, never a field on `Variable`, because
-`PRIMITIVE_TYPES` holds process-global scheme variables that outlive every
-check. One map per program rather than per module: a dependency's
-definition-site variable and its importer's instantiation of it have to be one
-edge, or a read inside the dependency cannot find the record the importer built.
-`constrain` never reads it, so biunification propagates the bounds it always did
-and stays polynomial; the shape walk follows it, and that is what lets
-`let get_x = fn v => v.x;` learn the record its call sites built — including
-when those call sites are in another file.
-
-Two _different_ records flowing to one node is not a wider record, it is two
-shapes, and the fact says so rather than unioning them. Lowering specializes a
-runtime `let` lambda once per concrete call shape, including through an imported
-module, so each call receives the nominal record it actually constructed.
-
-## `const` compiles to nothing
-
-A `const` is a compile-time value and emits no code. A use specializes it: a
-`const` holding a type or effect disappears entirely, and one holding a closure
-becomes a Core definition — once, by closure identity — only if something calls
-it. That is how `+` reaches Wasm at all. `Num.add` is a prelude closure, not a
-primitive, and `20 + 22` compiles to a call to one hoisted definition.
-
-Inference records compile-time declaration values by AST expression identity.
-The module's final value environment cannot contain a `const` local to a
-residual block, but lowering still needs that value to specialize a local
-handler or closure. Carrying the value as a fact preserves its effect identity
-without evaluating compiler input for a second time.
-
-## What compiles today
-
-Every accepted program in `examples/` reaches gpufuck's CPU compiler. That
-catalog covers literals, signed-i64 arithmetic, prelude operators and
-comparisons, records and their spreads, tuples, unions and `case` including
-literal guards and nested payloads, exact and nested destructuring, arrays and
-their spreads, the collection prelude, text operations, granted capabilities,
-lambdas and application, `let`, `if`, recursion, imported modules, host effects,
-and one-shot handlers including non-tail resume and abort.
-
-Staging runs after blot has checked the source and before lowering. It evaluates
-closed runtime fragments, removes compile-time-only result fields, and leaves
-effectful or otherwise residual expressions for gpufuck. Runtime result fields
-become named Wasm exports; compile-time fields remain in the manifest with no
-Wasm name. Runtime fields use Blot Core Wasm ABI 1 rather than gpufuck's private
-tagged-value boundary. The structural manifest records canonical function types,
-post-return ownership, imports, record fields, variant cases, and seals. Its
-exact bytes occur both beside the module and in the `blot:abi` custom section;
-[abi.md](abi.md) specifies the byte contract.
-
-`rec` becomes a Core `let-rec`, not a lifted top-level definition. Lifting it
-stranded whatever the lambda captured — `fold`'s inner `go` closes over
-`values`, and a definition has no enclosing scope for that to come from.
-
-An empty array is `storeEmpty`, which allocates a zero-length `Store a` and lets
-the surrounding constraints infer `a`. blot briefly recorded the element type
-during checking and wrote a typed placeholder instead; that worked only where
-the element was already pinned, so `map` and `filter` did not compile. Asking
-for the constructor was the right move over building monomorphization to route
-around its absence — gpufuck keeps Core polymorphic on measured grounds.
-
-An import is _inlined_: the internal module closure maps an input record to a
-returned record, both known at compile time, so importing one is lowering its
-body as a block. The import boundary exists for authority, not for code
-generation.
-
-`just wasm` discovers every accepted catalog program and compares all three
-executions on the staged runtime result rather than on a selected scalar. A
-record crosses the boundary as a constructor, and the field names the backend
-synthesized are what turn it back into something comparable. Comparing only
-scalars would quietly stop checking every program that returns a record.
-
-Arrays are Core's `Store`. A write produces a logically new store, so an array
-literal threads each element through its own binding — the first version rewrote
-the binder in the finished body instead, which quietly dropped every write but
-the last. When ownership proves a linear array is consumed by its final
-`@array.set` or `@array.push`, the emitted Store update carries an ownership
-witness and gpufuck may reuse the source allocation. Updates without that
-witness copy, preserving immutable source semantics for shared arrays. The
-interpreter cannot expose this representation choice; three-execution parity
-keeps its observable result identical.
-
-## Remaining backend boundaries
-
-The remaining restrictions are at boundaries where the compiler needs a concrete
-representation:
-
-- A runtime export needs a concrete first-order ABI. Integers, text, unit,
-  booleans, records, arrays, variants, seals, and functions over those values
-  cross. Types and effects are compile-time values, so staging records and
-  erases them instead of inventing a runtime encoding.
-- A source handler is specialized only when its effect, nullary computation, and
-  clause shape are statically visible. Handling a host effect, dynamically
-  choosing a handler, or spreading clauses would require a runtime handler
-  representation that gpufuck intentionally does not have.
-- A residual structurally polymorphic function must have a concrete record shape
-  before it reaches gpufuck. It gets one from the call sites that instantiated
-  it. A runtime `let` lambda is cloned at each distinct concrete call shape;
-  immutable aliases and statically known identity applications preserve that
-  lambda, and compile-time generic functions are specialized at their Blot call
-  sites. An unconstrained runtime export is rejected instead of being assigned
-  an arbitrary nominal ABI.
-- A generic runtime `fold` whose accumulator begins as an empty array still
-  needs a concrete element representation from its higher-order call site. The
-  compiler carries higher-order substitutions into nested closures, but rejects
-  the call when every available witness remains polymorphic. Surface iteration
-  does not allocate this intermediate index array and is the preferred form.
-
-The two formerly known shape leaks no longer reach gpufuck's type checker. A
-spread of a parameter, such as `fn r => { ...r; .x = 1; }`, needs a row variable
-to describe the fields it carries through and is rejected during source
-checking. A parameter destructured in place, such as `fn { .x = a; } => a`, is
-specialized with the concrete shape supplied by each call site.
-
-The same evidence follows a specialized parameter into a tuple `case`. A shape
-pattern in one tuple column destructures the concrete element nominal supplied
-at that call rather than the narrower record named by the pattern.
-
-A projecting function reached across an import used to be a third. It is not one
-now: the reads are held until every module has been checked and settled once, so
-a projection inside a dependency is answered by the record an importer built.
-`examples/widened.blot` and `examples/lib/camera.blot` are the catalog entry,
-and two differently shaped calls into one imported projection now lower as
-separate specializations.
-
-## The module input is the program's authority
-
-The entry module's input is the program's whole authority — no ambient
-filesystem, no ambient clock, nothing to import for more. At this boundary that
-authority _is_ the module's imports:
-
-```blot
-module with init
-…
-<- init.print message     // imports { Init }
+```txt
+resolved source graph
+  -> Baba lexer/layout/island parser
+  -> compact CST -> Rust AST
+  -> comptime evaluation
+  -> biunification
+  -> ownership and safety
+  -> specialization and residual evaluation
+  -> validated Runtime HIR
+  -> ABI 1 closure
+  -> emitted WebAssembly
 ```
 
-`init` has no runtime representation of its own. Each field the program reaches
-for becomes a declared host operation, with the signature inference found for
-it, and nothing is passed in. A program that never asked for `print` cannot
-reach it.
+The package format carries the canonical Rust-exported AST. Loading a package
+therefore validates and installs the same syntax artifact that source loading
+would have produced; there is no TypeScript AST or checker dialect.
 
-An operation's result may be unconstrained — nothing observes what `print`
-returns — and `()` is what that means at the boundary. An unconstrained _input_
-is still refused: the host cannot be handed something no type determines.
+Rust exposes source checking, tooling analysis, evaluation, tagged tests,
+portable AST export, Runtime-HIR preparation, and compilation. Diagnostics are
+source failures with real spans. Unsupported target policy is returned as a
+target refusal. A checked fact missing during lowering is an invariant failure,
+not a synthetic source diagnostic.
 
-Core carries text without measuring or rendering it, so gpufuck emits
-module-local Wasm implementations of `@text.len`, `@text.of_int`, and
-`@text.cmp`. They create no ambient `Text` capability. `@text.cmp` computes a
-sign and blot rebuilds the three-constructor ordering on this side.
+## Evaluation and conformance
 
-## Host effects are capabilities
+There are two authoritative observations of executable code:
 
-An effect the _host_ implements is declared with `@effect.host`, and it becomes
-a gpufuck capability — a named record of operations, each carrying the effect it
-performs, its parameter type, and its result type. gpufuck turns that into typed
-WebAssembly imports.
+| Observation    | Purpose                                                       |
+| -------------- | ------------------------------------------------------------- |
+| Rust evaluator | `const`, comptime, interactive evaluation, and test execution |
+| emitted Wasm   | production execution through Blot Core Wasm ABI 1             |
 
-```blot
-const Console = @effect.host { .write = Str -> Unit; }
+`pnpm conformance` requires both to agree on representative scalar and owned-
+collection programs, including owned quicksort. Independent evaluators may be
+used as research oracles, but they are not compiler implementations and cannot
+override the language checker.
 
-let report = fn () =>
-  result <- Console.write "compiled"
-  return result
-// () -> () ~ { Console }
-```
+## Inference feeds lowering
 
-This is why blot needs no raw import form: you declare an effect, and the
-boundary follows from its operation types. It is also why a host effect's row is
-allowed to reach the module boundary, where an ordinary one nothing handles is
-an error — the row _is_ the program's declared interface, and `blot build`
-prints it as the module's imports.
+The checker records the facts residual lowering is allowed to trust:
 
-Both executions answer the same declared effects: `blot eval` bridges them to
-the same grants `blot build` hands the compiled module. `just wasm` compares the
-printed transcripts as well as the results, because an effectful program's
-output is as much of its meaning as its return value.
+- expression runtime types;
+- closure signatures and recursive closure identities;
+- complete record and constructor sets;
+- declaration tags;
+- ownership contracts; and
+- concrete compile-time values needed by specialization.
 
-Host effects use the same full first-order boundary as exports: integers, text,
-unit, booleans, concrete records, arrays, variants, and seals. The manifest
-names every structural component, so the host never has to guess a nominal
-layout.
+The prelude snapshot contains its AST and checked certificate, including closure
+facts. Installing it inflates those facts and deterministically reconstructs the
+module value without reintroducing a second type checker.
 
-## Recovering a constructor set without monomorphizing
+Sequenced effect results obey the value restriction. `name <- computation` binds
+one monomorphic runtime value, so later uses refine the same result and, for an
+entry-module capability, its host signature. Pure `let` and `const` retain
+ordinary generalization.
 
-A wildcard arm leaves the scrutinee's constructor set open, which is common
-inside a polymorphic function: `case o of #Less => …, _ => …` says nothing about
-`#Equal`. Core needs the whole set to name the nominal, so the obvious fix is to
-duplicate the definition per instantiation — and that is the fix gpufuck's own
-measurements argue against.
+Canonical `@satisfies` requirements remain representation evidence during
+residual evaluation. This matters for an empty collection: `[T]` determines a
+Store element layout even when no element exists at the first recursive call.
 
-The set is already written down elsewhere.
-`const Message = #Ready | #Progress Int` _is_ a constructor set, so lowering
-harvests every compile-time union in scope and looks the arms up in them, the
-same membership lookup that already resolves which union a bare `#Ready` belongs
-to. An ambiguous tag — one two unions both declare — is refused rather than
-guessed.
+## Runtime HIR
 
-## What a pattern becomes
+Runtime HIR is typed, closed, ownership-annotated, and source-spanned. Recursive
+closures become internal functions with explicit runtime captures and
+`call.direct` edges. Dynamic branches become blocks and joins. Closed function
+choices are defunctionalized inside the program; an open source set is refused.
 
-Core dispatches on a constructor and nothing else, so the rest of blot's
-patterns become what they always described:
+Current scalar lowering covers signed integers, `f32`, `f64`, comparisons,
+conversions, and the supported SIMD families. Text lowering covers append,
+length, integer conversion, comparison, and substring search. The emitted
+substring helper searches UTF-8 bytes, which is equivalent to source substring
+semantics because both operands have already crossed validated UTF-8 text
+boundaries.
 
-| pattern                             | Core                                                           |
-| ----------------------------------- | -------------------------------------------------------------- |
-| `#Progress 0` next to `#Progress n` | one arm, with the literal as a guard inside it                 |
-| `case value of -1 => …, 1 => …`     | a chain of equality tests; there is no union to dispatch on    |
-| `#Pair (left, right)`               | one binder, then the `case` a compound binding already becomes |
-| `let [a, b] = xs`                   | reads by index, since a `Store` has no constructor             |
+Arrays use the generic Store operations: empty, length, read, persistent or
+owned-reuse write, growth, split, and take. Regions reuse those layouts while
+keeping split/join authority in ownership evidence. Quicksort remains ordinary
+Store and control-flow code; there is no quicksort, partition, or collection
+specialization primitive.
 
-An array literal with a spread is _built_ rather than allocated: start empty,
-push each written element, and copy each spread with a local recursive loop.
-`let-rec` is what makes the loop expressible.
+## Module authority and host effects
 
-## Handlers are evidence
+An entry module's `module with init` record is its complete host authority. A
+reached field becomes a typed Wasm import; an unused field does not. The
+operation's argument and result are inferred from the monomorphic source flow.
+An otherwise unconstrained result becomes `Unit`, while an unconstrained input
+is refused because the host ABI would have no representation.
 
-gpufuck has no runtime effect or handler representation. blot therefore
-specializes `@handle` with a selective CPS transform before Core exists.
-Ordinary expressions stay in direct style. At a handled operation, lowering
-passes the operation argument and an affine continuation representing the rest
-of the computation to the matching clause.
+Host effects declared with `@effect.host` use the same capability mechanism.
+Canonical text and nested structural results are bounds-checked and UTF-8-
+validated before residual code observes them.
 
-```blot
-const Counter = @effect { .bump = Int -> Int; }
-let doubling = {
-  .bump = fn (n, ?resume) =>
-    result <- resume (n * 2)
-    return result
-  ;
-}
-let counted = fn () =>
-  first <- Counter.bump 20
-  second <- Counter.bump 1
-  return first + second
+An effectful module top level cannot be replayed separately for multiple public
+runtime fields. Such a module must return one runtime value or move the effect
+inside a returned function.
 
-@handle (Counter, counted, doubling)   // 42
-```
+## Public ABI
 
-Calling `resume` continues from the operation and can use its eventual result in
-any expression. Omitting it aborts the rest of the computation. The affine
-qualifier is the static proof that a clause cannot resume twice; no runtime
-one-shot check is needed.
+Blot Core Wasm ABI 1 is memory32 with canonical UTF-8 text adapters. Public
+exports contain only closed first-order types. The emitter derives the sidecar
+manifest and the `blot:abi` custom section from one byte sequence, and the host
+requires them to agree.
 
-**Handling inlines the computation**, because the evidence is lexical. A closure
-has already resolved its operations against the global definitions, so a handler
-wrapped around a call to it would replace nothing. Specializing the handler is
-not an optimization here — it is what makes it mean anything. The computation
-and the handler both have to be written in the module, which is what "a handler
-known at compile time" always required.
+Compiler-private layouts never cross that boundary. These include recursive
+indirections, Store headers, defunctionalized closure-choice tags, and internal
+capture products. Exporting a function choice is refused even when it is valid
+inside Runtime HIR.
 
-Handler composition adds no backend path. A `|>` pipeline of two-argument
-`@handle (effect, handler)` steps saturates during CST lowering: each step
-becomes a named nullary computation containing the ordinary three-argument call,
-so the backend only ever sees the primitive.
+## Deliberate target restrictions
 
-## Names, and what may not be mangled
+The current backend refuses rather than guessing when:
 
-An effect's identity is its own, not its spelling: `@effect` mints a fresh one
-every time, so two effects may share a name. Core definitions are therefore
-named by identity — a name less unique than the memo that guards it is a
-duplicate definition waiting for two effects to collide.
+- a dynamic primitive has no Runtime-HIR operation;
+- a dynamic condition is not Boolean;
+- dynamic branches have incompatible runtime layouts;
+- a runtime function has no settled first-order signature;
+- a dynamic sum requires more than the supported binary residual dispatch;
+- a deferred parameter would survive into strict runtime execution;
+- a function choice has an open source set or crosses the public ABI; or
+- a compiled module has no runtime export.
 
-A **capability** name is the exception. It is the host-facing contract — the
-host supplies `init.Console` by that name — so it cannot be made unique behind
-the programmer's back. Two distinct host effects claiming it are ambiguous at
-the boundary, and `BLOT_AMBIGUOUS_CAPABILITY` says so rather than merging their
-operations.
-
-## When gpufuck disagrees
-
-gpufuck re-runs Hindley-Milner on what blot emits. blot's algebraic-subtyping
-result is the authority, so a rejection there is a **lowering bug**, never a
-type-system disagreement to resolve in gpufuck's favour. The diagnostic says so,
-because the alternative is a bug report filed against the wrong project.
-
-## Width subtyping is specialized before Core
-
-blot's records are structurally width-subtyped: `fn value => value.x` infers a
-function that accepts any record with `.x`. gpufuck's records are nominal and
-invariant, so an open structural type cannot be handed over unchanged.
-
-Compile-time generics close that type at each blot call site.
-`examples/generics.blot` specializes the same projection for both a two-field
-and a three-field record, and the resulting functions lower against two concrete
-nominals. A runtime export instead needs to state the concrete boundary:
-
-```blot
-const Point = { .x = Int; .y = Int; }
-sig project = Point -> Int
-let project = fn point => point.x
-
-return { .project = project; }
-```
-
-That signature is not an annotation the function body needs; it is the
-first-order Wasm contract. Exporting the unconstrained structural function is
-refused with `BLOT_EXPORT_NOT_FIRST_ORDER`, because choosing one nominal shape
-would narrow the source type silently.
+These are production-compiler boundaries. Adding one requires a Rust semantic
+implementation, a Runtime-HIR/ABI account where applicable, executable evidence,
+and matching updates to the language and compiler specifications.

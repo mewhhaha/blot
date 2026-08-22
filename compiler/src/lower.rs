@@ -2383,7 +2383,7 @@ fn lower_lambda(
 
 /// `~` is a qualifier only here: it defers one named parameter, where every
 /// other qualifier describes ownership of a pattern. Source elaboration reads
-/// it the same way, and both compilers must agree on the tree.
+/// it the same way, and every compiler entry point must expose the same tree.
 fn deferred_parameter(cst: &CompactCst<'_>, pattern: u32) -> Result<bool, String> {
     let Some(qualifier) = cst.field(pattern, "qualifier")? else {
         return Ok(false);
@@ -2970,7 +2970,7 @@ struct GuardedArm {
 /// Builds a `case`, folding the two-arm Boolean form into the internal
 /// conditional the way source elaboration does. `case` is the source
 /// value-selection form; the conditional node is what the checker's branch
-/// refinement already reads, and both compilers must produce the same tree.
+/// refinement already reads, and every compiler entry point must expose the same tree.
 fn case_expression(
     target: ExpressionId,
     arms: Vec<Arm>,

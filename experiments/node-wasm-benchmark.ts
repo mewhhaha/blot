@@ -7,10 +7,6 @@ import { load, type Loaded, refreshLoadedModules } from "../src/load.ts";
 import type { BlotRuntimeModule } from "../src/runtime/hir.ts";
 import { validateBlotRuntimeModule } from "../src/runtime/hir.ts";
 import { encodePortableModule } from "../src/syntax/portable.ts";
-import {
-  compareObservations,
-  type CompilerAcceptance,
-} from "../src/node/parity_report.ts";
 
 const samples = 9;
 const arguments_ = process.argv.slice(2);
@@ -74,7 +70,7 @@ async function main(): Promise<void> {
 
   try {
     // The qualification compile is also the cold sample. No repeated timing is
-    // performed until both compilers have proved that sample comparable.
+    // performed until both entry points have proved that sample comparable.
     const nodeColdStarted = performance.now();
     const nodeArtifact = await node.compile(sourcePath);
     const nodeCold = performance.now() - nodeColdStarted;
@@ -183,7 +179,7 @@ async function main(): Promise<void> {
       };
     }
 
-    let mode = "node-rust";
+    let mode = "host-direct";
     let comparison: Record<string, unknown> = {
       status: "matched",
       fields: [
@@ -213,7 +209,7 @@ async function main(): Promise<void> {
         compiler: {
           node: {
             host: process.version,
-            pipeline: "Baba Wasm -> Node -> gpupaper Rust/Wasm",
+            pipeline: "Node graph host -> Rust compiler Wasm",
           },
           rust: rustCompilerIdentity,
         },
@@ -466,23 +462,31 @@ function requireComparable(
 ): void {
   requireValidWasm("Node", nodeArtifact);
   requireValidWasm("Rust", rustArtifact);
-  const gap = compareObservations(
-    path,
-    acceptance(nodeHir, nodeArtifact),
-    acceptance(rustHir, rustArtifact),
-  );
-  if (gap === undefined) return;
+  const node = acceptance(nodeHir, nodeArtifact);
+  const rust = acceptance(rustHir, rustArtifact);
+  const differences: string[] = [];
+  if (node.exports.join("\0") !== rust.exports.join("\0")) {
+    differences.push("Runtime HIR exports");
+  }
+  if (node.manifest !== rust.manifest) differences.push("ABI manifest");
+  if (node.capabilities.join("\0") !== rust.capabilities.join("\0")) {
+    differences.push("capabilities");
+  }
+  if (differences.length === 0) return;
   throw new Error(
-    `${path}: benchmark compilers differ in ${gap.differences.join(", ")}`,
+    `${path}: benchmark adapters differ in ${differences.join(", ")}`,
   );
 }
 
 function acceptance(
   hir: BlotRuntimeModule,
   artifact: BenchmarkArtifact,
-): CompilerAcceptance {
+): {
+  readonly exports: readonly string[];
+  readonly manifest: string;
+  readonly capabilities: readonly string[];
+} {
   return {
-    status: "accepted",
     exports: hir.exports.map((exported) =>
       `${exported.sourceName}:${exported.phase}`
     ),

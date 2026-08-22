@@ -1,7 +1,10 @@
 import {
   decodeCompilerArtifactManifest,
+  sha256,
   validateCompilerArtifact,
 } from "./compiler_artifact.ts";
+import { COMPILER_HOST_ABI_VERSION } from "../src/compiler/host_abi.ts";
+import { compilerInputIdentity } from "./compiler_inputs.ts";
 
 interface WorkflowRun {
   readonly databaseId: number;
@@ -12,7 +15,6 @@ const repository = new URL("../", import.meta.url);
 const destination = new URL("../generated/compiler/", import.meta.url);
 const requestedRun = parseRun(Deno.args);
 const commit = await runText("git", ["rev-parse", "HEAD"]);
-const tree = await runText("git", ["rev-parse", "HEAD^{tree}"]);
 let runId = requestedRun;
 if (runId === undefined) runId = await findRun(commit);
 
@@ -36,7 +38,14 @@ try {
   const manifest = decodeCompilerArtifactManifest(
     await Deno.readTextFile(manifestPath),
   );
-  await validateCompilerArtifact(bytes, manifest, tree);
+  const prelude = await Deno.readFile(
+    new URL("../generated/compiler/prelude.snapshot", import.meta.url),
+  );
+  await validateCompilerArtifact(bytes, manifest, {
+    hostAbi: COMPILER_HOST_ABI_VERSION,
+    preludeSha256: await sha256(prelude),
+    compilerInputsSha256: await compilerInputIdentity(),
+  });
   await Deno.mkdir(destination, { recursive: true });
   await Deno.writeFile(new URL("compiler.wasm", destination), bytes);
   await Deno.writeTextFile(
@@ -81,7 +90,7 @@ async function findRun(commit: string): Promise<number> {
   const exact = runs.find((candidate) => candidate.headSha === commit);
   if (exact === undefined) {
     throw new Error(
-      `no successful Node Wasm CI run found for commit ${commit}; build locally or pass --run`,
+      `no successful Rust/Wasm compiler CI run found for commit ${commit}; build locally or pass --run`,
     );
   }
   return exact.databaseId;

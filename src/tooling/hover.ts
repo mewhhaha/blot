@@ -1,9 +1,12 @@
-import type { CheckResult } from "../check/mod.ts";
-import { bridge } from "../check/bridge.ts";
-import { show } from "../check/print.ts";
-import type { SimpleType } from "../check/type.ts";
-import { lookup, type Value } from "../comptime/value.ts";
-import type { Decl, Expr, Module, Pattern, Span } from "../syntax/ast.ts";
+import type { CompilerAnalysis } from "../compiler.ts";
+import type {
+  Decl,
+  Expr,
+  Module,
+  Pattern,
+  ShapeMember,
+  Span,
+} from "../syntax/ast.ts";
 import { buildFixityTable } from "../syntax/fixity.ts";
 import type { Rule, TokenCursor } from "../syntax/cursor.ts";
 import { definitionAt, identifierSpan } from "./definition.ts";
@@ -33,7 +36,7 @@ export function hoverAt(
   source: string,
   cst: Rule,
   offset: number,
-  checked: CheckResult | null,
+  checked: CompilerAnalysis | null,
 ): HoverDescription | null {
   const token = tokenAt(cst, offset);
   if (token === null) return null;
@@ -73,17 +76,17 @@ function bindingAt(
   source: string,
   token: TokenCursor,
   offset: number,
-  checked: CheckResult | null,
+  checked: CompilerAnalysis | null,
 ): BindingDescription | null {
   const site = valueSiteAt(module, source, token);
   if (site?.tag === "shape-field") {
-    const inferred = checked?.expressionTypes.get(site.value);
+    const inferred = typeAt(checked, site.value.span);
     let value = source.slice(site.value.span.start, site.value.span.end);
     if (site.value.tag === "lambda" || site.value.tag === "rec") {
       value = compactFunction(site.value, source);
     }
     let type: string | null = null;
-    if (inferred !== undefined) type = show(inferred);
+    if (inferred !== null) type = inferred;
     return {
       name: site.name,
       preview: `.${site.name} = ${value}`,
@@ -91,6 +94,23 @@ function bindingAt(
         source.lastIndexOf("\n", Math.max(0, token.span.start - 1)) + 1,
       type,
     };
+  }
+  if (site?.tag === "expression" && site.expression.tag === "field") {
+    const member = declaredMemberAt(module, source, site.expression);
+    if (member !== null) {
+      let value = source.slice(member.value.span.start, member.value.span.end);
+      if (member.value.tag === "lambda" || member.value.tag === "rec") {
+        value = compactFunction(member.value, source);
+      }
+      let type = typeAt(checked, site.expression.span);
+      if (type === null) type = typeAt(checked, member.value.span);
+      return {
+        name: member.name,
+        preview: `.${member.name} = ${value}`,
+        documentationStart: null,
+        type,
+      };
+    }
   }
 
   const definition = definitionAt(module, source, offset);
@@ -100,33 +120,21 @@ function bindingAt(
   }
   let occurrence: Expr | null = null;
   if (site?.tag === "expression") occurrence = site.expression;
-  let type: SimpleType | null | undefined = null;
+  let type: string | null = null;
   if (occurrence !== null && checked !== null) {
-    type = checked.expressionTypes.get(occurrence);
+    type = typeAt(checked, occurrence.span);
   }
   if (
-    (type === null || type === undefined) && declaration !== null &&
+    type === null && declaration !== null &&
     checked !== null
   ) {
-    type = checked.expressionTypes.get(declaration.value);
+    type = typeAt(checked, declaration.value.span);
   }
   if (
-    (type === null || type === undefined) && definition !== null &&
+    type === null && definition !== null &&
     checked !== null
   ) {
     type = referencedType(module, source, definition, checked);
-  }
-
-  let attachedMember: Value | null = null;
-  if (
-    occurrence !== null && occurrence.tag === "field" && checked !== null
-  ) {
-    attachedMember = attachedMemberValue(occurrence, checked);
-    if (type === null || type === undefined) {
-      if (attachedMember !== null) {
-        type = bridge(attachedMember);
-      }
-    }
   }
 
   let name: string | null = null;
@@ -142,128 +150,59 @@ function bindingAt(
   if (declaration !== null) {
     preview = compactDeclaration(declaration, source);
     documentationStart = declaration.span.start;
-  } else if (
-    attachedMember !== null && attachedMember.tag === "closure" &&
-    attachedMember.source !== undefined &&
-    expressionBelongsTo(module, attachedMember.source)
-  ) {
-    let memberName = name;
-    if (occurrence?.tag === "field") memberName = occurrence.name;
-    preview = `.${memberName} = ${
-      compactFunction(attachedMember.source, source)
-    }`;
-    documentationStart = attachedMember.source.span.start;
   }
-  let shownType: string | null = null;
-  if (type !== null && type !== undefined) shownType = show(type);
   return {
     name,
     preview,
     documentationStart,
-    type: shownType,
+    type,
   };
 }
 
-function attachedMemberValue(
-  expression: Expr & { tag: "field" },
-  checked: CheckResult,
-): Value | null {
-  const path: string[] = [];
-  let target: Expr = expression;
-  while (target.tag === "field") {
-    path.unshift(target.name);
-    target = target.target;
+function declaredMemberAt(
+  module: Module,
+  source: string,
+  expression: Extract<Expr, { readonly tag: "field" }>,
+): Extract<ShapeMember, { readonly tag: "field" }> | null {
+  if (expression.target.tag !== "var") return null;
+  const definition = definitionAt(
+    module,
+    source,
+    expression.target.span.start,
+  );
+  if (definition === null) return null;
+  const declaration = declarationAt(module, source, definition);
+  if (declaration?.tag !== "binding") return null;
+  let shape: Extract<Expr, { readonly tag: "shape" }> | null = null;
+  if (declaration.value.tag === "shape") {
+    shape = declaration.value;
+  } else if (
+    declaration.value.tag === "apply" &&
+    declaration.value.arg.tag === "shape" &&
+    declaration.value.fn.tag === "apply" &&
+    declaration.value.fn.fn.tag === "var" &&
+    declaration.value.fn.fn.name === "attach"
+  ) {
+    shape = declaration.value.arg;
   }
-  if (target.tag !== "var") return null;
-
-  let value = lookup(checked.values, target.name);
-  if (value === undefined) return null;
-  for (const name of path) {
-    let member: Value | undefined;
-    if (value.tag === "extended") {
-      member = value.members.get(name);
-    } else if (value.tag === "shape") {
-      member = value.fields.get(name);
-    } else {
-      return null;
+  if (shape === null) return null;
+  for (const member of shape.members) {
+    if (member.tag === "field" && member.name === expression.name) {
+      return member;
     }
-    if (member === undefined) return null;
-    value = member;
   }
-  return value;
-}
-
-function expressionBelongsTo(module: Module, wanted: Expr): boolean {
-  let found = false;
-  const visit = (expression: Expr): void => {
-    if (found) return;
-    if (expression === wanted) {
-      found = true;
-      return;
-    }
-    switch (expression.tag) {
-      case "apply":
-        visit(expression.fn);
-        visit(expression.arg);
-        return;
-      case "field":
-        visit(expression.target);
-        return;
-      case "lambda":
-        visit(expression.body);
-        return;
-      case "rec":
-        visit(expression.lambda);
-        return;
-      case "comptime":
-        visit(expression.body);
-        return;
-      case "tuple":
-        for (const element of expression.elements) visit(element);
-        return;
-      case "array":
-        for (const element of expression.elements) visit(element.value);
-        return;
-      case "shape":
-        for (const member of expression.members) visit(member.value);
-        return;
-      case "if":
-        for (const branch of expression.branches) {
-          visit(branch.condition);
-          visit(branch.consequence);
-        }
-        if (expression.fallback !== null) visit(expression.fallback);
-        return;
-      case "case":
-        visit(expression.target);
-        for (const arm of expression.arms) visit(arm.body);
-        return;
-      case "block":
-        for (const declaration of expression.declarations) {
-          visitDeclarationExpressions(declaration, visit);
-        }
-        visit(expression.result);
-        return;
-      default:
-        return;
-    }
-  };
-  for (const declaration of module.declarations) {
-    visitDeclarationExpressions(declaration, visit);
-  }
-  visit(module.result);
-  return found;
+  return null;
 }
 
 function referencedType(
   module: Module,
   source: string,
   definition: Span,
-  checked: CheckResult,
-): SimpleType | undefined {
-  let found: SimpleType | undefined;
+  checked: CompilerAnalysis,
+): string | null {
+  let found: string | null = null;
   const visit = (expression: Expr): void => {
-    if (found !== undefined) return;
+    if (found !== null) return;
     if (expression.tag === "var") {
       const occurrence = identifierSpan(
         expression.span,
@@ -274,7 +213,7 @@ function referencedType(
         occurrence !== null &&
         sameSpan(definitionAt(module, source, occurrence.start), definition)
       ) {
-        found = checked.expressionTypes.get(expression);
+        found = typeAt(checked, expression.span);
       }
       return;
     }
@@ -330,6 +269,15 @@ function referencedType(
   }
   visit(module.result);
   return found;
+}
+
+function typeAt(checked: CompilerAnalysis | null, span: Span): string | null {
+  if (checked === null) return null;
+  for (let index = checked.types.length - 1; index >= 0; index -= 1) {
+    const fact = checked.types[index];
+    if (sameSpan(fact.span, span)) return fact.type;
+  }
+  return null;
 }
 
 function expressionName(expression: Expr, token: TokenCursor): string | null {

@@ -961,6 +961,11 @@ impl ResidualTrace {
                 result.meaning = RuntimeMeaning::Ordering;
                 result
             }
+            "@text.contains" => {
+                let text = self.lower_as(arguments.first(), "text", span)?;
+                let query = self.lower_as(arguments.get(1), "text", span)?;
+                self.operation("text.contains", 1, vec![text.id, query.id], span, None)
+            }
             "@text.of_int" => {
                 let value = self.lower_as(arguments.first(), "signed-integer-64", span)?;
                 self.operation("text.from-i64", 3, vec![value.id], span, None)
@@ -2518,8 +2523,21 @@ impl ResidualTrace {
                 break;
             }
         }
-        let caller_argument =
-            self.lower_residual_argument(argument, domain, &substitutions, span)?;
+        let caller_argument = self
+            .lower_residual_argument(argument, domain, &substitutions, span)
+            .map_err(|mut diagnostic| {
+                diagnostic.message = format!(
+                    "{} Recursive closure `{name}` argument {} against {}; result {}, context {}.",
+                    diagnostic.message,
+                    crate::value::show(argument),
+                    crate::value::show(domain),
+                    crate::value::show(codomain),
+                    expected_result
+                        .map(crate::value::show)
+                        .unwrap_or_else(|| "<none>".to_owned()),
+                );
+                diagnostic
+            })?;
         let recursive_result = context
             .recursive_closures
             .borrow()
@@ -6628,11 +6646,7 @@ pub fn elaborate(
     );
     let (value, host_calls) = match complete_host_calls(computation) {
         Ok(completed) => completed,
-        Err(error)
-            if error.code == "BLOT_DYNAMIC_HOST_RESULT"
-                && !result_is_shape
-                && checked.parameter.is_none() =>
-        {
+        Err(error) if error.code == "BLOT_DYNAMIC_HOST_RESULT" && !result_is_shape => {
             return prepare_residual(context, path, checked);
         }
         Err(error) => return Err(error),
@@ -6830,11 +6844,12 @@ fn prepare_residual(
     checked: CheckedModule,
 ) -> Result<RuntimeModule, Diagnostic> {
     let trace = Rc::new(std::cell::RefCell::new(ResidualTrace::new(path)));
+    let argument = module_argument(&checked.parameter)?;
     let computation = evaluate_checked_module(
         context,
         path,
         &checked,
-        Value::Unit,
+        argument,
         Runtime::residual(Phase::Runtime, path.to_owned(), trace.clone()),
     );
     let value = complete_residual_host_calls(computation, &trace)?;
@@ -6919,7 +6934,10 @@ fn module_argument(parameter: &Option<Type>) -> Result<Value, Diagnostic> {
     };
     let mut operations = OrderedFields::default();
     for (name, signature) in fields {
-        let Type::Function { .. } = signature else {
+        let Type::Function {
+            parameter, result, ..
+        } = signature
+        else {
             return Err(hir_error(&format!(
                 "The module capability `{name}` is not a function."
             )));
@@ -6927,8 +6945,8 @@ fn module_argument(parameter: &Option<Type>) -> Result<Value, Diagnostic> {
         operations.insert(
             name.clone(),
             Value::Arrow {
-                domain: Box::new(Value::Unbounded),
-                codomain: Box::new(Value::Unit),
+                domain: Box::new(type_value(parameter)),
+                codomain: Box::new(type_value(result)),
                 effects: Vec::new(),
                 effect_tail: None,
             },
@@ -6957,6 +6975,72 @@ fn module_argument(parameter: &Option<Type>) -> Result<Value, Diagnostic> {
             })
             .collect(),
     ))
+}
+
+fn type_value(type_: &Type) -> Value {
+    match type_ {
+        Type::Variable(_) | Type::Rigid(_) | Type::Top | Type::Bottom => Value::Unbounded,
+        Type::Forall { variables, body } => {
+            variables
+                .iter()
+                .rev()
+                .fold(type_value(body), |body, variable| Value::Forall {
+                    variable: *variable,
+                    body: Box::new(body),
+                })
+        }
+        Type::Range { domain, low, high } => {
+            let bound = |bound: &Option<Scalar>| match bound {
+                Some(Scalar::Int(value)) => Value::Int(value.clone()),
+                Some(Scalar::Text(value)) => Value::Text(value.clone()),
+                None => Value::Unbounded,
+            };
+            let domain = match domain {
+                Domain::Int => crate::value::Domain::Int,
+                Domain::Text => crate::value::Domain::Text,
+                Domain::Float => crate::value::Domain::Float,
+                Domain::Float32 => crate::value::Domain::Float32,
+            };
+            Value::Range {
+                low: Box::new(bound(low)),
+                high: Box::new(bound(high)),
+                domain: Some(domain),
+            }
+        }
+        Type::Unit => Value::Unit,
+        Type::Function {
+            parameter, result, ..
+        } => Value::Arrow {
+            domain: Box::new(type_value(parameter)),
+            codomain: Box::new(type_value(result)),
+            effects: Vec::new(),
+            effect_tail: None,
+        },
+        Type::Record(fields) => Value::Shape(
+            fields
+                .iter()
+                .map(|(name, type_)| (name.clone(), type_value(type_)))
+                .collect(),
+        ),
+        Type::Array(element) => Value::Array(vec![type_value(element)]),
+        Type::Region(element) => Value::RegionType(Box::new(type_value(element))),
+        Type::Variant { cases, .. } => Value::Union(
+            cases
+                .iter()
+                .map(|(name, payload)| Value::Tag {
+                    name: name.clone(),
+                    payload: if matches!(payload, Type::Unit) {
+                        None
+                    } else {
+                        Some(Box::new(type_value(payload)))
+                    },
+                })
+                .collect(),
+        ),
+        Type::Union(members) => Value::Union(members.iter().map(type_value).collect()),
+        Type::Opaque(name) => Value::OpaqueType(name.clone()),
+        Type::Effects(_) | Type::OpenEffects { .. } => Value::Unit,
+    }
 }
 
 fn complete_host_calls(mut computation: Computation) -> Result<(Value, Vec<HostCall>), Diagnostic> {

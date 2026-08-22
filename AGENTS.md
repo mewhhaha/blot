@@ -3,23 +3,21 @@
 ## Goal
 
 The simplest language that keeps the reference feature set, fits Baba's parser
-profile, develops by default in Node/TypeScript, and ships through the Rust/Wasm
-production compiler.
+profile, and has one semantic compiler implemented in Rust and shipped as Wasm.
 
 ```txt
 source -> Baba Wasm lexer -> layout -> Baba lexical acceptance
        -> Baba CPU island parser -> compact CST -> AST
        -> comptime evaluation -> biunification -> linearity/ownership
-       -> Runtime HIR -> gpupaper Core -> gpupaper Rust/Wasm emitter -> Wasm
+       -> Runtime HIR -> ABI closure -> Rust/Wasm emission -> Wasm
 ```
 
 Blot owns source elaboration, inference, comptime, ownership, Runtime HIR, ABI
 policy, and the module shell. Baba owns lexing and parsing; do not hand-write a
-lexer or parser. Node/TypeScript is the ordinary development implementation and
-hosts Baba plus gpupaper's embedded emitter. Rust/Wasm is the production
-implementation. Keep their compiler phase modules recognizably parallel:
-`frontend`, `typecheck`, `hir`, `backend`, and `session`. The GPU paths remain
-explicit conformance tools, not compiler targets.
+lexer or parser. Rust/Wasm is the only semantic implementation. Node/TypeScript
+hosts the compiler artifact, resolves source graphs, and owns syntax-only CLI,
+formatter, and editor integration. Alternate oracles may consume validated
+Runtime HIR, but they are not compiler targets or semantic authorities.
 
 ## Invariants
 
@@ -60,13 +58,12 @@ API replays Baba's own lexer plan internally; that host-level replay is not a
 second syntax contract. WebGPU remains a comparison target.
 
 **Runtime HIR crosses the backend boundary.** The Node host resolves source,
-packages, imports, and includes, then Blot performs layout, CST-to-AST
-elaboration, checking, staging, specialization, and Runtime-HIR validation.
-`src/compiler/backend/` owns the development compiler's ABI and gpupaper bridge;
-conformance code may import that boundary, but compiler code must not import
-`src/conformance/`. Gpupaper receives only validated Runtime HIR lowered to its
-Core model. Its embedded Rust/Wasm emitter owns final binary planning and
-emission.
+packages, imports, and includes, then the Rust compiler performs layout,
+CST-to-AST elaboration, checking, staging, specialization, and Runtime-HIR
+validation. Conformance code may consume validated Runtime HIR, but compiler
+code must not import `src/conformance/`. Gpupaper receives only validated
+Runtime HIR lowered to its Core model. Its Rust/Wasm emitter owns final binary
+planning and emission.
 
 **Nothing is implicitly in scope.** The prelude is an ordinary module reached
 through `import` and spread with `open`; it gets no seeding, no privileged
@@ -137,37 +134,32 @@ an `@`-primitive only when it cannot be written in blot at all. `struct`,
 **Linearity is not in the type lattice.** Biunification stays polynomial only
 if ownership and linearity remain a separate flow analysis over Core.
 
-**Monomorphize before any conformance lowering.** blot's algebraic-subtyping
-result is the authority. Anything sent to the gpufuck/gpupaper oracle must be
-specialized enough for its independent checker to accept. An oracle inference
-failure on a well-typed blot program is a lowering bug, never a type-system
-disagreement to paper over.
+**Monomorphize before Runtime HIR.** Blot's algebraic-subtyping result is the
+authority. Any independent oracle consumes the same specialized Runtime HIR; it
+does not rerun inference or reinterpret an open source type.
 
-**The three executions agree.** The comptime evaluator, gpufuck's GPU
-evaluator, and the emitted Wasm run the same language. `just wasm` requires all
-three to produce the same value; a lowering that satisfies one and not another
-is wrong.
+**The executions agree.** The Rust evaluator and emitted Wasm run the same
+language. `pnpm conformance` requires their focused runtime observations to
+agree; a lowering that satisfies one and not the other is wrong.
 
-**Node is development; Rust/Wasm is production.** Implement and debug compiler
-features in the Node/TypeScript pipeline by default, then port the same phase to
-the correspondingly named Rust module. A feature is not production-complete
-until the CI-built Rust compiler Wasm agrees on acceptance, diagnostic code,
-Runtime-HIR exports, public ABI, capabilities, and runtime observations.
-`pnpm parity` must keep the known-gap inventory exact; `pnpm parity:strict` is
-the zero-gap target. Neither implementation overrides the language or compiler
-specification.
+**Rust/Wasm is the compiler.** Implement and debug semantic features in the Rust
+phase that owns them. Node/TypeScript must not check, evaluate, specialize, prove
+ownership, lower Runtime HIR, or emit a fallback artifact. Host tooling consumes
+versioned Rust facts and fails explicitly when the compiler artifact is missing
+or incompatible. Conformance compares the Rust evaluator, emitted Wasm, and the
+explicit GPU oracle; it never compares two Blot checkers.
 
-**The production compiler binary is derived output.** Git tracks the Rust
-source and generated prelude snapshot, not `generated/compiler/compiler.wasm`.
-CI builds the binary once with the pinned Rust toolchain, records its SHA-256
-and source-tree identity, uses it for parity and benchmarks, and publishes it
-both directly and inside the runnable workspace artifact. A downloaded binary
-must match the checkout tree before use; ordinary Node compiler commands do not
-require it.
+**The compiler binary is derived output.** Git tracks the Rust source and
+generated prelude snapshot, not `generated/compiler/compiler.wasm`. CI builds
+the binary once with the pinned Rust toolchain, records its SHA-256, host ABI,
+prelude digest, and compiler-input identity, and publishes it both directly and
+inside the runnable workspace artifact. A downloaded binary must match those
+inputs before use. Every semantic compiler command requires the artifact and
+must never fall back to TypeScript.
 
-**The caller never sees gpufuck values.** Blot Core Wasm ABI 1 is the stable
+**The caller never sees backend-private values.** Blot Core Wasm ABI 1 is the stable
 memory32, UTF-8 caller contract in `docs/abi.md`. Exports and host effects use
-its canonical adapters; gpufuck's tagged words, constructor numbers, and heap
+its canonical adapters; internal tagged words, constructor numbers, and heap
 headers remain private. An incompatible layout, signature, ownership, import,
 or semantic change requires another ABI major and a matching `LANGUAGE.md`
 change. The sidecar and `blot:abi` custom-section bytes must stay identical.
@@ -180,7 +172,7 @@ backend — that is a second type checker and, for effects, would mint a differe
 identity. This is why `load` keeps one cache per process.
 
 **Compiler commands must not touch WebGPU.** Node hosts Baba's generated lexer Wasm and general-profile CPU island parser,
-then gpupaper's embedded Rust/Wasm emitter. Keep the split structural so
+then the Rust compiler artifact parses and compiles the resolved sources. Keep the split structural so
 ordinary compiler, formatter, and language-server processes never initialize a
 device or invoke a native Rust toolchain.
 

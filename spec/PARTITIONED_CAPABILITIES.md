@@ -25,15 +25,15 @@ This separation preserves Blot's existing constraints:
 - ordinary wrappers remain source code rather than privileged names;
 - only operations that cannot be expressed in Blot earn primitives;
 - proof-only values disappear before Runtime HIR and the public ABI; and
-- Node and Rust independently validate the same certificate.
+- Rust producers and host consumers validate the same certificate.
 
 The destructive Runtime-HIR registry exposes the array-interval family, reused
 by `Slice` and the ordered-text-map adapter. The proof kernel additionally has
-Node/Rust law adapters for finite key sets and rectangular tensor tiles. Those
-adapters prove the generic algebra without pretending a tensor or hash-map
-runtime representation exists. A family registry is a compiler trust boundary,
-not a source extension point: arbitrary source code cannot claim that two
-footprints are disjoint or manufacture a partition witness.
+law adapters for finite key sets and rectangular tensor tiles. Those adapters
+prove the generic algebra without pretending a tensor or hash-map runtime
+representation exists. A family registry is a compiler trust boundary, not a
+source extension point: arbitrary source code cannot claim that two footprints
+are disjoint or manufacture a partition witness.
 
 ## 2. Family model
 
@@ -317,11 +317,11 @@ Foot = (root, [x0,x1), [y0,y1))
 Address = (x,y)
 ```
 
-`src/linear/rectangle.ts` and `compiler/src/partition.rs` implement this partial
-composition and containment model independently. Their tests cover horizontal
-and vertical faces, foreign roots, containment, and refusal of L-shaped unions.
-This is a trusted proof adapter; destructive tensor lowering still requires a
-row-major Store/stride adapter and the registration suite in section 10.
+`compiler/src/partition.rs` implements this partial composition and containment
+model. Its tests cover horizontal and vertical faces, foreign roots,
+containment, and refusal of L-shaped unions. This is a trusted proof adapter;
+destructive tensor lowering still requires a row-major Store/stride adapter and
+the registration suite in section 10.
 
 ### 7.3 Linked sequences
 
@@ -451,10 +451,10 @@ what belongs to arrays.
 ### 9.1 First extraction
 
 This PR extracts exact witness combination and proof-tree reassociation into
-`src/linear/partition.ts` and `compiler/src/partition.rs`. Those modules are
-parameterized by family and footprint and contain no Slice, Store, interval, or
-index operation. The existing Region ownership fact is the array-interval
-adapter that supplies produced-value equality and composition.
+`compiler/src/partition.rs`. That module is parameterized by family and
+footprint and contains no Slice, Store, interval, or index operation. The
+existing Region ownership fact is the array-interval adapter that supplies
+produced-value equality and composition.
 
 The law tests instantiate the same core with ordered intervals, disjoint map key
 sets, and rectangular tensor tiles. The key-set and rectangle models are
@@ -478,7 +478,7 @@ test all of the following:
 7. reassociation and inverse coherence;
 8. acquisition/release behavior for unrestricted and owned members;
 9. proof erasure and ABI refusal for live capabilities or witnesses;
-10. runtime observations and strict Node/Rust parity; and
+10. Rust-evaluator and emitted-Wasm observation agreement; and
 11. an explicit cost model distinguishing semantic guarantees from optimized
     representation reuse.
 

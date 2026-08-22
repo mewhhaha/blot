@@ -1,6 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
 import { join } from "@std/path";
-import { checkSource } from "../../src/check/mod.ts";
+import { checkSource } from "../../src/check.ts";
 import { BlotError } from "../../src/diagnostic.ts";
 import { evaluateFile } from "../../src/run.ts";
 

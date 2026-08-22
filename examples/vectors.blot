@@ -5,10 +5,9 @@
 // blot could take apart field by field would not be — so the type says
 // "register" and the primitives say which instruction.
 //
-// gpufuck ships scalar bodies for these operations, and its codegen replaces
-// their call sites with `f32x4.*` instructions when it is asked for SIMD. The
-// comptime evaluator does the same arithmetic one lane at a time and must agree
-// with the register.
+// The compiler evaluates scalar source meanings for these operations and emits
+// `f32x4.*` instructions for their residual calls. The comptime evaluator does
+// the same arithmetic one lane at a time and must agree with the register.
 
 open import "blot:prelude"
 

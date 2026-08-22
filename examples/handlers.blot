@@ -1,7 +1,7 @@
 // Handlers that compile.
 //
-// gpufuck has no runtime handler representation, so blot specializes a handler
-// with selective CPS before Core exists. Each operation receives an affine
+// Runtime HIR has no dynamic handler representation, so blot specializes a
+// handler with selective CPS before residual lowering. Each operation receives an affine
 // continuation for the rest of the computation.
 //
 // Handling means inlining the computation, because the evidence is lexical. A

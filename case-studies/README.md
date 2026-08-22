@@ -315,9 +315,9 @@ remove the worker.
   `visit_2` cannot: its visitor projects `transform.position`, and a record
   reaching a projection only by having been a tuple column records the narrower
   set the projection's own body reads rather than the set the store built, so
-  the nominal is the wrong one and gpufuck refuses the mismatch (`LANGUAGE.md`
-  §15). So a renderer's join stays two nested `case`s, and the cause is the
-  record, not the tuple pattern.
+  the runtime record is the wrong one and lowering refuses the mismatch
+  (`LANGUAGE.md` §15). So a renderer's join stays two nested `case`s, and the
+  cause is the record, not the tuple pattern.
 - **A lane cannot be written, only converted.** There is one float token in the
   grammar and it reads as an `F64`, so every single-precision constant in the
   engine is a `Float32.of_float` the program wrote down. That is the right

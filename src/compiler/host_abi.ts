@@ -1,0 +1,1 @@
+export const COMPILER_HOST_ABI_VERSION = 1;

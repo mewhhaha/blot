@@ -58,6 +58,7 @@ pub struct Context {
     pub(crate) module_cache: RefCell<Option<(String, Rc<Module>)>>,
     pub(crate) live_declarations: RefCell<LivenessCache>,
     pub(crate) evaluated_bindings: RefCell<EvaluatedBindings>,
+    pub(crate) captured_binding_modules: RefCell<HashSet<String>>,
     pub(crate) expression_types: RefCell<HashMap<(String, ExpressionId), Value>>,
     pub(crate) closure_signatures: RefCell<HashMap<(String, ExpressionId), Value>>,
     pub(crate) recursive_closures: RefCell<HashSet<(String, ExpressionId)>>,
@@ -1676,7 +1677,7 @@ fn evaluate_declarations(
         Declaration::Binding {
             kind,
             pattern,
-            value,
+            value: value_id,
             ..
         } => {
             let binding_runtime = if kind == DeclarationKind::Const {
@@ -1687,13 +1688,14 @@ fn evaluate_declarations(
             let binding_context = context.clone();
             let binding_module = module_path.clone();
             let binding_environment = environment.clone();
+            let binding_phase = binding_runtime.phase;
             let effect_context = context.clone();
             let effect_runtime = binding_runtime.clone();
             evaluate_binding(
                 context,
                 module_path,
                 pattern,
-                value,
+                value_id,
                 environment,
                 binding_runtime,
             )
@@ -1705,6 +1707,18 @@ fn evaluate_declarations(
                 }
             })
             .and_then(move |mut value| {
+                if binding_context
+                    .captured_binding_modules
+                    .borrow()
+                    .contains(binding_module.as_str())
+                {
+                    binding_context
+                        .evaluated_bindings
+                        .borrow_mut()
+                        .entry(binding_module.as_ref().clone())
+                        .or_default()
+                        .insert((pattern, value_id, binding_phase), value.clone());
+                }
                 let module = match module(&binding_context, &binding_module) {
                     Ok(module) => module,
                     Err(error) => return Computation::error(error),
@@ -2114,10 +2128,23 @@ fn apply_with_expected(
                     span,
                 ));
             };
-            let result_type = match operations.get(&name) {
+            let declared_result = match operations.get(&name) {
                 Some(Value::Arrow { codomain, .. }) => (**codomain).clone(),
                 _ => Value::Unbounded,
             };
+            let result_type =
+                if matches!(declared_result, Value::Unbounded | Value::TypeVariable(_)) {
+                    expected_result
+                        .filter(|expected| {
+                            !matches!(
+                                expected,
+                                Value::Unbounded | Value::TypeVariable(_) | Value::Forall { .. }
+                            )
+                        })
+                        .unwrap_or(declared_result)
+                } else {
+                    declared_result
+                };
             let request = Perform {
                 effect_id: id,
                 effect_name,
@@ -2163,7 +2190,14 @@ fn apply_with_expected(
                     applied,
                 });
             }
-            run_special_or_primitive(context, &name, applied, span, runtime)
+            let computation = run_special_or_primitive(context, &name, applied, span, runtime);
+            match expected_result {
+                Some(signature) => computation.and_then(move |mut value| {
+                    attach_signature(&mut value, &signature);
+                    Computation::value(value)
+                }),
+                None => computation,
+            }
         }
         other => Computation::error(Diagnostic::new(
             "BLOT_NOT_CALLABLE",

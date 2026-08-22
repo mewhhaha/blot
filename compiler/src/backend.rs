@@ -24,6 +24,7 @@ const MAX_STRUCTURED_LOOP_BLOCKS: usize = 128;
 struct DynamicHelpers {
     realloc: u32,
     text_compare: Option<u32>,
+    text_contains: Option<u32>,
     utf8_validator: Option<u32>,
     i64_to_text: Option<u32>,
 }
@@ -587,6 +588,19 @@ fn emit_dynamic_module(
     } else {
         None
     };
+    let text_contains_index = if has_operation("text.contains") {
+        let type_index = add_function_type(
+            &mut types,
+            vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
+            vec![ValType::I32],
+        );
+        let function_index = imported_function_count + functions.len();
+        functions.function(type_index);
+        code.function(&text_contains_function());
+        Some(function_index)
+    } else {
+        None
+    };
     let utf8_validator_index = if has_operation("host.call") {
         let type_index =
             add_function_type(&mut types, vec![ValType::I32, ValType::I32], Vec::new());
@@ -613,6 +627,7 @@ fn emit_dynamic_module(
     let dynamic_helpers = DynamicHelpers {
         realloc: realloc_index,
         text_compare: text_compare_index,
+        text_contains: text_contains_index,
         utf8_validator: utf8_validator_index,
         i64_to_text: i64_to_text_index,
     };
@@ -1243,6 +1258,19 @@ fn emit_dynamic_operation(
             emit_local_values(instructions, left);
             emit_local_values(instructions, right);
             instructions.call(text_compare).local_set(result[0]);
+        }
+        "text.contains" => {
+            let text_contains = helpers.text_contains.ok_or_else(|| {
+                format!(
+                    "{}: text.contains omitted its runtime helper",
+                    module.source
+                )
+            })?;
+            let text = locals_for(module, value_locals, operation.operands[0])?;
+            let query = locals_for(module, value_locals, operation.operands[1])?;
+            emit_local_values(instructions, text);
+            emit_local_values(instructions, query);
+            instructions.call(text_contains).local_set(result[0]);
         }
         "text.append" => {
             let left = locals_for(module, value_locals, operation.operands[0])?;
@@ -3545,6 +3573,91 @@ fn text_compare_function() -> Function {
         .i32_const(0)
         .end()
         .end()
+        .end();
+    function
+}
+
+fn text_contains_function() -> Function {
+    let mut function = Function::new([(4, ValType::I32)]);
+    let start = 4;
+    let index = 5;
+    let text_byte = 6;
+    let query_byte = 7;
+    let mut instructions = function.instructions();
+    instructions
+        .local_get(3)
+        .i32_eqz()
+        .if_(BlockType::Empty)
+        .i32_const(1)
+        .return_()
+        .end()
+        .local_get(3)
+        .local_get(1)
+        .i32_gt_u()
+        .if_(BlockType::Empty)
+        .i32_const(0)
+        .return_()
+        .end()
+        .i32_const(0)
+        .local_set(start)
+        .block(BlockType::Empty)
+        .loop_(BlockType::Empty)
+        .local_get(start)
+        .local_get(1)
+        .local_get(3)
+        .i32_sub()
+        .i32_gt_u()
+        .br_if(1)
+        .i32_const(0)
+        .local_set(index)
+        .block(BlockType::Empty)
+        .loop_(BlockType::Empty)
+        .local_get(index)
+        .local_get(3)
+        .i32_ge_u()
+        .if_(BlockType::Empty)
+        .i32_const(1)
+        .return_()
+        .end()
+        .local_get(0)
+        .local_get(start)
+        .i32_add()
+        .local_get(index)
+        .i32_add()
+        .i32_load8_u(wasm_encoder::MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        })
+        .local_set(text_byte)
+        .local_get(2)
+        .local_get(index)
+        .i32_add()
+        .i32_load8_u(wasm_encoder::MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        })
+        .local_set(query_byte)
+        .local_get(text_byte)
+        .local_get(query_byte)
+        .i32_ne()
+        .br_if(1)
+        .local_get(index)
+        .i32_const(1)
+        .i32_add()
+        .local_set(index)
+        .br(0)
+        .end()
+        .end()
+        .local_get(start)
+        .i32_const(1)
+        .i32_add()
+        .local_set(start)
+        .br(0)
+        .end()
+        .end()
+        .i32_const(0)
         .end();
     function
 }

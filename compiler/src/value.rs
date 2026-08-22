@@ -1184,17 +1184,46 @@ pub fn show(value: &Value) -> String {
         Value::Text(value) => format!("{value:?}"),
         Value::Unit => "()".to_owned(),
         Value::Shape(fields) => {
+            let tuple = fields
+                .keys()
+                .enumerate()
+                .all(|(index, name)| name == &index.to_string());
+            if tuple && !fields.is_empty() {
+                let values = fields
+                    .iter()
+                    .map(|(_, value)| show(value))
+                    .collect::<Vec<_>>();
+                if values.len() == 1 {
+                    return format!("({},)", values[0]);
+                }
+                return format!("({})", values.join(", "));
+            }
             let fields = fields
                 .iter()
                 .map(|(name, value)| format!(".{name} = {}", show(value)))
                 .collect::<Vec<_>>()
                 .join("; ");
-            format!("{{ {fields} }}")
+            if fields.is_empty() {
+                "{ }".to_owned()
+            } else {
+                format!("{{ {fields}; }}")
+            }
         }
-        Value::Array(elements) => format!(
-            "[{}]",
-            elements.iter().map(show).collect::<Vec<_>>().join(", ")
-        ),
+        Value::Array(elements) => {
+            let elements = elements
+                .iter()
+                .map(|element| {
+                    let shown = show(element);
+                    if matches!(element, Value::Union(_)) {
+                        format!("({shown})")
+                    } else {
+                        shown
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{elements}]")
+        }
         Value::RegionType(element) => format!("Region {}", show(element)),
         Value::Region { start, end, .. } => format!("<region {start}..{end}>"),
         Value::RegionRejoin {
@@ -1214,7 +1243,21 @@ pub fn show(value: &Value) -> String {
             format!("<function choice of {}>", alternatives.len())
         }
         Value::Primitive { name, .. } => format!("<primitive {name}>"),
-        Value::Range { low, high, .. } => format!("{}..{}", show(low), show(high)),
+        Value::Range { low, high, domain } => {
+            if !matches!(low.as_ref(), Value::Unbounded) && equal(low, high) {
+                return show(low);
+            }
+            if matches!(low.as_ref(), Value::Unbounded) && matches!(high.as_ref(), Value::Unbounded)
+            {
+                return match domain {
+                    Some(Domain::Text) => "Str".to_owned(),
+                    Some(Domain::Float) => "F64".to_owned(),
+                    Some(Domain::Float32) => "F32".to_owned(),
+                    Some(Domain::Int) | None => "..".to_owned(),
+                };
+            }
+            format!("{}..{}", show(low), show(high))
+        }
         Value::Union(members) => members.iter().map(show).collect::<Vec<_>>().join(" | "),
         Value::Unbounded => "..".to_owned(),
         Value::Arrow {
@@ -1239,9 +1282,52 @@ pub fn show(value: &Value) -> String {
         Value::Effect { name, .. } => format!("<effect {name}>"),
         Value::Operation { name, .. } => format!("<operation {name}>"),
         Value::Extended { inner, .. } => show(inner),
-        Value::Sealed { name, inner } => format!("{name}({})", show(inner)),
+        Value::Sealed { name, inner } => format!("{name} {}", show(inner)),
         Value::OpaqueType(name) => name.clone(),
         Value::Runtime(value) => format!("<runtime value {}>", value.id),
         Value::Continuation { .. } => "<continuation>".to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod show_tests {
+    use super::*;
+
+    #[test]
+    fn source_values_keep_the_public_display_spelling() {
+        assert_eq!(
+            show(&Value::Shape(OrderedFields::from([
+                ("x".to_owned(), Value::Int(1.into())),
+                ("y".to_owned(), Value::Text("two".to_owned())),
+            ]))),
+            "{ .x = 1; .y = \"two\"; }"
+        );
+        assert_eq!(
+            show(&tuple(vec![Value::Int(1.into()), Value::Int(2.into())])),
+            "(1, 2)"
+        );
+        assert_eq!(
+            show(&Value::Range {
+                low: Box::new(Value::Int(1.into())),
+                high: Box::new(Value::Int(1.into())),
+                domain: Some(Domain::Int),
+            }),
+            "1"
+        );
+        assert_eq!(
+            show(&Value::Range {
+                low: Box::new(Value::Unbounded),
+                high: Box::new(Value::Unbounded),
+                domain: Some(Domain::Text),
+            }),
+            "Str"
+        );
+        assert_eq!(
+            show(&Value::Sealed {
+                name: "Meters".to_owned(),
+                inner: Box::new(Value::Int(3.into())),
+            }),
+            "Meters 3"
+        );
     }
 }

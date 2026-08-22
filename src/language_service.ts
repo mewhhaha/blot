@@ -1,7 +1,5 @@
 import { fromFileUrl, resolve } from "@std/path";
-import { Compiler } from "./compiler.ts";
-import { checkSource as checkTypedSource } from "./check/mod.ts";
-import type { CheckResult } from "./check/mod.ts";
+import { Compiler, type CompilerAnalysis } from "./compiler.ts";
 import { BlotError } from "./diagnostic.ts";
 import type { Diagnostic } from "./diagnostic.ts";
 import { LoadError } from "./load.ts";
@@ -74,7 +72,10 @@ export class LanguageService {
   readonly #documents = new Map<string, OpenDocument>();
   readonly #hoverChecks = new Map<
     string,
-    { readonly version: number; readonly checked: Promise<CheckResult | null> }
+    {
+      readonly version: number;
+      readonly checked: Promise<CompilerAnalysis | null>;
+    }
   >();
   readonly #compiler: Promise<Compiler>;
 
@@ -205,7 +206,7 @@ export class LanguageService {
     const checked = await this.#typedRevision(uri, document);
     const offset = offsetAtPosition(document.source, position);
     const description = hoverAt(
-      checked?.module ?? parsed.module,
+      parsed.module,
       document.source,
       parsed.cst,
       offset,
@@ -240,13 +241,15 @@ export class LanguageService {
   #typedRevision(
     uri: string,
     document: OpenDocument,
-  ): Promise<CheckResult | null> {
+  ): Promise<CompilerAnalysis | null> {
     const cached = this.#hoverChecks.get(uri);
     if (cached !== undefined && cached.version === document.version) {
       return cached.checked;
     }
     const path = filePath(uri) ?? resolve(".blot-untitled.blot");
-    const checked = checkTypedSource(path, document.source).catch((error) => {
+    const checked = this.#compiler.then((compiler) =>
+      compiler.analyzeSource(path, document.source)
+    ).catch((error) => {
       if (
         error instanceof BlotError || error instanceof LoadError ||
         error instanceof Deno.errors.NotFound

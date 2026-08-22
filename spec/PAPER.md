@@ -1202,7 +1202,7 @@ executable checker or lowering test, not only by documentation.
 | Area                     | Current implementation                                                                                                                                                                                                                                                   | Model decision                                                         | Remaining gap                                                                                    |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | pure binding             | liveness erases unused definitions; every remaining definition evaluates once in source order                                                                                                                                                                            | liveness erasure followed by strict evaluation                         | none                                                                                             |
-| effect sequencing        | typed Core classifies live declarations as `define` or `bind`, gives compiler-owned applications dedicated nodes, records every residual type, and is the sole input schedule of the bounded gpupaper oracle                                                             | only `<-` binds a computation into scope                               | preserve source/Core/oracle handler and host traces                                              |
+| effect sequencing        | typed Core classifies live declarations as `define` or `bind`, gives compiler-owned applications dedicated nodes, records every residual type, and is the sole input schedule of an optional bounded Core oracle                                                         | only `<-` binds a computation into scope                               | preserve source/Core/oracle handler and host traces                                              |
 | coverage                 | uncertainty and every unlistable domain require an irrefutable arm; tuple coverage checks the complete cross-product                                                                                                                                                     | accepted closed `case` is exhaustive or has an irrefutable arm         | none for the implemented pattern language                                                        |
 | type reflection          | Core carries a graph-form `TyRep` table; saturated reflection is exact, generic payloads cannot authorize runtime work, and phase evidence is separate from inference variables                                                                                          | reflection payloads are indexed or typed at saturated call sites       | none                                                                                             |
 | dynamic shape operations | a run-time field name is rejected; `Dict` provides homogeneous run-time keys with ownership-preserving replacement and removal                                                                                                                                           | structural fields require compile-time names                           | none                                                                                             |
@@ -1302,7 +1302,7 @@ Move array identity and length relations into `Phi`.
 - Implement affine equalities and difference constraints.
 - Record proof evidence on direct array operations.
 - Add proof-producing array iteration.
-- Lower proved operations without asking gpufuck to reverse-engineer source
+- Lower proved operations without asking the target to reverse-engineer source
   facts from typed machine comparisons.
 
 Inference now attaches a type-independent certificate to each direct access and
@@ -1323,7 +1323,8 @@ Record explicit coercions and specialize every residual structural use.
 - Clone a structural function per incompatible concrete shape or pass a layout
   dictionary.
 - Preserve the full shape when polymorphic identity or spread requires it.
-- Ensure gpufuck HM-checks every program accepted by the closed source core.
+- When an independent Core oracle is run, ensure it accepts every closed source
+  core sent to it.
 
 Runtime `let` lambdas are cloned per concrete record shape through direct calls,
 immutable aliases, source forwarders, imports, and statically known higher-order
@@ -1374,7 +1375,8 @@ Constrain run-time integer ranges to signed `Int` and keep arbitrary bit widths
 in layout metadata. Decide later whether distinct word types are worthwhile.
 
 - Refuse a run-time signature containing unrepresentable integer inhabitants.
-- Test every arithmetic trap across evaluator, gpufuck, and Wasm.
+- Test every arithmetic trap across the Rust evaluator and emitted Wasm, with
+  optional independent-oracle comparison.
 - Specify packed load/store operations before claiming packed run-time records.
 
 Success means every inhabitant of a run-time type has a run-time representation.
@@ -1435,7 +1437,7 @@ metatheory. Each soundness layer needs a different test oracle.
 | refinements             | certificate replay by a small independent checker              |
 | ownership               | path-generated terms plus certificate replay                   |
 | staging                 | staged/unstaged contextual equivalence tests                   |
-| specialization          | gpufuck HM re-check with no source-accepted shape refusal      |
+| specialization          | closed Runtime HIR with no source-accepted shape refusal       |
 | backend                 | evaluator/GPU/Wasm differential execution                      |
 | ABI                     | round-trip properties and malformed-input trap tests           |
 

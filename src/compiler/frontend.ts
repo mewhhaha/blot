@@ -4,8 +4,7 @@ import { load, type Loaded, refreshLoadedModules } from "../load.ts";
  * Compiler-owned source-graph entry points.
  *
  * The graph implementation is shared with tooling, but compiler phases import
- * it through this module so the Node development compiler has the same named
- * `frontend` boundary as the Rust production compiler.
+ * it through this module so the host/compiler boundary remains explicit.
  */
 export async function loadProgram(path: string): Promise<Loaded> {
   return await load(path);

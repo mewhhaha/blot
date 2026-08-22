@@ -53,7 +53,7 @@ is polynomial; putting `!` into the lattice would make subtyping decide resource
 use and the algorithm would stop being the thing that pays for itself. The two
 passes share nothing but the AST.
 
-`src/linear/check.ts` runs after inference. A use-after-move reported on a
+`compiler/src/ownership.rs` runs after inference. A use-after-move reported on a
 program that does not type-check would be the second-best diagnostic.
 
 ## How a name is reached
@@ -221,7 +221,7 @@ copying or discarding one.
 last uses and the linear bindings proved consumed exactly once on every path.
 Only the second fact licenses Store reuse: when that proved consumption is the
 array operand of `@array.set` or `@array.push`, lowering marks the update owned.
-gpufuck may then write through the source allocation. An ordinary array, an
+the emitter may then write through the source allocation. An ordinary array, an
 affine binding consumed on only some paths, or a use that does not match the
 proved consumption stays persistent.
 

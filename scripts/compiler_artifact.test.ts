@@ -9,6 +9,8 @@ const emptyWasm = Uint8Array.of(0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0);
 const commit = "1".repeat(40);
 const tree = "2".repeat(40);
 const rustc = "rustc 1.97.1 (8bab26f4f 2026-07-14)";
+const prelude = "3".repeat(64);
+const inputs = "4".repeat(64);
 
 Deno.test("compiler artifact manifest authenticates bytes and source tree", async () => {
   const described = await describeCompilerArtifact(
@@ -16,19 +18,28 @@ Deno.test("compiler artifact manifest authenticates bytes and source tree", asyn
     commit,
     tree,
     rustc,
+    prelude,
+    inputs,
   );
   const manifest = decodeCompilerArtifactManifest(JSON.stringify(described));
-  await validateCompilerArtifact(emptyWasm, manifest, tree);
+  await validateCompilerArtifact(emptyWasm, manifest, {
+    hostAbi: 1,
+    preludeSha256: prelude,
+    compilerInputsSha256: inputs,
+  });
 
   await assertRejects(
-    () => validateCompilerArtifact(emptyWasm, manifest, "3".repeat(40)),
+    () =>
+      validateCompilerArtifact(emptyWasm, manifest, {
+        compilerInputsSha256: "5".repeat(64),
+      }),
     Error,
-    "belongs to source tree",
+    "inputs do not match",
   );
   const changed = emptyWasm.slice();
   changed[7] = 1;
   await assertRejects(
-    () => validateCompilerArtifact(changed, manifest, tree),
+    () => validateCompilerArtifact(changed, manifest, {}),
     Error,
     "valid WebAssembly",
   );

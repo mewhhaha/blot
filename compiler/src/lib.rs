@@ -33,6 +33,12 @@ thread_local! {
     static MODULE_SNAPSHOT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
+/// Version of the JSON/binary transport consumed by `src/compiler/wasm.ts`.
+#[unsafe(no_mangle)]
+pub extern "C" fn compiler_host_abi_version() -> u32 {
+    1
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn allocate_words(word_count: u32) -> *mut i32 {
     let words = vec![0_i32; word_count as usize].into_boxed_slice();
@@ -329,6 +335,99 @@ pub unsafe extern "C" fn check_compiler_session_module(
         Err(message) => serde_json::json!({ "ok": false, "message": message }),
     };
     write_result(serde_json::to_vec(&result).expect("check result serialization failed"))
+}
+
+#[unsafe(no_mangle)]
+/// Returns request-local semantic facts for editor and tool hosts.
+///
+/// # Safety
+///
+/// `path_pointer` must address `path_unit_count` initialized `i32` words in
+/// this module's linear memory for the duration of the call.
+pub unsafe extern "C" fn analyze_compiler_session_module(
+    handle: u32,
+    path_pointer: *const i32,
+    path_unit_count: u32,
+) -> u32 {
+    let path_words = unsafe { std::slice::from_raw_parts(path_pointer, path_unit_count as usize) };
+    let analyzed = decode_utf16_words(path_words, "module path").and_then(|path| {
+        let index = session_index(handle)?;
+        SESSIONS.with(|sessions| {
+            let sessions = sessions.borrow();
+            let session = sessions
+                .get(index)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| format!("unknown compiler session {handle}"))?;
+            Ok(session.analyze_module(&path))
+        })
+    });
+    let result = match analyzed {
+        Ok(result) => result,
+        Err(message) => serde_json::json!({ "ok": false, "message": message }),
+    };
+    write_result(serde_json::to_vec(&result).expect("analysis result serialization failed"))
+}
+
+#[unsafe(no_mangle)]
+/// Exports the canonical portable AST owned by the Rust frontend.
+///
+/// # Safety
+///
+/// `path_pointer` must address `path_unit_count` initialized `i32` words in
+/// this module's linear memory for the duration of the call.
+pub unsafe extern "C" fn export_compiler_session_module_ast(
+    handle: u32,
+    path_pointer: *const i32,
+    path_unit_count: u32,
+) -> u32 {
+    let path_words = unsafe { std::slice::from_raw_parts(path_pointer, path_unit_count as usize) };
+    let exported = decode_utf16_words(path_words, "module path").and_then(|path| {
+        let index = session_index(handle)?;
+        SESSIONS.with(|sessions| {
+            let sessions = sessions.borrow();
+            sessions
+                .get(index)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| format!("unknown compiler session {handle}"))?
+                .module_ast(&path)
+        })
+    });
+    let result = match exported {
+        Ok(ast) => serde_json::json!({ "ok": true, "ast": ast }),
+        Err(message) => serde_json::json!({ "ok": false, "message": message }),
+    };
+    write_result(serde_json::to_vec(&result).expect("portable AST result serialization failed"))
+}
+
+#[unsafe(no_mangle)]
+/// Discovers and executes declaration-tag tests in one configured module.
+///
+/// # Safety
+///
+/// `path_pointer` must address `path_unit_count` initialized `i32` words in
+/// this module's linear memory for the duration of the call.
+pub unsafe extern "C" fn test_compiler_session_module(
+    handle: u32,
+    path_pointer: *const i32,
+    path_unit_count: u32,
+) -> u32 {
+    let path_words = unsafe { std::slice::from_raw_parts(path_pointer, path_unit_count as usize) };
+    let tested = decode_utf16_words(path_words, "module path").and_then(|path| {
+        let index = session_index(handle)?;
+        SESSIONS.with(|sessions| {
+            let mut sessions = sessions.borrow_mut();
+            let session = sessions
+                .get_mut(index)
+                .and_then(Option::as_mut)
+                .ok_or_else(|| format!("unknown compiler session {handle}"))?;
+            Ok(session.test_module(&path))
+        })
+    });
+    let result = match tested {
+        Ok(result) => result,
+        Err(message) => serde_json::json!({ "ok": false, "message": message }),
+    };
+    write_result(serde_json::to_vec(&result).expect("test result serialization failed"))
 }
 
 #[unsafe(no_mangle)]

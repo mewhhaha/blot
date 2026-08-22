@@ -1,21 +1,16 @@
 // Module loading.
 //
-// A module is an ordered computation from an input value to a returned value.
-// Importing one grants it nothing: it sees only the value its importer supplies,
-// and the entry module's input is the entire authority the program has.
-//
-// Resolution happens before evaluation, so `import` never touches the disk
-// while a program is running and the evaluator can stay synchronous.
+// Node owns filesystem and package resolution, never source semantics. The
+// resolved graph is installed into one Rust compiler session before any check,
+// evaluation, Runtime-HIR request, or build begins.
 
 import { readFile } from "node:fs/promises";
-import { dirname, fromFileUrl, isAbsolute, relative, resolve } from "@std/path";
+import { dirname, fromFileUrl, isAbsolute, resolve } from "@std/path";
 import type { Expr, Module } from "./syntax/ast.ts";
 import type { Diagnostic } from "./diagnostic.ts";
 import { BlotError, render } from "./diagnostic.ts";
 import { parse, parseConcrete } from "./syntax/parse.ts";
 import { decodePortableModule } from "./syntax/portable.ts";
-import { childEnv, type Env, shapeOf, type Value } from "./comptime/value.ts";
-import { includedFileKey, moduleClosure } from "./comptime/eval.ts";
 import {
   type CapsuleModule,
   decodeModuleCapsule,
@@ -40,7 +35,6 @@ export class LoadError extends Error {
 
 export interface Loaded {
   readonly module: Module;
-  readonly closure: Value;
   readonly dependencies: ReadonlyMap<string, Loaded>;
   readonly includedFiles: ReadonlyMap<string, IncludedFile>;
   readonly source: string;
@@ -191,9 +185,8 @@ function dependencyExpressions(module: Module): DependencySites {
 /**
  * One cache per process, not per call.
  *
- * Inference records facts for the backend keyed by AST node identity, so two
- * `load` calls returning two structurally equal trees would silently lose every
- * one of them. Sharing the cache is what keeps "the module" a single thing.
+ * Syntax tooling benefits from stable AST identity, while compiler caches use
+ * exact graph revision keys. No semantic fact is stored in this cache.
  */
 const modules = new Map<string, Loaded>();
 
@@ -367,11 +360,9 @@ async function loadSourceRevision(
     }]);
   }
 
-  const imports = new Map<string, Value>();
   const dependencies = new Map<string, Loaded>();
   for (const specifier of new Set(dependencySites.imports.values())) {
     const dependency = await loadImport(specifier, absolute, cache, active);
-    imports.set(specifier, dependency.closure);
     dependencies.set(specifier, dependency);
   }
 
@@ -401,28 +392,10 @@ async function loadSourceRevision(
       path: includedPath,
       source: includedSource,
     });
-    let normalizedPath = relative(dirname(absolute), includedPath);
-    normalizedPath = normalizedPath.replaceAll("\\", "/");
-    if (!normalizedPath.startsWith(".")) normalizedPath = `./${normalizedPath}`;
-    imports.set(
-      includedFileKey(specifier),
-      shapeOf([
-        ["specifier", { tag: "text", value: specifier }],
-        ["path", { tag: "text", value: normalizedPath }],
-        ["text", { tag: "text", value: includedSource }],
-      ]),
-    );
   }
-
-  // Nothing is in scope that the module did not ask for. The prelude is an
-  // ordinary module with no privilege: `open import "blot:prelude"` is
-  // what puts `Num.add` where the default fixity for `+` can find it, and a
-  // module that does not open it does not have `+`.
-  const env: Env = childEnv(null);
 
   const loaded: Loaded = {
     module: parsed.module,
-    closure: moduleClosure(parsed.module, env, imports),
     dependencies,
     includedFiles,
     source,
@@ -523,7 +496,6 @@ async function loadModuleCapsule(
       return cached;
     }
     const dependencies = new Map<string, Loaded>();
-    const imports = new Map<string, Value>();
     const nextStack = [...stack, identifier];
     for (const imported of encoded.imports) {
       let dependency: Loaded;
@@ -538,7 +510,6 @@ async function loadModuleCapsule(
         );
       }
       dependencies.set(imported.specifier, dependency);
-      imports.set(imported.specifier, dependency.closure);
     }
     const includedFiles = new Map<string, IncludedFile>();
     for (const included of encoded.includes) {
@@ -546,19 +517,9 @@ async function loadModuleCapsule(
         path: included.path,
         source: included.text,
       });
-      imports.set(
-        includedFileKey(included.specifier),
-        shapeOf([
-          ["specifier", { tag: "text", value: included.specifier }],
-          ["path", { tag: "text", value: included.path }],
-          ["text", { tag: "text", value: included.text }],
-        ]),
-      );
     }
-    const env: Env = childEnv(null);
     const loaded: Loaded = {
       module,
-      closure: moduleClosure(module, env, imports),
       dependencies,
       includedFiles,
       source: "",

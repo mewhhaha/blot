@@ -352,7 +352,7 @@ interface ControlConstructors {
   readonly continue: string;
 }
 
-// gpufuck gives each constructor one monomorphic payload type. A boundary-
+// Runtime HIR gives each constructor one monomorphic payload type. A boundary-
 // specific, source-unspellable name keeps unrelated continuation payloads from
 // being unified, and the wrapper keeps `()` distinct from a payloadless tag.
 function syntheticConstructor(label: string, span: Span): string {

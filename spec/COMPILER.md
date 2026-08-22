@@ -12,32 +12,29 @@ meaning. [`PAPER.md`](PAPER.md) develops the target language model.
 [`TYPECHECKING.md`](TYPECHECKING.md) is a sub-reference of this specification,
 not a second definition of the language.
 
-Blot has one compiler contract and two maintained implementations.
-Node/TypeScript is the default development environment: Node instantiates Baba's
-generated lexer Wasm, runs Baba's general-profile CPU island executor, executes
-Blot's readable semantic passes, and instantiates gpupaper's embedded emitter.
-The Rust compiler Wasm built by CI is the production implementation. It is a
-transport artifact, not source: Git tracks the Rust implementation and its
-generated prelude snapshot, while successful CI runs publish the exact Wasm with
-a content hash and source-tree identity. Deno, a native Rust process, Cargo, and
-WebGPU are outside an ordinary compilation boundary.
+Blot has one compiler contract and one semantic implementation. Rust owns every
+semantic pass and is distributed as a compiler Wasm artifact. Node hosts that
+artifact, resolves source graphs, and provides syntax-only tooling through
+Baba's generated frontend. Git tracks the Rust implementation and generated
+prelude snapshot, while successful CI runs publish exact compiler bytes with a
+content hash, host-ABI version, and compiler-input identity. Deno, a native Rust
+process, Cargo, and WebGPU are outside an ordinary compilation boundary.
 
 Baba's Wasm runtime lexes layout-elaborated source. Its CPU island executor
-parses the general-profile plan and returns the compact CST. Gpupaper receives
-gpupaper Core lowered from validated Blot Runtime HIR. Blot owns every semantic
-judgment between those boundaries; neither Wasm component is permitted to
-reinterpret Blot source semantics. An implementation boundary is not a semantic
-boundary.
+parses the general-profile plan and returns the compact CST. The Rust emitter
+receives only validated Blot Runtime HIR. Blot owns every semantic judgment
+between those boundaries; neither Wasm component is permitted to reinterpret
+Blot source semantics. An implementation boundary is not a semantic boundary.
 
 The Node CLI exposes `ast`, `check`, `run`, and `build`. `run` executes a
 zero-parameter default or sole runtime export when the module needs no host
 capabilities. It copies direct and canonical-memory values and completes owned
 indirect results through their declared post-return. Evaluation of arbitrary
 host-dependent programs, ownership reports, formatting, and package construction
-remain development tools outside this CLI boundary. `pnpm parity` and
-`pnpm parity:strict` compare both compiler directions; comparing rejections
-alone would let either checker drift towards accepting a program the other
-refuses.
+remain development tools outside this CLI boundary. `pnpm conformance` compares
+the Rust evaluator, emitted Wasm, and explicit GPU oracle where that oracle
+supports the program. There is no second checker whose acceptance can override
+the Rust judgment.
 
 ## 1. Inputs, outputs, and observations
 
@@ -114,15 +111,15 @@ The source pipeline is:
 source -> Baba lexer -> layout elaboration -> Baba CPU frontend -> compact CST -> fixity fold -> AST
        -> comptime evaluation -> biunification -> safety -> ownership
        -> staging and specialization -> validated Runtime HIR
-       -> gpupaper Core -> gpupaper Rust/Wasm emission -> ClosedProgram
+       -> ABI closure -> Rust/Wasm emission -> ClosedProgram
 ```
 
 Baba owns lexing and parsing. Blot owns deterministic layout-token insertion,
 source-offset recovery, elaboration, inference, compile-time evaluation, safety,
-ownership, specialization, Runtime HIR, ABI policy, and the module shell.
-Gpupaper owns Core-to-Wasm planning and binary emission. The CI-built Blot Rust
-compiler Wasm is the production implementation and parity counterpart; it is not
-invoked by an ordinary Node development compilation.
+ownership, specialization, Runtime HIR, ABI policy, and the module shell. The
+Rust backend owns target planning and binary emission. The CI-built Blot
+compiler Wasm is the semantic compiler used by ordinary Node commands and
+production distributions alike.
 
 `TypedCore` is the first shared value/computation schedule. Each Core node has a
 stable node identity and a structural type-representation identity. A
@@ -135,29 +132,28 @@ is no state that means "pending with a fallback representation".
 ### 2.1 Production compiler distribution
 
 `compiler.wasm` is derived output. A distribution manifest binds its byte length
-and SHA-256 digest to the pinned Rust toolchain and complete Git source-tree
-identity used by the build. A consumer may install an artifact only after
-validating the Wasm magic, the byte length, the digest, and equality between the
-manifest tree and its checkout tree. A mismatched tree is not a source
-diagnostic and must not be silently accepted as a nearby compiler revision.
+and SHA-256 digest to the pinned Rust toolchain, compiler-host ABI, generated
+prelude digest, and exact closure of inputs that affect the compiler. A consumer
+may install an artifact only after validating every field. A mismatch is not a
+source diagnostic and must not be silently accepted as a nearby compiler
+revision.
 
 Each pull-request or main-branch CI run builds this artifact once and uses those
-same bytes for Rust parity, conformance, benchmarks, and the downloadable
-runnable workspace. The raw compiler artifact and workspace are retained as CI
-products; neither is a second semantic authority. Local development may
-reproduce the artifact with the pinned build procedure or download the artifact
-for an exactly matching source tree. Ordinary Node compilation still uses Baba
-and gpupaper's embedded emitter and therefore requires neither artifact nor
-Cargo.
+same bytes for conformance, benchmarks, and the downloadable runnable workspace.
+The raw compiler artifact and workspace are retained as CI products; neither is
+a second semantic authority. Local development may reproduce the artifact with
+the pinned build procedure or download an artifact for matching compiler inputs.
+Node compilation requires the artifact but never starts Cargo or a native
+compiler implicitly.
 
-The production distribution has a host adapter with the same resident phase
-shape as the development `Compiler`: `check`, `prepare`, `compile`, and
-`destroy`. The adapter resolves the exact source graph, installs every source or
-portable-AST module and include in one Rust session, and configures import edges
-before requesting a semantic phase. Its transport is not a fourth failure class:
-located source failures become ordinary source diagnostics, explicit target
-refusals become `TargetRefusal`, and failures after successful checking or
-Runtime-HIR validation become `InvariantFailure` without fabricated spans.
+The distribution has one host adapter with the resident `Compiler` shape:
+`check`, `checkSource`, `prepare`, `compile`, and `destroy`. The adapter
+resolves the exact source graph, installs every source or portable-AST module
+and include in one Rust session, and configures import edges before requesting a
+semantic phase. Its transport is not a fourth failure class: located source
+failures become ordinary source diagnostics, explicit target refusals become
+`TargetRefusal`, and failures after successful checking or Runtime-HIR
+validation become `InvariantFailure` without fabricated spans.
 
 ## 3. Pass contract
 
@@ -316,14 +312,14 @@ skip a pass only when a revision key proves that every input observed by that
 pass is unchanged and its closed output certificate validates. This is specified
 in [`INCREMENTAL.md`](INCREMENTAL.md).
 
-In the Node development compiler, a resident source-graph revision key is the
-canonical root identity plus every module's exact portable AST (including source
-spans), dependency revision keys, and included file identities and bytes.
-Equality permits reuse of the root's checked summary, validated Runtime HIR, and
-emitted artifact. Loader-object memoization may additionally reuse a complete
-root checking judgment while that loader reports the same revision. It may not
-reuse a dependency's mutable inference facts independently: those facts can
-observe importer constraints and staging context. Baba and gpupaper Wasm runtime
+In the Node host, a resident source-graph revision key is the canonical root
+identity plus every module's exact portable AST (including source spans),
+dependency revision keys, and included file identities and bytes. Equality
+permits reuse of the root's checked summary, validated Runtime HIR, and emitted
+artifact. Loader-object memoization may additionally reuse a complete root
+checking judgment while that loader reports the same revision. It may not reuse
+a dependency's mutable inference facts independently: those facts can observe
+importer constraints and staging context. Baba and compiler Wasm runtime
 instances are process resources, not semantic facts, and may be initialized once
 and shared across resident compiler sessions.
 
@@ -358,36 +354,25 @@ The premises are a release-build obligation over one distribution. The Rust/Wasm
 implementation resolves `blot:prelude` to the adjacent snapshot through the
 ordinary module loader, then validates the portable AST arena, certificate
 schema, closed flat type arena, and all arena references before installing the
-memoized result. The Node implementation loads the ordinary prelude source
-through its source graph and derives the same interface. The MessagePack
-envelope is a transport encoding of those existing artifacts, not another AST
-schema. If compile-time specialization needs values represented by the AST, the
-compiler evaluates the validated AST once per session and retains its result;
-the cached interface never substitutes an asserted runtime value.
+memoized result. The Node host installs that adjacent snapshot into the Rust
+session. The MessagePack envelope is a transport encoding of those existing
+artifacts, not another AST schema. If compile-time specialization needs values
+represented by the AST, the compiler evaluates the validated AST once per
+session and retains its result; the cached interface never substitutes an
+asserted runtime value.
 
 Performance is measured by phase work, not by repository boundaries. Cold, warm,
 resident, unchanged-revision, source-only-edit, and semantic-edit timings are
 different experiments. [`COST_MODEL.md`](COST_MODEL.md) defines them and the
-conditions under which a faster compiler remains the same compiler. The combined
-Node-hosted benchmark runs both implementations in one process with
-`pnpm run benchmark -- <root.blot>` and verifies comparable observations before
-reporting phase medians, artifact sizes, and Node-to-Rust ratios.
+conditions under which a faster compiler remains the same compiler. The
+Node-hosted benchmark compares the high-level graph/session adapter with the
+direct Wasm transport in one process. It first proves both routes reached
+identical Runtime HIR and ABI artifacts, then reports phase medians, artifact
+sizes, and host-overhead ratios. Both routes execute the same compiler.
 
-The Node and Rust/Wasm implementations are developed in sequence:
-Node/TypeScript is the readable default development implementation and Rust/Wasm
-is the production implementation. They remain implementations of this one
-judgment. Feature work normally begins in the Node phase that owns the behavior
-and is then ported to the correspondingly named Rust phase. A feature is
-production-complete only after both agree on acceptance or rejection, diagnostic
-code, Runtime-HIR export phases, public ABI manifest, capabilities, and the
-applicable runtime observations. Internal type pretty-printing and
-instruction-byte identity are not required observations.
-
-The repository-wide dual-compiler corpus runs both implementations under Node;
-the Rust implementation is the validated CI-built compiler Wasm, not a native
-toolchain process. Its known-gap file is an inventory, not permission to weaken
-a judgment. CI requires that inventory to change explicitly, and the strict mode
-requires the inventory to be empty.
+Rust/Wasm is the only implementation of the semantic judgment. Node/TypeScript
+may resolve inputs and present versioned facts, but it may not derive a
+competing type, ownership, evaluation, Runtime-HIR, or emission result.
 
 Staging evaluates one module instance as one ordered computation before
 selecting any named field from its returned value. A written import occurrence
@@ -506,7 +491,7 @@ public artifact, or an explicit compiler command.
 
 | Responsibility                                                                                                | Required result                      |
 | ------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| translate runtime operations to validated gpupaper Core or an equivalent direct plan                          | language-independent machine program |
+| translate runtime operations to a validated direct machine plan                                               | language-independent machine program |
 | lower trapping arithmetic, wrapping arithmetic, comparisons, control, memory, host calls, and SIMD            | specified WebAssembly behavior       |
 | emit UTF-8 validation, text comparison, integer formatting, relocation, and allocation support when reachable | complete runtime support             |
 | encode deterministic WebAssembly and validate it                                                              | final module bytes                   |
@@ -521,32 +506,24 @@ results. Merely putting the same responsibilities in one file is not a collapse.
 
 ## 10. Present implementation shape
 
-This is the Node development implementation boundary:
+This is the ordinary hosted compiler boundary:
 
 ```text
-source graph
-  -> Baba generated Wasm lexer for layout boundaries
-  -> layout elaboration
-  -> Baba generated Wasm lexical acceptance
-  -> Baba general-profile CPU island parser (same lexer plan replayed internally)
-  -> CST / AST
-  -> checking / comptime / ownership / staging
-  -> validated Runtime HIR
-  -> gpupaper Core and Wasm plan
-  -> gpupaper embedded Rust/Wasm emitter
+source graph resolved by Node
+  -> Rust compiler Wasm session
+     -> Baba lexer and CPU island plan
+     -> CST / AST
+     -> checking / comptime / ownership / staging
+     -> validated Runtime HIR
+     -> ABI closure and Wasm plan
   -> WasmArtifact
 ```
 
-The `Compiler` session caches final artifacts by immutable Runtime-HIR identity.
-Its check-only cache additionally stores conservative per-module sealed
-fingerprints. A changed module is freshly checked; unchanged fingerprints stop
-reverse propagation, while changed fingerprints enqueue every importer.
-Fingerprints contain the closed type/effect observation, derived relational
-facts and schema, checked live source, includes, capsule input, and dependency
-fingerprints. Updates commit only after the complete requested check succeeds.
-Baba's Wasm lexer and CPU parser instances are process-shared; the Wasm instance
-is disposed explicitly. Gpupaper's emitter bytes are checked into its package
-and instantiated through the standard `WebAssembly` API.
+The host caches final artifacts by exact source-graph revision. The resident
+Rust session owns checked interfaces, request-local facts, staged values,
+Runtime HIR, and closed programs. A changed module invalidates itself and its
+importers inside that session. Updates commit only after the requested phase
+succeeds. The Wasm instance is disposed explicitly.
 
 Residual structured values use the settled checked boundary type, not only the
 constructor or element observed during staging. This keeps empty Store values,
@@ -563,11 +540,9 @@ structured ABI policy. Unsupported target policy is a `TargetRefusal`; a failure
 after validated Runtime HIR is an `InvariantFailure`. Neither is a source
 diagnostic, and neither receives a fabricated source span.
 
-Node/TypeScript is the development implementation and the CI-built Rust/Wasm
-compiler is the production implementation. Semantic authority belongs to this
-specification and `LANGUAGE.md`, not to either implementation. gpufuck/WebGPU
-routes are conformance implementations and are not reachable from the public
-`Compiler.compile` path.
+Rust/Wasm is the sole semantic implementation. Semantic authority belongs to
+this specification and `LANGUAGE.md`; Node/TypeScript may resolve and present
+compiler facts but may not derive a competing judgment.
 
 ## 11. Collapse laws
 
@@ -636,34 +611,28 @@ adapters = emit(L)
 No emitter may independently recalculate record offsets, variant layouts,
 flattening limits, post-return obligations, or text ownership.
 
-### 11.5 One language judgment, development and production implementations
+### 11.5 One language judgment, one implementation
 
-Node/TypeScript is the readable default development implementation; Rust/Wasm is
-the production implementation. Their phase structure should stay recognizably
-parallel so a change can be ported mechanically rather than re-designed during
-translation. Neither defines a second language. A change graduates only when
-strict parity proves the shared corpus observations equal and focused runtime
-tests cover behavior that manifests cannot expose. The duplicate implementation
-is therefore a deliberate differential-testing cost, not permission to fork
-semantics.
+Rust/Wasm derives the semantic judgment. Node/TypeScript is a host and syntax
+tooling layer. Conformance compares the Rust evaluator with emitted Wasm and
+focused runtime observations; it never asks a second checker to vote on the
+language.
 
 ## 12. Minimal compiler architecture
 
-The compiler keeps one semantic contract per boundary and parallel development
-and production modules:
+The compiler keeps one semantic contract per boundary:
 
-| Phase     | Node development            | Rust production                          | Contract output                |
-| --------- | --------------------------- | ---------------------------------------- | ------------------------------ |
-| frontend  | `src/compiler/frontend.ts`  | `compiler/src/frontend.rs` + `source.rs` | source graph / AST             |
-| typecheck | `src/compiler/typecheck.ts` | `compiler/src/typecheck.rs`              | checked facts                  |
-| hir       | `src/compiler/hir.ts`       | `compiler/src/hir.rs`                    | validated Runtime HIR          |
-| backend   | `src/compiler/backend.ts`   | `compiler/src/backend.rs`                | closed program / Wasm artifact |
-| session   | `src/compiler/session.ts`   | `compiler/src/session.rs`                | resident incremental API       |
+| Boundary  | Host or implementation                                | Contract output                |
+| --------- | ----------------------------------------------------- | ------------------------------ |
+| graph     | `src/compiler/frontend.ts`                            | resolved sources and includes  |
+| frontend  | `compiler/src/frontend.rs` + `source.rs`              | AST                            |
+| typecheck | `compiler/src/typecheck.rs`                           | checked facts                  |
+| hir       | `compiler/src/hir.rs`                                 | validated Runtime HIR          |
+| backend   | `compiler/src/backend.rs`                             | closed program / Wasm artifact |
+| session   | `src/compiler/session.ts` + `compiler/src/session.rs` | resident host API              |
 
-Baba remains the syntax authority within both frontend implementations. The Node
-backend's ABI and gpupaper machinery live under `src/compiler/backend/`;
-compiler code does not depend on `src/conformance/`. Conformance code may
-consume compiler boundaries to compare them.
+Baba remains the syntax authority. Compiler code does not depend on conformance
+code; conformance consumes public compiler boundaries.
 
 `Runtime HIR` is the semantic/backend boundary. It contains settled runtime
 types and effects, residual operations, concrete representations, and source
@@ -716,12 +685,11 @@ dependent. No data layout makes that dependency disappear.
 
 The collapse should be tested by deletion or replacement in this order:
 
-1. **Development path:** `build` and the public `Compiler` route through the
-   Baba-Wasm → Node semantics → gpupaper-Wasm pipeline. The CI-built Blot Rust
-   compiler Wasm remains the production implementation and strict parity
-   counterpart.
-2. **Complete on the Node path:** constant and residual programs share Runtime
-   HIR and the gpupaper emitter, including structured canonical results.
+1. **Complete:** `build` and the public `Compiler` route every semantic request
+   through the CI-built Rust compiler Wasm. No TypeScript semantic fallback
+   remains.
+2. **Complete:** constant and residual programs share Runtime HIR and the Rust
+   emitter, including structured canonical results.
 3. **Complete at the persistence boundary:** one `ClosedProgram` owns Runtime
    HIR and the compiled artifact for a semantic revision. Flattening the
    remaining request-local analysis arenas is a separate internal optimization.
@@ -731,9 +699,8 @@ The collapse should be tested by deletion or replacement in this order:
    separate representation task.
 5. **Complete:** one `PublicLayout` owns manifest bytes, capabilities, canonical
    layout, and the data consumed by adapters.
-6. **Complete on the development path:** gpupaper Core and its embedded
-   Rust/Wasm emitter own target planning and binary emission; Blot does not
-   duplicate that emitter in Node.
+6. **Complete:** the Rust/Wasm compiler owns target planning and binary
+   emission; Blot has no duplicate emitter in Node.
 7. Replace the package capsule and prelude snapshot with one flat module
    artifact whose optional sections are AST, checked static interface, and
    `ClosedProgram`, all keyed by the same semantic schema.

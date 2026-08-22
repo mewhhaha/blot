@@ -150,8 +150,8 @@ A split at relative offset `k`, with `0 <= k <= hi - lo`, produces:
 ```
 
 The outputs are a disjoint exact cover of the input. The pure validator in
-`src/linear/region_interval.ts` implements these laws independently of any
-compiler control-flow representation.
+`compiler/src/partition.rs` implements these laws independently of any compiler
+control-flow representation.
 
 ## 3. `copy` is the explicit allocation boundary
 
@@ -407,7 +407,7 @@ branches into one fake execution order.
 
 ## 7. What `region_certificate.ts` currently proves
 
-`src/linear/region_certificate.ts` is an executable **single-path trace
+`compiler/src/ownership.rs` contains the executable **single-path trace
 oracle**, not yet the production static source certificate.
 
 It checks the linear graph for one concrete trace:
@@ -876,8 +876,8 @@ This revision is complete only when both Node and Rust implementations agree on:
   runtime code for proof reassociation;
 - accepted and rejected catalog examples exercising nested partitions with owned
   elements; and
-- strict Node/Rust parity with the generated prelude snapshot and compiler
-  specifications updated in the same change.
+- strict host/direct Rust/Wasm agreement with the generated prelude snapshot and
+  compiler specifications updated in the same change.
 
 ### 14.5 Ownership representation and conservation
 

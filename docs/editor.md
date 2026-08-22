@@ -17,8 +17,8 @@ The server publishes syntax and compiler diagnostics for the open editor
 revision, finds local lexical definitions, describes values and syntax on hover,
 formats documents, and publishes style lints with quick fixes. Production
 compiler conformance uses the downloaded CI-built compiler Wasm; the server
-itself uses Blot's development compiler and Baba's CPU frontend and does not
-initialize WebGPU. Run it outside Helix with:
+hosts that Rust/Wasm compiler with Baba's CPU frontend and does not initialize
+WebGPU. Run it outside Helix with:
 
 ```bash
 deno task lsp

@@ -65,8 +65,8 @@ const each_2 = fn (left, right, step) => do:
 // refusing the shape. Written as `case (at (left, id), at (right, id)) of`, the
 // pair is what carries the component out — and inference then records, at the
 // visitor's own `transform.position`, the three fields that visitor projects
-// rather than the four the store holds. The backend builds the record's Core
-// type from that set and gpufuck refuses the mismatch. Until a shape survives
+// rather than the four the store holds. The backend builds the record's runtime
+// type from that set and refuses the mismatch. Until a shape survives
 // a tuple scrutinee, a renderer's join stays two `case`s.
 const visit_2 = fn (left, right, visit) => do:
   for id in Iter.range (0, count left):

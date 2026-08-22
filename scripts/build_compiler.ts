@@ -75,6 +75,7 @@ if (Deno.args.includes("--check")) {
   await Deno.writeFile(preludeSnapshot, expectedSnapshot);
 }
 await Deno.writeFile(published, bytes);
+await import("./package_compiler_artifact.ts");
 
 /**
  * Builds the compiler Wasm with every machine-specific path remapped out of it.

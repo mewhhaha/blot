@@ -133,7 +133,7 @@ call, evaluator/emitted-Wasm host traces, Runtime-HIR parity, and whole-corpus
 evaluator/oracle/Wasm observations. These are bounded simulations, not
 substitutes for the preservation and progress proofs above.
 
-The bounded gpupaper oracle consumes typed Core directly. The source-AST
+An optional bounded Core oracle consumes typed Core directly. The source-AST
 evaluator remains an independent observation model and is never consulted to
 reconstruct Core declaration liveness, `define`/`bind` order, handler order, or
 proof markers. This makes source-to-Core and Core-to-oracle two separately
@@ -144,10 +144,10 @@ testable relations rather than two consumers of one source schedule.
 The implementation should advance in this order:
 
 1. golden parse and elaboration artifacts;
-2. principal-type and diagnostic parity;
+2. principal-type and diagnostic fixtures;
 3. independent coverage, relationship, and ownership certificate replay;
 4. staged/unstaged differential evaluation;
-5. Runtime-HIR parity between compiler implementations;
+5. Runtime-HIR certificate validation at every consumer boundary;
 6. reference/conformance/Wasm observational parity;
 7. ABI round-trip and malformed-input properties; and
 8. mechanization of the smallest stable core.

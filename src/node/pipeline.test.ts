@@ -41,7 +41,7 @@ interface Manifest {
   readonly imports: readonly ManifestImport[];
 }
 
-test("Baba Wasm -> Node -> gpupaper Wasm compiles Blot", async () => {
+test("Node hosts the Rust/Wasm compiler artifact", async () => {
   const compiler = await Compiler.create();
   try {
     const artifact = await compiler.compile(resolve("examples/minimal.blot"));

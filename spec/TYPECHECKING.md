@@ -782,8 +782,9 @@ retain record width subtyping; effect-row tails affect only the effect-set
 component of arrows. The integer SIMD catalog runs through the comptime
 evaluator, scalar conformance lowering, native Runtime HIR, production compiler,
 and emitted `wasm-simd128`; the certified selector becomes `i32x4.extract_lane`.
-The checker, Runtime-HIR, and evaluator parity corpora report no TypeScript/Rust
-disagreements, and the full language corpus preserves three-execution agreement.
+The checker, Runtime-HIR, evaluator, and emitted-Wasm corpora report no
+cross-phase disagreements, and the full language corpus preserves
+three-execution agreement.
 
 ### Parallel boundary
 
@@ -965,9 +966,9 @@ The certificate carries the closed checked result type of each application,
 keyed by its module-local expression identity. Installation rejects duplicate or
 absent identities. Runtime lowering consumes that type as a representation
 expectation, so a recursive function can choose its first-order result layout
-before its body evaluates another recursive call. This is the compact Rust/Wasm
-counterpart of the Node compiler's full typed-Core expression map, not a backend
-reconstruction of source constraints.
+before its body evaluates another recursive call. This is the compact
+certificate counterpart of the compiler's full typed-Core expression map, not a
+backend reconstruction of source constraints.
 
 The certificate also carries each source closure's ownership contract, keyed by
 the same `(module, body-expression)` identity as its runtime closure signature.
@@ -1017,11 +1018,11 @@ journalled graph that inference mutates.
 
 ## 7. Implementation stages and gates
 
-Each stage must preserve TypeScript/Rust diagnostic parity, inferred principal
-types, runtime HIR, and emitted ABI bytes before the next stage begins.
+Each stage must preserve diagnostic fixtures, inferred principal types, Runtime
+HIR certificates, and emitted ABI bytes before the next stage begins.
 
 1. Replace whole-state speculative clones with journalled transactions.
-2. Make the Rust level/extrusion and rank-N rules match the authority.
+2. Preserve the level/extrusion and rank-N rules while changing storage.
 3. Intern labels and immutable type nodes; replace recursive equality with IDs.
 4. Replace recursive propagation with a compact worklist and edge sets.
 5. Canonicalise finite rows and measure scalar contiguous scans.
@@ -1099,10 +1100,8 @@ Correctness gates:
 ```txt
 deno task check
 deno task test
-deno task conformance:check
-deno task conformance:hir
-deno task conformance:eval examples/*.blot
-just wasm
+pnpm compiler:build
+pnpm conformance
 ```
 
 Performance reports record medians, source path, compiler artifact hash, sample

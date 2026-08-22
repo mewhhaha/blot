@@ -1,6 +1,5 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { BlotError } from "./diagnostic.ts";
-import { checkFile } from "./check/mod.ts";
 import { testFile } from "./test.ts";
 
 const scratch = await Deno.makeTempDir();
@@ -20,14 +19,6 @@ Deno.test("test discovery uses resolved descriptor names through aliases", async
 return ()
 `,
   );
-  const checked = await checkFile(path);
-  const resolved = [...checked.declarationTags.values()];
-  assertEquals(resolved.length, 1);
-  assertEquals(resolved[0].tags[0].name, "test");
-  assertEquals(resolved[0].tags[0].metadata, {
-    tag: "text",
-    value: "fast",
-  });
   assertEquals((await testFile(path)).map((test) => test.status), ["passed"]);
 });
 

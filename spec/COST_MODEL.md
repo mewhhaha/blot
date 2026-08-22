@@ -207,8 +207,8 @@ The compiler performs each semantic derivation once:
 
 If a later phase appears to need the same traversal, first decide whether the
 earlier artifact omitted a necessary certificate. Moving work between
-TypeScript, Rust, gpupaper, or Wasm without removing it is not itself an
-optimization.
+TypeScript, Rust, an external oracle, or Wasm without removing it is not itself
+an optimization.
 
 The progressive-HIR benchmark reports checking, pending-node completion,
 whole-graph validation, emission, and phase-boundary heap high-water marks as

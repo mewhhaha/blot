@@ -5,6 +5,10 @@ disagreements, and that all 31 corpus programs of the day lowered. Every one of
 those four has since been fixed; see "What has landed since" below, and read the
 "State of the tree" section as the record it is. -->
 
+> **Archived:** this records the retired TypeScript/gpufuck compiler and is not
+> current implementation guidance. See `TASKS.md`, `spec/COMPILER.md`, and
+> `docs/compiler.md` for the Rust/Wasm compiler.
+
 # The finishing roadmap
 
 ## Vision
@@ -637,9 +641,8 @@ table of recovery patterns keyed on (failing rule, unexpected token) needs no
 baba change.
 
 **Remaining corpus gate.** Add `blot fmt --check` over the whole corpus beside
-`deno fmt --check`. This is a stronger parity statement than `just parity`
-alone: reprinting every program and reparsing it must give the same AST and the
-same comment placement.
+`deno fmt --check`. Reprinting every program and reparsing it must give the same
+AST and the same comment placement.
 
 **Remaining gate.** `blot fmt` every `.blot` file in the repo, reparse, assert
 the module is structurally identical and no comment was lost.

@@ -1,6 +1,5 @@
-import { prepareGpupaperHir } from "../src/conformance/gpufuck/compile.ts";
-import { validateBlotRuntimeModule } from "../src/runtime/hir.ts";
-import { compileBlotRuntimeModulesOnRustWasm } from "../src/compiler/backend/runtime/target.ts";
+import { Compiler } from "../src/compiler/session.ts";
+import { CompilerTargetRefusal } from "../src/compiler/policy.ts";
 
 const root = new URL("../examples/", import.meta.url);
 const files: string[] = [];
@@ -9,62 +8,50 @@ for await (const entry of Deno.readDir(root)) {
 }
 files.sort();
 
+const compiler = await Compiler.create();
 const results = [];
-for (const file of files) {
-  const path = new URL(file, root).pathname;
-  const started = performance.now();
-  try {
-    const hir = await prepareGpupaperHir(path);
-    const prepared = performance.now();
-    const validatedModule = validateBlotRuntimeModule(hir);
-    const validationFinished = performance.now();
-    const compiledBatch = await compileBlotRuntimeModulesOnRustWasm([
-      validatedModule,
-    ]);
-    const artifact = compiledBatch.artifacts[0];
-    if (artifact === undefined) {
-      throw new Error(
-        `${file}: Rust/WebAssembly emission omitted its artifact`,
-      );
+try {
+  for (const file of files) {
+    const path = new URL(file, root).pathname;
+    const started = performance.now();
+    try {
+      const artifact = await compiler.compile(path);
+      results.push({
+        file,
+        status: "ok",
+        total_ms: performance.now() - started,
+        wasm_bytes: artifact.wasm.byteLength,
+      });
+    } catch (error) {
+      let message = String(error);
+      if (error instanceof Error) message = error.message;
+      let status = "error";
+      if (error instanceof CompilerTargetRefusal) status = "refused";
+      results.push({
+        file,
+        status,
+        total_ms: performance.now() - started,
+        error: message,
+      });
     }
-    const compiled = performance.now();
-    results.push({
-      file,
-      status: "ok",
-      prepare_ms: prepared - started,
-      validate_ms: validationFinished - prepared,
-      target_ms: compiled - validationFinished,
-      wasm_bytes: artifact.wasm.byteLength,
-    });
-  } catch (error) {
-    let message = String(error);
-    if (error instanceof Error) message = error.message;
-    results.push({
-      file,
-      status: "error",
-      total_ms: performance.now() - started,
-      error: message,
-    });
   }
+} finally {
+  compiler.destroy();
 }
 
 const passed = results.filter((result) => result.status === "ok");
+const refused = results.filter((result) => result.status === "refused");
+const failed = results.filter((result) => result.status === "error");
 console.log(JSON.stringify(
   {
     corpus: "examples/*.blot",
     files: results.length,
     compiled: passed.length,
-    rejected: results.length - passed.length,
-    wasm_bytes: passed.reduce((sum, result) => {
-      if ("wasm_bytes" in result && result.wasm_bytes !== undefined) {
-        return sum + result.wasm_bytes;
-      }
-      return sum;
-    }, 0),
+    refused: refused.length,
+    failed: failed.length,
     results,
   },
   null,
   2,
 ));
-
-if (passed.length !== results.length) Deno.exit(1);
+if (failed.length > 0) Deno.exit(1);

@@ -13,18 +13,6 @@ inspect:
 parse file:
   deno task parse {{file}}
 
-# Diagnostic comparison between Baba's CPU and WebGPU general-profile
-# executors. Needs an adapter and is not a release gate.
-parity:
-    WGPU_BACKENDS=vulkan WGPU_POWER_PREF=high \
-      deno run --unstable-webgpu --allow-read --allow-env scripts/parity.ts \
-      examples/*.blot examples/lib/*.blot case-studies/*/*.blot \
-      case-studies/*/lib/*.blot src/prelude/*.blot
-
-# The compiler corpus through the authoritative CPU frontend only.
-parity-cpu:
-  deno run --allow-read scripts/parity.ts --cpu examples/*.blot examples/lib/*.blot case-studies/*/*.blot case-studies/*/lib/*.blot src/prelude/*.blot
-
 # Parse and evaluate one program.
 run file:
   deno run --allow-read src/cli.ts eval {{file}}
@@ -49,13 +37,13 @@ format-check file:
 ownership file:
   deno run --allow-read src/cli.ts ownership {{file}}
 
-# Compile one program through the Node development compiler.
+# Compile one program by hosting the Rust/Wasm compiler.
 build file:
   deno run --allow-read --allow-write src/cli.ts build {{file}}
 
-# Do the interpreter, the GPU evaluator, and the emitted Wasm agree?
-wasm:
-  WGPU_BACKENDS=vulkan deno run --unstable-webgpu --allow-read --allow-write --allow-env scripts/wasm.ts
+# Do the Rust evaluator and emitted Wasm agree on the conformance corpus?
+conformance:
+  pnpm conformance
 
 # Install the Tree-sitter grammar, queries, LSP, and `.blot` association into Helix.
 # Re-running replaces that block rather than appending a second copy.
@@ -79,10 +67,10 @@ check:
   cargo fmt --manifest-path compiler/Cargo.toml --check
   cargo clippy --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
   cargo test --manifest-path compiler/Cargo.toml
-  deno run --allow-read --allow-write --allow-run=cargo --allow-env scripts/build_compiler.ts --check
+  deno run --allow-read --allow-write --allow-run=cargo,git,rustc --allow-env scripts/build_compiler.ts --check
   pnpm run check
   pnpm run smoke
-  pnpm parity:strict
+  pnpm conformance
 
 test:
   pnpm test
