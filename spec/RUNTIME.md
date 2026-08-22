@@ -32,7 +32,9 @@ where `Delta_rep` maps every residual binding to a concrete representation and
    certificate and has a finite constructor case;
 8. every private function-choice table has at least one alternative, one case
    per alternative, and one capture product per case; and
-9. every export and import is admitted by the selected ABI policy.
+9. every function marked `reuse: "checked"` contains no persistent Store update
+   in its materialized Runtime-HIR frame; and
+10. every export and import is admitted by the selected ABI policy.
 
 Validation does not infer a missing source fact. A well-typed internal program
 that reaches an open shape or polymorphic operation exposes a specialization or
@@ -209,6 +211,14 @@ observation after the consuming occurrence. The public result adapter
 checkpoints the private heap at entry and restores it after scalar results or
 canonical post-return, so these internal allocations form a scratch arena per
 outer export call.
+
+Runtime-HIR schema 3 adds an optional `reuse: "checked"` function certificate.
+It is emitted only after the source `@[assert.reuse]` tag has been discharged.
+The independent validator replays the local condition: every `store.write` and
+`store.grow` in that materialized function must say `owned-reuse`. This flag is
+not operation evidence and the emitter never consults it to select destructive
+lowering; each operation still carries and validates its own ownership and
+closed-layout permission.
 
 Finite recursive structures may use the prelude `Arena`: nodes occupy a
 homogeneous Store and contain stable integer indices to other nodes. This is a

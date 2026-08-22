@@ -548,6 +548,7 @@ pub fn evaluate_expression(
                 self_name: None,
                 imports: None,
                 signature,
+                reuse_assertion: None,
             })
         }
         Expression::Tuple { elements, .. } => evaluate_many(
@@ -1826,6 +1827,7 @@ pub(crate) fn evaluate_binding(
             environment,
             imports,
             signature,
+            reuse_assertion,
             deferred,
             ..
         } = value
@@ -1845,6 +1847,7 @@ pub(crate) fn evaluate_binding(
             self_name: Some(self_name),
             imports,
             signature,
+            reuse_assertion,
         })
     })
 }
@@ -1994,6 +1997,7 @@ fn apply_with_expected(
             self_name,
             imports: _,
             signature,
+            reuse_assertion,
         } => {
             let mut argument = argument;
             let mut environment = environment;
@@ -2028,6 +2032,7 @@ fn apply_with_expected(
                         name,
                         environment: &environment,
                         signature: signature.as_deref(),
+                        reuse: reuse_assertion.is_some(),
                     },
                     &argument,
                     expected_result.as_ref(),
@@ -2062,6 +2067,7 @@ fn apply_with_expected(
                         self_name: Some(name),
                         imports: None,
                         signature: signature.clone(),
+                        reuse_assertion,
                     },
                 );
             }
@@ -2071,6 +2077,14 @@ fn apply_with_expected(
                     Err(error) => return Computation::error(error),
                 },
                 _ => argument,
+            };
+            let reuse_scope = if reuse_assertion.is_some() {
+                runtime.residual.as_ref().map(|trace| {
+                    let scope = trace.borrow().begin_reuse_scope();
+                    (trace.clone(), scope)
+                })
+            } else {
+                None
             };
             if !match_pattern(&loaded, parameter, &argument, &scope) {
                 return Computation::error(Diagnostic::new(
@@ -2084,10 +2098,27 @@ fn apply_with_expected(
             Rc::make_mut(&mut closure_runtime.effect_scope).push(Rc::new(argument));
             evaluate_expression(context, closure_module, body, scope, closure_runtime).and_then(
                 move |mut value| {
+                    if let Some((trace, scope)) = reuse_scope
+                        && let Err(error) = trace.borrow().finish_reuse_scope(
+                            scope,
+                            reuse_assertion.expect("checked reuse assertion"),
+                        )
+                    {
+                        return Computation::error(error);
+                    }
                     if let Some(Value::Arrow { codomain, .. }) =
                         signature.as_deref().map(signature_body)
                     {
                         attach_signature(&mut value, codomain);
+                    }
+                    if let Some(span) = reuse_assertion
+                        && let Value::Closure {
+                            reuse_assertion: nested,
+                            ..
+                        } = &mut value
+                        && nested.is_none()
+                    {
+                        *nested = Some(span);
                     }
                     let Some((trace, compilation)) = residual_compilation else {
                         return Computation::value(value);

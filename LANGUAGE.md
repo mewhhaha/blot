@@ -810,8 +810,10 @@ empty origin contributes no inhabitant alternative of its own: yielded or pushed
 values constrain the same element variable. The array may still be empty at
 runtime because array types do not encode cardinality.
 
-An array spread must evaluate to an array. Arrays are immutable; `@array.set`
-and `@array.push` return new arrays.
+An array spread must evaluate to an array. Arrays have immutable value
+semantics: `@array.set` and `@array.push` return successor arrays and never make
+an earlier source binding observe the change. Their implementation may update a
+uniquely owned Store in place under §11.
 
 `Arena` is the prelude convention for finite recursive data and graphs. It uses
 a homogeneous array as a scratch arena and stable `Int` indices as addresses.
@@ -924,10 +926,24 @@ A function is written with `fn` and has one parameter pattern:
 fn parameter => body
 ```
 
-`fn` is the only lambda form. The keyword is what makes a lambda identifiable
-from its first token, which is why the parameter is an ordinary binding pattern
-— qualifiers, tuples, shapes, arrays, and constructor patterns are all admitted
-there — rather than an expression reinterpreted after the fact.
+Every lambda contains `fn`; its parameter is an ordinary binding pattern, so
+qualifiers, tuples, shapes, arrays, and constructor patterns are admitted there.
+
+A declaration may ask the compiler to validate its Store-update cost contract
+with the ordinary `assert.reuse` tag:
+
+```blot
+@[assert.reuse]
+const transform = fn values => body
+```
+
+The tag is an identity transform. It does not consume a parameter, change a
+type, choose a specialization, or authorize an update. After ownership checking
+and residual lowering, every `store.write` and `store.grow` in the asserted
+function frame must already carry `owned-reuse`; otherwise compilation reports
+`BLOT_REUSE_NOT_PROVED` at the tag. A separately materialized nested or
+recursive function carries its own tag. The complete contract is
+[`spec/REUSE.md`](spec/REUSE.md).
 
 Application is juxtaposition and associates left:
 
@@ -2104,6 +2120,25 @@ Every branch starts from the same ownership state and must end in an agreeing
 state. A linear binding consumed on only one branch is rejected. An affine
 binding may be consumed on zero or one branch but never twice.
 
+Every fresh array has one affine Store authority even though its type is still
+ordinary `[T]`. An unqualified Array parameter begins as an authority candidate
+and consumes it only when the checked body updates, returns, captures, or passes
+it to another consuming contract. `!` remains reserved for exact linear
+protocols such as a Region and its rejoin witness. An Array parameter written
+`&values` guarantees a borrow. Returning the consumed parameter, or the
+successor produced by `Array.set` or `Array.push`, transfers the same authority
+to the result.
+
+`freeze values` consumes owned Store authorities and returns the same immutable,
+possibly shared arrays in `O(1)` time. It is rejected if the value contains a
+non-Store linear or affine resource. `Array.copy values` is the explicit
+shared-to-owned boundary with `O(n)` source semantics; a last-reference proof
+may elide its physical copy. A shared Array cannot be passed to a consuming
+Array parameter or updated directly. Passing an owned Array to a resolved
+non-consuming contract may share it in `O(1)` and leave the caller's binding
+shared; `&parameter` preserves caller uniqueness instead. The compiler never
+inserts a hidden copy.
+
 A closure inherits the strongest obligation it captures:
 
 - capturing a linear value makes the closure linear;
@@ -2125,25 +2160,27 @@ elements preserves the appended component's obligation. An array or record
 spread is rejected when an owned component would lose the position or field
 identity needed for later consuming extraction.
 
-A known function parameter is an ownership contract. An unannotated name
-parameter whose result structurally carries that parameter exactly once infers a
-consuming contract. This includes direct identity, a single position in a tuple,
-array, record, or constructor, and branches whose every result carries the
-parameter. The summary follows statically known consuming calls, fixed field
-projections, and direct `case` or declaration destructuring. A projected summary
-records the selected path: a caller may supply unrestricted sibling fields, but
-an owned sibling not returned by the function is rejected rather than silently
-treated as moved. An unknown call remains an ordinary parameter unless its
-source parameter carries an explicit contract. Passing any owned value to an
-ordinary parameter is rejected; a `!parameter` explicitly promises one
-consumption and may accept it. An affine parameter may accept an affine value
-but cannot accept a linear one because it may discard the argument. Ownership
-returned from a consuming parameter is instantiated with the caller's actual
-obligation at the recorded path, including through a returned closure; passing
-an unrestricted value therefore does not invent ownership. This usage summary
-remains separate from the type lattice. A module result may not retain an
-ownership obligation because the ABI has no implicit ownership contract.
-Last-use and proved-consumption facts are recorded for the backend.
+A known function parameter is an ownership contract. The contract records both
+the inferred input authority and the structural result. Unqualified positions
+whose settled runtime type is Array begin with affine Store authority, but the
+published input retains it only when the body demands ownership; explicit `!`,
+`?`, and `&` positions retain their written meaning. Tuple and shape parameter
+positions are matched structurally. The result summary follows statically known
+consuming calls, fixed field projections, and direct `case` or declaration
+destructuring, and an importer substitutes the caller's concrete authority
+through it. Unknown and host-supplied functions remain conservative. This usage
+summary is separate from the type lattice and keyed by exact module and closure
+identity, never by a binding name. A module or host result freezes remaining
+owned Stores implicitly because that transition copies no bytes; non-Store
+linear resources remain forbidden. Last-use and proved-consumption facts are
+recorded for the backend.
+
+A recursive Array function may publish one provisional Store result only when
+its checked result type is Array and exactly one parameter position supplies the
+affine authority. Every non-recursive result path must return that same
+authority shape; otherwise `BLOT_RECURSIVE_OWNERSHIP_RESULT` rejects the
+function. This is the induction step that lets the successor from one recursive
+call feed another without treating an arbitrary recursive result as owned.
 
 ### 11.1 A recursive group
 
@@ -2199,16 +2236,22 @@ refused rather than guessed. A binding a closure holds the only read of keeps
 its last use, because how often that closure runs is exactly what the linear
 proof is about.
 
-When the proved consumption of a linear or affine binding is the array operand
-of `@array.set` or `@array.push`, the backend may reuse that array's Store. This
-is an implementation permission published in an ownership certificate. A
-separate checker rejects duplicate binding identities, invalid spans, reentrant
-reads, or a reuse site absent from the complete set of path-specific
-consumptions before lowering consults it. Authorization is keyed to the exact
-binding identity and source occurrence, so one branch's consumption cannot
-authorize another branch's update. This is not mutation in the language: the
-source binding is unavailable after the consuming use, and updates of ordinary
-shared arrays remain persistent with the immutable behavior specified in §6.1.
+When the proved consumption of an owned Store is the array operand of
+`@array.set` or `@array.push`, the backend reuses that Store. Fresh arrays and
+consuming Array parameters begin with this authority, and the update result
+carries its successor. This is an implementation permission published in an
+ownership certificate. A separate checker rejects duplicate binding identities,
+invalid spans, reentrant reads, or a reuse site absent from the complete set of
+path-specific consumptions before lowering consults it. Authorization is keyed
+to the exact binding identity and source occurrence, so one branch's consumption
+cannot authorize another branch's update. This is not mutation in the language:
+the source binding is unavailable after the consuming use. Updating a shared
+Array is rejected rather than implemented by an implicit persistent copy; source
+requests that boundary with `Array.copy`.
+
+`@[assert.reuse]` asks the compiler to verify that every Store update in that
+function's residual frame used precisely this already-proved path. It does not
+turn a last use into consumption, trust a callee name, or grant ownership.
 
 ### 11.3 Regions and `Slice`
 
@@ -2637,6 +2680,7 @@ signed 64-bit range trap.
 | ---------------------- | --------------------------------------------------- |
 | `@array.empty`         | polymorphic empty array                             |
 | `@array.len`           | array length                                        |
+| `@array.copy`          | explicit shared-to-owned array copy                 |
 | `@array.get`           | proof-required indexed read                         |
 | `@array.set`           | proof-required immutable indexed replacement        |
 | `@array.push`          | immutable append                                    |
@@ -2767,6 +2811,20 @@ the separate `Slice`/region operation and carries its proof explicitly.
 `Array.get` and `Array.length` bind their array parameter with `&`: observing an
 array does not consume it. An explicitly borrowed array must be passed in that
 position directly; the borrow cannot be retained by an intervening binding.
+
+`Range` is the ordinary half-open `{ .start; .end; }` metadata also exposed as
+`Slice.Range`; it carries no ownership authority. `Range.whole (&values)` is
+`[0, Array.length values)`, and `length`, `last`, `before`, `after`, and
+`shorter_first` are pure metadata operations.
+
+`Array.quicksort (values, before_or_equal)` consumes the Array Store directly
+and returns its sorted successor. It performs no entry copy and is unstable. Its
+prelude kernel partitions in place, recursively evaluates the shorter range
+first, and tail-calls the longer range, bounding non-tail recursion by
+`O(log n)`. The expected comparison count is `O(n log n)` and the worst case is
+`O(n^2)`; owned `set` operations reuse the Store, subject only to ordinary
+capacity behavior. The kernel carries `@[assert.reuse]`, so a future lowering
+that introduces a persistent update is rejected.
 
 `@array.get xs index`, `@array.set xs index value`, `@array.take xs index`, and
 `@array.split xs index` are the direct path. The checker accepts them only when
@@ -3001,21 +3059,23 @@ function, an effect, and `F32x4`, whose whole content is its name.
 
 ### 13.5 Ownership markers
 
-`@linear.own`, `@linear.maybe`, and `@linear.borrow` are runtime identities
-whose meaning comes from ownership analysis and the default prefix fixities `!`,
-`?`, and `&`. A `?name` pattern introduces an at-most-once obligation;
+`@linear.own`, `@linear.maybe`, `@linear.borrow`, and `@linear.freeze` are
+runtime identities whose meaning comes from ownership analysis. The first three
+back the default prefix fixities `!`, `?`, and `&`; `freeze` is the prelude name
+for the fourth. A `?name` pattern introduces an at-most-once obligation;
 `?expression` explicitly transfers that affine value to a parameter which
 promises at-most-once use. The expression marker does not make a shared value
 unique: ownership analysis still rejects a second move or a callee without the
-matching affine parameter contract.
+matching affine parameter contract. `@linear.freeze` consumes Array Store
+authority without copying bytes and rejects embedded non-Store resources.
 
 ## 14. Standard prelude
 
 The standard prelude is ordinary Blot source at `blot:prelude`. Its public
 record currently exports:
 
-- function tools: `Fn`, `identity`, `always`, `compose`, `flip`;
-- declaration-tag tools: `tag`, `derive`, and `test`;
+- function tools: `Fn`, `identity`, `always`, `compose`, `flip`, `freeze`;
+- declaration-tag tools: `tag`, `derive`, `test`, and `assert.reuse`;
 - booleans: `Bool`, `True`, `False`, `Logic`, `not`, `expect`;
 - ordering and arithmetic: `Ordering`, `is_equal`, `is_less`, `is_greater`,
   `Ord`, `Eq`, `Num`;
@@ -3024,8 +3084,9 @@ record currently exports:
 - structural interfaces: `Empty`, `Length`, `Semigroup`, `Monoid`, `Mappable`,
   `Foldable`, `Filterable`, and `Iterable`;
 - text: `Text`, `text_eq`;
-- arrays: `Array`, `fold`, `each`, `map`, `filter`, `partition`, `sum`, `upto`,
-  `any`, `every`, and `sort_by`;
+- arrays: `Array` (including `copy`, `quicksort`, and checked range helpers),
+  `Range`, `fold`, `each`, `map`, `filter`, `partition`, `sum`, `upto`, `any`,
+  `every`, and `sort_by`;
 - collections: `List`, `Map`, `Set`, and the text-keyed `Dict` specialization;
 - iterators: `ever`, `Iter` (`range`, `items`, `indexed`, `affine`, `slice`,
   `reverse`, `iterate`, and `collect`), `iterate`, and `collect`;

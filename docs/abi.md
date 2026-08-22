@@ -165,7 +165,7 @@ outstanding result: the matching `cabi_post_*` restores the call's allocation
 checkpoint in constant time. Reentry, a wrong root pointer, a post-return for
 another export, and double post-return trap.
 
-Runtime HIR schema 2 may contain private `indirect` roots for positive recursive
+Runtime HIR schema 3 may contain private `indirect` roots for positive recursive
 algebraic values. Their targets live in the current export call's scratch arena
 and recursive edges are memory32 pointers. ABI 1 defines no caller encoding for
 such a root: it is admitted only as an internal value whose eventual public

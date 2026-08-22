@@ -1,0 +1,14 @@
+// A concrete quicksort specialization. The wrapper assertion checks every
+// inlined update in the materialized runtime frame.
+
+open import "blot:prelude"
+
+sig quicksort = Unit -> [Int]
+@[assert.reuse]
+const quicksort = fn () => do:
+  return Array.quicksort (
+    [4, 7, 3, 8, 2, 6, 1, 5],
+    fn (left, right) => left <= right
+  )
+
+return quicksort

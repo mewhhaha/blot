@@ -559,7 +559,7 @@ pub struct CachedModuleInterface {
     ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
 }
 
-pub const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 6;
+pub const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 8;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct CheckedModuleCertificate {
@@ -883,6 +883,7 @@ pub struct Checker {
     modules: RefCell<HashMap<String, Result<CheckedModule, Diagnostic>>>,
     active: RefCell<Vec<String>>,
     closure_types: RefCell<HashMap<(String, ExpressionId), Type>>,
+    signed_closure_types: RefCell<HashMap<(String, ExpressionId), Type>>,
     expression_types: RefCell<HashMap<(String, ExpressionId), Type>>,
     analysis_expression_types: RefCell<HashMap<(String, ExpressionId), Type>>,
     declaration_tags: RefCell<HashMap<(String, Span), Vec<String>>>,
@@ -922,6 +923,7 @@ impl Checker {
             modules: RefCell::new(HashMap::new()),
             active: RefCell::new(Vec::new()),
             closure_types: RefCell::new(HashMap::new()),
+            signed_closure_types: RefCell::new(HashMap::new()),
             expression_types: RefCell::new(HashMap::new()),
             analysis_expression_types: RefCell::new(HashMap::new()),
             declaration_tags: RefCell::new(HashMap::new()),
@@ -1062,6 +1064,9 @@ impl Checker {
             .borrow_mut()
             .retain(|path, _| !paths.contains(path));
         self.closure_types
+            .borrow_mut()
+            .retain(|(path, _), _| !paths.contains(path));
+        self.signed_closure_types
             .borrow_mut()
             .retain(|(path, _), _| !paths.contains(path));
         self.expression_types
@@ -1371,18 +1376,16 @@ impl Checker {
         analyses.ownership?;
         analyses.safety?;
         let mut analyzed_closure_signatures = self
-            .closure_types
-            .borrow()
-            .iter()
-            .filter(|((module, _), _)| module == path)
-            .map(|((_, body), type_)| {
+            .closure_types_for_path(path)
+            .into_iter()
+            .map(|(body, type_)| {
                 let (signature, type_recursive) = self.residual_signature_analysis(type_.clone());
                 let recursive = type_recursive
                     || self
                         .recursive_closure_bodies
                         .borrow()
-                        .contains(&(path.to_owned(), *body));
-                (*body, signature, recursive)
+                        .contains(&(path.to_owned(), body));
+                (body, signature, recursive)
             })
             .collect::<Vec<_>>();
         analyzed_closure_signatures.sort_by_key(|(body, _, _)| body.0);
@@ -1449,6 +1452,22 @@ impl Checker {
         Ok(checked)
     }
 
+    fn closure_types_for_path(&self, path: &str) -> HashMap<ExpressionId, Type> {
+        let mut types = self
+            .closure_types
+            .borrow()
+            .iter()
+            .filter(|((module, _), _)| module == path)
+            .map(|((_, body), type_)| (*body, type_.clone()))
+            .collect::<HashMap<_, _>>();
+        for ((module, body), type_) in self.signed_closure_types.borrow().iter() {
+            if module == path {
+                types.insert(*body, type_.clone());
+            }
+        }
+        types
+    }
+
     fn cached_analyses(
         &self,
         path: &str,
@@ -1458,7 +1477,34 @@ impl Checker {
         if let Some(cached) = self.module_analyses.borrow().get(path) {
             return cached.clone();
         }
-        let ownership = crate::ownership::check(module, &self.context, values);
+        let mut closure_types = self
+            .closure_types
+            .borrow()
+            .iter()
+            .filter(|((module, _), _)| module == path)
+            .map(|((_, body), type_)| (*body, self.settle(type_.clone(), true)))
+            .collect::<HashMap<_, _>>();
+        closure_types.extend(
+            self.signed_closure_types
+                .borrow()
+                .iter()
+                .filter(|((module, _), _)| module == path)
+                .map(|((_, body), type_)| (*body, type_.clone())),
+        );
+        let expression_types = self
+            .analysis_expression_types
+            .borrow()
+            .iter()
+            .filter(|((module, _), _)| module == path)
+            .map(|((_, expression), type_)| (*expression, self.settle(type_.clone(), true)))
+            .collect::<HashMap<_, _>>();
+        let ownership = crate::ownership::check(
+            module,
+            &self.context,
+            values,
+            &closure_types,
+            &expression_types,
+        );
         let analyses = CachedModuleAnalyses {
             ownership: ownership.diagnostics.into_iter().next().map_or(Ok(()), Err),
             ownership_contracts: ownership.contracts,
@@ -1918,6 +1964,11 @@ impl Checker {
                         span,
                     ));
                 }
+                if let Some(body) = declaration_closure_body(module, name) {
+                    self.signed_closure_types
+                        .borrow_mut()
+                        .insert((path.to_owned(), body), signature.clone());
+                }
                 signatures.insert(name.clone(), signature);
                 Ok(Type::Effects(BTreeSet::new()))
             }
@@ -1985,6 +2036,7 @@ impl Checker {
                 } else {
                     None
                 };
+                let signed = signature.is_some();
                 if signature.is_some()
                     && expression_has_generic_reflection(module, value, &mut Vec::new())
                 {
@@ -2186,6 +2238,26 @@ impl Checker {
                         self.constrain(inferred.type_.clone(), signature.clone(), span)?;
                     }
                     inferred.type_ = signature;
+                }
+                let closure_body = match module.arena.expressions[value.0 as usize] {
+                    Expression::Lambda { body, .. } => Some(body),
+                    Expression::Rec { lambda, .. } => {
+                        match module.arena.expressions[lambda.0 as usize] {
+                            Expression::Lambda { body, .. } => Some(body),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(body) = closure_body {
+                    self.closure_types
+                        .borrow_mut()
+                        .insert((path.to_owned(), body), inferred.type_.clone());
+                    if signed {
+                        self.signed_closure_types
+                            .borrow_mut()
+                            .insert((path.to_owned(), body), inferred.type_.clone());
+                    }
                 }
                 for bound in recursive_bounds {
                     self.constrain(inferred.type_.clone(), bound, span)?;
@@ -2940,7 +3012,8 @@ impl Checker {
                 };
                 self.closure_types
                     .borrow_mut()
-                    .insert((path.to_owned(), body_id), type_.clone());
+                    .entry((path.to_owned(), body_id))
+                    .or_insert_with(|| type_.clone());
                 Ok(Inferred::pure(type_))
             }
             Expression::Tuple { elements, .. } => {
@@ -3243,7 +3316,8 @@ impl Checker {
                 };
                 self.closure_types
                     .borrow_mut()
-                    .insert((path.to_owned(), body), inferred.type_.clone());
+                    .entry((path.to_owned(), body))
+                    .or_insert_with(|| inferred.type_.clone());
                 Ok(inferred)
             }
             Expression::Comptime { body, .. } => {
@@ -3344,6 +3418,14 @@ impl Checker {
             self.constrain(body.effects, *expected_effects, span)?;
             return Ok(Inferred::pure(expected));
         }
+        let signed_closure_body = match module.arena.expressions[expression.0 as usize] {
+            Expression::Lambda { body, .. }
+                if matches!(function_body(&expected), Type::Function { .. }) =>
+            {
+                Some(body)
+            }
+            _ => None,
+        };
         let inferred = self.infer(path, module, expression, environment, values, dependencies)?;
         if self.contains_unevidenced(&inferred.type_, &mut HashSet::new()) {
             if expression_contains_intrinsic(module, expression, "@type.reflect") {
@@ -3356,6 +3438,11 @@ impl Checker {
             return self.type_error(inferred.type_, expected, span);
         }
         self.constrain(inferred.type_, expected.clone(), span)?;
+        if let Some(body) = signed_closure_body {
+            self.closure_types
+                .borrow_mut()
+                .insert((path.to_owned(), body), expected.clone());
+        }
         self.analysis_expression_types
             .borrow_mut()
             .insert((path.to_owned(), expression), expected.clone());
@@ -6033,6 +6120,10 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         }
         "@array.empty" => Type::Array(Box::new(checker.fresh_empty_array_element())),
         "@array.len" => curried(vec![Type::Array(Box::new(checker.fresh()))], int),
+        "@array.copy" => {
+            let array = Type::Array(Box::new(checker.fresh()));
+            curried(vec![array.clone()], array)
+        }
         "@array.get" => {
             let element = checker.fresh();
             curried(vec![Type::Array(Box::new(element.clone())), int], element)
@@ -6072,8 +6163,12 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             curried(vec![checker.fresh()], checker.fresh())
         }
         "@type.seal" => curried(vec![text, checker.fresh()], Type::Opaque("Type".to_owned())),
-        "@type.open" | "@linear.own" | "@linear.maybe" | "@linear.borrow" | "@branch.likely"
-        | "@branch.unlikely" => {
+        "@linear.freeze" => {
+            let array = Type::Array(Box::new(checker.fresh()));
+            curried(vec![array.clone()], array)
+        }
+        "@type.open" | "@linear.own" | "@linear.maybe" | "@linear.borrow" | "@assert.reuse"
+        | "@branch.likely" | "@branch.unlikely" => {
             let value = checker.fresh();
             curried(vec![value.clone()], value)
         }
@@ -6243,6 +6338,13 @@ fn statically_known_callee(
         Expression::Comptime { .. } => true,
         _ => false,
     }
+}
+
+fn function_body(mut type_: &Type) -> &Type {
+    while let Type::Forall { body, .. } = type_ {
+        type_ = body;
+    }
+    type_
 }
 
 fn contains_function(type_: &Type) -> bool {
@@ -7234,6 +7336,40 @@ fn future_binding_names(module: &Module, declarations: &[DeclarationId]) -> BTre
             },
         )
         .collect()
+}
+
+fn declaration_closure_body(module: &Module, name: &str) -> Option<ExpressionId> {
+    module.declarations.iter().find_map(|declaration| {
+        let Declaration::Binding {
+            kind,
+            pattern,
+            value,
+            ..
+        } = &module.arena.declarations[declaration.0 as usize]
+        else {
+            return None;
+        };
+        if *kind == DeclarationKind::Sig {
+            return None;
+        }
+        let Pattern::Name {
+            name: bound_name, ..
+        } = &module.arena.patterns[pattern.0 as usize]
+        else {
+            return None;
+        };
+        if bound_name != name {
+            return None;
+        }
+        match module.arena.expressions[value.0 as usize] {
+            Expression::Lambda { body, .. } => Some(body),
+            Expression::Rec { lambda, .. } => match module.arena.expressions[lambda.0 as usize] {
+                Expression::Lambda { body, .. } => Some(body),
+                _ => None,
+            },
+            _ => None,
+        }
+    })
 }
 
 fn remove_declaration_names(
@@ -8705,6 +8841,7 @@ mod tests {
                 ExpressionId(8),
                 crate::ownership::OwnershipContract {
                     parameter: PatternId(0),
+                    input: crate::ownership::Produced::None,
                     result: crate::ownership::Produced::None,
                 },
             )],

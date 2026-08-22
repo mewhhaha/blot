@@ -755,8 +755,9 @@ authority rather than duplicating it:
   move replaces exactly one leaf by `none`, blocks whole-value reuse while the
   root is partial, and snapshots that remainder at branches and speculative
   ownership transactions. Ownership leaves also retain their source binding and
-  path. Certificate schema 2 publishes that lineage and independently requires
-  both `take` outputs or all three `split` outputs at one extraction identity.
+  path. Checked-module certificate schema 8 publishes that lineage and
+  independently requires both `take` outputs or all three `split` outputs at one
+  extraction identity.
 - A region ownership value is `Region(authority, elements)`: the first component
   is the opaque interval permission and the second is a hidden positional
   ownership tree transferred from the consumed input array. Region split and
@@ -972,13 +973,23 @@ backend reconstruction of source constraints.
 
 The certificate also carries each source closure's ownership contract, keyed by
 the same `(module, body-expression)` identity as its runtime closure signature.
-Its parameter pattern and produced-result tree are interpreted only against the
-certificate's exact installed AST. Validation rejects unknown body or pattern
+Its parameter pattern, inferred-input authority tree, and produced-result tree
+are interpreted only against the certificate's exact installed AST. An
+unqualified settled Array parameter starts with affine Store authority, but its
+certificate input retains that authority only if the body consumes or transfers
+it; the type remains `[T]`. Validation rejects unknown body or pattern
 identities, invalid spans, and malformed region derivation trees before the
 contract becomes visible to an importer. At a statically resolved call, the
 importer substitutes its concrete argument authority through that defining
 pattern. This is interface transport of the same ownership judgement, not
 re-inference and not trust attached to an exported name.
+
+The checked declaration signature remains authoritative across compile-time
+re-evaluation; a provisional inferred closure type cannot replace it before
+ownership certification. A recursive Array result is a checked ownership fixed
+point: the sole affine Array input seeds the provisional result, and the
+completed body must reproduce the same authority tree. This adds no recursive
+constraint to the type lattice.
 
 When a closure contract's produced-result tree is exactly `Parameter(source)`,
 residual lowering may project `source` structurally from the closure's actual

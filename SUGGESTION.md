@@ -17,7 +17,7 @@ Inference already accepts the useful equation
 List A = #Nil | #Cons (A, List A)
 ```
 
-Runtime HIR schema 2 now settles that equation to a finite graph. It allocates a
+Runtime HIR schema 3 now settles that equation to a finite graph. It allocates a
 private indirect root before compiling the positive constructor body, fills the
 target afterward, and emits scratch-arena `indirect.make` and `indirect.load`
 operations. A recursive sum is therefore an address to a tag and payload, while
@@ -34,7 +34,7 @@ singleton cases, constructor projection, exhaustive matching, ABI refusal, and
 scaling against the indexed `Arena` baseline. The private indirect edge is not a
 source ownership location: it remains call-local and cannot cross ABI 1.
 Source-level variant, record, and consuming-array extraction lineage is instead
-published by ownership certificate schema 2.
+published by ownership certificate schema 3.
 
 ## 2. Give Store an explicit capacity only when profiles require it
 

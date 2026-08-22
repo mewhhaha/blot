@@ -568,7 +568,11 @@ export function decodePortableModule(
           span,
         };
         break;
-      case "lambda":
+      case "lambda": {
+        const deferred = optionalBoolean(
+          node.deferred,
+          `${location} expression ${index} deferred`,
+        );
         decoded = {
           tag,
           parameter: pattern(
@@ -585,10 +589,11 @@ export function decodePortableModule(
               `${location} expression ${index} body`,
             ),
           ),
-          ...(node.deferred === true ? { deferred: true } : {}),
+          ...(deferred === true ? { deferred: true } : {}),
           span,
         };
         break;
+      }
       case "array":
         decoded = {
           tag,
@@ -1000,6 +1005,14 @@ function boolean(value: unknown, location: string): boolean {
     throw new Error(`${location} must be a boolean`);
   }
   return value;
+}
+
+function optionalBoolean(
+  value: unknown,
+  location: string,
+): boolean | undefined {
+  if (value === undefined) return undefined;
+  return boolean(value, location);
 }
 
 function finiteNumber(value: unknown, location: string): number {

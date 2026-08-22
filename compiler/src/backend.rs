@@ -4276,7 +4276,7 @@ mod tests {
     fn recursive_representation_is_private_to_runtime_hir() {
         let module = RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 2,
+            schema_version: 3,
             source: "recursive-boundary-test".to_owned(),
             types: vec![RuntimeType::Unit, RuntimeType::Indirect { target_type: 0 }],
             signatures: Vec::new(),
@@ -4297,6 +4297,7 @@ mod tests {
             id: 0,
             name: "structured-loop-test".to_owned(),
             signature: 0,
+            reuse: None,
             entry_block: 0,
             blocks,
             span: span(),

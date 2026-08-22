@@ -35,6 +35,12 @@ Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 and edge arrays directly. Declaring all 66 rules as islands is what preserves
 the full CST shape needed by source lowering.
 
+Removing the expression-local `reuse fn` assertion saves three lexer states, two
+island states, three island transitions, 7,644 dense-transition bytes, and 5,450
+packed bytes. `@[assert.reuse]` uses the existing declaration-tag grammar, so
+the checked assertion adds no syntax state, island, candidate multiplicity,
+contraction round, scratch expansion, or long-region loss.
+
 Removing element syntax while adding `compdo:` and effect-row tails moves the
 current plan from 117 to 113 lexer states, from 81 to 67 islands, and from 30 to
 22 maximum candidates per token. Dense transitions fall from 769,392 to 573,888

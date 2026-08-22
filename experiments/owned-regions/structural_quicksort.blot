@@ -1,22 +1,6 @@
-// Deliberately persistent, allocation-heavy quicksort: the functional
-// readability baseline for the owned-region experiment. `uncons` states the structural
-// recursion, `partition` classifies in one stable pass, and the array monoid
-// operator exposes the join algebra. Left association performs joins from left
-// to right without first building the entire right-hand concatenation.
-
-operators {
-  infixl 55 (<>) = Array.append;
-}
-
 open import "blot:prelude"
 
-sig quicksort = [Int] -> [Int]
-let rec quicksort =
-  fn values => case Array.uncons values of
-    #None => []
-    #Some (pivot, rest) => do:
-      let (smaller, larger) =
-        partition (rest, fn value => value <= pivot)
-      return quicksort smaller <> [pivot] <> quicksort larger
-
-return quicksort [4, 7, 3, 8, 2, 6, 1, 5]
+return Array.quicksort (
+  [4, 7, 3, 8, 2, 6, 1, 5],
+  fn (left, right) => left <= right
+)

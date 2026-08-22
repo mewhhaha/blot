@@ -1,0 +1,14 @@
+// The assertion does not turn a shared Array into a consuming argument.
+
+open import "blot:prelude"
+
+sig clear_first = [Int] -> [Int]
+@[assert.reuse]
+const clear_first = fn values => do:
+  if @array.len values > 0:
+    return @array.set values 0 0
+
+  return values
+
+let shared = freeze [1, 2, 3]
+return clear_first shared

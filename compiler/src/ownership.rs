@@ -14,10 +14,12 @@ use crate::partition::{
     Direction as PartitionDirection, PartitionError, PartitionWitness, combine_partition,
     reassociate_partition,
 };
+use crate::typecheck::Type;
 use crate::value::{Environment as ValueEnvironment, Value, lookup};
 
 type BindingRef = Rc<RefCell<Binding>>;
 type ScopeRef = Rc<RefCell<Scope>>;
+type FunctionContract = (Option<PatternId>, Produced, Produced, Option<Rc<Module>>);
 
 #[derive(Clone, Deserialize, PartialEq, Serialize)]
 pub(crate) enum Produced {
@@ -28,6 +30,13 @@ pub(crate) enum Produced {
         qualifier: Qualifier,
         source: PatternId,
     },
+    /// Symbolic unique Store authority introduced by an unqualified Array
+    /// parameter. Unlike written `?`, this may be frozen as shareable.
+    StoreParameter {
+        source: PatternId,
+        path: Vec<String>,
+        shareable: bool,
+    },
     Closure {
         captures: Box<Produced>,
         parameter: PatternId,
@@ -35,6 +44,15 @@ pub(crate) enum Produced {
     },
     Many(Vec<Produced>),
     Sequence(Vec<Produced>),
+    /// One uniquely owned runtime Store and the obligations of its elements.
+    /// This authority is affine even though `Array T` remains an ordinary type.
+    Store(Box<Produced>),
+    /// The allocation-free polymorphic empty array. It is freely shareable,
+    /// but its first successful grow creates a fresh owned Store.
+    EmptyStore,
+    /// An Array Store that may have aliases. It can be borrowed, frozen, or
+    /// copied, but never silently upgraded to destructive-update authority.
+    SharedStore,
     Shape(BTreeMap<String, Produced>),
     Variant(Box<Produced>),
     Choice(BTreeMap<String, Produced>),
@@ -76,6 +94,7 @@ pub(crate) enum Produced {
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct OwnershipContract {
     pub(crate) parameter: PatternId,
+    pub(crate) input: Produced,
     pub(crate) result: Produced,
 }
 
@@ -118,14 +137,15 @@ pub(crate) fn validate_contracts(
             ));
         }
         let defining_lambda = module.arena.expressions.iter().any(|expression| {
-            matches!(
-                expression,
-                Expression::Lambda {
-                    parameter,
-                    body: lambda_body,
-                    ..
-                } if parameter == &contract.parameter && lambda_body == body
-            )
+            let Expression::Lambda {
+                parameter,
+                body: lambda_body,
+                ..
+            } = expression
+            else {
+                return false;
+            };
+            parameter == &contract.parameter && lambda_body == body
         });
         if !defining_lambda {
             return Err(format!(
@@ -133,6 +153,7 @@ pub(crate) fn validate_contracts(
                 body.0, contract.parameter.0
             ));
         }
+        validate_produced(module, &contract.input)?;
         validate_produced(module, &contract.result)?;
     }
     Ok(())
@@ -149,11 +170,14 @@ fn validate_produced(module: &Module, produced: &Produced) -> Result<(), String>
         Ok(())
     };
     match produced {
-        Produced::None | Produced::Leaf(_) => Ok(()),
+        Produced::None | Produced::SharedStore | Produced::EmptyStore | Produced::Leaf(_) => Ok(()),
         Produced::Borrow(value)
+        | Produced::Store(value)
         | Produced::Variant(value)
         | Produced::PendingFreeze { region: value } => validate_produced(module, value),
-        Produced::Parameter { source, .. } => validate_pattern(*source),
+        Produced::Parameter { source, .. } | Produced::StoreParameter { source, .. } => {
+            validate_pattern(*source)
+        }
         Produced::Closure {
             captures,
             parameter,
@@ -228,12 +252,19 @@ struct Binding {
     qualifier: Qualifier,
     owned: Produced,
     parameter: Option<PatternId>,
+    input: Produced,
     contract_module: Option<Rc<Module>>,
     result: Produced,
+    recursive_result: Option<Produced>,
     value: Option<ExpressionId>,
     moved: Option<Span>,
     last_use: Option<Span>,
     partial: bool,
+    /// The current binding may be live again after `:=`; the function contract
+    /// still remembers whether any predecessor authority was consumed.
+    ownership_demanded: bool,
+    function_parameter: bool,
+    parameter_source: Option<(PatternId, Vec<String>)>,
 }
 
 struct Scope {
@@ -249,6 +280,7 @@ enum Use {
     Move,
     Borrow,
     Project,
+    Share,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -262,6 +294,8 @@ struct Analysis<'a> {
     module: &'a Module,
     context: &'a Context,
     values: &'a ValueEnvironment,
+    closure_types: &'a HashMap<ExpressionId, Type>,
+    expression_types: &'a HashMap<ExpressionId, Type>,
     diagnostics: Vec<Diagnostic>,
     function_results: HashMap<ExpressionId, Produced>,
     contracts: HashMap<ExpressionId, OwnershipContract>,
@@ -272,11 +306,15 @@ pub(crate) fn check(
     module: &Module,
     context: &Context,
     values: &ValueEnvironment,
+    closure_types: &HashMap<ExpressionId, Type>,
+    expression_types: &HashMap<ExpressionId, Type>,
 ) -> OwnershipCheck {
     let mut analysis = Analysis {
         module,
         context,
         values,
+        closure_types,
+        expression_types,
         diagnostics: Vec::new(),
         function_results: HashMap::new(),
         contracts: HashMap::new(),
@@ -295,7 +333,7 @@ pub(crate) fn check(
             module.arena.expression_span(module.result),
         );
     }
-    if obligation(&result) != Obligation::None {
+    if obligation_without_stores(&result) == Obligation::Linear {
         analysis.report(
             "BLOT_LINEAR_RESULT_ESCAPES",
             "The module result still owns a resource.",
@@ -401,12 +439,17 @@ fn declare(pattern: PatternId, produced: Produced, scope: &ScopeRef, analysis: &
                 qualifier,
                 owned,
                 parameter: None,
+                input: Produced::None,
                 contract_module: None,
                 result: Produced::None,
+                recursive_result: None,
                 value: None,
                 moved: None,
                 last_use: None,
                 partial: false,
+                ownership_demanded: false,
+                function_parameter: false,
+                parameter_source: None,
             }));
             analysis.bindings.push(binding.clone());
             scope.borrow_mut().bindings.insert(name.clone(), binding);
@@ -414,8 +457,27 @@ fn declare(pattern: PatternId, produced: Produced, scope: &ScopeRef, analysis: &
         Pattern::Pin { name, span } => {
             use_name(name, *span, scope, analysis, Use::Project);
         }
-        Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => {
+        Pattern::Tuple { elements, .. } => {
             let produced_elements = match produced {
+                Produced::Sequence(elements) => elements,
+                _ => Vec::new(),
+            };
+            for (index, pattern) in elements.iter().enumerate() {
+                let element = produced_elements
+                    .get(index)
+                    .cloned()
+                    .unwrap_or(Produced::None);
+                declare(*pattern, element, scope, analysis);
+            }
+            let discarded = join(produced_elements.into_iter().skip(elements.len()));
+            report_discarded(pattern, &discarded, analysis);
+        }
+        Pattern::Array { elements, .. } => {
+            let produced_elements = match produced {
+                Produced::Store(elements) => match *elements {
+                    Produced::Sequence(elements) => elements,
+                    _ => Vec::new(),
+                },
                 Produced::Sequence(elements) => elements,
                 _ => Vec::new(),
             };
@@ -499,7 +561,54 @@ fn use_name(
         );
         return Produced::None;
     }
+    if matches!(kind, Use::Share)
+        && matches!(
+            analysis.module.arena.patterns[binding.borrow().pattern.0 as usize],
+            Pattern::Name {
+                qualifier: Qualifier::None,
+                ..
+            }
+        )
+        && contains_concrete_store(&binding.borrow().owned)
+        && obligation_without_stores(&binding.borrow().owned) == Obligation::None
+    {
+        let shared = share_concrete_stores(binding.borrow().owned.clone());
+        {
+            let mut binding = binding.borrow_mut();
+            binding.owned = shared.clone();
+            binding.qualifier = Qualifier::None;
+        }
+        if let Some(captured_by) = captured_by {
+            install_capture(&captured_by, &binding, Qualifier::None);
+        }
+        return shared;
+    }
     if let Some(captured_by) = captured_by {
+        if matches!(kind, Use::Borrow)
+            && matches!(
+                analysis.module.arena.patterns[binding.borrow().pattern.0 as usize],
+                Pattern::Name {
+                    qualifier: Qualifier::None,
+                    ..
+                }
+            )
+            && contains_concrete_store(&binding.borrow().owned)
+            && obligation_without_stores(&binding.borrow().owned) == Obligation::None
+        {
+            // Keep the capture provisionally owned while its body is checked.
+            // A later move upgrades it to an owning closure; a read-only body
+            // shares it only after the complete capture use is known.
+            push_unique(&mut captured_by.borrow_mut().borrowed_captures, &binding);
+            install_capture(&captured_by, &binding, qualifier);
+            return use_name(name, span, scope, analysis, kind);
+        }
+        if matches!(kind, Use::Borrow)
+            && qualifier == Qualifier::None
+            && contains_shared(&binding.borrow().owned)
+        {
+            install_capture(&captured_by, &binding, Qualifier::None);
+            return use_name(name, span, scope, analysis, kind);
+        }
         if qualifier == Qualifier::Borrow || matches!(kind, Use::Borrow) {
             push_unique(&mut captured_by.borrow_mut().borrowed_captures, &binding);
             install_capture(&captured_by, &binding, Qualifier::Borrow);
@@ -512,7 +621,7 @@ fn use_name(
         }
     }
     if matches!(kind, Use::Borrow) || qualifier == Qualifier::Borrow {
-        return Produced::Borrow(Box::new(binding.borrow().owned.clone()));
+        return borrowed(binding.borrow().owned.clone());
     }
     if spendable(qualifier) {
         if binding.borrow().partial {
@@ -525,6 +634,9 @@ fn use_name(
             return Produced::None;
         }
         consume(&binding, span, analysis);
+        return binding.borrow().owned.clone();
+    }
+    if contains_shared(&binding.borrow().owned) || contains_empty_store(&binding.borrow().owned) {
         return binding.borrow().owned.clone();
     }
     Produced::None
@@ -540,12 +652,17 @@ fn install_capture(scope: &ScopeRef, source: &BindingRef, qualifier: Qualifier) 
             qualifier,
             owned: source.owned.clone(),
             parameter: source.parameter,
+            input: source.input.clone(),
             contract_module: source.contract_module.clone(),
             result: source.result.clone(),
+            recursive_result: source.recursive_result.clone(),
             value: source.value,
             moved: None,
             last_use: source.last_use,
             partial: source.partial,
+            ownership_demanded: source.ownership_demanded,
+            function_parameter: source.function_parameter,
+            parameter_source: source.parameter_source.clone(),
         })),
     );
 }
@@ -561,6 +678,7 @@ fn push_unique(bindings: &mut Vec<BindingRef>, binding: &BindingRef) {
 
 fn consume(binding: &BindingRef, span: Span, analysis: &mut Analysis) {
     let mut binding = binding.borrow_mut();
+    binding.ownership_demanded = true;
     if binding.moved.is_some() {
         analysis.report(
             "BLOT_LINEAR_CONSUMED_TWICE",
@@ -612,7 +730,15 @@ fn walk_declaration(declaration_id: DeclarationId, scope: &ScopeRef, analysis: &
             span,
             ..
         } => {
-            let produced = walk(value, scope, analysis, Use::Move);
+            let use_kind = if matches!(
+                analysis.module.arena.patterns[pattern.0 as usize],
+                Pattern::Array { .. }
+            ) {
+                Use::Share
+            } else {
+                Use::Move
+            };
+            let produced = walk(value, scope, analysis, use_kind);
             if contains_borrow(&produced) {
                 analysis.report(
                     "BLOT_BORROW_STORED",
@@ -621,19 +747,42 @@ fn walk_declaration(declaration_id: DeclarationId, scope: &ScopeRef, analysis: &
                 );
             }
             declare(pattern, produced.clone(), scope, analysis);
+            if let Some((source, path)) = expression_parameter_source(value, scope, analysis) {
+                assign_parameter_source(pattern, source, &path, scope, analysis.module);
+            }
             if let Pattern::Name { name, .. } = &analysis.module.arena.patterns[pattern.0 as usize]
                 && let Some(binding) = scope.borrow().bindings.get(name).cloned()
             {
-                let (parameter, result, contract_module) =
+                let (parameter, input, result, contract_module) =
                     function_contract(value, &produced, scope, analysis);
                 let mut binding = binding.borrow_mut();
                 binding.parameter = parameter;
+                binding.input = input;
                 binding.contract_module = contract_module;
                 binding.result = result;
                 binding.value = Some(value);
             }
         }
-        Declaration::Shadow { value, span, .. } | Declaration::Open { value, span, .. } => {
+        Declaration::Shadow {
+            name, value, span, ..
+        } => {
+            let produced = walk(value, scope, analysis, Use::Move);
+            if contains_borrow(&produced) {
+                analysis.report(
+                    "BLOT_BORROW_STORED",
+                    "This rebinding stores a borrowed view.",
+                    span,
+                );
+            }
+            if let Some((binding, _)) = analysis.lookup(scope, &name) {
+                let mut binding = binding.borrow_mut();
+                binding.qualifier = inherited(binding.qualifier, &produced);
+                binding.owned = produced;
+                binding.moved = None;
+                binding.partial = false;
+            }
+        }
+        Declaration::Open { value, span } => {
             let produced = walk(value, scope, analysis, Use::Move);
             if contains_borrow(&produced) {
                 analysis.report(
@@ -650,6 +799,57 @@ fn walk_declaration(declaration_id: DeclarationId, scope: &ScopeRef, analysis: &
                 );
             }
         }
+    }
+}
+
+fn expression_parameter_source(
+    expression: ExpressionId,
+    scope: &ScopeRef,
+    analysis: &Analysis<'_>,
+) -> Option<(PatternId, Vec<String>)> {
+    match &analysis.module.arena.expressions[expression.0 as usize] {
+        Expression::Var { name, .. } => analysis
+            .lookup(scope, name)
+            .and_then(|(binding, _)| binding.borrow().parameter_source.clone()),
+        Expression::Field { target, name, .. } => {
+            let (source, mut path) = expression_parameter_source(*target, scope, analysis)?;
+            path.push(name.clone());
+            Some((source, path))
+        }
+        _ => None,
+    }
+}
+
+fn assign_parameter_source(
+    pattern: PatternId,
+    source: PatternId,
+    path: &[String],
+    scope: &ScopeRef,
+    module: &Module,
+) {
+    match &module.arena.patterns[pattern.0 as usize] {
+        Pattern::Name { name, .. } => {
+            if let Some(binding) = scope.borrow().bindings.get(name) {
+                let mut binding = binding.borrow_mut();
+                binding.function_parameter = true;
+                binding.parameter_source = Some((source, path.to_vec()));
+            }
+        }
+        Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => {
+            for (index, pattern) in elements.iter().enumerate() {
+                let mut element_path = path.to_vec();
+                element_path.push(index.to_string());
+                assign_parameter_source(*pattern, source, &element_path, scope, module);
+            }
+        }
+        Pattern::Shape { fields, .. } => {
+            for field in fields {
+                let mut field_path = path.to_vec();
+                field_path.push(field.name.clone());
+                assign_parameter_source(field.pattern, source, &field_path, scope, module);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -678,9 +878,20 @@ fn walk_recursive_group(declarations: &[DeclarationId], scope: &ScopeRef, analys
         members.push((name.clone(), *qualifier, pattern, value, lambda, span));
     }
     for (name, qualifier, pattern, value, lambda, _) in &members {
-        let parameter = match analysis.module.arena.expressions[lambda.0 as usize] {
-            Expression::Lambda { parameter, .. } => Some(parameter),
-            _ => None,
+        let (parameter, input, result) = match analysis.module.arena.expressions[lambda.0 as usize]
+        {
+            Expression::Lambda {
+                parameter, body, ..
+            } => {
+                let input = written_parameter_pattern(
+                    parameter,
+                    analysis.module,
+                    closure_parameter_type(body, analysis),
+                );
+                let result = recursive_owned_result(&input, closure_result_type(body, analysis));
+                (Some(parameter), input, result)
+            }
+            _ => (None, Produced::None, None),
         };
         let binding = Rc::new(RefCell::new(Binding {
             pattern: *pattern,
@@ -688,12 +899,17 @@ fn walk_recursive_group(declarations: &[DeclarationId], scope: &ScopeRef, analys
             qualifier: *qualifier,
             owned: written_obligation(*qualifier),
             parameter,
+            input,
             contract_module: None,
-            result: Produced::None,
+            result: result.clone().unwrap_or(Produced::None),
+            recursive_result: result,
             value: Some(*value),
             moved: None,
             last_use: None,
             partial: false,
+            ownership_demanded: false,
+            function_parameter: false,
+            parameter_source: None,
         }));
         analysis.bindings.push(binding.clone());
         scope.borrow_mut().bindings.insert(name.clone(), binding);
@@ -711,6 +927,21 @@ fn walk_recursive_group(declarations: &[DeclarationId], scope: &ScopeRef, analys
             if let Some((binding, _)) = analysis.lookup(scope, &name)
                 && spendable(binding.borrow().qualifier)
             {
+                if matches!(
+                    analysis.module.arena.patterns[binding.borrow().pattern.0 as usize],
+                    Pattern::Name {
+                        qualifier: Qualifier::None,
+                        ..
+                    }
+                ) && contains_concrete_store(&binding.borrow().owned)
+                    && obligation_without_stores(&binding.borrow().owned) == Obligation::None
+                {
+                    let shared = share_concrete_stores(binding.borrow().owned.clone());
+                    let mut binding = binding.borrow_mut();
+                    binding.owned = shared;
+                    binding.qualifier = Qualifier::None;
+                    continue;
+                }
                 captures.insert(name);
             }
         }
@@ -761,12 +992,22 @@ fn walk_recursive_group(declarations: &[DeclarationId], scope: &ScopeRef, analys
             if let Pattern::Name { name, .. } = &analysis.module.arena.patterns[pattern.0 as usize]
                 && let Some(binding) = scope.borrow().bindings.get(name).cloned()
             {
-                let (parameter, result, contract_module) =
+                let (parameter, input, result, contract_module) =
                     function_contract(value, &produced, scope, analysis);
                 let mut binding = binding.borrow_mut();
+                if let Some(expected) = &binding.recursive_result
+                    && &result != expected
+                {
+                    analysis.report(
+                        "BLOT_RECURSIVE_OWNERSHIP_RESULT",
+                        "This recursive Array function does not return the Store authority its recursive calls assume.",
+                        analysis.module.arena.expression_span(value),
+                    );
+                }
                 binding.qualifier = inherited(binding.qualifier, &produced);
                 binding.owned = produced;
                 binding.parameter = parameter;
+                binding.input = input;
                 binding.contract_module = contract_module;
                 binding.result = result;
             }
@@ -804,12 +1045,26 @@ fn walk(
 ) -> Produced {
     let expression_node = analysis.module.arena.expressions[expression.0 as usize].clone();
     match expression_node {
-        Expression::Var { name, span } => use_name(&name, span, scope, analysis, kind),
+        Expression::Var { name, span } => {
+            prepare_array_binding(expression, &name, scope, analysis);
+            shared_array_result(
+                expression,
+                use_name(&name, span, scope, analysis, kind),
+                analysis,
+            )
+        }
         Expression::Apply {
             function,
             argument,
             span,
-        } => walk_apply(expression, function, argument, span, scope, analysis),
+        } => {
+            let produced = walk_apply(expression, function, argument, span, scope, analysis);
+            if matches!(kind, Use::Borrow) {
+                borrowed(produced)
+            } else {
+                produced
+            }
+        }
         Expression::Field { target, name, span } => {
             if let Some(projected) = project_owned_path(expression, scope, analysis, kind) {
                 return projected;
@@ -818,11 +1073,15 @@ fn walk(
             let target = match target {
                 Produced::Borrow(inner) => {
                     let selected = select_field(*inner, &name, span, analysis);
-                    return Produced::Borrow(Box::new(selected));
+                    return borrowed(selected);
                 }
                 target => target,
             };
-            select_field(target, &name, span, analysis)
+            shared_array_result(
+                expression,
+                select_field(target, &name, span, analysis),
+                analysis,
+            )
         }
         Expression::Lambda {
             parameter,
@@ -831,12 +1090,13 @@ fn walk(
             ..
         } => {
             let inner = child_scope(Some(scope.clone()), true);
-            declare(
+            let input = written_parameter_pattern(
                 parameter,
-                written_pattern(parameter, analysis.module),
-                &inner,
-                analysis,
+                analysis.module,
+                closure_parameter_type(body, analysis),
             );
+            declare(parameter, input.clone(), &inner, analysis);
+            mark_function_parameters(parameter, &inner, analysis.module);
             let result = walk(body, &inner, analysis, Use::Move);
             if contains_borrow(&result) {
                 analysis.report(
@@ -846,10 +1106,12 @@ fn walk(
                 );
             }
             analysis.function_results.insert(expression, result.clone());
+            let input = scope_pattern_owned(parameter, &inner, analysis.module);
             analysis.contracts.insert(
                 body,
                 OwnershipContract {
                     parameter,
+                    input,
                     result: result.clone(),
                 },
             );
@@ -862,10 +1124,38 @@ fn walk(
                 produced = combine(produced, captured.borrow().owned.clone());
             }
             for captured in borrowed_captures {
-                produced = combine(
-                    produced,
-                    Produced::Borrow(Box::new(captured.borrow().owned.clone())),
-                );
+                let local = inner
+                    .borrow()
+                    .bindings
+                    .get(&captured.borrow().name)
+                    .cloned();
+                if local
+                    .as_ref()
+                    .is_some_and(|binding| binding.borrow().ownership_demanded)
+                {
+                    // The provisional capture was eventually consumed.
+                    consume(&captured, span, analysis);
+                    produced = combine(produced, captured.borrow().owned.clone());
+                    continue;
+                }
+                if matches!(
+                    analysis.module.arena.patterns[captured.borrow().pattern.0 as usize],
+                    Pattern::Name {
+                        qualifier: Qualifier::None,
+                        ..
+                    }
+                ) && contains_concrete_store(&captured.borrow().owned)
+                    && obligation_without_stores(&captured.borrow().owned) == Obligation::None
+                {
+                    // An escaping read-only closure cannot retain a lexical
+                    // borrow, so relinquish only the Store authority in O(1).
+                    let shared = share_concrete_stores(captured.borrow().owned.clone());
+                    let mut captured = captured.borrow_mut();
+                    captured.owned = shared;
+                    captured.qualifier = Qualifier::None;
+                    continue;
+                }
+                produced = combine(produced, borrowed(captured.borrow().owned.clone()));
             }
             if relevant(&produced) {
                 Produced::Closure {
@@ -886,22 +1176,44 @@ fn walk(
                 .collect(),
         ),
         Expression::Array { elements, span } => {
-            let spread = elements.iter().any(|element| element.spread);
-            let produced = Produced::Sequence(
-                elements
-                    .into_iter()
-                    .map(|element| walk(element.value, scope, analysis, Use::Move))
-                    .collect(),
-            );
-            if spread && obligation(&produced) != Obligation::None {
-                analysis.report(
-                    "BLOT_LINEAR_ARRAY_SPREAD",
-                    "An array spread makes owned positions unknown.",
-                    span,
-                );
+            let mut values = Vec::new();
+            for element in elements {
+                let produced = walk(element.value, scope, analysis, Use::Move);
+                if !element.spread {
+                    values.push(produced);
+                    continue;
+                }
+                match produced {
+                    Produced::Store(elements) => match *elements {
+                        Produced::Sequence(elements) => values.extend(elements),
+                        elements => values.push(elements),
+                    },
+                    Produced::Sequence(elements) => values.extend(elements),
+                    Produced::None
+                    | Produced::SharedStore
+                    | Produced::EmptyStore
+                    | Produced::StoreParameter {
+                        shareable: true, ..
+                    } => {}
+                    produced => {
+                        if obligation(&produced) != Obligation::None {
+                            analysis.report(
+                                "BLOT_LINEAR_ARRAY_SPREAD",
+                                "An array spread makes owned positions unknown.",
+                                span,
+                            );
+                        }
+                    }
+                }
             }
-            produced
+            let elements = Produced::Sequence(values);
+            if runtime_array_expression(expression, analysis) {
+                Produced::Store(Box::new(elements))
+            } else {
+                elements
+            }
         }
+        Expression::Intrinsic { name, .. } if name == "@array.empty" => Produced::EmptyStore,
         Expression::Shape { members, span } => {
             let mut fields = BTreeMap::new();
             let mut spread = Produced::None;
@@ -992,6 +1304,74 @@ fn walk(
     }
 }
 
+fn mark_function_parameters(pattern: PatternId, scope: &ScopeRef, module: &Module) {
+    match &module.arena.patterns[pattern.0 as usize] {
+        Pattern::Name { name, .. } => {
+            if let Some(binding) = scope.borrow().bindings.get(name) {
+                let mut binding = binding.borrow_mut();
+                binding.function_parameter = true;
+                binding.parameter_source = Some((pattern, Vec::new()));
+            }
+        }
+        Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => {
+            for pattern in elements {
+                mark_function_parameters(*pattern, scope, module);
+            }
+        }
+        Pattern::Constructor {
+            payload: Some(pattern),
+            ..
+        } => mark_function_parameters(*pattern, scope, module),
+        Pattern::Shape { fields, .. } => {
+            for field in fields {
+                mark_function_parameters(field.pattern, scope, module);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn scope_pattern_owned(pattern: PatternId, scope: &ScopeRef, module: &Module) -> Produced {
+    match &module.arena.patterns[pattern.0 as usize] {
+        Pattern::Name { name, .. } => scope
+            .borrow()
+            .bindings
+            .get(name)
+            .map(|binding| {
+                let binding = binding.borrow();
+                if binding.ownership_demanded {
+                    binding.owned.clone()
+                } else {
+                    Produced::None
+                }
+            })
+            .unwrap_or(Produced::None),
+        Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => Produced::Sequence(
+            elements
+                .iter()
+                .map(|pattern| scope_pattern_owned(*pattern, scope, module))
+                .collect(),
+        ),
+        Pattern::Constructor { payload, .. } => Produced::Variant(Box::new(
+            payload
+                .map(|pattern| scope_pattern_owned(pattern, scope, module))
+                .unwrap_or(Produced::None),
+        )),
+        Pattern::Shape { fields, .. } => Produced::Shape(
+            fields
+                .iter()
+                .map(|field| {
+                    (
+                        field.name.clone(),
+                        scope_pattern_owned(field.pattern, scope, module),
+                    )
+                })
+                .collect(),
+        ),
+        _ => Produced::None,
+    }
+}
+
 fn project_owned_path(
     expression: ExpressionId,
     scope: &ScopeRef,
@@ -1010,16 +1390,41 @@ fn project_owned_path(
             Expression::Var { name, .. } => {
                 path.reverse();
                 let (binding, captured_by) = analysis.lookup(scope, name)?;
-                if captured_by.is_some() || !spendable(binding.borrow().qualifier) {
-                    return None;
-                }
                 if binding.borrow().moved.is_some() {
                     consume(&binding, span, analysis);
                     return Some(Produced::None);
                 }
                 let projected = remove_owned_path(&binding.borrow().owned, &path)?;
+                if matches!(kind, Use::Share)
+                    && matches!(
+                        analysis.module.arena.patterns[binding.borrow().pattern.0 as usize],
+                        Pattern::Name {
+                            qualifier: Qualifier::None,
+                            ..
+                        }
+                    )
+                    && contains_concrete_store(&projected.0)
+                    && obligation_without_stores(&projected.0) == Obligation::None
+                {
+                    let shared = share_concrete_stores(projected.0);
+                    let owned = replace_owned_path(&binding.borrow().owned, &path, shared.clone())?;
+                    let mut binding = binding.borrow_mut();
+                    binding.owned = owned;
+                    binding.qualifier = inherited(Qualifier::None, &binding.owned);
+                    return Some(shared);
+                }
+                if captured_by.is_some() || !spendable(binding.borrow().qualifier) {
+                    if obligation(&projected.0) != Obligation::None || contains_borrow(&projected.0)
+                    {
+                        return None;
+                    }
+                    if matches!(kind, Use::Borrow) {
+                        return Some(borrowed(projected.0));
+                    }
+                    return Some(projected.0);
+                }
                 if matches!(kind, Use::Borrow) {
-                    return Some(Produced::Borrow(Box::new(projected.0)));
+                    return Some(borrowed(projected.0));
                 }
                 if !relevant(&projected.0) {
                     return Some(projected.0);
@@ -1040,19 +1445,65 @@ fn project_owned_path(
 }
 
 fn remove_owned_path(produced: &Produced, path: &[String]) -> Option<(Produced, Produced)> {
-    let Produced::Shape(fields) = produced else {
-        return None;
-    };
     let (name, rest) = path.split_first()?;
-    let selected = fields.get(name)?.clone();
-    let mut remaining = fields.clone();
-    if rest.is_empty() {
-        remaining.insert(name.clone(), Produced::None);
-        return Some((selected, Produced::Shape(remaining)));
+    match produced {
+        Produced::Shape(fields) => {
+            let selected = fields.get(name)?.clone();
+            let mut remaining = fields.clone();
+            if rest.is_empty() {
+                remaining.insert(name.clone(), Produced::None);
+                return Some((selected, Produced::Shape(remaining)));
+            }
+            let (selected, nested) = remove_owned_path(&selected, rest)?;
+            remaining.insert(name.clone(), nested);
+            Some((selected, Produced::Shape(remaining)))
+        }
+        Produced::Sequence(values) => {
+            let index = name.parse::<usize>().ok()?;
+            let selected = values.get(index)?.clone();
+            let mut remaining = values.clone();
+            if rest.is_empty() {
+                remaining[index] = Produced::None;
+                return Some((selected, Produced::Sequence(remaining)));
+            }
+            let (selected, nested) = remove_owned_path(&selected, rest)?;
+            remaining[index] = nested;
+            Some((selected, Produced::Sequence(remaining)))
+        }
+        _ => None,
     }
-    let (selected, nested) = remove_owned_path(&selected, rest)?;
-    remaining.insert(name.clone(), nested);
-    Some((selected, Produced::Shape(remaining)))
+}
+
+fn replace_owned_path(
+    produced: &Produced,
+    path: &[String],
+    replacement: Produced,
+) -> Option<Produced> {
+    let (name, rest) = path.split_first()?;
+    match produced {
+        Produced::Shape(fields) => {
+            let mut fields = fields.clone();
+            if rest.is_empty() {
+                fields.insert(name.clone(), replacement);
+            } else {
+                let nested = replace_owned_path(fields.get(name)?, rest, replacement)?;
+                fields.insert(name.clone(), nested);
+            }
+            Some(Produced::Shape(fields))
+        }
+        Produced::Sequence(values) => {
+            let index = name.parse::<usize>().ok()?;
+            let mut values = values.clone();
+            if rest.is_empty() {
+                *values.get_mut(index)? = replacement;
+            } else {
+                let nested = replace_owned_path(values.get(index)?, rest, replacement)?;
+                values[index] = nested;
+            }
+            Some(Produced::Sequence(values))
+        }
+        _ => None,
+    }
 }
 
 fn walk_apply(
@@ -1069,8 +1520,19 @@ fn walk_apply(
         if name == "@linear.borrow" {
             return walk(argument, scope, analysis, Use::Borrow);
         }
-        if name == "@linear.own" {
+        if name == "@linear.own" || name == "@linear.maybe" {
             return walk(argument, scope, analysis, Use::Move);
+        }
+        if name == "@linear.freeze" {
+            let value = walk(argument, scope, analysis, Use::Move);
+            if obligation_without_stores(&value) != Obligation::None {
+                analysis.report(
+                    "BLOT_LINEAR_FREEZE",
+                    "A shareable array cannot retain a linear resource.",
+                    span,
+                );
+            }
+            return Produced::SharedStore;
         }
     }
     if matches!(
@@ -1117,15 +1579,25 @@ fn walk_apply(
             if handle_arguments.len() == 3 {
                 walk(handle_arguments[2], scope, analysis, Use::Move);
             }
-            return Produced::None;
+            return shared_array_result(expression, Produced::None, analysis);
         }
         if name == "@region.copy" && arguments.len() == 1 {
             let source = walk(arguments[0], scope, analysis, Use::Project);
+            let elements = match source {
+                Produced::Store(elements) => *elements,
+                Produced::None
+                | Produced::SharedStore
+                | Produced::EmptyStore
+                | Produced::StoreParameter {
+                    shareable: true, ..
+                } => Produced::None,
+                source => source,
+            };
             return Produced::Region {
                 qualifier: Qualifier::Linear,
                 root: None,
                 splits: Vec::new(),
-                elements: Box::new(source),
+                elements: Box::new(elements),
             };
         }
         if name == "@region.length" && arguments.len() == 1 {
@@ -1327,6 +1799,24 @@ fn walk_apply(
             let array = walk(arguments[0], scope, analysis, Use::Move);
             walk(arguments[1], scope, analysis, Use::Move);
             if name == "@array.take" {
+                if let Produced::Store(elements) = &array
+                    && let Produced::Sequence(elements) = elements.as_ref()
+                    && let Expression::Int { value, .. } =
+                        &analysis.module.arena.expressions[arguments[1].0 as usize]
+                    && let Some(position) = num_traits::ToPrimitive::to_usize(value)
+                    && let Some(selected) = elements.get(position)
+                {
+                    let remainder = elements
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| *index != position)
+                        .map(|(_, value)| value.clone())
+                        .collect();
+                    return Produced::Sequence(vec![
+                        selected.clone(),
+                        Produced::Store(Box::new(Produced::Sequence(remainder))),
+                    ]);
+                }
                 if let Produced::Sequence(elements) = &array
                     && let Expression::Int { value, .. } =
                         &analysis.module.arena.expressions[arguments[1].0 as usize]
@@ -1344,12 +1834,43 @@ fn walk_apply(
                         Produced::Sequence(remainder),
                     ]);
                 }
+                if matches!(
+                    &array,
+                    Produced::StoreParameter {
+                        shareable: true,
+                        ..
+                    }
+                ) {
+                    return Produced::Sequence(vec![Produced::None, array]);
+                }
+                if let Produced::Store(elements) = &array
+                    && obligation_without_stores(elements) == Obligation::None
+                {
+                    return Produced::Sequence(vec![
+                        Produced::None,
+                        Produced::Store(elements.clone()),
+                    ]);
+                }
                 let qualifier = match obligation(&array) {
                     Obligation::Linear => Qualifier::Linear,
                     Obligation::Affine => Qualifier::Affine,
                     Obligation::None => return Produced::Sequence(vec![Produced::None; 2]),
                 };
                 return Produced::Sequence(vec![Produced::Leaf(qualifier); 2]);
+            }
+            if let Produced::Store(elements) = &array
+                && let Produced::Sequence(elements) = elements.as_ref()
+                && let Expression::Int { value, .. } =
+                    &analysis.module.arena.expressions[arguments[1].0 as usize]
+                && let Some(position) = num_traits::ToPrimitive::to_usize(value)
+                && let Some(selected) = elements.get(position)
+            {
+                let before =
+                    Produced::Store(Box::new(Produced::Sequence(elements[..position].to_vec())));
+                let after = Produced::Store(Box::new(Produced::Sequence(
+                    elements[position + 1..].to_vec(),
+                )));
+                return Produced::Sequence(vec![before, selected.clone(), after]);
             }
             if let Produced::Sequence(elements) = &array
                 && let Expression::Int { value, .. } =
@@ -1372,26 +1893,105 @@ fn walk_apply(
             };
             return Produced::Sequence(vec![Produced::Leaf(qualifier); 3]);
         }
+        if name == "@array.len" && arguments.len() == 1 {
+            prepare_array_operand(arguments[0], scope, analysis);
+            walk(arguments[0], scope, analysis, Use::Borrow);
+            return Produced::None;
+        }
+        if name == "@shape.names" && arguments.len() == 1 {
+            walk(arguments[0], scope, analysis, Use::Project);
+            return Produced::Store(Box::new(Produced::None));
+        }
         if name == "@array.get" && arguments.len() == 2 {
-            let array = walk(arguments[0], scope, analysis, Use::Project);
+            prepare_array_operand(arguments[0], scope, analysis);
+            let array = walk(arguments[0], scope, analysis, Use::Borrow);
             walk(arguments[1], scope, analysis, Use::Move);
-            if obligation(&array) != Obligation::None {
+            let elements = match &array {
+                Produced::Borrow(array) => match array.as_ref() {
+                    Produced::Store(elements) => elements.as_ref(),
+                    value => value,
+                },
+                value => value,
+            };
+            if obligation_without_stores(elements) != Obligation::None {
                 analysis.report(
                     "BLOT_LINEAR_ARRAY_READ",
                     "Reading an array element would copy an owned value.",
                     span,
                 );
             }
-            return Produced::None;
+            return shared_array_result(expression, Produced::None, analysis);
+        }
+        if name == "@array.set" && arguments.len() == 3 {
+            let array = walk(arguments[0], scope, analysis, Use::Move);
+            walk(arguments[1], scope, analysis, Use::Move);
+            let replacement = walk(arguments[2], scope, analysis, Use::Move);
+            if matches!(array, Produced::SharedStore) {
+                analysis.report(
+                    "BLOT_SHARED_ARRAY_UPDATE",
+                    "This array may be shared. Use `Array.copy` before updating it.",
+                    analysis.module.arena.expression_span(arguments[0]),
+                );
+                return Produced::SharedStore;
+            }
+            if matches!(array, Produced::EmptyStore) {
+                return Produced::EmptyStore;
+            }
+            if let Produced::Store(elements) = array {
+                let mut elements = *elements;
+                if let Produced::Sequence(values) = &mut elements
+                    && let Expression::Int { value, .. } =
+                        &analysis.module.arena.expressions[arguments[1].0 as usize]
+                    && let Some(index) = num_traits::ToPrimitive::to_usize(value)
+                    && let Some(displaced) = values.get_mut(index)
+                {
+                    if obligation_without_stores(displaced) == Obligation::Linear {
+                        analysis.report(
+                            "BLOT_LINEAR_ARRAY_OVERWRITE",
+                            "Replacing this array element would discard a linear resource.",
+                            span,
+                        );
+                    }
+                    *displaced = replacement;
+                } else {
+                    elements = combine(elements, replacement);
+                }
+                return Produced::Store(Box::new(elements));
+            }
+            return combine(array, replacement);
         }
         if name == "@array.push" && arguments.len() == 2 {
             let array = walk(arguments[0], scope, analysis, Use::Move);
             let value = walk(arguments[1], scope, analysis, Use::Move);
-            if let Produced::Sequence(mut elements) = array {
-                elements.push(value);
-                return Produced::Sequence(elements);
+            if matches!(array, Produced::SharedStore) {
+                analysis.report(
+                    "BLOT_SHARED_ARRAY_UPDATE",
+                    "This array may be shared. Use `Array.copy` before updating it.",
+                    analysis.module.arena.expression_span(arguments[0]),
+                );
+                return Produced::SharedStore;
+            }
+            if matches!(array, Produced::EmptyStore) {
+                return Produced::Store(Box::new(Produced::Sequence(vec![value])));
+            }
+            if let Produced::Store(elements) = array {
+                let mut elements = *elements;
+                if let Produced::Sequence(values) = &mut elements {
+                    values.push(value);
+                } else {
+                    elements = combine(elements, value);
+                }
+                return Produced::Store(Box::new(elements));
             }
             return combine(array, value);
+        }
+        if name == "@array.copy" && arguments.len() == 1 {
+            let source = walk(arguments[0], scope, analysis, Use::Move);
+            return match source {
+                Produced::Store(_) => source,
+                Produced::EmptyStore => Produced::Store(Box::new(Produced::Sequence(Vec::new()))),
+                _ => Produced::Store(Box::new(Produced::None)),
+            };
         }
     }
     let cancels_continuation = matches!(
@@ -1412,10 +2012,17 @@ fn walk_apply(
     }
 
     let callee = walk(function, scope, analysis, Use::Project);
-    let argument_value = walk(argument, scope, analysis, Use::Move);
-    let (parameter, result, defining_module) =
+    let (parameter, input, result, defining_module) =
         function_contract(function, &callee, scope, analysis);
     let contract_module = defining_module.as_deref().unwrap_or(analysis.module);
+    let argument_value = walk_call_argument(
+        argument,
+        parameter,
+        &input,
+        contract_module,
+        scope,
+        analysis,
+    );
     if contains_borrow(&argument_value)
         && !parameter_accepts_borrow(parameter, &argument_value, contract_module)
         && !trusted_borrow_operation(function, analysis.module)
@@ -1426,9 +2033,12 @@ fn walk_apply(
             analysis.module.arena.expression_span(argument),
         );
     }
-    if obligation(&argument_value) != Obligation::None
-        && !parameter_accepts_ownership(parameter, &argument_value, contract_module)
+    if (obligation(&argument_value) != Obligation::None
+        || (contains_shared(&argument_value) && demands_ownership(&input)))
+        && !parameter_accepts_ownership(&input, &argument_value)
         && !trusted_scalar_operation(function, analysis.module)
+        && !(obligation(&argument_value) == Obligation::Affine
+            && local_recursive_call(function, scope, analysis))
     {
         analysis.report(
             "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
@@ -1437,7 +2047,310 @@ fn walk_apply(
         );
     }
     let result = substitute_parameters(result, parameter, &argument_value, contract_module);
-    resolve_pending(result, span, analysis)
+    shared_array_result(
+        expression,
+        resolve_pending(result, span, analysis),
+        analysis,
+    )
+}
+
+fn demands_ownership(input: &Produced) -> bool {
+    match input {
+        Produced::Leaf(Qualifier::Linear | Qualifier::Affine)
+        | Produced::Parameter {
+            qualifier: Qualifier::Linear | Qualifier::Affine,
+            ..
+        }
+        | Produced::StoreParameter { .. } => true,
+        Produced::Sequence(values) | Produced::Many(values) => values.iter().any(demands_ownership),
+        Produced::Shape(fields) | Produced::Choice(fields) => {
+            fields.values().any(demands_ownership)
+        }
+        Produced::Variant(value) => demands_ownership(value),
+        _ => false,
+    }
+}
+
+fn local_recursive_call(function: ExpressionId, scope: &ScopeRef, analysis: &Analysis<'_>) -> bool {
+    let Expression::Var { name, .. } = &analysis.module.arena.expressions[function.0 as usize]
+    else {
+        return false;
+    };
+    analysis
+        .lookup(scope, name)
+        .and_then(|(binding, _)| binding.borrow().value)
+        .is_some_and(|value| {
+            matches!(
+                analysis.module.arena.expressions[value.0 as usize],
+                Expression::Rec { .. }
+            )
+        })
+}
+
+fn walk_call_argument(
+    argument: ExpressionId,
+    parameter: Option<PatternId>,
+    input: &Produced,
+    parameter_module: &Module,
+    scope: &ScopeRef,
+    analysis: &mut Analysis,
+) -> Produced {
+    let Some(parameter) = parameter else {
+        return walk_unowned_argument(argument, input, scope, analysis);
+    };
+    let no_input = Produced::None;
+    match (
+        &parameter_module.arena.patterns[parameter.0 as usize],
+        &analysis.module.arena.expressions[argument.0 as usize],
+    ) {
+        (
+            Pattern::Name {
+                qualifier: Qualifier::Borrow,
+                ..
+            },
+            _,
+        ) => {
+            let value = walk(argument, scope, analysis, Use::Borrow);
+            if matches!(value, Produced::Borrow(_)) {
+                value
+            } else {
+                borrowed(value)
+            }
+        }
+        (
+            Pattern::Tuple { elements, .. },
+            Expression::Tuple {
+                elements: values, ..
+            },
+        ) if elements.len() == values.len() => Produced::Sequence(
+            elements
+                .iter()
+                .zip(values)
+                .enumerate()
+                .map(|(index, (parameter, argument))| {
+                    let input = match input {
+                        Produced::Sequence(inputs) => inputs.get(index).unwrap_or(&no_input),
+                        _ => &no_input,
+                    };
+                    walk_call_argument(
+                        *argument,
+                        Some(*parameter),
+                        input,
+                        parameter_module,
+                        scope,
+                        analysis,
+                    )
+                })
+                .collect(),
+        ),
+        _ => walk_unowned_argument(argument, input, scope, analysis),
+    }
+}
+
+fn walk_unowned_argument(
+    argument: ExpressionId,
+    input: &Produced,
+    scope: &ScopeRef,
+    analysis: &mut Analysis,
+) -> Produced {
+    if demands_ownership(input) {
+        return walk(argument, scope, analysis, Use::Move);
+    }
+    share_concrete_stores(walk(argument, scope, analysis, Use::Share))
+}
+
+fn shared_array_result(
+    expression: ExpressionId,
+    produced: Produced,
+    analysis: &Analysis<'_>,
+) -> Produced {
+    if !matches!(produced, Produced::None) {
+        return produced;
+    }
+    if matches!(
+        analysis.callee_value(expression),
+        Some(Value::Array(elements)) if elements.is_empty()
+    ) || matches!(
+        analysis.callee_value(expression),
+        Some(Value::EmptyArray { .. })
+    ) {
+        return Produced::EmptyStore;
+    }
+    if matches!(
+        analysis.expression_types.get(&expression),
+        Some(Type::Array(_))
+    ) {
+        return Produced::SharedStore;
+    }
+    produced
+}
+
+fn prepare_array_binding(
+    expression: ExpressionId,
+    name: &str,
+    scope: &ScopeRef,
+    analysis: &Analysis<'_>,
+) {
+    if !matches!(
+        analysis.expression_types.get(&expression),
+        Some(Type::Array(_))
+    ) {
+        return;
+    }
+    let Some((binding, _)) = analysis.lookup(scope, name) else {
+        return;
+    };
+    let mut binding = binding.borrow_mut();
+    if !matches!(binding.owned, Produced::None) || binding.qualifier != Qualifier::None {
+        return;
+    }
+    if let Some((source, path)) = binding.parameter_source.clone() {
+        let shareable = array_parameter_shareable(expression, analysis);
+        binding.qualifier = Qualifier::Affine;
+        binding.owned = Produced::StoreParameter {
+            source,
+            path: path.clone(),
+            shareable,
+        };
+        drop(binding);
+        record_store_parameter_authority(source, &path, shareable, analysis);
+    } else {
+        binding.owned = Produced::SharedStore;
+    }
+}
+
+fn prepare_array_operand(expression: ExpressionId, scope: &ScopeRef, analysis: &Analysis<'_>) {
+    let Expression::Var { name, .. } = &analysis.module.arena.expressions[expression.0 as usize]
+    else {
+        return;
+    };
+    let Some((binding, _)) = analysis.lookup(scope, name) else {
+        return;
+    };
+    let mut binding = binding.borrow_mut();
+    if !matches!(binding.owned, Produced::None) || binding.qualifier != Qualifier::None {
+        return;
+    }
+    if let Some((source, path)) = binding.parameter_source.clone() {
+        let shareable = array_parameter_shareable(expression, analysis);
+        binding.qualifier = Qualifier::Affine;
+        binding.owned = Produced::StoreParameter {
+            source,
+            path: path.clone(),
+            shareable,
+        };
+        drop(binding);
+        record_store_parameter_authority(source, &path, shareable, analysis);
+    } else {
+        binding.owned = Produced::SharedStore;
+    }
+}
+
+fn record_store_parameter_authority(
+    source: PatternId,
+    path: &[String],
+    shareable: bool,
+    analysis: &Analysis<'_>,
+) {
+    let Some(root) = analysis
+        .bindings
+        .iter()
+        .find(|binding| binding.borrow().pattern == source)
+        .cloned()
+    else {
+        return;
+    };
+    let authority = Produced::StoreParameter {
+        source,
+        path: path.to_vec(),
+        shareable,
+    };
+    let mut root = root.borrow_mut();
+    root.owned = insert_parameter_authority(root.owned.clone(), path, authority);
+    root.qualifier = inherited(root.qualifier, &root.owned);
+    if !path.is_empty() {
+        root.partial = true;
+    }
+}
+
+fn insert_parameter_authority(
+    produced: Produced,
+    path: &[String],
+    authority: Produced,
+) -> Produced {
+    let Some((name, rest)) = path.split_first() else {
+        return authority;
+    };
+    let mut fields = match produced {
+        Produced::Shape(fields) => fields,
+        _ => BTreeMap::new(),
+    };
+    let current = fields.remove(name).unwrap_or(Produced::None);
+    fields.insert(
+        name.clone(),
+        insert_parameter_authority(current, rest, authority),
+    );
+    Produced::Shape(fields)
+}
+
+fn runtime_array_expression(expression: ExpressionId, analysis: &Analysis<'_>) -> bool {
+    let Some(Type::Array(element)) = analysis.expression_types.get(&expression) else {
+        return false;
+    };
+    !contains_type_value(element)
+}
+
+fn array_parameter_shareable(expression: ExpressionId, analysis: &Analysis<'_>) -> bool {
+    let Some(Type::Array(element)) = analysis.expression_types.get(&expression) else {
+        return false;
+    };
+    !type_may_carry_ownership(element)
+}
+
+fn type_may_carry_ownership(type_: &Type) -> bool {
+    match type_ {
+        Type::Variable(_) | Type::Rigid(_) | Type::Top => true,
+        Type::Forall { body, .. } => type_may_carry_ownership(body),
+        Type::Function { .. } | Type::Array(_) | Type::Region(_) => true,
+        Type::Record(fields) => fields
+            .iter()
+            .any(|(_, type_)| type_may_carry_ownership(type_)),
+        Type::Variant { cases, .. } => cases
+            .iter()
+            .any(|(_, type_)| type_may_carry_ownership(type_)),
+        Type::Union(types) => types.iter().any(type_may_carry_ownership),
+        Type::Range { .. }
+        | Type::Unit
+        | Type::Effects(_)
+        | Type::OpenEffects { .. }
+        | Type::Opaque(_)
+        | Type::Bottom => false,
+    }
+}
+
+fn contains_type_value(type_: &Type) -> bool {
+    match type_ {
+        Type::Opaque(name) => name == "Type",
+        Type::Forall { body, .. } | Type::Array(body) | Type::Region(body) => {
+            contains_type_value(body)
+        }
+        Type::Function {
+            parameter,
+            effects,
+            result,
+        } => {
+            contains_type_value(parameter)
+                || contains_type_value(effects)
+                || contains_type_value(result)
+        }
+        Type::Record(fields) => fields.iter().any(|(_, field)| contains_type_value(field)),
+        Type::Variant { cases, .. } => cases
+            .iter()
+            .any(|(_, payload)| contains_type_value(payload)),
+        Type::OpenEffects { tail, .. } => contains_type_value(tail),
+        Type::Union(members) => members.iter().any(contains_type_value),
+        _ => false,
+    }
 }
 
 fn function_contract(
@@ -1445,16 +2358,29 @@ fn function_contract(
     produced: &Produced,
     scope: &ScopeRef,
     analysis: &Analysis,
-) -> (Option<PatternId>, Produced, Option<Rc<Module>>) {
+) -> FunctionContract {
     if let Produced::Closure {
         parameter, result, ..
     } = produced
     {
-        return (Some(*parameter), (**result).clone(), None);
+        let input = analysis
+            .contracts
+            .values()
+            .find(|contract| contract.parameter == *parameter && contract.result == **result)
+            .map(|contract| contract.input.clone())
+            .unwrap_or(Produced::None);
+        return (Some(*parameter), input, (**result).clone(), None);
     }
     match analysis.module.arena.expressions[expression.0 as usize] {
-        Expression::Lambda { parameter, .. } => (
+        Expression::Lambda {
+            parameter, body, ..
+        } => (
             Some(parameter),
+            analysis
+                .contracts
+                .get(&body)
+                .map(|contract| contract.input.clone())
+                .unwrap_or(Produced::None),
             analysis
                 .function_results
                 .get(&expression)
@@ -1464,8 +2390,15 @@ fn function_contract(
         ),
         Expression::Rec { lambda, .. } => {
             match analysis.module.arena.expressions[lambda.0 as usize] {
-                Expression::Lambda { parameter, .. } => (
+                Expression::Lambda {
+                    parameter, body, ..
+                } => (
                     Some(parameter),
+                    analysis
+                        .contracts
+                        .get(&body)
+                        .map(|contract| contract.input.clone())
+                        .unwrap_or(Produced::None),
                     analysis
                         .function_results
                         .get(&lambda)
@@ -1473,7 +2406,7 @@ fn function_contract(
                         .unwrap_or(Produced::None),
                     None,
                 ),
-                _ => (None, Produced::None, None),
+                _ => (None, Produced::None, Produced::None, None),
             }
         }
         Expression::Var { ref name, .. } => {
@@ -1481,36 +2414,34 @@ fn function_contract(
                 let binding = binding.borrow();
                 (
                     binding.parameter,
+                    binding.input.clone(),
                     binding.result.clone(),
                     binding.contract_module.clone(),
                 )
             });
-            if matches!(local, Some((Some(_), _, _))) {
+            if matches!(local, Some((Some(_), _, _, _))) {
                 return local.expect("matched local ownership contract");
             }
             imported_function_contract(expression, analysis)
                 .or(local)
-                .unwrap_or((None, Produced::None, None))
+                .unwrap_or((None, Produced::None, Produced::None, None))
         }
-        _ => {
-            imported_function_contract(expression, analysis).unwrap_or((None, Produced::None, None))
-        }
+        _ => imported_function_contract(expression, analysis).unwrap_or((
+            None,
+            Produced::None,
+            Produced::None,
+            None,
+        )),
     }
 }
 
 fn imported_function_contract(
     expression: ExpressionId,
     analysis: &Analysis,
-) -> Option<(Option<PatternId>, Produced, Option<Rc<Module>>)> {
+) -> Option<FunctionContract> {
     let Value::Closure { module, body, .. } = analysis.callee_value(expression)? else {
         return None;
     };
-    let contract = analysis
-        .context
-        .ownership_contracts
-        .borrow()
-        .get(&(module.as_ref().clone(), body))
-        .cloned()?;
     let defining_module = analysis
         .context
         .modules
@@ -1518,8 +2449,19 @@ fn imported_function_contract(
         .get(module.as_str())?
         .module
         .clone();
+    let contract = if std::ptr::eq(defining_module.as_ref(), analysis.module) {
+        analysis.contracts.get(&body).cloned()
+    } else {
+        analysis
+            .context
+            .ownership_contracts
+            .borrow()
+            .get(&(module.as_ref().clone(), body))
+            .cloned()
+    }?;
     Some((
         Some(contract.parameter),
+        contract.input,
         contract.result,
         Some(defining_module),
     ))
@@ -1570,6 +2512,8 @@ fn substitute_parameter_source(
 ) -> Produced {
     match produced {
         Produced::None => Produced::None,
+        Produced::SharedStore => Produced::SharedStore,
+        Produced::EmptyStore => Produced::EmptyStore,
         Produced::Borrow(value) => Produced::Borrow(Box::new(substitute_parameter_source(
             *value, source, argument,
         ))),
@@ -1584,6 +2528,21 @@ fn substitute_parameter_source(
                 Produced::Parameter {
                     qualifier,
                     source: found,
+                }
+            }
+        }
+        Produced::StoreParameter {
+            source: found,
+            path,
+            shareable,
+        } => {
+            if found == source {
+                project_parameter_argument(argument, &path)
+            } else {
+                Produced::StoreParameter {
+                    source: found,
+                    path,
+                    shareable,
                 }
             }
         }
@@ -1607,6 +2566,9 @@ fn substitute_parameter_source(
                 .map(|value| substitute_parameter_source(value, source, argument))
                 .collect(),
         ),
+        Produced::Store(elements) => Produced::Store(Box::new(substitute_parameter_source(
+            *elements, source, argument,
+        ))),
         Produced::Shape(fields) => Produced::Shape(
             fields
                 .into_iter()
@@ -1661,11 +2623,12 @@ fn substitute_parameter_source(
             elements,
         } => {
             if root != Some(source) {
+                let elements = substitute_store_contents(*elements, source, argument);
                 return Produced::Region {
                     qualifier,
                     root,
                     splits,
-                    elements: Box::new(substitute_parameter_source(*elements, source, argument)),
+                    elements: Box::new(elements),
                 };
             }
             match argument {
@@ -1709,6 +2672,44 @@ fn substitute_parameter_source(
     }
 }
 
+fn project_parameter_argument(argument: &Produced, path: &[String]) -> Produced {
+    let Some((name, rest)) = path.split_first() else {
+        return argument.clone();
+    };
+    let Produced::Shape(fields) = argument else {
+        return Produced::SharedStore;
+    };
+    fields.get(name).map_or(Produced::SharedStore, |value| {
+        project_parameter_argument(value, rest)
+    })
+}
+
+fn substitute_store_contents(
+    produced: Produced,
+    source: PatternId,
+    argument: &Produced,
+) -> Produced {
+    if let Produced::StoreParameter {
+        source: found,
+        path,
+        ..
+    } = &produced
+        && *found == source
+    {
+        return match project_parameter_argument(argument, path) {
+            Produced::Store(elements) => *elements,
+            Produced::None
+            | Produced::SharedStore
+            | Produced::EmptyStore
+            | Produced::StoreParameter {
+                shareable: true, ..
+            } => Produced::None,
+            argument => argument,
+        };
+    }
+    substitute_parameter_source(produced, source, argument)
+}
+
 fn substitute_element_source(
     produced: Produced,
     source: PatternId,
@@ -1716,6 +2717,8 @@ fn substitute_element_source(
 ) -> Produced {
     match produced {
         Produced::None => Produced::None,
+        Produced::SharedStore => Produced::SharedStore,
+        Produced::EmptyStore => Produced::EmptyStore,
         Produced::Borrow(value) => Produced::Borrow(Box::new(substitute_element_source(
             *value,
             source,
@@ -1732,6 +2735,21 @@ fn substitute_element_source(
                 Produced::Parameter {
                     qualifier,
                     source: found,
+                }
+            }
+        }
+        Produced::StoreParameter {
+            source: found,
+            path,
+            shareable,
+        } => {
+            if found == source {
+                project_parameter_argument(argument_elements, &path)
+            } else {
+                Produced::StoreParameter {
+                    source: found,
+                    path,
+                    shareable,
                 }
             }
         }
@@ -1763,6 +2781,11 @@ fn substitute_element_source(
                 .map(|value| substitute_element_source(value, source, argument_elements))
                 .collect(),
         ),
+        Produced::Store(elements) => Produced::Store(Box::new(substitute_element_source(
+            *elements,
+            source,
+            argument_elements,
+        ))),
         Produced::Shape(fields) => Produced::Shape(
             fields
                 .into_iter()
@@ -1975,7 +2998,7 @@ fn close_scope(scope: &ScopeRef, analysis: &mut Analysis) {
     }
 }
 
-type Snapshot = Vec<(BindingRef, Option<Span>, Produced, bool)>;
+type Snapshot = Vec<(BindingRef, Option<Span>, Produced, bool, bool)>;
 
 fn snapshot(scope: &ScopeRef) -> Snapshot {
     let mut snapshot = Vec::new();
@@ -1992,6 +3015,7 @@ fn snapshot(scope: &ScopeRef) -> Snapshot {
                     binding_state.moved,
                     binding_state.owned.clone(),
                     binding_state.partial,
+                    binding_state.ownership_demanded,
                 ));
             }
         }
@@ -2001,11 +3025,12 @@ fn snapshot(scope: &ScopeRef) -> Snapshot {
 }
 
 fn restore(snapshot: &Snapshot) {
-    for (binding, moved, owned, partial) in snapshot {
+    for (binding, moved, owned, partial, ownership_demanded) in snapshot {
         let mut binding = binding.borrow_mut();
         binding.moved = *moved;
         binding.owned = owned.clone();
         binding.partial = *partial;
+        binding.ownership_demanded = *ownership_demanded;
     }
 }
 
@@ -2013,15 +3038,22 @@ fn agree(outcomes: &[Snapshot], before: &Snapshot, span: Span, analysis: &mut An
     if outcomes.is_empty() {
         return;
     }
-    for (binding, _, prior_owned, prior_partial) in before {
+    for (binding, _, prior_owned, prior_partial, prior_ownership_demanded) in before {
         let states = outcomes
             .iter()
             .map(|outcome| {
                 outcome
                     .iter()
                     .find(|(candidate, ..)| Rc::ptr_eq(candidate, binding))
-                    .map(|(_, moved, owned, partial)| (*moved, owned.clone(), *partial))
-                    .unwrap_or((None, prior_owned.clone(), *prior_partial))
+                    .map(|(_, moved, owned, partial, ownership_demanded)| {
+                        (*moved, owned.clone(), *partial, *ownership_demanded)
+                    })
+                    .unwrap_or((
+                        None,
+                        prior_owned.clone(),
+                        *prior_partial,
+                        *prior_ownership_demanded,
+                    ))
             })
             .collect::<Vec<_>>();
         let some = states.iter().any(|(moved, ..)| moved.is_some());
@@ -2040,7 +3072,7 @@ fn agree(outcomes: &[Snapshot], before: &Snapshot, span: Span, analysis: &mut An
         if binding.borrow().qualifier == Qualifier::Linear
             && states
                 .iter()
-                .any(|(_, owned, partial)| owned != &first.1 || partial != &first.2)
+                .any(|(_, owned, partial, _)| owned != &first.1 || partial != &first.2)
         {
             analysis.report(
                 "BLOT_LINEAR_BRANCH_DISAGREEMENT",
@@ -2059,6 +3091,7 @@ fn agree(outcomes: &[Snapshot], before: &Snapshot, span: Span, analysis: &mut An
         binding.moved = chosen.0;
         binding.owned = chosen.1.clone();
         binding.partial = chosen.2;
+        binding.ownership_demanded = states.iter().any(|state| state.3);
     }
 }
 
@@ -2078,26 +3111,140 @@ fn written_parameter_obligation(qualifier: Qualifier, source: PatternId) -> Prod
     }
 }
 
-fn written_pattern(pattern: PatternId, module: &Module) -> Produced {
+fn closure_parameter_type<'a>(body: ExpressionId, analysis: &'a Analysis<'_>) -> Option<&'a Type> {
+    let mut type_ = analysis.closure_types.get(&body)?;
+    while let Type::Forall { body, .. } = type_ {
+        type_ = body;
+    }
+    let Type::Function { parameter, .. } = type_ else {
+        return None;
+    };
+    Some(parameter)
+}
+
+fn closure_result_type<'a>(body: ExpressionId, analysis: &'a Analysis<'_>) -> Option<&'a Type> {
+    let mut type_ = analysis.closure_types.get(&body)?;
+    while let Type::Forall { body, .. } = type_ {
+        type_ = body;
+    }
+    let Type::Function { result, .. } = type_ else {
+        return None;
+    };
+    Some(result)
+}
+
+fn recursive_owned_result(input: &Produced, result_type: Option<&Type>) -> Option<Produced> {
+    if !matches!(result_type, Some(Type::Array(_))) {
+        return None;
+    }
+    let mut candidates = Vec::new();
+    recursive_owned_candidates(input, &mut candidates);
+    if candidates.len() == 1 {
+        candidates.pop()
+    } else {
+        None
+    }
+}
+
+fn recursive_owned_candidates(produced: &Produced, candidates: &mut Vec<Produced>) {
+    match produced {
+        Produced::StoreParameter { .. }
+        | Produced::Parameter {
+            qualifier: Qualifier::Affine,
+            ..
+        } => candidates.push(produced.clone()),
+        Produced::Sequence(values) | Produced::Many(values) => {
+            for value in values {
+                recursive_owned_candidates(value, candidates);
+            }
+        }
+        Produced::Shape(fields) | Produced::Choice(fields) => {
+            for value in fields.values() {
+                recursive_owned_candidates(value, candidates);
+            }
+        }
+        Produced::Variant(value) => recursive_owned_candidates(value, candidates),
+        _ => {}
+    }
+}
+
+fn written_parameter_pattern(
+    pattern: PatternId,
+    module: &Module,
+    type_: Option<&Type>,
+) -> Produced {
     match &module.arena.patterns[pattern.0 as usize] {
-        Pattern::Name { qualifier, .. } => written_parameter_obligation(*qualifier, pattern),
-        Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => Produced::Sequence(
+        Pattern::Name { qualifier, .. } => {
+            let written = written_parameter_obligation(*qualifier, pattern);
+            if relevant(&written) || !matches!(qualifier, Qualifier::None) {
+                return written;
+            }
+            type_.map_or(Produced::None, |type_| {
+                owned_parameter_type(type_, pattern, &[])
+            })
+        }
+        Pattern::Tuple { elements, .. } => {
+            let fields = match type_ {
+                Some(Type::Record(fields)) => Some(fields),
+                _ => None,
+            };
+            Produced::Sequence(
+                elements
+                    .iter()
+                    .enumerate()
+                    .map(|(index, pattern)| {
+                        let type_ = fields.and_then(|fields| {
+                            fields
+                                .iter()
+                                .find(|(name, _)| name == &index.to_string())
+                                .map(|(_, type_)| type_)
+                        });
+                        written_parameter_pattern(*pattern, module, type_)
+                    })
+                    .collect(),
+            )
+        }
+        Pattern::Array { elements, .. } => Produced::Sequence(
             elements
                 .iter()
-                .map(|pattern| written_pattern(*pattern, module))
+                .map(|pattern| written_parameter_pattern(*pattern, module, None))
                 .collect(),
         ),
         Pattern::Constructor { payload, .. } => Produced::Variant(Box::new(
             payload
-                .map(|payload| written_pattern(payload, module))
+                .map(|payload| written_parameter_pattern(payload, module, None))
                 .unwrap_or(Produced::None),
         )),
         Pattern::Shape { fields, .. } => Produced::Shape(
             fields
                 .iter()
-                .map(|field| (field.name.clone(), written_pattern(field.pattern, module)))
+                .map(|field| {
+                    let field_type = match type_ {
+                        Some(Type::Record(types)) => types
+                            .iter()
+                            .find(|(name, _)| name == &field.name)
+                            .map(|(_, type_)| type_),
+                        _ => None,
+                    };
+                    (
+                        field.name.clone(),
+                        written_parameter_pattern(field.pattern, module, field_type),
+                    )
+                })
                 .collect(),
         ),
+        _ => Produced::None,
+    }
+}
+
+fn owned_parameter_type(type_: &Type, source: PatternId, path: &[String]) -> Produced {
+    match type_ {
+        Type::Forall { body, .. } => owned_parameter_type(body, source, path),
+        Type::Array(element) => Produced::StoreParameter {
+            source,
+            path: path.to_vec(),
+            shareable: !type_may_carry_ownership(element),
+        },
         _ => Produced::None,
     }
 }
@@ -2117,7 +3264,9 @@ fn spendable(qualifier: Qualifier) -> bool {
 
 fn obligation(produced: &Produced) -> Obligation {
     match produced {
-        Produced::None | Produced::Borrow(_) => Obligation::None,
+        Produced::None | Produced::SharedStore | Produced::EmptyStore | Produced::Borrow(_) => {
+            Obligation::None
+        }
         Produced::Leaf(Qualifier::Linear)
         | Produced::Parameter {
             qualifier: Qualifier::Linear,
@@ -2127,8 +3276,10 @@ fn obligation(produced: &Produced) -> Obligation {
         | Produced::Parameter {
             qualifier: Qualifier::Affine,
             ..
-        } => Obligation::Affine,
+        }
+        | Produced::StoreParameter { .. } => Obligation::Affine,
         Produced::Leaf(_) | Produced::Parameter { .. } => Obligation::None,
+        Produced::Store(elements) => merge_obligation(Obligation::Affine, obligation(elements)),
         Produced::Region { qualifier, .. } => match qualifier {
             Qualifier::Linear => Obligation::Linear,
             Qualifier::Affine => Obligation::Affine,
@@ -2157,6 +3308,32 @@ fn obligation(produced: &Produced) -> Obligation {
     }
 }
 
+fn obligation_without_stores(produced: &Produced) -> Obligation {
+    match produced {
+        Produced::Store(elements) => obligation_without_stores(elements),
+        Produced::StoreParameter { .. } => Obligation::None,
+        Produced::Borrow(_)
+        | Produced::None
+        | Produced::SharedStore
+        | Produced::EmptyStore
+        | Produced::PendingFreeze { .. } => Obligation::None,
+        Produced::Closure { captures, .. } | Produced::Variant(captures) => {
+            obligation_without_stores(captures)
+        }
+        Produced::Many(values) | Produced::Sequence(values) => {
+            values.iter().fold(Obligation::None, |found, value| {
+                merge_obligation(found, obligation_without_stores(value))
+            })
+        }
+        Produced::Shape(fields) | Produced::Choice(fields) => {
+            fields.values().fold(Obligation::None, |found, value| {
+                merge_obligation(found, obligation_without_stores(value))
+            })
+        }
+        value => obligation(value),
+    }
+}
+
 fn merge_obligation(left: Obligation, right: Obligation) -> Obligation {
     if left == Obligation::Linear || right == Obligation::Linear {
         return Obligation::Linear;
@@ -2171,8 +3348,11 @@ fn contains_borrow(produced: &Produced) -> bool {
     match produced {
         Produced::Borrow(_) => true,
         Produced::None
+        | Produced::SharedStore
+        | Produced::EmptyStore
         | Produced::Leaf(_)
         | Produced::Parameter { .. }
+        | Produced::StoreParameter { .. }
         | Produced::Region { .. }
         | Produced::RegionWitness { .. }
         | Produced::PendingJoin { .. }
@@ -2181,6 +3361,7 @@ fn contains_borrow(produced: &Produced) -> bool {
         Produced::Closure {
             captures, result, ..
         } => contains_borrow(captures) || contains_borrow(result),
+        Produced::Store(elements) => contains_borrow(elements),
         Produced::Many(values) | Produced::Sequence(values) => values.iter().any(contains_borrow),
         Produced::Shape(fields) => fields.values().any(contains_borrow),
         Produced::Variant(payload) => contains_borrow(payload),
@@ -2188,8 +3369,189 @@ fn contains_borrow(produced: &Produced) -> bool {
     }
 }
 
+fn contains_shared(produced: &Produced) -> bool {
+    match produced {
+        Produced::SharedStore => true,
+        Produced::Borrow(_) => false,
+        Produced::Store(value)
+        | Produced::Variant(value)
+        | Produced::PendingFreeze { region: value } => contains_shared(value),
+        Produced::Closure {
+            captures, result, ..
+        } => contains_shared(captures) || contains_shared(result),
+        Produced::Many(values) | Produced::Sequence(values) => values.iter().any(contains_shared),
+        Produced::Shape(fields) | Produced::Choice(fields) => fields.values().any(contains_shared),
+        Produced::Region { elements, .. } => contains_shared(elements),
+        Produced::RegionWitness {
+            left,
+            right,
+            parent,
+        } => contains_shared(left) || contains_shared(right) || contains_shared(parent),
+        Produced::PendingJoin {
+            witness,
+            left,
+            right,
+        } => contains_shared(witness) || contains_shared(left) || contains_shared(right),
+        Produced::PendingReassociate { outer, inner, .. } => {
+            contains_shared(outer) || contains_shared(inner)
+        }
+        Produced::None
+        | Produced::EmptyStore
+        | Produced::Leaf(_)
+        | Produced::Parameter { .. }
+        | Produced::StoreParameter { .. } => false,
+    }
+}
+
+fn contains_empty_store(produced: &Produced) -> bool {
+    match produced {
+        Produced::EmptyStore => true,
+        Produced::Borrow(value)
+        | Produced::Store(value)
+        | Produced::Variant(value)
+        | Produced::PendingFreeze { region: value } => contains_empty_store(value),
+        Produced::Closure {
+            captures, result, ..
+        } => contains_empty_store(captures) || contains_empty_store(result),
+        Produced::Many(values) | Produced::Sequence(values) => {
+            values.iter().any(contains_empty_store)
+        }
+        Produced::Shape(fields) | Produced::Choice(fields) => {
+            fields.values().any(contains_empty_store)
+        }
+        Produced::Region { elements, .. } => contains_empty_store(elements),
+        Produced::RegionWitness {
+            left,
+            right,
+            parent,
+        } => {
+            contains_empty_store(left)
+                || contains_empty_store(right)
+                || contains_empty_store(parent)
+        }
+        Produced::PendingJoin {
+            witness,
+            left,
+            right,
+        } => {
+            contains_empty_store(witness)
+                || contains_empty_store(left)
+                || contains_empty_store(right)
+        }
+        Produced::PendingReassociate { outer, inner, .. } => {
+            contains_empty_store(outer) || contains_empty_store(inner)
+        }
+        Produced::None
+        | Produced::SharedStore
+        | Produced::Leaf(_)
+        | Produced::Parameter { .. }
+        | Produced::StoreParameter { .. } => false,
+    }
+}
+
+fn contains_concrete_store(produced: &Produced) -> bool {
+    match produced {
+        Produced::Store(_) => true,
+        Produced::StoreParameter {
+            shareable: true, ..
+        } => true,
+        Produced::Borrow(value)
+        | Produced::Variant(value)
+        | Produced::PendingFreeze { region: value } => contains_concrete_store(value),
+        Produced::Closure {
+            captures, result, ..
+        } => contains_concrete_store(captures) || contains_concrete_store(result),
+        Produced::Many(values) | Produced::Sequence(values) => {
+            values.iter().any(contains_concrete_store)
+        }
+        Produced::Shape(fields) | Produced::Choice(fields) => {
+            fields.values().any(contains_concrete_store)
+        }
+        Produced::Region { elements, .. } => contains_concrete_store(elements),
+        Produced::RegionWitness {
+            left,
+            right,
+            parent,
+        } => {
+            contains_concrete_store(left)
+                || contains_concrete_store(right)
+                || contains_concrete_store(parent)
+        }
+        Produced::PendingJoin {
+            witness,
+            left,
+            right,
+        } => {
+            contains_concrete_store(witness)
+                || contains_concrete_store(left)
+                || contains_concrete_store(right)
+        }
+        Produced::PendingReassociate { outer, inner, .. } => {
+            contains_concrete_store(outer) || contains_concrete_store(inner)
+        }
+        Produced::None
+        | Produced::SharedStore
+        | Produced::EmptyStore
+        | Produced::Leaf(_)
+        | Produced::Parameter { .. }
+        | Produced::StoreParameter {
+            shareable: false, ..
+        } => false,
+    }
+}
+
+fn share_concrete_stores(produced: Produced) -> Produced {
+    match produced {
+        Produced::Store(_) => Produced::SharedStore,
+        Produced::StoreParameter {
+            shareable: true, ..
+        } => Produced::SharedStore,
+        Produced::Borrow(value) => Produced::Borrow(Box::new(share_concrete_stores(*value))),
+        Produced::Closure {
+            captures,
+            parameter,
+            result,
+        } => Produced::Closure {
+            captures: Box::new(share_concrete_stores(*captures)),
+            parameter,
+            result: Box::new(share_concrete_stores(*result)),
+        },
+        Produced::Many(values) => {
+            Produced::Many(values.into_iter().map(share_concrete_stores).collect())
+        }
+        Produced::Sequence(values) => {
+            Produced::Sequence(values.into_iter().map(share_concrete_stores).collect())
+        }
+        Produced::Shape(fields) => Produced::Shape(
+            fields
+                .into_iter()
+                .map(|(name, value)| (name, share_concrete_stores(value)))
+                .collect(),
+        ),
+        Produced::Variant(value) => Produced::Variant(Box::new(share_concrete_stores(*value))),
+        Produced::Choice(fields) => Produced::Choice(
+            fields
+                .into_iter()
+                .map(|(name, value)| (name, share_concrete_stores(value)))
+                .collect(),
+        ),
+        produced => produced,
+    }
+}
+
+fn borrowed(produced: Produced) -> Produced {
+    if relevant(&produced) {
+        Produced::Borrow(Box::new(produced))
+    } else {
+        Produced::None
+    }
+}
+
 fn relevant(produced: &Produced) -> bool {
-    obligation(produced) != Obligation::None || contains_borrow(produced)
+    obligation(produced) != Obligation::None
+        || contains_borrow(produced)
+        || contains_shared(produced)
+        || contains_empty_store(produced)
 }
 
 fn combine(left: Produced, right: Produced) -> Produced {
@@ -2862,54 +4224,52 @@ fn pattern_binds(pattern: PatternId, module: &Module) -> bool {
     }
 }
 
-fn parameter_accepts_ownership(
-    parameter: Option<PatternId>,
-    argument: &Produced,
-    module: &Module,
-) -> bool {
-    if obligation(argument) == Obligation::None {
+fn parameter_accepts_ownership(input: &Produced, argument: &Produced) -> bool {
+    if obligation(argument) == Obligation::None && !contains_shared(argument) {
         return true;
     }
-    let Some(parameter) = parameter else {
-        return false;
-    };
-    match (&module.arena.patterns[parameter.0 as usize], argument) {
+    match (input, argument) {
         (
-            Pattern::Name {
+            Produced::StoreParameter { .. },
+            Produced::Store(_)
+            | Produced::EmptyStore
+            | Produced::StoreParameter { .. }
+            | Produced::Parameter {
+                qualifier: Qualifier::Affine,
+                ..
+            },
+        ) => true,
+        (
+            Produced::Leaf(Qualifier::Linear)
+            | Produced::Parameter {
                 qualifier: Qualifier::Linear,
                 ..
             },
             _,
         ) => true,
         (
-            Pattern::Name {
+            Produced::Leaf(Qualifier::Affine)
+            | Produced::Parameter {
                 qualifier: Qualifier::Affine,
                 ..
             },
             _,
         ) => obligation(argument) == Obligation::Affine,
-        (
-            Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. },
-            Produced::Sequence(values),
-        ) => {
-            elements.len() == values.len()
-                && elements.iter().zip(values).all(|(pattern, value)| {
-                    parameter_accepts_ownership(Some(*pattern), value, module)
-                })
-        }
-        (Pattern::Constructor { payload, .. }, Produced::Variant(value)) => {
-            parameter_accepts_ownership(*payload, value, module)
-        }
-        (Pattern::Shape { fields, .. }, Produced::Shape(values)) => {
-            values.iter().all(|(name, value)| {
-                fields
+        (Produced::Sequence(inputs), Produced::Sequence(values)) => {
+            inputs.len() == values.len()
+                && inputs
                     .iter()
-                    .find(|field| &field.name == name)
-                    .is_some_and(|field| {
-                        parameter_accepts_ownership(Some(field.pattern), value, module)
-                    })
-            })
+                    .zip(values)
+                    .all(|(input, value)| parameter_accepts_ownership(input, value))
         }
+        (Produced::Variant(input), Produced::Variant(value)) => {
+            parameter_accepts_ownership(input, value)
+        }
+        (Produced::Shape(inputs), Produced::Shape(values)) => values.iter().all(|(name, value)| {
+            inputs
+                .get(name)
+                .is_some_and(|input| parameter_accepts_ownership(input, value))
+        }),
         _ => false,
     }
 }

@@ -459,9 +459,9 @@ array_element = (
   value:value
 ) ;
 
-// A lambda is admissible wherever a value is. The two alternatives are told
-// apart by their first token — `fn` begins one and nothing else — so this is a
-// decision the parser makes without lookahead.
+// A lambda is admissible wherever a value is. Its first token is `fn`, which
+// does not begin an expression, so this remains a decision the parser makes
+// without lookahead.
 value = lambda | expression ;
 
 // One structural aggregate. Tuples are shapes with integer labels; the
@@ -490,11 +490,8 @@ shape_field = (
 ) ;
 
 // `fn` is the only lambda form, and it is what makes a lambda lexically
-// identifiable from its first token. That one keyword pays for everything else
-// here: `value = lambda | expression` gets disjoint FIRST sets, which is
-// requirements 3 and 4 rather than a convenience, and the parameter is an
-// actual `binding_pattern` instead of an expression semantic analysis has to
-// reclassify afterwards.
+// identifiable from its first token. Checked cost assertions are declaration
+// tags, not a second lambda syntax.
 //
 // A curried chain is a repetition rather than a lambda whose body is another
 // lambda. Both accept exactly the same source — `fn f => fn x => f (f x)` — but

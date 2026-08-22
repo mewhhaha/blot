@@ -1,0 +1,14 @@
+// Runtime-input fixture for the checked Store-reuse contract. Preparing this
+// module must materialize a function whose write is independently owned.
+
+open import "blot:prelude"
+
+sig clear_first = [Int] -> [Int]
+@[assert.reuse]
+const clear_first = fn values => do:
+  if @array.len values > 0:
+    return @array.set values 0 0
+
+  return values
+
+return clear_first

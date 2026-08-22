@@ -360,6 +360,8 @@ pub(crate) struct RuntimeFunction {
     pub(crate) id: usize,
     pub(crate) name: String,
     pub(crate) signature: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reuse: Option<&'static str>,
     #[serde(rename = "entryBlock")]
     pub(crate) entry_block: usize,
     pub(crate) blocks: Vec<RuntimeBlock>,
@@ -522,6 +524,7 @@ pub(crate) struct ResidualClosure<'a> {
     pub(crate) name: &'a str,
     pub(crate) environment: &'a Environment,
     pub(crate) signature: Option<&'a Value>,
+    pub(crate) reuse: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -541,6 +544,7 @@ pub(crate) struct ResidualFunctionCompilation {
     result_type: usize,
     caller_arguments: Vec<usize>,
     name: String,
+    reuse: bool,
     span: crate::ast::Span,
 }
 
@@ -560,6 +564,10 @@ struct ResidualBlock {
     terminator: Option<RuntimeTerminator>,
 }
 
+pub(crate) struct ResidualReuseScope {
+    operation_counts: Vec<usize>,
+}
+
 pub(crate) struct ResidualBranches {
     pub(crate) consequent: usize,
     pub(crate) alternate: usize,
@@ -567,6 +575,45 @@ pub(crate) struct ResidualBranches {
 }
 
 impl ResidualTrace {
+    pub(crate) fn begin_reuse_scope(&self) -> ResidualReuseScope {
+        ResidualReuseScope {
+            operation_counts: self
+                .blocks
+                .iter()
+                .map(|block| block.operations.len())
+                .collect(),
+        }
+    }
+
+    pub(crate) fn finish_reuse_scope(
+        &self,
+        scope: ResidualReuseScope,
+        span: crate::ast::Span,
+    ) -> Result<(), Diagnostic> {
+        for (block_index, block) in self.blocks.iter().enumerate() {
+            let start = scope
+                .operation_counts
+                .get(block_index)
+                .copied()
+                .unwrap_or(0);
+            for operation in block.operations.iter().skip(start) {
+                if matches!(operation.kind, "store.write" | "store.grow")
+                    && operation.update != Some("owned-reuse")
+                {
+                    return Err(Diagnostic::new(
+                        "BLOT_REUSE_NOT_PROVED",
+                        format!(
+                            "`@[assert.reuse]` found a persistent {}. Hand off an owned Array, add `Array.copy` at the shared boundary, or remove the assertion.",
+                            operation.kind
+                        ),
+                        span,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn new(source: &str) -> Self {
         let mut trace = Self {
             source: source.to_owned(),
@@ -708,6 +755,8 @@ impl ResidualTrace {
         value: Value,
         parameter_types: Vec<usize>,
         result_type: &Type,
+        reuse: bool,
+        function_span: RuntimeSpan,
     ) -> Result<RuntimeModule, Diagnostic> {
         let result = self.lower_value(&value, crate::ast::Span { start: 0, end: 0 })?;
         let expected = self.runtime_type_from_checked_type(result_type)?;
@@ -745,19 +794,16 @@ impl ResidualTrace {
                 id: 0,
                 name: format!("blot$residual${name}"),
                 signature,
+                reuse: reuse.then_some("checked"),
                 entry_block: 0,
                 blocks,
-                span: RuntimeSpan {
-                    file: self.source.clone(),
-                    start: 0,
-                    end: 0,
-                },
+                span: function_span,
             }),
         );
         validate_runtime_layouts(&self.types)?;
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 2,
+            schema_version: 3,
             source: self.source,
             types: self.types,
             signatures: self.signatures,
@@ -784,6 +830,24 @@ impl ResidualTrace {
             return Ok(None);
         }
         self.active_primitive = Some(name.to_owned());
+        if name == "@assert.reuse" {
+            let mut value = arguments
+                .first()
+                .cloned()
+                .ok_or_else(|| hir_error("A reuse assertion omitted its function."))?;
+            let Value::Closure {
+                reuse_assertion, ..
+            } = &mut value
+            else {
+                return Err(Diagnostic::new(
+                    "BLOT_REUSE_ASSERTION_NOT_FUNCTION",
+                    "`@[assert.reuse]` can annotate only a function declaration.",
+                    span,
+                ));
+            };
+            *reuse_assertion = Some(span);
+            return Ok(Some(value));
+        }
         if matches!(name, "@linear.own" | "@linear.maybe") {
             let mut value = arguments
                 .first()
@@ -798,13 +862,13 @@ impl ResidualTrace {
         }
         if matches!(
             name,
-            "@linear.borrow" | "@branch.likely" | "@branch.unlikely"
+            "@linear.borrow" | "@linear.freeze" | "@branch.likely" | "@branch.unlikely"
         ) {
             let mut value = arguments
                 .first()
                 .cloned()
                 .ok_or_else(|| hir_error("A runtime marker omitted its value."))?;
-            if name == "@linear.borrow"
+            if matches!(name, "@linear.borrow" | "@linear.freeze")
                 && let Value::Runtime(runtime) = &mut value
                 && matches!(runtime.meaning, RuntimeMeaning::ReusableStore)
             {
@@ -1139,6 +1203,22 @@ impl ResidualTrace {
                 let integer = self.insert_type("signed-integer-64", RuntimeType::SignedInteger64);
                 self.array_operation("store.length", integer, vec![store.id], span, None)
             }
+            "@array.copy" => {
+                let original = &arguments[0];
+                let lowered = self.lower_value(original, span)?;
+                if !matches!(self.types[lowered.type_id], RuntimeType::Store { .. }) {
+                    return Err(hir_error("Array copy lowered a non-Store value."));
+                }
+                let mut copied = if matches!(original, Value::Array(_))
+                    || matches!(lowered.meaning, RuntimeMeaning::ReusableStore)
+                {
+                    lowered
+                } else {
+                    self.private_store_copy(lowered, span)?
+                };
+                copied.meaning = RuntimeMeaning::ReusableStore;
+                return self.symbolic_value(copied, span).map(Some);
+            }
             "@array.get" => {
                 let store = self.lower_value(&arguments[0], span)?;
                 let RuntimeType::Store { element_type } = self.types[store.type_id] else {
@@ -1176,13 +1256,17 @@ impl ResidualTrace {
                 };
                 let index = self.lower_as(arguments.get(1), "signed-integer-64", span)?;
                 let value = self.lower_store_element(&arguments[2], element_type, span)?;
-                self.array_operation(
+                let mut result = self.array_operation(
                     "store.write",
                     store.type_id,
                     vec![store.id, index.id, value.id],
                     span,
                     Some(update),
-                )
+                );
+                if update == "owned-reuse" {
+                    result.meaning = RuntimeMeaning::ReusableStore;
+                }
+                result
             }
             "@array.push" => {
                 let update = if matches!(
@@ -1201,13 +1285,17 @@ impl ResidualTrace {
                     return Err(hir_error("Dynamic array push received a non-array value."));
                 };
                 let value = self.lower_store_element(&arguments[1], element_type, span)?;
-                self.array_operation(
+                let mut result = self.array_operation(
                     "store.grow",
                     store.type_id,
                     vec![store.id, value.id],
                     span,
                     Some(update),
-                )
+                );
+                if update == "owned-reuse" {
+                    result.meaning = RuntimeMeaning::ReusableStore;
+                }
+                result
             }
             _ => {
                 return Err(Diagnostic::new(
@@ -1891,6 +1979,7 @@ impl ResidualTrace {
                 environment,
                 self_name,
                 signature,
+                reuse_assertion,
                 ..
             } => {
                 let captures = runtime_captures(
@@ -1912,6 +2001,7 @@ impl ResidualTrace {
                         environment: environment.clone(),
                         self_name: self_name.clone(),
                         signature: signature.clone(),
+                        reuse_assertion: *reuse_assertion,
                     },
                     captures,
                     product_type,
@@ -2237,6 +2327,7 @@ impl ResidualTrace {
                 environment,
                 self_name,
                 signature,
+                reuse_assertion,
             } => {
                 let environment = match replacements.is_empty() {
                     true => environment.clone(),
@@ -2261,6 +2352,7 @@ impl ResidualTrace {
                     self_name: self_name.clone(),
                     imports: None,
                     signature: signature.clone(),
+                    reuse_assertion: *reuse_assertion,
                 })
             }
             ChoiceSource::Primitive {
@@ -2432,6 +2524,7 @@ impl ResidualTrace {
             name,
             environment,
             signature,
+            reuse,
         } = closure;
         let lexical_closure = LexicalClosure {
             module,
@@ -2685,19 +2778,13 @@ impl ResidualTrace {
             },
             span,
         )?;
-        let loaded = context
-            .modules
+        let input = context
+            .ownership_contracts
             .borrow()
-            .get(module)
-            .map(|loaded| loaded.module.clone())
-            .ok_or_else(|| {
-                Diagnostic::new(
-                    "BLOT_UNRESOLVED_IMPORT",
-                    format!("Module `{module}` was not loaded."),
-                    span,
-                )
-            })?;
-        let argument = mark_reusable_stores(&loaded, closure_parameter, argument, &self.types);
+            .get(&(module.to_owned(), body))
+            .map(|contract| contract.input.clone())
+            .unwrap_or(Produced::None);
+        let argument = mark_reusable_stores(&input, argument, &self.types);
         let mut replacements = HashMap::new();
         for capture in &captures {
             let parameter = self.next_value();
@@ -2729,6 +2816,7 @@ impl ResidualTrace {
             result_type,
             caller_arguments,
             name: name.to_owned(),
+            reuse,
             span,
         }))
     }
@@ -2753,6 +2841,7 @@ impl ResidualTrace {
                     source,
                     qualifier: _,
                 },
+            ..
         }) = contract
         else {
             return Ok(None);
@@ -2820,6 +2909,7 @@ impl ResidualTrace {
                 id: compilation.function,
                 name: format!("blot$residual${}", compilation.name),
                 signature: compilation.signature,
+                reuse: compilation.reuse.then_some("checked"),
                 entry_block: 0,
                 blocks,
                 span: self.span(compilation.span),
@@ -2926,6 +3016,7 @@ impl ResidualTrace {
                 id: 0,
                 name: "blot$residual$blot:default".to_owned(),
                 signature: function_signature,
+                reuse: None,
                 entry_block: 0,
                 blocks,
                 span: RuntimeSpan {
@@ -2938,7 +3029,7 @@ impl ResidualTrace {
         validate_runtime_layouts(&self.types)?;
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 2,
+            schema_version: 3,
             source: self.source.clone(),
             types: self.types,
             signatures: self.signatures,
@@ -3422,6 +3513,7 @@ impl ResidualTrace {
                 );
                 let mut store =
                     self.array_operation("store.empty", store_type, Vec::new(), span, None);
+                store.meaning = RuntimeMeaning::ReusableStore;
                 for element in elements {
                     let element = self.lower_store_element(element, element_type, span)?;
                     store = self.array_operation(
@@ -3429,8 +3521,9 @@ impl ResidualTrace {
                         store_type,
                         vec![store.id, element.id],
                         span,
-                        Some("persistent"),
+                        Some("owned-reuse"),
                     );
+                    store.meaning = RuntimeMeaning::ReusableStore;
                 }
                 Ok(store)
             }
@@ -3440,7 +3533,10 @@ impl ResidualTrace {
                     &format!("store:{element_type}"),
                     RuntimeType::Store { element_type },
                 );
-                Ok(self.array_operation("store.empty", store_type, Vec::new(), span, None))
+                let mut store =
+                    self.array_operation("store.empty", store_type, Vec::new(), span, None);
+                store.meaning = RuntimeMeaning::ReusableStore;
+                Ok(store)
             }
             // A witness is element-free proof; at runtime it is erased to
             // unit, because ownership already discharged the pairing.
@@ -5299,15 +5395,11 @@ fn compiler_tag_payload(payload: Option<&Value>) -> Value {
     value.clone()
 }
 
-fn mark_reusable_stores(
-    module: &crate::ast::Module,
-    pattern: crate::ast::PatternId,
-    mut value: Value,
-    types: &[RuntimeType],
-) -> Value {
-    let pattern = &module.arena.patterns[pattern.0 as usize];
-    match pattern {
-        crate::ast::Pattern::Name {
+fn mark_reusable_stores(input: &Produced, mut value: Value, types: &[RuntimeType]) -> Value {
+    match input {
+        Produced::Leaf(crate::ast::Qualifier::Linear | crate::ast::Qualifier::Affine)
+        | Produced::StoreParameter { .. }
+        | Produced::Parameter {
             qualifier: crate::ast::Qualifier::Linear | crate::ast::Qualifier::Affine,
             ..
         } => {
@@ -5318,39 +5410,32 @@ fn mark_reusable_stores(
                 runtime.meaning = RuntimeMeaning::ReusableStore;
             }
         }
-        crate::ast::Pattern::Tuple { elements, .. }
-        | crate::ast::Pattern::Array { elements, .. } => {
+        Produced::Sequence(elements) => {
             if let Value::Shape(values) = &mut value {
-                for (index, pattern) in elements.iter().enumerate() {
+                for (index, input) in elements.iter().enumerate() {
                     let name = index.to_string();
                     if let Some(element) = values.get(&name).cloned() {
-                        values.insert(name, mark_reusable_stores(module, *pattern, element, types));
+                        values.insert(name, mark_reusable_stores(input, element, types));
                     }
                 }
             }
         }
-        crate::ast::Pattern::Shape { fields, .. } => {
+        Produced::Shape(fields) => {
             if let Value::Shape(values) = &mut value {
-                for field in fields {
-                    if let Some(element) = values.get(&field.name).cloned() {
-                        values.insert(
-                            field.name.clone(),
-                            mark_reusable_stores(module, field.pattern, element, types),
-                        );
+                for (name, input) in fields {
+                    if let Some(element) = values.get(name).cloned() {
+                        values.insert(name.clone(), mark_reusable_stores(input, element, types));
                     }
                 }
             }
         }
-        crate::ast::Pattern::Constructor {
-            payload: Some(pattern),
-            ..
-        } => {
+        Produced::Variant(input) => {
             if let Value::Tag {
                 payload: Some(payload),
                 ..
             } = &mut value
             {
-                **payload = mark_reusable_stores(module, *pattern, (**payload).clone(), types);
+                **payload = mark_reusable_stores(input, (**payload).clone(), types);
             }
         }
         _ => {}
@@ -6709,6 +6794,29 @@ fn prepare_function_export(
     let Some((mut function, mut type_)) = exported.runtime else {
         return Err(hir_error("A function export lost its runtime value."));
     };
+    let reuse_assertion = match &function {
+        Value::Closure {
+            module,
+            reuse_assertion,
+            ..
+        } => Some((
+            reuse_assertion.is_some(),
+            RuntimeSpan {
+                file: module.as_ref().clone(),
+                start: reuse_assertion.map_or(0, |span| span.start),
+                end: reuse_assertion.map_or(0, |span| span.end),
+            },
+        )),
+        _ => None,
+    };
+    let (reuse, function_span) = reuse_assertion.unwrap_or((
+        false,
+        RuntimeSpan {
+            file: path.to_owned(),
+            start: 0,
+            end: 0,
+        },
+    ));
     let trace = Rc::new(std::cell::RefCell::new(ResidualTrace::new(path)));
     let runtime = Runtime::residual(Phase::Runtime, path.to_owned(), trace.clone());
     let mut parameter_types = Vec::new();
@@ -6719,6 +6827,19 @@ fn prepare_function_export(
         let (argument, parameter_type) = trace
             .borrow_mut()
             .export_parameter(&parameter, crate::ast::Span { start: 0, end: 0 })?;
+        let input = match &function {
+            Value::Closure { module, body, .. } => context
+                .ownership_contracts
+                .borrow()
+                .get(&(module.as_ref().clone(), *body))
+                .map(|contract| contract.input.clone())
+                .unwrap_or(Produced::None),
+            _ => Produced::None,
+        };
+        let argument = {
+            let trace = trace.borrow();
+            mark_reusable_stores(&input, argument, &trace.types)
+        };
         parameter_types.push(parameter_type);
         function = complete_residual_host_calls(
             crate::eval::apply(
@@ -6736,7 +6857,14 @@ fn prepare_function_export(
     let trace = Rc::try_unwrap(trace)
         .map_err(|_| hir_error("A function export trace still has live evaluator references."))?
         .into_inner();
-    trace.finish_export(exported.name, function, parameter_types, &type_)
+    trace.finish_export(
+        exported.name,
+        function,
+        parameter_types,
+        &type_,
+        reuse,
+        function_span,
+    )
 }
 
 fn merge_runtime_modules(
@@ -6828,7 +6956,7 @@ fn merge_runtime_modules(
     validate_runtime_layouts(&types)?;
     Ok(RuntimeModule {
         format: "blot-runtime-hir",
-        schema_version: 2,
+        schema_version: 3,
         source: source.to_owned(),
         types,
         signatures,
@@ -7229,7 +7357,7 @@ impl HirBuilder {
         validate_runtime_layouts(&self.types)?;
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 2,
+            schema_version: 3,
             source: self.source,
             types: self.types,
             signatures: self.signatures,
@@ -7268,6 +7396,7 @@ impl HirBuilder {
             id,
             name: format!("blot$constant${}", exported.name),
             signature,
+            reuse: None,
             entry_block: 0,
             blocks: vec![RuntimeBlock {
                 id: 0,
@@ -8420,6 +8549,7 @@ mod tests {
             id: 7,
             name: "tail-test".to_owned(),
             signature: 0,
+            reuse: None,
             entry_block: 0,
             blocks,
             span: span(),

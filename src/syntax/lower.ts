@@ -2148,6 +2148,9 @@ function lowerLambda(rule: Rule, context: Context): Expr {
     result = {
       tag: "lambda",
       parameter: lowered.pattern,
+      // A source curried chain is one lambda island. Preserve the assertion on
+      // every unary lambda produced from it so later parameters cannot make the
+      // checked body vacuous.
       // Written only when the parameter is deferred, so an ordinary lambda is
       // the same node it was before this form existed — which is what the
       // capsule format round-trips and what the Rust middle builds.

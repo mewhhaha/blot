@@ -12,12 +12,55 @@ test("Rust compiler host exposes check, prepare, compile", async () => {
     assert.equal(checked.type, "42");
 
     const runtime = await compiler.prepare("examples/minimal.blot");
-    assert.equal(runtime.schemaVersion, 2);
+    assert.equal(runtime.schemaVersion, 3);
 
     const artifact = await compiler.compile("examples/minimal.blot");
     const wasm = Uint8Array.from(artifact.wasm).buffer;
     assert.equal(WebAssembly.validate(wasm), true);
     assert.equal(artifact.artifactSource, "compiled");
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("reuse assertion tags publish only discharged Store updates", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const runtime = await compiler.prepare(
+      "examples/lib/reuse_clear_first.blot",
+    );
+    assert.equal(runtime.functions[0]?.reuse, "checked");
+
+    const quicksort = await compiler.prepare(
+      "examples/lib/reuse_quicksort.blot",
+    );
+    const updatingFunctions = quicksort.functions.filter((function_) =>
+      function_.blocks.some((block) =>
+        block.operations.some((operation) =>
+          operation.kind === "store.write" || operation.kind === "store.grow"
+        )
+      )
+    );
+    assert.ok(updatingFunctions.length >= 1);
+    for (const function_ of updatingFunctions) {
+      assert.equal(function_.reuse, "checked");
+      for (
+        const operation of function_.blocks.flatMap((block) => block.operations)
+      ) {
+        if (
+          operation.kind === "store.write" || operation.kind === "store.grow"
+        ) {
+          assert.equal(operation.update, "owned-reuse");
+        }
+      }
+    }
+
+    await assert.rejects(
+      compiler.prepare(
+        "examples/rejected/semantics/reuse_persistent_update.blot",
+      ),
+      /BLOT_LINEAR_ARGUMENT_NOT_OWNED/,
+    );
   } finally {
     compiler.destroy();
   }

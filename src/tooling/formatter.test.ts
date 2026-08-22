@@ -184,6 +184,19 @@ return values
   );
 });
 
+Deno.test("formatting preserves a reuse assertion tag", async () => {
+  await assertStableFormatting(
+    `@[assert.reuse]
+const clear = fn values => @array.set values 0 0
+return clear
+`,
+    `@[assert.reuse]
+const clear = fn values => @array.set values 0 0
+return clear
+`,
+  );
+});
+
 Deno.test("formatting indents a separated return inside a colon block", async () => {
   const returnedValue = "x".repeat(70);
   const source = `let choose = fn ready => do:

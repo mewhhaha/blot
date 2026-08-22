@@ -367,6 +367,9 @@ pub enum Value {
         self_name: Option<String>,
         imports: Option<BTreeMap<String, String>>,
         signature: Option<Box<Value>>,
+        /// Source span of `@[assert.reuse]`, when this closure carries the
+        /// cost-contract assertion. It grants no ownership permission.
+        reuse_assertion: Option<crate::ast::Span>,
         /// The caller suspends the argument until the parameter is read.
         deferred: bool,
     },
@@ -458,6 +461,7 @@ pub enum ChoiceSource {
         environment: Environment,
         self_name: Option<String>,
         signature: Option<Box<Value>>,
+        reuse_assertion: Option<crate::ast::Span>,
     },
     Primitive {
         name: String,
@@ -1068,6 +1072,7 @@ mod type_value_tests {
             self_name: None,
             imports: None,
             signature: None,
+            reuse_assertion: None,
             deferred: false,
         };
         let principal = identity(7);
