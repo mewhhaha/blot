@@ -153,13 +153,13 @@ The outputs are a disjoint exact cover of the input. The pure validator in
 `src/linear/region_interval.ts` implements these laws independently of any
 compiler control-flow representation.
 
-## 3. `claim` has copy-safe source semantics
+## 3. `copy` is the explicit allocation boundary
 
 A useful source operation should not require a new uniqueness type merely to be
 safe:
 
 ```text
-claim : [A] -> Slice A
+copy : [A] -> Slice A
 ```
 
 For the first implementation, `A` is restricted to values whose array contents
@@ -178,7 +178,7 @@ that the input allocation is already uniquely reusable:
 
 ```text
 unknown/shared input
-  array --copy--> fresh private Store --claim--> Slice
+  array --copy elements--> fresh private Store --mint authority--> Slice
 
 proved unique input
   array ---------reuse root-----------> Slice
@@ -189,7 +189,7 @@ same source meaning.
 
 This separates acceptance from optimization:
 
-- ordinary code can always claim a slice of copyable elements; and
+- ordinary code can always call `Slice.copy` for copyable elements; and
 - zero-copy acquisition requires a verified Store root.
 
 Arrays containing owned elements need a consuming acquisition which _moves_
@@ -201,7 +201,7 @@ existing consuming-array lineage and is deliberately outside the first patch.
 Application code calls ordinary prelude or user-defined wrappers. `@region.*` is
 the small trusted boundary recognized by ownership and Runtime HIR.
 
-### `@region.claim`
+### `@region.copy`
 
 Creates a full array-interval authority. The evaluator may always take the
 copy-safe path. Runtime HIR may use a proof-backed reuse path.
@@ -310,7 +310,7 @@ Own(root,[0,len(S)))
 No destructive authority survives. The first implementation requires this to be
 the only live permission for the root, including empty permissions.
 
-`freeze` intentionally ends the private destructive phase. A later claim remains
+`freeze` intentionally ends the private destructive phase. A later copy remains
 semantically valid by copying and may steal again only if separate Store
 provenance re-establishes uniqueness.
 
@@ -320,7 +320,7 @@ A prelude wrapper can keep application code ordinary:
 
 ```blot
 const Slice = {
-  .claim = fn !values => @region.claim (!values);
+  .copy = fn !values => @region.copy (!values);
   .length = fn &slice => @region.length (&slice);
   .split = fn (!slice, index) => @region.split (slice, index);
   .join = fn (!rejoin, !left, !right) => @region.join (rejoin, left, right);
@@ -380,7 +380,7 @@ recording a flat authority program.
 Conceptually, each region-carrying ownership leaf gains region lineage:
 
 ```text
-claim(root, family, operation)
+copy(root, family, operation)
 partition(parent, part, part_count, operation)
 combine(parents, operation)
 transform(parent, operation)
@@ -390,7 +390,7 @@ The existing ownership pass remains responsible for whether that leaf is used
 exactly once on each path. Region verification checks only local derivation
 facts:
 
-- a `claim` is backed by either fresh allocation or a verified reuse root;
+- a `copy` is backed by either fresh allocation or a verified reuse root;
 - all parts of a partition are accounted for, as existing consuming extraction
   lineage already requires for `@array.take` and `@array.split`;
 - a partition's family validator proves its outputs are a disjoint exact cover;
@@ -413,7 +413,7 @@ oracle**, not yet the production static source certificate.
 It checks the linear graph for one concrete trace:
 
 ```text
-claim(root, origin, family) -> p
+copy(root, origin, family) -> p
 partition(p)                -> [p1, ..., pn]
 combine([p1, ..., pn])      -> p
 transform(p)                -> p'
@@ -470,11 +470,11 @@ for that root. Maintain:
 forall R1 != R2 in Live(S). disjoint(R1,R2)
 ```
 
-### Claim
+### Copy
 
-Fresh claim creates a private Store, so the root premise holds by construction.
-Reuse claim is admitted only with Store-provenance evidence. `Live(S)` begins as
-one full interval.
+The semantic copy creates a private Store, so the root premise holds by
+construction. Its physical elision is admitted only with Store-provenance
+evidence. `Live(S)` begins as one full interval.
 
 ### Split
 
@@ -517,25 +517,31 @@ may change; source-visible values do not.
 ## 10. Quicksort
 
 The executable catalog entry uses Lomuto partitioning with `swap`, carrying one
-complete root and a persistent worklist of `(low, high)` ranges:
+complete root and ordinary half-open range metadata:
 
 ```text
-let rec sort_work =
-  fn (!slice, work, cursor) =>
-    if cursor >= Array.length work:
+let rec sort_range =
+  fn (!slice, bounds) =>
+    if length(bounds) < 2:
       return slice
-    let (low, high) = work[cursor]
-    let (slice, pivot) = partition (!slice, low, high)
-    let pending = work ++ [(low, pivot), (pivot + 1, high)]
-    return sort_work (!slice, pending, cursor + 1)
+    let (slice, pivot) = partition (!slice, bounds)
+    let left = before(bounds, pivot)
+    let right = after(bounds, pivot)
+    if length(left) < length(right):
+      let slice = sort_range (!slice, left)
+      return sort_range (!slice, right)
+    let slice = sort_range (!slice, right)
+    return sort_range (!slice, left)
 ```
 
-The real source uses total indexed operations rather than the schematic `[]` and
-`++`. The element Store is never copied during partition or recursive sorting.
-The only possible O(n) element copy is acquisition of a private Store, and Store
-provenance eliminates that copy for an explicitly owned fresh input. The range
-worklist remains an ordinary persistent array and its allocations are reported
-separately by the benchmark.
+The real source uses checked prelude range and index helpers. It sorts the
+smaller partition in the only non-tail recursive call and leaves the larger
+partition as a self-tail call, which Runtime-HIR loop recovery turns into a back
+edge. The call stack is therefore `O(log n)` even for maximally unbalanced
+partitions. The element Store is never copied during partition or recursive
+sorting. The only possible `O(n)` element copy is acquisition of a private
+Store, and Store provenance eliminates that copy for an explicitly owned fresh
+input.
 
 ```text
 shared/unknown input: one O(n) acquisition copy + in-place quicksort
@@ -543,9 +549,9 @@ proved unique input: zero acquisition copy + in-place quicksort
 ```
 
 `split`/`join` supports a recursive program whose calls own disjoint regions;
-the focused witness tests establish that algebra independently. The first
-catalog implementation deliberately keeps one root live, avoiding a deep tree of
-witnesses while exercising the same destructive partition operations.
+the focused witness tests establish that algebra independently. The catalog
+implementation deliberately transfers one complete root sequentially, avoiding a
+tree of witnesses while exercising the same destructive partition operations.
 
 ## 11. Why this is not general mutable references
 
@@ -603,9 +609,9 @@ program requires a borrow to escape the current lexical boundary.
 
 The first region family is production-complete. Its gates are:
 
-- Store-provenance tests proving zero-copy claim is denied when an older
+- Store-provenance tests proving zero-copy copy is denied when an older
   persistent alias could observe the Store;
-- a copy fallback proving ordinary claim remains valid for shared inputs;
+- a copy fallback proving ordinary copy remains valid for shared inputs;
 - a first-version restriction or consuming transfer proof for owned elements;
 - path-sensitive tests where alternative branches consume/transform one slice;
 - lineage tamper tests proving every partition output is accounted for;
@@ -620,12 +626,12 @@ The first region family is production-complete. Its gates are:
 
 The accepted/rejected catalog, dynamic Wasm tests, certificate validation,
 cross-module wrapper example, and `pnpm benchmark:owned-regions` provide that
-evidence. The catalog quicksort carries one complete root through a
-tail-recursive range worklist; it exercises the same partition writes without
-manufacturing a deep tree of live witnesses. Split, failed split, sibling
-isolation, exact rejoin, reversed-part rejection, partial-freeze rejection,
-shared-input copy, owned-input reuse, and ABI refusal remain separate focused
-contracts.
+evidence. The catalog quicksort carries one complete root through smaller-first
+recursion; its larger recursive step becomes a loop back-edge, and it exercises
+the same partition writes without manufacturing a tree of live witnesses. Split,
+failed split, sibling isolation, exact rejoin, reversed-part rejection,
+partial-freeze rejection, shared-input copy, owned-input reuse, and ABI refusal
+remain separate focused contracts.
 
 ## 13. Recombination witnesses
 
@@ -762,10 +768,10 @@ lineage of every element inside it.
 
 ### 14.1 Consuming acquisition and freeze
 
-`@region.claim` keeps its copy-safe behavior for unrestricted elements. When the
-input array carries affine or linear elements, claim is accepted only as a
-proved consumption of the complete array. The operation moves its positional
-ownership lineage into the new full-region value:
+`@region.copy` keeps its copy-safe behavior for unrestricted elements. When the
+input array carries affine or linear elements, copy is accepted only as a proved
+consumption of the complete array. The operation moves its positional ownership
+lineage into the new full-region value:
 
 ```text
 !Array(root, [o0, ..., on]) -> Slice(store, [0,n), [o0, ..., on])
@@ -780,7 +786,7 @@ Split partitions the positional lineage at the same boundary as the interval.
 Join requires the witness's exact sibling regions and concatenates their
 lineage. Swap permutes two lineage positions with the corresponding Store slots.
 Freeze consumes the sole full-region authority and reconstructs an ordinary
-array carrying the same obligations in their final positions. Claim followed by
+array carrying the same obligations in their final positions. Copy followed by
 freeze is therefore ownership-neutral even when the representation changes.
 
 Borrowed `get` remains unavailable for an owned element because it would copy an
@@ -857,8 +863,8 @@ an invariant failure.
 
 This revision is complete only when both Node and Rust implementations agree on:
 
-- consuming claim and freeze for arrays containing affine and linear elements;
-- rejection of any claim path that would duplicate an owned element;
+- consuming copy and freeze for arrays containing affine and linear elements;
+- rejection of any copy path that would duplicate an owned element;
 - split, swap, join, and freeze preserving positional element obligations;
 - successful replacement returning the old obligation exactly once;
 - out-of-bounds replacement returning both inputs and performing no write;
@@ -883,7 +889,7 @@ source-visible field nor changes `Region T` in the type lattice.
 The conservation equations are:
 
 ```text
-claim(Array(E))                             = Region(root, E)
+copy(Array(E))                             = Region(root, E)
 split(Region(P, E), k)                      = Region(L, Eₗ), Region(R, Eᵣ), J
 join(J, Region(L, Eₗ), Region(R, Eᵣ)) = Region(P, E)
 replace(Region(P, E), i, N)                 = E[i], Region(P, E[i := N])
@@ -924,7 +930,7 @@ obligation exactly once.
 - `split`, `join`, and both reassociation operations copy no elements. Split and
   join construct only fixed-size private region products; reassociation is
   proof-only and emits no Runtime-HIR or Wasm operation.
-- `claim` is `O(1)` when the consumed array Store is certified reusable and
+- `copy` is `O(1)` when the consumed array Store is certified reusable and
   otherwise `O(n)` for the required private Store copy. Owned elements never add
   a second copy.
 - `freeze` is `O(1)` for a complete root because it exposes the private Store as
@@ -941,13 +947,13 @@ transform : (!Slice A, arguments...) -> Slice A
 ```
 
 The old slice is unavailable after the call. Reads through aliases are
-impossible because `claim` established a private Store root, and writes through
+impossible because `copy` established a private Store root, and writes through
 other authorities are impossible because the region proof requires their
 intervals to be disjoint. The compiler may therefore update the Store in place,
 while the source meaning remains the persistent equation:
 
 ```text
-freeze(transform(claim(xs), args))
+freeze(transform(copy(xs), args))
   == persistent_transform(xs, args)
 ```
 
@@ -983,7 +989,7 @@ result[end:n] == input[end:n]
 
 The predicate is evaluated exactly once per element. The first implementation
 uses swaps, is deliberately unstable, takes `O(end-start)` time, and needs
-`O(1)` element storage. It allocates no element Store after `claim`; the same
+`O(1)` element storage. It allocates no element Store after `copy`; the same
 private Store and interval authority flow into the result. `Slice.partition` is
 the total whole-interval specialization and therefore needs no failure variant.
 
@@ -1000,7 +1006,42 @@ means this first form applies to copyable elements. A future variant for owned
 elements must make the predicate's borrow and every element movement explicit
 rather than copying an obligation out of the Store.
 
-### 15.2 Relation to array monoids and split witnesses
+### 15.2 Checked range and index ergonomics
+
+Algorithms that retain a complete root otherwise repeat the same total-result
+arms around every index operation. The prelude may package those arms without
+turning bounds metadata into authority:
+
+```text
+Slice.whole(&slice)                         -> Slice.Range
+Slice.range(&slice, start, end)             -> #Range Slice.Range
+                                                | #RangeOutOfBounds
+Slice.range_length(bounds)                  -> Int
+Slice.range_last(bounds)                    -> Int
+Slice.range_before(bounds, pivot)           -> Slice.Range
+Slice.range_after(bounds, pivot)            -> Slice.Range
+Slice.partition_in(!slice, bounds, test)    -> partition result
+Slice.expect_get(&slice, index)             -> element or trap
+Slice.swap_or_keep(!slice, left, right)     -> !slice
+```
+
+`Slice.Range` is an ordinary structural `{start,end}` source value. `whole` and
+a successful `range` enforce `0 <= start <= end <= length(slice)`. Its
+arithmetic helpers preserve that relation when they receive a boundary returned
+by the validated partition, deriving half-open lengths, the last index, and the
+ranges before and after its pivot. It is not a second linear capability, does
+not enter ownership certificates, and cannot authorize Store reuse.
+
+Because any matching structural record can be constructed directly, and a range
+may be reused with another region, `partition_in` is only an ordinary wrapper
+that passes its fields to the total `partition_range`. That operation
+revalidates them against the current borrowed `Slice` before the first predicate
+call or write. An invalid borrowed read traps; an invalid consuming operation
+performs no Store access and returns its unchanged authority. The `Slice`
+authority remains the only trusted fact, so this convenience layer stays
+entirely in prelude source.
+
+### 15.3 Relation to array monoids and split witnesses
 
 `Array.partition` remains the stable, persistent value operation. It creates two
 independent arrays, and `left <> right` is ordinary monoid append. Neither

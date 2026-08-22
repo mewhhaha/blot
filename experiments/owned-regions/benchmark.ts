@@ -265,7 +265,7 @@ const Source = @effect.host { .value = Int -> Int; }
 sig quicksort = [Int] -> [Int]
 let rec quicksort = fn values => case Array.uncons values of
   #None => []
-  #Some (pivot, rest) =>
+  #Some (pivot, rest) => do:
     let (smaller, larger) =
       Array.partition (rest, fn value => value <= pivot)
     return quicksort smaller <> [pivot] <> quicksort larger
@@ -282,7 +282,7 @@ function persistentSource(values: readonly number[]): string {
 const Source = @effect.host { .value = Int -> Int; }
 
 sig keep_swap = ([Int], Int, Int) -> [Int]
-let keep_swap = fn (values, left, right) =>
+let keep_swap = fn (values, left, right) => do:
   let left_value = case Array.get (values, left) of
     #Some value => value
     #None => 0
@@ -297,7 +297,7 @@ let keep_swap = fn (values, left, right) =>
     #None => first
 
 sig partition = ([Int], Int, Int, Int, Int, Int) -> ([Int], Int)
-let rec partition = fn (values, pivot, low, scan, boundary, limit) =>
+let rec partition = fn (values, pivot, low, scan, boundary, limit) => do:
   if scan >= limit:
     return (values, boundary)
   else:
@@ -309,39 +309,39 @@ let rec partition = fn (values, pivot, low, scan, boundary, limit) =>
     else:
       return partition (values, pivot, low, scan + 1, boundary, limit)
 
-sig sort_work = ([Int], [(Int, Int)], Int) -> [Int]
-let rec sort_work = fn (values, work, cursor) =>
-  let count = Array.length work
-  if count <= cursor:
+sig sort_range = ([Int], Int, Int) -> [Int]
+let rec sort_range = fn (values, low, high) => do:
+  if high - low < 2:
     return values
   else:
-    let (low, high) = case Array.get (work, cursor) of
-      #Some entry => entry
-      #None => (0, 0)
-    if high - low < 2:
-      return sort_work (values, work, cursor + 1)
+    let last = high - 1
+    let pivot = case Array.get (values, last) of
+      #Some value => value
+      #None => 0
+    let (partitioned, boundary) = partition (values, pivot, low, low, low, last)
+    let updated = keep_swap (partitioned, boundary, last)
+    let right = boundary + 1
+    if boundary - low < high - right:
+      let smaller = sort_range (updated, low, boundary)
+      return sort_range (smaller, right, high)
     else:
-      let last = high - 1
-      let pivot = case Array.get (values, last) of
-        #Some value => value
-        #None => 0
-      let (partitioned, boundary) = partition (values, pivot, low, low, low, last)
-      let updated = keep_swap (partitioned, boundary, last)
-      let pending = @array.push (@array.push work (low, boundary)) (boundary + 1, high)
-      return sort_work (updated, pending, cursor + 1)
+      let smaller = sort_range (updated, right, high)
+      return sort_range (smaller, low, boundary)
 
 dynamic <- Source.value 0
 let values = [dynamic, ${values.slice(1).join(", ")}]
-let sorted = sort_work (values, [(0, Array.length values)], 0)
+let sorted = sort_range (values, 0, Array.length values)
 ${checksumSource()}
 `;
 }
 
 function ownedSource(prefix: string, values: readonly number[]): string {
   return `${prefix}dynamic <- Source.value 0
-let region = Slice.claim [dynamic, ${values.slice(1).join(", ")}]
-let length = Slice.length (&region)
-let sorted_region = sort_work (!region, [(0, length)], 0)
+let values = Slice.copy [dynamic, ${values.slice(1).join(", ")}]
+let sorted_region = quicksort_owned (
+  (!values),
+  fn (left, right) => left <= right
+)
 let sorted = Slice.freeze (!sorted_region)
 ${checksumSource()}
 `;
@@ -349,7 +349,7 @@ ${checksumSource()}
 
 function checksumSource(): string {
   return `sig ordered_checksum = ([Int], Int, Int) -> Int
-let rec ordered_checksum = fn (values, index, total) =>
+let rec ordered_checksum = fn (values, index, total) => do:
   if index >= Array.length values:
     return total
   else:

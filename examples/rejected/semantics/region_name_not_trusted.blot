@@ -1,6 +1,6 @@
 // A record spelled `Slice` receives no ownership privilege. Its ordinary
 // parameter does not promise to consume the Region passed to it.
 
-let whole = @region.claim [1, 2, 3]
+let whole = @region.copy [1, 2, 3]
 const Slice = { .freeze = fn region => []; }
 return Slice.freeze (!whole)

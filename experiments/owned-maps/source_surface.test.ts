@@ -24,7 +24,7 @@ let source = [("a", 1), ("b", 2), ("c", 3)]
 let valid = case OrderedTextMap.validate (&source) of
   #True => 1
   #False => 0
-let entries = OrderedTextMap.claim source
+let entries = OrderedTextMap.copy source
 let before = OrderedTextMap.lower_bound ((&entries), "")
 let present = OrderedTextMap.lower_bound ((&entries), "b")
 let absent = OrderedTextMap.lower_bound ((&entries), "bb")
@@ -42,11 +42,11 @@ Deno.test("OrderedTextMap handles empty and singleton roots", async () => {
     `open import "blot:prelude"
 sig empty_source = [OrderedTextMap.entry Int]
 let empty_source = Array.empty
-let empty = OrderedTextMap.claim empty_source
+let empty = OrderedTextMap.copy empty_source
 let empty_length = OrderedTextMap.length (&empty)
 let empty_bound = OrderedTextMap.lower_bound ((&empty), "a")
 let empty_frozen = OrderedTextMap.freeze (!empty)
-let singleton = OrderedTextMap.claim [("b", 2)]
+let singleton = OrderedTextMap.copy [("b", 2)]
 let before = OrderedTextMap.lower_bound ((&singleton), "a")
 let present = OrderedTextMap.lower_bound ((&singleton), "b")
 let after = OrderedTextMap.lower_bound ((&singleton), "c")
@@ -76,11 +76,11 @@ return case (duplicate_valid, descending_valid) of
   try {
     await evaluate(
       `open import "blot:prelude"
-let entries = OrderedTextMap.claim [("b", 1), ("a", 2)]
+let entries = OrderedTextMap.copy [("b", 1), ("a", 2)]
 return OrderedTextMap.freeze (!entries)
 `,
     );
-    throw new Error("expected OrderedTextMap.claim to trap");
+    throw new Error("expected OrderedTextMap.copy to trap");
   } catch (error) {
     assert(error instanceof BlotError);
     assertEquals(error.diagnostic.code, "BLOT_PANIC");
@@ -90,7 +90,7 @@ return OrderedTextMap.freeze (!entries)
 Deno.test("OrderedTextMap missing replacement returns both inputs", async () => {
   const result = await evaluate(
     `open import "blot:prelude"
-let entries = OrderedTextMap.claim [("a", 1), ("b", 2)]
+let entries = OrderedTextMap.copy [("a", 1), ("b", 2)]
 return case OrderedTextMap.replace ((!entries), "z", 9) of
   #MapReplaced (previous, !updated) => do:
     let frozen = OrderedTextMap.freeze (!updated)
@@ -110,7 +110,7 @@ Deno.test("OrderedTextMap refuses values whose lookup would copy ownership", asy
       `open import "blot:prelude"
 let consume = fn !value => value
 let !token = 1
-let entries = OrderedTextMap.claim [
+let entries = OrderedTextMap.copy [
   ("a", fn () => consume (!token))
 ]
 return OrderedTextMap.freeze (!entries)

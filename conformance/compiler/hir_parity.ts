@@ -119,6 +119,19 @@ const expectedTargetRefusals = new Set([
       const validatedTypescriptModule = validateBlotRuntimeModule(
         typescriptModule,
       );
+      if (root.endsWith("owned_slice_quicksort.blot")) {
+        const expected = { recursiveCalls: 2, backEdges: 2 };
+        assertEquals(
+          quicksortTailShape(rustModule),
+          expected,
+          `${root}: Rust smaller-first recursion`,
+        );
+        assertEquals(
+          quicksortTailShape(validatedTypescriptModule),
+          expected,
+          `${root}: TypeScript smaller-first recursion`,
+        );
+      }
       assertEquals(
         exportedPhases(rustModule),
         exportedPhases(validatedTypescriptModule),
@@ -166,6 +179,34 @@ function exportedPhases(module: BlotRuntimeModule): readonly string[] {
   );
 }
 
+function quicksortTailShape(module: BlotRuntimeModule): {
+  readonly recursiveCalls: number;
+  readonly backEdges: number;
+} {
+  const recursive = module.functions.find((function_) =>
+    function_.blocks.some((block) =>
+      block.operations.some((operation) =>
+        operation.kind === "call.direct" &&
+        operation.function === function_.id
+      )
+    )
+  );
+  if (recursive === undefined) {
+    throw new Error(`${module.source}: quicksort recursive function is absent`);
+  }
+  const recursiveCalls = recursive.blocks.flatMap((block) => block.operations)
+    .filter((operation) =>
+      operation.kind === "call.direct" &&
+      operation.function === recursive.id
+    ).length;
+  const backEdges =
+    recursive.blocks.filter((block) =>
+      block.terminator.kind === "branch" &&
+      block.terminator.target === recursive.entryBlock
+    ).length;
+  return { recursiveCalls, backEdges };
+}
+
 function collect(loaded: Loaded, modules: Map<string, Loaded>): void {
   if (modules.has(loaded.path)) return;
   modules.set(loaded.path, loaded);
@@ -175,7 +216,7 @@ function collect(loaded: Loaded, modules: Map<string, Loaded>): void {
 }
 
 async function repositoryPrograms(): Promise<string[]> {
-  const paths: string[] = [];
+  const paths = ["experiments/owned-regions/owned_slice_quicksort.blot"];
   for (const directory of ["examples", "case-studies"]) {
     for await (const entry of walk(directory)) {
       if (

@@ -58,6 +58,7 @@ pub struct Context {
     pub(crate) module_cache: RefCell<Option<(String, Rc<Module>)>>,
     pub(crate) live_declarations: RefCell<LivenessCache>,
     pub(crate) evaluated_bindings: RefCell<EvaluatedBindings>,
+    pub(crate) expression_types: RefCell<HashMap<(String, ExpressionId), Value>>,
     pub(crate) closure_signatures: RefCell<HashMap<(String, ExpressionId), Value>>,
     pub(crate) recursive_closures: RefCell<HashSet<(String, ExpressionId)>>,
     pub(crate) ownership_contracts:
@@ -444,6 +445,11 @@ pub fn evaluate_expression(
         Expression::Apply {
             function, argument, ..
         } => {
+            let expected_result = context
+                .expression_types
+                .borrow()
+                .get(&(module_path.as_ref().clone(), expression_id))
+                .cloned();
             let function = *function;
             let argument = *argument;
             let argument_context = context.clone();
@@ -487,12 +493,13 @@ pub fn evaluate_expression(
                         environment: argument_environment,
                         demanded: Rc::new(Cell::new(false)),
                     };
-                    return apply(
+                    return apply_with_expected(
                         argument_context,
                         function,
                         suspended,
                         span,
                         argument_runtime,
+                        expected_result.clone(),
                     );
                 }
                 evaluate_expression(
@@ -503,7 +510,14 @@ pub fn evaluate_expression(
                     argument_runtime.clone(),
                 )
                 .and_then(move |argument| {
-                    apply(argument_context, function, argument, span, argument_runtime)
+                    apply_with_expected(
+                        argument_context,
+                        function,
+                        argument,
+                        span,
+                        argument_runtime,
+                        expected_result,
+                    )
                 })
             })
         }
@@ -1904,6 +1918,17 @@ pub fn apply(
     span: Span,
     runtime: Runtime,
 ) -> Computation {
+    apply_with_expected(context, function, argument, span, runtime, None)
+}
+
+fn apply_with_expected(
+    context: Rc<Context>,
+    function: Value,
+    argument: Value,
+    span: Span,
+    runtime: Runtime,
+    expected_result: Option<Value>,
+) -> Computation {
     match function {
         Value::ModuleClosure { module } => {
             // A cached module result is a definition-level value. Reusing it
@@ -1991,6 +2016,7 @@ pub fn apply(
                         signature: signature.as_deref(),
                     },
                     &argument,
+                    expected_result.as_ref(),
                     span,
                 );
                 match call {

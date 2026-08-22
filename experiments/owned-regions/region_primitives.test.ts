@@ -26,11 +26,11 @@ function split(value: Value, at: bigint): readonly Value[] {
 }
 
 Deno.test("Region witness reassociation validates Store identity", () => {
-  const first = run("@region.claim", [{
+  const first = run("@region.copy", [{
     tag: "array",
     elements: [{ tag: "int", value: 1n }, { tag: "int", value: 2n }],
   }]);
-  const second = run("@region.claim", [{
+  const second = run("@region.copy", [{
     tag: "array",
     elements: [{ tag: "int", value: 3n }, { tag: "int", value: 4n }],
   }]);
@@ -44,7 +44,7 @@ Deno.test("Region witness reassociation validates Store identity", () => {
 });
 
 Deno.test("Region replace failure returns both unchanged inputs", () => {
-  const region = run("@region.claim", [{
+  const region = run("@region.copy", [{
     tag: "array",
     elements: [{ tag: "int", value: 1n }],
   }]);

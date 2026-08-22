@@ -59,10 +59,10 @@ Consequences:
 5. joining siblings restores the parent's exact key range; and
 6. value replacement preserves every fact above.
 
-The invariant is checked before `Slice.claim`. `validate` provides a
-non-trapping preflight. `claim` traps before minting authority when validation
-fails; on success it returns the full root directly so the ordinary closure
-ownership contract preserves the full-root freeze proof.
+The invariant is checked before `Slice.copy`. `validate` provides a non-trapping
+preflight. `copy` traps before minting authority when validation fails; on
+success it returns the full root directly so the ordinary closure ownership
+contract preserves the full-root freeze proof.
 
 ## 3. Public authority and operations
 
@@ -73,7 +73,7 @@ ownership contract preserves the full-root freeze proof.
 validate
   : &[(Text,V)] -> Bool
 
-claim
+copy
   : [(Text,V)] -> OrderedTextMap.of V
   traps when keys are not strictly increasing
 
@@ -151,7 +151,7 @@ updating every affected witness. Neither is part of this adapter.
 ## 5. Refinement proof
 
 Let `I(S, lo, hi)` be the existing array-interval authority and let `ordered(S)`
-be the abstraction invariant established by `claim`. Define:
+be the abstraction invariant established by `copy`. Define:
 
 ```text
 MapRange(S, lo, hi) = I(S, lo, hi) + ordered(S)
@@ -169,12 +169,12 @@ underlying interval authority or create memory unsafety.
 ```text
 strictly_ordered(entries)
 --------------------------------
-claim(entries) : MapRange(S,0,n)
+copy(entries) : MapRange(S,0,n)
 ```
 
-When the premise is false, `claim` traps and produces no result.
+When the premise is false, `copy` traps and produces no result.
 
-The underlying `Slice.claim` retains its copy-safe semantics and may reuse the
+The underlying `Slice.copy` retains its copy-safe semantics and may reuse the
 Store only with its existing provenance proof.
 
 ### Borrowed lookup
@@ -237,16 +237,16 @@ copying or adding runtime capability objects.
 
 For `n` entries:
 
-| Operation       |                                                      Work | Element Store copies after acquisition |
-| --------------- | --------------------------------------------------------: | -------------------------------------: |
-| invariant check |                                   `O(n)` text comparisons |                                      0 |
-| claim           | `O(n)` copy-safe acquisition; `O(1)` when reuse is proved |                   at most 1 full Store |
-| length          |                                                    `O(1)` |                                      0 |
-| get             |                                    `O(log n)` comparisons |                                      0 |
-| replace         |               `O(log n)` comparisons + `O(1)` owned write |                                      0 |
-| split_before    |                  `O(log n)` comparisons + `O(1)` metadata |                                      0 |
-| join            |                                           `O(1)` metadata |                                      0 |
-| freeze          |                       `O(1)` Store release in Runtime HIR |                                      0 |
+| Operation       |                                                     Work | Element Store copies after acquisition |
+| --------------- | -------------------------------------------------------: | -------------------------------------: |
+| invariant check |                                  `O(n)` text comparisons |                                      0 |
+| copy            | `O(n)` explicit acquisition; `O(1)` when reuse is proved |                   at most 1 full Store |
+| length          |                                                   `O(1)` |                                      0 |
+| get             |                                   `O(log n)` comparisons |                                      0 |
+| replace         |              `O(log n)` comparisons + `O(1)` owned write |                                      0 |
+| split_before    |                 `O(log n)` comparisons + `O(1)` metadata |                                      0 |
+| join            |                                          `O(1)` metadata |                                      0 |
+| freeze          |                      `O(1)` Store release in Runtime HIR |                                      0 |
 
 The existing persistent `Map.with equal` is an association array. Its lookup is
 `O(n)`; `put` rebuilds an `O(n)` array. The benchmark must compare equal

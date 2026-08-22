@@ -12,7 +12,7 @@ let replace_keep = fn (!entries, key, value) => do:
 
 let source =
   [("alpha", 1), ("beta", 2), ("gamma", 3), ("omega", 4)]
-let entries = OrderedTextMap.claim source
+let entries = OrderedTextMap.copy source
 
 let beta = case OrderedTextMap.get ((&entries), "beta") of
   #Some value => value

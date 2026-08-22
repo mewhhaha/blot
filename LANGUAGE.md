@@ -2213,8 +2213,9 @@ Store. Its backing Store, interval bounds, and recombination identities cannot
 be projected by source. The prelude exposes the ordinary source wrapper `Slice`;
 only its `@region.*` bodies are primitive:
 
-- `Slice.claim values` consumes an explicitly owned array allocation when one is
-  available, otherwise copies a shared array into a private Store;
+- `Slice.copy values` explicitly enters a private `Slice` phase. Its source
+  meaning copies the array into a private Store; the compiler may elide that
+  physical copy only when ownership proves the input Store uniquely reusable;
 - `Slice.length (&slice)` and `Slice.get ((&slice), index)` borrow authority;
 - `Slice.set ((!slice), index, value)` and `Slice.swap ((!slice), left, right)`
   consume and return the same authority;
@@ -2223,6 +2224,18 @@ only its `@region.*` bodies are primitive:
 - `Slice.partition_range ((!slice), start, end, belongs_left)` does the same for
   a checked subrange and returns either `#Partitioned (!slice, boundary)` or
   `#PartitionOutOfBounds (!slice, start)`;
+- `Slice.partition_in ((!slice), bounds, belongs_left)` is the ordinary
+  `Slice.Range` wrapper over `partition_range`;
+- `Slice.whole (&slice)` returns the checked `Slice.Range` value `[0,length)`,
+  while `Slice.range ((&slice), start, end)` validates an arbitrary half-open
+  range and returns `#Range bounds` or `#RangeOutOfBounds`;
+- `Slice.range_length`, `.range_last`, `.range_before`, and `.range_after`
+  perform ordinary half-open-range arithmetic. `range_before (bounds, pivot)` is
+  `[bounds.start,pivot)` and `range_after` is `[pivot+1,bounds.end)`;
+- `Slice.expect_get` and `Slice.swap_or_keep` are invariant-oriented wrappers
+  over the total operations above. An invalid read traps; an invalid consuming
+  operation returns its unchanged authority, which a linear helper cannot
+  discard merely because its caller violated an invariant;
 - `Slice.replace ((!slice), index, (!value))` consumes both inputs and returns
   either `#Replaced (!old, !slice)` or `#ReplaceOutOfBounds (!value, !slice)`,
   so replacement never drops an owned element;
@@ -2243,6 +2256,11 @@ substitution of an unrelated part, duplicate use, or loss of the witness is
 rejected. Only a complete root may freeze, so a part cannot discard the rest of
 its Store.
 
+`Slice.copy` is the only persistent-array-to-`Slice` allocation boundary. No
+other `Slice` operation implicitly copies its backing Store. A compiler reuse
+proof may only remove the physical work requested by that explicit operation; it
+may not introduce a hidden copy elsewhere.
+
 Ownership-transforming closures publish a structural contract keyed by their
 defining module and lambda body. The contract records the parameter pattern and
 the ownership value produced by the body. An importer resolves an ordinary
@@ -2258,15 +2276,17 @@ Runtime HIR lowers a Region to private Store-plus-bounds data, erases the
 witness after checking, uses persistent acquisition for shared inputs, and may
 emit owned Store writes only for authority proven unique by ownership. The
 ownership analysis separately carries the region's positional element
-obligations. Claim transfers them from the consumed array, split and swap
-partition or permute them, replace exchanges exactly one obligation, join
-restores the parent tree, and freeze returns them with the resulting array. This
-hidden accounting does not alter `Slice.of T` or make ownership a type.
+obligations. Copy transfers them from a consumed array when the elements are
+owned, while split and swap partition or permute them, replace exchanges exactly
+one obligation, join restores the parent tree, and freeze returns them with the
+resulting array. This hidden accounting does not alter `Slice.of T` or make
+ownership a type.
 
 Replacement is constant-time: one bounds check, one Store read, and one Store
 write. Split and join copy no elements. Witness reassociation is erased and
-emits no runtime operation. Claim is constant-time only when Store reuse is
-certified; its persistent fallback remains linear in the input length.
+emits no runtime operation. `Slice.copy` is semantically explicit and linear in
+the input length; a certified Store-reuse optimization can make its physical
+cost constant-time without changing the program's meaning.
 
 Partition is a pure consuming update. A successful partition preserves the
 multiset of elements in the selected interval, places every predicate-true
@@ -2283,6 +2303,15 @@ and `swap`. They introduce no intrinsic and no observable mutation. Their
 meaning is the persistent result of the same permutation; Store reuse is an
 implementation permission justified by the consumed authority.
 
+`Slice.Range` is ergonomic checked metadata, not ownership authority and not a
+dependent type. Blot is structural, so code can construct the same `{start,end}`
+shape directly, and a range may be carried to a different `Slice`. Code submits
+its fields to the total `Slice.partition_range`, which validates them again
+against the borrowed region before reading or writing. The trusted permission
+remains the `Slice` itself; an invalid range performs no Store access and
+returns the unchanged authority. This keeps the helpers in ordinary prelude
+source rather than adding another `@region` primitive.
+
 ### 11.4 Owned ordered text maps
 
 `OrderedTextMap` is an ordinary prelude adapter over `Slice`, not a second
@@ -2293,7 +2322,7 @@ whose elements have that entry type.
 An input is valid when every adjacent key pair is strictly increasing under
 `Text.cmp`. This implies unique keys and makes every physical Slice interval a
 contiguous key range. `OrderedTextMap.validate (&entries)` checks the invariant
-without acquiring authority. `OrderedTextMap.claim entries` performs the same
+without acquiring authority. `OrderedTextMap.copy entries` performs the same
 check, traps with `BLOT_PANIC` when it fails, and otherwise acquires the full
 region. The input parameter is persistent, so shared inputs retain Slice's
 copy-safe acquisition semantics.
@@ -2318,10 +2347,10 @@ strict ordering. Values carrying affine or linear obligations are not admitted
 by this first adapter: validation and binary search must inspect an entry to
 read its key, and a borrowed entry read cannot copy an owned value.
 
-The public type is structural. Passing an independently claimed, unsorted
-`Slice` of the same entry type to these functions deliberately violates their
+The public type is structural. Passing an independently copied, unsorted `Slice`
+of the same entry type to these functions deliberately violates their
 sorted-input precondition; it does not create or enlarge region authority.
-`claim` is the checked construction path.
+`copy` is the checked construction path.
 
 Validation is linear. Lookup, replacement focus, and `split_before` use
 logarithmic binary search; replacement then performs one constant-time owned
@@ -3156,7 +3185,11 @@ free values is runtime-known. Inferred closure signatures are checked facts
 attached to the defining module and lambda body, including when that module is
 loaded from the compiler-distributed prelude snapshot. Higher-order applications
 instantiate their representation variables before a nested recursive closure is
-lowered. These transformations change neither source scope nor the public ABI.
+lowered. Checked application-result types supply the same representation fact to
+the production compiler. If the ownership certificate proves that a recursive
+result is exactly one linear parameter component, lowering may carry that
+component's representation through the recursive call without a copy. These
+transformations change neither source scope nor the public ABI.
 
 A positive recursive result equation is closed automatically. Runtime HIR schema
 2 represents its root as one private indirect word whose target is allocated in

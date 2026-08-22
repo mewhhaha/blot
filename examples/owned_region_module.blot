@@ -5,7 +5,7 @@ open import "blot:prelude"
 
 const Vault = import "./lib/region_vault.blot"
 
-let region = Slice.claim [4, 2, 9]
+let region = Slice.copy [4, 2, 9]
 let frozen = Vault.finish (!region)
 return case Array.get (frozen, 2) of
   #Some value => value

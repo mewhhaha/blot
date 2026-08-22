@@ -1,49 +1,49 @@
-// In-place quicksort over one private Store. The worklist is persistent and
-// small; every element rearrangement consumes and returns the same full Region
-// authority, so sorting performs no element-Store copy after acquisition.
+// Generic in-place quicksort over one private Store. The persistent wrapper has
+// one explicit copy boundary; the owned algorithm itself only moves authority.
 
 open import "blot:prelude"
 
-sig keep_swap = (Slice.of Int, Int, Int) -> Slice.of Int
-let keep_swap = fn (!region, left, right) => do:
-  return case Slice.swap ((!region), left, right) of
-    #Updated !updated => updated
-    #SwapOutOfBounds !original => original
-
-sig sort_work = (Slice.of Int, [(Int, Int)], Int) -> Slice.of Int
-let rec sort_work =
-  fn (!region, work, cursor) => do:
-    let count = Array.length work
-    if count <= cursor:
-      return region
+sig quicksort_owned =
+  @forall (fn T => do:
+    return (Slice.of T, (T, T) -> Bool) -> Slice.of T
+  )
+const quicksort_owned = fn (!values, before_or_equal) => do:
+  let rec sort = fn (!current, bounds) => do:
+    if Slice.range_length bounds < 2:
+      return current
     else:
-      let (low, high) = case Array.get (work, cursor) of
-        #Some entry => entry
-        #None => @panic "work index escaped its queue"
-      if high - low < 2:
-        return sort_work (!region, work, cursor + 1)
+      let last = Slice.range_last bounds
+      let pivot = Slice.expect_get ((&current), last)
+      let (!partitioned, boundary) =
+        case Slice.partition_in (
+            (!current),
+            Slice.range_before (bounds, last),
+            fn value => before_or_equal (value, pivot)
+          ) of
+          #Partitioned (!next, index) => (!next, index)
+          #PartitionOutOfBounds (!original, index) => (!original, index)
+      let updated = Slice.swap_or_keep ((!partitioned), boundary, last)
+      let left = Slice.range_before (bounds, boundary)
+      let right = Slice.range_after (bounds, boundary)
+      if Slice.range_length left < Slice.range_length right:
+        let smaller = sort (!updated, left)
+        return sort (!smaller, right)
       else:
-        let last = high - 1
-        let pivot = case Slice.get ((&region), last) of
-          #Some value => value
-          #None => @panic "pivot index escaped its Region"
-        let (!partitioned, boundary) = case Slice.partition_range (
-          (!region),
-          low,
-          last,
-          fn value => value <= pivot
-        ) of
-          #Partitioned (!updated, middle) => (updated, middle)
-          #PartitionOutOfBounds (!original, fallback) => (original, fallback)
-        let updated = keep_swap ((!partitioned), boundary, last)
-        let pending =
-          @array.push (@array.push work (low, boundary)) (boundary + 1, high)
-        return sort_work (!updated, pending, cursor + 1)
+        let smaller = sort (!updated, right)
+        return sort (!smaller, left)
+  let bounds = Slice.whole (&values)
+  return sort (!values, bounds)
 
-sig quicksort = [Int] -> [Int]
-let quicksort = fn values => do:
-  let region = Slice.claim values
-  let length = Slice.length (&region)
-  return Slice.freeze (sort_work (!region, [(0, length)], 0))
+sig quicksort =
+  @forall (fn T => do:
+    return ([T], (T, T) -> Bool) -> [T]
+  )
+const quicksort = fn (values, before_or_equal) => do:
+  let owned = Slice.copy values
+  let sorted = quicksort_owned ((!owned), before_or_equal)
+  return Slice.freeze (!sorted)
 
-return quicksort [4, 7, 3, 8, 2, 6, 1, 5]
+return quicksort (
+  [4, 7, 3, 8, 2, 6, 1, 5],
+  fn (left, right) => left <= right
+)

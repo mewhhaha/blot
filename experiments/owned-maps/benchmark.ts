@@ -177,7 +177,7 @@ let rec update_all = fn (!entries, keys, index, base) =>
     return update_all (!updated, keys, index + 1, base)
 
 dynamic <- Source.value 0
-let entries = OrderedTextMap.claim [${entries(size, "dynamic")}]
+let entries = OrderedTextMap.copy [${entries(size, "dynamic")}]
 let keys = [${keys(size)}]
 let updated = update_all (!entries, keys, 0, dynamic)
 let frozen = OrderedTextMap.freeze (!updated)

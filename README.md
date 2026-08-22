@@ -7,10 +7,12 @@ specialization, and WebAssembly compilation all shape the source language.
 See [DOCS.md](DOCS.md) for idiomatic Blot, [LANGUAGE.md](LANGUAGE.md) for the
 current language, and the [specification map](spec/README.md) for the language
 model, compiler theorem, typechecking theory, staging, safety, lowering,
-incrementality, and cost model. Executable application studies live in
-[case-studies/](case-studies/): a grep-like file search, an interactive terminal
-program, an agent-style conversation loop, and a 3D engine with a browser host
-and hot reload.
+incrementality, and cost model. The
+[algorithm memory guide](docs/algorithm-memory.md) records when a consuming
+`Slice -> Slice` formulation is actually appropriate. Executable application
+studies live in [case-studies/](case-studies/): a grep-like file search, an
+interactive terminal program, an agent-style conversation loop, and a 3D engine
+with a browser host and hot reload.
 
 `@mewhhaha/blot` uses Node/TypeScript as the default compiler development
 environment. Node hosts Baba's checked-in generated parser and gpupaper's
@@ -34,23 +36,23 @@ often presented as elegant but dismissed as impractical should remain useful
 source programs, with staging, specialization, loop recovery, layout selection,
 and ownership reuse doing the mechanical work.
 
-The executable catalog keeps that claim concrete:
+The executable catalog and focused experiments keep that claim concrete:
 
-| definition               | executable source                                                                            | what it pressures                                                    |
-| ------------------------ | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| persistent quicksort     | [`examples/quicksort.blot`](examples/quicksort.blot)                                         | structural recursion, stable partitioning, and allocation visibility |
-| in-place quicksort       | [`examples/owned_quicksort.blot`](examples/owned_quicksort.blot)                             | one-Store ownership, partitioning, and memory reuse                  |
-| naïve Fibonacci          | [`examples/pathological_fibonacci.blot`](examples/pathological_fibonacci.blot)               | non-tail overlapping recursion and the future memoization boundary   |
-| recursive lists          | [`examples/pathological_recursive_values.blot`](examples/pathological_recursive_values.blot) | direct and mutual recursive algebraic values                         |
-| binary trees             | [`examples/arena_binary_tree.blot`](examples/arena_binary_tree.blot)                         | compact arena layout and recursive traversal                         |
-| recursive descent        | [`examples/walker.blot`](examples/walker.blot)                                               | mutually recursive functions with checked indexing                   |
-| ordinary loops and folds | [`examples/loops.blot`](examples/loops.blot)                                                 | inferred loop state and structured control-flow recovery             |
+| definition               | executable source                                                                                            | what it pressures                                                    |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| functional quicksort     | [`experiments/owned-regions/structural_quicksort.blot`](experiments/owned-regions/structural_quicksort.blot) | structural recursion, stable partitioning, and allocation visibility |
+| in-place quicksort       | [`examples/owned_quicksort.blot`](examples/owned_quicksort.blot)                                             | one-Store ownership, partitioning, and memory reuse                  |
+| naïve Fibonacci          | [`examples/pathological_fibonacci.blot`](examples/pathological_fibonacci.blot)                               | non-tail overlapping recursion and the future memoization boundary   |
+| recursive lists          | [`examples/pathological_recursive_values.blot`](examples/pathological_recursive_values.blot)                 | direct and mutual recursive algebraic values                         |
+| binary trees             | [`examples/arena_binary_tree.blot`](examples/arena_binary_tree.blot)                                         | compact arena layout and recursive traversal                         |
+| recursive descent        | [`examples/walker.blot`](examples/walker.blot)                                                               | mutually recursive functions with checked indexing                   |
+| ordinary loops and folds | [`examples/loops.blot`](examples/loops.blot)                                                                 | inferred loop state and structured control-flow recovery             |
 
-These files are executable correctness claims. Performance claims are added only
-with equal-semantics benchmarks: accepting naïve Fibonacci is not yet a claim
-that exponential recursion has become linear. The point of keeping the direct
-program in the corpus is to give optimization work a stable source-level target
-without replacing it with a hand-written different algorithm.
+These sources are executable correctness claims. Performance claims are added
+only with equal-semantics benchmarks: accepting naïve Fibonacci is not yet a
+claim that exponential recursion has become linear. The point of keeping the
+direct program in the corpus is to give optimization work a stable source-level
+target without replacing it with a hand-written different algorithm.
 
 The development and production compilers intentionally use the same phase
 vocabulary: `frontend`, `typecheck`, `hir`, `backend`, and `session`. The Node
