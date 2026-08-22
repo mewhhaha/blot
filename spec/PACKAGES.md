@@ -12,7 +12,7 @@ ordinary source and, optionally, a built module capsule:
 ```json
 {
   "schema": "blot-package",
-  "version": 3,
+  "version": 4,
   "exports": {
     ".": {
       "source": "./src/mod.blot",
@@ -54,17 +54,18 @@ authoritative.
 
 The capsule contains:
 
-- the exact package-owned lowered AST module graph in flat ID arenas;
+- the exact package-owned canonical AST module graph exported by Rust;
 - resolved relative-import edges between graph nodes;
 - logical external edges for package and `blot:` imports;
 - exact included-file bytes and their source-visible paths;
 - a schema version and a SHA-256 hash over the canonical gzip payload.
 
-Producing it requires the source export to pass ordinary checking. An absolute
-import, or a relative import that escapes the package, is rejected rather than
-capturing an accidental build-machine path. External package edges remain
-logical so the consumer's package installation can share them and select their
-versions normally.
+Producing it requires the source export to pass ordinary Rust checking. The AST
+bytes are exported from that resident Rust session rather than re-encoded by a
+host semantic pass. An absolute import, or a relative import that escapes the
+package, is rejected rather than capturing an accidental build-machine path.
+External package edges remain logical so the consumer's package installation can
+share them and select their versions normally.
 
 Loading validates the schema, compression, canonical hash, arena references,
 spans, graph acyclicity, import uniqueness, include uniqueness, and agreement

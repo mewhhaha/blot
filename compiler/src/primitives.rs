@@ -7,7 +7,7 @@ use crate::ast::Span;
 use crate::diagnostic::Diagnostic;
 use crate::eval::Phase;
 use crate::value::{
-    Domain, OrderedFields, Value, boolean, closure_signature, equal, show,
+    Domain, OrderedFields, Value, attach_signature, boolean, closure_signature, equal, show,
     substitute_type_variable, tuple,
 };
 
@@ -391,7 +391,11 @@ pub fn run_primitive(
         }
         // Type checking owns this judgment. Evaluation preserves the checked
         // subject instead of losing inferred evidence by checking it again.
-        "@satisfies" => Ok(arguments[0].clone()),
+        "@satisfies" => {
+            let mut subject = arguments[0].clone();
+            attach_signature(&mut subject, &arguments[1]);
+            Ok(subject)
+        }
         "@shape.get" => {
             let fields = shape(&arguments[0], span, name)?;
             let key = text(&arguments[1], span, name)?;

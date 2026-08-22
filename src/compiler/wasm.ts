@@ -1,7 +1,9 @@
 import type { BlotRuntimeModule } from "../runtime/hir.ts";
+import { COMPILER_HOST_ABI_VERSION } from "./host_abi.ts";
 
 interface CompilerWasmExports {
   readonly memory: WebAssembly.Memory;
+  compiler_host_abi_version(): number;
   allocate_words(wordCount: number): number;
   deallocate_words(pointer: number, wordCount: number): void;
   allocate_bytes(byteCount: number): number;
@@ -37,6 +39,21 @@ interface CompilerWasmExports {
     pathUnits: number,
   ): number;
   check_compiler_session_module(
+    handle: number,
+    pathPointer: number,
+    pathUnits: number,
+  ): number;
+  analyze_compiler_session_module(
+    handle: number,
+    pathPointer: number,
+    pathUnits: number,
+  ): number;
+  export_compiler_session_module_ast(
+    handle: number,
+    pathPointer: number,
+    pathUnits: number,
+  ): number;
+  test_compiler_session_module(
     handle: number,
     pathPointer: number,
     pathUnits: number,
@@ -122,11 +139,61 @@ export interface CompilerModuleConfiguration {
 }
 
 export type CompilerEvaluationResult =
-  | { readonly ok: true; readonly value: unknown; readonly display: string }
+  | {
+    readonly ok: true;
+    readonly value: unknown;
+    readonly display: string;
+    readonly writes: readonly string[];
+  }
   | CompilerTransportFailure;
 
 export type CompilerCheckResult =
   | { readonly ok: true; readonly type: string; readonly effects: string }
+  | CompilerTransportFailure;
+
+export interface CompilerTypeFact {
+  readonly span: { readonly start: number; readonly end: number };
+  readonly type: string;
+}
+
+export interface CompilerTagFact {
+  readonly span: { readonly start: number; readonly end: number };
+  readonly names: readonly string[];
+}
+
+export interface CompilerOwnershipFact {
+  readonly path: string;
+  readonly name: string;
+  readonly span: { readonly start: number; readonly end: number };
+  readonly last_use: { readonly start: number; readonly end: number } | null;
+  readonly spent: boolean;
+}
+
+export type CompilerAnalysisResult =
+  | {
+    readonly ok: true;
+    readonly type: string;
+    readonly effects: string;
+    readonly types: readonly CompilerTypeFact[];
+    readonly tags: readonly CompilerTagFact[];
+    readonly ownership: readonly CompilerOwnershipFact[];
+  }
+  | CompilerTransportFailure;
+
+export type CompilerPortableAstResult =
+  | { readonly ok: true; readonly ast: string }
+  | CompilerTransportFailure;
+
+export interface CompilerTestOutcome {
+  readonly status: "passed" | "failed";
+  readonly path: string;
+  readonly name: string;
+  readonly span: { readonly start: number; readonly end: number };
+  readonly diagnostic?: CompilerSourceDiagnostic;
+}
+
+export type CompilerTestResult =
+  | { readonly ok: true; readonly outcomes: readonly CompilerTestOutcome[] }
   | CompilerTransportFailure;
 
 export type CompilerRuntimeHirResult =
@@ -152,7 +219,16 @@ export class CompilerWasm {
   static async load(wasm: Uint8Array): Promise<CompilerWasm> {
     const module = await WebAssembly.compile(Uint8Array.from(wasm).buffer);
     const instance = await WebAssembly.instantiate(module);
-    return new CompilerWasm(instance.exports as unknown as CompilerWasmExports);
+    const exports = instance.exports as unknown as CompilerWasmExports;
+    if (
+      typeof exports.compiler_host_abi_version !== "function" ||
+      exports.compiler_host_abi_version() !== COMPILER_HOST_ABI_VERSION
+    ) {
+      throw new Error(
+        `Rust compiler host ABI mismatch; expected version ${COMPILER_HOST_ABI_VERSION}`,
+      );
+    }
+    return new CompilerWasm(exports);
   }
 
   lower(source: string): CompilerLoweringResult {
@@ -279,6 +355,57 @@ export class CompilerWasm {
         pathAllocation.wordCount,
       );
       return this.#readResult(length) as CompilerCheckResult;
+    } finally {
+      this.#free(pathAllocation);
+    }
+  }
+
+  analyzeCompilerSessionModule(
+    handle: number,
+    path: string,
+  ): CompilerAnalysisResult {
+    const pathAllocation = this.#allocate(textWords(path));
+    try {
+      const length = this.#exports.analyze_compiler_session_module(
+        handle,
+        pathAllocation.pointer,
+        pathAllocation.wordCount,
+      );
+      return this.#readResult(length) as CompilerAnalysisResult;
+    } finally {
+      this.#free(pathAllocation);
+    }
+  }
+
+  exportCompilerSessionModuleAst(
+    handle: number,
+    path: string,
+  ): CompilerPortableAstResult {
+    const pathAllocation = this.#allocate(textWords(path));
+    try {
+      const length = this.#exports.export_compiler_session_module_ast(
+        handle,
+        pathAllocation.pointer,
+        pathAllocation.wordCount,
+      );
+      return this.#readResult(length) as CompilerPortableAstResult;
+    } finally {
+      this.#free(pathAllocation);
+    }
+  }
+
+  testCompilerSessionModule(
+    handle: number,
+    path: string,
+  ): CompilerTestResult {
+    const pathAllocation = this.#allocate(textWords(path));
+    try {
+      const length = this.#exports.test_compiler_session_module(
+        handle,
+        pathAllocation.pointer,
+        pathAllocation.wordCount,
+      );
+      return this.#readResult(length) as CompilerTestResult;
     } finally {
       this.#free(pathAllocation);
     }

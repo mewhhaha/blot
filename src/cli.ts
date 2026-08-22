@@ -1,17 +1,13 @@
 // blot's command line.
 //
-// `build` runs the Node development compiler over Baba-generated parser tables.
-// WebGPU belongs only to explicit conformance tools such as `just parity` and
-// `just wasm`.
+// Every semantic command hosts the same Rust/Wasm compiler artifact. Formatting
+// and AST inspection remain syntax-only Node tools over Baba's parser.
 
 import { resolve } from "@std/path";
 import { BlotError, locate, render } from "./diagnostic.ts";
 import { parse } from "./syntax/parse.ts";
-import { show } from "./comptime/value.ts";
-import { evaluateFile as run } from "./run.ts";
+import { evaluateFile as run, show } from "./run.ts";
 import { loadedSource, LoadError } from "./load.ts";
-import { checkFile, type OwnedBinding } from "./check/mod.ts";
-import type { NamePattern } from "./linear/check.ts";
 import { testFile, type TestOutcome } from "./test.ts";
 import { buildPackage } from "./package.ts";
 import { Compiler } from "./compiler.ts";
@@ -95,10 +91,10 @@ function printUsage(): void {
     "usage: blot <check|test|eval|ast|ownership|fmt> <path>...",
   );
   console.error(
-    "       check, build, and package answer from the Node development compiler;",
+    "       check, test, eval, ownership, build, and package use Rust/Wasm;",
   );
   console.error(
-    "       eval and ownership answer from the TypeScript conformance oracle.",
+    "       ast and fmt use Baba syntax only.",
   );
   console.error("       blot fmt [--check] <file.blot>...");
   console.error("       blot build <file.blot>...");
@@ -175,14 +171,13 @@ async function evaluateFile(path: string): Promise<void> {
  * dependency's source.
  */
 async function ownership(path: string): Promise<void> {
-  const checked = await checkFile(path);
-  // A fact carries the path the loader resolved, so the argument has to be
-  // resolved the same way before the two can be compared.
+  if (compiler === undefined) compiler = Compiler.create();
+  const analyzed = await (await compiler).analyze(path);
   const entry = resolve(path);
-  const byPath = new Map<string, [NamePattern, OwnedBinding][]>();
-  for (const fact of checked.ownership) {
-    const existing = byPath.get(fact[1].path);
-    if (existing === undefined) byPath.set(fact[1].path, [fact]);
+  const byPath = new Map<string, typeof analyzed.ownership[number][]>();
+  for (const fact of analyzed.ownership) {
+    const existing = byPath.get(fact.path);
+    if (existing === undefined) byPath.set(fact.path, [fact]);
     else existing.push(fact);
   }
   // The file asked about comes first; the rest are what it pulled in.
@@ -198,14 +193,14 @@ async function ownership(path: string): Promise<void> {
     if (source === undefined) source = await Deno.readTextFile(contributor);
     console.log(`${contributor}:`);
     const spent = facts
-      .filter(([, fact]) => fact.spent)
-      .map(([pattern]) => pattern.name);
+      .filter((fact) => fact.spent)
+      .map((fact) => fact.name);
     if (spent.length > 0) {
       console.log(`  linear, consumed exactly once: ${spent.join(", ")}`);
     }
-    const uses = facts.flatMap(([pattern, fact]) => {
-      if (fact.lastUse === null) return [];
-      return [{ name: pattern.name, at: fact.lastUse }];
+    const uses = facts.flatMap((fact) => {
+      if (fact.last_use === null) return [];
+      return [{ name: fact.name, at: fact.last_use }];
     });
     uses.sort((left, right) => left.at.start - right.at.start);
     for (const use of uses) {

@@ -15,18 +15,15 @@
     "test:regression": "node scripts/node_regression_tests.mjs",
     "smoke": "tsx --import ./src/node/polyfills.mjs src/node/cli.ts build examples/minimal.blot",
     "benchmark": "tsx --import ./src/node/polyfills.mjs experiments/node-wasm-benchmark.ts",
-    "benchmark:relational": "tsx --import ./src/node/polyfills.mjs experiments/relational-summaries/benchmark.ts",
-    "benchmark:relational:production": "tsx --import ./src/node/polyfills.mjs experiments/relational-summaries/production_benchmark.ts",
-    "benchmark:sealed": "tsx --import ./src/node/polyfills.mjs experiments/sealed-interfaces/benchmark.ts",
     "benchmark:owned-regions": "tsx --import ./src/node/polyfills.mjs experiments/owned-regions/benchmark.ts",
     "benchmark:owned-maps": "tsx --import ./src/node/polyfills.mjs experiments/owned-maps/benchmark.ts",
     "benchmark:predicate-refinements": "tsx --import ./src/node/polyfills.mjs experiments/predicate-refinements/benchmark.ts",
-    "compiler:build": "deno run --allow-read --allow-write --allow-run=cargo --allow-env scripts/build_compiler.ts",
-    "test:compiler": "deno run --allow-read conformance/compiler/parity.ts && deno run --allow-read conformance/compiler/check_parity.ts && deno run --allow-read conformance/compiler/eval_parity.ts && deno run --allow-read conformance/compiler/hir_parity.ts",
-    "verify:compiler": "deno run --allow-read scripts/verify_runtime.ts",
+    "compiler:build": "deno run --allow-read --allow-write --allow-run=cargo,git,rustc --allow-env scripts/build_compiler.ts",
+    "test:compiler": "cargo test --manifest-path compiler/Cargo.toml && deno run --allow-read scripts/verify_runtime.ts",
+    "conformance": "deno run --allow-read scripts/verify_runtime.ts",
+    "verify:compiler": "pnpm conformance",
     "compiler:download": "deno run --allow-read --allow-write --allow-run=gh,git scripts/download_compiler.ts",
-    "parity": "tsx --import ./src/node/polyfills.mjs src/node/parity.ts",
-    "parity:strict": "tsx --import ./src/node/polyfills.mjs src/node/parity.ts --strict"
+    "compile:corpus": "deno run --allow-read scripts/compile_corpus.ts"
   },
   "dependencies": {
     "@mewhhaha/baba": "npm:@jsr/mewhhaha__baba@9.0.0",
@@ -36,7 +33,6 @@
   "devDependencies": {
     "@std/assert": "npm:@jsr/std__assert@1.0.19",
     "@types/node": "22.20.1",
-    "gpufuck": "npm:@jsr/mewhhaha__gpufuck@0.9.0",
     "tsx": "4.23.5"
   },
   "engines": {

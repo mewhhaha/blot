@@ -82,6 +82,15 @@ pub(crate) struct OwnershipContract {
 pub(crate) struct OwnershipCheck {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) contracts: Vec<(ExpressionId, OwnershipContract)>,
+    pub(crate) facts: Vec<OwnershipFact>,
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct OwnershipFact {
+    pub(crate) name: String,
+    pub(crate) span: Span,
+    pub(crate) last_use: Option<Span>,
+    pub(crate) spent: bool,
 }
 
 pub(crate) fn validate_contracts(
@@ -223,6 +232,7 @@ struct Binding {
     result: Produced,
     value: Option<ExpressionId>,
     moved: Option<Span>,
+    last_use: Option<Span>,
     partial: bool,
 }
 
@@ -255,6 +265,7 @@ struct Analysis<'a> {
     diagnostics: Vec<Diagnostic>,
     function_results: HashMap<ExpressionId, Produced>,
     contracts: HashMap<ExpressionId, OwnershipContract>,
+    bindings: Vec<BindingRef>,
 }
 
 pub(crate) fn check(
@@ -269,6 +280,7 @@ pub(crate) fn check(
         diagnostics: Vec::new(),
         function_results: HashMap::new(),
         contracts: HashMap::new(),
+        bindings: Vec::new(),
     };
     let scope = child_scope(None, false);
     if let Some(parameter) = module.parameter {
@@ -293,9 +305,24 @@ pub(crate) fn check(
     close_scope(&scope, &mut analysis);
     let mut contracts = analysis.contracts.into_iter().collect::<Vec<_>>();
     contracts.sort_by_key(|(body, _)| body.0);
+    let mut facts = analysis
+        .bindings
+        .iter()
+        .map(|binding| {
+            let binding = binding.borrow();
+            OwnershipFact {
+                name: binding.name.clone(),
+                span: pattern_span(module, binding.pattern),
+                last_use: binding.last_use,
+                spent: binding.moved.is_some(),
+            }
+        })
+        .collect::<Vec<_>>();
+    facts.sort_by_key(|fact| (fact.span.start, fact.span.end));
     OwnershipCheck {
         diagnostics: analysis.diagnostics,
         contracts,
+        facts,
     }
 }
 
@@ -368,21 +395,21 @@ fn declare(pattern: PatternId, produced: Produced, scope: &ScopeRef, analysis: &
                 *root = Some(pattern);
             }
             let qualifier = inherited(*qualifier, &owned);
-            scope.borrow_mut().bindings.insert(
-                name.clone(),
-                Rc::new(RefCell::new(Binding {
-                    pattern,
-                    name: name.clone(),
-                    qualifier,
-                    owned,
-                    parameter: None,
-                    contract_module: None,
-                    result: Produced::None,
-                    value: None,
-                    moved: None,
-                    partial: false,
-                })),
-            );
+            let binding = Rc::new(RefCell::new(Binding {
+                pattern,
+                name: name.clone(),
+                qualifier,
+                owned,
+                parameter: None,
+                contract_module: None,
+                result: Produced::None,
+                value: None,
+                moved: None,
+                last_use: None,
+                partial: false,
+            }));
+            analysis.bindings.push(binding.clone());
+            scope.borrow_mut().bindings.insert(name.clone(), binding);
         }
         Pattern::Pin { name, span } => {
             use_name(name, *span, scope, analysis, Use::Project);
@@ -462,6 +489,7 @@ fn use_name(
     let Some((binding, captured_by)) = analysis.lookup(scope, name) else {
         return Produced::None;
     };
+    binding.borrow_mut().last_use = Some(span);
     let qualifier = binding.borrow().qualifier;
     if qualifier == Qualifier::Borrow && matches!(kind, Use::Move) {
         analysis.report(
@@ -516,6 +544,7 @@ fn install_capture(scope: &ScopeRef, source: &BindingRef, qualifier: Qualifier) 
             result: source.result.clone(),
             value: source.value,
             moved: None,
+            last_use: source.last_use,
             partial: source.partial,
         })),
     );
@@ -653,21 +682,21 @@ fn walk_recursive_group(declarations: &[DeclarationId], scope: &ScopeRef, analys
             Expression::Lambda { parameter, .. } => Some(parameter),
             _ => None,
         };
-        scope.borrow_mut().bindings.insert(
-            name.clone(),
-            Rc::new(RefCell::new(Binding {
-                pattern: *pattern,
-                name: name.clone(),
-                qualifier: *qualifier,
-                owned: written_obligation(*qualifier),
-                parameter,
-                contract_module: None,
-                result: Produced::None,
-                value: Some(*value),
-                moved: None,
-                partial: false,
-            })),
-        );
+        let binding = Rc::new(RefCell::new(Binding {
+            pattern: *pattern,
+            name: name.clone(),
+            qualifier: *qualifier,
+            owned: written_obligation(*qualifier),
+            parameter,
+            contract_module: None,
+            result: Produced::None,
+            value: Some(*value),
+            moved: None,
+            last_use: None,
+            partial: false,
+        }));
+        analysis.bindings.push(binding.clone());
+        scope.borrow_mut().bindings.insert(name.clone(), binding);
     }
     let names = members
         .iter()

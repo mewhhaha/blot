@@ -24,9 +24,6 @@ importers:
       '@types/node':
         specifier: 22.20.1
         version: 22.20.1
-      gpufuck:
-        specifier: npm:@jsr/mewhhaha__gpufuck@0.9.0
-        version: '@jsr/mewhhaha__gpufuck@0.9.0'
       tsx:
         specifier: 4.23.5
         version: 4.23.5
@@ -192,9 +189,6 @@ packages:
   '@jsr/mewhhaha__baba@9.0.0':
     resolution: {integrity: sha512-ude91q/Zj3ALXyihluHXcyK0/WyEookCJ39Yuc47SqS3gUF7t8NsVRlr5zin7nTOiYxqjZnskN6CwS+7N9VHlw==, tarball: https://npm.jsr.io/~/11/@jsr/mewhhaha__baba/9.0.0.tgz}
 
-  '@jsr/mewhhaha__gpufuck@0.9.0':
-    resolution: {integrity: sha512-+PW7edKc7a0XwLv9nJcDYncIgfQDcm1FmT7SLF3Ea9kCXd5wEdnwiFyuvo9XMS9qYItB2/ohWBjTIwdnILvYXQ==, tarball: https://npm.jsr.io/~/11/@jsr/mewhhaha__gpufuck/0.9.0.tgz}
-
   '@jsr/mewhhaha__gpupaper@0.1.6':
     resolution: {integrity: sha512-FLlFZ00QDUvbgRuQeBob5uSujkTyqaM4kugag6l0evMnqJ03RcpQdYnrl5YRrvcDRn5Y77sJmCxivZQzKYWeOA==, tarball: https://npm.jsr.io/~/11/@jsr/mewhhaha__gpupaper/0.1.6.tgz}
 
@@ -309,8 +303,6 @@ snapshots:
     optional: true
 
   '@jsr/mewhhaha__baba@9.0.0': {}
-
-  '@jsr/mewhhaha__gpufuck@0.9.0': {}
 
   '@jsr/mewhhaha__gpupaper@0.1.6': {}
 

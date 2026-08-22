@@ -9,13 +9,15 @@ use crate::ast::{
 };
 use crate::backend::{ClosedProgram, CompiledModule};
 use crate::diagnostic::Diagnostic;
-use crate::eval::{Context, IncludedFile, LoadedModule, Phase, Runtime, evaluate_module, run};
+use crate::eval::{
+    Computation, Context, IncludedFile, LoadedModule, Phase, Runtime, evaluate_module, run,
+};
 use crate::frontend::FrontendState;
 use crate::typecheck::{
     CHECKED_MODULE_CERTIFICATE_SCHEMA, CachedModuleAnalyses, CachedModuleInterface,
     CheckedModuleCertificate, Checker,
 };
-use crate::value::{Value, show};
+use crate::value::{OrderedFields, Value, show};
 
 #[derive(Deserialize, Serialize)]
 struct ModuleSnapshot {
@@ -83,13 +85,27 @@ impl CompilerSession {
         self.install_module(path.to_owned(), snapshot.ast)?;
         self.checker
             .install_certificate(path, snapshot.certificate)?;
-        let value = run(evaluate_module(
+        self.checker.check(path).map_err(|diagnostic| {
+            format!(
+                "module snapshot interface for {path} failed to inflate: {} ({})",
+                diagnostic.message, diagnostic.code,
+            )
+        })?;
+        self.context
+            .captured_binding_modules
+            .borrow_mut()
+            .insert(path.to_owned());
+        let evaluated = run(evaluate_module(
             self.context.clone(),
             path.to_owned(),
             Value::Unit,
             Runtime::new(Phase::Comptime, path.to_owned()),
-        ))
-        .map_err(|diagnostic| {
+        ));
+        self.context
+            .captured_binding_modules
+            .borrow_mut()
+            .remove(path);
+        let value = evaluated.map_err(|diagnostic| {
             format!(
                 "module snapshot evaluation for {path} failed: {} ({})",
                 diagnostic.message, diagnostic.code,
@@ -214,35 +230,255 @@ impl CompilerSession {
     }
 
     pub fn evaluate_module(&self, path: &str) -> serde_json::Value {
+        self.checker.begin_request();
+        let checked = match self.checker.check(path) {
+            Ok(checked) => checked,
+            Err(diagnostic) => return diagnostic_json(diagnostic),
+        };
+        let argument = if checked.parameter.is_some() {
+            tool_grants()
+        } else {
+            Value::Unit
+        };
         let computation = evaluate_module(
             self.context.clone(),
             path.to_owned(),
-            Value::Unit,
+            argument,
             Runtime::new(Phase::Runtime, path.to_owned()),
         );
-        match run(computation) {
-            Ok(value) => serde_json::json!({
+        match run_tool(computation) {
+            Ok((value, writes)) => serde_json::json!({
                 "ok": true,
                 "value": json_value(&value),
                 "display": show(&value),
+                "writes": writes,
             }),
-            Err(diagnostic) => serde_json::json!({
-                "ok": false,
-                "diagnostic": {
-                    "code": diagnostic.code,
-                    "message": diagnostic.message,
-                    "span": {
-                        "start": diagnostic.span.start,
-                        "end": diagnostic.span.end,
-                    },
-                },
-            }),
+            Err(diagnostic) => diagnostic_json(diagnostic),
         }
     }
 
     pub fn check_module(&self, path: &str) -> serde_json::Value {
         self.checker.begin_request();
         self.checker.check_json(path)
+    }
+
+    pub fn analyze_module(&self, path: &str) -> serde_json::Value {
+        self.checker.begin_request();
+        self.checker.analysis_json(path)
+    }
+
+    pub fn test_module(&mut self, path: &str) -> serde_json::Value {
+        self.checker.begin_request();
+        let checked = match self.checker.check(path) {
+            Ok(checked) => checked,
+            Err(diagnostic) => return diagnostic_json(diagnostic),
+        };
+        let loaded = match self.context.modules.borrow().get(path).cloned() {
+            Some(loaded) => loaded,
+            None => {
+                return diagnostic_json(
+                    Diagnostic::new(
+                        "BLOT_UNRESOLVED_IMPORT",
+                        format!("Module `{path}` was not loaded."),
+                        crate::ast::Span { start: 0, end: 0 },
+                    )
+                    .at(path),
+                );
+            }
+        };
+        let top_level = loaded
+            .module
+            .declarations
+            .iter()
+            .map(|declaration| declaration_span(&loaded.module, *declaration))
+            .collect::<HashSet<_>>();
+        for declaration in &loaded.module.arena.declarations {
+            let span = declaration_span_value(declaration);
+            if self
+                .checker
+                .declaration_tag_names(path, span)
+                .iter()
+                .any(|name| name == "test")
+                && !top_level.contains(&span)
+            {
+                return diagnostic_json(
+                    Diagnostic::new(
+                        "BLOT_BAD_TEST",
+                        "A `test` tag is discoverable only on a top-level named binding.",
+                        span,
+                    )
+                    .at(path),
+                );
+            }
+        }
+
+        let mut tests = Vec::new();
+        for (ordinal, declaration_id) in loaded.module.declarations.iter().enumerate() {
+            let declaration = &loaded.module.arena.declarations[declaration_id.0 as usize];
+            let span = declaration_span_value(declaration);
+            if !self
+                .checker
+                .declaration_tag_names(path, span)
+                .iter()
+                .any(|name| name == "test")
+            {
+                continue;
+            }
+            let Declaration::Binding {
+                kind,
+                pattern,
+                value,
+                ..
+            } = declaration
+            else {
+                return diagnostic_json(
+                    Diagnostic::new(
+                        "BLOT_BAD_TEST",
+                        "A `test` tag requires a named top-level `let` or `const` binding.",
+                        span,
+                    )
+                    .at(path),
+                );
+            };
+            if *kind == crate::ast::DeclarationKind::Sig {
+                return diagnostic_json(
+                    Diagnostic::new(
+                        "BLOT_BAD_TEST",
+                        "A `test` tag requires a named top-level `let` or `const` binding.",
+                        span,
+                    )
+                    .at(path),
+                );
+            }
+            let Pattern::Name { name, .. } = &loaded.module.arena.patterns[pattern.0 as usize]
+            else {
+                return diagnostic_json(
+                    Diagnostic::new(
+                        "BLOT_BAD_TEST",
+                        "A `test` tag requires a named top-level `let` or `const` binding.",
+                        span,
+                    )
+                    .at(path),
+                );
+            };
+            let type_ = self
+                .checker
+                .expression_type_string(path, *value)
+                .unwrap_or_else(|| "<unknown>".to_owned());
+            if !self.checker.expression_is_nullary_unit(path, *value) {
+                return diagnostic_json(
+                    Diagnostic::new(
+                        "BLOT_BAD_TEST",
+                        format!("Test `{name}` must have type `() -> ()`, found {type_}."),
+                        span,
+                    )
+                    .at(path),
+                );
+            }
+            tests.push((ordinal, name.clone(), span));
+        }
+        if tests.is_empty() {
+            return serde_json::json!({ "ok": true, "outcomes": [] });
+        }
+        if loaded.module.parameter.is_some() {
+            return diagnostic_json(
+                Diagnostic::new(
+                    "BLOT_BAD_TEST",
+                    "A file run by `blot test` cannot declare a module input.",
+                    loaded.module.span,
+                )
+                .at(path),
+            );
+        }
+        if !self.checker.effects_are_empty(&checked.effects) {
+            return diagnostic_json(
+                Diagnostic::new(
+                    "BLOT_BAD_TEST",
+                    "A file run by `blot test` must initialize without effects.",
+                    loaded.module.span,
+                )
+                .at(path),
+            );
+        }
+
+        let mut outcomes = Vec::new();
+        for (ordinal, name, span) in tests {
+            let result = self.run_test(path, &loaded, ordinal, &name, span);
+            match result {
+                Ok(()) => outcomes.push(serde_json::json!({
+                    "status": "passed",
+                    "path": path,
+                    "name": name,
+                    "span": span,
+                })),
+                Err(mut diagnostic) => {
+                    diagnostic.origin = Some(path.to_owned());
+                    outcomes.push(serde_json::json!({
+                        "status": "failed",
+                        "path": path,
+                        "name": name,
+                        "span": span,
+                        "diagnostic": {
+                            "code": diagnostic.code,
+                            "message": diagnostic.message,
+                            "span": diagnostic.span,
+                        },
+                    }));
+                }
+            }
+        }
+        serde_json::json!({ "ok": true, "outcomes": outcomes })
+    }
+
+    fn run_test(
+        &mut self,
+        path: &str,
+        loaded: &LoadedModule,
+        ordinal: usize,
+        name: &str,
+        span: crate::ast::Span,
+    ) -> Result<(), Diagnostic> {
+        let mut module = loaded.module.as_ref().clone();
+        module.declarations.truncate(ordinal + 1);
+        let function = module.arena.expression(Expression::Var {
+            name: name.to_owned(),
+            span,
+        });
+        let argument = module.arena.expression(Expression::Unit { span });
+        module.result = module.arena.expression(Expression::Apply {
+            function,
+            argument,
+            span,
+        });
+        let temporary = format!("{path}\0test");
+        self.install_module(temporary.clone(), module)
+            .map_err(|message| Diagnostic::new("BLOT_RUST_INVARIANT", message, span).at(path))?;
+        self.configure_module(&temporary, loaded.imports.clone(), loaded.includes.clone())
+            .map_err(|message| Diagnostic::new("BLOT_RUST_INVARIANT", message, span).at(path))?;
+        self.checker.begin_request();
+        self.checker.check(&temporary).map_err(|mut diagnostic| {
+            diagnostic.origin = Some(path.to_owned());
+            diagnostic
+        })?;
+        let computation = evaluate_module(
+            self.context.clone(),
+            temporary,
+            Value::Unit,
+            Runtime::new(Phase::Runtime, path.to_owned()),
+        );
+        let (value, _) = run_tool(computation).map_err(|mut diagnostic| {
+            diagnostic.origin = Some(path.to_owned());
+            diagnostic
+        })?;
+        if !matches!(value, Value::Unit) {
+            return Err(Diagnostic::new(
+                "BLOT_RUST_INVARIANT",
+                format!("Test `{name}` returned a non-unit value after checking."),
+                span,
+            )
+            .at(path));
+        }
+        Ok(())
     }
 
     pub fn module_snapshot(&self, path: &str) -> Result<Vec<u8>, String> {
@@ -260,6 +496,18 @@ impl CompilerSession {
             certificate,
         })
         .map_err(|error| format!("could not encode module snapshot: {error}"))
+    }
+
+    pub fn module_ast(&self, path: &str) -> Result<String, String> {
+        let module = self
+            .context
+            .modules
+            .borrow()
+            .get(path)
+            .map(|loaded| loaded.module.clone())
+            .ok_or_else(|| format!("cannot export unknown module {path}"))?;
+        serde_json::to_string(module.as_ref())
+            .map_err(|error| format!("could not encode portable module AST: {error}"))
     }
 
     pub fn prepare_runtime_hir(&self, path: &str) -> serde_json::Value {
@@ -360,6 +608,74 @@ impl CompilerSession {
         self.closed_programs
             .borrow_mut()
             .retain(|path, _| !invalidated.contains(path));
+    }
+}
+
+fn tool_grants() -> Value {
+    let operations = OrderedFields::from_iter([(
+        "write".to_owned(),
+        Value::Arrow {
+            domain: Box::new(Value::Unbounded),
+            codomain: Box::new(Value::Unit),
+            effects: Vec::new(),
+            effect_tail: None,
+        },
+    )]);
+    let effect = Value::Effect {
+        id: u32::MAX,
+        name: "Console".to_owned(),
+        operations,
+        host: true,
+    };
+    Value::Shape(OrderedFields::from_iter([(
+        "print".to_owned(),
+        Value::Operation {
+            effect: Box::new(effect),
+            name: "write".to_owned(),
+        },
+    )]))
+}
+
+fn run_tool(mut computation: Computation) -> Result<(Value, Vec<String>), Diagnostic> {
+    let mut writes = Vec::new();
+    loop {
+        match computation {
+            Computation::Done(result) => return result.map(|value| (value, writes)),
+            Computation::Perform { request, resume }
+                if request.host
+                    && request.effect_name == "Console"
+                    && request.operation == "write" =>
+            {
+                let line = match request.argument {
+                    Value::Text(text) => text,
+                    value => show(&value),
+                };
+                writes.push(line);
+                computation = resume(Value::Unit);
+            }
+            Computation::Perform { request, .. } => {
+                return Err(Diagnostic::new(
+                    "BLOT_UNHANDLED_EFFECT",
+                    format!(
+                        "No handler for `{}.{}`.",
+                        request.effect_name, request.operation
+                    ),
+                    request.span,
+                ));
+            }
+        }
+    }
+}
+
+fn declaration_span(module: &Module, declaration: DeclarationId) -> crate::ast::Span {
+    declaration_span_value(&module.arena.declarations[declaration.0 as usize])
+}
+
+fn declaration_span_value(declaration: &Declaration) -> crate::ast::Span {
+    match declaration {
+        Declaration::Binding { span, .. }
+        | Declaration::Shadow { span, .. }
+        | Declaration::Open { span, .. } => *span,
     }
 }
 
@@ -827,7 +1143,7 @@ mod tests {
     #[test]
     fn binary_module_snapshot_restores_interface_and_value() {
         const MODULE_PATH: &str = "snapshot:library";
-        const MODULE_SOURCE: &str = "let rec increment = fn value => @int.add value 1\n\u{e000}return { .answer = increment 42; }\u{e000}\n";
+        const MODULE_SOURCE: &str = "let rec increment = fn value => @int.add value 1\n\u{e000}const identity = fn value => value\n\u{e000}return { .increment = increment; .identity = identity; }\u{e000}\n";
         let mut builder = CompilerSession::default();
         builder
             .add_source(MODULE_PATH.to_owned(), source(MODULE_SOURCE))
@@ -857,6 +1173,25 @@ mod tests {
                 .borrow()
                 .keys()
                 .any(|(path, _)| path == MODULE_PATH)
+        );
+        consumer
+            .add_source(
+                "snapshot:consumer".to_owned(),
+                source(
+                    "const library = import \"library\"\n\u{e000}let number = library.identity 42\n\u{e000}let text = library.identity \"ok\"\n\u{e000}return (library.increment 42, number, text)\u{e000}\n",
+                ),
+            )
+            .expect("consumer source should load");
+        consumer
+            .configure_module(
+                "snapshot:consumer",
+                BTreeMap::from([("library".to_owned(), MODULE_PATH.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("consumer should configure");
+        assert_eq!(
+            consumer.evaluate_module("snapshot:consumer")["display"],
+            "(43, 42, \"ok\")"
         );
     }
 
@@ -939,6 +1274,33 @@ mod tests {
             prepared["targetRefusal"]
         );
         assert!(prepared.get("diagnostic").is_none());
+    }
+
+    #[test]
+    fn module_capability_signatures_follow_monomorphic_effect_results() {
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                "main.blot".to_owned(),
+                source(
+                    "module with init\n\nvalue <- init.read ()\n<- init.observe (@int.add value 1)\nreturn ()\n",
+                ),
+            )
+            .expect("source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("source should configure");
+
+        let prepared = session.prepare_runtime_hir("main.blot");
+        assert_eq!(prepared["ok"], true, "{prepared}");
+        assert_eq!(
+            prepared["module"]["capabilities"][0]["operations"][0]["name"],
+            "read"
+        );
+        assert_eq!(
+            prepared["module"]["capabilities"][0]["operations"][1]["name"],
+            "observe"
+        );
     }
 
     #[test]

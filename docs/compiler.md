@@ -1,42 +1,24 @@
-# Compiler development and production
+# Compiler host and distribution
 
-Node/TypeScript is Blot's default compiler development environment. The CI-built
-Rust compiler Wasm is the production implementation. Both implement the same
-compiler contract and are kept in strict observable parity. The Node pipeline
-is:
+Blot has one semantic compiler. It is implemented in Rust, built as Wasm, and
+hosted by Node for ordinary commands and library use.
 
 ```text
-source
-  -> Baba generated Wasm lexer for layout boundaries
-  -> Blot layout elaboration
-  -> Baba generated Wasm lexical acceptance
-  -> Baba general-profile CPU island parser
-  -> Blot TypeScript semantics
-  -> validated Runtime HIR
-  -> gpupaper Core
-  -> gpupaper embedded Rust/Wasm emitter
+source graph resolved by Node
+  -> Rust compiler Wasm session
+     -> Baba lexer, layout, and CPU island parser
+     -> AST
+     -> comptime evaluation and biunification
+     -> ownership and safety
+     -> Runtime HIR
+     -> ABI closure and Wasm emission
   -> WebAssembly + ABI manifest
 ```
 
-Baba owns lexing and parsing. Blot checks, evaluates the compile-time fragment,
-proves ownership, stages the program, and exports Runtime HIR. The
-compiler-owned backend lowers Runtime HIR through gpupaper Core; gpupaper owns
-final Wasm planning and emission. Ordinary Node development uses no Deno
-runtime, native Rust toolchain, Cargo process, WebGPU device, or handwritten
-parser.
-
-The source trees intentionally use the same phase vocabulary:
-
-| Phase       | Node development            | Rust production                          |
-| ----------- | --------------------------- | ---------------------------------------- |
-| frontend    | `src/compiler/frontend.ts`  | `compiler/src/frontend.rs` + `source.rs` |
-| typecheck   | `src/compiler/typecheck.ts` | `compiler/src/typecheck.rs`              |
-| Runtime HIR | `src/compiler/hir.ts`       | `compiler/src/hir.rs`                    |
-| backend     | `src/compiler/backend.ts`   | `compiler/src/backend.rs`                |
-| session     | `src/compiler/session.ts`   | `compiler/src/session.rs`                |
-
-Feature work should start in the Node phase that owns the behavior, then be
-ported to the correspondingly named Rust phase before it is production-complete.
+TypeScript owns filesystem and package resolution, syntax-only formatting and
+editor services, transport validation, and caller ABI decoding. It does not
+contain a fallback checker, evaluator, ownership pass, Runtime-HIR lowerer, or
+emitter.
 
 ## Versions
 
@@ -44,188 +26,123 @@ ported to the correspondingly named Rust phase before it is production-complete.
 | --------- | ---------------: |
 | Node      | 22.16.0 or newer |
 | pnpm      |          11.21.0 |
+| Rust      |           1.97.1 |
 | Baba      |            9.0.0 |
-| gpupaper  |            0.1.6 |
 | @std/path |            1.1.6 |
-
-The pnpm workspace applies a seven-day minimum release age and excludes the two
-`@mewhhaha` packages, whose coordinated releases may need immediate testing.
 
 ## Use it
 
 ```bash
 corepack enable
 pnpm install
+pnpm compiler:build
 pnpm blot check examples/minimal.blot
 pnpm blot run examples/minimal.blot
 pnpm blot build examples/minimal.blot
 pnpm test
 ```
 
-`run` compiles in memory and invokes a zero-parameter default (or sole) runtime
-export. It copies and prints Unit, scalar, Text, array, record, variant, and
-sealed results, then performs the ABI post-return exactly once for owned
-indirect values. Programs that require host capabilities must be embedded in a
-host that implements those operations.
-
-`build` writes `examples/minimal.wasm` and `examples/minimal.wasm.json`. The
-sidecar bytes match the `blot:abi` custom section embedded in the module.
+`run` invokes a zero-parameter default or sole runtime export and decodes its
+canonical ABI result. Programs that need host capabilities must be embedded in a
+host that implements them.
 
 Library consumers use the same resident compiler:
 
 ```ts
-import { Compiler } from "@mewhhaha/blot";
+import { Compiler } from "@mewhhaha/blot/compiler";
 
 const compiler = await Compiler.create();
 try {
+  const checked = await compiler.check("examples/minimal.blot");
+  const analysis = await compiler.analyze("examples/minimal.blot");
+  const hir = await compiler.prepare("examples/minimal.blot");
   const artifact = await compiler.compile("examples/minimal.blot");
+  console.log(checked.type, analysis.ownership.length, hir.schemaVersion);
   console.log(WebAssembly.validate(artifact.wasm));
 } finally {
   compiler.destroy();
 }
 ```
 
-Release and embedding hosts can select the CI-built Rust implementation without
-changing the phase-facing code:
-
-```ts
-import { readFile } from "node:fs/promises";
-import { ProductionCompiler } from "@mewhhaha/blot/compiler";
-
-const wasm = await readFile("generated/compiler/compiler.wasm");
-const compiler = await ProductionCompiler.create({ wasm });
-try {
-  const checked = await compiler.check("examples/minimal.blot");
-  const hir = await compiler.prepare("examples/minimal.blot");
-  const artifact = await compiler.compile("examples/minimal.blot");
-  console.log(checked.type, hir.schemaVersion, artifact.wasm.length);
-} finally {
-  compiler.destroy();
-}
-```
-
-The production host resolves and configures the complete source graph in one
-resident Rust session. Rust source diagnostics become located `BlotError`s,
-target refusals remain `CompilerTargetRefusal`, and post-check failures remain
+The host resolves and configures the complete source graph in one Rust session.
+Rust source diagnostics become located `BlotError`s, target refusals remain
+`CompilerTargetRefusal`, and post-check failures remain
 `CompilerInvariantFailure`.
 
-## Wasm boundaries
+## Compiler distribution
 
-The checked-in Blot parser binary and plan live under `generated/wasm/`. Layout
-first asks Baba's generated Wasm lexer for token boundaries on the original
-source. After Blot inserts private layout markers, `src/syntax/parse.ts` runs
-the same generated lexer over the elaborated source for authoritative lexical
-acceptance. Baba's general-profile `CpuFrontend` then consumes the elaborated
-source; its current API accepts source rather than a token tape, so it
-internally replays the same lexer tables before executing the island parser.
-That replay is an implementation duplication, not a second syntax definition.
-The generated-Wasm island parser remains strict-profile-only and is not used for
-the general plan.
+`generated/compiler/compiler.wasm` is derived and ignored by Git. Its adjacent
+manifest is schema version 2 and binds the bytes to:
 
-`src/compiler/hir.ts` runs the development semantic passes and freezes the
-Runtime-HIR snapshot. The heavy residual lowering lives under
-`src/compiler/lower/`. `src/compiler/backend.ts` is the compiler-owned close and
-emission boundary; its ABI and gpupaper implementation lives under
-`src/compiler/backend/runtime/`. Conformance code imports these compiler
-boundaries, never the other way around.
+- the compiler host ABI version;
+- the generated prelude snapshot digest;
+- a deterministic digest of every Rust compiler input;
+- the pinned Rust toolchain and Git provenance.
 
-The residualizer evaluates the staged module result once per exported function
-before projecting its named field. This deliberately preserves module-level host
-request order and replay behavior shared with the Rust compiler. Settled checked
-types drive Store, record, variant, sealed, and host-grant layouts; the value
-observed during staging is not allowed to narrow a public layout. Specialized
-self-tail recursion becomes a Runtime-HIR loop back-edge. A direct self-tail
-call exposed only after closure conversion receives the same rewrite through
-administrative product and sum returns. Direct scalar results cross the
-canonical Wasm boundary without a return area.
+`Compiler.create()` requires the Wasm, manifest, and prelude snapshot and
+validates the byte digest, host ABI, and prelude digest before instantiation. It
+never invokes Cargo and never falls back to TypeScript. A custom Wasm passed to
+`Compiler.create` must include its matching prelude snapshot.
 
-Gpupaper embeds its checked Rust emitter bytes in its published package. Node
-instantiates those bytes with the standard `WebAssembly` API, so final emission
-does not read a toolchain artifact from disk.
-
-## Target policy and failures
-
-`Compiler.create()` uses an explicit immutable target policy. Today that policy
-is ABI major 1 and `wasm-simd128`; making it explicit keeps the implementation
-aligned with the `tau` parameter in `spec/COMPILER.md` and prevents hidden
-backend defaults from becoming part of the language by accident. Runtime-HIR
-schema compatibility is internal to the compiler/backend pair: a mismatch is an
-invariant failure, not a caller-selected target.
-
-Source diagnostics, target refusals, and compiler invariant failures are
-distinct. An unsupported target policy throws `CompilerTargetRefusal`. A failure
-after validated Runtime HIR throws `CompilerInvariantFailure`; it is not
-rewritten as a `BLOT_BACKEND_ERROR` source diagnostic with a synthetic
-offset-zero span.
-
-## Cache and invalidation
-
-The module loader retains stable AST identity for unchanged source and
-invalidates changed modules plus their importers. Checking memoizes a complete
-root program by loader identity. A resident check session may independently
-recheck a changed dependency and stop before its importers when its conservative
-sealed boundary is unchanged; importer-dependent live inference state itself
-never crosses that boundary.
-
-A resident compiler also keys each source graph by the exact portable AST,
-including spans, dependency revision keys, and included file paths and bytes. An
-equal key may reuse the checked summary, Runtime HIR, and finished artifact.
-This permits comment-only edits that preserve the portable graph to return
-copied bytes marked `revision-cache`, while source-span, dependency, and include
-changes invalidate the result. The immutable Runtime-HIR object remains the
-final artifact-cache key.
-
-`Compiler.create()` starts Baba runtime and gpupaper emitter initialization in
-parallel. Both runtimes are shared for the process lifetime; no semantic fact
-crosses a process or unvalidated revision boundary.
-
-## Dual-compiler development
-
-`pnpm parity` discovers every Blot file under `examples/`, `case-studies/`, and
-`src/prelude/`, then hosts both compilers in the same Node process. The
-development compiler uses Baba, the TypeScript semantic passes, and the
-compiler-owned backend. The production compiler is the validated CI-built Rust
-compiler Wasm. Neither path starts Deno, Cargo, or a native Rust process during
-parity.
-
-For every corpus root, parity compares frontend acceptance, rejection stage and
-diagnostic code, Runtime-HIR export phases, canonical ABI manifest bytes, and
-capabilities. Internal type pretty-printing and emitted instruction bytes are
-not parity observations. `conformance/node-rust-gaps.json` records the current
-known gap signatures. The feature-parity baseline is empty. CI runs
-`pnpm parity:strict`, so a Node feature, Rust/Wasm feature, diagnostic, export,
-manifest, or capability change cannot land while the implementations disagree.
-Focused runtime tests cover host-call results, canonical values, conversion edge
-rounding, and recursive control flow that manifest comparison cannot observe.
-
-## Benchmark
-
-The combined benchmark hosts both compiler implementations inside one Node
-process and first verifies their observable artifacts are comparable:
+Build the bundle locally with:
 
 ```bash
-pnpm run benchmark -- examples/storage.blot
-pnpm run benchmark -- --node-only examples/storage.blot
+pnpm compiler:build
 ```
 
-It reports nine-sample medians for initialization, cold and resident builds,
-checks, comment-only edits, semantic edits, phase splits, emitted sizes, and
-Node-to-Rust ratios. `--node-only` is useful while rebuilding the local Rust
-compiler Wasm; it is not a parity measurement.
+Or download the artifact from a successful CI run for the same compiler-input
+closure:
+
+```bash
+pnpm compiler:download
+```
+
+The download additionally validates the complete compiler-input digest before
+installing anything.
+
+## Host ABI
+
+The compiler exports one versioned session ABI for source and portable-AST
+installation, graph configuration, checking, analysis, evaluation, tagged test
+execution, canonical AST export, Runtime-HIR preparation, and compilation.
+Transport failures preserve the compiler's three public classes:
+
+- located source diagnostics;
+- explicit target refusals;
+- compiler invariant failures.
+
+Analysis facts are request-local. Editor hovers consume span/type facts,
+`blot ownership` consumes last-use and spent-binding facts, and `blot test`
+executes Rust-discovered declaration tags. These facts are observations of the
+Rust check, not a second host analysis.
+
+The compiler-distributed prelude snapshot contains the Rust AST and checked
+certificate. The host installs it under the ordinary resolved prelude path.
+Package capsules are different: package format 4 stores canonical AST JSON
+exported by Rust, but consumers still check and specialize that graph normally.
+
+## Caching
+
+The Node host keys a resident source graph by portable syntax, dependencies, and
+included bytes. The Rust session owns semantic caches and invalidates a changed
+module together with its importers. Runtime HIR and artifacts are copied at the
+public boundary so caller mutation cannot poison the cache.
+
+## Conformance and benchmark
+
+`pnpm conformance` compares the Rust evaluator with emitted Wasm on the focused
+runtime corpus. Rust unit tests and the executable source catalog cover
+checking, diagnostics, ownership, staging, and lowering contracts.
+
+`pnpm run benchmark -- <root.blot>` compares the high-level host adapter with
+the direct compiler-Wasm transport. Both routes execute the same semantic
+implementation; the comparison measures host overhead and first confirms that
+Runtime HIR and ABI artifacts are identical.
 
 ## CI boundary
 
-Pull-request and main-branch CI install exact package versions with pnpm, run
-the Node tests and checker, build the Rust compiler Wasm once, run Rust tests,
-and require strict dual-compiler parity against those exact bytes. CI records
-the pinned Rust version, SHA-256, byte length, and source-tree identity, then
-publishes the compiler and a Cargo-free runnable workspace for 90 days. The
-workspace includes the compiler artifact used by parity and benchmarks in that
-run.
-
-The binary itself is ignored derived output. `pnpm compiler:download` selects a
-successful CI run for the current commit, downloads `blot-rust-compiler`, and
-installs it only when its manifest matches the checkout tree and content.
-`pnpm compiler:build` is the local Cargo fallback and refreshes the tracked
-prelude snapshot. Ordinary `pnpm blot check` and `pnpm blot build` need neither
-the production compiler artifact nor Cargo; parity and Rust conformance do.
+CI builds the compiler bundle once with the pinned toolchain, uploads those
+exact bytes, and uses them for TypeScript checks, Node and regression tests,
+conformance, package tests, smoke builds, and benchmarks. The runnable workspace
+contains the same Wasm, manifest, and prelude snapshot. Compiler commands never
+initialize WebGPU or invoke a native toolchain at runtime.

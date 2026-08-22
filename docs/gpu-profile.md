@@ -391,18 +391,12 @@ Two things the profile did _not_ cost, contrary to the gpu-duck reference:
 
 ## WebGPU comparison
 
-The Baba 9 general-profile CPU frontend is the compiler authority. The WebGPU
-executor can still be compared with it when an adapter is available:
-
-```bash
-just parity
-```
-
-This diagnostic compares raw tokens, nodes, edges, symbols, and types word for
-word. Baba 9's general CPU and WebGPU executors can currently choose different
-node orders or reject different nested-island candidates, so this comparison is
-not a Blot release gate. `deno task generate`, the CPU corpus gate, lowering,
-and the executable catalog are the release checks.
+The Baba 9 general-profile CPU frontend is the compiler authority. A WebGPU
+executor may still be compared with it by an explicit conformance adapter, but
+that adapter is not part of the compiler or a Blot release gate. Baba's general
+CPU and WebGPU executors can choose different node orders or reject different
+nested-island candidates. `deno task generate`, the CPU corpus gate, Rust
+lowering, and the executable catalog are the release checks.
 
 The corpus includes `src/prelude/*.blot`. The prelude is blot source and gets no
 exemption from the compiler's CPU frontend contract.

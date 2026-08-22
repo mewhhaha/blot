@@ -44,15 +44,15 @@ rejects `sorry`, `admit`, or `axiom` declarations in the formal source.
 
 ## Correspondence boundary
 
-The syntax is a model of the stable subset, not a serialization of the
-TypeScript or Rust arenas. The correspondence is structural: `Term` mirrors
-typed Core's result index and closed residual forms; `HirOperation` mirrors the
-validated integer, branch, proved-array, and host-effect operations that cross
-the backend boundary. Source modules, parsing, reflection, SIMD, desugarings,
-and the public ABI remain intentionally outside this first artifact.
+The syntax is a model of the stable subset, not a serialization of the Rust
+arenas. The correspondence is structural: `Term` mirrors typed Core's result
+index and closed residual forms; `HirOperation` mirrors the validated integer,
+branch, proved-array, and host-effect operations that cross the backend
+boundary. Source modules, parsing, reflection, SIMD, desugarings, and the public
+ABI remain intentionally outside this first artifact.
 
-The bounded TypeScript/Rust parity, mutation, artifact-reproducibility, ABI, and
-emitted-Wasm gates remain authoritative executable checks. The mechanization
-supplements them; it does not replace them.
+The Rust evaluator/emitted-Wasm agreement, mutation, artifact-reproducibility,
+ABI, and conformance gates remain authoritative executable checks. The
+mechanization supplements them; it does not replace them.
 
 Run `lake build` from this directory.

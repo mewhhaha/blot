@@ -961,9 +961,9 @@ const Iterable = fn (collection, value, state) => {
 //
 // It is a *state* and a step rather than a closure that returns the next
 // closure. Both express the same protocol, but the closure form allocates one
-// closure per element and leaves gpufuck resolving a lambda set that grows with
-// the loop; this form is one closure total and a plain value threaded through
-// it, which is a Core loop.
+// closure per element and leaves residual lowering resolving a lambda set that
+// grows with the loop; this form is one closure total and a plain value threaded
+// through it, which is an ordinary Runtime-HIR loop.
 //
 // The protocol is source. `range` and `items` are ordinary functions, so a new
 // kind of sequence is a function someone writes rather than a case the compiler

@@ -1,11 +1,10 @@
 /**
- * The Blot language frontend, evaluator, checker, and WebAssembly backend.
+ * Blot syntax tooling and the host for its Rust/Wasm compiler.
  *
  * @module
  */
 
-export * from "./src/conformance/gpufuck/host.ts";
-export * from "./src/check/mod.ts";
+export * from "./src/check.ts";
 export * from "./src/compiler.ts";
 export * from "./src/diagnostic.ts";
 export * from "./src/language_service.ts";

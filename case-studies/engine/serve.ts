@@ -10,16 +10,15 @@
 //            the page swaps in a new worker. The camera survives because the
 //            camera was never in the guest.
 //
-// Compiling needs a WebGPU adapter. One session is held for the life of the
-// server, so a rebuild is a compile and not a device acquisition.
+// One Rust/Wasm compiler session is held for the life of the server.
 
-import { BlotCompilerSession } from "../../src/conformance/gpufuck/compile.ts";
+import { Compiler } from "../../src/compiler/session.ts";
 
 const root = new URL(".", import.meta.url);
 const source = "case-studies/engine/main.blot";
 const port = 8321;
 
-const session = await BlotCompilerSession.create();
+const session = await Compiler.create();
 
 interface Entity {
   readonly kind: number;
@@ -78,8 +77,16 @@ let generation = 1;
 
 async function rebuild(): Promise<string | null> {
   try {
-    const built = await session.build(source);
-    const exported = built.manifest.exports.find(
+    const built = await session.compile(source);
+    const manifest = JSON.parse(
+      new TextDecoder().decode(built.manifestBytes),
+    ) as {
+      readonly exports: readonly {
+        readonly sourceName: string;
+        readonly name: string | null;
+      }[];
+    };
+    const exported = manifest.exports.find(
       (candidate) => candidate.sourceName === "default",
     );
     if (exported === undefined || exported.name === null) {
@@ -92,8 +99,7 @@ async function rebuild(): Promise<string | null> {
       revision,
     };
     console.log(
-      `code r${revision}: ${built.wasm.byteLength} bytes, ` +
-        `${built.storeReads.proven}/${built.storeReads.total} bounds checks removed`,
+      `code r${revision}: ${built.wasm.byteLength} bytes`,
     );
     return null;
   } catch (error) {

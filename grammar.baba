@@ -335,8 +335,8 @@ operand = (
 // `[...x]` ambiguous.
 prefix_operator = (OPERATOR | QUESTION) ;
 
-// Unary application by juxtaposition: `f x y` is `(f x) y`. This matches
-// gpufuck's unary Core exactly, so lowering needs no currying pass.
+// Unary application by juxtaposition: `f x y` is `(f x) y`. The semantic AST
+// uses that same unary shape, so lowering needs no currying pass.
 postfix_expression = (
   value:primary_expression
   suffixes:field_suffix*

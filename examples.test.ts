@@ -18,11 +18,11 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { basename, join } from "@std/path";
 import { parse } from "./src/syntax/parse.ts";
-import { evaluateFile } from "./src/run.ts";
-import { show } from "./src/comptime/value.ts";
+import { evaluateFile, show } from "./src/run.ts";
 import { BlotError } from "./src/diagnostic.ts";
 import { LoadError } from "./src/load.ts";
-import { checkFile } from "./src/check/mod.ts";
+import { checkFile } from "./src/check.ts";
+import { Compiler } from "./src/compiler/session.ts";
 
 /**
  * The diagnostic each semantic rejection must produce, and which stage catches
@@ -401,15 +401,21 @@ for (const name of await blotFiles("examples/rejected/semantics")) {
         );
       }
       const path = join("examples/rejected/semantics", name);
-      // A `build` rejection needs a WebGPU adapter, so it is asserted by
-      // `just wasm` rather than here; checking it must still pass.
-      if (expected.stage === "build") {
-        await checkFile(path);
-        return;
+      let run: () => Promise<unknown>;
+      if (expected.stage === "check") {
+        run = () => checkFile(path);
+      } else if (expected.stage === "build") {
+        run = async () => {
+          const compiler = await Compiler.create();
+          try {
+            return await compiler.compile(path);
+          } finally {
+            compiler.destroy();
+          }
+        };
+      } else {
+        run = () => evaluateFile(path, { write: () => {} });
       }
-      const run = expected.stage === "check"
-        ? () => checkFile(path)
-        : () => evaluateFile(path, { write: () => {} });
 
       let message: string | null = null;
       try {

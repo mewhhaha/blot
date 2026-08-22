@@ -1,11 +1,11 @@
 // What reaches WebAssembly today.
 //
-// Everything here compiles through gpufuck's Functional Core: prelude
+// Everything here compiles through Blot Runtime HIR: prelude
 // operators, comparisons, records, tuples, unions, and recursion. `blot build`
 // emits a `.wasm` whose `main` export returns the module's result.
 //
 // The prelude is compiled, not inlined at every use — `+` is `Num.add`, an
-// ordinary closure that becomes one Core definition.
+// ordinary closure that becomes one runtime definition.
 
 open import "blot:prelude"
 

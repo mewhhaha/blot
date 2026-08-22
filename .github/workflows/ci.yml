@@ -1,4 +1,4 @@
-name: Node Wasm CI
+name: Rust/Wasm compiler CI
 
 on:
   pull_request:
@@ -55,21 +55,15 @@ jobs:
           toolchain: 1.97.1
           targets: wasm32-unknown-unknown
           components: clippy, rustfmt
+      - run: pnpm install --frozen-lockfile
       - name: Rebuild Rust compiler Wasm
         run: >-
           deno run
           --allow-read
           --allow-write
-          --allow-run=cargo
+          --allow-run=cargo,git,rustc
           --allow-env
           scripts/build_compiler.ts
-      - name: Describe Rust compiler artifact
-        run: >-
-          deno run
-          --allow-read
-          --allow-write
-          --allow-run=git,rustc
-          scripts/package_compiler_artifact.ts
       - name: Upload Rust compiler artifact
         uses: actions/upload-artifact@v7
         with:
@@ -91,7 +85,6 @@ jobs:
           -- -D warnings
       - name: Test Rust compiler
         run: cargo test --manifest-path compiler/Cargo.toml
-      - run: pnpm install --frozen-lockfile
       - name: Check TypeScript
         run: deno check .
       - name: Check formatting
@@ -127,14 +120,13 @@ jobs:
           cd "$workspace"
           test -f AGENTS.md
           test -f case-studies/agent/main.blot
-          test -f conformance/node-rust-gaps.json
           test -f experiments/node-wasm-benchmark.ts
           test -f generated/compiler/compiler.wasm
           test -f generated/compiler/compiler-artifact.json
           test -s .pnp.cjs
           pnpm exec tsx --import ./src/node/polyfills.mjs src/node/cli.ts check examples/minimal.blot
           pnpm exec tsx --import ./src/node/polyfills.mjs --test src/node/pipeline.test.ts
-          pnpm parity:strict examples/minimal.blot
+          pnpm conformance
       - name: Upload runnable Node workspace
         uses: actions/upload-artifact@v7
         with:
@@ -146,7 +138,6 @@ jobs:
       - run: pnpm run check
       - run: pnpm run smoke
       - run: pnpm blot run examples/node-runner-demo.blot
-      - run: pnpm parity:strict
       - run: pnpm test:compiler
       - run: pnpm verify:compiler
       - run: pnpm run benchmark -- examples/storage.blot

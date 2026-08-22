@@ -263,7 +263,7 @@ The executable acceptance boundary for persistent decomposition includes:
   output agrees in the evaluator and emitted Wasm;
 - Runtime-HIR inspection proving the sort remains ordinary Store/control-flow
   code rather than a collection-specific operation; and
-- Node development and Rust production acceptance parity for the same source.
+- high-level host and direct Rust/Wasm compiler acceptance for the same source.
 
 ## 6. Runtime theorem obligations
 

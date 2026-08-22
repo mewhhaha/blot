@@ -1,4 +1,4 @@
-import { build } from "../src/conformance/gpufuck/compile.ts";
+import { Compiler } from "../src/compiler/session.ts";
 
 type Study =
   | {
@@ -386,13 +386,23 @@ if (study.kind === "grep") {
   };
 }
 
-const built = await build(study.source);
+const compiler = await Compiler.create();
+const built = await compiler.compile(study.source);
+compiler.destroy();
 const wasm = new Uint8Array(built.wasm);
 const module = await WebAssembly.compile(wasm);
 const instance = await WebAssembly.instantiate(module, imports);
 guest.attach(instance);
 
-const exported = built.manifest.exports.find((candidate) =>
+const manifest = JSON.parse(
+  new TextDecoder().decode(built.manifestBytes),
+) as {
+  readonly exports: readonly {
+    readonly sourceName: string;
+    readonly name: string | null;
+  }[];
+};
+const exported = manifest.exports.find((candidate) =>
   candidate.sourceName === "default"
 );
 if (exported?.name === null || exported?.name === undefined) {

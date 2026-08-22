@@ -1,8 +1,8 @@
 # Core WebAssembly ABI
 
 `blot build` publishes a stable Core WebAssembly interface. It does not expose
-gpufuck's tagged values or heap objects. Generated adapters lift caller values
-into that private representation and lower results back out.
+Runtime HIR's private Store, sum, or closure layouts. Generated adapters lift
+caller values into that private representation and lower results back out.
 
 The current contract is Blot Core Wasm ABI 1.0. A compatible compiler may add
 manifest fields or exports that do not change an existing declaration. Changing
@@ -145,8 +145,8 @@ The manifest records:
 
 The sidecar and custom-section bytes are identical, including the final newline.
 The canonical type tree contains record field names, variant case names, and
-seal names, so compatibility is structural rather than dependent on gpufuck's
-private constructor numbers.
+seal names, so compatibility is structural rather than dependent on private
+constructor numbers.
 
 ## Runtime target status
 

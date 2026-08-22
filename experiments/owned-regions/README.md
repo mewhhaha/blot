@@ -95,5 +95,5 @@ regression boundary; these timings are descriptive rather than a gate.
 classification, `<>` is ordinary array-monoid append, and non-tail recursion
 becomes a residual `call.direct`. Proof-refined dynamic `@array.take` and
 `@array.split` return plain tuples and compile to generic Store length/read/grow
-operations and control flow in both compiler implementations. No
+operations and control flow in both compiler entry points. No
 collection-algorithm opcode crosses Runtime HIR.

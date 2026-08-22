@@ -127,10 +127,11 @@ sig b = Bit
 let b = 1
 ```
 
-`src/check/bridge.ts` is where that conversion lives. It returns `null` for a
-value that is not a type — a closure, whose type comes from its body — and the
-caller falls back to inference. Returning `null` rather than `⊤` is deliberate:
-silently widening to "anything" would turn a missing case into a passing check.
+The bridge in `compiler/src/typecheck.rs` owns that conversion. It returns no
+type for a value that is not a type — a closure, whose type comes from its body
+— and the caller falls back to inference. Returning `null` rather than `⊤` is
+deliberate: silently widening to "anything" would turn a missing case into a
+passing check.
 
 The consequence is that `blot check` evaluates compile-time code. That is not an
 implementation shortcut; it is what "types are values" means.
@@ -153,23 +154,23 @@ arm from its own pattern. The narrowed type is _computed_, never represented:
 no complement constructor to add. `constrain` is not called at all, and
 biunification cannot observe that the feature exists.
 
-The set algebra is `src/check/setops.ts`, written over ground types only and
-refusing everything else. It is deliberately not `@type.intersect` or
+The set algebra lives in `compiler/src/typecheck.rs`, written over ground types
+only and refusing everything else. It is deliberately not `@type.intersect` or
 `@type.diff`, which filter members with the comptime `equal` — and `equal` on a
 range compares exact bounds, so `@type.diff Int 1` answers `Int` and readmits
 the value it was asked to remove.
 
-What a condition proves comes from `src/check/narrow.ts`, and the interesting
-part is that it is derived from the operator's compile-time _value_ rather than
-from its name. `==` is a fixity entry naming `Eq.eq`, and any module may bind
-that name to anything, so a checker that assumed `==` meant equality would prove
-a false fact about a program that shadowed it — a program writable today.
-Instead a value is accepted only when it is `fn p1 => fn p2 => body` with every
-occurrence of both parameters inside one `@int.cmp p1 p2`. Then
-`op(a, b) = H(cmp(a, b))` for some `H` the checker never sees, `@int.cmp` is
-compiler-owned and total on integers with a three-element codomain, and three
-probes tabulate `H` everywhere. That is why narrowing reaches `Int` and not just
-an enumerable union: no sampling argument could.
+What a condition proves comes from `compiler/src/predicate_refinement.rs`, and
+the interesting part is that it is derived from the operator's compile-time
+_value_ rather than from its name. `==` is a fixity entry naming `Eq.eq`, and
+any module may bind that name to anything, so a checker that assumed `==` meant
+equality would prove a false fact about a program that shadowed it — a program
+writable today. Instead a value is accepted only when it is
+`fn p1 => fn p2 => body` with every occurrence of both parameters inside one
+`@int.cmp p1 p2`. Then `op(a, b) = H(cmp(a, b))` for some `H` the checker never
+sees, `@int.cmp` is compiler-owned and total on integers with a three-element
+codomain, and three probes tabulate `H` everywhere. That is why narrowing
+reaches `Int` and not just an enumerable union: no sampling argument could.
 
 Two guards carry the soundness, and both were measured rather than assumed. The
 first is that the operator's value is read out of the _type_ environment, paired

@@ -1,9 +1,8 @@
 import { assert, assertEquals } from "@std/assert";
 import { fromFileUrl, join } from "@std/path";
-import { checkSource } from "../../src/check/mod.ts";
-import { show } from "../../src/comptime/value.ts";
+import { checkSource } from "../../src/check.ts";
 import { BlotError } from "../../src/diagnostic.ts";
-import { evaluateFile } from "../../src/run.ts";
+import { evaluateFile, show } from "../../src/run.ts";
 
 const path = "/tmp/blot-owned-region-source-test.blot";
 const structuralQuicksortPath = fromFileUrl(

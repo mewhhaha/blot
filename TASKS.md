@@ -6,18 +6,18 @@ remain outside its scope.
 
 ## Completed compiler boundaries
 
-1. **Rust production host.** `ProductionCompiler` gives the CI-built Rust/Wasm
-   compiler the resident `check`, `prepare`, `compile`, and `destroy` contract
-   used by the Node development compiler. It installs exact source graphs and
+1. **Rust compiler host.** `Compiler` gives the Rust/Wasm compiler the resident
+   `check`, `analyze`, `evaluate`, `test`, `prepare`, `compile`, and `destroy`
+   contract used by every semantic command. It installs exact source graphs and
    transports source diagnostics, target refusals, and compiler invariant
    failures without synthetic source locations.
 
 2. **Closed `collect` inference.** Empty-array origins constrain the same
    homogeneous element variable as recursive pushes.
    `collect (Iter.range
-   (0, 4))` has the principal result `[Int]` in both
-   TypeScript and Rust while empty iteration remains valid. The executable
-   contract is `examples/collect_principal_type.blot`.
+   (0, 4))` has the principal result `[Int]` while empty
+   iteration remains valid. The executable contract is
+   `examples/collect_principal_type.blot`.
 
 3. **Progressive Runtime HIR.** Typed Core nodes carry structural type
    identities and explicit settled or pending HIR-builder state. Closed static
@@ -29,11 +29,9 @@ remain outside its scope.
    byte-identical artifact check are recorded in
    `experiments/progressive-hir-performance.md`.
 
-4. **Typed-Core bounded oracle.** The gpupaper conformance oracle consumes typed
-   Core's `define`/`bind` schedule, imports, handlers, constants, residual
-   closures, types, and proof markers. The source evaluator remains an
-   independent observation model. A poisoned-origin regression test proves the
-   adapter does not recover scheduling semantics from source provenance.
+4. **Single semantic implementation.** TypeScript semantic passes and the
+   dual-compiler parity inventory were removed. The Rust evaluator and emitted
+   Wasm remain independent observations of one checked program.
 
 5. **Mechanized stable core.** `formal/lean/Blot/Stable.lean` contains the first
    intrinsically typed stable residual model: pure bindings, finite function
@@ -53,6 +51,6 @@ just test
 
 Compiler-artifact changes additionally rebuild the Rust compiler and prelude
 snapshot, verify reproducibility, run the Rust compiler integration suite, and
-run `verify:compiler` against the exact bounded-oracle rejection inventory.
-`LANGUAGE.md` and the focused compiler specifications remain part of the same
-change whenever their contracts move.
+run `pnpm conformance` against the focused runtime corpus. `LANGUAGE.md` and the
+focused compiler specifications remain part of the same change whenever their
+contracts move.

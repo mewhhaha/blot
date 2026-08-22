@@ -19,8 +19,8 @@ Blot is a strict, expression-oriented functional language with:
 - separate flow analysis for linear, affine, and borrowed bindings;
 - modules represented as unary functions;
 - surface control forms lowered to ordinary recursion and cases; and
-- a validated Runtime HIR path through gpupaper's Rust/WebAssembly emitter, with
-  the GPU pipeline retained only as an explicit conformance check.
+- a validated Runtime HIR path through the Rust/WebAssembly emitter, with the
+  GPU pipeline retained only as an explicit conformance check.
 
 There is no separate type language, type namespace, assignment operation,
 exception syntax, implicit prelude, or ambient authority.
@@ -128,8 +128,8 @@ than one performed on it. `Float32.widen` goes back, exactly, because every
 and count are part of the type; none is a tuple or record that can be projected
 structurally. `Vec4`, `Int32x4`, `Int16x8`, and `Int8x16` are the prelude
 namespaces for their operations. The emitted `wasm-simd128` artifact uses native
-vector instructions. The gpufuck conformance path may implement an integer
-vector lane by lane, but must produce the same value.
+vector instructions. An independent conformance oracle may implement an integer
+vector lane by lane, but it must produce the same value.
 
 Integer lane arithmetic wraps modulo (2^{32}), (2^{16}), or (2^8). Shift amounts
 are reduced modulo the lane width. Operations whose interpretation matters say
@@ -630,6 +630,10 @@ An already-applied expression that performs while it is evaluated remains valid
 on the right of `<-`; its result is bound directly. A projected nullary
 operation is itself an effect value, so `time <- Clock.now` and
 `time <- Clock.now ()` have the same result and effect row.
+
+The result bound by `<-` is monomorphic. Later uses refine that one runtime
+value, including the inferred result type of an entry-module capability; an
+effectful computation is never generalized into a reusable polymorphic value.
 
 `let`, `const`, `:=`, `open`, and function results written without a block are
 pure value positions. The expression in `return value` is a tail computation of
@@ -2429,7 +2433,7 @@ statically and also guarded during evaluation.
 
 Effects not named by the handler remain in the inferred row. Handler
 specialization is lexical: the effect, computation, and clause shape must be
-statically visible. gpufuck has no runtime handler representation.
+statically visible. Runtime HIR has no general runtime handler representation.
 
 ### 12.2 Handler composition
 
@@ -2801,14 +2805,14 @@ lowering may emit the Store access or decomposition. After replay, the direct
 Runtime-HIR emitter omits a second bounds decision: an invalid index must have
 been refused by the checker, while a total prelude read or write reaches the
 direct primitive only through its ordinary successful guard. Gpufuck's range
-pass applies the same erasure to the certified residual comparison.
+lowering applies the same erasure to the certified residual comparison.
 
 `@array.indexed xs` is the proof-producing traversal path (§9.2). Its `.step`
 performs one bounds decision to decide whether another element exists. A
 successful step packages the already selected element with its index proof, so
 reusing that index for the same immutable array requires no second check. The
 package is compiler evidence, not a source constructor, and is erased before the
-gpufuck boundary.
+Runtime-HIR boundary.
 
 The relationship survives ordinary immutable bindings:
 
@@ -2845,7 +2849,9 @@ The checker has one judgment, `subject satisfies requirement`. Both a `sig` and
 following lambda and therefore requires the canonical type form.
 
 `@satisfies value requirement` is the expression form. It returns `value`
-unchanged and accepts either form of requirement:
+unchanged and accepts either form of requirement. The compiler retains a
+canonical requirement as representation evidence, so an empty array refined to
+`[T]` still has the element layout needed by residual code:
 
 1. A canonical type value constrains the subject's open inferred type.
 2. A compile-time predicate receives the subject's closed, reifiable inferred
@@ -3140,15 +3146,12 @@ update this specification.
 
 ## 15. Runtime and compilation
 
-The reference evaluator gives runtime and compile-time code the same semantics,
-apart from integer representation and phase restrictions. A valid compiled
-program accepted by the conformance target must agree across:
+The Rust evaluator gives runtime and compile-time code the same semantics, apart
+from integer representation and phase restrictions. A valid compiled program
+must agree between the Rust evaluator and emitted WebAssembly. Independent
+oracles may consume validated Runtime HIR, but they do not define acceptance.
 
-1. the reference evaluator;
-2. gpufuck's GPU evaluator; and
-3. emitted WebAssembly.
-
-Before gpufuck lowering, Blot:
+Before Runtime-HIR lowering, Blot:
 
 - evaluates and erases compile-time-only values;
 - elaborates live block declarations into explicit Core `define` and `bind`
@@ -3161,7 +3164,7 @@ Before gpufuck lowering, Blot:
 - specializes algebraic-subtyping results into concrete Core uses;
 - lowers shapes and tuples to nominal records;
 - lowers constructor sets to nominal variants;
-- lowers arrays to gpufuck `Store`;
+- lowers arrays to backend `Store` values;
 - marks a Store update owned only when it consumes a proved linear or affine
   array;
 - lowers each recursive group to one local `let-rec` group;
@@ -3203,8 +3206,8 @@ self-only result equation with no constructor case is refused rather than given
 an invented inhabitant.
 
 A residual structurally polymorphic function is specialized to a concrete record
-shape before gpufuck. The shape is the one that _flows_ to the projection, not
-the narrower one the body reads: inference follows what flowed into the
+shape before Runtime HIR. The shape is the one that _flows_ to the projection,
+not the narrower one the body reads: inference follows what flowed into the
 projected variable, across the instantiation a `let`-bound scheme makes for each
 of its callers, so `let get_x = fn v => v.x;` takes its record from the call
 sites. When nothing flows in — a parameter whose caller is outside the program —
@@ -3260,18 +3263,16 @@ time, the ordinary dynamic-shape refusal still applies.
 ### 15.1 Core WebAssembly ABI
 
 `blot build` validates Blot Runtime HIR, constructs the ABI adapters specified
-here, lowers to gpupaper's language-independent Core, and emits the resulting
-plan through gpupaper's checked Rust/WebAssembly emitter. Gpupaper contributes
-no Blot-specific HIR, ABI rule, or adapter. The compiler parses through Baba 9's
-CPU frontend and materializes its compact CST without initializing WebGPU. When
-Baba reports only its built-in signed-I32 literal policy, Blot re-ingests those
-already-identified token spans with offset-preserving zero spellings and
-materializes the original I64 text; no tokenization rule is duplicated. The
-separate conformance tools exercise the GPU frontend and evaluator, but they are
-not compiler targets. Generated modules implement Blot Core Wasm ABI 1.0.
-Backend-private values and heap objects never cross the generated adapters,
-which expose the synchronous memory32, UTF-8 subset of the Component Model
-Canonical ABI.
+here, and emits the resulting plan through the checked Rust/WebAssembly emitter.
+The compiler parses through Baba 9's CPU frontend and materializes its compact
+CST without initializing WebGPU. When Baba reports only its built-in signed-I32
+literal policy, Blot re-ingests those already-identified token spans with
+offset-preserving zero spellings and materializes the original I64 text; no
+tokenization rule is duplicated. The external conformance tools may exercise
+alternate frontends or evaluators, but they are not compiler targets. Generated
+modules implement Blot Core Wasm ABI 1.0. Backend-private values and heap
+objects never cross the generated adapters, which expose the synchronous
+memory32, UTF-8 subset of the Component Model Canonical ABI.
 
 Each runtime field of a record module result is exported as `blot:<field>`. A
 module whose result is not a record has one export, `blot:default`, which is

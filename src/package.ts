@@ -1,5 +1,5 @@
 import { dirname, isAbsolute, relative, resolve } from "@std/path";
-import { checkFile } from "./check/mod.ts";
+import { Compiler } from "./compiler/session.ts";
 import { load, type Loaded, refreshLoadedModules } from "./load.ts";
 import {
   encodeModuleCapsule,
@@ -8,7 +8,6 @@ import {
   PACKAGE_FORMAT_VERSION,
   readPackageManifest,
 } from "./package_format.ts";
-import { encodePortableModule } from "./syntax/portable.ts";
 
 export interface BuiltPackageExport {
   readonly name: string;
@@ -25,41 +24,47 @@ export async function buildPackage(
   const packageRoot = dirname(absoluteManifest);
   const manifest = await readPackageManifest(absoluteManifest);
   await refreshLoadedModules();
+  const compiler = await Compiler.create();
   const prepared: Array<BuiltPackageExport & { readonly contents: string }> =
     [];
   const builtTargets = new Set<string>();
-  for (
-    const [name, exported] of [...manifest.exports].sort(([left], [right]) =>
-      left.localeCompare(right)
-    )
-  ) {
-    if (exported.built === undefined) {
-      throw new Error(
-        `Blot package export ${JSON.stringify(name)} in ${
-          JSON.stringify(absoluteManifest)
-        } has no built target`,
-      );
+  try {
+    for (
+      const [name, exported] of [...manifest.exports].sort(([left], [right]) =>
+        left.localeCompare(right)
+      )
+    ) {
+      if (exported.built === undefined) {
+        throw new Error(
+          `Blot package export ${JSON.stringify(name)} in ${
+            JSON.stringify(absoluteManifest)
+          } has no built target`,
+        );
+      }
+      if (builtTargets.has(exported.built)) {
+        throw new Error(
+          `Blot package manifest ${
+            JSON.stringify(absoluteManifest)
+          } repeats built target ${JSON.stringify(exported.built)}`,
+        );
+      }
+      builtTargets.add(exported.built);
+      await compiler.check(exported.source);
+      const asts = await compiler.portableGraph(exported.source);
+      const root = await load(exported.source);
+      const payload = moduleCapsule(root, packageRoot, exported.source, asts);
+      const source = await encodeModuleCapsule(payload);
+      prepared.push({
+        name,
+        source: exported.source,
+        built: exported.built,
+        bytes: new TextEncoder().encode(source).byteLength,
+        modules: payload.modules.length,
+        contents: source,
+      });
     }
-    if (builtTargets.has(exported.built)) {
-      throw new Error(
-        `Blot package manifest ${
-          JSON.stringify(absoluteManifest)
-        } repeats built target ${JSON.stringify(exported.built)}`,
-      );
-    }
-    builtTargets.add(exported.built);
-    await checkFile(exported.source);
-    const root = await load(exported.source);
-    const payload = moduleCapsule(root, packageRoot, exported.source);
-    const source = await encodeModuleCapsule(payload);
-    prepared.push({
-      name,
-      source: exported.source,
-      built: exported.built,
-      bytes: new TextEncoder().encode(source).byteLength,
-      modules: payload.modules.length,
-      contents: source,
-    });
+  } finally {
+    compiler.destroy();
   }
   for (const artifact of prepared) {
     await Deno.mkdir(dirname(artifact.built), { recursive: true });
@@ -72,6 +77,7 @@ function moduleCapsule(
   root: Loaded,
   packageRoot: string,
   rootSource: string,
+  asts: ReadonlyMap<string, string>,
 ): ModuleCapsulePayload {
   const ordered: Loaded[] = [];
   const identifiers = new Map<Loaded, string>();
@@ -138,10 +144,14 @@ function moduleCapsule(
       if (!path.startsWith(".")) path = `./${path}`;
       return { specifier, path, text: included.source };
     });
+    const ast = asts.get(loaded.path);
+    if (ast === undefined) {
+      throw new Error(`Rust compiler omitted portable AST for ${loaded.path}`);
+    }
     return {
       id,
       name,
-      ast: JSON.stringify(encodePortableModule(loaded.module)),
+      ast,
       imports,
       includes,
     };

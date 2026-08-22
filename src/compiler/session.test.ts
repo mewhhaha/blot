@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { Compiler } from "./session.ts";
 
-test("development compiler exposes check, prepare, compile", async () => {
+test("Rust compiler host exposes check, prepare, compile", async () => {
   const compiler = await Compiler.create();
   try {
     const checked = await compiler.check("examples/minimal.blot");
@@ -23,7 +23,7 @@ test("development compiler exposes check, prepare, compile", async () => {
   }
 });
 
-test("destroyed development compiler refuses new work", async () => {
+test("destroyed Rust compiler host refuses new work", async () => {
   const compiler = await Compiler.create();
   compiler.destroy();
   await assert.rejects(
@@ -91,7 +91,7 @@ test(
       );
       await assert.rejects(
         compiler.check(root),
-        /no field `\.base`/,
+        /does not flow into \{ \.base = ⊤ \}/,
       );
     } finally {
       compiler.destroy();

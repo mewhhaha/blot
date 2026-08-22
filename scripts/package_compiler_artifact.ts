@@ -1,7 +1,9 @@
 import {
   type CompilerArtifactManifest,
   describeCompilerArtifact,
+  sha256,
 } from "./compiler_artifact.ts";
+import { compilerInputIdentity } from "./compiler_inputs.ts";
 
 const repository = new URL("../", import.meta.url);
 const compiler = new URL(
@@ -14,11 +16,16 @@ const manifestPath = new URL(
 );
 
 const bytes = await Deno.readFile(compiler);
+const prelude = await Deno.readFile(
+  new URL("../generated/compiler/prelude.snapshot", import.meta.url),
+);
 const manifest: CompilerArtifactManifest = await describeCompilerArtifact(
   bytes,
   await commandText("git", "rev-parse", "HEAD"),
   await commandText("git", "rev-parse", "HEAD^{tree}"),
   await commandText("rustc", "--version"),
+  await sha256(prelude),
+  await compilerInputIdentity(),
 );
 await Deno.writeTextFile(
   manifestPath,

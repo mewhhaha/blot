@@ -14,11 +14,9 @@ studies live in [case-studies/](case-studies/): a grep-like file search, an
 interactive terminal program, an agent-style conversation loop, and a 3D engine
 with a browser host and hot reload.
 
-`@mewhhaha/blot` uses Node/TypeScript as the default compiler development
-environment. Node hosts Baba's checked-in generated parser and gpupaper's
-embedded Rust/Wasm emitter. Blot's CI-built Rust compiler Wasm is the production
-implementation; strict parity keeps both implementations on the same compiler
-contract. Blot's TypeScript passes connect the development pipeline:
+`@mewhhaha/blot` has one semantic compiler, implemented in Rust and distributed
+as Wasm. Node resolves source graphs and hosts that artifact; TypeScript owns
+only Baba-backed syntax tooling and the host shell:
 
 ```ts
 import { parse } from "@mewhhaha/blot";
@@ -54,11 +52,9 @@ claim that exponential recursion has become linear. The point of keeping the
 direct program in the corpus is to give optimization work a stable source-level
 target without replacing it with a hand-written different algorithm.
 
-The development and production compilers intentionally use the same phase
-vocabulary: `frontend`, `typecheck`, `hir`, `backend`, and `session`. The Node
-modules under `src/compiler/` are arranged to resemble the corresponding Rust
-modules under `compiler/src/`, so a feature can be developed readably in
-TypeScript and then ported phase-for-phase to production Rust.
+The Rust phases are `frontend`, `typecheck`, `hir`, `backend`, and `session`.
+There is no TypeScript fallback checker, evaluator, ownership pass, HIR lowerer,
+or emitter.
 
 Blot libraries can be distributed through an ordinary npm-linked package. The
 package owns a `blot.json` manifest and may ship both readable source and a
@@ -67,7 +63,7 @@ checked module capsule:
 ```json
 {
   "schema": "blot-package",
-  "version": 3,
+  "version": 4,
   "exports": {
     ".": {
       "source": "./src/mod.blot",
@@ -82,11 +78,11 @@ source and capsule exports from `node_modules`. An importer writes
 `import "@scope/package"`, or a declared package subpath, and Blot resolves the
 nearest `node_modules` package without executing its JavaScript. A valid
 `.blotc` is preferred and corrupt or unsupported built files fall back to the
-declared source. The capsule bundles the package-owned lowered AST graph and its
-includes without retaining source text, while package imports remain shared
-external edges. Consumer-specific typechecking and compile-time specialization
-still happen in the importer, so a reusable capsule is not final WebAssembly.
-See [spec/PACKAGES.md](spec/PACKAGES.md).
+declared source. The capsule bundles the package-owned Rust-exported AST graph
+and its includes without retaining source text, while package imports remain
+shared external edges. Consumer-specific typechecking and compile-time
+specialization still happen in the importer, so a reusable capsule is not final
+WebAssembly. See [spec/PACKAGES.md](spec/PACKAGES.md).
 
 The parser profile is a design tool, not an implementation afterthought. It
 rules out contextual lexing and recursive precedence grammar, keeping both the
@@ -135,30 +131,30 @@ backend consumes. A final `@array.set` or `@array.push` on a proved linear array
 reuses its Store allocation; ordinary shared arrays remain persistent. See
 [docs/ownership.md](docs/ownership.md).
 
-The compiler (M4) develops accepted programs through the Baba-Wasm → Node →
-gpupaper-Wasm pipeline; the CI-built Rust compiler Wasm is the production
-implementation. `pnpm blot check` and `pnpm blot build` need neither Deno nor
-native Rust; building produces caller-facing WebAssembly plus a JSON ABI
-manifest without executing the program. The identical manifest is embedded in
-the `blot:abi` custom section. See [docs/abi.md](docs/abi.md). Compile-time-only
-result fields are erased, runtime fields become named Wasm exports, host effects
-become typed imports, and one-shot handlers are specialized through non-tail
-resume and abort. See [docs/backend.md](docs/backend.md).
+The compiler (M4) develops accepted programs through one Rust pipeline hosted as
+Wasm by Node. `pnpm blot check` and `pnpm blot build` need neither Deno nor
+native Rust at runtime; building produces caller-facing WebAssembly plus a JSON
+ABI manifest without executing the program. The identical manifest is embedded
+in the `blot:abi` custom section. See [docs/abi.md](docs/abi.md).
+Compile-time-only result fields are erased, runtime fields become named Wasm
+exports, host effects become typed imports, and one-shot handlers are
+specialized through non-tail resume and abort. See
+[docs/backend.md](docs/backend.md).
 
-The public `Compiler` API runs the same pipeline as `pnpm blot build`. Baba's
-generated Wasm parses source, Blot's TypeScript checker and staging passes
-produce validated Runtime HIR, and gpupaper 0.1.6 lowers Core through its
-embedded Rust/Wasm emitter. The operational boundary is documented in
-[docs/compiler.md](docs/compiler.md).
+The public `Compiler` API runs the same Rust/Wasm pipeline as `pnpm blot build`.
+Node resolves the graph; Rust owns Baba-backed parsing, checking, staging,
+ownership, Runtime HIR, ABI closure, and Wasm emission. The operational boundary
+is documented in [docs/compiler.md](docs/compiler.md).
 
 The production compiler binary is not committed to Git. CI publishes a 90-day
 `blot-rust-compiler` artifact and a runnable workspace containing the same
 bytes. From a checkout at the corresponding commit, `pnpm compiler:download`
-downloads the latest successful artifact for that commit and verifies its source
-tree, pinned toolchain provenance, byte length, Wasm header, and SHA-256 before
-installing it under `generated/compiler/`. `pnpm compiler:build` reproduces it
-locally when Cargo and the Wasm target are available. Downloading requires an
-authenticated GitHub CLI that can read Actions artifacts for the repository.
+downloads the latest successful artifact for that commit and verifies its host
+ABI, prelude digest, exact compiler-input digest, byte length, Wasm header, and
+SHA-256 before installing it under `generated/compiler/`. `pnpm compiler:build`
+reproduces it locally when Cargo and the Wasm target are available. Downloading
+requires an authenticated GitHub CLI that can read Actions artifacts for the
+repository.
 
 ```ts
 import { Compiler } from "@mewhhaha/blot";

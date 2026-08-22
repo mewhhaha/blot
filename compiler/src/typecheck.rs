@@ -16,7 +16,7 @@ use crate::eval::{
 };
 use crate::value::{
     Domain as ValueDomain, Environment as ValueEnvironment, OpenedValues, Value, attach_signature,
-    child_env, lookup,
+    child_env, closure_signature, lookup,
 };
 
 type VariableId = u32;
@@ -866,6 +866,7 @@ fn validate_certificate_type(
 pub struct CachedModuleAnalyses {
     ownership: Result<(), Diagnostic>,
     ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
+    ownership_facts: Vec<crate::ownership::OwnershipFact>,
     safety: Result<(), Diagnostic>,
 }
 
@@ -883,6 +884,9 @@ pub struct Checker {
     active: RefCell<Vec<String>>,
     closure_types: RefCell<HashMap<(String, ExpressionId), Type>>,
     expression_types: RefCell<HashMap<(String, ExpressionId), Type>>,
+    analysis_expression_types: RefCell<HashMap<(String, ExpressionId), Type>>,
+    declaration_tags: RefCell<HashMap<(String, Span), Vec<String>>>,
+    ownership_facts: RefCell<HashMap<String, Vec<crate::ownership::OwnershipFact>>>,
     recursive_closure_bodies: RefCell<HashSet<(String, ExpressionId)>>,
     empty_array_elements: RefCell<HashSet<VariableId>>,
     incomplete_evaluations: RefCell<HashSet<String>>,
@@ -919,6 +923,9 @@ impl Checker {
             active: RefCell::new(Vec::new()),
             closure_types: RefCell::new(HashMap::new()),
             expression_types: RefCell::new(HashMap::new()),
+            analysis_expression_types: RefCell::new(HashMap::new()),
+            declaration_tags: RefCell::new(HashMap::new()),
+            ownership_facts: RefCell::new(HashMap::new()),
             recursive_closure_bodies: RefCell::new(HashSet::new()),
             empty_array_elements: RefCell::new(HashSet::new()),
             incomplete_evaluations: RefCell::new(HashSet::new()),
@@ -1060,6 +1067,15 @@ impl Checker {
         self.expression_types
             .borrow_mut()
             .retain(|(path, _), _| !paths.contains(path));
+        self.analysis_expression_types
+            .borrow_mut()
+            .retain(|(path, _), _| !paths.contains(path));
+        self.declaration_tags
+            .borrow_mut()
+            .retain(|(path, _), _| !paths.contains(path));
+        self.ownership_facts
+            .borrow_mut()
+            .retain(|path, _| !paths.contains(path));
         self.recursive_closure_bodies
             .borrow_mut()
             .retain(|(path, _)| !paths.contains(path));
@@ -1095,6 +1111,157 @@ impl Checker {
                 },
             }),
         }
+    }
+
+    pub fn analysis_json(&self, path: &str) -> serde_json::Value {
+        let checked = match self.check(path) {
+            Ok(checked) => checked,
+            Err(diagnostic) => {
+                return serde_json::json!({
+                    "ok": false,
+                    "diagnostic": {
+                        "code": diagnostic.code,
+                        "message": diagnostic.message,
+                        "origin": diagnostic.origin,
+                        "span": {
+                            "start": diagnostic.span.start,
+                            "end": diagnostic.span.end,
+                        },
+                    },
+                });
+            }
+        };
+        let module = self
+            .context
+            .modules
+            .borrow()
+            .get(path)
+            .expect("checked module must remain loaded")
+            .module
+            .clone();
+        let mut types = self
+            .analysis_expression_types
+            .borrow()
+            .iter()
+            .filter(|((module, _), _)| module == path)
+            .map(|((_, expression), type_)| {
+                serde_json::json!({
+                    "span": module.arena.expression_span(*expression),
+                    "type": self.show_analysis(type_),
+                })
+            })
+            .collect::<Vec<_>>();
+        types.sort_by_key(|fact| {
+            let span = &fact["span"];
+            (
+                span["start"].as_u64().unwrap_or_default(),
+                span["end"].as_u64().unwrap_or_default(),
+            )
+        });
+        let mut tags = self
+            .declaration_tags
+            .borrow()
+            .iter()
+            .filter(|((module, _), _)| module == path)
+            .map(|((_, span), names)| serde_json::json!({ "span": span, "names": names }))
+            .collect::<Vec<_>>();
+        tags.sort_by_key(|fact| fact["span"]["start"].as_u64().unwrap_or_default());
+        let mut ownership = self
+            .ownership_facts
+            .borrow()
+            .iter()
+            .flat_map(|(module, facts)| {
+                facts.iter().map(move |fact| {
+                    serde_json::json!({
+                        "path": module,
+                        "name": &fact.name,
+                        "span": fact.span,
+                        "last_use": fact.last_use,
+                        "spent": fact.spent,
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        ownership.sort_by_key(|fact| {
+            (
+                fact["path"].as_str().unwrap_or_default().to_owned(),
+                fact["span"]["start"].as_u64().unwrap_or_default(),
+            )
+        });
+        serde_json::json!({
+            "ok": true,
+            "type": self.show(&checked.result),
+            "effects": show_effects(&self.settle(checked.effects, true)),
+            "types": types,
+            "tags": tags,
+            "ownership": ownership,
+        })
+    }
+
+    pub(crate) fn effects_are_empty(&self, effects: &Type) -> bool {
+        empty_effects(&self.settle(effects.clone(), true))
+    }
+
+    pub(crate) fn expression_type_string(
+        &self,
+        path: &str,
+        expression: ExpressionId,
+    ) -> Option<String> {
+        self.expression_type(path, expression)
+            .map(|type_| self.show(&type_))
+    }
+
+    pub(crate) fn expression_is_nullary_unit(&self, path: &str, expression: ExpressionId) -> bool {
+        let Some(type_) = self.expression_type(path, expression) else {
+            return false;
+        };
+        let Type::Function {
+            parameter,
+            effects,
+            result,
+        } = type_
+        else {
+            return false;
+        };
+        matches!(*parameter, Type::Unit)
+            && empty_effects(&effects)
+            && matches!(*result, Type::Unit | Type::Bottom)
+    }
+
+    fn expression_type(&self, path: &str, expression: ExpressionId) -> Option<Type> {
+        let direct = self
+            .analysis_expression_types
+            .borrow()
+            .get(&(path.to_owned(), expression))
+            .cloned();
+        let type_ = if direct.is_some() {
+            direct
+        } else {
+            let module = self.context.modules.borrow().get(path)?.module.clone();
+            let body = match module.arena.expressions.get(expression.0 as usize)? {
+                Expression::Lambda { body, .. } => Some(*body),
+                Expression::Rec { lambda, .. } => {
+                    match module.arena.expressions.get(lambda.0 as usize)? {
+                        Expression::Lambda { body, .. } => Some(*body),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }?;
+            self.closure_types
+                .borrow()
+                .get(&(path.to_owned(), body))
+                .cloned()
+        }?;
+        Some(self.settle(type_, true))
+    }
+
+    pub(crate) fn declaration_tag_names(&self, path: &str, span: Span) -> Vec<String> {
+        self.declaration_tags
+            .borrow()
+            .get(&(path.to_owned(), span))
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn check_uncached(&self, path: &str) -> Result<CheckedModule, Diagnostic> {
@@ -1198,6 +1365,9 @@ impl Checker {
             ));
         }
         let analyses = self.cached_analyses(path, &loaded.module, &values);
+        self.ownership_facts
+            .borrow_mut()
+            .insert(path.to_owned(), analyses.ownership_facts.clone());
         analyses.ownership?;
         analyses.safety?;
         let mut analyzed_closure_signatures = self
@@ -1292,6 +1462,7 @@ impl Checker {
         let analyses = CachedModuleAnalyses {
             ownership: ownership.diagnostics.into_iter().next().map_or(Ok(()), Err),
             ownership_contracts: ownership.contracts,
+            ownership_facts: ownership.facts,
             safety: crate::safety::check(module, &self.context, values)
                 .into_iter()
                 .next()
@@ -1757,6 +1928,7 @@ impl Checker {
                 value,
                 span,
             } => {
+                let mut tag_names = Vec::new();
                 for tag in tags {
                     let descriptor = self
                         .evaluate(path, tag.descriptor, values, Phase::Comptime)
@@ -1767,7 +1939,12 @@ impl Checker {
                                 tag.span,
                             )
                         })?;
-                    validate_declaration_tag(&descriptor, tag.span)?;
+                    tag_names.push(validate_declaration_tag(&descriptor, tag.span)?);
+                }
+                if !tag_names.is_empty() {
+                    self.declaration_tags
+                        .borrow_mut()
+                        .insert((path.to_owned(), span), tag_names);
                 }
                 let recursive = matches!(
                     module.arena.expressions[value.0 as usize],
@@ -2043,13 +2220,15 @@ impl Checker {
                             ));
                         }
                     };
-                    Rc::make_mut(&mut types.names).insert(
-                        name.clone(),
+                    let typing = if kind == DeclarationKind::Effect {
+                        Typing::Mono(body)
+                    } else {
                         Typing::Scheme {
                             level: self.level.get(),
                             body,
-                        },
-                    );
+                        }
+                    };
+                    Rc::make_mut(&mut types.names).insert(name.clone(), typing);
                     if let Some(signature) = inferred_signature.clone() {
                         values.signatures.borrow_mut().insert(name, signature);
                     }
@@ -2153,10 +2332,45 @@ impl Checker {
         values: &ValueEnvironment,
         dependencies: &BTreeMap<String, Type>,
     ) -> Result<Inferred, Diagnostic> {
+        let inferred = self.infer_inner(
+            path,
+            module,
+            expression_id,
+            environment,
+            values,
+            dependencies,
+        );
+        if let Ok(inferred) = &inferred {
+            self.analysis_expression_types
+                .borrow_mut()
+                .insert((path.to_owned(), expression_id), inferred.type_.clone());
+        }
+        if let Ok(inferred) = &inferred
+            && matches!(
+                module.arena.expressions[expression_id.0 as usize],
+                Expression::Apply { .. }
+            )
+        {
+            self.expression_types
+                .borrow_mut()
+                .insert((path.to_owned(), expression_id), inferred.type_.clone());
+        }
+        inferred
+    }
+
+    fn infer_inner(
+        &self,
+        path: &str,
+        module: &Module,
+        expression_id: ExpressionId,
+        environment: &TypeEnvironment,
+        values: &ValueEnvironment,
+        dependencies: &BTreeMap<String, Type>,
+    ) -> Result<Inferred, Diagnostic> {
         let expression = module.arena.expressions[expression_id.0 as usize].clone();
         let span = expression_span(&expression);
         let pure = || Type::Effects(BTreeSet::new());
-        let inferred = match expression {
+        match expression {
             Expression::Int { value, .. } => Ok(Inferred::pure(Type::Range {
                 domain: Domain::Int,
                 low: Some(Scalar::Int(value.clone())),
@@ -2198,6 +2412,7 @@ impl Checker {
             Expression::Apply {
                 function, argument, ..
             } => {
+                let function_expression = function;
                 let (member_callee, member_arguments) =
                     application_spine_ids(module, expression_id);
                 if member_arguments.len() == 2
@@ -2508,6 +2723,10 @@ impl Checker {
                 } else {
                     None
                 };
+                let evaluated_signature = evaluated_function
+                    .as_ref()
+                    .and_then(closure_signature)
+                    .and_then(|signature| self.bridge(&signature));
                 if let Some(argument) = contextual_argument.as_ref()
                     && contains_function(&self.settle(argument.type_.clone(), true))
                     && let Some(Value::Closure {
@@ -2545,6 +2764,11 @@ impl Checker {
                         },
                         span,
                     )?;
+                    if let Some(signature) = evaluated_signature.clone() {
+                        self.analysis_expression_types
+                            .borrow_mut()
+                            .insert((path.to_owned(), function_expression), signature);
+                    }
                     return Ok(Inferred {
                         type_: result,
                         effects: self.join_effects(argument.effects.clone(), performed)?,
@@ -2628,30 +2852,40 @@ impl Checker {
                 if let Some(selected_effects) = selected_effects {
                     effects = self.join_effects(effects, selected_effects)?;
                 }
+                if let Some(signature) = evaluated_signature {
+                    self.analysis_expression_types
+                        .borrow_mut()
+                        .insert((path.to_owned(), function_expression), signature);
+                }
                 Ok(Inferred {
                     type_: selected_result,
                     effects,
                 })
             }
             Expression::Field { target, name, .. } => {
-                if let Ok(target_value) = self.evaluate(path, target, values, Phase::Comptime) {
-                    if let Some(member) = static_member(&target_value, &name) {
-                        if let Some(type_) = self.bridge(&member) {
-                            return Ok(Inferred::pure(type_));
+                let static_type = self
+                    .evaluate(path, target, values, Phase::Comptime)
+                    .ok()
+                    .and_then(|target_value| {
+                        if let Some(member) = static_member(&target_value, &name) {
+                            if let Some(type_) = self.bridge(&member) {
+                                return Some(type_);
+                            }
+                            if matches!(target_value, Value::Extended { .. }) {
+                                return Some(self.fresh());
+                            }
                         }
-                        if matches!(target_value, Value::Extended { .. }) {
-                            return Ok(Inferred::pure(self.fresh()));
-                        }
-                    }
-                    if let Value::Effect {
-                        id,
-                        name: effect_name,
-                        operations,
-                        host,
-                    } = target_value
-                        && let Some(signature) = operations.get(&name)
-                        && let Some(mut type_) = self.bridge(signature)
-                    {
+                        let Value::Effect {
+                            id,
+                            name: effect_name,
+                            operations,
+                            host,
+                        } = target_value
+                        else {
+                            return None;
+                        };
+                        let signature = operations.get(&name)?;
+                        let mut type_ = self.bridge(signature)?;
                         add_function_effect(
                             &mut type_,
                             format!(
@@ -2659,20 +2893,24 @@ impl Checker {
                                 if host { "host" } else { "effect" }
                             ),
                         );
-                        return Ok(Inferred::pure(type_));
-                    }
+                        Some(type_)
+                    });
+                if let Some(type_) = static_type {
+                    Ok(Inferred::pure(type_))
+                } else {
+                    let target =
+                        self.infer(path, module, target, environment, values, dependencies)?;
+                    let field = self.fresh();
+                    self.constrain(
+                        target.type_,
+                        Type::Record(vec![(name, field.clone())]),
+                        span,
+                    )?;
+                    Ok(Inferred {
+                        type_: field,
+                        effects: target.effects,
+                    })
                 }
-                let target = self.infer(path, module, target, environment, values, dependencies)?;
-                let field = self.fresh();
-                self.constrain(
-                    target.type_,
-                    Type::Record(vec![(name, field.clone())]),
-                    span,
-                )?;
-                Ok(Inferred {
-                    type_: field,
-                    effects: target.effects,
-                })
             }
             Expression::Lambda {
                 parameter,
@@ -3015,18 +3253,7 @@ impl Checker {
                 let inferred = inferred?;
                 Ok(Inferred::pure(inferred.type_))
             }
-        };
-        if let Ok(inferred) = &inferred
-            && matches!(
-                module.arena.expressions[expression_id.0 as usize],
-                Expression::Apply { .. }
-            )
-        {
-            self.expression_types
-                .borrow_mut()
-                .insert((path.to_owned(), expression_id), inferred.type_.clone());
         }
-        inferred
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3129,6 +3356,9 @@ impl Checker {
             return self.type_error(inferred.type_, expected, span);
         }
         self.constrain(inferred.type_, expected.clone(), span)?;
+        self.analysis_expression_types
+            .borrow_mut()
+            .insert((path.to_owned(), expression), expected.clone());
         let key = (path.to_owned(), expression);
         if self.expression_types.borrow().contains_key(&key) {
             self.expression_types
@@ -5238,6 +5468,11 @@ impl Checker {
                 domain: Domain::Float32,
                 ..
             } => "F32".to_owned(),
+            Type::Range {
+                low: Some(low),
+                high: Some(high),
+                ..
+            } if low == high => show_bound(Some(low)),
             Type::Range { low, high, .. } => format!("{}..{}", show_bound(low), show_bound(high)),
             Type::Unit => "Unit".to_owned(),
             Type::Function {
@@ -5258,7 +5493,14 @@ impl Checker {
                     .collect::<Vec<_>>()
                     .join("; ")
             ),
-            Type::Array(element) => format!("[{}]", self.show(&element)),
+            Type::Array(element) => {
+                let shown = self.show(&element);
+                if matches!(element.as_ref(), Type::Union(_)) && shown.contains(" | ") {
+                    format!("[({shown})]")
+                } else {
+                    format!("[{shown}]")
+                }
+            }
             Type::Region(element) => format!("Region {}", self.show(&element)),
             Type::Variant { cases, .. } => cases
                 .iter()
@@ -5290,6 +5532,93 @@ impl Checker {
             Type::Top => "⊤".to_owned(),
             Type::Bottom => "⊥".to_owned(),
         }
+    }
+
+    fn show_analysis(&self, type_: &Type) -> String {
+        let signature = self.residual_signature(type_.clone());
+        let mut replacements = HashMap::new();
+        let body = match signature {
+            Type::Forall { variables, body } => {
+                for (index, variable) in variables.into_iter().enumerate() {
+                    replacements.insert(variable, Type::Opaque(type_variable_name(index)));
+                }
+                *body
+            }
+            body => body,
+        };
+        let mut free = BTreeSet::new();
+        free_rigid_variables(&body, &mut HashSet::new(), &mut free);
+        for variable in free {
+            if replacements.contains_key(&variable) {
+                continue;
+            }
+            let index = replacements.len();
+            replacements.insert(variable, Type::Opaque(type_variable_name(index)));
+        }
+        self.show(&substitute_rigid(body, &replacements))
+    }
+}
+
+fn type_variable_name(index: usize) -> String {
+    if index < 26 {
+        format!("'{}", char::from(b'a' + index as u8))
+    } else {
+        format!("'t{index}")
+    }
+}
+
+fn free_rigid_variables(
+    type_: &Type,
+    bound: &mut HashSet<VariableId>,
+    free: &mut BTreeSet<VariableId>,
+) {
+    match type_ {
+        Type::Rigid(variable) => {
+            if !bound.contains(variable) {
+                free.insert(*variable);
+            }
+        }
+        Type::Forall { variables, body } => {
+            let inserted = variables
+                .iter()
+                .copied()
+                .filter(|variable| bound.insert(*variable))
+                .collect::<Vec<_>>();
+            free_rigid_variables(body, bound, free);
+            for variable in inserted {
+                bound.remove(&variable);
+            }
+        }
+        Type::Function {
+            parameter,
+            effects,
+            result,
+        } => {
+            free_rigid_variables(parameter, bound, free);
+            free_rigid_variables(effects, bound, free);
+            free_rigid_variables(result, bound, free);
+        }
+        Type::Record(fields) | Type::Variant { cases: fields, .. } => {
+            for (_, field) in fields {
+                free_rigid_variables(field, bound, free);
+            }
+        }
+        Type::Array(element) | Type::Region(element) => {
+            free_rigid_variables(element, bound, free);
+        }
+        Type::OpenEffects { tail, .. } => free_rigid_variables(tail, bound, free),
+        Type::Union(members) => {
+            for member in members {
+                free_rigid_variables(member, bound, free);
+            }
+        }
+        Type::Variable(_)
+        | Type::Range { .. }
+        | Type::Unit
+        | Type::Effects(_)
+        | Type::Opaque(_)
+        | Type::Top
+        | Type::Bottom => {}
     }
 }
 
@@ -6614,7 +6943,7 @@ fn static_member(value: &Value, name: &str) -> Option<Value> {
     }
 }
 
-fn validate_declaration_tag(value: &Value, span: Span) -> Result<(), Diagnostic> {
+fn validate_declaration_tag(value: &Value, span: Span) -> Result<String, Diagnostic> {
     let Value::Shape(fields) = value else {
         return Err(Diagnostic::new(
             "BLOT_BAD_DECLARATION_TAG",
@@ -6622,13 +6951,16 @@ fn validate_declaration_tag(value: &Value, span: Span) -> Result<(), Diagnostic>
             span,
         ));
     };
-    if !matches!(fields.get("name"), Some(Value::Text(name)) if !name.is_empty()) {
-        return Err(Diagnostic::new(
-            "BLOT_BAD_DECLARATION_TAG",
-            "A declaration tag descriptor needs a non-empty text field `.name`.",
-            span,
-        ));
-    }
+    let name = match fields.get("name") {
+        Some(Value::Text(name)) if !name.is_empty() => name.clone(),
+        _ => {
+            return Err(Diagnostic::new(
+                "BLOT_BAD_DECLARATION_TAG",
+                "A declaration tag descriptor needs a non-empty text field `.name`.",
+                span,
+            ));
+        }
+    };
     if fields.get("metadata").is_none() {
         return Err(Diagnostic::new(
             "BLOT_BAD_DECLARATION_TAG",
@@ -6652,7 +6984,7 @@ fn validate_declaration_tag(value: &Value, span: Span) -> Result<(), Diagnostic>
             span,
         ));
     }
-    Ok(())
+    Ok(name)
 }
 
 fn require_continuation_qualifier(
@@ -7402,7 +7734,6 @@ fn union_types(types: Vec<Type>) -> Type {
     if !types.into_iter().all(|type_| append(&mut members, type_)) {
         return Type::Top;
     }
-    members.sort_by(|(left, _), (right, _)| left.cmp(right));
     let mut members = members
         .into_iter()
         .map(|(_, member)| member)
