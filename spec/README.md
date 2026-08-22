@@ -17,8 +17,9 @@ that implements it.
 | [`SAFETY.md`](SAFETY.md)                                     | Coverage, relational proofs, and ownership certificates                |
 | [`PARTITIONED_CAPABILITIES.md`](PARTITIONED_CAPABILITIES.md) | Generic partitioned-authority proof algebra                            |
 | [`OWNED_REGIONS.md`](OWNED_REGIONS.md)                       | Store-region provenance, split/join witnesses, and production gates    |
+| [`OWNED_VALUES.md`](OWNED_VALUES.md)                         | Owned-until-shared Stores, borrowing, freezing, and explicit copies    |
 | [`OWNED_ORDERED_MAPS.md`](OWNED_ORDERED_MAPS.md)             | Ordered-map representation, refinements, and cost model                |
-| [`REUSE.md`](REUSE.md)                                       | Expression-local Store-reuse assertions and Runtime-HIR certificates   |
+| [`REUSE.md`](REUSE.md)                                       | Declaration-tag Store-reuse assertions and Runtime-HIR certificates    |
 | [`RUNTIME.md`](RUNTIME.md)                                   | Runtime HIR, canonical ABI lowering, and WebAssembly boundary          |
 | [`CORRECTNESS.md`](CORRECTNESS.md)                           | Pass simulations and the whole-compiler correctness obligation         |
 | [`INCREMENTAL.md`](INCREMENTAL.md)                           | Revision identity, invalidation, and certified cache reuse             |

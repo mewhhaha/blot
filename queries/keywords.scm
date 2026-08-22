@@ -59,9 +59,6 @@
 
 
 
-(lambda
-  "reuse" @keyword.storage.modifier)
-
 (lambda_parameter
   "fn" @keyword.function)
 

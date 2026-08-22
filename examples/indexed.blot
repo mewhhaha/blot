@@ -24,11 +24,10 @@ let at = fn xs => fn n => do:
 // takes, and asks the same question of it.
 sig clear = [Int] -> Int -> [Int]
 let clear = fn xs => fn n => do:
-  if n >= 0:
-    if n < @array.len xs:
-      return @array.set xs n 0
-
-  return xs
+  if n >= 0 && n < @array.len xs:
+    return @array.set xs n 0
+  else:
+    return xs
 
 let values = [10, 20, 30]
 let indexed_sum = 0
@@ -43,8 +42,8 @@ return {
   .inside = at values 1;
   .past_end = at values 3;
   .negative = at values (0 - 1);
-  .cleared = clear values 2;
-  .unchanged = clear values 9;
+  .cleared = clear (Array.copy values) 2;
+  .unchanged = clear (Array.copy values) 9;
   .missing = case Array.get (values, 9) of
     #Some value => value
     #None => -1

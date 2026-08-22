@@ -1,15 +1,16 @@
-// `reuse fn` checks the residual Store-update path. It does not grant
-// ownership: the parameter and update still consume `values` explicitly.
+// The tag checks the residual Store-update path. It grants no ownership;
+// the update makes the inferred `values` contract consuming.
 
 open import "blot:prelude"
 
 sig clear_first_length = [Int] -> Int
-const clear_first_length = reuse fn !values => do:
-  if @array.len (&values) > 0:
-    let !updated = @array.set (!values) 0 0
-    return @array.len (!updated)
+@[assert.reuse]
+const clear_first_length = fn values => do:
+  if @array.len values > 0:
+    let updated = @array.set values 0 0
+    return @array.len updated
 
-  return @array.len (!values)
+  return @array.len values
 
-let !values = [10, 20, 30]
-return clear_first_length (!values)
+let values = [10, 20, 30]
+return clear_first_length values

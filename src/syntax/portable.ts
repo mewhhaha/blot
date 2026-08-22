@@ -162,7 +162,6 @@ export function encodePortableModule(module: Module): PortableModule {
           tag: expression.tag,
           parameter: patternId(expression.parameter),
           body: expressionId(expression.body),
-          ...(expression.reuse === true ? { reuse: true } : {}),
           // Written only when set, so an ordinary lambda encodes exactly as it
           // did before deferred parameters existed. A capsule that dropped it
           // would hand the importer a strict function under a deferred name.
@@ -570,10 +569,6 @@ export function decodePortableModule(
         };
         break;
       case "lambda": {
-        const reuse = optionalBoolean(
-          node.reuse,
-          `${location} expression ${index} reuse`,
-        );
         const deferred = optionalBoolean(
           node.deferred,
           `${location} expression ${index} deferred`,
@@ -594,7 +589,6 @@ export function decodePortableModule(
               `${location} expression ${index} body`,
             ),
           ),
-          ...(reuse === true ? { reuse: true } : {}),
           ...(deferred === true ? { deferred: true } : {}),
           span,
         };

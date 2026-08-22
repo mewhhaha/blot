@@ -77,7 +77,9 @@ return case (duplicate_valid, descending_valid) of
     await evaluate(
       `open import "blot:prelude"
 let entries = OrderedTextMap.copy [("b", 1), ("a", 2)]
-return OrderedTextMap.freeze (!entries)
+let found = OrderedTextMap.get ((&entries), "a")
+let _ = OrderedTextMap.freeze (!entries)
+return found
 `,
     );
     throw new Error("expected OrderedTextMap.copy to trap");
@@ -103,7 +105,7 @@ return case OrderedTextMap.replace ((!entries), "z", 9) of
   assertEquals(result, { tag: "int", value: 92n });
 });
 
-Deno.test("OrderedTextMap refuses values whose lookup would copy ownership", async () => {
+Deno.test("OrderedTextMap cannot export an owned value", async () => {
   try {
     await checkSource(
       path,
@@ -116,9 +118,9 @@ let entries = OrderedTextMap.copy [
 return OrderedTextMap.freeze (!entries)
 `,
     );
-    throw new Error("expected owned-value acquisition to be rejected");
+    throw new Error("expected owned-value export to be rejected");
   } catch (error) {
     assert(error instanceof BlotError);
-    assertEquals(error.diagnostic.code, "BLOT_LINEAR_ARGUMENT_NOT_OWNED");
+    assertEquals(error.diagnostic.code, "BLOT_LINEAR_RESULT_ESCAPES");
   }
 });

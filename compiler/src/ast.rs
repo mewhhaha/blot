@@ -159,9 +159,6 @@ pub enum Expression {
     Lambda {
         parameter: PatternId,
         body: ExpressionId,
-        /// Every residual Store update in this lambda must be ownership-reusing.
-        #[serde(default)]
-        reuse: bool,
         /// The caller suspends the argument until the parameter is read.
         /// Always serialized: the module snapshot encodes a struct as a
         /// sequence, so a field that comes and goes shifts every field after

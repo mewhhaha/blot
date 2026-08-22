@@ -108,6 +108,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@fail"
         | "@shape.names"
         | "@array.len"
+        | "@array.copy"
         | "@array.indexed"
         | "@region.type"
         | "@region.copy"
@@ -119,6 +120,8 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@linear.own"
         | "@linear.maybe"
         | "@linear.borrow"
+        | "@linear.freeze"
+        | "@assert.reuse"
         | "@float.neg"
         | "@float.is_nan"
         | "@float.of_int"
@@ -647,6 +650,7 @@ pub fn run_primitive(
         "@array.len" => Ok(Value::Int(BigInt::from(
             array(&arguments[0], span, name)?.len(),
         ))),
+        "@array.copy" => Ok(Value::Array(array(&arguments[0], span, name)?.to_vec())),
         "@array.get" => {
             let values = array(&arguments[0], span, name)?;
             let index = index(&arguments[1], span, name)?;
@@ -716,8 +720,23 @@ pub fn run_primitive(
         )?))),
         "@text.of_int" => Ok(Value::Text(integer(&arguments[0], span, name)?.to_string())),
         "@json.parse" => parse_json(arguments, span, phase),
-        "@linear.own" | "@linear.maybe" | "@linear.borrow" | "@branch.likely"
-        | "@branch.unlikely" => Ok(arguments[0].clone()),
+        "@assert.reuse" => {
+            let mut value = arguments[0].clone();
+            let Value::Closure {
+                reuse_assertion, ..
+            } = &mut value
+            else {
+                return Err(Diagnostic::new(
+                    "BLOT_REUSE_ASSERTION_NOT_FUNCTION",
+                    "`@[assert.reuse]` can annotate only a function declaration.",
+                    span,
+                ));
+            };
+            *reuse_assertion = Some(span);
+            Ok(value)
+        }
+        "@linear.own" | "@linear.maybe" | "@linear.borrow" | "@linear.freeze"
+        | "@branch.likely" | "@branch.unlikely" => Ok(arguments[0].clone()),
         "@float.add" => float_binary(arguments, span, name, |left, right| left + right),
         "@float.sub" => float_binary(arguments, span, name, |left, right| left - right),
         "@float.mul" => float_binary(arguments, span, name, |left, right| left * right),

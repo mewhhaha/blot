@@ -184,12 +184,14 @@ return values
   );
 });
 
-Deno.test("formatting preserves a reuse lambda prefix", async () => {
+Deno.test("formatting preserves a reuse assertion tag", async () => {
   await assertStableFormatting(
-    `const clear = reuse fn !values => @array.set (!values) 0 0
+    `@[assert.reuse]
+const clear = fn values => @array.set values 0 0
 return clear
 `,
-    `const clear = reuse fn !values => @array.set (!values) 0 0
+    `@[assert.reuse]
+const clear = fn values => @array.set values 0 0
 return clear
 `,
   );

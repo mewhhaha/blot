@@ -217,7 +217,6 @@ fn handler_transformer(
     Expression::Lambda {
         parameter,
         body,
-        reuse: false,
         deferred: false,
         span,
     }
@@ -270,7 +269,6 @@ fn handled_computation(
     Expression::Lambda {
         parameter,
         body,
-        reuse: false,
         deferred: false,
         span,
     }
@@ -392,7 +390,6 @@ fn quantify_effect_row_tails(
         let lambda = arena.expression(Expression::Lambda {
             parameter,
             body: value,
-            reuse: false,
             deferred: false,
             span,
         });
@@ -1603,7 +1600,6 @@ fn desugar_loop(
     let lambda = arena.expression(Expression::Lambda {
         parameter: go_parameter,
         body: go_body,
-        reuse: false,
         deferred: false,
         span,
     });
@@ -2359,7 +2355,6 @@ fn lower_lambda(
     };
     let mut result = lower_expression(cst, body, &context.body(), arena)
         .map_err(|error| format!("while lowering lambda body: {error}"))?;
-    let reuse = cst.field(rule, "reuse")?.is_some();
     for parameter in parameters.into_iter().rev() {
         let parameter = as_rule(parameter)?;
         let pattern_cursor = required(cst, parameter, "pattern")?;
@@ -2379,7 +2374,6 @@ fn lower_lambda(
         result = arena.expression(Expression::Lambda {
             parameter: pattern,
             body: result,
-            reuse,
             deferred,
             span,
         });
@@ -3111,7 +3105,6 @@ fn guard_level(
     let lambda = arena.expression(Expression::Lambda {
         parameter: unit,
         body,
-        reuse: false,
         deferred: false,
         span,
     });

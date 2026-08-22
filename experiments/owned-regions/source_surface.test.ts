@@ -207,7 +207,7 @@ return (derived, checked, read, boundary, Slice.freeze (!partitioned))
   }
 });
 
-Deno.test("structural quicksort remains an executable functional baseline", async () => {
+Deno.test("direct quicksort is executable", async () => {
   const result = await evaluateFile(structuralQuicksortPath, { write() {} });
   assertEquals(show(result), "[1, 2, 3, 4, 5, 6, 7, 8]");
 });

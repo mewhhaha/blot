@@ -1,39 +1,14 @@
-// A runtime-input quicksort whose private sorting phase is reuse-checked.
+// A concrete quicksort specialization. The wrapper assertion checks every
+// inlined update in the materialized runtime frame.
 
 open import "blot:prelude"
 
-sig quicksort_owned = Slice.of Int -> Slice.of Int
-const quicksort_owned = reuse fn !values => do:
-  let rec sort = reuse fn (!current, bounds) => do:
-    if Slice.range_length bounds < 2:
-      return current
-    else:
-      let last = Slice.range_last bounds
-      let pivot = Slice.expect_get ((&current), last)
-      let (!partitioned, boundary) =
-        case Slice.partition_in (
-            (!current),
-            Slice.range_before (bounds, last),
-            fn value => value <= pivot
-          ) of
-          #Partitioned (!next, index) => (!next, index)
-          #PartitionOutOfBounds (!original, index) => (!original, index)
-      let updated = Slice.swap_or_keep ((!partitioned), boundary, last)
-      let left = Slice.range_before (bounds, boundary)
-      let right = Slice.range_after (bounds, boundary)
-      if Slice.range_length left < Slice.range_length right:
-        let smaller = sort (!updated, left)
-        return sort (!smaller, right)
-      else:
-        let smaller = sort (!updated, right)
-        return sort (!smaller, left)
-
-  return sort (!values, Slice.whole (&values))
-
-sig quicksort = [Int] -> [Int]
-const quicksort = fn values => do:
-  let owned = Slice.copy values
-  let sorted = quicksort_owned (!owned)
-  return Slice.freeze (!sorted)
+sig quicksort = Unit -> [Int]
+@[assert.reuse]
+const quicksort = fn () => do:
+  return Array.quicksort (
+    [4, 7, 3, 8, 2, 6, 1, 5],
+    fn (left, right) => left <= right
+  )
 
 return quicksort

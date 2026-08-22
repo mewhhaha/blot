@@ -1,49 +1,7 @@
-// Generic in-place quicksort over one private Store. The persistent wrapper has
-// one explicit copy boundary; the owned algorithm itself only moves authority.
+// The fresh Array is handed directly to the consuming quicksort contract.
+// There is no copy boundary and no ownership syntax at the call site.
 
 open import "blot:prelude"
 
-sig quicksort_owned =
-  @forall (fn T => do:
-    return (Slice.of T, (T, T) -> Bool) -> Slice.of T
-  )
-const quicksort_owned = reuse fn (!values, before_or_equal) => do:
-  let rec sort = reuse fn (!current, bounds) => do:
-    if Slice.range_length bounds < 2:
-      return current
-    else:
-      let last = Slice.range_last bounds
-      let pivot = Slice.expect_get ((&current), last)
-      let (!partitioned, boundary) =
-        case Slice.partition_in (
-            (!current),
-            Slice.range_before (bounds, last),
-            fn value => before_or_equal (value, pivot)
-          ) of
-          #Partitioned (!next, index) => (!next, index)
-          #PartitionOutOfBounds (!original, index) => (!original, index)
-      let updated = Slice.swap_or_keep ((!partitioned), boundary, last)
-      let left = Slice.range_before (bounds, boundary)
-      let right = Slice.range_after (bounds, boundary)
-      if Slice.range_length left < Slice.range_length right:
-        let smaller = sort (!updated, left)
-        return sort (!smaller, right)
-      else:
-        let smaller = sort (!updated, right)
-        return sort (!smaller, left)
-  let bounds = Slice.whole (&values)
-  return sort (!values, bounds)
-
-sig quicksort =
-  @forall (fn T => do:
-    return ([T], (T, T) -> Bool) -> [T]
-  )
-const quicksort = fn (values, before_or_equal) => do:
-  let owned = Slice.copy values
-  let sorted = quicksort_owned ((!owned), before_or_equal)
-  return Slice.freeze (!sorted)
-
-return quicksort (
-  [4, 7, 3, 8, 2, 6, 1, 5],
-  fn (left, right) => left <= right
-)
+let values = [4, 7, 3, 8, 2, 6, 1, 5]
+return Array.quicksort (values, fn (left, right) => left <= right)

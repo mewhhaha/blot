@@ -154,7 +154,7 @@ const REJECTIONS: Record<
     stage: "check",
   },
   "ordered_map_owned_value": {
-    code: "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
+    code: "BLOT_LINEAR_RESULT_ESCAPES",
     stage: "check",
   },
   "linear_handler_abort": {
@@ -189,8 +189,8 @@ const REJECTIONS: Record<
   },
   "deferred_at_runtime": { code: "BLOT_DEFERRED_AT_RUNTIME", stage: "build" },
   "reuse_persistent_update": {
-    code: "BLOT_REUSE_NOT_PROVED",
-    stage: "build",
+    code: "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
+    stage: "check",
   },
   "deferred_demanded_twice": {
     code: "BLOT_DEFERRED_DEMANDED_TWICE",

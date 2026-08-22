@@ -31,6 +31,8 @@ const Type =
 
 const identity = fn value => value
 const always = fn value => fn _ => value
+sig freeze = @forall (fn T => [T] -> [T])
+const freeze = fn value => @linear.freeze value
 
 // Curried: these are the targets of `$` and `|>`.
 const apply = fn f => fn x => f x
@@ -62,6 +64,7 @@ const tag = fn (name, metadata, transform) => {
 
 const derive = fn transform => tag ("derive", (), transform)
 const test = tag ("test", (), identity)
+const assert = { .reuse = tag ("assert.reuse", (), @assert.reuse); }
 
 // --- booleans ---------------------------------------------------------------
 //
@@ -246,7 +249,11 @@ const Continuation =
 
 // Structural recursion, which is all a surface loop becomes before inference.
 // Rebindings form the accumulator; `for` does not introduce assignment.
-const fold = fn (values, state, step) => do:
+sig fold =
+  @forall (fn T => @forall (fn S => do:
+    return ([T], S, (S, T) -> S) -> S
+  ))
+const fold = fn (&values, state, step) => do:
   let rec go =
     fn (index, current) => do:
       result <- case array_get (values, index) of
@@ -301,28 +308,14 @@ const array_uncons_at = fn (values, index) => do:
 
 const array_uncons = fn values => array_uncons_at (values, 0)
 
-const array_items = fn values => {
-  .state = 0;
-  .step = fn index => case array_get (values, index) of
-    #Some value => #Some (value, @int.add index 1)
-    #None => #None
-  ;
-}
-
-const Array =
-  {
-    .empty = @array.empty;
-    .append = array_append;
-    .fold = fold;
-    .map = array_map;
-    .filter = array_filter;
-    .partition = array_partition;
-    .uncons = array_uncons;
-    .items = array_items;
-    .length = fn &values => @array.len (&values);
-    .get = array_get;
-    .set = array_set;
-    .push = fn (values, value) => @array.push values value;
+const array_items = fn values => do:
+  let shared = @linear.freeze values
+  return {
+    .state = 0;
+    .step = fn index => case array_get (shared, index) of
+      #Some value => #Some (value, @int.add index 1)
+      #None => #None
+    ;
   }
 
 sig slice_copy = @forall (fn T => [T] -> @region.type T)
@@ -341,7 +334,7 @@ sig slice_set =
       (@region.type T, @type.int, T) -> (#Updated (@region.type T) | #SetOutOfBounds (@region.type T))
   )
 const slice_set =
-  reuse fn (!region, index, value) => @region.set (!region) index value
+  fn (!region, index, value) => @region.set (!region) index value
 
 sig slice_replace =
   @forall (fn T => do:
@@ -350,7 +343,7 @@ sig slice_replace =
          #ReplaceOutOfBounds (T, @region.type T))
   )
 const slice_replace =
-  reuse fn (!region, index, !value) => @region.replace (!region) index (!value)
+  fn (!region, index, !value) => @region.replace (!region) index (!value)
 
 sig slice_swap =
   @forall (fn T => do:
@@ -358,7 +351,7 @@ sig slice_swap =
       (@region.type T, @type.int, @type.int) -> (#Updated (@region.type T) | #SwapOutOfBounds (@region.type T))
   )
 const slice_swap =
-  reuse fn (!region, left, right) => @region.swap (!region) left right
+  fn (!region, left, right) => @region.swap (!region) left right
 
 sig slice_partition_unchecked =
   @forall (fn T => do:
@@ -370,9 +363,9 @@ sig slice_partition_unchecked =
     ) -> (@region.type T, @type.int)
   )
 const slice_partition_unchecked =
-  reuse fn (!region, start, end, belongs_left) => do:
+  fn (!region, start, end, belongs_left) => do:
     let rec go =
-      reuse fn (!current_region, scan, boundary, final) => do:
+      fn (!current_region, scan, boundary, final) => do:
         if is_equal (@int.cmp scan final):
           return (!current_region, boundary)
         else:
@@ -415,7 +408,7 @@ sig slice_partition_range =
     )
   )
 const slice_partition_range =
-  reuse fn (!region, start, end, belongs_left) => do:
+  fn (!region, start, end, belongs_left) => do:
     let length = slice_length (&region)
     if is_less (@int.cmp start 0):
       return #PartitionOutOfBounds (!region, start)
@@ -443,7 +436,7 @@ sig slice_partition =
     ) -> (@region.type T, @type.int)
   )
 const slice_partition =
-  reuse fn (!region, belongs_left) => do:
+  fn (!region, belongs_left) => do:
     let length = slice_length (&region)
     return slice_partition_unchecked (
       !region,
@@ -518,6 +511,187 @@ const slice_range_after = fn (bounds, boundary) => do:
   let { .end; } = slice_range_bounds bounds
   return slice_range_value (@int.add boundary 1, end)
 
+sig range_whole = @forall (fn T => [T] -> SliceRange)
+const range_whole = fn &values => do:
+  return slice_range_value (0, @array.len (&values))
+
+sig range_shorter_first = (SliceRange, SliceRange) -> (SliceRange, SliceRange)
+const range_shorter_first = fn (left, right) => do:
+  if slice_range_length left <= slice_range_length right:
+    return (left, right)
+
+  return (right, left)
+
+const Range =
+  {
+    .Type = SliceRange;
+    .of = slice_range_value;
+    .whole = range_whole;
+    .length = slice_range_length;
+    .last = slice_range_last;
+    .before = slice_range_before;
+    .after = slice_range_after;
+    .shorter_first = range_shorter_first;
+  }
+
+sig array_expect_get = @forall (fn T => ([T], @type.int) -> T)
+const array_expect_get = fn (&values, index) => do:
+  return case array_get ((&values), index) of
+    #Some value => value
+    #None => @panic "index escaped its checked Array range"
+
+sig array_swap_or_keep =
+  @forall (fn T => ([T], @type.int, @type.int) -> [T])
+@[assert.reuse]
+const array_swap_or_keep = fn (?values, left, right) => do:
+  if left >= 0:
+    if left < @array.len (&values):
+      if right >= 0:
+        if right < @array.len (&values):
+          let left_value = @array.get (&values) left
+          let right_value = @array.get (&values) right
+          return @array.set
+            (@array.set values left right_value)
+            right
+            left_value
+        else:
+          return values
+      else:
+        return values
+    else:
+      return values
+  else:
+    return values
+
+sig array_partition_from =
+  @forall (fn T => do:
+    return (
+      [T],
+      @type.int,
+      @type.int,
+      @type.int,
+      T,
+      ((T, T) -> (#True | #False))
+    ) -> ([T], @type.int)
+  )
+@[assert.reuse]
+const rec array_partition_from =
+  fn (?values, scan, boundary, end, pivot, before_or_equal) => do:
+    return case scan >= end of
+      #True => (values, boundary)
+      #False => do:
+        let value = array_expect_get ((&values), scan)
+        return case before_or_equal (value, pivot) of
+          #True => do:
+            let values = array_swap_or_keep (values, scan, boundary)
+            return array_partition_from (
+              values,
+              scan + 1,
+              boundary + 1,
+              end,
+              pivot,
+              before_or_equal
+            )
+          #False => array_partition_from (
+            values,
+            scan + 1,
+            boundary,
+            end,
+            pivot,
+            before_or_equal
+          )
+
+sig array_partition_before =
+  @forall (fn T => do:
+    return (
+      [T],
+      @type.int,
+      @type.int,
+      T,
+      ((T, T) -> (#True | #False))
+    ) -> ([T], @type.int)
+  )
+const array_partition_before =
+  fn (?values, start, end, pivot, before_or_equal) => do:
+    return array_partition_from (
+      values,
+      start,
+      start,
+      end,
+      pivot,
+      before_or_equal
+    )
+
+sig array_expect_partition_last =
+  @forall (fn T => do:
+    return (
+      [T],
+      SliceRange,
+      ((T, T) -> (#True | #False))
+    ) -> ([T], SliceRange, SliceRange)
+  )
+@[assert.reuse]
+const array_expect_partition_last =
+  fn (?values, bounds, before_or_equal) => do:
+    let { .start; .end; } = slice_range_bounds bounds
+    let last = end - 1
+    let pivot = array_expect_get ((&values), last)
+    let (values, boundary) =
+      array_partition_before (values, start, last, pivot, before_or_equal)
+    let values = array_swap_or_keep (values, boundary, last)
+    return (
+      values,
+      slice_range_before (bounds, boundary),
+      slice_range_after (bounds, boundary)
+    )
+
+sig array_quicksort_range =
+  @forall (fn T => do:
+    return (
+      [T],
+      SliceRange,
+      ((T, T) -> (#True | #False))
+    ) -> [T]
+  )
+@[assert.reuse]
+const rec array_quicksort_range =
+  fn (?values, bounds, before_or_equal) => do:
+    if slice_range_length bounds < 2:
+      return values
+    else:
+      let (values, left, right) =
+        array_expect_partition_last (values, bounds, before_or_equal)
+      let (first, second) = range_shorter_first (left, right)
+      let values = array_quicksort_range (values, first, before_or_equal)
+      return array_quicksort_range (values, second, before_or_equal)
+
+sig array_quicksort =
+  @forall (fn T => ([T], ((T, T) -> (#True | #False))) -> [T])
+const array_quicksort = fn (values, before_or_equal) => do:
+  let bounds = range_whole (&values)
+  return array_quicksort_range (values, bounds, before_or_equal)
+
+const Array =
+  {
+    .empty = @array.empty;
+    .append = array_append;
+    .fold = fold;
+    .map = array_map;
+    .filter = array_filter;
+    .partition = array_partition;
+    .uncons = array_uncons;
+    .items = array_items;
+    .length = fn &values => @array.len (&values);
+    .copy = fn &values => @array.copy (&values);
+    .get = array_get;
+    .expect_get = array_expect_get;
+    .set = array_set;
+    .push = fn (values, value) => @array.push values value;
+    .swap_or_keep = array_swap_or_keep;
+    .expect_partition_last = array_expect_partition_last;
+    .quicksort = array_quicksort;
+  }
+
 sig slice_whole = @forall (fn T => @region.type T -> SliceRange)
 const slice_whole = fn &region => do:
   return slice_range_value (0, slice_length (&region))
@@ -558,7 +732,7 @@ sig slice_partition_in =
       #PartitionOutOfBounds (@region.type T, @type.int)
     )
   )
-const slice_partition_in = reuse fn (!region, bounds, belongs_left) => do:
+const slice_partition_in = fn (!region, bounds, belongs_left) => do:
   let { .start; .end; } = slice_range_bounds bounds
   return slice_partition_range (
     !region,
@@ -571,7 +745,7 @@ sig slice_swap_or_keep =
   @forall (fn T => do:
     return (@region.type T, @type.int, @type.int) -> @region.type T
   )
-const slice_swap_or_keep = reuse fn (!region, left, right) => do:
+const slice_swap_or_keep = fn (!region, left, right) => do:
   return case slice_swap ((!region), left, right) of
     #Updated !updated => updated
     #SwapOutOfBounds !original => original
@@ -637,31 +811,34 @@ const sum = fn values => do:
     fn (state, value) => @int.add state value
   )
 
-const any = fn (values, holds) => do:
+sig any = @forall (fn T => ([T], T -> (#True | #False)) -> (#True | #False))
+const any = fn (&values, holds) => do:
   return fold (
     values,
     False,
     fn (seen, value) => seen || holds value
   )
 
-const every = fn (values, holds) => do:
+sig every = @forall (fn T => ([T], T -> (#True | #False)) -> (#True | #False))
+const every = fn (&values, holds) => do:
   return fold (
     values,
     True,
     fn (seen, value) => seen && holds value
   )
 
-const upto = fn (low, high) => do:
-  let rec build =
-    fn (index, state) => do:
-      if is_less (@int.cmp index high):
-        return build (
-          @int.add index 1,
-          @array.push state index
-        )
-      else:
-        return state
-  return build (low, Array.empty)
+sig upto_build = (@type.int, @type.int, [@type.int]) -> [@type.int]
+const rec upto_build = fn (index, high, state) => do:
+  if is_less (@int.cmp index high):
+    return upto_build (
+      @int.add index 1,
+      high,
+      @array.push state index
+    )
+  else:
+    return state
+
+const upto = fn (low, high) => upto_build (low, high, Array.empty)
 
 // --- floats -----------------------------------------------------------------
 //
@@ -986,13 +1163,7 @@ const iter_range = fn (from, to) => {
   ;
 }
 
-const iter_items = fn values => {
-  .state = 0;
-  .step = fn index => case array_get (values, index) of
-    #Some value => Some (value, @int.add index 1)
-    #None => None
-  ;
-}
+const iter_items = array_items
 
 // A half-open affine walk over one array Store. The state is only the logical
 // index: `values`, `stop`, and `stride` are loop-invariant captures, so Runtime
@@ -1039,6 +1210,17 @@ const iter_reverse = fn values => do:
 
 // Draining one. `for` is this loop with the accumulator inferred from the names
 // its body rebinds; written out, it is the same fold.
+sig iterate =
+  @forall (fn State => @forall (fn Element => @forall (fn Carried => do:
+    return (
+      {
+        .state = State;
+        .step = State -> (#Some (Element, State) | #None);
+      },
+      Carried,
+      (Carried, Element) -> Carried
+    ) -> Carried
+  )))
 const iterate = fn (iterator, initial, visit) => do:
   let rec go =
     fn (state, carried) => case iterator.step state of
@@ -1047,9 +1229,9 @@ const iterate = fn (iterator, initial, visit) => do:
   return go (iterator.state, initial)
 
 const collect = fn iterator => do:
-  let values = Array.empty
+  let values = []
   for value in iterator:
-    values := @array.push values value
+    values := @array.push (Array.copy values) value
 
   return values
 
@@ -1200,19 +1382,19 @@ const map_put = fn (equal, entries, key, value) => do:
       (Array.empty, None, False),
       fn (state, entry) => do:
         if state.2:
-          return (@array.push state.0 entry, state.1, state.2)
+          return (@array.push (Array.copy state.0) entry, state.1, state.2)
         else if equal entry.0 key:
           return (
-            @array.push state.0 (key, value),
+            @array.push (Array.copy state.0) (key, value),
             Some entry.1,
             True
           )
         else:
-          return (@array.push state.0 entry, state.1, state.2)
+          return (@array.push (Array.copy state.0) entry, state.1, state.2)
     )
   let updated = case replaced.2 of
     #True => replaced.0
-    #False => @array.push replaced.0 (key, value)
+    #False => @array.push (Array.copy replaced.0) (key, value)
   return (replaced.1, updated)
 
 const map_remove = fn (equal, entries, key) => do:
@@ -1222,11 +1404,11 @@ const map_remove = fn (equal, entries, key) => do:
       (Array.empty, None, False),
       fn (state, entry) => do:
         if state.2:
-          return (@array.push state.0 entry, state.1, state.2)
+          return (@array.push (Array.copy state.0) entry, state.1, state.2)
         else if equal entry.0 key:
           return (state.0, Some entry.1, True)
         else:
-          return (@array.push state.0 entry, state.1, state.2)
+          return (@array.push (Array.copy state.0) entry, state.1, state.2)
     )
   return (removed.1, removed.0)
 
@@ -1275,22 +1457,30 @@ const set_has = fn (equal, values, needle) => do:
     fn (found, value) => found || equal value needle
   )
 
-const set_insert = fn (equal, values, inserted) => do:
+sig set_insert =
+  @forall (fn T => do:
+    return (
+      T -> T -> (#True | #False),
+      [T],
+      T
+    ) -> (#None | #Some T, [T])
+  )
+const set_insert = fn (equal, ?values, inserted) => do:
   let replaced =
     fold (
       values,
       (Array.empty, None, False),
       fn (state, value) => do:
         if state.2:
-          return (@array.push state.0 value, state.1, state.2)
+          return (@array.push (Array.copy state.0) value, state.1, state.2)
         else if equal value inserted:
-          return (@array.push state.0 inserted, Some value, True)
+          return (@array.push (Array.copy state.0) inserted, Some value, True)
         else:
-          return (@array.push state.0 value, state.1, state.2)
+          return (@array.push (Array.copy state.0) value, state.1, state.2)
     )
   let updated = case replaced.2 of
     #True => replaced.0
-    #False => @array.push replaced.0 inserted
+    #False => @array.push (Array.copy replaced.0) inserted
   return (replaced.1, updated)
 
 const set_remove = fn (equal, values, needle) => do:
@@ -1300,28 +1490,29 @@ const set_remove = fn (equal, values, needle) => do:
       (Array.empty, None, False),
       fn (state, value) => do:
         if state.2:
-          return (@array.push state.0 value, state.1, state.2)
+          return (@array.push (Array.copy state.0) value, state.1, state.2)
         else if equal value needle:
           return (state.0, Some value, True)
         else:
-          return (@array.push state.0 value, state.1, state.2)
+          return (@array.push (Array.copy state.0) value, state.1, state.2)
     )
   return (removed.1, removed.0)
 
 const set_with = fn equal => do:
-  let insert = fn (values, value) => set_insert (equal, values, value)
+  let insert =
+    fn (?values, value) => set_insert (equal, Array.copy values, value)
   let union = fn left => fn right => do:
     return fold (
       right,
       left,
-      fn (values, value) => (insert (values, value)).1
+      fn (values, value) => (set_insert (equal, Array.copy values, value)).1
     )
   let map_with_equal = fn (values, mapped_equal, transform) => do:
     return fold (
       values,
       Array.empty,
       fn (mapped, value) => do:
-        return (set_insert (mapped_equal, mapped, transform value)).1
+        return (set_insert (mapped_equal, Array.copy mapped, transform value)).1
     )
   return {
     .of = set_type;
@@ -1365,19 +1556,19 @@ const Dict = map_with (fn left => fn right => text_eq (left, right))
 // closure that has to rebuild it on every element.
 const sort_by = fn (values, before) => do:
   let sorted = Array.empty
-  for value in Iter.items values:
+  for value in array_items values:
     let out = Array.empty
     let placed = False
-    for existing in Iter.items sorted:
+    for existing in array_items (Array.copy sorted):
       let goes_first = not placed && before (value, existing)
       out := case goes_first of
-        #True => @array.push (@array.push out value) existing
-        #False => @array.push out existing
+        #True => @array.push (@array.push (Array.copy out) value) existing
+        #False => @array.push (Array.copy out) existing
       placed := placed || goes_first
 
     sorted := case placed of
       #True => out
-      #False => @array.push out value
+      #False => @array.push (Array.copy out) value
 
   return sorted
 
@@ -1473,9 +1664,13 @@ const Unit = @type.unit
 const layout = fn (shape, width_of) => do:
   let offset = 0
   let fields = Array.empty
-  for name in Iter.items (@shape.names shape):
+  for name in array_items (@shape.names shape):
     let width = width_of (@shape.get shape name)
-    fields := @array.push fields { .name = name; .offset = offset; .width = width; }
+    fields := @array.push (Array.copy fields) {
+      .name = name;
+      .offset = offset;
+      .width = width;
+    }
     offset := @int.add offset width
 
   return { .size = offset; .fields = fields; }
@@ -1766,11 +1961,11 @@ const reorder = fn (shape, order) => do:
   )
 
 const struct = fn shape => do:
-  let order = @shape.names shape
+  let order = @linear.freeze (@shape.names shape)
   // Where each field lives.
   let next = 0
   let slots = @shape.empty
-  for name in Iter.items order:
+  for name in array_items (@array.copy (&order)):
     slots := @shape.set slots name next
     next := @int.add next 1
 
@@ -1784,12 +1979,12 @@ const struct = fn shape => do:
   // takes a shape and `@type.attach` takes a type value, so the storage has to
   // be finished before an accessor can go on it.
   let product = @shape.empty
-  for name in Iter.items order:
+  for name in array_items (@array.copy (&order)):
     product := @shape.set product (key name) (@shape.get shape name)
 
   // One accessor per field: a projection at a known slot, nothing more. The
   // names are computed, so this is `@type.attach` rather than `<+`.
-  for name in Iter.items order:
+  for name in array_items (@array.copy (&order)):
     product := @type.attach product name (fn value => do:
       return @shape.get value (key name)
     )
@@ -1802,7 +1997,7 @@ const struct = fn shape => do:
     .new = fn record => do:
       let _ = @satisfies (@shape.names record) order
       let product = @shape.empty
-      for name in Iter.items order:
+      for name in array_items (@array.copy (&order)):
         product := @shape.set product (key name) (@satisfies (@shape.get record name) (@shape.get shape name))
 
       return product
@@ -1811,7 +2006,7 @@ const struct = fn shape => do:
     // ...and back, so storage can be read by name without knowing the order.
     .named = fn value => do:
       let record = @shape.empty
-      for name in Iter.items order:
+      for name in array_items (@array.copy (&order)):
         record := @shape.set record name (@shape.get value (key name))
 
       return record
@@ -1837,7 +2032,7 @@ const aligned = fn (shape, order, width_of) => do:
   let offset = 0
   let padding = 0
   let fields = Array.empty
-  for name in Iter.items order:
+  for name in array_items (@array.copy (&order)):
     let width = width_of (@shape.get shape name)
     let slack = @int.rem offset width
     let pad = case Ord.eq slack 0 of
@@ -1858,7 +2053,7 @@ const packed = fn shape => do:
   let order = @shape.names shape
   let bits = layout (shape, bit_width)
   let fields =
-    map (
+    freeze (map (
       bits.fields,
       fn field => {
         .name = field.name;
@@ -1866,7 +2061,7 @@ const packed = fn shape => do:
         .bit_width = field.width;
         .mask = @int.sub (pow2 field.width) 1;
       }
-    )
+    ))
   let byte_size = @int.div (@int.add bits.size 7) 8
   return {
     .order = order;
@@ -2086,12 +2281,14 @@ const Type =
 return {
   .Fn = Fn;
   .identity = identity;
+  .freeze = freeze;
   .always = always;
   .compose = compose;
   .flip = flip;
   .tag = tag;
   .derive = derive;
   .test = test;
+  .assert = assert;
 
   .Bool = Bool;
   .True = True;
@@ -2128,6 +2325,7 @@ return {
   .Iterable = Iterable;
 
   .Array = Array;
+  .Range = Range;
   .Slice = Slice;
   .Arena = Arena;
   .Continuation = Continuation;

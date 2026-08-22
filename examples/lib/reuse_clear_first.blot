@@ -4,10 +4,11 @@
 open import "blot:prelude"
 
 sig clear_first = [Int] -> [Int]
-const clear_first = reuse fn !values => do:
-  if @array.len (&values) > 0:
-    return @array.set (!values) 0 0
+@[assert.reuse]
+const clear_first = fn values => do:
+  if @array.len values > 0:
+    return @array.set values 0 0
 
-  return !values
+  return values
 
 return clear_first

@@ -162,7 +162,6 @@ export type LiteralKind =
   | "of"
   | "do"
   | "compdo"
-  | "reuse"
   | "fn"
   | ".."
   | "..."
@@ -642,7 +641,6 @@ export interface ShapeFieldCursor extends RuleCursorBase<"shape_field"> {
 export interface LambdaCursor extends RuleCursorBase<"lambda"> {
   field(name: "body"): ExpressionCursor;
   field(name: "parameters"): ReadonlyArray<LambdaParameterCursor>;
-  field(name: "reuse"): TokenCursor<"literal", "reuse"> | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }

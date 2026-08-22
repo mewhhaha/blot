@@ -19,14 +19,14 @@ in a benchmark months later.
 
 | counter                     |    blot | note                                               |
 | --------------------------- | ------: | -------------------------------------------------- |
-| `lexerStates`               |     125 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`               |     122 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |      22 | worst-case island candidates allocated per token   |
 | `islandCount`               |      66 | one island for every grammar rule                  |
-| `islandStates`              |     391 |                                                    |
-| `islandTransitions`         |     401 |                                                    |
+| `islandStates`              |     389 |                                                    |
+| `islandTransitions`         |     398 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 581,808 | immutable device table                             |
-| `packedBytes`               | 455,249 | version-3 runtime section                          |
+| `denseTransitionBytes`      | 574,164 | immutable device table                             |
+| `packedBytes`               | 449,799 | version-3 runtime section                          |
 | `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |       6 | islands admitted to parallel long-region execution |
 
@@ -35,11 +35,11 @@ Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 and edge arrays directly. Declaring all 66 rules as islands is what preserves
 the full CST shape needed by source lowering.
 
-Adding the expression-local `reuse fn` assertion costs three lexer states, two
+Removing the expression-local `reuse fn` assertion saves three lexer states, two
 island states, three island transitions, 7,644 dense-transition bytes, and 5,450
-packed bytes. It adds no island, candidate multiplicity, contraction round,
-scratch expansion, or long-region loss because the optional `reuse` prefix lives
-on the existing flat lambda island and has a disjoint first token.
+packed bytes. `@[assert.reuse]` uses the existing declaration-tag grammar, so
+the checked assertion adds no syntax state, island, candidate multiplicity,
+contraction round, scratch expansion, or long-region loss.
 
 Removing element syntax while adding `compdo:` and effect-row tails moves the
 current plan from 117 to 113 lexer states, from 81 to 67 islands, and from 30 to

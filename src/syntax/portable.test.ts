@@ -5,7 +5,7 @@ import { decodePortableModule, encodePortableModule } from "./portable.ts";
 Deno.test("a portable AST round trip preserves the lowered module", async () => {
   const parsed = await parse(
     `const answer = 41
-return reuse fn offset => answer + offset
+return fn offset => answer + offset
 `,
   );
   if (!parsed.ok) throw new Error("portable AST fixture did not parse");
@@ -17,33 +17,6 @@ return reuse fn offset => answer + offset
   );
 
   assertEquals(decoded, parsed.module);
-});
-
-Deno.test("a portable AST rejects a forged reuse assertion", async () => {
-  const parsed = await parse(`return reuse fn value => value
-`);
-  if (!parsed.ok) throw new Error("portable AST fixture did not parse");
-  const encoded = JSON.parse(
-    JSON.stringify(encodePortableModule(parsed.module)),
-  ) as {
-    arena: { expressions: Array<Record<string, unknown>> };
-  };
-  const lambda = encoded.arena.expressions.find((expression) =>
-    expression.tag === "lambda"
-  );
-  if (lambda === undefined) {
-    throw new Error("portable AST fixture lost its lambda");
-  }
-  lambda.reuse = "checked";
-
-  const failure = assertThrows(
-    () => decodePortableModule(encoded, "forged-reuse fixture"),
-    Error,
-  );
-  assertEquals(
-    failure.message,
-    "forged-reuse fixture expression 0 reuse must be a boolean",
-  );
 });
 
 Deno.test("a portable AST rejects references outside its arenas", async () => {

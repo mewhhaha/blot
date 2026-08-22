@@ -213,7 +213,7 @@ canonical post-return, so these internal allocations form a scratch arena per
 outer export call.
 
 Runtime-HIR schema 3 adds an optional `reuse: "checked"` function certificate.
-It is emitted only after the source `reuse fn` assertion has been discharged.
+It is emitted only after the source `@[assert.reuse]` tag has been discharged.
 The independent validator replays the local condition: every `store.write` and
 `store.grow` in that materialized function must say `owned-reuse`. This flag is
 not operation evidence and the emitter never consults it to select destructive

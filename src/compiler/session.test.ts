@@ -23,7 +23,7 @@ test("Rust compiler host exposes check, prepare, compile", async () => {
   }
 });
 
-test("reuse functions publish only discharged Store-update assertions", async () => {
+test("reuse assertion tags publish only discharged Store updates", async () => {
   const compiler = await Compiler.create();
   try {
     const runtime = await compiler.prepare(
@@ -41,7 +41,7 @@ test("reuse functions publish only discharged Store-update assertions", async ()
         )
       )
     );
-    assert.ok(updatingFunctions.length >= 2);
+    assert.ok(updatingFunctions.length >= 1);
     for (const function_ of updatingFunctions) {
       assert.equal(function_.reuse, "checked");
       for (
@@ -59,7 +59,7 @@ test("reuse functions publish only discharged Store-update assertions", async ()
       compiler.prepare(
         "examples/rejected/semantics/reuse_persistent_update.blot",
       ),
-      /BLOT_REUSE_NOT_PROVED/,
+      /BLOT_LINEAR_ARGUMENT_NOT_OWNED/,
     );
   } finally {
     compiler.destroy();
