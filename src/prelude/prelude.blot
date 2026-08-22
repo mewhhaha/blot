@@ -563,44 +563,6 @@ const array_swap_or_keep = fn (?values, left, right) => do:
   else:
     return values
 
-sig array_partition_from =
-  @forall (fn T => do:
-    return (
-      [T],
-      @type.int,
-      @type.int,
-      @type.int,
-      T,
-      ((T, T) -> (#True | #False))
-    ) -> ([T], @type.int)
-  )
-@[assert.reuse]
-const rec array_partition_from =
-  fn (?values, scan, boundary, end, pivot, before_or_equal) => do:
-    return case scan >= end of
-      #True => (values, boundary)
-      #False => do:
-        let value = array_expect_get ((&values), scan)
-        return case before_or_equal (value, pivot) of
-          #True => do:
-            let values = array_swap_or_keep (values, scan, boundary)
-            return array_partition_from (
-              values,
-              scan + 1,
-              boundary + 1,
-              end,
-              pivot,
-              before_or_equal
-            )
-          #False => array_partition_from (
-            values,
-            scan + 1,
-            boundary,
-            end,
-            pivot,
-            before_or_equal
-          )
-
 sig array_partition_before =
   @forall (fn T => do:
     return (
@@ -613,14 +575,19 @@ sig array_partition_before =
   )
 const array_partition_before =
   fn (?values, start, end, pivot, before_or_equal) => do:
-    return array_partition_from (
-      values,
-      start,
-      start,
-      end,
-      pivot,
-      before_or_equal
-    )
+    @[assert.reuse]
+    let rec go = fn (?current, scan, boundary) => do:
+      return case scan >= end of
+        #True => (current, boundary)
+        #False => do:
+          let value = array_expect_get ((&current), scan)
+          return case before_or_equal (value, pivot) of
+            #True => do:
+              let current = array_swap_or_keep (current, scan, boundary)
+              return go (?current, scan + 1, boundary + 1)
+            #False => go (?current, scan + 1, boundary)
+
+    return go (?values, start, start)
 
 sig array_expect_partition_last =
   @forall (fn T => do:
@@ -645,31 +612,26 @@ const array_expect_partition_last =
       slice_range_after (bounds, boundary)
     )
 
-sig array_quicksort_range =
-  @forall (fn T => do:
-    return (
-      [T],
-      SliceRange,
-      ((T, T) -> (#True | #False))
-    ) -> [T]
-  )
-@[assert.reuse]
-const rec array_quicksort_range =
-  fn (?values, bounds, before_or_equal) => do:
-    if slice_range_length bounds < 2:
-      return values
-    else:
-      let (values, left, right) =
-        array_expect_partition_last (values, bounds, before_or_equal)
-      let (first, second) = range_shorter_first (left, right)
-      let values = array_quicksort_range (values, first, before_or_equal)
-      return array_quicksort_range (values, second, before_or_equal)
-
 sig array_quicksort =
   @forall (fn T => ([T], ((T, T) -> (#True | #False))) -> [T])
 const array_quicksort = fn (values, before_or_equal) => do:
   let bounds = range_whole (&values)
-  return array_quicksort_range (values, bounds, before_or_equal)
+  @[assert.reuse]
+  let rec sort = fn (?current, current_bounds) => do:
+    if slice_range_length current_bounds < 2:
+      return current
+    else:
+      let (current, left, right) =
+        array_expect_partition_last (
+          current,
+          current_bounds,
+          before_or_equal
+        )
+      let (first, second) = range_shorter_first (left, right)
+      let current = sort (?current, first)
+      return sort (?current, second)
+
+  return sort (?values, bounds)
 
 const Array =
   {

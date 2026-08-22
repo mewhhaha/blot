@@ -85,6 +85,12 @@ locally. A read-only Store captured by an escaping or recursive closure is
 shared for the same reason; a capture that later consumes it instead transfers
 the authority into the closure.
 
+An exclusive runtime branch preserves Store authority when every continuing arm
+returns an owned successor of the same incoming authority. Runtime HIR retains
+that ownership meaning on its block parameter: the ownership certificate has
+already proved that only one arm executes and that their outgoing states agree.
+A join with a shared arm is not reusable.
+
 At a module or host result boundary, an otherwise valid owned Store is frozen
 implicitly. The boundary already transfers no source-visible destructive
 authority, and the transition performs no copy. Linear resources remain
@@ -169,7 +175,11 @@ The implementation must preserve these facts:
 5. ownership contracts are keyed by module and exact closure AST identity;
 6. Runtime HIR verifies closed element layout before every destructive update;
 7. removing `@[assert.reuse]` changes neither accepted calls nor value results;
-8. evaluator and emitted Wasm observe the same persistent value semantics.
+8. evaluator and emitted Wasm observe the same persistent value semantics; and
+9. residual aggregate specialization preserves the concrete Store element
+   representation observed at the call site; and
+10. a residual direct call restores Store authority only from its certified
+    produced-result tree.
 
 The useful asymptotic boundary is explicit:
 

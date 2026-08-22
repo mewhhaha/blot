@@ -34,15 +34,13 @@ test("reuse assertion tags publish only discharged Store updates", async () => {
     const quicksort = await compiler.prepare(
       "examples/lib/reuse_quicksort.blot",
     );
-    const updatingFunctions = quicksort.functions.filter((function_) =>
+    const writingFunctions = quicksort.functions.filter((function_) =>
       function_.blocks.some((block) =>
-        block.operations.some((operation) =>
-          operation.kind === "store.write" || operation.kind === "store.grow"
-        )
+        block.operations.some((operation) => operation.kind === "store.write")
       )
     );
-    assert.ok(updatingFunctions.length >= 1);
-    for (const function_ of updatingFunctions) {
+    assert.ok(writingFunctions.length >= 1);
+    for (const function_ of writingFunctions) {
       assert.equal(function_.reuse, "checked");
       for (
         const operation of function_.blocks.flatMap((block) => block.operations)
@@ -54,6 +52,54 @@ test("reuse assertion tags publish only discharged Store updates", async () => {
         }
       }
     }
+    const operations = quicksort.functions.flatMap((function_) =>
+      function_.blocks.flatMap((block) => block.operations)
+    );
+    assert.ok(
+      operations.some((operation) => operation.kind === "call.direct"),
+      "runtime quicksort lost its direct recursive call",
+    );
+    assert.ok(
+      quicksort.functions.some((function_) =>
+        function_.blocks.some((block) =>
+          block.terminator.kind === "branch" &&
+          block.terminator.target === function_.entryBlock
+        )
+      ),
+      "runtime quicksort lost its tail-recursive back-edge",
+    );
+    for (const operation of operations) {
+      if (operation.kind === "store.write" || operation.kind === "store.grow") {
+        assert.equal(operation.update, "owned-reuse");
+      }
+    }
+
+    const artifact = await compiler.compile(
+      "examples/lib/reuse_quicksort.blot",
+    );
+    const module = await WebAssembly.compile(
+      Uint8Array.from(artifact.wasm) as BufferSource,
+    );
+    const importedFunctions = WebAssembly.Module.imports(module).map((entry) =>
+      `${entry.module}.${entry.name}`
+    );
+    assert.deepEqual(importedFunctions, ["blot:host/Source.value"]);
+
+    const instantiate = async (direction: bigint): Promise<() => bigint> => {
+      const instance = await WebAssembly.instantiate(module, {
+        "blot:host/Source": {
+          value(input: bigint) {
+            if (input === 0n) return 4n;
+            return direction;
+          },
+        },
+      });
+      const run = instance.exports["blot:default"];
+      assert.equal(typeof run, "function");
+      return run as () => bigint;
+    };
+    assert.equal((await instantiate(1n))(), 204n);
+    assert.equal((await instantiate(-1n))(), 120n);
 
     await assert.rejects(
       compiler.prepare(

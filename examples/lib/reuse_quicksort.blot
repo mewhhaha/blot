@@ -1,14 +1,32 @@
-// A concrete quicksort specialization. The wrapper assertion checks every
-// inlined update in the materialized runtime frame.
+// Keep both the Array and the ordering dynamic so this example exercises the
+// residual recursive kernels instead of staging a known sort at compile time.
 
 open import "blot:prelude"
 
-sig quicksort = Unit -> [Int]
+const Source = @effect.host { .value = Int -> Int; }
+
+sig quicksort = ([Int], Int) -> [Int]
 @[assert.reuse]
-const quicksort = fn () => do:
+const quicksort = fn (?values, direction) => do:
   return Array.quicksort (
-    [4, 7, 3, 8, 2, 6, 1, 5],
-    fn (left, right) => left <= right
+    ?values,
+    fn (left, right) => do:
+      if direction < 0:
+        return left >= right
+      else:
+        return left <= right
   )
 
-return quicksort
+dynamic <- Source.value 0
+direction <- Source.value 1
+let values = [dynamic, 7, 3, 8, 2, 6, 1, 5]
+let sorted = quicksort (?values, direction)
+let a = Array.expect_get ((&sorted), 0)
+let b = Array.expect_get ((&sorted), 1)
+let c = Array.expect_get ((&sorted), 2)
+let d = Array.expect_get ((&sorted), 3)
+let e = Array.expect_get ((&sorted), 4)
+let f = Array.expect_get ((&sorted), 5)
+let g = Array.expect_get ((&sorted), 6)
+let h = Array.expect_get ((&sorted), 7)
+return a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f + 7 * g + 8 * h

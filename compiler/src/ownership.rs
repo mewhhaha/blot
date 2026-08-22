@@ -5,8 +5,8 @@ use std::rc::Rc;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    Declaration, DeclarationId, DeclarationKind, Expression, ExpressionId, Module, Pattern,
-    PatternId, Qualifier, ShapeMember, Span,
+    Declaration, DeclarationId, DeclarationKind, DeclarationTag, Expression, ExpressionId, Module,
+    Pattern, PatternId, Qualifier, ShapeMember, Span,
 };
 use crate::diagnostic::Diagnostic;
 use crate::eval::Context;
@@ -728,6 +728,7 @@ fn walk_declaration(declaration_id: DeclarationId, scope: &ScopeRef, analysis: &
             pattern,
             value,
             span,
+            tags,
             ..
         } => {
             let use_kind = if matches!(
@@ -754,7 +755,7 @@ fn walk_declaration(declaration_id: DeclarationId, scope: &ScopeRef, analysis: &
                 && let Some(binding) = scope.borrow().bindings.get(name).cloned()
             {
                 let (parameter, input, result, contract_module) =
-                    function_contract(value, &produced, scope, analysis);
+                    declaration_function_contract(value, &produced, &tags, scope, analysis);
                 let mut binding = binding.borrow_mut();
                 binding.parameter = parameter;
                 binding.input = input;
@@ -1333,13 +1334,15 @@ fn mark_function_parameters(pattern: PatternId, scope: &ScopeRef, module: &Modul
 
 fn scope_pattern_owned(pattern: PatternId, scope: &ScopeRef, module: &Module) -> Produced {
     match &module.arena.patterns[pattern.0 as usize] {
-        Pattern::Name { name, .. } => scope
+        Pattern::Name {
+            name, qualifier, ..
+        } => scope
             .borrow()
             .bindings
             .get(name)
             .map(|binding| {
                 let binding = binding.borrow();
-                if binding.ownership_demanded {
+                if binding.ownership_demanded || spendable(*qualifier) {
                     binding.owned.clone()
                 } else {
                     Produced::None
@@ -2433,6 +2436,48 @@ fn function_contract(
             None,
         )),
     }
+}
+
+fn declaration_function_contract(
+    expression: ExpressionId,
+    produced: &Produced,
+    tags: &[DeclarationTag],
+    scope: &ScopeRef,
+    analysis: &Analysis,
+) -> FunctionContract {
+    let contract = function_contract(expression, produced, scope, analysis);
+    if contract.0.is_some()
+        || tags.is_empty()
+        || !tags.iter().all(|tag| reuse_identity_tag(tag, analysis))
+    {
+        return contract;
+    }
+    let Expression::Block { declarations, .. } =
+        &analysis.module.arena.expressions[expression.0 as usize]
+    else {
+        return contract;
+    };
+    let Some(Declaration::Binding { value, .. }) = declarations
+        .last()
+        .map(|declaration| &analysis.module.arena.declarations[declaration.0 as usize])
+    else {
+        return contract;
+    };
+    function_contract(*value, &Produced::None, scope, analysis)
+}
+
+fn reuse_identity_tag(tag: &DeclarationTag, analysis: &Analysis<'_>) -> bool {
+    let Some(Value::Shape(fields)) = analysis.callee_value(tag.descriptor) else {
+        return false;
+    };
+    matches!(
+        fields.get("transform"),
+        Some(Value::Primitive {
+            name,
+            arity: 1,
+            applied,
+        }) if name == "@assert.reuse" && applied.is_empty()
+    )
 }
 
 fn imported_function_contract(

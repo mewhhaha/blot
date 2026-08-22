@@ -141,10 +141,24 @@ is neither a lambda, a partially applied primitive, nor another choice has an
 open source set; that refusal reports the offending value and the signature the
 checker inferred for the function. A closed source set must compile.
 
-Staged non-empty arrays become ordinary Store construction. Store memory uses
-the canonical scalar layout internally as well as at adapters, so reads and
-writes preserve `i64`, `f32`, and `f64` element representations rather than
-reinterpreting an unconstrained element as `Unit`.
+Staged non-empty arrays become ordinary Store construction. If one or more
+elements are residual, recursive call-site substitution first settles the
+element representation from the concrete elements, and argument lowering uses
+that representation for the whole Store. Store memory uses the canonical scalar
+layout internally as well as at adapters, so reads and writes preserve `i64`,
+`f32`, and `f64` element representations rather than reinterpreting an
+unconstrained element as `Unit`.
+
+A block parameter joining two exclusive branches keeps reusable-Store meaning
+exactly when both incoming values carry it. This transports the ownership
+certificate through SSA control flow; it does not prove ownership anew. Any
+plain or shared incoming value makes the join plain.
+
+A residual direct call materializes a plain runtime value first, then reapplies
+the callee's certified produced-result tree. A Store component becomes reusable
+only where that tree identifies the successor of a consuming parameter. This is
+the inter-function counterpart of the block-join rule and never infers authority
+from the Store layout.
 
 Validation derives a closed layout witness for every Runtime-HIR type:
 
@@ -240,15 +254,14 @@ permutations observe the same old parameter values as a call. Mutual recursion
 and indirect calls remain calls.
 
 An entry-cycle function may be emitted as one WebAssembly `loop` when treating
-every edge to the entry as a back-edge leaves an acyclic reachable graph. The
-emitter unfolds that graph into nested target conditionals, assigns entry
-arguments in parallel, and emits each entry edge as `br`; returns remain
-returns. A shared acyclic join may therefore be duplicated in the artifact, but
-only the chosen branch executes it. Unfolding has an explicit block budget. A
-non-entry cycle, an invalid target, or a graph over that budget retains the
-block dispatcher. This criterion makes reducibility and code-size growth
-explicit rather than relying on source syntax: recursive functions and desugared
-`for` forms use the same rule.
+every edge to the entry as a back-edge leaves an acyclic, tree-shaped reachable
+graph: unfolding may not revisit a block through two predecessors. The emitter
+unfolds that graph into nested target conditionals, assigns entry arguments in
+parallel, and emits each entry edge as `br`; returns remain returns. Unfolding
+has an explicit block budget. A shared join, non-entry cycle, invalid target, or
+graph over that budget retains the block dispatcher. This criterion makes
+reducibility and code-size growth explicit rather than relying on source syntax:
+recursive functions and desugared `for` forms use the same rule.
 
 Before that test, Runtime HIR may bypass representation-only control
 round-trips. A conditional that materializes opposite booleans solely to branch

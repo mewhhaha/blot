@@ -1814,11 +1814,13 @@ fn emit_dynamic_operation(
 
 fn structured_loop_eligible(function: &RuntimeFunction) -> bool {
     let mut active = HashSet::new();
+    let mut expanded = HashSet::new();
     let mut has_back_edge = false;
     let Some(expanded_blocks) = structured_loop_expansion(
         function,
         function.entry_block,
         &mut active,
+        &mut expanded,
         &mut has_back_edge,
     ) else {
         return false;
@@ -1830,9 +1832,13 @@ fn structured_loop_expansion(
     function: &RuntimeFunction,
     block_id: usize,
     active: &mut HashSet<usize>,
+    expanded: &mut HashSet<usize>,
     has_back_edge: &mut bool,
 ) -> Option<usize> {
-    if !active.insert(block_id) {
+    // Recursive emission unfolds targets as nested Wasm constructs. A shared
+    // join would be emitted under more than one construct, so leave arbitrary
+    // reconvergent CFGs to the dispatcher instead of guessing a duplication.
+    if !active.insert(block_id) || !expanded.insert(block_id) {
         return None;
     }
     let block = function.blocks.get(block_id)?;
@@ -1845,7 +1851,8 @@ fn structured_loop_expansion(
             *has_back_edge = true;
             continue;
         }
-        expanded_blocks += structured_loop_expansion(function, target, active, has_back_edge)?;
+        expanded_blocks +=
+            structured_loop_expansion(function, target, active, expanded, has_back_edge)?;
         if expanded_blocks > MAX_STRUCTURED_LOOP_BLOCKS {
             return None;
         }
@@ -4267,6 +4274,18 @@ mod tests {
             branch_block(0, 1),
             branch_block(1, 2),
             branch_block(2, 1),
+        ]);
+
+        assert!(!structured_loop_eligible(&function));
+    }
+
+    #[test]
+    fn reconverging_loop_body_keeps_the_dispatcher() {
+        let function = runtime_function(vec![
+            conditional_block(0, 1, 2),
+            branch_block(1, 3),
+            branch_block(2, 3),
+            branch_block(3, 0),
         ]);
 
         assert!(!structured_loop_eligible(&function));
