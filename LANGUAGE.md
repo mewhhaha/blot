@@ -924,10 +924,39 @@ A function is written with `fn` and has one parameter pattern:
 fn parameter => body
 ```
 
-`fn` is the only lambda form. The keyword is what makes a lambda identifiable
-from its first token, which is why the parameter is an ordinary binding pattern
-— qualifiers, tuples, shapes, arrays, and constructor patterns are all admitted
-there — rather than an expression reinterpreted after the fact.
+Every lambda contains `fn`. An ordinary lambda begins with `fn`; a checked-reuse
+lambda begins with the reserved `reuse` modifier. Those disjoint first tokens
+make a lambda identifiable without reinterpreting an expression, which is why
+the parameter is an ordinary binding pattern — qualifiers, tuples, shapes,
+arrays, and constructor patterns are all admitted there.
+
+`reuse fn` is the same lambda with a checked Store-update assertion:
+
+```blot
+reuse fn parameter => body
+```
+
+It has the same type and value semantics as the lambda obtained by deleting
+`reuse`. The keyword does not consume the parameter or authorize a destructive
+update. Instead, after ordinary ownership checking and residual lowering, the
+compiler requires every `store.write` and `store.grow` emitted while evaluating
+that lambda to carry the existing `owned-reuse` permission. A persistent Store
+update reports `BLOT_REUSE_NOT_PROVED` at the lambda. Fresh construction and a
+uniquely owned Store growth that must relocate for capacity remain permitted;
+this first contract is reuse-clean, not allocation-free.
+
+Calls evaluated into the lambda's residual frame are covered. A recursive
+closure lowered as a separate Runtime-HIR function is a separate frame and says
+`reuse fn` when it wants the same check. In a curried source chain, one leading
+`reuse` applies to every unary lambda produced by lowering:
+
+```blot
+reuse fn values => fn index => body
+```
+
+The assertion remains outside the type lattice and does not request owned and
+persistent specializations. Its complete compiler contract is
+[`spec/REUSE.md`](spec/REUSE.md).
 
 Application is juxtaposition and associates left:
 
@@ -2209,6 +2238,11 @@ binding identity and source occurrence, so one branch's consumption cannot
 authorize another branch's update. This is not mutation in the language: the
 source binding is unavailable after the consuming use, and updates of ordinary
 shared arrays remain persistent with the immutable behavior specified in §6.1.
+
+A `reuse fn` asks the compiler to verify that every Store update in that
+lambda's residual frame used precisely this already-proved path. It does not
+turn a last use into consumption, trust a callee name, or weaken the persistent
+meaning of an ordinary update.
 
 ### 11.3 Regions and `Slice`
 

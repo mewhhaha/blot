@@ -188,6 +188,10 @@ const REJECTIONS: Record<
     stage: "check",
   },
   "deferred_at_runtime": { code: "BLOT_DEFERRED_AT_RUNTIME", stage: "build" },
+  "reuse_persistent_update": {
+    code: "BLOT_REUSE_NOT_PROVED",
+    stage: "build",
+  },
   "deferred_demanded_twice": {
     code: "BLOT_DEFERRED_DEMANDED_TWICE",
     stage: "check",

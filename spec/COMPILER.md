@@ -225,19 +225,21 @@ premise. The current summary certificate is unary array length plus a literal
 affine offset and is erased after the direct-operation proof is constructed.
 Ownership owns path consumption, extraction lineage, reuse permission, and
 closure ownership contracts. A contract is keyed by defining module revision and
-lambda-body identity and contains a parameter-pattern identity plus a closed
-produced-result tree. When that tree says the result is one parameter component,
-Runtime HIR may reuse the component's already settled representation for a
-recursive result; this is consumption of the structural certificate, not type
-inference from a name. The compiler-distributed module certificate serializes it
-beside the closure signature and validates every expression, pattern, span, and
-region derivation reference against the installed AST before an importer may
-substitute an argument through it. Ownership certificate schema 2 identifies
-every lineage source by module-local binding identity and requires a complete
-dynamic extraction partition. Neither certificate recognizes a source binding
-name. Staging owns compile-time values and residualization decisions.
-Specialization owns concrete representations. A later pass verifies and consumes
-these facts; it does not infer them again.
+lambda-body identity and contains a parameter-pattern identity, the
+checked-reuse assertion bit, and a closed produced-result tree. The bit is
+validated against the exact installed lambda and cannot itself license reuse.
+When the produced tree says the result is one parameter component, Runtime HIR
+may reuse the component's already settled representation for a recursive result;
+this is consumption of the structural certificate, not type inference from a
+name. The compiler-distributed module certificate serializes it beside the
+closure signature and validates every expression, pattern, span, and region
+derivation reference against the installed AST before an importer may substitute
+an argument through it. Ownership certificate schema 3 adds the checked-reuse
+assertion bit and identifies every lineage source by module-local binding
+identity and requires a complete dynamic extraction partition. Neither
+certificate recognizes a source binding name. Staging owns compile-time values
+and residualization decisions. Specialization owns concrete representations. A
+later pass verifies and consumes these facts; it does not infer them again.
 
 The progressive Runtime-HIR builder state is keyed by the typed-Core node ID,
 not by a printed type. Its structural representation key is composed from the

@@ -74,13 +74,20 @@ The no-double-move lemma and exact branch rules live in
 by an ownership certificate for the final consuming update; source arrays remain
 immutable whether or not the target reuses storage.
 
-Ownership certificate schema 2 also publishes structural lineage. Each owning
-destination path names its earlier binding identity and source path. Dynamic
-proof-refined `@array.take` lineage contains exactly the selected and remainder
-parts; `@array.split` contains exactly the prefix, selected, and suffix parts.
-The independent verifier rejects an unknown source identity, malformed path,
-duplicate lineage, invalid part, or incomplete partition. Bounds failure is not
-an ownership path: an unproved extraction is rejected before lineage is minted.
+A `reuse fn` assertion is checked after those permissions exist. It rejects a
+persistent Store update in the lambda's residual frame but cannot manufacture a
+permission, reinterpret a last use as consumption, or change the inferred
+function type. Materialized checked functions publish the discharged assertion
+in Runtime-HIR schema 3 for independent validation.
+
+Ownership certificate schema 3 publishes the checked-reuse assertion bit and
+structural lineage. Each owning destination path names its earlier binding
+identity and source path. Dynamic proof-refined `@array.take` lineage contains
+exactly the selected and remainder parts; `@array.split` contains exactly the
+prefix, selected, and suffix parts. The independent verifier rejects an unknown
+source identity, malformed path, duplicate lineage, invalid part, or incomplete
+partition. Bounds failure is not an ownership path: an unproved extraction is
+rejected before lineage is minted.
 
 ## 5. Certificate discipline
 

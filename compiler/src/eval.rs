@@ -2015,6 +2015,25 @@ fn apply_with_expected(
                 Ok(module) => module,
                 Err(error) => return Computation::error(error),
             };
+            let (reuse, reuse_span) = loaded
+                .arena
+                .expressions
+                .iter()
+                .find_map(|expression| {
+                    let Expression::Lambda {
+                        parameter: candidate_parameter,
+                        body: candidate_body,
+                        reuse,
+                        span,
+                        ..
+                    } = expression
+                    else {
+                        return None;
+                    };
+                    (*candidate_parameter == parameter && *candidate_body == body)
+                        .then_some((*reuse, *span))
+                })
+                .expect("a closure must match its defining lambda");
             if self_name.is_some()
                 && let Some(trace) = runtime.residual.clone()
             {
@@ -2072,6 +2091,14 @@ fn apply_with_expected(
                 },
                 _ => argument,
             };
+            let reuse_scope = if reuse {
+                runtime.residual.as_ref().map(|trace| {
+                    let scope = trace.borrow().begin_reuse_scope();
+                    (trace.clone(), scope)
+                })
+            } else {
+                None
+            };
             if !match_pattern(&loaded, parameter, &argument, &scope) {
                 return Computation::error(Diagnostic::new(
                     "BLOT_ARGUMENT_MISMATCH",
@@ -2084,6 +2111,11 @@ fn apply_with_expected(
             Rc::make_mut(&mut closure_runtime.effect_scope).push(Rc::new(argument));
             evaluate_expression(context, closure_module, body, scope, closure_runtime).and_then(
                 move |mut value| {
+                    if let Some((trace, scope)) = reuse_scope
+                        && let Err(error) = trace.borrow().finish_reuse_scope(scope, reuse_span)
+                    {
+                        return Computation::error(error);
+                    }
                     if let Some(Value::Arrow { codomain, .. }) =
                         signature.as_deref().map(signature_body)
                     {

@@ -10,7 +10,7 @@ const span = { file: "test.blot", start: 0, end: 1 } as const;
 function acceptedModule(): BlotRuntimeModule {
   return {
     format: "blot-runtime-hir",
-    schemaVersion: 2,
+    schemaVersion: 3,
     source: "test.blot",
     types: [
       { kind: "unit" },
@@ -258,6 +258,56 @@ Deno.test("Blot Runtime HIR rejects owned Store reuse without ownership evidence
   assertThrows(
     () => validateBlotRuntimeModule(invalid),
     /claims owned reuse with plain ownership/,
+  );
+});
+
+Deno.test("Blot Runtime HIR rejects a persistent update in a reuse-checked function", () => {
+  const module = acceptedModule();
+  const main = module.functions[0];
+  const entry = main.blocks[0];
+  const invalid: BlotRuntimeModule = {
+    ...module,
+    functions: [{
+      ...main,
+      reuse: "checked",
+      blocks: [{
+        ...entry,
+        operations: [...entry.operations, {
+          kind: "store.empty",
+          result: 4,
+          type: 3,
+          operands: [],
+          ownership: "owned",
+          span,
+        }, {
+          kind: "store.write",
+          result: 5,
+          type: 3,
+          operands: [4, 1, 1],
+          ownership: "owned",
+          update: "persistent",
+          span,
+        }],
+      }, ...main.blocks.slice(1)],
+    }, ...module.functions.slice(1)],
+  };
+
+  assertThrows(
+    () => validateBlotRuntimeModule(invalid),
+    /reuse-checked function main contains persistent store.write/,
+  );
+});
+
+Deno.test("Blot Runtime HIR rejects an unknown reuse certificate", () => {
+  const module = acceptedModule();
+  const invalid = {
+    ...module,
+    functions: [{ ...module.functions[0], reuse: "claimed" }],
+  } as unknown as BlotRuntimeModule;
+
+  assertThrows(
+    () => validateBlotRuntimeModule(invalid),
+    /function main has unknown reuse certificate claimed/,
   );
 });
 

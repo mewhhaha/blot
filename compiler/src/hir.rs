@@ -360,6 +360,8 @@ pub(crate) struct RuntimeFunction {
     pub(crate) id: usize,
     pub(crate) name: String,
     pub(crate) signature: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reuse: Option<&'static str>,
     #[serde(rename = "entryBlock")]
     pub(crate) entry_block: usize,
     pub(crate) blocks: Vec<RuntimeBlock>,
@@ -541,6 +543,7 @@ pub(crate) struct ResidualFunctionCompilation {
     result_type: usize,
     caller_arguments: Vec<usize>,
     name: String,
+    reuse: bool,
     span: crate::ast::Span,
 }
 
@@ -560,6 +563,10 @@ struct ResidualBlock {
     terminator: Option<RuntimeTerminator>,
 }
 
+pub(crate) struct ResidualReuseScope {
+    operation_counts: Vec<usize>,
+}
+
 pub(crate) struct ResidualBranches {
     pub(crate) consequent: usize,
     pub(crate) alternate: usize,
@@ -567,6 +574,45 @@ pub(crate) struct ResidualBranches {
 }
 
 impl ResidualTrace {
+    pub(crate) fn begin_reuse_scope(&self) -> ResidualReuseScope {
+        ResidualReuseScope {
+            operation_counts: self
+                .blocks
+                .iter()
+                .map(|block| block.operations.len())
+                .collect(),
+        }
+    }
+
+    pub(crate) fn finish_reuse_scope(
+        &self,
+        scope: ResidualReuseScope,
+        span: crate::ast::Span,
+    ) -> Result<(), Diagnostic> {
+        for (block_index, block) in self.blocks.iter().enumerate() {
+            let start = scope
+                .operation_counts
+                .get(block_index)
+                .copied()
+                .unwrap_or(0);
+            for operation in block.operations.iter().skip(start) {
+                if matches!(operation.kind, "store.write" | "store.grow")
+                    && operation.update != Some("owned-reuse")
+                {
+                    return Err(Diagnostic::new(
+                        "BLOT_REUSE_NOT_PROVED",
+                        format!(
+                            "`reuse fn` emitted a persistent {}. Consume the Store with `!`, use an ownership-checked Region operation, or remove `reuse`.",
+                            operation.kind
+                        ),
+                        span,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn new(source: &str) -> Self {
         let mut trace = Self {
             source: source.to_owned(),
@@ -708,6 +754,8 @@ impl ResidualTrace {
         value: Value,
         parameter_types: Vec<usize>,
         result_type: &Type,
+        reuse: bool,
+        function_span: RuntimeSpan,
     ) -> Result<RuntimeModule, Diagnostic> {
         let result = self.lower_value(&value, crate::ast::Span { start: 0, end: 0 })?;
         let expected = self.runtime_type_from_checked_type(result_type)?;
@@ -745,19 +793,16 @@ impl ResidualTrace {
                 id: 0,
                 name: format!("blot$residual${name}"),
                 signature,
+                reuse: reuse.then_some("checked"),
                 entry_block: 0,
                 blocks,
-                span: RuntimeSpan {
-                    file: self.source.clone(),
-                    start: 0,
-                    end: 0,
-                },
+                span: function_span,
             }),
         );
         validate_runtime_layouts(&self.types)?;
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 2,
+            schema_version: 3,
             source: self.source,
             types: self.types,
             signatures: self.signatures,
@@ -2721,6 +2766,23 @@ impl ResidualTrace {
         let environment = replace_environment_runtime(context, lexical_closure, &replacements)?;
         let mut caller_arguments = vec![caller_argument.id];
         caller_arguments.extend(captures.iter().map(|capture| capture.id));
+        let reuse = loaded
+            .arena
+            .expressions
+            .iter()
+            .find_map(|expression| {
+                let crate::ast::Expression::Lambda {
+                    parameter,
+                    body: lambda_body,
+                    reuse,
+                    ..
+                } = expression
+                else {
+                    return None;
+                };
+                (parameter == &closure_parameter && lambda_body == &body).then_some(*reuse)
+            })
+            .expect("a residual closure must match its defining lambda");
         Ok(ResidualFunctionCall::Compile(ResidualFunctionCompilation {
             argument,
             environment,
@@ -2729,6 +2791,7 @@ impl ResidualTrace {
             result_type,
             caller_arguments,
             name: name.to_owned(),
+            reuse,
             span,
         }))
     }
@@ -2753,6 +2816,7 @@ impl ResidualTrace {
                     source,
                     qualifier: _,
                 },
+            ..
         }) = contract
         else {
             return Ok(None);
@@ -2820,6 +2884,7 @@ impl ResidualTrace {
                 id: compilation.function,
                 name: format!("blot$residual${}", compilation.name),
                 signature: compilation.signature,
+                reuse: compilation.reuse.then_some("checked"),
                 entry_block: 0,
                 blocks,
                 span: self.span(compilation.span),
@@ -2926,6 +2991,7 @@ impl ResidualTrace {
                 id: 0,
                 name: "blot$residual$blot:default".to_owned(),
                 signature: function_signature,
+                reuse: None,
                 entry_block: 0,
                 blocks,
                 span: RuntimeSpan {
@@ -2938,7 +3004,7 @@ impl ResidualTrace {
         validate_runtime_layouts(&self.types)?;
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 2,
+            schema_version: 3,
             source: self.source.clone(),
             types: self.types,
             signatures: self.signatures,
@@ -6709,6 +6775,56 @@ fn prepare_function_export(
     let Some((mut function, mut type_)) = exported.runtime else {
         return Err(hir_error("A function export lost its runtime value."));
     };
+    let reuse_assertion = match &function {
+        Value::Closure {
+            module,
+            parameter,
+            body,
+            ..
+        } => {
+            let modules = context.modules.borrow();
+            let loaded = modules
+                .get(module.as_ref())
+                .expect("a function export must retain its defining module");
+            Some(
+                loaded
+                    .module
+                    .arena
+                    .expressions
+                    .iter()
+                    .find_map(|expression| {
+                        let crate::ast::Expression::Lambda {
+                            parameter: candidate_parameter,
+                            body: candidate_body,
+                            reuse,
+                            span,
+                            ..
+                        } = expression
+                        else {
+                            return None;
+                        };
+                        (candidate_parameter == parameter && candidate_body == body).then_some((
+                            *reuse,
+                            RuntimeSpan {
+                                file: module.as_ref().clone(),
+                                start: span.start,
+                                end: span.end,
+                            },
+                        ))
+                    })
+                    .expect("a function export must match its defining lambda"),
+            )
+        }
+        _ => None,
+    };
+    let (reuse, function_span) = reuse_assertion.unwrap_or((
+        false,
+        RuntimeSpan {
+            file: path.to_owned(),
+            start: 0,
+            end: 0,
+        },
+    ));
     let trace = Rc::new(std::cell::RefCell::new(ResidualTrace::new(path)));
     let runtime = Runtime::residual(Phase::Runtime, path.to_owned(), trace.clone());
     let mut parameter_types = Vec::new();
@@ -6736,7 +6852,14 @@ fn prepare_function_export(
     let trace = Rc::try_unwrap(trace)
         .map_err(|_| hir_error("A function export trace still has live evaluator references."))?
         .into_inner();
-    trace.finish_export(exported.name, function, parameter_types, &type_)
+    trace.finish_export(
+        exported.name,
+        function,
+        parameter_types,
+        &type_,
+        reuse,
+        function_span,
+    )
 }
 
 fn merge_runtime_modules(
@@ -6828,7 +6951,7 @@ fn merge_runtime_modules(
     validate_runtime_layouts(&types)?;
     Ok(RuntimeModule {
         format: "blot-runtime-hir",
-        schema_version: 2,
+        schema_version: 3,
         source: source.to_owned(),
         types,
         signatures,
@@ -7229,7 +7352,7 @@ impl HirBuilder {
         validate_runtime_layouts(&self.types)?;
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 2,
+            schema_version: 3,
             source: self.source,
             types: self.types,
             signatures: self.signatures,
@@ -7268,6 +7391,7 @@ impl HirBuilder {
             id,
             name: format!("blot$constant${}", exported.name),
             signature,
+            reuse: None,
             entry_block: 0,
             blocks: vec![RuntimeBlock {
                 id: 0,
@@ -8420,6 +8544,7 @@ mod tests {
             id: 7,
             name: "tail-test".to_owned(),
             signature: 0,
+            reuse: None,
             entry_block: 0,
             blocks,
             span: span(),

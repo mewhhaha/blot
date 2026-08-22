@@ -274,6 +274,7 @@ export type BlotRuntimeFunction = {
   readonly id: number;
   readonly name: string;
   readonly signature: number;
+  readonly reuse?: "checked";
   readonly entryBlock: number;
   readonly blocks: readonly BlotRuntimeBlock[];
   readonly span: BlotRuntimeSpan;
@@ -303,7 +304,7 @@ export type BlotRuntimeExport =
 
 export type BlotRuntimeModule = {
   readonly format: "blot-runtime-hir";
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly source: string;
   readonly types: readonly BlotRuntimeType[];
   readonly signatures: readonly BlotRuntimeSignature[];
@@ -495,9 +496,9 @@ type BlotRuntimeValueDefinition = {
 export function validateBlotRuntimeModule(
   module: BlotRuntimeModule,
 ): ValidatedBlotRuntimeModule {
-  if (module.format !== "blot-runtime-hir" || module.schemaVersion !== 2) {
+  if (module.format !== "blot-runtime-hir" || module.schemaVersion !== 3) {
     throw new TypeError(
-      `Blot Runtime HIR requires format blot-runtime-hir schema 2; received ${module.format} schema ${module.schemaVersion}`,
+      `Blot Runtime HIR requires format blot-runtime-hir schema 3; received ${module.format} schema ${module.schemaVersion}`,
     );
   }
   if (module.types.length === 0) {
@@ -646,6 +647,11 @@ function validateFunction(
   function_: BlotRuntimeFunction,
   capabilityOperations: ReadonlyMap<string, number>,
 ): void {
+  if (function_.reuse !== undefined && function_.reuse !== "checked") {
+    throw new TypeError(
+      `${module.source}: function ${function_.name} has unknown reuse certificate ${function_.reuse}`,
+    );
+  }
   const signature = requireSignature(
     module,
     function_.signature,
@@ -739,6 +745,15 @@ function validateFunction(
         capabilityOperations,
         values,
       );
+      if (
+        function_.reuse === "checked" &&
+        (operation.kind === "store.write" || operation.kind === "store.grow") &&
+        operation.update !== "owned-reuse"
+      ) {
+        throw new TypeError(
+          `${module.source}: reuse-checked function ${function_.name} contains persistent ${operation.kind}`,
+        );
+      }
     }
     for (const operand of terminatorValues(block.terminator)) {
       requireDominatingValue(

@@ -162,6 +162,7 @@ export function encodePortableModule(module: Module): PortableModule {
           tag: expression.tag,
           parameter: patternId(expression.parameter),
           body: expressionId(expression.body),
+          ...(expression.reuse === true ? { reuse: true } : {}),
           // Written only when set, so an ordinary lambda encodes exactly as it
           // did before deferred parameters existed. A capsule that dropped it
           // would hand the importer a strict function under a deferred name.
@@ -568,7 +569,15 @@ export function decodePortableModule(
           span,
         };
         break;
-      case "lambda":
+      case "lambda": {
+        const reuse = optionalBoolean(
+          node.reuse,
+          `${location} expression ${index} reuse`,
+        );
+        const deferred = optionalBoolean(
+          node.deferred,
+          `${location} expression ${index} deferred`,
+        );
         decoded = {
           tag,
           parameter: pattern(
@@ -585,10 +594,12 @@ export function decodePortableModule(
               `${location} expression ${index} body`,
             ),
           ),
-          ...(node.deferred === true ? { deferred: true } : {}),
+          ...(reuse === true ? { reuse: true } : {}),
+          ...(deferred === true ? { deferred: true } : {}),
           span,
         };
         break;
+      }
       case "array":
         decoded = {
           tag,
@@ -1000,6 +1011,14 @@ function boolean(value: unknown, location: string): boolean {
     throw new Error(`${location} must be a boolean`);
   }
   return value;
+}
+
+function optionalBoolean(
+  value: unknown,
+  location: string,
+): boolean | undefined {
+  if (value === undefined) return undefined;
+  return boolean(value, location);
 }
 
 function finiteNumber(value: unknown, location: string): number {

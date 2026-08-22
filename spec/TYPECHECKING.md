@@ -755,7 +755,7 @@ authority rather than duplicating it:
   move replaces exactly one leaf by `none`, blocks whole-value reuse while the
   root is partial, and snapshots that remainder at branches and speculative
   ownership transactions. Ownership leaves also retain their source binding and
-  path. Certificate schema 2 publishes that lineage and independently requires
+  path. Certificate schema 3 publishes that lineage and independently requires
   both `take` outputs or all three `split` outputs at one extraction identity.
 - A region ownership value is `Region(authority, elements)`: the first component
   is the opaque interval permission and the second is a hidden positional

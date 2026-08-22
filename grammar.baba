@@ -362,7 +362,7 @@ keyword = (
   | "operators" | "infixl" | "infixr" | "infix" | "prefix"
   | "let" | "const" | "sig" | "return"
   | "if" | "else" | "case" | "of" | "rec" | "open"
-  | "for" | "in" | "break" | "do" | "compdo" | "fn"
+  | "for" | "in" | "break" | "do" | "compdo" | "reuse" | "fn"
 ) ;
 
 primary_expression = (
@@ -459,8 +459,8 @@ array_element = (
   value:value
 ) ;
 
-// A lambda is admissible wherever a value is. The two alternatives are told
-// apart by their first token — `fn` begins one and nothing else — so this is a
+// A lambda is admissible wherever a value is. Its first token is either `fn` or
+// the reserved `reuse` prefix; neither begins an expression, so this remains a
 // decision the parser makes without lookahead.
 value = lambda | expression ;
 
@@ -489,12 +489,12 @@ shape_field = (
   ";"
 ) ;
 
-// `fn` is the only lambda form, and it is what makes a lambda lexically
-// identifiable from its first token. That one keyword pays for everything else
-// here: `value = lambda | expression` gets disjoint FIRST sets, which is
-// requirements 3 and 4 rather than a convenience, and the parameter is an
-// actual `binding_pattern` instead of an expression semantic analysis has to
-// reclassify afterwards.
+// `fn` is the ordinary lambda form. `reuse fn` adds a checked lowering
+// assertion without changing the function's type or semantics. Both are
+// lexically identifiable from their first token, so `value = lambda |
+// expression` keeps disjoint FIRST sets. The optional prefix lives on this one
+// flat lambda rule rather than on a declaration tag or on every curried
+// parameter.
 //
 // A curried chain is a repetition rather than a lambda whose body is another
 // lambda. Both accept exactly the same source — `fn f => fn x => f (f x)` — but
@@ -504,6 +504,7 @@ shape_field = (
 // division of labour `expression` has with `fold-fixity`: the grammar stays
 // flat and the tree is built semantically.
 lambda = (
+  reuse:"reuse"?
   parameters:lambda_parameter+
   body:expression
 ) ;

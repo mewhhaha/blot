@@ -341,7 +341,7 @@ sig slice_set =
       (@region.type T, @type.int, T) -> (#Updated (@region.type T) | #SetOutOfBounds (@region.type T))
   )
 const slice_set =
-  fn (!region, index, value) => @region.set (!region) index value
+  reuse fn (!region, index, value) => @region.set (!region) index value
 
 sig slice_replace =
   @forall (fn T => do:
@@ -350,7 +350,7 @@ sig slice_replace =
          #ReplaceOutOfBounds (T, @region.type T))
   )
 const slice_replace =
-  fn (!region, index, !value) => @region.replace (!region) index (!value)
+  reuse fn (!region, index, !value) => @region.replace (!region) index (!value)
 
 sig slice_swap =
   @forall (fn T => do:
@@ -358,7 +358,7 @@ sig slice_swap =
       (@region.type T, @type.int, @type.int) -> (#Updated (@region.type T) | #SwapOutOfBounds (@region.type T))
   )
 const slice_swap =
-  fn (!region, left, right) => @region.swap (!region) left right
+  reuse fn (!region, left, right) => @region.swap (!region) left right
 
 sig slice_partition_unchecked =
   @forall (fn T => do:
@@ -370,9 +370,9 @@ sig slice_partition_unchecked =
     ) -> (@region.type T, @type.int)
   )
 const slice_partition_unchecked =
-  fn (!region, start, end, belongs_left) => do:
+  reuse fn (!region, start, end, belongs_left) => do:
     let rec go =
-      fn (!current_region, scan, boundary, final) => do:
+      reuse fn (!current_region, scan, boundary, final) => do:
         if is_equal (@int.cmp scan final):
           return (!current_region, boundary)
         else:
@@ -415,7 +415,7 @@ sig slice_partition_range =
     )
   )
 const slice_partition_range =
-  fn (!region, start, end, belongs_left) => do:
+  reuse fn (!region, start, end, belongs_left) => do:
     let length = slice_length (&region)
     if is_less (@int.cmp start 0):
       return #PartitionOutOfBounds (!region, start)
@@ -443,7 +443,7 @@ sig slice_partition =
     ) -> (@region.type T, @type.int)
   )
 const slice_partition =
-  fn (!region, belongs_left) => do:
+  reuse fn (!region, belongs_left) => do:
     let length = slice_length (&region)
     return slice_partition_unchecked (
       !region,
@@ -558,7 +558,7 @@ sig slice_partition_in =
       #PartitionOutOfBounds (@region.type T, @type.int)
     )
   )
-const slice_partition_in = fn (!region, bounds, belongs_left) => do:
+const slice_partition_in = reuse fn (!region, bounds, belongs_left) => do:
   let { .start; .end; } = slice_range_bounds bounds
   return slice_partition_range (
     !region,
@@ -571,7 +571,7 @@ sig slice_swap_or_keep =
   @forall (fn T => do:
     return (@region.type T, @type.int, @type.int) -> @region.type T
   )
-const slice_swap_or_keep = fn (!region, left, right) => do:
+const slice_swap_or_keep = reuse fn (!region, left, right) => do:
   return case slice_swap ((!region), left, right) of
     #Updated !updated => updated
     #SwapOutOfBounds !original => original

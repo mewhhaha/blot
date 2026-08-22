@@ -1,0 +1,15 @@
+// `reuse fn` checks the residual Store-update path. It does not grant
+// ownership: the parameter and update still consume `values` explicitly.
+
+open import "blot:prelude"
+
+sig clear_first_length = [Int] -> Int
+const clear_first_length = reuse fn !values => do:
+  if @array.len (&values) > 0:
+    let !updated = @array.set (!values) 0 0
+    return @array.len (!updated)
+
+  return @array.len (!values)
+
+let !values = [10, 20, 30]
+return clear_first_length (!values)

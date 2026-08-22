@@ -76,6 +76,8 @@ pub(crate) enum Produced {
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct OwnershipContract {
     pub(crate) parameter: PatternId,
+    #[serde(default)]
+    pub(crate) reuse: bool,
     pub(crate) result: Produced,
 }
 
@@ -117,20 +119,28 @@ pub(crate) fn validate_contracts(
                 body.0
             ));
         }
-        let defining_lambda = module.arena.expressions.iter().any(|expression| {
-            matches!(
-                expression,
-                Expression::Lambda {
-                    parameter,
-                    body: lambda_body,
-                    ..
-                } if parameter == &contract.parameter && lambda_body == body
-            )
+        let defining_lambda = module.arena.expressions.iter().find_map(|expression| {
+            let Expression::Lambda {
+                parameter,
+                body: lambda_body,
+                reuse,
+                ..
+            } = expression
+            else {
+                return None;
+            };
+            (parameter == &contract.parameter && lambda_body == body).then_some(*reuse)
         });
-        if !defining_lambda {
+        let Some(reuse) = defining_lambda else {
             return Err(format!(
                 "ownership contract for body {} does not match lambda parameter {}",
                 body.0, contract.parameter.0
+            ));
+        };
+        if reuse != contract.reuse {
+            return Err(format!(
+                "ownership contract for body {} changed its checked-reuse assertion",
+                body.0
             ));
         }
         validate_produced(module, &contract.result)?;
@@ -827,6 +837,7 @@ fn walk(
         Expression::Lambda {
             parameter,
             body,
+            reuse,
             span,
             ..
         } => {
@@ -850,6 +861,7 @@ fn walk(
                 body,
                 OwnershipContract {
                     parameter,
+                    reuse,
                     result: result.clone(),
                 },
             );

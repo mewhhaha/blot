@@ -184,6 +184,17 @@ return values
   );
 });
 
+Deno.test("formatting preserves a reuse lambda prefix", async () => {
+  await assertStableFormatting(
+    `const clear = reuse fn !values => @array.set (!values) 0 0
+return clear
+`,
+    `const clear = reuse fn !values => @array.set (!values) 0 0
+return clear
+`,
+  );
+});
+
 Deno.test("formatting indents a separated return inside a colon block", async () => {
   const returnedValue = "x".repeat(70);
   const source = `let choose = fn ready => do:

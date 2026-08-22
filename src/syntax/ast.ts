@@ -101,6 +101,8 @@ export type Expr =
     readonly tag: "lambda";
     readonly parameter: Pattern;
     readonly body: Expr;
+    /** Every residual Store update in this lambda must be ownership-reusing. */
+    readonly reuse?: boolean;
     /**
      * The caller suspends the argument until the parameter is read. Absent on
      * an ordinary lambda rather than `false`, so the two spell the same tree
