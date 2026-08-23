@@ -965,8 +965,9 @@ that purpose.
 The `=>` token is reserved for lambda parameters and case arms. A lambda written
 without `fn` is therefore a syntax error rather than an operator chain.
 
-A parameter written `~name` is deferred: the caller suspends the argument
-expression and it is evaluated only where the body reads the name.
+A parameter written `~name` is deferred: the callee, rather than the caller,
+decides whether to evaluate the argument expression by reading the name. This is
+affine call-by-name, not general laziness.
 
 ```blot
 let unless = fn condition => fn ~fallback => case condition of
@@ -974,22 +975,33 @@ let unless = fn condition => fn ~fallback => case condition of
   #False => fallback
 ```
 
-Deferral is a property of the arrow, not of the call. `~A -> B` is the type of a
-function whose parameter is deferred, `@type.defer` is the primitive the prefix
-names, and the two arrows are unrelated: a strict function does not satisfy a
-deferred signature and a deferred one does not satisfy a strict signature, in a
-`sig`, at an application, and under `refines` alike. `~` is read as a prefix
-here and as the row separator after a `->` in §12.4; the grammar position
-decides which, and neither form can appear where the other is meant.
+Deferral is a property of the arrow, not of the call. `A ~> B` is the type of a
+function whose parameter is deferred, and `@type.deferred_arrow` is the
+primitive the operator names. The two arrows are unrelated: a strict function
+does not satisfy a deferred signature and a deferred one does not satisfy a
+strict signature, in a `sig`, at an application, and under `refines` alike. Both
+arrows associate to the right, so `Bool -> Int ~> Int` describes a strict first
+parameter followed by a deferred second parameter.
 
-A deferred argument must be pure, and its parameter may be read at most once —
-reading it twice is `BLOT_DEFERRED_DEMANDED_TWICE`, and forcing it once into an
-ordinary `let` is how a program uses the value more than once.
+A deferred parameter may be read at most once along one execution path. Reading
+it once in each side of a runtime branch is valid because the sides are
+exclusive. Reading it twice on one path is `BLOT_DEFERRED_DEMANDED_TWICE`;
+forcing it once into an ordinary `let` is how a body reuses the resulting value.
+The function's effect at a call includes the argument's possible effects even
+when a branch skips them, so effect checking is conservative while execution is
+conditional.
 
-Deferral is settled while compiling. A call that survives into the emitted
-program is `BLOT_DEFERRED_AT_RUNTIME`, because WebAssembly has no representation
-for a suspension and would run an argument the evaluator never demanded — the
-two executions would then disagree about a program that traps.
+Handing an expression to a deferred parameter transfers any affine ownership
+captured by that expression at the call. Skipping the expression may skip work
+and allocation, but it does not return transferred authority to the caller. This
+keeps ownership independent of demand and prevents a later use from depending on
+which runtime branch the callee chose.
+
+Known deferred calls are normalized during specialization. A demanded argument
+is emitted in the branch that demands it, and an omitted argument emits no work.
+Runtime HIR and Wasm therefore contain ordinary control flow and no suspension
+or heap thunk. A deferred function that escapes known call sites into an opaque
+runtime value or the public ABI is refused with `BLOT_DEFERRED_AT_RUNTIME`.
 
 ### 6.4 Blocks
 
@@ -1128,6 +1140,7 @@ Fixed operators, from loosest to tightest:
 | 22    | `\|\|`                      | right           | `Logic.or`                      |
 | 24    | `&&`                        | right           | `Logic.and`                     |
 | 25    | `->`                        | right           | `@type.arrow`                   |
+| 25    | `~>`                        | right           | `@type.deferred_arrow`          |
 | 30    | `==` `!=` `<` `<=` `>` `>=` | non-associative | `Int.*`                         |
 | 40    | `\|` `\`                    | left            | `Type.union`, `Type.diff`       |
 | 45    | `&`                         | left            | `Type.intersect`                |
@@ -1138,9 +1151,10 @@ Fixed operators, from loosest to tightest:
 | 90    | `-`                         | prefix          | `Int.negate`                    |
 | 90    | `!` `?` `&`                 | prefix          | `@linear.*`                     |
 
-Most operators lower to ordinary function calls. `&&` and `||` are the two
-control operators: lowering turns them into `if`, so the right operand is
-evaluated only when the left operand does not determine the result.
+Every operator lowers to an ordinary function call. `&&` and `||` target
+`Logic.and` and `Logic.or`; those ordinary prelude functions take a deferred
+second parameter and decide whether to demand it. No boolean operator has a
+compiler-only control rule.
 
 `?name` introduces an affine binding when it appears in a pattern. Affine names
 are consumed by ordinary move positions; `?value` is not a separate ownership
@@ -1939,7 +1953,7 @@ Compiler output uses notation that is not additional source syntax:
 | `#Some Int \| ..`           | variant with an open set         |
 | `A -> B`                    | pure function                    |
 | `A -> B ~ { Console, ..e }` | function with an open effect row |
-| `~A -> B`                   | deferred parameter (§6.3)        |
+| `A ~> B`                    | deferred parameter (§6.3)        |
 | `'a`, `'b`                  | inferred type variables          |
 | `forall 'q0. ...`           | explicit quantified type         |
 | `⊤`, `⊥`                    | top and bottom                   |
@@ -3006,34 +3020,34 @@ the examples above do.
 
 ### 13.4 Type values
 
-| primitive           | meaning                                           |
-| ------------------- | ------------------------------------------------- |
-| `@type.unbounded`   | open range bound                                  |
-| `@type.int`         | signed 64-bit runtime integer domain              |
-| `@type.text`        | unbounded text domain                             |
-| `@type.float`       | the double domain, which has no bounds            |
-| `@type.float32`     | the single-precision domain                       |
-| `@type.f32x4`       | four single-precision lanes, an opaque type       |
-| `@type.f32x4_mask`  | four comparison lanes, an opaque type             |
-| `@type.unit`        | unit type/value                                   |
-| `@type.range`       | inclusive range                                   |
-| `@type.refine`      | normalize a pure integer predicate into a type    |
-| `@type.equal`       | exact alpha-equivalent equality of type values    |
-| `@type.instantiate` | eliminate one outer quantified type variable      |
-| `@type.probe`       | eliminate one binder with a kind-correct witness  |
-| `@type.union`       | flattened duplicate-free union                    |
-| `@type.intersect`   | intersection of union members                     |
-| `@type.diff`        | difference of union members                       |
-| `@type.arrow`       | function type value                               |
-| `@type.defer`       | mark a parameter type as deferred                 |
-| `@type.performs`    | attach an effect row to a function type           |
-| `@type.of`          | structural singleton type of a compile-time value |
-| `@type.seal`        | nominally seal a carrier under a text name        |
-| `@type.open`        | recover a sealed carrier                          |
-| `@type.attach`      | attach one namespace member to a type value       |
-| `@type.members`     | recover attached namespace members                |
-| `@type.reflect`     | inspect the representation of a type value        |
-| `@type.union_of`    | union a non-empty array of type values            |
+| primitive              | meaning                                           |
+| ---------------------- | ------------------------------------------------- |
+| `@type.unbounded`      | open range bound                                  |
+| `@type.int`            | signed 64-bit runtime integer domain              |
+| `@type.text`           | unbounded text domain                             |
+| `@type.float`          | the double domain, which has no bounds            |
+| `@type.float32`        | the single-precision domain                       |
+| `@type.f32x4`          | four single-precision lanes, an opaque type       |
+| `@type.f32x4_mask`     | four comparison lanes, an opaque type             |
+| `@type.unit`           | unit type/value                                   |
+| `@type.range`          | inclusive range                                   |
+| `@type.refine`         | normalize a pure integer predicate into a type    |
+| `@type.equal`          | exact alpha-equivalent equality of type values    |
+| `@type.instantiate`    | eliminate one outer quantified type variable      |
+| `@type.probe`          | eliminate one binder with a kind-correct witness  |
+| `@type.union`          | flattened duplicate-free union                    |
+| `@type.intersect`      | intersection of union members                     |
+| `@type.diff`           | difference of union members                       |
+| `@type.arrow`          | function type value                               |
+| `@type.deferred_arrow` | deferred function type value                      |
+| `@type.performs`       | attach an effect row to a function type           |
+| `@type.of`             | structural singleton type of a compile-time value |
+| `@type.seal`           | nominally seal a carrier under a text name        |
+| `@type.open`           | recover a sealed carrier                          |
+| `@type.attach`         | attach one namespace member to a type value       |
+| `@type.members`        | recover attached namespace members                |
+| `@type.reflect`        | inspect the representation of a type value        |
+| `@type.union_of`       | union a non-empty array of type values            |
 
 An empty intersection or difference, and `@type.union_of []`, are errors; Blot
 has no value representing an empty compile-time union.

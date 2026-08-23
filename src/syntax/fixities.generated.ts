@@ -23,21 +23,25 @@ export const generatedFixities = [
     "operator": "||",
     "associativity": "right",
     "precedence": 22,
-    "target": "Logic.or",
-    "control": "or"
+    "target": "Logic.or"
   },
   {
     "operator": "&&",
     "associativity": "right",
     "precedence": 24,
-    "target": "Logic.and",
-    "control": "and"
+    "target": "Logic.and"
   },
   {
     "operator": "->",
     "associativity": "right",
     "precedence": 25,
     "target": "@type.arrow"
+  },
+  {
+    "operator": "~>",
+    "associativity": "right",
+    "precedence": 25,
+    "target": "@type.deferred_arrow"
   },
   {
     "operator": "==",
@@ -140,12 +144,6 @@ export const generatedFixities = [
     "associativity": "prefix",
     "precedence": 90,
     "target": "Int.negate"
-  },
-  {
-    "operator": "~",
-    "associativity": "prefix",
-    "precedence": 90,
-    "target": "@type.defer"
   },
   {
     "operator": "!",

@@ -2004,6 +2004,41 @@ impl ResidualTrace {
         self.current_block
     }
 
+    pub(crate) fn blocks_share_path(&self, left: usize, right: usize) -> bool {
+        left == right || self.block_reaches(left, right) || self.block_reaches(right, left)
+    }
+
+    fn block_reaches(&self, source: usize, target: usize) -> bool {
+        let mut pending = vec![source];
+        let mut seen = HashSet::new();
+        while let Some(block) = pending.pop() {
+            if !seen.insert(block) {
+                continue;
+            }
+            let Some(terminator) = self
+                .blocks
+                .get(block)
+                .and_then(|block| block.terminator.as_ref())
+            else {
+                continue;
+            };
+            let successors = match terminator {
+                RuntimeTerminator::Branch { target, .. } => vec![*target],
+                RuntimeTerminator::Conditional {
+                    consequent,
+                    alternate,
+                    ..
+                } => vec![*consequent, *alternate],
+                RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => Vec::new(),
+            };
+            if successors.contains(&target) {
+                return true;
+            }
+            pending.extend(successors);
+        }
+        false
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn join_conditional(
         &mut self,
@@ -2198,6 +2233,7 @@ impl ResidualTrace {
                 self_name,
                 signature,
                 reuse_assertion,
+                deferred,
                 ..
             } => {
                 let captures = runtime_captures(
@@ -2220,6 +2256,7 @@ impl ResidualTrace {
                         self_name: self_name.clone(),
                         signature: signature.clone(),
                         reuse_assertion: *reuse_assertion,
+                        deferred: *deferred,
                     },
                     captures,
                     product_type,
@@ -2546,6 +2583,7 @@ impl ResidualTrace {
                 self_name,
                 signature,
                 reuse_assertion,
+                deferred,
             } => {
                 let environment = match replacements.is_empty() {
                     true => environment.clone(),
@@ -2565,7 +2603,7 @@ impl ResidualTrace {
                     module: module.clone(),
                     parameter: *parameter,
                     body: *body,
-                    deferred: false,
+                    deferred: *deferred,
                     environment,
                     self_name: self_name.clone(),
                     imports: None,
@@ -3991,17 +4029,15 @@ impl ResidualTrace {
                 closure_choice_refusal(alternatives.len()),
                 span,
             )),
-            // The emitted program has one calling convention and it evaluates
-            // the argument. A deferred function reaching here would be run
-            // strictly while the source said the argument may never run at
-            // all, so it is refused with the diagnostic source elaboration
-            // gives the same program.
+            // Known deferred calls have already become ordinary control flow.
+            // A deferred closure reaching value lowering escaped that
+            // normalization and would require a runtime thunk convention.
             Value::Closure { deferred: true, .. } => Err(Diagnostic::new(
                 "BLOT_DEFERRED_AT_RUNTIME",
                 concat!(
-                    "A deferred parameter is only supplied while compiling. This function ",
-                    "survives into the running program, where its argument would run whether ",
-                    "or not the parameter is read."
+                    "This deferred function escapes known call sites. Runtime HIR has no thunk ",
+                    "value or public deferred calling convention; apply it where its source is ",
+                    "known, or store an explicit nullary function instead."
                 ),
                 span,
             )),
@@ -7304,9 +7340,39 @@ fn prepare_function_export(
     let runtime = Runtime::residual(Phase::Runtime, path.to_owned(), trace.clone());
     let mut parameter_types = Vec::new();
     while let Type::Function {
-        parameter, result, ..
+        deferred,
+        parameter,
+        result,
+        ..
     } = type_
     {
+        if deferred {
+            let (source, expression) = match &function {
+                Value::Closure { module, body, .. } => (module.as_str(), *body),
+                _ => {
+                    let loaded = context.modules.borrow().get(path).cloned().ok_or_else(|| {
+                        hir_error("A deferred export lost its loaded source module.")
+                    })?;
+                    (path, loaded.module.result)
+                }
+            };
+            let loaded = context
+                .modules
+                .borrow()
+                .get(source)
+                .cloned()
+                .ok_or_else(|| hir_error("A deferred export lost its defining module."))?;
+            let span = loaded.module.arena.expression_span(expression);
+            return Err(Diagnostic::new(
+                "BLOT_DEFERRED_AT_RUNTIME",
+                concat!(
+                    "This deferred function crosses the public runtime ABI. Apply it inside ",
+                    "Blot where demand can become control flow, or export an explicit strict ",
+                    "or nullary function instead."
+                ),
+                span,
+            ));
+        }
         let (argument, parameter_type) = trace
             .borrow_mut()
             .export_parameter(&parameter, crate::ast::Span { start: 0, end: 0 })?;
@@ -7559,6 +7625,7 @@ fn module_argument(parameter: &Option<Type>) -> Result<Value, Diagnostic> {
         operations.insert(
             name.clone(),
             Value::Arrow {
+                deferred: false,
                 domain: Box::new(type_value(parameter)),
                 codomain: Box::new(type_value(result)),
                 effects: Vec::new(),
@@ -7625,6 +7692,7 @@ fn type_value(type_: &Type) -> Value {
         Type::Function {
             parameter, result, ..
         } => Value::Arrow {
+            deferred: false,
             domain: Box::new(type_value(parameter)),
             codomain: Box::new(type_value(result)),
             effects: Vec::new(),

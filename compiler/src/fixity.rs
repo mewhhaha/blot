@@ -23,7 +23,6 @@ struct GeneratedFixity {
     associativity: GeneratedAssociativity,
     precedence: u32,
     target: &'static str,
-    control: Option<&'static str>,
 }
 
 include!("fixities_generated.rs");
@@ -34,7 +33,6 @@ pub(crate) struct Fixity {
     associativity: Associativity,
     precedence: u32,
     target: Vec<String>,
-    control: Option<&'static str>,
 }
 
 pub struct FixityTable {
@@ -123,36 +121,6 @@ impl FixityTable {
                 start: arena.expression_span(result).start,
                 end: arena.expression_span(right).end,
             };
-            if fixity.control == Some("and") {
-                let fallback = arena.expression(Expression::Tag {
-                    name: "False".to_owned(),
-                    span: step.span,
-                });
-                result = arena.expression(Expression::If {
-                    branches: vec![crate::ast::Branch {
-                        condition: result,
-                        consequence: right,
-                    }],
-                    fallback: Some(fallback),
-                    span,
-                });
-                continue;
-            }
-            if fixity.control == Some("or") {
-                let consequence = arena.expression(Expression::Tag {
-                    name: "True".to_owned(),
-                    span: step.span,
-                });
-                result = arena.expression(Expression::If {
-                    branches: vec![crate::ast::Branch {
-                        condition: result,
-                        consequence,
-                    }],
-                    fallback: Some(right),
-                    span,
-                });
-                continue;
-            }
             let callee = target_expression(fixity, step.span, arena)?;
             let applied_left = arena.expression(Expression::Apply {
                 function: callee,
@@ -224,7 +192,6 @@ fn defaults() -> Vec<Fixity> {
             } else {
                 generated.target.split('.').map(str::to_owned).collect()
             },
-            control: generated.control,
         })
         .collect()
 }

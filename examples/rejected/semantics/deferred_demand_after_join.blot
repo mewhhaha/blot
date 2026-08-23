@@ -1,0 +1,12 @@
+open import "blot:prelude"
+
+let use_twice_on_one_path = fn condition => fn ~value => do:
+  let first = case condition of
+    #True => value
+    #False => 0
+  return first + value
+
+sig run = Int -> Int
+let run = fn value => use_twice_on_one_path (value == 0) (value + 1)
+
+return { .default = run; }

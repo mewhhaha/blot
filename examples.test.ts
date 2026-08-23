@@ -195,13 +195,24 @@ const REJECTIONS: Record<
     code: "BLOT_LINEAR_CONSUMED_TWICE",
     stage: "check",
   },
-  "deferred_at_runtime": { code: "BLOT_DEFERRED_AT_RUNTIME", stage: "build" },
   "reuse_persistent_update": {
     code: "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
     stage: "check",
   },
   "deferred_demanded_twice": {
     code: "BLOT_DEFERRED_DEMANDED_TWICE",
+    stage: "check",
+  },
+  "deferred_demand_after_join": {
+    code: "BLOT_DEFERRED_DEMANDED_TWICE",
+    stage: "build",
+  },
+  "deferred_escapes_runtime": {
+    code: "BLOT_DEFERRED_AT_RUNTIME",
+    stage: "build",
+  },
+  "deferred_signature_mismatch": {
+    code: "BLOT_TYPE_ERROR",
     stage: "check",
   },
   "effect_not_discharged": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },

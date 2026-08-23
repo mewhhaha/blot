@@ -79,14 +79,14 @@ const not = fn value => case value of
   #True => False
   #False => True
 
-// Named eager versions of boolean combination. The `&&` and `||` surface
-// operators lower directly to `if` and therefore short-circuit; calling
-// `Logic.and` or `Logic.or` explicitly evaluates ordinary call arguments.
-const and = fn left => fn right => case left of
+// Ordinary deferred functions implement boolean combination. The operators are
+// ordinary calls to these bindings; the function decides whether to demand its
+// second argument.
+const and = fn left => fn ~right => case left of
   #False => False
   #True => right
 
-const or = fn left => fn right => case left of
+const or = fn left => fn ~right => case left of
   #True => True
   #False => right
 

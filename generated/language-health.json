@@ -1,7 +1,7 @@
 {
   "protocol": {
     "compilerHostAbi": 1,
-    "checkedModuleCertificate": 11,
+    "checkedModuleCertificate": 12,
     "runtimeHir": 4
   },
   "operators": [
@@ -27,21 +27,25 @@
       "operator": "||",
       "associativity": "right",
       "precedence": 22,
-      "target": "Logic.or",
-      "control": "or"
+      "target": "Logic.or"
     },
     {
       "operator": "&&",
       "associativity": "right",
       "precedence": 24,
-      "target": "Logic.and",
-      "control": "and"
+      "target": "Logic.and"
     },
     {
       "operator": "->",
       "associativity": "right",
       "precedence": 25,
       "target": "@type.arrow"
+    },
+    {
+      "operator": "~>",
+      "associativity": "right",
+      "precedence": 25,
+      "target": "@type.deferred_arrow"
     },
     {
       "operator": "==",
@@ -144,12 +148,6 @@
       "associativity": "prefix",
       "precedence": 90,
       "target": "Int.negate"
-    },
-    {
-      "operator": "~",
-      "associativity": "prefix",
-      "precedence": 90,
-      "target": "@type.defer"
     },
     {
       "operator": "!",
@@ -535,6 +533,7 @@
     "@text.of_int",
     "@type.arrow",
     "@type.attach",
+    "@type.deferred_arrow",
     "@type.diff",
     "@type.equal",
     "@type.f32x4",
@@ -694,15 +693,15 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 9411
+      "lines": 9511
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 9147
+      "lines": 9215
     },
     {
       "path": "compiler/src/ownership.rs",
-      "lines": 5744
+      "lines": 5745
     },
     {
       "path": "compiler/src/backend.rs",
@@ -710,7 +709,7 @@
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 3496
+      "lines": 3504
     },
     {
       "path": "compiler/src/frontend_plan.rs",
@@ -730,15 +729,15 @@
     },
     {
       "path": "compiler/src/primitives.rs",
-      "lines": 2096
+      "lines": 2113
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 1827
+      "lines": 1830
     },
     {
       "path": "compiler/src/value.rs",
-      "lines": 1393
+      "lines": 1417
     },
     {
       "path": "src/runtime/hir.ts",

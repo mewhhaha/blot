@@ -2815,6 +2815,7 @@ fn contains_type_value(type_: &Type) -> bool {
             parameter,
             effects,
             result,
+            ..
         } => {
             contains_type_value(parameter)
                 || contains_type_value(effects)

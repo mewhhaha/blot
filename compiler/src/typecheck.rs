@@ -44,6 +44,7 @@ pub enum Type {
     },
     Unit,
     Function {
+        deferred: bool,
         parameter: Box<Type>,
         effects: Box<Type>,
         result: Box<Type>,
@@ -103,6 +104,7 @@ enum ConstraintTypeNode {
     },
     Unit,
     Function {
+        deferred: bool,
         parameter: ConstraintTypeId,
         effects: ConstraintTypeId,
         result: ConstraintTypeId,
@@ -148,10 +150,12 @@ impl ConstraintTypeArena {
             },
             Type::Unit => ConstraintTypeNode::Unit,
             Type::Function {
+                deferred,
                 parameter,
                 effects,
                 result,
             } => ConstraintTypeNode::Function {
+                deferred: *deferred,
                 parameter: self.intern(parameter),
                 effects: self.intern(effects),
                 result: self.intern(result),
@@ -208,10 +212,12 @@ impl ConstraintTypeArena {
             },
             ConstraintTypeNode::Unit => Type::Unit,
             ConstraintTypeNode::Function {
+                deferred,
                 parameter,
                 effects,
                 result,
             } => Type::Function {
+                deferred: *deferred,
                 parameter: Box::new(self.expand(*parameter)),
                 effects: Box::new(self.expand(*effects)),
                 result: Box::new(self.expand(*result)),
@@ -261,6 +267,7 @@ impl ConstraintTypeArena {
                 parameter,
                 effects,
                 result,
+                ..
             } => self
                 .level_of(*parameter, variables)
                 .max(self.level_of(*effects, variables))
@@ -375,17 +382,20 @@ impl ConstraintTypeArena {
             }
             (
                 ConstraintTypeNode::Function {
+                    deferred: left_deferred,
                     parameter: left_parameter,
                     effects: left_effects,
                     result: left_result,
                 },
                 ConstraintTypeNode::Function {
+                    deferred: right_deferred,
                     parameter: right_parameter,
                     effects: right_effects,
                     result: right_result,
                 },
             ) => {
-                self.same_with_rigids(*left_parameter, *right_parameter, rigids)
+                left_deferred == right_deferred
+                    && self.same_with_rigids(*left_parameter, *right_parameter, rigids)
                     && self.same_with_rigids(*left_effects, *right_effects, rigids)
                     && self.same_with_rigids(*left_result, *right_result, rigids)
             }
@@ -607,6 +617,7 @@ enum FlatTypeNode {
     },
     Unit,
     Function {
+        deferred: bool,
         parameter: FlatTypeId,
         effects: FlatTypeId,
         result: FlatTypeId,
@@ -848,6 +859,7 @@ fn validate_certificate_type(
             parameter,
             effects,
             result,
+            ..
         } => {
             validate_child(*parameter, bound)?;
             validate_child(*effects, bound)?;
@@ -1226,6 +1238,13 @@ impl Checker {
         empty_effects(&self.settle(effects.clone(), true))
     }
 
+    fn deferred_call(&self, function: &Type) -> bool {
+        matches!(
+            self.settle(function.clone(), true),
+            Type::Function { deferred: true, .. }
+        )
+    }
+
     pub(crate) fn expression_type_string(
         &self,
         path: &str,
@@ -1243,6 +1262,7 @@ impl Checker {
             parameter,
             effects,
             result,
+            ..
         } = type_
         else {
             return false;
@@ -1308,6 +1328,7 @@ impl Checker {
             dependency_types.insert(
                 specifier.clone(),
                 Type::Function {
+                    deferred: false,
                     parameter: Box::new(checked.parameter.unwrap_or(Type::Unit)),
                     effects: Box::new(checked.effects),
                     result: Box::new(checked.result),
@@ -1659,10 +1680,12 @@ impl Checker {
                 }
             }
             FlatTypeNode::Function {
+                deferred,
                 parameter,
                 effects,
                 result,
             } => Type::Function {
+                deferred: *deferred,
                 parameter: Box::new(self.inflate_interface_type(arena, *parameter, rigids)),
                 effects: Box::new(self.inflate_interface_type(arena, *effects, rigids)),
                 result: Box::new(self.inflate_interface_type(arena, *result, rigids)),
@@ -2601,9 +2624,11 @@ impl Checker {
                     for argument in arguments {
                         let result = self.fresh();
                         let performed = self.fresh();
+                        let deferred = self.deferred_call(&function_type);
                         self.constrain(
                             function_type,
                             Type::Function {
+                                deferred,
                                 parameter: Box::new(argument),
                                 effects: Box::new(performed.clone()),
                                 result: Box::new(result.clone()),
@@ -2659,9 +2684,11 @@ impl Checker {
                     )?;
                     let result = self.fresh();
                     let performed = self.fresh();
+                    let deferred = self.deferred_call(&function_type);
                     self.constrain(
                         function_type,
                         Type::Function {
+                            deferred,
                             parameter: Box::new(argument_type.type_),
                             effects: Box::new(performed.clone()),
                             result: Box::new(result.clone()),
@@ -2863,9 +2890,11 @@ impl Checker {
                     )?;
                     let result = self.fresh();
                     let performed = self.fresh();
+                    let deferred = self.deferred_call(&function);
                     self.constrain(
                         function,
                         Type::Function {
+                            deferred,
                             parameter: Box::new(argument.type_.clone()),
                             effects: Box::new(performed.clone()),
                             result: Box::new(result.clone()),
@@ -2901,9 +2930,11 @@ impl Checker {
                 let argument_type = argument.type_.clone();
                 let result = self.fresh();
                 let performed = self.fresh();
+                let deferred = self.deferred_call(&function.type_);
                 self.constrain(
                     function.type_,
                     Type::Function {
+                        deferred,
                         parameter: Box::new(argument_type.clone()),
                         effects: Box::new(performed.clone()),
                         result: Box::new(result.clone()),
@@ -2941,9 +2972,11 @@ impl Checker {
                     )?;
                     let selected_result = self.fresh();
                     let selected_performed = self.fresh();
+                    let deferred = self.deferred_call(&selected);
                     self.constrain(
                         selected,
                         Type::Function {
+                            deferred,
                             parameter: Box::new(argument_type),
                             effects: Box::new(selected_performed.clone()),
                             result: Box::new(selected_result.clone()),
@@ -3031,11 +3064,7 @@ impl Checker {
             } => {
                 let parameter_type = self.fresh();
                 let mut scope = TypeEnvironment::child(Rc::new(environment.clone()));
-                let parameter_phase = if deferred {
-                    Phase::Comptime
-                } else {
-                    Phase::Runtime
-                };
+                let parameter_phase = Phase::Runtime;
                 self.bind_pattern_at_phase(
                     module,
                     parameter,
@@ -3045,6 +3074,7 @@ impl Checker {
                 );
                 let body = self.infer(path, module, body_id, &scope, values, dependencies)?;
                 let type_ = Type::Function {
+                    deferred,
                     parameter: Box::new(parameter_type),
                     effects: Box::new(body.effects),
                     result: Box::new(body.type_),
@@ -3437,20 +3467,29 @@ impl Checker {
             ..
         } = module.arena.expressions[expression.0 as usize]
             && let Type::Function {
+                deferred: expected_deferred,
                 parameter: expected_parameter,
                 effects: expected_effects,
                 result: expected_result,
             } = expected.clone()
         {
+            if deferred != expected_deferred {
+                return self.type_error(
+                    Type::Function {
+                        deferred,
+                        parameter: expected_parameter,
+                        effects: expected_effects,
+                        result: expected_result,
+                    },
+                    expected,
+                    span,
+                );
+            }
             self.closure_types
                 .borrow_mut()
                 .insert((path.to_owned(), body), expected.clone());
             let mut scope = TypeEnvironment::child(Rc::new(environment.clone()));
-            let parameter_phase = if deferred {
-                Phase::Comptime
-            } else {
-                Phase::Runtime
-            };
+            let parameter_phase = Phase::Runtime;
             self.bind_pattern_at_phase(
                 module,
                 parameter,
@@ -3585,11 +3624,7 @@ impl Checker {
             Some(parameter_type) => parameter_type,
             None => self.fresh(),
         };
-        let parameter_phase = if deferred {
-            Phase::Comptime
-        } else {
-            Phase::Runtime
-        };
+        let parameter_phase = Phase::Runtime;
         self.bind_pattern_at_phase(
             &closure_ast,
             parameter,
@@ -3611,6 +3646,7 @@ impl Checker {
         self.specialization_depth.set(previous_specialization_depth);
         let inferred = inferred?;
         let function = Type::Function {
+            deferred,
             parameter: Box::new(parameter_type),
             effects: Box::new(inferred.effects),
             result: Box::new(inferred.type_),
@@ -3798,6 +3834,7 @@ impl Checker {
         self.constrain(
             thunk.type_,
             Type::Function {
+                deferred: false,
                 parameter: Box::new(Type::Unit),
                 effects: Box::new(performed.clone()),
                 result: Box::new(computation_result.clone()),
@@ -3818,11 +3855,13 @@ impl Checker {
                 continue;
             };
             let continuation = Type::Function {
+                deferred: false,
                 parameter: result,
                 effects: Box::new(handler_row.clone()),
                 result: Box::new(handled_result.clone()),
             };
             let clause = Type::Function {
+                deferred: false,
                 parameter: Box::new(Type::Record(vec![
                     ("0".to_owned(), *parameter),
                     ("1".to_owned(), continuation),
@@ -3842,6 +3881,7 @@ impl Checker {
                 Type::Record(vec![(
                     "return".to_owned(),
                     Type::Function {
+                        deferred: false,
                         parameter: Box::new(computation_result),
                         effects: Box::new(handler_row.clone()),
                         result: Box::new(handled_result.clone()),
@@ -3935,10 +3975,12 @@ impl Checker {
                 body: Box::new(self.freshen(*body, level, fresh)),
             },
             Type::Function {
+                deferred,
                 parameter,
                 effects,
                 result,
             } => Type::Function {
+                deferred,
                 parameter: Box::new(self.freshen(*parameter, level, fresh)),
                 effects: Box::new(self.freshen(*effects, level, fresh)),
                 result: Box::new(self.freshen(*result, level, fresh)),
@@ -4001,6 +4043,7 @@ impl Checker {
                 parameter,
                 effects,
                 result,
+                ..
             } => self
                 .level_of(parameter)
                 .max(self.level_of(effects))
@@ -4087,10 +4130,12 @@ impl Checker {
                 body: Box::new(self.extrude(*body, polarity, level, copies)),
             },
             Type::Function {
+                deferred,
                 parameter,
                 effects,
                 result,
             } => Type::Function {
+                deferred,
                 parameter: Box::new(self.extrude(*parameter, !polarity, level, copies)),
                 effects: Box::new(self.extrude(*effects, polarity, level, copies)),
                 result: Box::new(self.extrude(*result, polarity, level, copies)),
@@ -4300,16 +4345,25 @@ impl Checker {
             }
             (
                 ConstraintTypeNode::Function {
+                    deferred: left_deferred,
                     parameter: left_parameter,
                     effects: left_effects,
                     result: left_result,
                 },
                 ConstraintTypeNode::Function {
+                    deferred: right_deferred,
                     parameter: right_parameter,
                     effects: right_effects,
                     result: right_result,
                 },
             ) => {
+                if left_deferred != right_deferred {
+                    return self.type_error(
+                        self.expand_constraint(left),
+                        self.expand_constraint(right),
+                        span,
+                    );
+                }
                 self.constrain_ids(right_parameter, left_parameter, span, seen)?;
                 self.constrain_ids(left_effects, right_effects, span, seen)?;
                 self.constrain_ids(left_result, right_result, span, seen)?;
@@ -4616,6 +4670,7 @@ impl Checker {
                     parameter,
                     effects,
                     result,
+                    ..
                 } => {
                     pending.push((parameter, bound.clone()));
                     pending.push((effects, bound.clone()));
@@ -4750,10 +4805,12 @@ impl Checker {
                 ),
             },
             Type::Function {
+                deferred,
                 parameter,
                 effects,
                 result,
             } => Type::Function {
+                deferred,
                 parameter: Box::new(
                     self.residual_signature_type(*parameter, seen, resolved, unresolved, recursive),
                 ),
@@ -4883,10 +4940,12 @@ impl Checker {
                 body: Box::new(self.settle_seen(*body, positive, seen)),
             },
             Type::Function {
+                deferred,
                 parameter,
                 effects,
                 result,
             } => Type::Function {
+                deferred,
                 parameter: Box::new(self.settle_seen(*parameter, !positive, seen)),
                 effects: Box::new(self.settle_seen(*effects, positive, seen)),
                 result: Box::new(self.settle_seen(*result, positive, seen)),
@@ -4949,6 +5008,7 @@ impl Checker {
             parameter,
             effects,
             result,
+            ..
         } = type_
         else {
             return None;
@@ -5351,6 +5411,7 @@ impl Checker {
                 parameter,
                 effects,
                 result,
+                ..
             } => {
                 self.contains_unevidenced(parameter, seen)
                     || self.contains_unevidenced(effects, seen)
@@ -5551,6 +5612,7 @@ impl Checker {
             )),
             Value::Unbounded => Some(Type::Top),
             Value::Arrow {
+                deferred,
                 domain,
                 codomain,
                 effects,
@@ -5568,6 +5630,7 @@ impl Checker {
                     None => Type::Effects(labels),
                 };
                 Some(Type::Function {
+                    deferred: *deferred,
                     parameter: Box::new(self.bridge(domain)?),
                     effects: Box::new(effects),
                     result: Box::new(self.bridge(codomain)?),
@@ -5663,15 +5726,19 @@ impl Checker {
             Type::Range { low, high, .. } => format!("{}..{}", show_bound(low), show_bound(high)),
             Type::Unit => "Unit".to_owned(),
             Type::Function {
+                deferred,
                 parameter,
                 effects,
                 result,
-            } => format!(
-                "{} -> {}{}",
-                self.show(&parameter),
-                self.show(&result),
-                show_effects(&effects)
-            ),
+            } => {
+                let arrow = if deferred { " ~> " } else { " -> " };
+                format!(
+                    "{}{arrow}{}{}",
+                    self.show(&parameter),
+                    self.show(&result),
+                    show_effects(&effects)
+                )
+            }
             Type::Record(fields) => format!(
                 "{{ {} }}",
                 fields
@@ -5781,6 +5848,7 @@ fn free_rigid_variables(
             parameter,
             effects,
             result,
+            ..
         } => {
             free_rigid_variables(parameter, bound, free);
             free_rigid_variables(effects, bound, free);
@@ -6279,8 +6347,15 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             Type::Opaque("Type".to_owned())
         }
         "@type.unit" => Type::Unit,
-        "@type.range" | "@type.refine" | "@type.union" | "@type.intersect" | "@type.diff"
-        | "@type.arrow" | "@type.performs" | "@type.instantiate" => curried(
+        "@type.range"
+        | "@type.refine"
+        | "@type.union"
+        | "@type.intersect"
+        | "@type.diff"
+        | "@type.arrow"
+        | "@type.deferred_arrow"
+        | "@type.performs"
+        | "@type.instantiate" => curried(
             vec![checker.fresh(), checker.fresh()],
             Type::Opaque("Type".to_owned()),
         ),
@@ -6317,6 +6392,7 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
                 vec![
                     text,
                     Type::Function {
+                        deferred: false,
                         parameter: Box::new(checker.fresh()),
                         effects: Box::new(Type::Effects(BTreeSet::new())),
                         result: Box::new(result.clone()),
@@ -6390,6 +6466,7 @@ fn curried(parameters: Vec<Type>, result: Type) -> Type {
         .into_iter()
         .rev()
         .fold(result, |result, parameter| Type::Function {
+            deferred: false,
             parameter: Box::new(parameter),
             effects: Box::new(Type::Effects(BTreeSet::new())),
             result: Box::new(result),
@@ -6844,10 +6921,12 @@ fn substitute_rigid(type_: Type, replacements: &HashMap<VariableId, Type>) -> Ty
             }
         }
         Type::Function {
+            deferred,
             parameter,
             effects,
             result,
         } => Type::Function {
+            deferred,
             parameter: Box::new(substitute_rigid(*parameter, replacements)),
             effects: Box::new(substitute_rigid(*effects, replacements)),
             result: Box::new(substitute_rigid(*result, replacements)),
@@ -7661,6 +7740,7 @@ fn reify_type_with_holes(type_: &Type, next_hole: &mut u32) -> Option<Value> {
                 .collect::<Option<Vec<_>>>()?,
         )),
         Type::Function {
+            deferred,
             parameter,
             effects,
             result,
@@ -7677,6 +7757,7 @@ fn reify_type_with_holes(type_: &Type, next_hole: &mut u32) -> Option<Value> {
                 _ => return None,
             };
             Some(Value::Arrow {
+                deferred: *deferred,
                 domain: Box::new(reify_type_with_holes(parameter, next_hole)?),
                 codomain: Box::new(reify_type_with_holes(result, next_hole)?),
                 effects: labels
@@ -7803,17 +7884,20 @@ fn same_type_with_rigids(
         ) => left_labels == right_labels && same_type_with_rigids(left_tail, right_tail, rigids),
         (
             Type::Function {
+                deferred: left_deferred,
                 parameter: left_parameter,
                 effects: left_effects,
                 result: left_result,
             },
             Type::Function {
+                deferred: right_deferred,
                 parameter: right_parameter,
                 effects: right_effects,
                 result: right_result,
             },
         ) => {
-            same_type_with_rigids(left_parameter, right_parameter, rigids)
+            left_deferred == right_deferred
+                && same_type_with_rigids(left_parameter, right_parameter, rigids)
                 && same_type_with_rigids(left_effects, right_effects, rigids)
                 && same_type_with_rigids(left_result, right_result, rigids)
         }
@@ -7910,6 +7994,7 @@ fn unrepresentable_integer(type_: &Type) -> Option<&Type> {
             parameter,
             effects,
             result,
+            ..
         } => unrepresentable_integer(parameter)
             .or_else(|| unrepresentable_integer(effects))
             .or_else(|| unrepresentable_integer(result)),
@@ -7969,11 +8054,12 @@ fn closed_type_key(type_: &Type) -> String {
             }
             Type::Unit => "unit".to_owned(),
             Type::Function {
+                deferred,
                 parameter,
                 effects,
                 result,
             } => format!(
-                "fun({},{},{})",
+                "fun({deferred},{},{},{})",
                 visit(parameter, binders),
                 visit(effects, binders),
                 visit(result, binders)
@@ -8623,6 +8709,7 @@ fn closed_checked_type(type_: &Type, bound: &mut HashSet<VariableId>) -> bool {
             parameter,
             effects,
             result,
+            ..
         } => {
             closed_checked_type(parameter, bound)
                 && closed_checked_type(effects, bound)
@@ -8677,10 +8764,12 @@ fn flatten_interface_type(
             }
         }
         Type::Function {
+            deferred,
             parameter,
             effects,
             result,
         } => FlatTypeNode::Function {
+            deferred: *deferred,
             parameter: flatten_interface_type(parameter, bound, types)?,
             effects: flatten_interface_type(effects, bound, types)?,
             result: flatten_interface_type(result, bound, types)?,
@@ -8876,6 +8965,7 @@ mod tests {
         let checker = Checker::new(Rc::new(Context::default()));
         let region = Type::Region(Box::new(int_type()));
         let signature = Type::Function {
+            deferred: false,
             parameter: Box::new(region.clone()),
             effects: Box::new(Type::Effects(BTreeSet::new())),
             result: Box::new(region),
@@ -9171,6 +9261,7 @@ mod tests {
             .constrain(
                 callback.clone(),
                 Type::Function {
+                    deferred: false,
                     parameter: Box::new(Type::Unit),
                     effects: Box::new(callback_effects.clone()),
                     result: Box::new(Type::Unit),
@@ -9193,6 +9284,7 @@ mod tests {
             )
             .expect("the wrapper performs its callback effects");
         let wrapper = Type::Function {
+            deferred: false,
             parameter: Box::new(parameter),
             effects: Box::new(wrapper_effects),
             result: Box::new(Type::Unit),
@@ -9204,9 +9296,11 @@ mod tests {
             .constrain(
                 wrapper,
                 Type::Function {
+                    deferred: false,
                     parameter: Box::new(Type::Record(vec![(
                         "0".to_owned(),
                         Type::Function {
+                            deferred: false,
                             parameter: Box::new(Type::Unit),
                             effects: Box::new(Type::Effects(BTreeSet::from(["Access".to_owned()]))),
                             result: Box::new(Type::Unit),
@@ -9231,12 +9325,14 @@ mod tests {
         let identity = Type::Forall {
             variables: vec![7],
             body: Box::new(Type::Function {
+                deferred: false,
                 parameter: Box::new(Type::Rigid(7)),
                 effects: Box::new(Type::Effects(BTreeSet::new())),
                 result: Box::new(Type::Rigid(7)),
             }),
         };
         let integer_identity = Type::Function {
+            deferred: false,
             parameter: Box::new(int_type()),
             effects: Box::new(Type::Effects(BTreeSet::new())),
             result: Box::new(int_type()),
@@ -9252,6 +9348,7 @@ mod tests {
         let left = Type::Forall {
             variables: vec![7],
             body: Box::new(Type::Function {
+                deferred: false,
                 parameter: Box::new(Type::Rigid(7)),
                 effects: Box::new(Type::Effects(BTreeSet::new())),
                 result: Box::new(Type::Rigid(7)),
@@ -9260,6 +9357,7 @@ mod tests {
         let right = Type::Forall {
             variables: vec![91],
             body: Box::new(Type::Function {
+                deferred: false,
                 parameter: Box::new(Type::Rigid(91)),
                 effects: Box::new(Type::Effects(BTreeSet::new())),
                 result: Box::new(Type::Rigid(91)),
@@ -9287,6 +9385,7 @@ mod tests {
     fn monomorphic_function_does_not_satisfy_a_forall_requirement() {
         let checker = Checker::new(Rc::new(Context::default()));
         let integer_identity = Type::Function {
+            deferred: false,
             parameter: Box::new(int_type()),
             effects: Box::new(Type::Effects(BTreeSet::new())),
             result: Box::new(int_type()),
@@ -9294,6 +9393,7 @@ mod tests {
         let identity_requirement = Type::Forall {
             variables: vec![7],
             body: Box::new(Type::Function {
+                deferred: false,
                 parameter: Box::new(Type::Rigid(7)),
                 effects: Box::new(Type::Effects(BTreeSet::new())),
                 result: Box::new(Type::Rigid(7)),

@@ -21,7 +21,6 @@ export interface Fixity {
   readonly associativity: Associativity;
   readonly precedence: number;
   readonly target: readonly string[];
-  readonly control: "and" | "or" | undefined;
   readonly span: Span;
 }
 
@@ -30,7 +29,6 @@ function entry(
   associativity: Associativity,
   precedence: number,
   target: string,
-  control: "and" | "or" | undefined,
 ): Fixity {
   // An intrinsic is one token, dots included; only a qualified name splits.
   const path = target.startsWith("@") ? [target] : target.split(".");
@@ -39,7 +37,6 @@ function entry(
     associativity,
     precedence,
     target: path,
-    control,
     span: NOWHERE,
   };
 }
@@ -50,14 +47,11 @@ function entry(
  */
 export const DEFAULT_FIXITIES: readonly Fixity[] = [
   ...generatedFixities.map((fixity) => {
-    let control: "and" | "or" | undefined;
-    if ("control" in fixity) control = fixity.control;
     return entry(
       fixity.operator,
       fixity.associativity,
       fixity.precedence,
       fixity.target,
-      control,
     );
   }),
 ];
@@ -162,27 +156,6 @@ export function foldChain(
       }
 
       const span = { start: result.span.start, end: right.span.end };
-      if (fixity.control === "and") {
-        result = {
-          tag: "if",
-          branches: [{ condition: result, consequence: right }],
-          fallback: { tag: "tag", name: "False", span: step.span },
-          span,
-        };
-        continue;
-      }
-      if (fixity.control === "or") {
-        result = {
-          tag: "if",
-          branches: [{
-            condition: result,
-            consequence: { tag: "tag", name: "True", span: step.span },
-          }],
-          fallback: right,
-          span,
-        };
-        continue;
-      }
       const callee = targetExpr(fixity, step.span);
       result = {
         tag: "apply",

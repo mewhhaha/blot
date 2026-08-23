@@ -140,7 +140,6 @@ interface OperatorEntry {
   readonly associativity: "left" | "right" | "none" | "prefix";
   readonly precedence: number;
   readonly target: string;
-  readonly control?: "and" | "or";
 }
 
 async function languageOutputs(): Promise<
@@ -170,15 +169,11 @@ async function languageOutputs(): Promise<
   const rustEntries = operators.map((entry) => {
     const associativity = entry.associativity[0].toUpperCase() +
       entry.associativity.slice(1);
-    let control = "None";
-    if (entry.control !== undefined) {
-      control = `Some(${JSON.stringify(entry.control)})`;
-    }
     return `    GeneratedFixity { operator: ${
       JSON.stringify(entry.operator)
     }, associativity: GeneratedAssociativity::${associativity}, precedence: ${entry.precedence}, target: ${
       JSON.stringify(entry.target)
-    }, control: ${control} },`;
+    } },`;
   }).join("\n");
   const rust = `// Generated from compiler/language.json. Do not edit.\n\n` +
     `#[rustfmt::skip]\n` +

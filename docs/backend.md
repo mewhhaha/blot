@@ -159,7 +159,8 @@ The current backend refuses rather than guessing when:
 - dynamic branches have incompatible runtime layouts;
 - a runtime function has no settled first-order signature;
 - a dynamic sum requires more than the supported binary residual dispatch;
-- a deferred parameter would survive into strict runtime execution;
+- a deferred function escapes known application and would require a runtime
+  thunk or public deferred calling convention;
 - a function choice has an open source set or crosses the public ABI; or
 - a compiled module has no runtime export.
 

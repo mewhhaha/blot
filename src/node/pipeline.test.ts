@@ -235,6 +235,114 @@ test("a named .default field is projected as blot:default", async () => {
   }
 });
 
+test("a deferred runtime argument is omitted when the callee never demands it", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const path = resolve("examples/deferred_runtime.blot");
+    const hir = await compiler.prepare(path);
+    const deferredOperations = hir.functions.flatMap((function_) =>
+      function_.blocks.flatMap((block) => block.operations)
+    );
+    assert.equal(
+      deferredOperations.some((operation) =>
+        /defer|suspend|thunk/.test(operation.kind)
+      ),
+      false,
+    );
+    assert.equal(
+      deferredOperations.filter((operation) =>
+        operation.kind === "scalar" && operation.operator === "divide"
+      ).length,
+      2,
+    );
+    const runHir = hir.functions.find((function_) =>
+      function_.name === "blot$residual$default"
+    );
+    assert.notEqual(runHir, undefined);
+    if (runHir === undefined) {
+      throw new Error("deferred example has no default HIR");
+    }
+    assert.equal(
+      runHir.blocks[runHir.entryBlock]?.terminator.kind,
+      "conditional",
+    );
+
+    const artifact = await compiler.compile(path);
+    const instantiated = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm),
+    );
+    const memory = exportedMemory(instantiated.instance);
+    const pagesBefore = memory.buffer.byteLength;
+    const run = exportedFunction(instantiated.instance, "blot:default");
+    assert.equal(run(0n), 42n);
+    assert.equal(run(7n), 12n);
+    const both = exportedFunction(instantiated.instance, "blot:both");
+    assert.equal(both(0n), 1n);
+    assert.equal(both(7n), 8n);
+    const choice = exportedFunction(instantiated.instance, "blot:choice");
+    assert.equal(choice(0n, 0n), 42n);
+    assert.equal(choice(1n, 7n), 12n);
+    const helper = exportedFunction(instantiated.instance, "blot:helper");
+    assert.equal(helper(0n), 1n);
+    assert.equal(helper(7n), 8n);
+    for (let index = 0; index < 10_000; index += 1) {
+      run(BigInt(index % 8));
+      choice(BigInt(index % 2), BigInt((index % 7) + 1));
+    }
+    assert.equal(memory.buffer.byteLength, pagesBefore);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("a deferred effect runs only on a demanding runtime path", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-node-deferred-effect-"));
+  const path = join(directory, "deferred-effect.blot");
+  const compiler = await Compiler.create();
+  try {
+    await writeFile(
+      path,
+      `module with init
+
+open import "blot:prelude"
+
+sig choose = Bool -> Int ~> Int
+let choose = fn condition => fn ~fallback => case condition of
+  #True => fallback
+  #False => 42
+
+sig run = Int -> Int
+let run = fn flag => do:
+  value <- choose (flag != 0) (init.read ())
+  return value
+
+return { .default = run; }
+`,
+    );
+    const artifact = await compiler.compile(path);
+    let reads = 0;
+    const instantiated = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm),
+      {
+        "blot:host/Init": {
+          read(): bigint {
+            reads += 1;
+            return 99n;
+          },
+        },
+      },
+    );
+    const run = exportedFunction(instantiated.instance, "blot:default");
+    assert.equal(run(0n), 42n);
+    assert.equal(reads, 0);
+    assert.equal(run(1n), 99n);
+    assert.equal(reads, 1);
+  } finally {
+    compiler.destroy();
+    await rm(directory, { recursive: true });
+  }
+});
+
 test("module grants keep Unit return typing through canonical text imports", async () => {
   const compiler = await Compiler.create();
   try {

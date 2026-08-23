@@ -157,11 +157,11 @@ compiler implicitly.
 
 `compiler/protocol.json` is the single source for transport and certificate
 versions. `compiler/language.json` is the single source for fixed operator
-spelling, precedence, targets, and control behavior. Generation produces both
-Rust and TypeScript consumers; CI rejects stale copies. The generated
-`language-health.json`, diagnostic-code union, and `STDLIB.md` inventory the
-remaining intrinsic, diagnostic, hotspot, and public-library surfaces so growth
-is reviewed as an explicit contract change.
+spelling, precedence, and targets. Generation produces both Rust and TypeScript
+consumers; CI rejects stale copies. The generated `language-health.json`,
+diagnostic-code union, and `STDLIB.md` inventory the remaining intrinsic,
+diagnostic, hotspot, and public-library surfaces so growth is reviewed as an
+explicit contract change.
 
 The distribution has one host adapter with the resident `Compiler` shape:
 `check`, `checkSource`, `prepare`, `compile`, and `destroy`. The adapter
@@ -283,6 +283,14 @@ Neither certificate recognizes a source binding name. Staging owns compile-time
 values and residualization decisions. Specialization owns concrete
 representations. A later pass verifies and consumes these facts; it does not
 infer them again.
+
+Certificate schema 12 records the strict/deferred calling-convention bit on
+every function node. Deferred application suspends the caller expression only
+inside Rust specialization. Each demand is checked against residual-CFG
+reachability, so exclusive branches may each demand once while sequential paths
+remain affine. Known calls emit the argument only on demanding paths, and
+Runtime HIR never receives a thunk value. A deferred closure that escapes known
+application or reaches ABI closure is an explicit target refusal.
 
 The progressive Runtime-HIR builder state is keyed by the typed-Core node ID,
 not by a printed type. Its structural representation key is composed from the
@@ -465,17 +473,17 @@ public artifact, or an explicit compiler command.
 
 ### 9.2 Frontend and elaboration
 
-| Responsibility                                                            | Required result                                   |
-| ------------------------------------------------------------------------- | ------------------------------------------------- |
-| execute Baba's generated lexer plan                                       | deterministic tokens and lexical diagnostics      |
-| execute Baba's island parser plan                                         | deterministic compact CST                         |
-| reuse an unaffected token prefix after an edit                            | fresh-equivalent incremental frontend output      |
-| materialize compact nodes, fields, tokens, and spans                      | a checked CST view                                |
-| fold the generated fixed operator table                                   | ordinary binding applications and boolean control |
-| build flat AST arenas and validate their references                       | one source representation for later semantics     |
-| desugar loops, statement control, guards, elements, and effect sequencing | the small core source language                    |
-| assign source origins and compiler-local fresh names                      | stable diagnostics and hygienic control lowering  |
-| discover imports and includes in lowered expressions                      | complete graph inputs before evaluation           |
+| Responsibility                                                            | Required result                                  |
+| ------------------------------------------------------------------------- | ------------------------------------------------ |
+| execute Baba's generated lexer plan                                       | deterministic tokens and lexical diagnostics     |
+| execute Baba's island parser plan                                         | deterministic compact CST                        |
+| reuse an unaffected token prefix after an edit                            | fresh-equivalent incremental frontend output     |
+| materialize compact nodes, fields, tokens, and spans                      | a checked CST view                               |
+| fold the generated fixed operator table                                   | ordinary binding applications                    |
+| build flat AST arenas and validate their references                       | one source representation for later semantics    |
+| desugar loops, statement control, guards, elements, and effect sequencing | the small core source language                   |
+| assign source origins and compiler-local fresh names                      | stable diagnostics and hygienic control lowering |
+| discover imports and includes in lowered expressions                      | complete graph inputs before evaluation          |
 
 ### 9.3 Static semantics
 

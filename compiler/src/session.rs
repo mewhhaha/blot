@@ -613,6 +613,7 @@ fn tool_grants() -> Value {
     let operations = OrderedFields::from_iter([(
         "write".to_owned(),
         Value::Arrow {
+            deferred: false,
             domain: Box::new(Value::Unbounded),
             codomain: Box::new(Value::Unit),
             effects: Vec::new(),
@@ -792,6 +793,7 @@ fn json_value(value: &Value) -> serde_json::Value {
         }),
         Value::Unbounded => serde_json::json!({ "tag": "unbounded" }),
         Value::Arrow {
+            deferred,
             domain,
             codomain,
             effects,
@@ -799,6 +801,7 @@ fn json_value(value: &Value) -> serde_json::Value {
         } => {
             let mut value = serde_json::json!({
                 "tag": "arrow",
+                "deferred": deferred,
                 "domain": json_value(domain),
                 "codomain": json_value(codomain),
                 "effects": effects.iter().map(json_value).collect::<Vec<_>>(),

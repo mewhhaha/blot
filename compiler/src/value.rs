@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -394,7 +393,7 @@ pub enum Value {
         module: Rc<String>,
         expression: ExpressionId,
         environment: Environment,
-        demanded: Rc<Cell<bool>>,
+        demands: Rc<RefCell<Vec<Option<usize>>>>,
     },
     ClosureChoice {
         selector: RuntimeValue,
@@ -419,6 +418,9 @@ pub enum Value {
     Union(Vec<Value>),
     Unbounded,
     Arrow {
+        /// Whether the callee, rather than the caller, decides if the argument
+        /// is evaluated.
+        deferred: bool,
         domain: Box<Value>,
         codomain: Box<Value>,
         effects: Vec<Value>,
@@ -476,6 +478,7 @@ pub enum ChoiceSource {
         self_name: Option<String>,
         signature: Option<Box<Value>>,
         reuse_assertion: Option<crate::ast::Span>,
+        deferred: bool,
     },
     Primitive {
         name: String,
@@ -514,6 +517,13 @@ impl ClosureAlternative {
         match &self.source {
             ChoiceSource::Lambda { signature, .. } => signature.as_deref(),
             ChoiceSource::Primitive { .. } => None,
+        }
+    }
+
+    pub fn deferred(&self) -> bool {
+        match &self.source {
+            ChoiceSource::Lambda { deferred, .. } => *deferred,
+            ChoiceSource::Primitive { .. } => false,
         }
     }
 
@@ -686,6 +696,7 @@ pub fn substitute_type_variable(
             Value::Union(members.iter().map(substitute).collect::<Option<Vec<_>>>()?)
         }
         Value::Arrow {
+            deferred,
             domain,
             codomain,
             effects,
@@ -696,6 +707,7 @@ pub fn substitute_type_variable(
             let mut effects = effects.iter().map(substitute).collect::<Option<Vec<_>>>()?;
             if *effect_tail != Some(variable) {
                 Value::Arrow {
+                    deferred: *deferred,
                     domain,
                     codomain,
                     effects,
@@ -728,6 +740,7 @@ pub fn substitute_type_variable(
                     None
                 };
                 Value::Arrow {
+                    deferred: *deferred,
                     domain,
                     codomain,
                     effects,
@@ -811,6 +824,7 @@ fn collect_type_variables(value: &Value, variables: &mut BTreeSet<u32>) {
             codomain,
             effects,
             effect_tail,
+            ..
         } => {
             collect_type_variables(domain, variables);
             collect_type_variables(codomain, variables);
@@ -1021,19 +1035,22 @@ pub fn equal(left: &Value, right: &Value) -> bool {
         }
         (
             Value::Arrow {
+                deferred: left_deferred,
                 domain: left_domain,
                 codomain: left_codomain,
                 effects: left_effects,
                 effect_tail: left_tail,
             },
             Value::Arrow {
+                deferred: right_deferred,
                 domain: right_domain,
                 codomain: right_codomain,
                 effects: right_effects,
                 effect_tail: right_tail,
             },
         ) => {
-            equal(left_domain, right_domain)
+            left_deferred == right_deferred
+                && equal(left_domain, right_domain)
                 && equal(left_codomain, right_codomain)
                 && left_tail == right_tail
                 && left_effects.len() == right_effects.len()
@@ -1103,6 +1120,7 @@ mod type_value_tests {
         Value::Forall {
             variable,
             body: Box::new(Value::Arrow {
+                deferred: false,
                 domain: Box::new(Value::TypeVariable(variable)),
                 codomain: Box::new(Value::TypeVariable(variable)),
                 effects: Vec::new(),
@@ -1129,6 +1147,7 @@ mod type_value_tests {
         attach_signature(
             &mut closure,
             &Value::Arrow {
+                deferred: false,
                 domain: Box::new(Value::Unbounded),
                 codomain: Box::new(Value::Unbounded),
                 effects: Vec::new(),
@@ -1169,6 +1188,7 @@ mod type_value_tests {
         assert!(equal(
             &instantiated,
             &Value::Arrow {
+                deferred: false,
                 domain: Box::new(Value::OpaqueType("T".into())),
                 codomain: Box::new(Value::OpaqueType("T".into())),
                 effects: Vec::new(),
@@ -1198,6 +1218,7 @@ mod type_value_tests {
     #[test]
     fn effect_row_instantiation_closes_only_with_effects() {
         let body = Value::Arrow {
+            deferred: false,
             domain: Box::new(Value::Unit),
             codomain: Box::new(Value::Unit),
             effects: Vec::new(),
@@ -1213,6 +1234,7 @@ mod type_value_tests {
             &substitute_type_variable(&body, 7, &effect)
                 .expect("an effect closes an effect-row tail"),
             &Value::Arrow {
+                deferred: false,
                 domain: Box::new(Value::Unit),
                 codomain: Box::new(Value::Unit),
                 effects: vec![effect],
@@ -1320,6 +1342,7 @@ pub fn show(value: &Value) -> String {
         Value::Union(members) => members.iter().map(show).collect::<Vec<_>>().join(" | "),
         Value::Unbounded => "..".to_owned(),
         Value::Arrow {
+            deferred,
             domain,
             codomain,
             effects,
@@ -1334,7 +1357,8 @@ pub fn show(value: &Value) -> String {
             } else {
                 format!(" ~ {{ {} }}", parts.join(", "))
             };
-            format!("{} -> {}{row}", show(domain), show(codomain))
+            let arrow = if *deferred { " ~> " } else { " -> " };
+            format!("{}{arrow}{}{row}", show(domain), show(codomain))
         }
         Value::TypeVariable(id) => format!("'t{id}"),
         Value::Forall { variable, body } => format!("forall 't{variable}. {}", show(body)),

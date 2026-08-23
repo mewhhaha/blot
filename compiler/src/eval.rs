@@ -420,9 +420,20 @@ pub fn evaluate_expression(
                 module: suspended_module,
                 expression,
                 environment: suspended_environment,
-                demanded,
+                demands,
             }) => {
-                if demanded.get() {
+                let block = runtime
+                    .residual
+                    .as_ref()
+                    .map(|trace| trace.borrow().current_block());
+                let conflicts = demands.borrow().iter().any(|prior| match (*prior, block) {
+                    (None, _) | (_, None) => true,
+                    (Some(prior), Some(current)) => runtime
+                        .residual
+                        .as_ref()
+                        .is_some_and(|trace| trace.borrow().blocks_share_path(prior, current)),
+                });
+                if conflicts {
                     return Computation::error(Diagnostic::new(
                         "BLOT_DEFERRED_DEMANDED_TWICE",
                         format!(
@@ -431,7 +442,7 @@ pub fn evaluate_expression(
                         span,
                     ));
                 }
-                demanded.set(true);
+                demands.borrow_mut().push(block);
                 evaluate_expression(
                     context,
                     suspended_module,
@@ -480,32 +491,27 @@ pub fn evaluate_expression(
             .and_then(move |function| {
                 // A deferred parameter is handed the argument unevaluated, so
                 // the decision not to run it belongs to the body's reads.
-                if let Value::Closure {
-                    module: closure_module,
-                    deferred: true,
-                    ..
-                } = &function
-                {
-                    // Deferral is settled while compiling. A residual trace
-                    // means this call is being staged into the running
-                    // program, which has no representation for a suspension —
-                    // source elaboration refuses the same program.
-                    if argument_runtime.residual.is_some() {
-                        return Computation::error(Diagnostic::new(
-                            "BLOT_DEFERRED_AT_RUNTIME",
-                            concat!(
-                                "A deferred parameter is only supplied while compiling. This call ",
-                                "survives into the emitted program, where the argument would run ",
-                                "whether or not the parameter is read."
-                            ),
-                            span,
-                        ));
+                let deferred = match &function {
+                    Value::Closure { deferred, .. } => *deferred,
+                    Value::ClosureChoice { alternatives, .. } => {
+                        let deferred = alternatives.first().is_some_and(|item| item.deferred());
+                        if alternatives.iter().any(|item| item.deferred() != deferred) {
+                            return Computation::error(Diagnostic::new(
+                                "BLOT_RUST_INVARIANT",
+                                "One runtime function choice mixed strict and deferred arrows.",
+                                span,
+                            ));
+                        }
+                        deferred
                     }
+                    _ => false,
+                };
+                if deferred {
                     let suspended = Value::Deferred {
-                        module: closure_module.clone(),
+                        module: argument_module,
                         expression: argument,
                         environment: argument_environment,
-                        demanded: Rc::new(Cell::new(false)),
+                        demands: Rc::new(RefCell::new(Vec::new())),
                     };
                     return apply_with_expected(
                         argument_context,
@@ -3083,11 +3089,13 @@ fn substitute_signature(signature: &Value, environment: &Environment) -> Value {
             domain: *domain,
         },
         Value::Arrow {
+            deferred,
             domain,
             codomain,
             effects,
             effect_tail,
         } => Value::Arrow {
+            deferred: *deferred,
             domain: Box::new(substitute_signature(domain, environment)),
             codomain: Box::new(substitute_signature(codomain, environment)),
             effects: effects
