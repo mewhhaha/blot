@@ -44,6 +44,39 @@ return value
   assertEquals(binding.value.result.tag, "var");
 });
 
+Deno.test("effect sequencing binds an ordinary pattern", async () => {
+  const parsed = await parse(
+    `const Pair = @effect { .read = Unit -> (Int, Int); }
+(left, right) <- Pair.read ()
+left := right
+return left
+`,
+  );
+  assert(parsed.ok);
+  if (!parsed.ok) return;
+  const binding = parsed.module.declarations[1];
+  assert(binding !== undefined && binding.tag === "binding");
+  if (binding === undefined || binding.tag !== "binding") return;
+  assertEquals(binding.kind, "effect");
+  assertEquals(binding.pattern.tag, "tuple");
+  if (binding.pattern.tag !== "tuple") return;
+  assertEquals(
+    binding.pattern.elements.map((element) => element.tag),
+    ["name", "name"],
+  );
+});
+
+Deno.test("stable rebinding still requires one unqualified name", async () => {
+  const parsed = await parse(`let left = 1
+let right = 2
+(left, right) := (right, left)
+return left
+`);
+  assert(!parsed.ok);
+  if (parsed.ok) return;
+  assertEquals(parsed.diagnostics[0]?.code, "BLOT_BAD_REBINDING_TARGET");
+});
+
 Deno.test("a closure cannot rebind a captured outer lineage", async () => {
   const source = `let x = 0
 let change = fn () => do:

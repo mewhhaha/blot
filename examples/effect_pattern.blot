@@ -1,0 +1,17 @@
+// Sequencing performs once, then matches the result with an ordinary pattern.
+
+open import "blot:prelude"
+
+const Pair = @effect { .read = Unit -> (Int, Int); }
+
+let sum = fn () => do:
+  (left, right) <- Pair.read ()
+  return left + right
+
+let supplying =
+  {
+    .read = fn ((), ?resume) => resume (20, 22);
+    .return = fn value => value;
+  }
+
+return @handle (Pair, sum, supplying)

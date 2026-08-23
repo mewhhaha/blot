@@ -116,13 +116,15 @@ function visitStatement(
   if (rule.name === "rebinding") {
     const value = cursorField(rule, "value");
     if (value !== null) visitCursor(value, scope, validation);
-    const name = tokenText(cursorField(rule, "name"));
+    const pattern = cursorField(rule, "pattern");
     const arrow = tokenText(cursorField(rule, "arrow"));
-    if (name === null || arrow === null) return;
+    if (pattern === null || arrow === null) return;
     if (arrow === "<-") {
-      bindNames(scope, [name]);
+      bindNames(scope, boundPatternNames(pattern));
       return;
     }
+    const name = unqualifiedPatternName(pattern);
+    if (name === null) return;
     if (arrow === ":=" && visible(scope, name) && !rebindable(scope, name)) {
       validation.diagnostics.push({
         code: "BLOT_REBINDING_FRAME",
@@ -148,6 +150,23 @@ function visitStatement(
     const value = cursorField(rule, name);
     if (value !== null) visitCursor(value, scope, validation);
   }
+}
+
+function unqualifiedPatternName(cursor: Cursor): string | null {
+  if (cursor.type !== "rule" || cursor.name !== "binding_pattern") return null;
+  if (cursorField(cursor, "qualifier") !== null) return null;
+  let core = cursorField(cursor, "value");
+  while (
+    core !== null && core.type === "rule" && core.name === "pattern_core"
+  ) {
+    const child = core.child(0);
+    if (child === undefined) return null;
+    core = child;
+  }
+  if (core === null || core.type !== "token") return null;
+  if (core.kind !== "IDENT" && core.kind !== "TYPE_IDENT") return null;
+  if (core.text === "_") return null;
+  return core.text;
 }
 
 function visitConditionalStatement(

@@ -588,7 +588,7 @@ let x = x
 x := update x
 ```
 
-Function parameters, `let`/`const` bindings, named `<-` bindings, loop binders,
+Function parameters, `let`/`const` bindings, names bound by `<-`, loop binders,
 and successful `if let` binders introduce names in their frame. `open` does not
 start a rebinding lineage; use `let` first when an opened name should be
 rebound. In a curried function every arrow is a closure boundary, so an inner
@@ -606,15 +606,22 @@ of the inner loop instead.
 ### 4.5 Effect sequencing
 
 ```blot
-name <- expression
+pattern <- expression
 <- expression
 ```
 
 This is the only declaration form that admits an effectful expression. It binds
-one name, not a pattern, and executes the effect value on its right. The leading
-form discards the result and is exactly equivalent to `_ <- expression`; it is
-sequencing syntax, not a prefix operator. The formatter uses the leading form as
-the canonical spelling.
+an ordinary binding pattern and executes the effect value on its right exactly
+once. The pattern has the same matching and ownership rules as a `let` pattern;
+a mismatch is an error, and every name it contains starts a local rebinding
+lineage. The leading form discards the result and is exactly equivalent to
+`_ <- expression`; it is sequencing syntax, not a prefix operator. The formatter
+uses the leading form as the canonical spelling.
+
+```blot
+(status, body) <- Http.fetch request
+#Some value <- Cache.lookup key
+```
 
 An effect value has the erased representation `Unit -> A ~ E`. Sequencing it
 supplies `()` and binds the resulting `A`, so it can be constructed, retained,

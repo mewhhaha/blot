@@ -434,33 +434,27 @@ static ISLAND_9_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_10_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 1, target: 1, emit: IslandEmit { field: 33 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 2, target: 2, emit: IslandEmit { field: 33 } },
+    IslandTransition { input_kind: InputKind::Island, input: 17, target: 1, emit: IslandEmit { field: 39 } },
 ];
 
 static ISLAND_10_STATE_1_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 35, target: 3, emit: IslandEmit { field: 4 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 36, target: 4, emit: IslandEmit { field: 4 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 35, target: 2, emit: IslandEmit { field: 4 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 36, target: 3, emit: IslandEmit { field: 4 } },
 ];
 
 static ISLAND_10_STATE_2_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 35, target: 3, emit: IslandEmit { field: 4 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 36, target: 4, emit: IslandEmit { field: 4 } },
+    IslandTransition { input_kind: InputKind::Island, input: 47, target: 4, emit: IslandEmit { field: 58 } },
 ];
 
 static ISLAND_10_STATE_3_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Island, input: 47, target: 5, emit: IslandEmit { field: 58 } },
+    IslandTransition { input_kind: InputKind::Island, input: 47, target: 4, emit: IslandEmit { field: 58 } },
 ];
 
 static ISLAND_10_STATE_4_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Island, input: 47, target: 5, emit: IslandEmit { field: 58 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 11, target: 5, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_10_STATE_5_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 11, target: 6, emit: IslandEmit { field: -1 } },
-];
-
-static ISLAND_10_STATE_6_TRANSITIONS: &[IslandTransition] = &[
 
 ];
 
@@ -470,8 +464,7 @@ static ISLAND_10_STATES: &[IslandState] = &[
     IslandState { accepting: false, transitions: ISLAND_10_STATE_2_TRANSITIONS },
     IslandState { accepting: false, transitions: ISLAND_10_STATE_3_TRANSITIONS },
     IslandState { accepting: false, transitions: ISLAND_10_STATE_4_TRANSITIONS },
-    IslandState { accepting: false, transitions: ISLAND_10_STATE_5_TRANSITIONS },
-    IslandState { accepting: true, transitions: ISLAND_10_STATE_6_TRANSITIONS },
+    IslandState { accepting: true, transitions: ISLAND_10_STATE_5_TRANSITIONS },
 ];
 
 static ISLAND_11_STATE_0_TRANSITIONS: &[IslandTransition] = &[

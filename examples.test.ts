@@ -198,6 +198,10 @@ const REJECTIONS: Record<
   },
   "effect_not_discharged": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },
   "for_type_drift": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "rebinding_pattern": {
+    code: "BLOT_BAD_REBINDING_TARGET",
+    stage: "check",
+  },
   "rebinding_type_change": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "rebinding_unbound": { code: "BLOT_UNBOUND", stage: "check" },
   // A scope error with its own code, because the name is not missing — it is

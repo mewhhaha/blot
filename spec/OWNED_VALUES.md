@@ -144,7 +144,30 @@ The Runtime-HIR function certificate remains `reuse: "checked"`. Its validator
 checks every operation independently, so the function bit cannot grant
 permission absent from the operation.
 
-## 6. Quicksort and the Region boundary
+## 6. Higher-order state recursion
+
+Repeated recursion over one owned value can be factored into a state-passing
+driver only when the driver's transition contract records a relation, not just
+an arrow type: every transition must consume the current authority and return
+its successor in each continuing result alternative. A binary driver would
+accept `#Done state` or `#Split (state, first, second)`, recursively process the
+smaller problem, and leave the larger problem in ownership-tail position.
+
+The current ownership certificate describes a closure's own parameter and result
+but cannot quantify over the contract of a function-valued parameter.
+Consequently a generic binary driver must be rejected when it passes owned state
+to an opaque transition. Compile-time specialization selecting a concrete
+transition does not change that rule: ownership checks the generic definition
+before Runtime-HIR specialization, and safety cannot depend on optional
+inlining.
+
+A future abstraction must add relational higher-order ownership constraints or a
+scoped state construct with equivalent laws. It must not assume forwarding from
+equal input and result types, recognize quicksort, or introduce a hidden copy.
+Until then the direct recurrence is the smallest source form whose certificate
+can state the full authority chain.
+
+## 7. Quicksort and the Region boundary
 
 Sequential quicksort threads one whole Store authority through both recursive
 calls. It therefore needs an owned array and range values, not a `Slice` merely
@@ -164,7 +187,7 @@ remains the correct tool when two disjoint interval authorities must be live
 independently, transferred to unrelated callees, processed concurrently, or
 rejoined later.
 
-## 7. Soundness and cost obligations
+## 8. Soundness and cost obligations
 
 The implementation must preserve these facts:
 
@@ -180,6 +203,8 @@ The implementation must preserve these facts:
    representation observed at the call site; and
 10. a residual direct call restores Store authority only from its certified
     produced-result tree.
+11. an opaque higher-order callback never receives owned state without a
+    certified consuming parameter contract.
 
 The useful asymptotic boundary is explicit:
 

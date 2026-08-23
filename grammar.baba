@@ -123,21 +123,21 @@ declaration_tag = (
   line:LAYOUT_NEWLINE?
 ) ;
 
-// Rebinding a name. Two arrows, one rule: `:=` shadows an existing binding with
-// a value of the same stable type, while `<-` binds the result of a computation
-// that performs. A new `let` or `const` is how a name is shadowed with another
-// type.
+// Rebinding or sequencing. Two arrows, one rule: `:=` shadows one existing name
+// with a value of the same stable type, while `<-` binds a pattern to the result
+// of a computation that performs. A new `let` or `const` is how a name is
+// shadowed with another type.
 //
-// One rule rather than two alternatives because they share their FIRST set — a
-// name — and splitting them is a shift/reduce conflict on IDENT. Factoring the
-// arrow out is the design fix, and it says something true: both are a name, an
-// arrow, and a value, and neither takes a pattern.
+// One rule rather than two alternatives because a named pattern gives them the
+// same FIRST set, and splitting them is a shift/reduce conflict on IDENT.
+// Factoring the arrow out keeps the grammar deterministic. Lowering rejects a
+// non-name pattern with `:=`; `<-` uses the ordinary binding-pattern contract.
 //
 // `<-` is not a second spelling for `let`. It executes the effect value on its
 // right and binds the produced result. An already-applied effectful expression
 // remains valid; a nullary effect value is forced with `()` by this declaration.
 rebinding = (
-  name:(IDENT | TYPE_IDENT)
+  pattern:binding_pattern
   arrow:(":=" | "<-")
   value:value
   LAYOUT_NEWLINE

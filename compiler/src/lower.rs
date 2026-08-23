@@ -506,16 +506,19 @@ fn lower_declaration(
             Ok(arena.declaration(Declaration::Open { value, span }))
         }
         "rebinding" => {
-            let name = token_text(cst, required(cst, rule, "name")?)?;
+            let pattern = lower_pattern(cst, required(cst, rule, "pattern")?, arena)?;
             let value = lower_value(cst, required(cst, rule, "value")?, context, arena)?;
             if token_text(cst, required(cst, rule, "arrow")?)? == ":=" {
+                let Pattern::Name {
+                    name,
+                    qualifier: Qualifier::None,
+                    ..
+                } = arena.patterns[pattern.0 as usize].clone()
+                else {
+                    return Err("BLOT_BAD_REBINDING_TARGET: `:=` requires one unqualified name. Use `let` to bind a pattern.".to_owned());
+                };
                 return Ok(arena.declaration(Declaration::Shadow { name, value, span }));
             }
-            let pattern = arena.pattern(Pattern::Name {
-                name,
-                qualifier: Qualifier::None,
-                span,
-            });
             Ok(arena.declaration(Declaration::Binding {
                 kind: DeclarationKind::Effect,
                 tags: Vec::new(),
@@ -526,11 +529,7 @@ fn lower_declaration(
         }
         "sequencing" => {
             let value = lower_value(cst, required(cst, rule, "value")?, context, arena)?;
-            let pattern = arena.pattern(Pattern::Name {
-                name: "_".to_owned(),
-                qualifier: Qualifier::None,
-                span,
-            });
+            let pattern = arena.pattern(Pattern::Wildcard { span });
             Ok(arena.declaration(Declaration::Binding {
                 kind: DeclarationKind::Effect,
                 tags: Vec::new(),
@@ -2083,7 +2082,9 @@ fn collect_rebound_names(
         if cst.rule_name(statement)? == "rebinding"
             && token_text(cst, required(cst, statement, "arrow")?)? == ":="
         {
-            let name = token_text(cst, required(cst, statement, "name")?)?;
+            let Some(name) = unqualified_rebinding_name(cst, statement)? else {
+                return Err("BLOT_BAD_REBINDING_TARGET: `:=` requires one unqualified name. Use `let` to bind a pattern.".to_owned());
+            };
             if !shadowed.contains(&name) && !rebound.contains(&name) {
                 rebound.push(name);
             }
@@ -2092,7 +2093,9 @@ fn collect_rebound_names(
         if cst.rule_name(statement)? == "rebinding"
             && token_text(cst, required(cst, statement, "arrow")?)? == "<-"
         {
-            shadowed.push(token_text(cst, required(cst, statement, "name")?)?);
+            let mut names = Vec::new();
+            pattern_names_from_cst(cst, required(cst, statement, "pattern")?, &mut names)?;
+            shadowed.extend(names);
             continue;
         }
         if cst.rule_name(statement)? != "iteration" {
@@ -2119,6 +2122,26 @@ fn collect_rebound_names(
         shadowed.extend(names);
     }
     Ok(())
+}
+
+fn unqualified_rebinding_name(
+    cst: &CompactCst<'_>,
+    rebinding: u32,
+) -> Result<Option<String>, String> {
+    let pattern = as_rule(required(cst, rebinding, "pattern")?)?;
+    require_rule(cst, pattern, "binding_pattern")?;
+    if cst.field(pattern, "qualifier")?.is_some() {
+        return Ok(None);
+    }
+    let core = cst.unwrap(required(cst, pattern, "value")?)?;
+    let Cursor::Token(token) = core else {
+        return Ok(None);
+    };
+    let kind = cst.token_kind(token)?;
+    if !matches!(kind.as_str(), "IDENT" | "TYPE_IDENT") || cst.text(core)? == "_" {
+        return Ok(None);
+    }
+    Ok(Some(cst.text(core)?))
 }
 
 fn pattern_names_from_cst(
